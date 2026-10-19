@@ -8,8 +8,8 @@ use core_video::base::{CVOptionFlags, CVTimeStamp};
 use core_video::display_link::{CVDisplayLink, CVDisplayLinkRef};
 use core_video::r#return::CVReturn;
 use metal::{
-    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLStoreAction, MetalLayer,
-    RenderPassDescriptor, RenderPipelineDescriptor, RenderPipelineState,
+    MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLResourceOptions, MTLStoreAction,
+    MetalLayer, RenderPassDescriptor, RenderPipelineDescriptor, RenderPipelineState,
 };
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
@@ -212,6 +212,7 @@ unsafe impl Sync for SharedMetalOverlay {}
 
 struct MetalLaserRenderer {
     layer: MetalLayer,
+    device: metal::Device,
     command_queue: metal::CommandQueue,
     pipeline: RenderPipelineState,
     width: f32,
@@ -272,6 +273,7 @@ impl SharedMetalOverlay {
             origin,
             renderer: Mutex::new(MetalLaserRenderer {
                 command_queue: device.new_command_queue(),
+                device,
                 layer,
                 pipeline,
                 width,
@@ -526,11 +528,14 @@ impl SharedMetalOverlay {
                 size_of::<LaserUniforms>() as u64,
                 (&raw const uniforms).cast(),
             );
-            enc.set_fragment_bytes(
-                1,
-                (segments.len() * size_of::<PathSegment>()) as u64,
+            // Up to MAX_SEGMENTS * 32 B = 48 KB, past the 4 KB `set_fragment_bytes` limit (128
+            // segments), so segments go in a buffer. Metal retains it until the command buffer completes.
+            let segment_buffer = renderer.device.new_buffer_with_data(
                 segments.as_ptr().cast(),
+                (segments.len() * size_of::<PathSegment>()) as u64,
+                MTLResourceOptions::StorageModeShared,
             );
+            enc.set_fragment_buffer(1, Some(&segment_buffer), 0);
             enc.set_fragment_bytes(
                 2,
                 (pins.len() * size_of::<PinMarker>()) as u64,
@@ -546,6 +551,18 @@ impl SharedMetalOverlay {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// `setFragmentBytes` aborts in the driver past 4 KB.
+    const SET_BYTES_LIMIT: usize = 4096;
+
+    /// Uniforms and pins still go through `set_fragment_bytes`; segments don't fit and use a buffer.
+    #[test]
+    fn inline_fragment_bytes_fit_the_metal_limit() {
+        assert!(size_of::<LaserUniforms>() <= SET_BYTES_LIMIT);
+        assert!(MAX_PINS * size_of::<PinMarker>() <= SET_BYTES_LIMIT);
+    }
+
     /// The shader must load on the oldest macOS Scrawl supports (`LSMinimumSystemVersion` 26.0).
     /// Without `-mmacosx-version-min`, `xcrun metal` targets the build machine's macOS and the
     /// overlay (ink, laser, edge glow) silently fails to open on older systems.
