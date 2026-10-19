@@ -162,6 +162,7 @@ Preview every pane, dark and light, with the recorder listening and a combinatio
 - `⌥⇧V`: Paste both `contact-sheet.png` and `summary.md` into the active app or terminal (`⌃⌥⇧V` also works while it's the default)
 - **Normal pointer**: Clicks and scrolls pass straight through to the app underneath
 - **Hold `⇧` (Shift) + move**: Draw a persistent red marker stroke (`#ff3b30`) on screen that fades out after release
+- **Hold `⌥⇧` (Option + Shift) + move**: Draw a straight line from where the stroke began to the pointer. Press `⌥` mid-stroke to straighten from that point, release it to carry on freehand
 - **`⌘Z`**: Undo the last stroke
 - **`Esc`**: Cancel the active selection or capture
 

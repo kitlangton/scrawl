@@ -2939,6 +2939,8 @@ pub fn post_synthetic_click(screen_x: f64, screen_y: f64) {
 fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
     let mut prev_shift_ink = false;
     let mut await_shift_release = false;
+    // Index of the point a straight run (⌥⇧) started from, while Option is held.
+    let mut straight_from: Option<usize> = None;
     let mut prev_mod_mask = 0_u8;
     let mut prev_buttons = [false; 2];
     let mut last_tap_check: Option<Instant> = None;
@@ -2955,9 +2957,10 @@ fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
         let ctrl = (flags & FLAG_CONTROL) != 0;
         let alt = (flags & FLAG_ALTERNATE) != 0;
         let shift = (flags & FLAG_SHIFT) != 0;
+        // ⌥⇧ held before a capture starts is the shortcut, not ink: wait for ⇧ to come up.
         if !shift {
             await_shift_release = false;
-        } else if cmd || ctrl || alt {
+        } else if cmd || ctrl || (alt && !telemetry.active.load(Ordering::Acquire)) {
             await_shift_release = true;
         }
         let mod_mask =
@@ -2994,12 +2997,17 @@ fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
             &mut prev_buttons,
             buttons,
             (loc.x, loc.y),
-            shift && !cmd && !ctrl && !alt,
+            shift && !cmd && !ctrl,
             |x, y| telemetry.on_scrawl_window(x, y),
         );
 
         let inside_target = telemetry.contains_screen_point(loc.x, loc.y);
-        let pure_shift = shift && !cmd && !ctrl && !alt && !await_shift_release;
+        let pure_shift = shift && !cmd && !ctrl && !await_shift_release;
+        // Option on top of Shift turns the stroke into a straight line from where it began.
+        let straight_now = pure_shift && alt;
+        if !straight_now {
+            straight_from = None;
+        }
 
         // Hold Shift + move cursor inside the capture target = draw a persistent stroke.
         if pure_shift && inside_target {
@@ -3026,14 +3034,21 @@ fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
                 pts: Vec::new(),
             });
             let dt = t_ms.saturating_sub(stroke.t0) as i32;
-            let should_push = stroke.pts.chunks_exact(3).last().is_none_or(|prev| {
-                let dx = (sx - prev[0]) as f32 / SCALE as f32 * fw as f32;
-                let dy = (sy - prev[1]) as f32 / SCALE as f32 * fh as f32;
-                dx.hypot(dy) >= 1.5
-            });
-            if should_push && stroke.pts.len() / 3 < 2_400 {
-                stroke.pts.extend_from_slice(&[sx, sy, dt]);
+            if straight_now {
+                let anchor = *straight_from
+                    .get_or_insert_with(|| (stroke.pts.len() / 3).saturating_sub(1));
+                stroke.push_live_point((sx, sy), dt, Some(anchor));
                 stroke.t1 = t_ms;
+            } else {
+                let should_push = stroke.pts.chunks_exact(3).last().is_none_or(|prev| {
+                    let dx = (sx - prev[0]) as f32 / SCALE as f32 * fw as f32;
+                    let dy = (sy - prev[1]) as f32 / SCALE as f32 * fh as f32;
+                    dx.hypot(dy) >= 1.5
+                });
+                if should_push && stroke.pts.len() / 3 < 2_400 {
+                    stroke.push_live_point((sx, sy), dt, None);
+                    stroke.t1 = t_ms;
+                }
             }
         } else if !pure_shift && prev_shift_ink {
             telemetry.shift_held.store(false, Ordering::Release);

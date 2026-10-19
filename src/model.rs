@@ -351,6 +351,18 @@ pub struct Stroke {
 }
 
 impl Stroke {
+    /// Adds the cursor's latest position to a live Shift stroke (`dt_ms` since `t0`).
+    ///
+    /// `straight` is the index of the point a straight run (Option held) started from, or
+    /// `None` while drawing freehand. A straight run keeps only that point and the cursor, so
+    /// it reads as one line that follows the pointer; ink drawn before the run is untouched.
+    pub fn push_live_point(&mut self, (x, y): (i32, i32), dt_ms: i32, straight: Option<usize>) {
+        if let Some(anchor) = straight {
+            self.pts.truncate((anchor + 1) * 3);
+        }
+        self.pts.extend_from_slice(&[x, y, dt_ms]);
+    }
+
     /// Moves the stroke `ms` earlier onto a clock that started at `ms`, shifting point `dt_ms`
     /// by any clipped prefix and dropping points before `ms`. Returns `false` if the stroke
     /// ended before `ms` or has no remaining points.
@@ -659,6 +671,39 @@ mod tests {
         assert_eq!(json["contextChanges"][0]["value"], serde_json::Value::Null);
         let back: ScrawlBundle = serde_json::from_value(json).unwrap();
         assert_eq!(back, bundle);
+    }
+
+    #[test]
+    fn straight_run_keeps_its_start_and_the_cursor_only() {
+        let mut stroke = Stroke {
+            t0: 0,
+            t1: 0,
+            fw: 100,
+            fh: 100,
+            on: None,
+            pin: None,
+            laser: false,
+            pts: Vec::new(),
+        };
+        // Freehand, then Option goes down at the third point.
+        stroke.push_live_point((0, 0), 0, None);
+        stroke.push_live_point((10, 5), 8, None);
+        stroke.push_live_point((20, 0), 16, None);
+        let anchor = Some(stroke.pts.len() / 3 - 1);
+        for (i, x) in [30, 45, 60].into_iter().enumerate() {
+            stroke.push_live_point((x, 40), 24 + 8 * i as i32, anchor);
+        }
+        assert_eq!(stroke.pts, vec![0, 0, 0, 10, 5, 8, 20, 0, 16, 60, 40, 40]);
+        // Option released: freehand carries on from where the line ended.
+        stroke.push_live_point((62, 41), 48, None);
+        assert_eq!(stroke.pts.len(), 15);
+
+        // Option held from the first point: a plain two-point line.
+        let mut line = Stroke { pts: Vec::new(), ..stroke };
+        for x in [5, 50, 90] {
+            line.push_live_point((x, x), x, Some(0));
+        }
+        assert_eq!(line.pts, vec![5, 5, 5, 90, 90, 90]);
     }
 
     #[test]
