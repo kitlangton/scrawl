@@ -1514,6 +1514,8 @@ fn build_ingested(
         "Saved bundle"
     });
     scrawl_log(format!("ingest: {} ({status})", dir.display()));
+    // The user's own command, if any; it logs how it went and never holds up the phone's reply.
+    crate::on_capture::spawn(&dir, |_| {});
     if let (Some(on_bundle), Some(bundle)) = (&config.on_bundle, bundle) {
         on_bundle(dir, bundle, Some(status));
     }

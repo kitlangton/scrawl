@@ -27,6 +27,7 @@ mod live_transcribe;
 mod mic;
 mod model;
 mod native;
+mod on_capture;
 mod onboarding;
 mod onboarding_window;
 mod page;
