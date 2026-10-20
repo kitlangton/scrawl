@@ -487,6 +487,13 @@ pub struct Config {
     /// Where new captures go (`default_captures_dir`); absent keeps the built-in folder.
     #[serde(default)]
     pub captures_dir: Option<String>,
+    /// A command run once each capture's bundle is written, as an argv starting with an
+    /// absolute path; `{bundle}` is the bundle's folder (`on_capture`).
+    #[serde(default)]
+    pub on_capture: Option<Vec<String>>,
+    /// How long `on_capture` may run before it's stopped (default 120, at most 3600).
+    #[serde(default)]
+    pub on_capture_timeout_seconds: Option<u64>,
 }
 
 impl Config {
@@ -551,7 +558,7 @@ where
 }
 
 /// Config problems are logged once per process, not on every read.
-fn log_config_once(message: String) {
+pub(crate) fn log_config_once(message: String) {
     static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !seen.contains(&message) {
@@ -2053,6 +2060,35 @@ mod tests {
         let cfg = load_config_from(&path);
         assert_eq!(cfg.agent_host.as_deref(), Some("pro"));
         assert_eq!(cfg.usb_apps.len(), 1);
+    }
+
+    #[test]
+    fn on_capture_reads_as_an_argv_and_a_string_is_dropped() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("config.json");
+        fs::write(
+            &path,
+            r#"{"onCapture": ["/usr/local/bin/send", "{bundle}"], "onCaptureTimeoutSeconds": 30}"#,
+        )
+        .unwrap();
+        let cfg = load_config_from(&path);
+        assert_eq!(
+            cfg.on_capture,
+            Some(vec![
+                "/usr/local/bin/send".to_owned(),
+                "{bundle}".to_owned()
+            ])
+        );
+        assert_eq!(cfg.on_capture_timeout_seconds, Some(30));
+        // A shell string isn't an argv: it's dropped on its own.
+        fs::write(
+            &path,
+            r#"{"onCapture": "send {bundle}", "autoSend": false}"#,
+        )
+        .unwrap();
+        let cfg = load_config_from(&path);
+        assert_eq!(cfg.on_capture, None);
+        assert_eq!(cfg.auto_send, Some(false));
     }
 
     #[test]

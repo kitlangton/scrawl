@@ -286,6 +286,34 @@ scrawl route --browser com.brave.Browser   # the browser's front tab
 Turn it off with **Send dev-site captures to OpenCode** in Settings › General, or `"autoSend": false` in
 `~/.config/scrawl/config.json`. `SCRAWL_NO_OPENCODE=1` also turns it off.
 
+## Send captures anywhere (`onCapture`)
+
+To hand every capture to something other than OpenCode (another agent, a script, a sync, a bot),
+give Scrawl a command of your own in `~/.config/scrawl/config.json`:
+
+```json
+{
+  "onCapture": ["/Users/me/bin/send-to-my-agent", "{bundle}"],
+  "onCaptureTimeoutSeconds": 120
+}
+```
+
+Scrawl runs it once each capture's bundle is written, from the Mac and from the iPhone, after
+copying the summary to the clipboard as usual.
+
+- It's an argv, run without a shell, and the first entry must be an absolute path.
+- `{bundle}` anywhere in an argument becomes the `.scrawl` folder. With no `{bundle}`, the folder
+  is added as the last argument. The command also runs inside that folder.
+- Exit 0 counts as delivered. The first line it prints names where the capture went, and the
+  Completed island shows it ("Sent to Hermes") unless an OpenCode send is reporting already.
+- A non-zero exit, or running past `onCaptureTimeoutSeconds` (default 120, at most 3600), shows
+  "Copied · onCapture failed". A timeout also stops anything the command started. Either way the
+  outcome is in `scrawl.log`.
+- It gets the environment of an app opened from the Finder, so a `PATH` without Homebrew. Use
+  absolute paths inside the command too, or set `PATH` at the top of a script.
+- macOS may treat it as part of Scrawl, letting it use Scrawl's Screen Recording and Microphone
+  access. Point it only at something you trust, and keep `config.json` writable only by you.
+
 ## Auto-crop (Screen captures)
 
 Instead of picking an area up front, record the whole screen: tap `⌥⇧S`, or choose **Screen**.
