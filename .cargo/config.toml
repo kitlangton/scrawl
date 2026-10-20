@@ -1,0 +1,9 @@
+# Windows builds link the C and C++ runtimes statically, so scrawl.exe starts on
+# a clean PC without the Visual C++ Redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# transcribe-cpp's CMake build defaults to the DLL runtime (/MD) even when Rust
+# links statically, so pin its MSVC runtime to match.
+[env]
+CMAKE_ARGS = "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"

@@ -39,7 +39,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release
+          key: release-crt-static
           cache-on-failure: true
 
       - run: cargo build ${{ env.BUILD }}
@@ -47,9 +47,6 @@ jobs:
       - name: scrawl --help runs headless
         run: '& $env:EXE --help'
 
-      # transcribe.cpp builds against the DLL C runtime, so the Visual C++ runtime DLLs scrawl.exe
-      # imports go beside it in the zip (app-local, as Microsoft allows): a fresh Windows has no
-      # Visual C++ redistributable.
       # A fresh runner has no Scrawl config, so the app opens the welcome window. Scrawl leaves its
       # own windows out of screen captures unless SCRAWL_SHOW_OWN_WINDOWS is set.
       - name: The welcome window opens on a fresh profile
@@ -79,23 +76,17 @@ jobs:
           path: dist/welcome.png
           if-no-files-found: warn
 
-      - name: Collect the Visual C++ runtime DLLs
+      - name: Check the executable needs no Visual C++ Redistributable
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vs = & $vswhere -latest -products * -property installationPath
           $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
           $deps = & $dumpbin.FullName /nologo /dependents $env:EXE | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin failed with exit code $LASTEXITCODE" }
           "imports:"; $deps
-          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
-          "runtime from $($crt.FullName)"
-          New-Item -ItemType Directory -Force runtime | Out-Null
-          foreach ($dll in $deps | Where-Object { $_ -match '^(vcruntime|msvcp|concrt|vcomp)' }) {
-            $file = Join-Path $crt.FullName $dll
-            if (-not (Test-Path $file)) { throw "no $dll in $($crt.FullName)" }
-            Copy-Item $file runtime\
-          }
-          Get-ChildItem runtime | Format-Table Name, Length
+          $redist = $deps | Where-Object { $_ -match '^(vcruntime|msvcp|concrt|vcomp)' }
+          if ($redist) { throw "scrawl.exe imports Visual C++ runtime DLLs: $redist" }
 
       - name: Downloads and loads the speech model
         run: cargo test ${{ env.BUILD }} win::speech -- --ignored --nocapture
@@ -109,7 +100,6 @@ jobs:
           $dir = "dist\Scrawl"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item $env:EXE "$dir\scrawl.exe"
-          Copy-Item runtime\*.dll $dir
           Copy-Item LICENSE "$dir\LICENSE.txt"
           @"
           Scrawl $version for Windows (preview)
