@@ -122,4 +122,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --verify-tag --title "Scrawl ${TAG#v}" --notes "Release notes to follow."
-          gh release upload "$TAG" "dist/${{ steps.package.outputs.name }}" --clobber
+          gh release upload "$TAG" "dist/${{ steps.package.outputs.name }}" "dist/${{ steps.package.outputs.name }}.sha256" --clobber

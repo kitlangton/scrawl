@@ -197,6 +197,27 @@ struct OutboxTests {
     ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []).sorted()
   }
 
+  @Test func changingThePairingCannotRerouteQueuedRecordings() async throws {
+    let outbox = makeOutbox()
+    defer { outbox.invalidate() }
+    let entry = try await outbox.enqueue(timeline: timeline, movie: movie, target: target, recordedAt: "2026-10-14T18:00:00Z")
+    let other = URL(string: "https://other.example.com/upload")!
+    outbox.setCredentials(target: other, token: "other-token")
+    let newEntry = try await outbox.enqueue(timeline: timeline, movie: movie, target: other, recordedAt: "2026-10-14T19:00:00Z")
+    outbox.kick(force: true)
+    // A new-destination upload proves reconnection and dispatch have completed, while the
+    // old recording must never even have started an upload with the new credentials.
+    #expect(await eventually { events.all.contains(.sent(id: newEntry.id, reply: .delivered(sessionTitle: "Problems · Ledger"))) })
+    #expect(!events.all.contains(.started(id: entry.id)))
+    let entries = await outbox.entries()
+    #expect(entries.contains { $0.id == entry.id })
+    outbox.setCredentials(target: target, token: "renewed-token")
+    outbox.kick(force: true)
+    #expect(await eventually { events.all.contains(.sent(id: entry.id, reply: .delivered(sessionTitle: "Problems · Ledger"))) })
+    #expect(StubServer.received.count == 2)
+    #expect(StubServer.received.last?.request.url == target.appending(path: "ingest"))
+  }
+
   @Test func persistsTheFramedPayloadBeforeSendingAndDeletesItAfter2xx() async throws {
     let outbox = makeOutbox()
     let entry = try await outbox.enqueue(timeline: timeline, movie: movie, target: target, recordedAt: "2026-10-14T18:00:00Z")

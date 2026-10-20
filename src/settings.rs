@@ -1180,7 +1180,7 @@ impl Panel {
                 available: login != LoginItem::Unavailable,
                 needs_approval: login == LoginItem::NeedsApproval,
             },
-            auto_send: config.auto_send.unwrap_or(true),
+            auto_send: config.auto_send.unwrap_or(false),
             shortcuts: ShortcutKind::ALL
                 .into_iter()
                 .map(|kind| {
@@ -2029,6 +2029,8 @@ mod tests {
                 host,
             )
         };
+        assert!(!panel.view(&host).auto_send);
+        set(&mut panel, &mut host, "autoSend", true.into());
         assert!(panel.view(&host).auto_send);
         set(&mut panel, &mut host, "autoSend", false.into());
         set(&mut panel, &mut host, "videoExport", true.into());

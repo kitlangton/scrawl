@@ -161,7 +161,8 @@ final class Outbox: NSObject, @unchecked Sendable {
   }
 
   /// Where uploads go and the bearer token (from the current pairing). Entries are sent to the
-  /// current target, so renewing the link carries queued recordings with it.
+  /// original target only. Renewing a token may resume uploads to that same destination;
+  /// changing destinations must never reroute previously captured data.
   func setCredentials(target: URL?, token: String?) {
     queue.async { [self] in
       self.target = target
@@ -369,7 +370,7 @@ final class Outbox: NSObject, @unchecked Sendable {
 
   private func start(_ entry: Entry) {
     guard let token, !token.isEmpty else { return }
-    let base = target ?? entry.target
+    guard let base = target, base == entry.target else { return }
     var request = URLRequest(url: base.appending(path: "ingest"))
     request.httpMethod = "POST"
     request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")

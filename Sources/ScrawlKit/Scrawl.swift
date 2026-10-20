@@ -393,8 +393,8 @@
 
     /// Handles a `<scheme>://scrawl?url=<urlencoded base>[&url=<second>]&token=<token>[&session=ses_…]`
     /// setup link or `<scheme>://scrawl?reset=1` reset link (also accepts the legacy `tether` host).
-    /// Stores or clears the configuration in the Keychain, triggers haptic feedback, and returns
-    /// `true` when `url` was a valid Scrawl link.
+    /// Requests approval before storing or clearing the pairing. Merely opening a link must
+    /// never change the recipient of recordings. Returns `true` for a recognized link.
     @discardableResult
     public static func handleSetupURL(_ url: URL) -> Bool {
       guard let action = ScrawlConfig.parseSetupURL(url) else { return false }
@@ -402,23 +402,44 @@
       let isDuplicateEvent = shared.lastSetupURLHandled.map {
         $0.url == url && ($0.at.duration(to: now) < .milliseconds(250))
       } ?? false
-      shared.lastSetupURLHandled = (url, now)
+      guard !isDuplicateEvent else { return true }
+      guard let scene = UIApplication.shared.connectedScenes
+        .compactMap({ $0 as? UIWindowScene })
+        .first(where: { $0.activationState == .foregroundActive }),
+        var presenter = scene.windows.first(where: \.isKeyWindow)?.rootViewController
+      else { return true } // No way to obtain consent: leave the pairing alone.
+      while let presented = presenter.presentedViewController { presenter = presented }
+      guard !(presenter is UIAlertController) else { return true }
 
+      let message: String
+      switch action {
+      case let .configure(config):
+        let destinations = config.urls.map(\.absoluteString).joined(separator: "\n")
+        message = "Future recordings will be uploaded to:\n\(destinations)\n\nQueued recordings stay with their original destination. Only approve a server you trust."
+      case .reset:
+        message = "Disconnect Scrawl from its recording upload server?"
+      }
+      let alert = UIAlertController(title: "Change Scrawl pairing?", message: message, preferredStyle: .alert)
+      alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+      alert.addAction(UIAlertAction(title: "Approve", style: .default) { _ in
+        Self.applySetupAction(action)
+      })
+      shared.lastSetupURLHandled = (url, now)
+      presenter.present(alert, animated: true)
+      return true
+    }
+
+    private static func applySetupAction(_ action: ScrawlConfig.SetupAction) {
       switch action {
       case let .configure(newConfig):
         ScrawlConfig.saveToKeychain(newConfig)
         shared.applyConfig(ScrawlConfig.resolved(keychain: newConfig) ?? newConfig)
-        if !isDuplicateEvent {
-          UINotificationFeedbackGenerator().notificationOccurred(.success)
-        }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
       case .reset:
         ScrawlConfig.deleteFromKeychain()
         shared.applyConfig(ScrawlConfig.resolved(keychain: nil))
-        if !isDuplicateEvent {
-          UINotificationFeedbackGenerator().notificationOccurred(.warning)
-        }
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
       }
-      return true
     }
 
     private func applyConfig(_ config: ScrawlConfig?) {

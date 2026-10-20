@@ -25,6 +25,8 @@ jobs:
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - run: cargo build --locked
       - run: cargo test --locked
+      - name: ScrawlKit delivery regression tests
+        run: swift test
 
   windows:
     name: Windows
