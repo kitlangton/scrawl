@@ -627,9 +627,9 @@ pub fn ensure_ingest_token() -> Result<String> {
     ensure_ingest_token_in(&default_config_path())
 }
 
-/// Whether Mac captures of a dev site go straight to its session (`autoSend`, default on).
+/// Whether captures go straight to an agent session (`autoSend`, opt-in).
 pub fn auto_send() -> bool {
-    config().auto_send.unwrap_or(true)
+    config().auto_send.unwrap_or(false)
 }
 
 /// Whether the menu offers video export (`videoExport`, default off). `scrawl export` works
@@ -1770,11 +1770,14 @@ mod tests {
     }
 
     #[test]
-    fn auto_send_defaults_on_and_the_toggle_keeps_other_keys() {
+    fn auto_send_defaults_off_and_the_toggle_keeps_other_keys() {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
         fs::write(&path, br#"{"ingestToken":"abc","retention":{"mediaDays":7}}"#).unwrap();
         assert_eq!(load_config_from(&path).auto_send, None);
+        assert!(!load_config_from(&path).auto_send.unwrap_or(false));
+        set_config_value_in(&path, "autoSend", serde_json::Value::Bool(true)).unwrap();
+        assert_eq!(load_config_from(&path).auto_send, Some(true));
         set_config_value_in(&path, "autoSend", serde_json::Value::Bool(false)).unwrap();
         let config = load_config_from(&path);
         assert_eq!(config.auto_send, Some(false));

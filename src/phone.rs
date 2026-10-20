@@ -1235,15 +1235,20 @@ pub fn format_setup_link(
     Ok(format!("{scheme}://scrawl?{}", query.join("&")))
 }
 
-/// Starts Scrawl's background ScrawlKit ingest inside the GUI app: an HTTP server on
-/// `0.0.0.0:47777` the phone uploads to, and a cabled-iPhone `devicectl` watcher for when the
+/// Starts Scrawl's background ScrawlKit ingest inside the GUI app: a localhost HTTP server
+/// and a cabled-iPhone `devicectl` watcher for when the
 /// network can't reach the Mac. Each recording becomes a `.scrawl` bundle, lands on the clipboard
 /// and is queued into the OpenCode session matching the app.
 pub fn start_ingest_server(ui_sender: flume::Sender<LiveOverlayEvent>) {
+    if std::env::var_os("SCRAWL_NO_INGEST").is_some() {
+        scrawl_log("ingest disabled by local launcher");
+        return;
+    }
     if let Err(err) = crate::handoff::ensure_ingest_token() {
         scrawl_log(format!("ingest token setup failed: {err:#}"));
     }
-    let route_opencode = std::env::var_os("SCRAWL_NO_OPENCODE").is_none();
+    let route_opencode =
+        crate::handoff::auto_send() && std::env::var_os("SCRAWL_NO_OPENCODE").is_none();
     let config = IngestConfig {
         copy_clipboard: true,
         route_opencode,
@@ -1271,7 +1276,9 @@ pub fn start_ingest_server(ui_sender: flume::Sender<LiveOverlayEvent>) {
 /// building, and OpenCode routing as the GUI app, without touching the clipboard or HUD.
 pub fn run_ingest_server(port: u16, usb: bool, no_opencode: bool) -> Result<()> {
     let _ = crate::handoff::ensure_ingest_token()?;
-    let route_opencode = !no_opencode && std::env::var_os("SCRAWL_NO_OPENCODE").is_none();
+    let route_opencode = crate::handoff::auto_send()
+        && !no_opencode
+        && std::env::var_os("SCRAWL_NO_OPENCODE").is_none();
     let config = IngestConfig {
         copy_clipboard: false,
         route_opencode,
@@ -1285,7 +1292,8 @@ pub fn run_ingest_server(port: u16, usb: bool, no_opencode: bool) -> Result<()> 
 }
 
 fn serve_http(port: u16, config: IngestConfig) -> Result<()> {
-    let addr = format!("0.0.0.0:{port}");
+    // Remote clients must use an authenticated, encrypted tunnel to this loopback service.
+    let addr = format!("127.0.0.1:{port}");
     let listener = std::net::TcpListener::bind(&addr)
         .with_context(|| format!("port {port} already in use"))?;
     scrawl_log(format!("ingest server listening on {addr}"));
@@ -1294,13 +1302,21 @@ fn serve_http(port: u16, config: IngestConfig) -> Result<()> {
     if config.route_opencode {
         crate::delivery::spawn_retries(config.captures_dir(), config.hooks.forward, mark_sent);
     }
+    let connections = crate::ingest_http::Connections::default();
     for stream in listener.incoming().flatten() {
+        let Some(permit) = connections.acquire() else {
+            drop(stream);
+            continue;
+        };
         let cfg = config.clone();
-        std::thread::spawn(move || {
-            if let Err(err) = handle_ingest_connection(stream, &cfg) {
-                scrawl_log(format!("ingest http: {err:#}"));
-            }
-        });
+        let _ = std::thread::Builder::new()
+            .name("scrawl-ingest-client".into())
+            .spawn(move || {
+                let _permit = permit;
+                if let Err(err) = handle_ingest_connection(stream, &cfg) {
+                    scrawl_log(format!("ingest http: {err:#}"));
+                }
+            });
     }
     Ok(())
 }
@@ -1546,10 +1562,7 @@ fn http_unauthorized(stream: &mut std::net::TcpStream) {
     }
 }
 
-fn handle_ingest_connection(
-    stream: std::net::TcpStream,
-    config: &IngestConfig,
-) -> Result<()> {
+fn handle_ingest_connection(stream: std::net::TcpStream, config: &IngestConfig) -> Result<()> {
     let expected_token = crate::handoff::ensure_ingest_token()?;
     handle_ingest_connection_with_token(stream, &expected_token, config)
 }
@@ -1559,22 +1572,8 @@ fn handle_ingest_connection_with_token(
     expected_token: &str,
     config: &IngestConfig,
 ) -> Result<()> {
-    use std::io::Read;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
-
-    let mut header = Vec::with_capacity(2048);
-    let mut byte = [0_u8; 1];
-    while header.len() < 16_384 && !header.ends_with(b"\r\n\r\n") {
-        if stream.read(&mut byte)? == 0 {
-            break;
-        }
-        header.push(byte[0]);
-    }
-    if header.is_empty() {
-        return Ok(());
-    }
-    let header = String::from_utf8_lossy(&header);
+    let header = crate::ingest_http::read_header(&mut stream, crate::ingest_http::HEADER_TIMEOUT)?;
     // The dev-page SDK's routes check their own access (loopback pages, or the token).
     if crate::web::handle(&mut stream, &header, expected_token)? {
         return Ok(());
@@ -1610,7 +1609,7 @@ fn handle_ingest_connection_with_token(
         "Invalid payload length"
     );
     let mut payload = vec![0_u8; content_len];
-    stream.read_exact(&mut payload)?;
+    crate::ingest_http::read_body(&mut stream, &mut payload)?;
 
     let json_len = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
     ensure!(4 + json_len < payload.len(), "Invalid framed payload");

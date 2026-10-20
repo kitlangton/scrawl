@@ -348,7 +348,7 @@ pub fn handle(stream: &mut TcpStream, header: &str, expected_token: &str) -> Res
                 .unwrap_or(0);
             anyhow::ensure!(len <= 64 * 1024, "Page context too large");
             let mut bytes = vec![0_u8; len];
-            stream.read_exact(&mut bytes)?;
+            crate::ingest_http::read_body(stream, &mut bytes)?;
             // Loopback pages only, token or not.
             let Some(page_origin) = origin
                 .filter(|o| peer_loopback && is_loopback_origin(o))
@@ -381,7 +381,7 @@ pub fn handle(stream: &mut TcpStream, header: &str, expected_token: &str) -> Res
             anyhow::ensure!(len <= 16 * 1024, "Registration too large");
             // Read the body even when refusing, so the answer isn't lost to a reset.
             let mut bytes = vec![0_u8; len];
-            stream.read_exact(&mut bytes)?;
+            crate::ingest_http::read_body(stream, &mut bytes)?;
             if !may_register(origin, peer_loopback, token_ok) {
                 respond_json(
                     stream,

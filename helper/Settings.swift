@@ -118,7 +118,7 @@ struct SettingsCommandLine: Decodable, Equatable {
 struct SettingsState: Decodable, Equatable {
   var version = "0.3.2"
   var login = SettingsLogin()
-  var autoSend = true
+  var autoSend = false
   var shortcuts: [SettingsShortcut] = [
     SettingsShortcut(),
     SettingsShortcut(kind: "paste", title: "Paste last capture", label: "⌥⇧V", key: "V"),
