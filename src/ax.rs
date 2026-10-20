@@ -60,6 +60,10 @@ pub struct Hit {
     pub identifier: Option<String>,
     /// The file name of the document the element's window shows (`AXDocument`).
     pub document: Option<String>,
+    /// An input field (secure, text, search, combo box): what was typed in it is never read,
+    /// from here or off the screen. Its fixed name (one of `sketch::FIELD_NAMES`), which names it
+    /// when nothing else does.
+    pub field: Option<&'static str>,
 }
 
 impl Hit {
@@ -79,10 +83,14 @@ impl Hit {
     }
 
     /// `button “Area” #area`: what `Stroke.on` holds. `None` when the element has nothing to name
-    /// it by but its role.
+    /// it by but its role, except an input field, which is named by its kind alone (`search
+    /// field`, shown unquoted) so its typed value is never read off the screen either
+    /// (`crate::screen_text`).
     pub fn on_text(&self) -> Option<String> {
-        self.label_text()
-            .map(|text| format!("{} {text}", self.role))
+        match self.label_text() {
+            Some(text) => Some(format!("{} {text}", self.role)),
+            None => self.field.map(str::to_owned),
+        }
     }
 }
 
@@ -100,14 +108,22 @@ pub fn clip(raw: &str) -> Option<String> {
     })
 }
 
-/// Roles whose value is what the user typed; their value is never read.
+/// Roles whose value is what the user typed (their value is never read), as the field's kind in
+/// English whatever the app's language, so the text can show it unquoted (`sketch::FIELD_NAMES`)
+/// and never mistake it for a label or text on the screen.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn is_input(role: &str, subrole: &str) -> bool {
-    subrole == "AXSecureTextField"
-        || matches!(
-            role,
-            "AXSecureTextField" | "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField"
-        )
+fn field_name(role: &str, subrole: &str) -> Option<&'static str> {
+    if subrole == "AXSecureTextField" {
+        return Some("secure text field");
+    }
+    Some(match role {
+        "AXSecureTextField" => "secure text field",
+        "AXTextField" => "text field",
+        "AXTextArea" => "text area",
+        "AXComboBox" => "combo box",
+        "AXSearchField" => "search field",
+        _ => return None,
+    })
 }
 
 /// Roles that are usually a piece of a control (its text or icon), so the control names it.
@@ -234,12 +250,14 @@ pub fn hit_test(x: f64, y: f64) -> Option<Hit> {
         }
     }
     let subrole = string_attribute(element.0, "AXSubrole").unwrap_or_default();
-    let input = is_input(&role, &subrole);
+    let field = field_name(&role, &subrole);
+    let input = field.is_some();
     let role_description = string_attribute(element.0, "AXRoleDescription")
         .or_else(|| role.strip_prefix("AX").map(str::to_lowercase))
         .unwrap_or_default();
     let mut hit = Hit {
         role: clip(&role_description).unwrap_or_else(|| "element".into()),
+        field,
         ..Hit::default()
     };
     for name in ["AXTitle", "AXDescription", "AXValue", "AXPlaceholderValue"] {
@@ -471,6 +489,7 @@ mod tests {
             label: Some("New Tab".into()),
             identifier: Some("tab-new".into()),
             document: Some("main.rs".into()),
+            field: None,
         };
         assert_eq!(
             hit.label_text().as_deref(),
@@ -486,6 +505,25 @@ mod tests {
         };
         assert_eq!(bare.label_text(), None);
         assert_eq!(bare.on_text(), None, "a role alone names nothing");
+        for (ax, sub, name) in [
+            ("AXSecureTextField", "", "secure text field"),
+            ("AXTextField", "AXSecureTextField", "secure text field"),
+            ("AXSearchField", "", "search field"),
+            ("AXTextArea", "", "text area"),
+        ] {
+            let field = Hit {
+                role: "champ de recherche".into(),
+                field: field_name(ax, sub),
+                ..Hit::default()
+            };
+            assert_eq!(
+                field.on_text().as_deref(),
+                Some(name),
+                "an input field is named by its kind, so its typed value is never read off the screen"
+            );
+            assert!(crate::sketch::FIELD_NAMES.contains(&name));
+        }
+        assert_eq!(field_name("AXButton", ""), None);
         assert_eq!(
             document_name("file:///Users/k/My%20Notes.md").as_deref(),
             Some("My Notes.md")
@@ -494,11 +532,11 @@ mod tests {
 
     #[test]
     fn typed_values_are_never_read() {
-        assert!(is_input("AXTextField", "AXSecureTextField"));
-        assert!(is_input("AXSecureTextField", ""));
-        assert!(is_input("AXTextArea", ""));
-        assert!(!is_input("AXStaticText", ""));
-        assert!(!is_input("AXButton", ""));
+        assert!(field_name("AXTextField", "AXSecureTextField").is_some());
+        assert!(field_name("AXSecureTextField", "").is_some());
+        assert!(field_name("AXTextArea", "").is_some());
+        assert!(field_name("AXStaticText", "").is_none());
+        assert!(field_name("AXButton", "").is_none());
     }
 
     #[test]

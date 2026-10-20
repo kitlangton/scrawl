@@ -9,6 +9,7 @@
 //   scrawl-helper frames MOVIE --out-dir DIR (--every MS | --at MS,MS…) [--max-edge PX]
 //   scrawl-helper audio MOVIE OUT.wav                   16 kHz mono PCM of every audio track, mixed
 //   scrawl-helper probe MOVIE                           duration and video size
+//   scrawl-helper read-text MOVIE --at MS:X0,Y0,X1,Y1 [--at …]   Vision text lines/words in regions of frames (ScreenText.swift)
 //   scrawl-helper shrink MOVIE --out FILE.mov [--max-edge PX] [--bitrate BPS]   HEVC copy, same timeline
 //   scrawl-helper export PLAN.json                      shareable .mp4: crop/camera, burned-in ink, audio (Export.swift)
 //   scrawl-helper permissions                           what Scrawl has been granted, as JSON
@@ -150,6 +151,11 @@ case "export":
 case "probe":
   guard arguments.count >= 2 else { fail("probe needs MOVIE") }
   runAsync { emit(try await Media.probe(URL(filePath: arguments[1]))) }
+case "read-text":
+  guard arguments.count >= 3, let regions = ScreenText.parse(Array(arguments.dropFirst(2))), !regions.isEmpty else {
+    fail("read-text needs MOVIE --at MS:X0,Y0,X1,Y1 [--at …]")
+  }
+  runAsync { emit(try await ScreenText.read(movie: URL(filePath: arguments[1]), regions: regions)) }
 case "permission-panel":
   PermissionPanel.run(arguments: arguments)
 case "permissions":
@@ -167,5 +173,5 @@ case "qr":
   }
   emit(["qr": qr])
 default:
-  fail("usage: scrawl-helper devices|mirror|transcribe|transcribe-stream|speech-model|frames|audio|probe|export|shrink|permission-panel|permissions|sck-probe|onboarding|settings|qr …")
+  fail("usage: scrawl-helper devices|mirror|transcribe|transcribe-stream|speech-model|frames|audio|probe|read-text|export|shrink|permission-panel|permissions|sck-probe|onboarding|settings|qr …")
 }
