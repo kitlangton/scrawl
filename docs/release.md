@@ -34,4 +34,5 @@ it's unset.
 Check after deploying: the live DMG, zips and newest delta match the release's sha256s, the live
 appcast's signature verifies, `spctl` accepts the downloaded DMG and the app in it, the site shows the
 new version for both the Mac and Windows download buttons, and the Windows zip has `scrawl.exe`,
-README and LICENSE. Check that the Windows executable needs no Visual C++ Redistributable.
+transcribe.cpp's DLLs, README and LICENSE. Check that the Windows executable and those DLLs need no
+Visual C++ Redistributable.

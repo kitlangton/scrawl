@@ -31,6 +31,7 @@ mod onboarding;
 mod onboarding_window;
 mod page;
 mod phone;
+mod recover;
 mod render;
 mod retention;
 mod routing;
@@ -292,6 +293,14 @@ enum Command {
         /// (e.g. `agentContext`). Repeatable.
         #[arg(long = "experiment", value_name = "NAME")]
         experiments: Vec<String>,
+    },
+    /// Build the bundles whose build died with the app (`unfinished.json`, no `scrawl.json`) from
+    /// their video, audio and input log, in place, once each. The app runs it at launch.
+    #[command(hide = true)]
+    Recover {
+        /// Captures folder (defaults to Scrawl's).
+        #[arg(long)]
+        captures: Option<PathBuf>,
     },
     /// Motion lab: replay the capsule's states on a fixed timeline with nothing captured, for
     /// traces (`--trace`, motion-lint's format), screen recordings and tuning.
@@ -845,6 +854,23 @@ pub fn finalize_capture_bundle(
     }
     let wav_path = bundle_dir.join("audio.wav");
     let has_wav = wav_path.exists();
+    recover::write(
+        bundle_dir,
+        &recover::Unfinished {
+            target: target.clone(),
+            duration_ms,
+            video: video_path
+                .as_ref()
+                .and_then(|v| v.file_name())
+                .map(|name| name.to_string_lossy().into_owned()),
+            video_offset_ms,
+            strokes: strokes.clone(),
+            events: events.clone(),
+            note: note.clone(),
+            windows: activity.windows.clone(),
+            cursor: activity.cursor.clone(),
+        },
+    );
     let crop_settings = (target.mode == CaptureMode::Display)
         .then(autocrop::Settings::configured)
         .flatten();
@@ -905,7 +931,7 @@ pub fn finalize_capture_bundle(
         (transcribe_handle.join().unwrap(), pre)
     });
 
-    build_bundle_from_parts(
+    let built = build_bundle_from_parts(
         bundle_dir,
         target,
         duration_ms,
@@ -930,7 +956,75 @@ pub fn finalize_capture_bundle(
             },
             ..SourceExtras::default()
         },
-    )
+    );
+    if built.is_ok() {
+        recover::finished(bundle_dir);
+    }
+    built
+}
+
+/// Builds a Screen capture's bundle in `out`, which holds its video and `audio.wav`, from them
+/// and what the recording logged: `scrawl reprocess` and `scrawl recover`.
+pub fn rebuild_screen_bundle(out: &Path, old: recover::Unfinished) -> Result<String> {
+    let started_at = std::time::Instant::now();
+    let video = old
+        .video
+        .as_ref()
+        .map(|name| out.join(name))
+        .filter(|p| p.is_file())
+        .context("The bundle has no video")?;
+    let wav = out.join("audio.wav");
+    let recorded = if wav.is_file() {
+        Some(audio::recorded_audio_from_wav(std::fs::read(&wav)?)?)
+    } else {
+        None
+    };
+    let offset = old.video_offset_ms;
+    let ((transcript, transcribe_ms), joined) = std::thread::scope(|scope| {
+        let frames = scope.spawn(|| {
+            let t0 = std::time::Instant::now();
+            let res = helper::frames(&video, helper::FrameTimes::Every(220), 640);
+            (res, t0.elapsed().as_millis() as u64)
+        });
+        let t0 = std::time::Instant::now();
+        let tr =
+            transcribe::transcribe(recorded.as_ref().map(|_| wav.as_path()), recorded.as_ref());
+        ((tr, t0.elapsed().as_millis() as u64), frames.join())
+    });
+    let (frames, candidates_ms) = joined.map_err(|_| anyhow::anyhow!("Frame decoding panicked"))?;
+    let mut frames = frames?;
+    for frame in &mut frames {
+        frame.t_ms += offset;
+    }
+    let full_frames = Some(movie_keyframes(video.clone(), offset));
+    Ok(build_bundle_from_parts(
+        out,
+        old.target,
+        old.duration_ms,
+        frames,
+        old.strokes,
+        old.events,
+        transcript,
+        Some(video),
+        old.note,
+        SourceExtras {
+            activity: windows::ActivityLog {
+                windows: old.windows,
+                cursor: old.cursor,
+                ..Default::default()
+            },
+            full_frames,
+            video_offset_ms: offset,
+            timings: StageTimings {
+                started_at: Some(started_at),
+                candidates_ms: Some(candidates_ms),
+                transcribe_ms: Some(transcribe_ms),
+                ..Default::default()
+            },
+            ..SourceExtras::default()
+        },
+    )?
+    .2)
 }
 
 /// A bundle without its transcript yet (the speech model was still downloading) gets it later.
@@ -1803,71 +1897,45 @@ fn main() -> Result<()> {
                 )?
                 .2
             } else {
-                let started_at = std::time::Instant::now();
-                let audio = old
+                if let Some(audio) = old
                     .audio
                     .as_ref()
                     .map(|a| dir.join(a))
-                    .filter(|p| p.is_file());
-                let recorded = match &audio {
-                    Some(path) => {
-                        std::fs::copy(path, out.join("audio.wav"))?;
-                        Some(audio::recorded_audio_from_wav(std::fs::read(path)?)?)
-                    }
-                    None => None,
-                };
-                let wav = out.join("audio.wav");
-                let offset = old.video_offset_ms;
-                let ((transcript, transcribe_ms), joined) = std::thread::scope(|scope| {
-                    let frames = scope.spawn(|| {
-                        let t0 = std::time::Instant::now();
-                        let res = helper::frames(&copied, helper::FrameTimes::Every(220), 640);
-                        (res, t0.elapsed().as_millis() as u64)
-                    });
-                    let t0 = std::time::Instant::now();
-                    let tr = transcribe::transcribe(
-                        recorded.as_ref().map(|_| wav.as_path()),
-                        recorded.as_ref(),
-                    );
-                    ((tr, t0.elapsed().as_millis() as u64), frames.join())
-                });
-                let (frames, candidates_ms) =
-                    joined.map_err(|_| anyhow::anyhow!("Frame decoding panicked"))?;
-                let mut frames = frames?;
-                for frame in &mut frames {
-                    frame.t_ms += offset;
+                    .filter(|p| p.is_file())
+                {
+                    std::fs::copy(audio, out.join("audio.wav"))?;
                 }
-                let full_frames = Some(movie_keyframes(copied.clone(), offset));
-                build_bundle_from_parts(
+                rebuild_screen_bundle(
                     &out,
-                    old.target,
-                    old.duration_ms,
-                    frames,
-                    old.strokes,
-                    old.events,
-                    transcript,
-                    Some(copied),
-                    old.note,
-                    SourceExtras {
-                        activity: windows::ActivityLog {
-                            windows: old.windows,
-                            cursor: old.cursor,
-                            ..Default::default()
-                        },
-                        full_frames,
-                        video_offset_ms: offset,
-                        timings: StageTimings {
-                            started_at: Some(started_at),
-                            candidates_ms: Some(candidates_ms),
-                            transcribe_ms: Some(transcribe_ms),
-                            ..Default::default()
-                        },
-                        ..SourceExtras::default()
+                    recover::Unfinished {
+                        target: old.target,
+                        duration_ms: old.duration_ms,
+                        video: copied
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned()),
+                        video_offset_ms: old.video_offset_ms,
+                        strokes: old.strokes,
+                        events: old.events,
+                        note: old.note,
+                        windows: old.windows,
+                        cursor: old.cursor,
                     },
                 )?
-                .2
             };
             print!("{summary}");
+            Ok(())
+        }
+        Command::Recover { captures } => {
+            let captures = captures.unwrap_or_else(handoff::default_captures_dir);
+            let results = recover::run(&captures);
+            let failed = results.iter().filter(|(_, r)| r.is_err()).count();
+            for (dir, result) in results {
+                match result {
+                    Ok(_) => println!("rebuilt {}", dir.display()),
+                    Err(error) => println!("failed  {}: {error:#}", dir.display()),
+                }
+            }
+            ensure!(failed == 0, "{failed} bundle(s) could not be rebuilt");
             Ok(())
         }
         Command::Lab {

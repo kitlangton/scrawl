@@ -140,8 +140,7 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
         return Ok(transcript);
     }
 
-    transcribe_cpp::disable_logging();
-    transcribe_cpp::init_backends_default().context("transcribe.cpp backends")?;
+    init_backends()?;
     let model = Model::load(&path).with_context(|| format!("Could not load {}", path.display()))?;
     let mut session = model.session()?;
     let options = RunOptions {
@@ -205,6 +204,18 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
     }
     transcript.text = texts.join(" ");
     Ok(transcript)
+}
+
+/// Loads ggml's CPU backend DLL for this CPU (beside `transcribe.dll`), once per process: the
+/// registry it fills isn't safe to change while another thread loads a model.
+fn init_backends() -> Result<()> {
+    static INIT: std::sync::OnceLock<std::result::Result<(), String>> = std::sync::OnceLock::new();
+    INIT.get_or_init(|| {
+        transcribe_cpp::disable_logging();
+        transcribe_cpp::init_backends_default().map_err(|error| format!("{error:#}"))
+    })
+    .clone()
+    .map_err(|error| anyhow::anyhow!("transcribe.cpp backends: {error}"))
 }
 
 /// Makes sure a model is on disk: `installed` when Hex's or Scrawl's own is there, else downloads
@@ -359,16 +370,39 @@ mod tests {
         assert!(verified_in(&dir).is_empty());
     }
 
-    /// Downloads the real model (731 MB) and loads it. CI's release job runs it.
+    /// Downloads the real model (731 MB), loads it and runs it on two seconds of sound. CI's
+    /// release job runs it, then again under Intel SDE as a CPU without AVX-512 (#58), with
+    /// `SCRAWL_TEST_MODEL_DIR` keeping the download between the two.
     #[test]
     #[ignore]
-    fn downloads_and_loads_parakeet() {
-        let dir = temp_dir("parakeet");
+    fn downloads_and_runs_parakeet() {
+        let kept = std::env::var_os("SCRAWL_TEST_MODEL_DIR").map(PathBuf::from);
+        let dir = kept.clone().unwrap_or_else(|| temp_dir("parakeet"));
+        let fresh = !dir.join(PARAKEET.filename).is_file();
         let mut last = 0.0;
         let model = download(&PARAKEET, &dir, &mut |done| last = done).unwrap();
-        assert_eq!(last, 1.0);
-        transcribe_cpp::init_backends_default().unwrap();
-        Model::load(&model).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
+        if fresh {
+            assert_eq!(last, 1.0);
+        }
+        if std::env::var_os("SCRAWL_TEST_NO_AVX512").is_some() {
+            // Under SDE: proves the emulated CPU is the one without AVX-512.
+            assert!(!std::arch::is_x86_feature_detected!("avx512f"));
+        }
+        init_backends().unwrap();
+        for device in transcribe_cpp::devices() {
+            eprintln!("device: {} ({})", device.name, device.description);
+        }
+        let model = Model::load(&model).unwrap();
+        let pcm: Vec<f32> = (0..32_000)
+            .map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / 16_000.0).sin() * 0.1)
+            .collect();
+        model
+            .session()
+            .unwrap()
+            .run(&pcm, &RunOptions::default())
+            .unwrap();
+        if kept.is_none() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

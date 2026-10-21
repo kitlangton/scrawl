@@ -37,8 +37,13 @@ jobs:
         with:
           cache-on-failure: true
       - run: cargo build --locked
+      - name: No AVX-512 outside the CPU backends that need it
+        run: scripts\check-windows-cpu-tiers.ps1 target\debug
       - run: cargo test --locked
       - uses: actions/upload-artifact@v5
         with:
           name: scrawl-windows-x86_64
-          path: target/debug/scrawl.exe
+          path: |
+            target/debug/scrawl.exe
+            target/debug/transcribe.dll
+            target/debug/ggml*.dll

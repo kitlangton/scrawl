@@ -47,6 +47,9 @@ jobs:
       - name: scrawl --help runs headless
         run: '& $env:EXE --help'
 
+      - name: No AVX-512 outside the CPU backends that need it
+        run: scripts\check-windows-cpu-tiers.ps1 target\x86_64-pc-windows-msvc\release
+
       # A fresh runner has no Scrawl config, so the app opens the welcome window. Scrawl leaves its
       # own windows out of screen captures unless SCRAWL_SHOW_OWN_WINDOWS is set.
       - name: The welcome window opens on a fresh profile
@@ -76,20 +79,44 @@ jobs:
           path: dist/welcome.png
           if-no-files-found: warn
 
-      - name: Check the executable needs no Visual C++ Redistributable
+      - name: Check the executable and DLLs need no Visual C++ Redistributable
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vs = & $vswhere -latest -products * -property installationPath
           $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
-          $deps = & $dumpbin.FullName /nologo /dependents $env:EXE | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
-          if ($LASTEXITCODE -ne 0) { throw "dumpbin failed with exit code $LASTEXITCODE" }
+          $files = @($env:EXE) + (Get-ChildItem target\x86_64-pc-windows-msvc\release\transcribe.dll, target\x86_64-pc-windows-msvc\release\ggml*.dll).FullName
+          $deps = $files | ForEach-Object {
+            & $dumpbin.FullName /nologo /dependents $_
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $_ with exit code $LASTEXITCODE" }
+          } | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() } | Sort-Object -Unique
           "imports:"; $deps
           $redist = $deps | Where-Object { $_ -match '^(vcruntime|msvcp|concrt|vcomp)' }
-          if ($redist) { throw "scrawl.exe imports Visual C++ runtime DLLs: $redist" }
+          if ($redist) { throw "Scrawl imports Visual C++ runtime DLLs: $redist" }
 
-      - name: Downloads and loads the speech model
+      - name: Downloads and runs the speech model
+        env:
+          SCRAWL_TEST_MODEL_DIR: ${{ runner.temp }}\speech-model
         run: cargo test ${{ env.BUILD }} win::speech -- --ignored --nocapture
+
+      # The runner has AVX-512; Intel SDE runs the model again as a Lunar Lake CPU (AVX2 and
+      # AVX-VNNI, no AVX-512), the one that crashed in #58. ggml then loads the alderlake backend.
+      - uses: petarpetrovt/setup-sde@v6.0
+      - name: Runs the speech model on a CPU without AVX-512
+        timeout-minutes: 30
+        shell: pwsh
+        env:
+          SCRAWL_TEST_MODEL_DIR: ${{ runner.temp }}\speech-model
+          SCRAWL_TEST_NO_AVX512: "1"
+        run: |
+          $test = cargo test ${{ env.BUILD }} --bin scrawl --no-run --message-format=json |
+            ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.reason -eq "compiler-artifact" -and $_.target.name -eq "scrawl" -and $_.profile.test } |
+            Select-Object -ExpandProperty executable -First 1
+          "test binary: $test"
+          $sde = Get-ChildItem $env:SDE_PATH -Recurse -Filter sde.exe | Select-Object -First 1
+          & $sde.FullName -lnl -- $test win::speech::tests::downloads_and_runs_parakeet --exact --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "failed under SDE -lnl (exit $LASTEXITCODE)" }
 
       - name: Package
         id: package
@@ -100,11 +127,13 @@ jobs:
           $dir = "dist\Scrawl"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item $env:EXE "$dir\scrawl.exe"
+          Copy-Item target\x86_64-pc-windows-msvc\release\transcribe.dll, target\x86_64-pc-windows-msvc\release\ggml*.dll $dir
           Copy-Item LICENSE "$dir\LICENSE.txt"
           @"
           Scrawl $version for Windows (preview)
 
-          Run scrawl.exe. Scrawl lives in the notification area; press Alt+Shift+S to record.
+          Run scrawl.exe, keeping the DLLs beside it. Scrawl lives in the notification area;
+          press Alt+Shift+S to record.
 
           This build isn't signed yet, so Windows may say "Windows protected your PC".
           Click More info, then Run anyway.

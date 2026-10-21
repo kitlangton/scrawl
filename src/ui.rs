@@ -5264,6 +5264,7 @@ pub fn run_app(
         start_global_input_tap(Arc::clone(&telemetry));
         platform::start_updates();
         crate::retention::start();
+        crate::recover::start();
         crate::hex::watch();
         crate::speech_model::ensure();
         let menu_rx = install_status_bar();
