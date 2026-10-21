@@ -32,8 +32,8 @@ pub enum Scene {
     TapThenWindow,
     /// Tap: recording + chips, then the Screen chip folds them back.
     TapThenScreen,
-    /// Hold: the picker opens on Screen, a click on Area, then Screen, then Screen again records.
-    HoldThenPick,
+    /// The menu's picker opens on Screen, a click on Area, then Screen, then Screen again records.
+    Picker,
     /// Tap, chips fold, finish: processing, then done, then dismissed.
     Finish,
     /// Tap: recording + chips, then cancel straight from the recording.
@@ -59,7 +59,7 @@ impl Scene {
             Self::TapThenArea => "tap-then-area",
             Self::TapThenWindow => "tap-then-window",
             Self::TapThenScreen => "tap-then-screen",
-            Self::HoldThenPick => "hold-then-pick",
+            Self::Picker => "picker",
             Self::Finish => "finish",
             Self::Cancel => "cancel",
             Self::Dismiss => "dismiss",
@@ -89,7 +89,7 @@ impl Scene {
                     (2.4, Step::Cancel),
                 ]
             }
-            Self::HoldThenPick => vec![
+            Self::Picker => vec![
                 (0.0, Step::Open),
                 (0.9, Step::Click(Area)),
                 (1.8, Step::Click(Screen)),

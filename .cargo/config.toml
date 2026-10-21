@@ -3,7 +3,12 @@
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
 
+[env]
+# The oldest macOS Scrawl runs on (LSMinimumSystemVersion). Without it, C dependencies built
+# through `cc` (psm, ring) take the build machine's SDK version as their minimum, and that ends
+# up in the `scrawl` binary's LC_BUILD_VERSION.
+MACOSX_DEPLOYMENT_TARGET = "15.0"
+
 # transcribe-cpp's CMake build defaults to the DLL runtime (/MD) even when Rust
 # links statically, so pin its MSVC runtime to match.
-[env]
 CMAKE_ARGS = "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"

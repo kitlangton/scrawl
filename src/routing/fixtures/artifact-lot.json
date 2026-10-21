@@ -1,0 +1,1547 @@
+{
+  "capture": "scrawl-1792532925341-c160-19.scrawl",
+  "savedDecision": "send CANVAS",
+  "page": {
+    "url": "https://studio.taila8e7c7.ts.net:8444/raw/lot-2026-10-20/iteration-2.jpg",
+    "served": "https://studio.taila8e7c7.ts.net:8444/raw/",
+    "file": "lot-2026-10-20/iteration-2.jpg",
+    "modifiedMs": 1792530527365,
+    "writes": [
+      {
+        "session": "ses_ea50678ecffefpFGa2k3TPUt30",
+        "root": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "tool": "shell",
+        "ran": 1792528881250,
+        "done": 1792528881362
+      },
+      {
+        "session": "ses_ea50678ecffefpFGa2k3TPUt30",
+        "root": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "tool": "shell",
+        "ran": 1792528884793,
+        "done": 1792528884894
+      },
+      {
+        "session": "ses_ea50678ecffefpFGa2k3TPUt30",
+        "root": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "tool": "read",
+        "ran": 1792528890647,
+        "done": 1792528890675
+      },
+      {
+        "session": "ses_ea5daf43dffevB306S6c8LAD8E",
+        "root": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "tool": "shell",
+        "ran": 1792529470949,
+        "done": 1792529471860
+      },
+      {
+        "session": "ses_ea5daf43dffevB306S6c8LAD8E",
+        "root": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "tool": "shell",
+        "ran": 1792529505436,
+        "done": 1792529505503
+      },
+      {
+        "session": "ses_ea5daf43dffevB306S6c8LAD8E",
+        "root": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "tool": "shell",
+        "ran": 1792529648690,
+        "done": 1792529648847
+      },
+      {
+        "session": "ses_ea5daf43dffevB306S6c8LAD8E",
+        "root": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "tool": "execute",
+        "ran": 1792529662017,
+        "done": 1792529662056
+      },
+      {
+        "session": "ses_ea5daf43dffevB306S6c8LAD8E",
+        "root": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "tool": "shell",
+        "ran": 1792529679883,
+        "done": 1792529679932
+      },
+      {
+        "session": "ses_ea5daf43dffevB306S6c8LAD8E",
+        "root": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "tool": "shell",
+        "ran": 1792529736011,
+        "done": 1792529737101
+      },
+      {
+        "session": "ses_ea5daf43dffevB306S6c8LAD8E",
+        "root": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "tool": "shell",
+        "ran": 1792530526279,
+        "done": 1792530527393
+      }
+    ]
+  },
+  "bundle": {
+    "version": 1,
+    "id": "scrawl-1792532925341-c160-19",
+    "createdAtMs": 1792532977736,
+    "durationMs": 52094,
+    "target": {
+      "mode": "display",
+      "app": "Brave Browser",
+      "bundleId": "com.brave.Browser",
+      "windowTitle": "iteration-2.jpg (3840×1122)",
+      "displayId": 3,
+      "frame": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 2560.0,
+        "height": 1440.0,
+        "scale": 2.0
+      }
+    },
+    "transcript": {
+      "source": "speech-analyzer",
+      "model": "SpeechTranscriber en_US",
+      "text": "Oh, wow, this is much, much closer. It's almost identical. I think the car is facing the wrong way. I don't know what these, there's some lines in there. You can't see as much of the road, closer to you. I kind of like it. It's like fuzzier than this one you can see more of it in the darkness. It's kind of all hidden here. The light streaks are maybe a little nicer and there. I don't know which one's more realistic. And also you can't see through the glass in ours, but you can see it. Do it in mirrors, I think. And the light, okay, has this nice light comes. Where our light comes. But definitely getting better. Also, yeah, his fog descends more, like the trees are thicker and they kind of connect, make a better silhouette. Towers doesn't, and it's shadier up there, more atmospheric. And they hear some like stuff on the ground and we don't.",
+      "segments": [],
+      "words": [
+        {
+          "t0": 60,
+          "t1": 480,
+          "text": "Oh,"
+        },
+        {
+          "t0": 480,
+          "t1": 840,
+          "text": "wow,"
+        },
+        {
+          "t0": 840,
+          "t1": 960,
+          "text": "this"
+        },
+        {
+          "t0": 960,
+          "t1": 1080,
+          "text": "is"
+        },
+        {
+          "t0": 1080,
+          "t1": 1500,
+          "text": "much,"
+        },
+        {
+          "t0": 1500,
+          "t1": 1740,
+          "text": "much"
+        },
+        {
+          "t0": 1740,
+          "t1": 2220,
+          "text": "closer."
+        },
+        {
+          "t0": 2280,
+          "t1": 2580,
+          "text": "It's"
+        },
+        {
+          "t0": 2580,
+          "t1": 2640,
+          "text": "almost"
+        },
+        {
+          "t0": 2640,
+          "t1": 3840,
+          "text": "identical."
+        },
+        {
+          "t0": 3900,
+          "t1": 3960,
+          "text": "I"
+        },
+        {
+          "t0": 3960,
+          "t1": 4080,
+          "text": "think"
+        },
+        {
+          "t0": 4080,
+          "t1": 4200,
+          "text": "the"
+        },
+        {
+          "t0": 4200,
+          "t1": 4260,
+          "text": "car"
+        },
+        {
+          "t0": 4260,
+          "t1": 4440,
+          "text": "is"
+        },
+        {
+          "t0": 4440,
+          "t1": 4680,
+          "text": "facing"
+        },
+        {
+          "t0": 4680,
+          "t1": 4800,
+          "text": "the"
+        },
+        {
+          "t0": 4800,
+          "t1": 4920,
+          "text": "wrong"
+        },
+        {
+          "t0": 4920,
+          "t1": 5160,
+          "text": "way."
+        },
+        {
+          "t0": 5220,
+          "t1": 5280,
+          "text": "I"
+        },
+        {
+          "t0": 5280,
+          "t1": 5520,
+          "text": "don't"
+        },
+        {
+          "t0": 5520,
+          "t1": 5580,
+          "text": "know"
+        },
+        {
+          "t0": 5580,
+          "t1": 5700,
+          "text": "what"
+        },
+        {
+          "t0": 5700,
+          "t1": 6000,
+          "text": "these,"
+        },
+        {
+          "t0": 6000,
+          "t1": 6420,
+          "text": "there's"
+        },
+        {
+          "t0": 6420,
+          "t1": 6480,
+          "text": "some"
+        },
+        {
+          "t0": 6480,
+          "t1": 6720,
+          "text": "lines"
+        },
+        {
+          "t0": 6720,
+          "t1": 6840,
+          "text": "in"
+        },
+        {
+          "t0": 6840,
+          "t1": 7740,
+          "text": "there."
+        },
+        {
+          "t0": 7860,
+          "t1": 8160,
+          "text": "You"
+        },
+        {
+          "t0": 8160,
+          "t1": 8520,
+          "text": "can't"
+        },
+        {
+          "t0": 8520,
+          "t1": 8640,
+          "text": "see"
+        },
+        {
+          "t0": 8640,
+          "t1": 9600,
+          "text": "as"
+        },
+        {
+          "t0": 9600,
+          "t1": 9900,
+          "text": "much"
+        },
+        {
+          "t0": 9900,
+          "t1": 10080,
+          "text": "of"
+        },
+        {
+          "t0": 10080,
+          "t1": 10200,
+          "text": "the"
+        },
+        {
+          "t0": 10200,
+          "t1": 11580,
+          "text": "road,"
+        },
+        {
+          "t0": 11580,
+          "t1": 11940,
+          "text": "closer"
+        },
+        {
+          "t0": 11940,
+          "t1": 12060,
+          "text": "to"
+        },
+        {
+          "t0": 12060,
+          "t1": 12300,
+          "text": "you."
+        },
+        {
+          "t0": 12360,
+          "t1": 12420,
+          "text": "I"
+        },
+        {
+          "t0": 12420,
+          "t1": 12540,
+          "text": "kind"
+        },
+        {
+          "t0": 12540,
+          "t1": 12660,
+          "text": "of"
+        },
+        {
+          "t0": 12660,
+          "t1": 12720,
+          "text": "like"
+        },
+        {
+          "t0": 12720,
+          "t1": 12960,
+          "text": "it."
+        },
+        {
+          "t0": 13020,
+          "t1": 13260,
+          "text": "It's"
+        },
+        {
+          "t0": 13260,
+          "t1": 13380,
+          "text": "like"
+        },
+        {
+          "t0": 13380,
+          "t1": 13920,
+          "text": "fuzzier"
+        },
+        {
+          "t0": 13920,
+          "t1": 14580,
+          "text": "than"
+        },
+        {
+          "t0": 14580,
+          "t1": 14760,
+          "text": "this"
+        },
+        {
+          "t0": 14760,
+          "t1": 14940,
+          "text": "one"
+        },
+        {
+          "t0": 14940,
+          "t1": 15120,
+          "text": "you"
+        },
+        {
+          "t0": 15120,
+          "t1": 15180,
+          "text": "can"
+        },
+        {
+          "t0": 15180,
+          "t1": 15420,
+          "text": "see"
+        },
+        {
+          "t0": 15420,
+          "t1": 15600,
+          "text": "more"
+        },
+        {
+          "t0": 15600,
+          "t1": 15720,
+          "text": "of"
+        },
+        {
+          "t0": 15720,
+          "t1": 15840,
+          "text": "it"
+        },
+        {
+          "t0": 15840,
+          "t1": 16200,
+          "text": "in"
+        },
+        {
+          "t0": 16200,
+          "t1": 16320,
+          "text": "the"
+        },
+        {
+          "t0": 16320,
+          "t1": 16920,
+          "text": "darkness."
+        },
+        {
+          "t0": 17040,
+          "t1": 17520,
+          "text": "It's"
+        },
+        {
+          "t0": 17520,
+          "t1": 17640,
+          "text": "kind"
+        },
+        {
+          "t0": 17640,
+          "t1": 17700,
+          "text": "of"
+        },
+        {
+          "t0": 17700,
+          "t1": 18060,
+          "text": "all"
+        },
+        {
+          "t0": 18060,
+          "t1": 18420,
+          "text": "hidden"
+        },
+        {
+          "t0": 18420,
+          "t1": 18960,
+          "text": "here."
+        },
+        {
+          "t0": 19260,
+          "t1": 19440,
+          "text": "The"
+        },
+        {
+          "t0": 19440,
+          "t1": 19620,
+          "text": "light"
+        },
+        {
+          "t0": 19620,
+          "t1": 20100,
+          "text": "streaks"
+        },
+        {
+          "t0": 20100,
+          "t1": 20220,
+          "text": "are"
+        },
+        {
+          "t0": 20220,
+          "t1": 20580,
+          "text": "maybe"
+        },
+        {
+          "t0": 20580,
+          "t1": 20760,
+          "text": "a"
+        },
+        {
+          "t0": 20760,
+          "t1": 20820,
+          "text": "little"
+        },
+        {
+          "t0": 20820,
+          "t1": 21180,
+          "text": "nicer"
+        },
+        {
+          "t0": 21180,
+          "t1": 21300,
+          "text": "and"
+        },
+        {
+          "t0": 21300,
+          "t1": 21480,
+          "text": "there."
+        },
+        {
+          "t0": 21540,
+          "t1": 21600,
+          "text": "I"
+        },
+        {
+          "t0": 21600,
+          "t1": 21840,
+          "text": "don't"
+        },
+        {
+          "t0": 21840,
+          "t1": 21900,
+          "text": "know"
+        },
+        {
+          "t0": 21900,
+          "t1": 22020,
+          "text": "which"
+        },
+        {
+          "t0": 22020,
+          "t1": 22320,
+          "text": "one's"
+        },
+        {
+          "t0": 22320,
+          "t1": 22380,
+          "text": "more"
+        },
+        {
+          "t0": 22380,
+          "t1": 23040,
+          "text": "realistic."
+        },
+        {
+          "t0": 23340,
+          "t1": 23640,
+          "text": "And"
+        },
+        {
+          "t0": 23640,
+          "t1": 23820,
+          "text": "also"
+        },
+        {
+          "t0": 23820,
+          "t1": 24120,
+          "text": "you"
+        },
+        {
+          "t0": 24120,
+          "t1": 24360,
+          "text": "can't"
+        },
+        {
+          "t0": 24360,
+          "t1": 24480,
+          "text": "see"
+        },
+        {
+          "t0": 24480,
+          "t1": 24660,
+          "text": "through"
+        },
+        {
+          "t0": 24660,
+          "t1": 24780,
+          "text": "the"
+        },
+        {
+          "t0": 24780,
+          "t1": 24900,
+          "text": "glass"
+        },
+        {
+          "t0": 24900,
+          "t1": 25260,
+          "text": "in"
+        },
+        {
+          "t0": 25260,
+          "t1": 25620,
+          "text": "ours,"
+        },
+        {
+          "t0": 25620,
+          "t1": 25740,
+          "text": "but"
+        },
+        {
+          "t0": 25740,
+          "t1": 25920,
+          "text": "you"
+        },
+        {
+          "t0": 25920,
+          "t1": 26040,
+          "text": "can"
+        },
+        {
+          "t0": 26040,
+          "t1": 26220,
+          "text": "see"
+        },
+        {
+          "t0": 26220,
+          "t1": 26760,
+          "text": "it."
+        },
+        {
+          "t0": 27300,
+          "t1": 27600,
+          "text": "Do"
+        },
+        {
+          "t0": 27600,
+          "t1": 27840,
+          "text": "it"
+        },
+        {
+          "t0": 27840,
+          "t1": 27960,
+          "text": "in"
+        },
+        {
+          "t0": 27960,
+          "t1": 28740,
+          "text": "mirrors,"
+        },
+        {
+          "t0": 28740,
+          "t1": 28860,
+          "text": "I"
+        },
+        {
+          "t0": 28860,
+          "t1": 29100,
+          "text": "think."
+        },
+        {
+          "t0": 29880,
+          "t1": 30180,
+          "text": "And"
+        },
+        {
+          "t0": 30180,
+          "t1": 30420,
+          "text": "the"
+        },
+        {
+          "t0": 30420,
+          "t1": 30900,
+          "text": "light,"
+        },
+        {
+          "t0": 30900,
+          "t1": 31080,
+          "text": "okay,"
+        },
+        {
+          "t0": 31080,
+          "t1": 31200,
+          "text": "has"
+        },
+        {
+          "t0": 31200,
+          "t1": 31320,
+          "text": "this"
+        },
+        {
+          "t0": 31320,
+          "t1": 31500,
+          "text": "nice"
+        },
+        {
+          "t0": 31500,
+          "t1": 31680,
+          "text": "light"
+        },
+        {
+          "t0": 31680,
+          "t1": 32280,
+          "text": "comes."
+        },
+        {
+          "t0": 32340,
+          "t1": 32640,
+          "text": "Where"
+        },
+        {
+          "t0": 32640,
+          "t1": 33420,
+          "text": "our"
+        },
+        {
+          "t0": 33420,
+          "t1": 33600,
+          "text": "light"
+        },
+        {
+          "t0": 33600,
+          "t1": 34620,
+          "text": "comes."
+        },
+        {
+          "t0": 35100,
+          "t1": 35400,
+          "text": "But"
+        },
+        {
+          "t0": 35400,
+          "t1": 35700,
+          "text": "definitely"
+        },
+        {
+          "t0": 35700,
+          "t1": 36000,
+          "text": "getting"
+        },
+        {
+          "t0": 36000,
+          "t1": 36960,
+          "text": "better."
+        },
+        {
+          "t0": 37020,
+          "t1": 37380,
+          "text": "Also,"
+        },
+        {
+          "t0": 37380,
+          "t1": 37680,
+          "text": "yeah,"
+        },
+        {
+          "t0": 37680,
+          "t1": 37740,
+          "text": "his"
+        },
+        {
+          "t0": 37740,
+          "t1": 38100,
+          "text": "fog"
+        },
+        {
+          "t0": 38100,
+          "t1": 38700,
+          "text": "descends"
+        },
+        {
+          "t0": 38700,
+          "t1": 39060,
+          "text": "more,"
+        },
+        {
+          "t0": 39060,
+          "t1": 39120,
+          "text": "like"
+        },
+        {
+          "t0": 39120,
+          "t1": 39240,
+          "text": "the"
+        },
+        {
+          "t0": 39240,
+          "t1": 39420,
+          "text": "trees"
+        },
+        {
+          "t0": 39420,
+          "t1": 39600,
+          "text": "are"
+        },
+        {
+          "t0": 39600,
+          "t1": 39900,
+          "text": "thicker"
+        },
+        {
+          "t0": 39900,
+          "t1": 40140,
+          "text": "and"
+        },
+        {
+          "t0": 40140,
+          "t1": 40260,
+          "text": "they"
+        },
+        {
+          "t0": 40260,
+          "t1": 40380,
+          "text": "kind"
+        },
+        {
+          "t0": 40380,
+          "t1": 40500,
+          "text": "of"
+        },
+        {
+          "t0": 40500,
+          "t1": 40980,
+          "text": "connect,"
+        },
+        {
+          "t0": 40980,
+          "t1": 41640,
+          "text": "make"
+        },
+        {
+          "t0": 41640,
+          "t1": 41880,
+          "text": "a"
+        },
+        {
+          "t0": 41880,
+          "t1": 42060,
+          "text": "better"
+        },
+        {
+          "t0": 42060,
+          "t1": 42900,
+          "text": "silhouette."
+        },
+        {
+          "t0": 42960,
+          "t1": 43200,
+          "text": "Towers"
+        },
+        {
+          "t0": 43200,
+          "t1": 43680,
+          "text": "doesn't,"
+        },
+        {
+          "t0": 43680,
+          "t1": 44580,
+          "text": "and"
+        },
+        {
+          "t0": 44580,
+          "t1": 45000,
+          "text": "it's"
+        },
+        {
+          "t0": 45000,
+          "t1": 45420,
+          "text": "shadier"
+        },
+        {
+          "t0": 45420,
+          "t1": 45600,
+          "text": "up"
+        },
+        {
+          "t0": 45600,
+          "t1": 46140,
+          "text": "there,"
+        },
+        {
+          "t0": 46140,
+          "t1": 46260,
+          "text": "more"
+        },
+        {
+          "t0": 46260,
+          "t1": 47280,
+          "text": "atmospheric."
+        },
+        {
+          "t0": 48840,
+          "t1": 49140,
+          "text": "And"
+        },
+        {
+          "t0": 49140,
+          "t1": 49260,
+          "text": "they"
+        },
+        {
+          "t0": 49260,
+          "t1": 49380,
+          "text": "hear"
+        },
+        {
+          "t0": 49380,
+          "t1": 49620,
+          "text": "some"
+        },
+        {
+          "t0": 49620,
+          "t1": 49740,
+          "text": "like"
+        },
+        {
+          "t0": 49740,
+          "t1": 49980,
+          "text": "stuff"
+        },
+        {
+          "t0": 49980,
+          "t1": 50160,
+          "text": "on"
+        },
+        {
+          "t0": 50160,
+          "t1": 50220,
+          "text": "the"
+        },
+        {
+          "t0": 50220,
+          "t1": 50340,
+          "text": "ground"
+        },
+        {
+          "t0": 50340,
+          "t1": 50640,
+          "text": "and"
+        },
+        {
+          "t0": 50640,
+          "t1": 50820,
+          "text": "we"
+        },
+        {
+          "t0": 50820,
+          "t1": 51240,
+          "text": "don't."
+        }
+      ]
+    },
+    "strokes": [],
+    "marks": [
+      {
+        "id": "m1",
+        "strokes": [
+          0
+        ],
+        "t0": 3742,
+        "t1": 4260,
+        "boxNorm": [
+          0.6756,
+          0.5689,
+          0.7033,
+          0.5892
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.68–0.70, y 0.57–0.59 over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-01.png"
+      },
+      {
+        "id": "m2",
+        "strokes": [
+          1
+        ],
+        "t0": 5645,
+        "t1": 6729,
+        "boxNorm": [
+          0.6587,
+          0.5941,
+          0.6872,
+          0.6058
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.66–0.69, y 0.59–0.61 over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-01.png"
+      },
+      {
+        "id": "m3",
+        "strokes": [
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "t0": 8089,
+        "t1": 13208,
+        "boxNorm": [
+          0.2653,
+          0.5976,
+          0.9993,
+          0.7553
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.27–1.00, y 0.60–0.76 (6 strokes) over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-01.png"
+      },
+      {
+        "id": "m4",
+        "strokes": [
+          8,
+          9,
+          10,
+          11,
+          12,
+          13
+        ],
+        "t0": 13385,
+        "t1": 18480,
+        "boxNorm": [
+          0.1485,
+          0.613,
+          0.9657,
+          0.7672
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.15–0.97, y 0.61–0.77 (6 strokes) over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-02.png"
+      },
+      {
+        "id": "m5",
+        "strokes": [
+          14,
+          15
+        ],
+        "t0": 19685,
+        "t1": 20855,
+        "boxNorm": [
+          0.2969,
+          0.6049,
+          0.3327,
+          0.6451
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.30–0.33, y 0.60–0.65 (2 strokes) over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-02.png"
+      },
+      {
+        "id": "m6",
+        "strokes": [
+          16,
+          17,
+          18
+        ],
+        "t0": 22845,
+        "t1": 25108,
+        "boxNorm": [
+          0.6696,
+          0.5631,
+          0.8308,
+          0.6356
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.67–0.83, y 0.56–0.64 (3 strokes) over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-02.png"
+      },
+      {
+        "id": "m7",
+        "strokes": [
+          19
+        ],
+        "t0": 27562,
+        "t1": 28025,
+        "boxNorm": [
+          0.3098,
+          0.5524,
+          0.3252,
+          0.5754
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.31–0.33, y 0.55–0.58 over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-02.png"
+      },
+      {
+        "id": "m8",
+        "strokes": [
+          20,
+          21,
+          22,
+          23,
+          24,
+          25
+        ],
+        "t0": 31274,
+        "t1": 34471,
+        "boxNorm": [
+          0.2061,
+          0.4876,
+          0.8413,
+          0.5501
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.21–0.84, y 0.49–0.55 (6 strokes) over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-03.png"
+      },
+      {
+        "id": "m9",
+        "strokes": [
+          26,
+          27,
+          28,
+          29,
+          30,
+          31
+        ],
+        "t0": 37575,
+        "t1": 40464,
+        "boxNorm": [
+          0.3426,
+          0.4749,
+          0.9253,
+          0.5465
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.34–0.93, y 0.47–0.55 (6 strokes) over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-03.png"
+      },
+      {
+        "id": "m10",
+        "strokes": [
+          32,
+          33,
+          34,
+          35,
+          36,
+          37
+        ],
+        "t0": 41016,
+        "t1": 45226,
+        "boxNorm": [
+          0.0908,
+          0.3253,
+          0.9665,
+          0.5345
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.09–0.97, y 0.33–0.53 (6 strokes) over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-04.png"
+      },
+      {
+        "id": "m11",
+        "strokes": [
+          38,
+          39
+        ],
+        "t0": 45380,
+        "t1": 46064,
+        "boxNorm": [
+          0.2027,
+          0.3579,
+          0.2871,
+          0.378
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.20–0.29, y 0.36–0.38 (2 strokes) over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-04.png"
+      },
+      {
+        "id": "m12",
+        "strokes": [
+          40,
+          41,
+          42,
+          43
+        ],
+        "t0": 49484,
+        "t1": 50847,
+        "boxNorm": [
+          0.3487,
+          0.5849,
+          0.8673,
+          0.6044
+        ],
+        "shape": "mark",
+        "on": "scroll area in iteration-2.jpg",
+        "description": "marked region x 0.35–0.87, y 0.58–0.60 (4 strokes) over “scroll area in iteration-2.jpg”",
+        "frame": "frames/frame-04.png"
+      }
+    ],
+    "events": [
+      {
+        "kind": "click",
+        "t": 52000,
+        "x": 0.5374649,
+        "y": 0.059016928,
+        "button": "left",
+        "role": "group"
+      }
+    ],
+    "keyframes": [],
+    "contactSheet": "contact-sheet.png"
+  },
+  "evidence": {
+    "clues": [
+      {
+        "source": "port",
+        "pointer": {
+          "kind": "folder",
+          "path": "/Users/kit/code/open-source/gpu-gallery",
+          "root": "/Users/kit/code/open-source/gpu-gallery",
+          "tree": true,
+          "repo": "/Users/kit/code/open-source/gpu-gallery"
+        },
+        "note": "https://studio.taila8e7c7.ts.net:8444 (port 8460 here) is served from /Users/kit/code/open-source/gpu-gallery"
+      },
+      {
+        "source": "title",
+        "pointer": {
+          "kind": "words",
+          "words": [
+            "iteration",
+            "jpg"
+          ]
+        },
+        "note": "window title \"iteration-2.jpg (3840×1122)\""
+      },
+      {
+        "source": "speech",
+        "pointer": {
+          "kind": "words",
+          "words": [
+            "wow",
+            "closer",
+            "almost",
+            "identical",
+            "car",
+            "facing",
+            "wrong",
+            "lines",
+            "road",
+            "fuzzier",
+            "darkness",
+            "hidden",
+            "light",
+            "streaks",
+            "nicer",
+            "ones",
+            "realistic",
+            "glass",
+            "ours",
+            "mirrors",
+            "comes",
+            "definitely",
+            "getting",
+            "his",
+            "fog",
+            "descends",
+            "trees",
+            "thicker",
+            "connect",
+            "silhouette",
+            "towers",
+            "shadier",
+            "atmospheric",
+            "hear",
+            "stuff",
+            "ground"
+          ]
+        },
+        "note": "said"
+      }
+    ],
+    "candidates": [
+      {
+        "id": "ses_f501e10c4ffedeySM4jnNIe3AD",
+        "title": "OPENCODE IOS",
+        "directory": "/Users/kit/code/open-source/opencode-ios-oc380-loading",
+        "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+        "updatedMs": 1792532950765,
+        "viewedMs": 1792532740825
+      },
+      {
+        "id": "ses_edb79c155ffeZ8eqFja5zoWOlX",
+        "title": "DESKTOP",
+        "directory": "/Users/kit/code/open-source/opencode",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792532896456,
+        "viewedMs": 1792532896832
+      },
+      {
+        "id": "ses_eb96316daffevhidtO7Z4W583K",
+        "title": "FLIT",
+        "directory": "/Users/kit/code/open-source/flit",
+        "repo": "/Users/kit/code/open-source/flit",
+        "updatedMs": 1792532894196,
+        "viewedMs": 1792530102033
+      },
+      {
+        "id": "ses_edb816b31ffe4B3nexhh9rqAJp",
+        "title": "SCRAWL",
+        "directory": "/Users/kit/code/open-source/scrawl",
+        "repo": "/Users/kit/code/open-source/scrawl",
+        "updatedMs": 1792532863981,
+        "viewedMs": 1792532693610
+      },
+      {
+        "id": "ses_ed125b1feffeX5uSGJiGJJ0Zq1",
+        "title": "PROBLEMS",
+        "directory": "/Users/kit/code/worktrees/team-board/task-page",
+        "repo": "/Users/kit/code/worktrees/team-board/rewrite",
+        "updatedMs": 1792532720067,
+        "viewedMs": 1792524255129
+      },
+      {
+        "id": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "title": "HEX",
+        "directory": "/Users/kit/code/open-source/hex",
+        "repo": "/Users/kit/code/open-source/hex",
+        "updatedMs": 1792532716045,
+        "viewedMs": 1792531809163
+      },
+      {
+        "id": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "title": "GAME ENGINE",
+        "directory": "/Users/kit/code/open-source/arcade",
+        "repo": "/Users/kit/code/open-source/arcade",
+        "updatedMs": 1792532524049,
+        "viewedMs": 1792532524097
+      },
+      {
+        "id": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "title": "HOME",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792532501892,
+        "viewedMs": 1792532501986
+      },
+      {
+        "id": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "title": "KNOBS",
+        "directory": "/Users/kit/code/open-source/knobs",
+        "repo": "/Users/kit/code/open-source/knobs",
+        "updatedMs": 1792532282559,
+        "viewedMs": 1792531977327
+      },
+      {
+        "id": "ses_ea50d656fffeKREJT4CD0y5Bwt",
+        "title": "OPENCODE DATA",
+        "directory": "/Users/kit/code/worktrees/opencode/stats-data",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792532243272
+      },
+      {
+        "id": "ses_ea859384fffdECcdg0RfwQC1HJ",
+        "title": "PASSWORD AUDIT",
+        "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/46555d/stellar-star",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792531832636,
+        "viewedMs": 1792478242962
+      },
+      {
+        "id": "ses_eb97fd4bcffeuNORqi0lEBAC73",
+        "title": "KIT MOTION",
+        "directory": "/Users/kit/code/home/research/2026-10-16-motion-v3",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792531832626,
+        "viewedMs": 1792517287142
+      },
+      {
+        "id": "ses_ebd33f90bffer4eZZgeryssZt3",
+        "title": "SERVER VOICE",
+        "directory": "/Users/kit/worktrees/opencode/server-voice",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792530160929,
+        "viewedMs": 1792526515843
+      },
+      {
+        "id": "ses_f13460621ffeQz0u4Attrj4Z4l",
+        "title": "SLACKBOT",
+        "directory": "/Users/kit/code/open-source/opencode-slack",
+        "repo": "/Users/kit/code/open-source/opencode-slack",
+        "updatedMs": 1792529440364,
+        "viewedMs": 1792440889443
+      },
+      {
+        "id": "ses_ec318a614ffeQvPht0qntUnIcP",
+        "title": "CANVAS",
+        "directory": "/Users/kit/code/open-source/gpu-gallery",
+        "repo": "/Users/kit/code/open-source/gpu-gallery",
+        "updatedMs": 1792528540028,
+        "viewedMs": 1792524901843
+      },
+      {
+        "id": "ses_ead6919a3ffevHC33dOqB663bd",
+        "title": "Feedback synonym",
+        "directory": "/Users/kit/code/open-source/arcade",
+        "repo": "/Users/kit/code/open-source/arcade",
+        "updatedMs": 1792474285630,
+        "viewedMs": 1792473284006
+      },
+      {
+        "id": "ses_eb4805506ffdExxfN3euuGJzSR",
+        "title": "Quick check-in",
+        "directory": "/Users/kit/code/open-source/scrawl",
+        "repo": "/Users/kit/code/open-source/scrawl",
+        "updatedMs": 1792472119901,
+        "viewedMs": 1792302248443
+      },
+      {
+        "id": "ses_f0c100c89ffeta4TCCxgTHFI2J",
+        "title": "UP DOWN APP",
+        "directory": "/Users/kit/code/open-source/life-hub-uikit",
+        "repo": "/Users/kit/code/open-source/life-hub-uikit",
+        "updatedMs": 1792454885370,
+        "viewedMs": 1792454885390
+      },
+      {
+        "id": "ses_ebea564f3ffeI16n54W8y9Mtyz",
+        "title": "CONSOLE VORTEX",
+        "directory": "/Users/kit/code/open-source/opencode-console",
+        "repo": "/Users/kit/code/open-source/opencode-console",
+        "updatedMs": 1792438810776,
+        "viewedMs": 1792438810783
+      },
+      {
+        "id": "ses_ead6fc607ffeQrhX4zQOyKuUWk",
+        "title": "Streaming Markdown Profiling & Library",
+        "directory": "/Users/kit/code/open-source/streaming-markdown-lab",
+        "updatedMs": 1792437625175,
+        "viewedMs": 1792392138105
+      },
+      {
+        "id": "ses_ead884a3dffephbfYhZ8yrShY4",
+        "title": "JEVAL",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792436507580,
+        "viewedMs": 1792389692797
+      },
+      {
+        "id": "ses_ebe313af4ffex4Y5UKIvEiftzm",
+        "title": "OPENCODE CONSOLE",
+        "directory": "/Users/kit/code/open-source/opencode-console",
+        "repo": "/Users/kit/code/open-source/opencode-console",
+        "updatedMs": 1792431356040,
+        "viewedMs": 1792187291153
+      },
+      {
+        "id": "ses_eb480ee0affeghrrePfmjzMFLX",
+        "title": "Public-site audit fixes",
+        "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/lucky-rocket",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792429760607,
+        "viewedMs": 1792358813510
+      },
+      {
+        "id": "ses_eaf459a69ffeRF6Oq8hjTbVtvR",
+        "title": "MODEL PICKER",
+        "directory": "/Users/kit/code/open-source/opencode-ios-model-picker",
+        "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+        "updatedMs": 1792424967210,
+        "viewedMs": 1792363784492
+      },
+      {
+        "id": "ses_ead37e06cffeRfPkN2vrbdNWDs",
+        "title": "SCRAWL RECORDER",
+        "directory": "/Users/kit/code/open-source/scrawl",
+        "repo": "/Users/kit/code/open-source/scrawl",
+        "updatedMs": 1792391837251,
+        "viewedMs": 1792391837366
+      },
+      {
+        "id": "ses_ead693524ffew0n2o1ghgLBa6q",
+        "title": "Claude typo",
+        "directory": "/Users/kit/code",
+        "updatedMs": 1792386980319,
+        "viewedMs": 1792386977838
+      },
+      {
+        "id": "ses_eb4808112ffdq5ncWwmVhRPaRq",
+        "title": "SPR good to go?",
+        "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/quick-tiger",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792269008625,
+        "viewedMs": 1792268816383
+      },
+      {
+        "id": "ses_ec39487c0ffezso4grvaG2gs9n",
+        "title": "OPEN MONEY",
+        "directory": "/Users/kit/code/open-source/openmoney",
+        "repo": "/Users/kit/code/open-source/openmoney",
+        "updatedMs": 1792251233509,
+        "viewedMs": 1792251233513
+      },
+      {
+        "id": "ses_eb8255eacffe553A73CCAC1745",
+        "title": "Project screenshots",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792206962866,
+        "viewedMs": 1792206962871
+      },
+      {
+        "id": "ses_eb891d476ffeDD0D2B647FDC4B",
+        "title": "Taelin’s infinite-chat compaction algorithm",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792206712130,
+        "viewedMs": 1792206712132
+      },
+      {
+        "id": "ses_ebd58b4a3ffeOuHOBJ84IHoNGc",
+        "title": "DEADBOLT",
+        "directory": "/Users/kit/code/open-source/deadbolt",
+        "repo": "/Users/kit/code/open-source/deadbolt",
+        "updatedMs": 1792177126854,
+        "viewedMs": 1792172591104
+      },
+      {
+        "id": "ses_ec4dfeed7ffebmlNkG7QK04Tqq",
+        "title": "AI TALK",
+        "directory": "/Users/kit/code/open-source/ai-talk",
+        "repo": "/Users/kit/code/open-source/ai-talk",
+        "updatedMs": 1792171656850,
+        "viewedMs": 1792123145000
+      },
+      {
+        "id": "ses_ebef6c45fffevSGyuztH3R6AVp",
+        "title": "BROWSER CONTROL",
+        "directory": "/Users/kit/code/open-source/browser-control",
+        "repo": "/Users/kit/code/open-source/browser-control",
+        "updatedMs": 1792094949860,
+        "viewedMs": 1792094949875
+      },
+      {
+        "id": "ses_ec299b65affePaP87h2UYqEf3x",
+        "title": "free-tier read-only test 3 (delete me)",
+        "directory": "/private/var/folders/4t/_jnrck017r5f_jttbc19b7s40000gn/T/opencode/freetier-test",
+        "updatedMs": 1792031486314,
+        "viewedMs": 1792031486324
+      },
+      {
+        "id": "ses_ec29a0324ffekLZrOzpDctJphz",
+        "title": "free-tier read-only test 2 (delete me)",
+        "directory": "/private/var/folders/4t/_jnrck017r5f_jttbc19b7s40000gn/T/opencode/freetier-test",
+        "updatedMs": 1792031462829,
+        "viewedMs": 1792031462855
+      },
+      {
+        "id": "ses_ec29a4978ffeOYfAtDvrTaG8WG",
+        "title": "free-tier read-only test (delete me)",
+        "directory": "/private/var/folders/4t/_jnrck017r5f_jttbc19b7s40000gn/T/opencode/freetier-test",
+        "updatedMs": 1792031446084,
+        "viewedMs": 1792031446101
+      },
+      {
+        "id": "ses_ec8ac0d73ffeYDTUgKZeuLdJ5X",
+        "title": "CHOOSER",
+        "directory": "/Users/kit/code/experiments/typescript/choose-gpu",
+        "repo": "/Users/kit/code/experiments/typescript/choose-gpu",
+        "updatedMs": 1791956676331,
+        "viewedMs": 1791953219243
+      }
+    ],
+    "nowMs": 1792532977736
+  }
+}

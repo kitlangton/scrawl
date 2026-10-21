@@ -1,0 +1,327 @@
+{
+ "capture": "scrawl-1792525157848-170ef-11.scrawl",
+ "savedDecision": "send OPENCODE IOS",
+ "bundle": {
+  "version": 1,
+  "id": "scrawl-1792525157848-170ef-11",
+  "createdAtMs": 1792525181414,
+  "durationMs": 23213,
+  "target": {
+   "mode": "display",
+   "app": "OpenCode Beta",
+   "bundleId": "ai.opencode.desktop.beta",
+   "windowTitle": "OpenCode",
+   "displayId": 3,
+   "frame": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 2560.0,
+    "height": 1440.0,
+    "scale": 2.0
+   }
+  },
+  "transcript": {
+   "source": "speech-analyzer",
+   "text": "This button is really weird. First of all, the spacing of this whole thing is messed up. And then when I search, like, loading, searching, the flashing, just doesn't look very good, this thing, like, there are definitely better ways of having these kinds of opponents work, and I want to really just, like, make us really good. Oh my goodness, that's bad. Don't we have like a type ahead search component that we could use in multiple places? We got to polish it properly.",
+   "segments": []
+  },
+  "strokes": [],
+  "marks": [
+   {
+    "id": "m1",
+    "strokes": [
+     0,
+     1
+    ],
+    "t0": 670,
+    "t1": 2093,
+    "boxNorm": [
+     0.4321,
+     0.4736,
+     0.5385,
+     0.4961
+    ],
+    "shape": "arrow",
+    "description": "drew an arrow from x 0.43, y 0.49 pointing to x 0.51, y 0.50"
+   }
+  ],
+  "events": [
+   {
+    "kind": "click",
+    "t": 3107,
+    "x": 0.5292145,
+    "y": 0.4895752,
+    "button": "left",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 10128,
+    "x": 0.59112704,
+    "y": 0.5126248,
+    "button": "left",
+    "role": "scroll area"
+   },
+   {
+    "kind": "key",
+    "t": 18303,
+    "shortcut": "\u2318A"
+   },
+   {
+    "kind": "click",
+    "t": 18935,
+    "x": 0.56838685,
+    "y": 0.5186252,
+    "button": "left",
+    "role": "scroll area"
+   },
+   {
+    "kind": "key",
+    "t": 19685,
+    "shortcut": "\u2318A"
+   },
+   {
+    "kind": "click",
+    "t": 23138,
+    "x": 0.5382034,
+    "y": 0.054752603,
+    "button": "left",
+    "label": "\u201cFinish\u201d",
+    "role": "text"
+   }
+  ],
+  "keyframes": [],
+  "contactSheet": "contact-sheet.png"
+ },
+ "evidence": {
+  "clues": [
+   {
+    "source": "speech",
+    "pointer": {
+     "kind": "words",
+     "words": []
+    },
+    "note": "said"
+   },
+   {
+    "source": "viewed",
+    "pointer": {
+     "kind": "session",
+     "id": "ses_f501e10c4ffedeySM4jnNIe3AD"
+    },
+    "note": "OpenCode Desktop showed OPENCODE IOS last (2 min before the capture ended)"
+   }
+  ],
+  "candidates": [
+   {
+    "id": "ses_f501e10c4ffedeySM4jnNIe3AD",
+    "title": "OPENCODE IOS",
+    "directory": "/Users/kit/code/open-source/opencode-ios-oc380-loading",
+    "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+    "updatedMs": 1792525135588,
+    "viewedMs": 1792525001743
+   },
+   {
+    "id": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+    "title": "HOME",
+    "directory": "/Users/kit/code/home",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792525133918,
+    "viewedMs": 1792524271390
+   },
+   {
+    "id": "ses_edb79c155ffeZ8eqFja5zoWOlX",
+    "title": "DESKTOP",
+    "directory": "/Users/kit/code/open-source/opencode",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792525015482,
+    "viewedMs": 1792524888253
+   },
+   {
+    "id": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+    "title": "GAME ENGINE",
+    "directory": "/Users/kit/code/open-source/arcade",
+    "repo": "/Users/kit/code/open-source/arcade",
+    "updatedMs": 1792524968229,
+    "viewedMs": 1792524968271
+   },
+   {
+    "id": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+    "title": "HEX",
+    "directory": "/Users/kit/code/open-source/hex",
+    "repo": "/Users/kit/code/open-source/hex",
+    "updatedMs": 1792524934029,
+    "viewedMs": 1792524934058
+   },
+   {
+    "id": "ses_ec318a614ffeQvPht0qntUnIcP",
+    "title": "CANVAS",
+    "directory": "/Users/kit/code/open-source/gpu-gallery",
+    "repo": "/Users/kit/code/open-source/gpu-gallery",
+    "updatedMs": 1792524901681,
+    "viewedMs": 1792524901843
+   },
+   {
+    "id": "ses_eb96316daffevhidtO7Z4W583K",
+    "title": "FLIT",
+    "directory": "/Users/kit/code/open-source/flit",
+    "repo": "/Users/kit/code/open-source/flit",
+    "updatedMs": 1792524728204,
+    "viewedMs": 1792523687397
+   },
+   {
+    "id": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+    "title": "KNOBS",
+    "directory": "/Users/kit/code/open-source/knobs",
+    "repo": "/Users/kit/code/open-source/knobs",
+    "updatedMs": 1792524428015,
+    "viewedMs": 1792524428209
+   },
+   {
+    "id": "ses_ed125b1feffeX5uSGJiGJJ0Zq1",
+    "title": "PROBLEMS",
+    "directory": "/Users/kit/code/worktrees/team-board/task-page",
+    "repo": "/Users/kit/code/worktrees/team-board/rewrite",
+    "updatedMs": 1792524255031,
+    "viewedMs": 1792524255129
+   },
+   {
+    "id": "ses_edb816b31ffe4B3nexhh9rqAJp",
+    "title": "SCRAWL",
+    "directory": "/Users/kit/code/open-source/scrawl",
+    "repo": "/Users/kit/code/open-source/scrawl",
+    "updatedMs": 1792523771831,
+    "viewedMs": 1792519144207
+   },
+   {
+    "id": "ses_eb97fd4bcffeuNORqi0lEBAC73",
+    "title": "KIT MOTION",
+    "directory": "/Users/kit/code/home/research/2026-10-16-motion-v3",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792523767105,
+    "viewedMs": 1792517287142
+   },
+   {
+    "id": "ses_f13460621ffeQz0u4Attrj4Z4l",
+    "title": "SLACKBOT",
+    "directory": "/Users/kit/code/open-source/opencode-slack",
+    "repo": "/Users/kit/code/open-source/opencode-slack",
+    "updatedMs": 1792478486144,
+    "viewedMs": 1792440889443
+   },
+   {
+    "id": "ses_ebd33f90bffer4eZZgeryssZt3",
+    "title": "SERVER VOICE",
+    "directory": "/Users/kit/worktrees/opencode/server-voice",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792478486119,
+    "viewedMs": 1792442360125
+   },
+   {
+    "id": "ses_f0c100c89ffeta4TCCxgTHFI2J",
+    "title": "UP DOWN APP",
+    "directory": "/Users/kit/code/open-source/life-hub-uikit",
+    "repo": "/Users/kit/code/open-source/life-hub-uikit",
+    "updatedMs": 1792454885370,
+    "viewedMs": 1792454885390
+   },
+   {
+    "id": "ses_ebea564f3ffeI16n54W8y9Mtyz",
+    "title": "CONSOLE VORTEX",
+    "directory": "/Users/kit/code/open-source/opencode-console",
+    "repo": "/Users/kit/code/open-source/opencode-console",
+    "updatedMs": 1792438810776,
+    "viewedMs": 1792438810783
+   },
+   {
+    "id": "ses_ead884a3dffephbfYhZ8yrShY4",
+    "title": "JEVAL",
+    "directory": "/Users/kit/code/home",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792436507580,
+    "viewedMs": 1792389692797
+   },
+   {
+    "id": "ses_ebe313af4ffex4Y5UKIvEiftzm",
+    "title": "OPENCODE CONSOLE",
+    "directory": "/Users/kit/code/open-source/opencode-console",
+    "repo": "/Users/kit/code/open-source/opencode-console",
+    "updatedMs": 1792431356040,
+    "viewedMs": 1792187291153
+   },
+   {
+    "id": "ses_eb480ee0affeghrrePfmjzMFLX",
+    "title": "Public-site audit fixes",
+    "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/lucky-rocket",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792429760607,
+    "viewedMs": 1792358813510
+   },
+   {
+    "id": "ses_eaf459a69ffeRF6Oq8hjTbVtvR",
+    "title": "MODEL PICKER",
+    "directory": "/Users/kit/code/open-source/opencode-ios-model-picker",
+    "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+    "updatedMs": 1792424967210,
+    "viewedMs": 1792363784492
+   },
+   {
+    "id": "ses_ead37e06cffeRfPkN2vrbdNWDs",
+    "title": "SCRAWL RECORDER",
+    "directory": "/Users/kit/code/open-source/scrawl",
+    "repo": "/Users/kit/code/open-source/scrawl",
+    "updatedMs": 1792391837251,
+    "viewedMs": 1792391837366
+   },
+   {
+    "id": "ses_eb4808112ffdq5ncWwmVhRPaRq",
+    "title": "SPR good to go?",
+    "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/quick-tiger",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792269008625,
+    "viewedMs": 1792268816383
+   },
+   {
+    "id": "ses_ec39487c0ffezso4grvaG2gs9n",
+    "title": "OPEN MONEY",
+    "directory": "/Users/kit/code/open-source/openmoney",
+    "repo": "/Users/kit/code/open-source/openmoney",
+    "updatedMs": 1792251233509,
+    "viewedMs": 1792251233513
+   },
+   {
+    "id": "ses_ebd58b4a3ffeOuHOBJ84IHoNGc",
+    "title": "DEADBOLT",
+    "directory": "/Users/kit/code/open-source/deadbolt",
+    "repo": "/Users/kit/code/open-source/deadbolt",
+    "updatedMs": 1792177126854,
+    "viewedMs": 1792172591104
+   },
+   {
+    "id": "ses_ec4dfeed7ffebmlNkG7QK04Tqq",
+    "title": "AI TALK",
+    "directory": "/Users/kit/code/open-source/ai-talk",
+    "repo": "/Users/kit/code/open-source/ai-talk",
+    "updatedMs": 1792171656850,
+    "viewedMs": 1792123145000
+   },
+   {
+    "id": "ses_ebef6c45fffevSGyuztH3R6AVp",
+    "title": "BROWSER CONTROL",
+    "directory": "/Users/kit/code/open-source/browser-control",
+    "repo": "/Users/kit/code/open-source/browser-control",
+    "updatedMs": 1792094949860,
+    "viewedMs": 1792094949875
+   },
+   {
+    "id": "ses_ec8ac0d73ffeYDTUgKZeuLdJ5X",
+    "title": "CHOOSER",
+    "directory": "/Users/kit/code/experiments/typescript/choose-gpu",
+    "repo": "/Users/kit/code/experiments/typescript/choose-gpu",
+    "updatedMs": 1791956676331,
+    "viewedMs": 1791953219243
+   }
+  ],
+  "nowMs": 1792525181414
+ }
+}

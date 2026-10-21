@@ -8,7 +8,7 @@ import { measureAnchors, sameAnchors } from "./measure"
 import { motion, motionControls, motionServer } from "./motion"
 import { AGENT, type Anchors, BEATS, buildScript, cursorAt, type Mode, STAGE, T } from "./script"
 import * as sfx from "./sfx"
-import { Caption, Cursor, fixState, Island, Ink, Keys, MenuBar, phoneLive, Ripples, Selection, terminalActive } from "./stage-parts"
+import { Caption, Cursor, EdgeGlow, fixState, Island, Ink, Keys, MenuBar, phoneLive, Ripples, terminalActive } from "./stage-parts"
 import { Terminal } from "./terminal"
 
 type UserStroke = { points: [number, number, number][]; done: boolean }
@@ -450,7 +450,7 @@ export function Demo() {
     const dt = t - prev.t
     const stepping = playing && sound && dt > 0 && dt < 250
     if (stepping) for (const c of cues) if (c.t > prev.t && c.t <= t) sfx.play(c.sound, c.volume)
-    const texture: sfx.Texture | null = !stepping || !cursor ? null : cursor.drawing ? "marker" : mode === "mac" && t > T.dragStart && t < T.dragEnd ? "glass" : null
+    const texture: sfx.Texture | null = stepping && cursor?.drawing ? "marker" : null
     const v = texture && at && prev.at ? Math.hypot(at[0] - prev.at[0], at[1] - prev.at[1]) / dt : 0
     const speed = texture ? prev.speed + (v - prev.speed) * 0.4 : 0
     if (texture) sfx.scribble("demo", texture, speed / (texture === "marker" ? 0.45 : 1.4))
@@ -521,7 +521,7 @@ export function Demo() {
                 <PhoneMirror fix={fix} sheen={look.sheen} refs={refs} live={live} />
               )}
               {script && <Terminal t={t} mode={mode} script={script} />}
-              {script && <Selection t={t} script={script} cursor={cursor} />}
+              <EdgeGlow t={t} />
               {script && <Ink t={t} script={script} />}
               {script && <Caption t={t} script={script} />}
               <Keys t={t} mode={mode} />
@@ -535,7 +535,7 @@ export function Demo() {
                 </svg>
               )}
               {GpuOverlay && <GpuOverlay t={t} script={script} intensity={look.inkSheen} stageRef={stageRef} />}
-              {cursor && <Cursor c={cursor} crosshair={mode === "mac" && t >= T.select && t < T.record} ibeam={overTerminal && t >= T.promptClick - 400 && t < T.paste + 120} />}
+              {cursor && <Cursor c={cursor} ibeam={overTerminal && t >= T.promptClick - 400 && t < T.paste + 120} />}
             </div>
           )}
         </div>
@@ -584,7 +584,7 @@ export function Demo() {
             </button>
             <button className="stage-btn primary liquid-glass liquid-glass-primary" onClick={() => switchMode(other)}>
               {other === "iphone" ? <PhoneIcon /> : <MacIcon />}
-              {other === "iphone" ? "Watch iPhone Mirror" : "Watch Mac Window"}
+              {other === "iphone" ? "Watch iPhone Mirror" : "Watch Mac Screen"}
               <span aria-hidden>→</span>
             </button>
           </div>
@@ -767,7 +767,7 @@ function ModeSwitch({ mode, onMode }: { mode: Mode; onMode: (m: Mode) => void })
       <span className={`mode-thumb ${mode}`} aria-hidden />
       <button role="tab" aria-selected={mode === "mac"} className={mode === "mac" ? "on" : ""} onClick={() => onMode("mac")}>
         <MacIcon />
-        Mac Window
+        Mac Screen
       </button>
       <button role="tab" aria-selected={mode === "iphone"} className={mode === "iphone" ? "on" : ""} onClick={() => onMode("iphone")}>
         <PhoneIcon />

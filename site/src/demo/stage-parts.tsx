@@ -3,7 +3,6 @@ import {
   AGENT,
   AREA,
   clock,
-  easeOut,
   type Mode,
   PHONE,
   PILL,
@@ -12,6 +11,8 @@ import {
   pillWidth,
   progress,
   type Rect,
+  recStart,
+  revealEnd,
   type Script,
   STAGE,
   strokeAt,
@@ -113,63 +114,83 @@ const Divider = () => <span className="island-divider" />
 
 type IslandProps = {
   state: Pill
+  phone: boolean
+  // The iPhone chip was clicked (`phonePressed` while the button is down).
   phoneOn: boolean
   phonePressed: boolean
-  recordPressed: boolean
-  finishPressed: boolean
-  undoDim: boolean
   recText: string
+  // 1 while the switch chips show, 0 once they've folded into Cancel · Finish.
+  chips: number
 }
 
-const islandItems = (state: Pill, phoneOn: boolean) =>
-  state === "notch" ? PILL.items.select : state === "select" && phoneOn ? PILL.items.selectPhone : PILL.items[state]
+const islandItems = (state: Pill, phone: boolean, chips: number): number[] => {
+  const reveal = phone ? PILL.items.revealPhone : PILL.items.reveal
+  if (state === "notch" || state === "reveal") return reveal
+  if (state === "recording") return chips > 0.5 ? reveal : PILL.items.recording
+  return PILL.items[state]
+}
 
-function IslandContent({ state, phoneOn, phonePressed, recordPressed, finishPressed, undoDim, recText }: IslandProps) {
-  const items = islandItems(state, phoneOn)
-  const [lead, , c2, c3, c4, c5] = items
+const CloseChip = ({ w }: { w: number }) => (
+  <Chip w={w} round>
+    <svg viewBox="0 0 10 10" aria-hidden>
+      <path d="M2 2l6 6M8 2L2 8" />
+    </svg>
+  </Chip>
+)
+
+// The recording capsule: the lead (dot + clock) stays pinned to the left edge while the trailing
+// items swap in place, the switch chips fading out as Cancel · Finish fade in (src/ui.rs).
+function RecordingContent({ phone, phoneOn, phonePressed, recText, chips }: Omit<IslandProps, "state">) {
+  const reveal = phone ? PILL.items.revealPhone : PILL.items.reveal
+  const [lead] = reveal
+  const [, , cancel, finish] = PILL.items.recording
+  const blur = (k: number) => (k > 0.001 && k < 0.999 ? `blur(${(Math.sin(Math.PI * k) * 2).toFixed(2)}px)` : undefined)
   return (
     <>
-      {state === "select" && (
-        <>
-          <Chip w={lead} on={!phoneOn}>
-            Area
-          </Chip>
-          <Chip w={items[1]}>Full Screen</Chip>
-          <Chip w={c2} on={phoneOn} pressed={phonePressed}>
-            iPhone
-          </Chip>
-          {phoneOn && (
-            <Chip w={c3} primary pressed={recordPressed}>
-              Record
+      <span className="island-lead" style={{ width: lead }}>
+        <span className="rec-slot">
+          <i className="rec-halo" />
+          <i className="rec-dot" />
+        </span>
+        <b>{recText}</b>
+      </span>
+      <Divider />
+      <span className="island-trail">
+        {chips > 0.001 && (
+          <span className="island-chips" style={{ opacity: chips, filter: blur(chips) }}>
+            <Chip w={reveal[2]}>Area</Chip>
+            <Chip w={reveal[3]}>Window</Chip>
+            <Chip w={reveal[4]} on={!phoneOn}>
+              Screen
             </Chip>
-          )}
-          <Divider />
-          <Chip w={phoneOn ? c5 : c4} round>
-            <svg viewBox="0 0 10 10" aria-hidden>
-              <path d="M2 2l6 6M8 2L2 8" />
-            </svg>
-          </Chip>
-        </>
-      )}
-      {state === "recording" && (
-        <>
-          <span className="island-lead" style={{ width: lead }}>
-            <span className="rec-slot">
-              <i className="rec-halo" />
-              <i className="rec-dot" />
-            </span>
-            <b>{recText}</b>
+            {phone && (
+              <Chip w={reveal[5]} on={phoneOn} pressed={phonePressed}>
+                iPhone
+              </Chip>
+            )}
+            <Divider />
+            <CloseChip w={reveal[reveal.length - 1]} />
           </span>
-          <Divider />
-          <Chip w={c2} dim={undoDim}>
-            Undo
-          </Chip>
-          <Chip w={c3}>Cancel</Chip>
-          <Chip w={c4} primary pressed={finishPressed}>
-            Finish
-          </Chip>
-        </>
-      )}
+        )}
+        {chips < 0.999 && (
+          <span className="island-controls" style={{ opacity: 1 - chips, filter: blur(chips) }}>
+            <Chip w={cancel}>Cancel</Chip>
+            <Chip w={finish} primary>
+              Finish
+            </Chip>
+          </span>
+        )}
+      </span>
+    </>
+  )
+}
+
+function IslandContent({ state, ...props }: IslandProps) {
+  const items = islandItems(state, props.phone, props.chips)
+  const [lead, , c2, c3, c4] = items
+  return (
+    <>
+      {(state === "reveal" || state === "recording") && <RecordingContent {...props} />}
       {state === "processing" && (
         <span className="island-lead" style={{ width: lead }}>
           <span className="orbit">
@@ -195,30 +216,32 @@ function IslandContent({ state, phoneOn, phonePressed, recordPressed, finishPres
             Paste
           </Chip>
           <Chip w={c3}>Inspect</Chip>
-          <Chip w={c4} round>
-            <svg viewBox="0 0 10 10" aria-hidden>
-              <path d="M2 2l6 6M8 2L2 8" />
-            </svg>
-          </Chip>
+          <CloseChip w={c4} />
         </>
       )}
     </>
   )
 }
 
-type Leaving = { state: Pill; phoneOn: boolean; opacity: number } | null
+type Leaving = { state: Pill; opacity: number } | null
 
 const IslandInner = memo(function IslandInner({ gone, leaving, ...props }: IslandProps & { gone: boolean; leaving: Leaving }) {
-  const { state, phoneOn } = props
-  const width = pillWidth(islandItems(state, phoneOn))
+  const { state } = props
+  const width = pillWidth(islandItems(state, props.phone, props.chips))
+  const recording = state === "reveal" || state === "recording"
   return (
-    <div className={`island ${state}${gone ? " gone" : ""}`} style={{ left: PILL.cx, top: PILL.top, width, height: PILL.h }} aria-hidden={gone}>
+    <div
+      className={`island ${state}${recording ? " pinned" : ""}${gone ? " gone" : ""}`}
+      style={{ left: PILL.cx, top: PILL.top, width, height: PILL.h }}
+      aria-hidden={gone}
+    >
       {leaving && (
         <div className="island-content island-leaving" style={{ opacity: leaving.opacity }} aria-hidden>
-          <IslandContent {...props} state={leaving.state} phoneOn={leaving.phoneOn} recText={clock(T.finish - T.record)} phonePressed={false} recordPressed={false} finishPressed={false} />
+          <IslandContent {...props} state={leaving.state} chips={0} phoneOn={false} phonePressed={false} />
         </div>
       )}
-      <div className="island-content" key={state === "select" && phoneOn ? "select-phone" : state}>
+      {/* One key across reveal and recording, so the lead never remounts when the chips fold. */}
+      <div className="island-content" key={recording ? "recording" : state}>
         <IslandContent {...props} />
       </div>
     </div>
@@ -227,85 +250,47 @@ const IslandInner = memo(function IslandInner({ gone, leaving, ...props }: Islan
 
 // The HUD's content cross-fades when its state changes: the old chips fade out in place over
 // 140 ms while the new ones fade in, instead of vanishing in one frame.
-const ISLAND_SWAPS: [number, Pill, Mode | null][] = [
-  [T.phoneClick, "select", "iphone"],
-  [T.record, "select", null],
-  [T.finish + 50, "recording", null],
-  [T.copied, "processing", null],
+const ISLAND_SWAPS: [number, Pill][] = [
+  [T.finish + 50, "recording"],
+  [T.copied, "processing"],
 ]
 
+const FOLD_MS = 160
+
 export function Island({ t, mode }: { t: number; mode: Mode }) {
-  const state = pillState(t)
-  const phoneOn = mode === "iphone" && t >= T.phoneClick
+  const state = pillState(t, mode)
+  const phone = mode === "iphone"
+  const fold = revealEnd(mode)
+  const chips = t < fold ? 1 : +(1 - smoother((t - fold) / FOLD_MS)).toFixed(3)
   const gone = state === "notch" || t >= T.paste
-  const swap = ISLAND_SWAPS.find(([at, , only]) => t >= at && t < at + 140 && (only === null || only === mode))
-  const leaving = swap
-    ? { state: swap[1], phoneOn: mode === "iphone" && swap[0] > T.phoneClick, opacity: +(1 - smoother((t - swap[0]) / 140)).toFixed(3) }
-    : null
+  const swap = ISLAND_SWAPS.find(([at]) => t >= at && t < at + 140)
+  const leaving = swap ? { state: swap[1], opacity: +(1 - smoother((t - swap[0]) / 140)).toFixed(3) } : null
+  const recording = state === "reveal" || state === "recording"
   return (
     <IslandInner
       state={state}
-      phoneOn={phoneOn}
-      phonePressed={mode === "iphone" && pressedAt(t, T.phoneClick)}
-      recordPressed={mode === "iphone" && pressedAt(t, T.phoneRecord)}
-      finishPressed={pressedAt(t, T.finish)}
-      undoDim={t < T.circle[1]}
-      recText={state === "recording" ? clock(t - T.record) : "0:00"}
+      phone={phone}
+      phoneOn={phone && t >= T.phoneClick - 60}
+      phonePressed={phone && pressedAt(t, T.phoneClick)}
+      recText={recording ? clock(t - recStart(mode, t)) : clock(T.finish - recStart(mode, t))}
+      chips={state === "notch" ? 1 : chips}
       gone={gone}
       leaving={leaving}
     />
   )
 }
 
-export function Selection({ t, script, cursor }: { t: number; script: Script; cursor: CursorState | null }) {
-  if (!script.drag || t < T.select || t > T.finish + 300) return null
-  let rect: Rect | null = null
-  const [fx, fy] = script.drag.from
-  const dragging = t >= T.dragStart && t < T.dragEnd
-  if (dragging && cursor) {
-    // The corner is the cursor tip, so the box can never lead or lag the pointer.
-    rect = { x: fx, y: fy, w: Math.max(0, cursor.at[0] - fx), h: Math.max(0, cursor.at[1] - fy) }
-  } else if (t >= T.dragEnd) {
-    rect = { x: fx, y: fy, w: AREA.w, h: AREA.h }
+// A tap-started Screen recording: a soft red glow along the display's edges rises in 0.12 s and is
+// gone by 1.1 s (laser_overlay.metal), so the start shows without the picker.
+export function EdgeGlow({ t }: { t: number }) {
+  const s = (t - T.keysUp) / 1000
+  if (s <= 0 || s >= 1.1) return null
+  const smoothstep = (a: number, b: number, x: number) => {
+    const k = Math.min(1, Math.max(0, (x - a) / (b - a)))
+    return k * k * (3 - 2 * k)
   }
-  // Matches laser_overlay.metal: 0.32 picker dim easing to 0.22 while recording, 1px border 0.92 → 0.28.
-  const intro = easeOut(progress(t, T.record, T.record + 240))
-  const dim = 0.32 + (0.22 - 0.32) * intro
-  const border = 0.92 + (0.28 - 0.92) * intro
-  const fade = 1 - progress(t, T.finish, T.finish + 300)
-  const sizeOpacity = Math.min(progress(t, T.dragStart, T.dragStart + 120), 1 - progress(t, T.dragEnd, T.dragEnd + 220))
-  const maskD = rect
-    ? `M0 0H${STAGE.w}V${STAGE.h}H0ZM${rect.x.toFixed(2)} ${rect.y.toFixed(2)}h${rect.w.toFixed(2)}v${rect.h.toFixed(2)}H${rect.x.toFixed(2)}Z`
-    : `M0 0H${STAGE.w}V${STAGE.h}H0Z`
-  return (
-    <div className="selection" style={{ opacity: fade }}>
-      <svg className="selection-svg" viewBox={`0 0 ${STAGE.w} ${STAGE.h}`} aria-hidden>
-        <path fillRule="evenodd" d={maskD} fill={`rgba(0,0,0,${dim.toFixed(3)})`} />
-        {rect && rect.w > 1 && rect.h > 1 && (
-          <rect
-            x={rect.x + 0.5}
-            y={rect.y + 0.5}
-            width={Math.max(0, rect.w - 1)}
-            height={Math.max(0, rect.h - 1)}
-            fill="none"
-            stroke={`rgba(255,255,255,${border.toFixed(3)})`}
-            strokeWidth={1}
-          />
-        )}
-      </svg>
-      {rect && sizeOpacity > 0 && (
-        <span
-          className="selection-size"
-          style={{
-            transform: `translate3d(${(rect.x + rect.w).toFixed(2)}px, ${(rect.y + rect.h + 10).toFixed(2)}px, 0) translateX(-100%)`,
-            opacity: sizeOpacity,
-          }}
-        >
-          {Math.round(rect.w)} × {Math.round(rect.h)}
-        </span>
-      )}
-    </div>
-  )
+  const env = smoothstep(0, 0.12, s) * (1 - smoothstep(0.35, 1.1, s))
+  return <div className="edge-glow" style={{ opacity: +env.toFixed(3) }} aria-hidden />
 }
 
 export function Ink({ t, script }: { t: number; script: Script }) {
@@ -345,16 +330,11 @@ export function Ripples({ t, script }: { t: number; script: Script }) {
   )
 }
 
-export function Cursor({ c, crosshair, ibeam }: { c: CursorState; crosshair?: boolean; ibeam?: boolean }) {
+export function Cursor({ c, ibeam }: { c: CursorState; ibeam?: boolean }) {
   const [x, y] = c.at
   return (
     <div className="cursor" style={{ transform: `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0)` }}>
-      {crosshair && !c.shift ? (
-        <svg width="25" height="25" viewBox="-12.5 -12.5 25 25" style={{ transform: "translate(-12.5px, -12.5px)" }}>
-          <path d="M0 -11V11M-11 0H11" stroke="#fff" strokeWidth="3" strokeLinecap="square" />
-          <path d="M0 -10V10M-10 0H10" stroke="#000" strokeWidth="1" shapeRendering="crispEdges" />
-        </svg>
-      ) : c.shift ? (
+      {c.shift ? (
         <svg className="cursor-glyph" width="26" height="26" viewBox="0 0 26 26" style={{ transform: `translate(-2px, -24px) scale(${c.pressed ? 0.94 : 1})` }}>
           <path d="M3 23l2-7L18 3l5 5L10 21z" fill="#f2f2f2" stroke="#111" strokeWidth="1.3" strokeLinejoin="round" />
           <path d="M3 23l2-7 5 5z" fill="#ff3b30" stroke="#111" strokeWidth="1.3" strokeLinejoin="round" />
@@ -377,16 +357,22 @@ export function Cursor({ c, crosshair, ibeam }: { c: CursorState; crosshair?: bo
 
 const KEYS = ["⌥", "⇧", "S"]
 
+// The two taps of ⌥⇧S: one starts recording as the keys come up, the next finishes as S goes down.
+const TAPS = [
+  { down: T.keys, up: T.keysUp },
+  { down: T.finish - 160, up: T.finish + 120 },
+]
+
 export function Keys({ t, mode }: { t: number; mode: Mode }) {
   const cx = mode === "mac" ? MAC_WINDOW.x + MAC_WINDOW.w / 2 : PHONE.x + PHONE.w / 2
-  const shortcut = t >= T.keys - 150 && t < T.keysUp + 350
+  const tap = TAPS.find((k) => t >= k.down - 150 && t < k.up + 350)
   const paste = t >= T.paste - 400 && t < T.paste + 500
-  if (shortcut) {
-    const out = progress(t, T.keysUp, T.keysUp + 350)
+  if (tap) {
+    const out = progress(t, tap.up, tap.up + 350)
     return (
-      <div className="keys" style={{ left: cx, top: 646, opacity: (1 - out) * Math.min(1, progress(t, T.keys - 150, T.keys)) }}>
+      <div className="keys" style={{ left: cx, top: 646, opacity: (1 - out) * Math.min(1, progress(t, tap.down - 150, tap.down)) }}>
         {KEYS.map((k, i) => (
-          <kbd key={k} className={t >= T.keys + i * 150 && t < T.keysUp ? "down" : ""}>
+          <kbd key={k} className={t >= tap.down + i * 80 && t < tap.up ? "down" : ""}>
             {k}
           </kbd>
         ))}

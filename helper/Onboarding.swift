@@ -2,6 +2,7 @@ import AVFoundation
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Speech
 import SwiftUI
 
 // `scrawl-helper onboarding`: the welcome window. Scrawl decides what it shows
@@ -30,18 +31,28 @@ enum Permissions {
       default: return "not-determined"
       }
     }
-    return [
+    var statuses = [
       "screen-recording": CGPreflightScreenCaptureAccess() ? "granted" : "not-determined",
       "microphone": av(.audio),
       "accessibility": AXIsProcessTrusted() ? "granted" : "not-determined",
       "camera": av(.video),
     ]
+    // Only SFSpeechRecognizer, the macOS 15 transcriber, needs it; SpeechAnalyzer doesn't.
+    if !SpeechModel.analyzer {
+      switch SFSpeechRecognizer.authorizationStatus() {
+      case .authorized: statuses["speech-recognition"] = "granted"
+      case .denied, .restricted: statuses["speech-recognition"] = "denied"
+      default: statuses["speech-recognition"] = "not-determined"
+      }
+    }
+    return statuses
   }
 
   static func request(_ permission: String) {
     switch permission {
     case "microphone": AVCaptureDevice.requestAccess(for: .audio) { _ in }
     case "camera": AVCaptureDevice.requestAccess(for: .video) { _ in }
+    case "speech-recognition": SFSpeechRecognizer.requestAuthorization { _ in }
     case "accessibility":
       let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
       _ = AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
@@ -61,7 +72,11 @@ enum Permissions {
       panels[permission] = PermissionPanel.launch(permission: permission, from: button) { _ in }
       return
     }
-    let anchor = permission == "camera" ? "Privacy_Camera" : "Privacy_Microphone"
+    let anchor = switch permission {
+    case "camera": "Privacy_Camera"
+    case "speech-recognition": "Privacy_SpeechRecognition"
+    default: "Privacy_Microphone"
+    }
     if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?\(anchor)") {
       NSWorkspace.shared.open(url)
     }
@@ -89,8 +104,11 @@ struct PermissionRow: Decodable, Equatable, Identifiable {
 /// Apple's speech model, which Scrawl installs in the background (`src/speech_model.rs`).
 struct SpeechStatus: Decodable, Equatable {
   var state = "unknown"
+  var engine: String?
   var locale: String?
   var progress = 0.0
+  var locales: [String]?
+  var error: String?
 
   private var language: String {
     locale.flatMap { Locale.current.localizedString(forIdentifier: $0) } ?? "your language"
@@ -106,13 +124,16 @@ struct SpeechStatus: Decodable, Equatable {
     case "downloading": return "Downloading the speech model…\(percent)"
     case "ready": return "Speech model ready (\(language))"
     case "unavailable": return "No Apple speech model for \(language) on this Mac"
+    // macOS 15: the error says what to turn on (Speech Recognition, or Dictation's model).
+    case "needsPermission": return error ?? "Speech Recognition isn't allowed yet, so captures have no transcript."
+    case "failed" where engine == "SFSpeechRecognizer" && error != nil: return error
     case "failed": return "The speech model didn't download. Scrawl will try again."
     default: return nil
     }
   }
 
   /// Still on its way, or not coming: worth a line on the Microphone row and Try it.
-  var notReady: Bool { ["checking", "downloading", "failed", "unavailable"].contains(state) }
+  var notReady: Bool { ["checking", "downloading", "failed", "unavailable", "needsPermission"].contains(state) }
 }
 
 struct OnboardingState: Decodable, Equatable {
@@ -416,6 +437,8 @@ func permissionInfo(_ permission: String, paste: String) -> PermissionInfo {
     return PermissionInfo(symbol: "accessibility", name: accessibilityName, why: "Undo with ⌘Z while you record, and paste with \(paste)")
   case "camera":
     return PermissionInfo(symbol: "iphone", name: "Camera", why: "Show and record a cabled iPhone")
+  case "speech-recognition":
+    return PermissionInfo(symbol: "waveform", name: "Speech Recognition", why: "Write down what you say, on this Mac")
   default:
     return PermissionInfo(symbol: "lock", name: permission, why: "")
   }
@@ -578,7 +601,7 @@ struct OnboardingView: View {
           note(pickerNoteText).padding(.top, 12)
         }
         if state.speech?.notReady == true, let line = state.speech?.line {
-          note(state.speech?.state == "downloading" || state.speech?.state == "checking"
+          note((state.speech?.state == "downloading" || state.speech?.state == "checking") && state.speech?.engine != "SFSpeechRecognizer"
             ? "The speech model is still downloading\(state.speech?.percentInParens ?? ""). If it isn't done when you finish, Scrawl adds the transcript to your capture afterwards."
             : line)
             .padding(.top, 12)
@@ -650,7 +673,7 @@ struct OnboardingView: View {
           if i > 0 { divider }
           PermissionRowView(
             row: row, paste: model.paste, showOptional: !state.fix,
-            detail: row.permission == "microphone" && state.speech?.notReady == true ? state.speech?.line : nil,
+            detail: row.permission == speechRow && state.speech?.notReady == true ? state.speech?.line : nil,
             next: row.permission == next,
             buttonFrame: { model.buttonFrames[row.permission] = $0 },
             grant: { model.grant(row.permission) }
@@ -663,6 +686,12 @@ struct OnboardingView: View {
           .padding(.top, 14)
       }
     }
+  }
+
+  /// The row that carries the speech model's line: Speech Recognition where it's asked for
+  /// (macOS 15), else Microphone.
+  private var speechRow: String {
+    state.rows.contains { $0.permission == "speech-recognition" } ? "speech-recognition" : "microphone"
   }
 
   private var pickerNoteText: String {
@@ -1015,6 +1044,9 @@ final class Onboarding: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let all = [row("screen-recording", "granted"), row("microphone", "granted"), row("accessibility", "granted")]
     let fallback = [row("screen-recording", "granted", relaunch: true), row("microphone", "granted"), row("accessibility", "granted")]
     let lost = [row("screen-recording", "granted"), row("microphone", "granted"), row("accessibility")]
+    let sequoia = none + [row("speech-recognition")]
+    let sequoiaNoDictation = all + [row("speech-recognition", "granted")]
+    let noDictation = SpeechStatus(state: "failed", engine: "SFSpeechRecognizer", locale: "en_US", error: "Turn on Dictation in System Settings › Keyboard for transcripts.")
     let samples: [(String, OnboardingState, Double)] = [
       ("welcome", OnboardingState(step: "welcome", index: 0), 0.25),
       ("how-it-works", OnboardingState(step: "how-it-works", index: 1), 0),
@@ -1033,6 +1065,8 @@ final class Onboarding: NSObject, NSApplicationDelegate, NSWindowDelegate {
       ("permissions-all", OnboardingState(step: "permissions", index: 2, rows: all, ready: true), 0),
       ("permissions-reopen-fallback", OnboardingState(step: "permissions", index: 2, rows: fallback), 0),
       ("permissions-picker-note", OnboardingState(step: "permissions", index: 2, rows: some, pickerNote: true, speech: SpeechStatus(state: "downloading", locale: "en_US", progress: 0.42)), 0.3),
+      ("permissions-macos15", OnboardingState(step: "permissions", index: 2, rows: sequoia, speech: SpeechStatus(state: "needsPermission", engine: "SFSpeechRecognizer", locale: "en_US")), 0),
+      ("permissions-macos15-no-dictation", OnboardingState(step: "permissions", index: 2, rows: sequoiaNoDictation, ready: true, speech: noDictation), 0),
       ("try-it", OnboardingState(step: "try-it", index: 2, count: 3), 0.3),
       ("try-it-downloading", OnboardingState(step: "try-it", index: 2, count: 3, pickerNote: true, speech: SpeechStatus(state: "downloading", locale: "en_US", progress: 0.42)), 0.3),
       ("done", OnboardingState(step: "done", index: 3), 0),

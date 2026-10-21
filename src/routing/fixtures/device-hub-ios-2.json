@@ -1,0 +1,539 @@
+{
+ "capture": "scrawl-1792523688788-170ef-2.scrawl",
+ "savedDecision": "keep",
+ "bundle": {
+  "version": 1,
+  "id": "scrawl-1792523688788-170ef-2",
+  "createdAtMs": 1792523729944,
+  "durationMs": 40788,
+  "target": {
+   "mode": "display",
+   "app": "Device Hub",
+   "bundleId": "com.apple.dt.Devices",
+   "displayId": 3,
+   "frame": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 2560.0,
+    "height": 1440.0,
+    "scale": 2.0
+   }
+  },
+  "transcript": {
+   "source": "speech-analyzer",
+   "text": "What is up with this menu, though? Like, you can see that the photos remains like a blur doesn't collapse correctly, like this should. I feel like we're not using the liquid glass correctly for this menu open. Also, how do I keep forgetting this? Command option K. You seem to be working. And it's not showing over the thing. What?",
+   "segments": []
+  },
+  "strokes": [],
+  "marks": [
+   {
+    "id": "m1",
+    "strokes": [
+     0
+    ],
+    "t0": 1656,
+    "t1": 2009,
+    "boxNorm": [
+     0.6223,
+     0.7172,
+     0.6813,
+     0.7581
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.62\u20130.68, y 0.72\u20130.76 over button \u201cPhotos\u201d",
+    "on": "button \u201cPhotos\u201d"
+   },
+   {
+    "id": "m2",
+    "strokes": [
+     1
+    ],
+    "t0": 3798,
+    "t1": 3977,
+    "boxNorm": [
+     0.6421,
+     0.7279,
+     0.6543,
+     0.731
+    ],
+    "shape": "underline",
+    "description": "underlined x 0.64\u20130.65 at y 0.73 over button \u201cPhotos\u201d",
+    "on": "button \u201cPhotos\u201d"
+   },
+   {
+    "id": "m3",
+    "strokes": [
+     2
+    ],
+    "t0": 38555,
+    "t1": 39374,
+    "boxNorm": [
+     0.6233,
+     0.4867,
+     0.7217,
+     0.6885
+    ],
+    "shape": "circle",
+    "description": "circled region x 0.62\u20130.72, y 0.49\u20130.69 over button \u201cLocation\u201d",
+    "on": "button \u201cLocation\u201d"
+   }
+  ],
+  "events": [
+   {
+    "kind": "click",
+    "t": 1014,
+    "x": 0.6284836,
+    "y": 0.78728026,
+    "button": "left",
+    "label": "\u201cAdd attachment\u201d #attachment-menu-button",
+    "role": "button"
+   },
+   {
+    "kind": "click",
+    "t": 2191,
+    "x": 0.7287384,
+    "y": 0.6532742,
+    "button": "left",
+    "role": "group"
+   },
+   {
+    "kind": "click",
+    "t": 3064,
+    "x": 0.63411105,
+    "y": 0.79355466,
+    "button": "left",
+    "label": "\u201cAdd attachment\u201d #attachment-menu-button",
+    "role": "button"
+   },
+   {
+    "kind": "click",
+    "t": 4307,
+    "x": 0.64646757,
+    "y": 0.6906277,
+    "button": "left",
+    "role": "group"
+   },
+   {
+    "kind": "click",
+    "t": 5191,
+    "x": 0.6274002,
+    "y": 0.79595,
+    "button": "left",
+    "label": "\u201cAdd attachment\u201d #attachment-menu-button",
+    "role": "button"
+   },
+   {
+    "kind": "click",
+    "t": 5839,
+    "x": 0.6607773,
+    "y": 0.66942,
+    "button": "left",
+    "role": "group"
+   },
+   {
+    "kind": "click",
+    "t": 6656,
+    "x": 0.6312866,
+    "y": 0.7858236,
+    "button": "left",
+    "label": "\u201cAdd attachment\u201d #attachment-menu-button",
+    "role": "button"
+   },
+   {
+    "kind": "click",
+    "t": 7347,
+    "x": 0.6430786,
+    "y": 0.67798126,
+    "button": "left",
+    "role": "group"
+   },
+   {
+    "kind": "click",
+    "t": 7997,
+    "x": 0.629158,
+    "y": 0.7880452,
+    "button": "left",
+    "label": "\u201cAdd attachment\u201d #attachment-menu-button",
+    "role": "button"
+   },
+   {
+    "kind": "click",
+    "t": 8707,
+    "x": 0.63932645,
+    "y": 0.6471327,
+    "button": "left",
+    "role": "group"
+   },
+   {
+    "kind": "click",
+    "t": 9310,
+    "x": 0.63494414,
+    "y": 0.79118925,
+    "button": "left",
+    "label": "\u201cAdd attachment\u201d #attachment-menu-button",
+    "role": "button"
+   },
+   {
+    "kind": "click",
+    "t": 9943,
+    "x": 0.6344635,
+    "y": 0.7877713,
+    "button": "left",
+    "label": "\u201cAdd attachment\u201d #attachment-menu-button",
+    "role": "button"
+   },
+   {
+    "kind": "click",
+    "t": 10547,
+    "x": 0.6343994,
+    "y": 0.6630751,
+    "button": "left",
+    "role": "group"
+   },
+   {
+    "kind": "click",
+    "t": 11091,
+    "x": 0.62855226,
+    "y": 0.79572755,
+    "button": "left",
+    "label": "\u201cAdd attachment\u201d #attachment-menu-button",
+    "role": "button"
+   },
+   {
+    "kind": "click",
+    "t": 11691,
+    "x": 0.6329956,
+    "y": 0.7874756,
+    "button": "left",
+    "label": "\u201cAdd attachment\u201d #attachment-menu-button",
+    "role": "button"
+   },
+   {
+    "kind": "key",
+    "t": 14273,
+    "shortcut": "\u2325\u2318K"
+   },
+   {
+    "kind": "click",
+    "t": 21495,
+    "x": 0.1149292,
+    "y": 0.0016927083,
+    "button": "left",
+    "label": "\u201cDevice\u201d",
+    "role": "menu bar item"
+   },
+   {
+    "kind": "click",
+    "t": 24407,
+    "x": 0.58007354,
+    "y": 0.54287654,
+    "button": "left",
+    "role": "group"
+   },
+   {
+    "kind": "key",
+    "t": 24805,
+    "shortcut": "\u2325\u2318K"
+   },
+   {
+    "kind": "key",
+    "t": 25892,
+    "shortcut": "\u2325\u2318K"
+   },
+   {
+    "kind": "click",
+    "t": 26259,
+    "x": 0.70964205,
+    "y": 0.78272027,
+    "button": "left",
+    "role": "group"
+   },
+   {
+    "kind": "key",
+    "t": 26858,
+    "shortcut": "\u2325\u2318K"
+   },
+   {
+    "kind": "key",
+    "t": 28123,
+    "shortcut": "\u2325\u2318K"
+   },
+   {
+    "kind": "click",
+    "t": 28543,
+    "x": 0.66822356,
+    "y": 0.7839817,
+    "button": "left",
+    "label": "#transcript-list",
+    "role": "Group"
+   },
+   {
+    "kind": "click",
+    "t": 28980,
+    "x": 0.6655426,
+    "y": 0.7873345,
+    "button": "left"
+   },
+   {
+    "kind": "click",
+    "t": 33375,
+    "x": 0.11187134,
+    "y": 0.0,
+    "button": "left",
+    "role": "dialog"
+   },
+   {
+    "kind": "click",
+    "t": 35480,
+    "x": 0.24905547,
+    "y": 0.3009006,
+    "button": "left",
+    "label": "\u201cToggle Software Keyboard\u201d #menuAction:",
+    "role": "menu item"
+   },
+   {
+    "kind": "click",
+    "t": 37297,
+    "x": 0.6265396,
+    "y": 0.5759087,
+    "button": "left",
+    "label": "#transcript-list",
+    "role": "Group"
+   },
+   {
+    "kind": "click",
+    "t": 40691,
+    "x": 0.5417007,
+    "y": 0.04731174,
+    "button": "left",
+    "label": "\u201cFinish\u201d",
+    "role": "text"
+   }
+  ],
+  "keyframes": [],
+  "contactSheet": "contact-sheet.png"
+ },
+ "evidence": {
+  "clues": [
+   {
+    "source": "speech",
+    "pointer": {
+     "kind": "words",
+     "words": []
+    },
+    "note": "said"
+   }
+  ],
+  "candidates": [
+   {
+    "id": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+    "title": "KNOBS",
+    "directory": "/Users/kit/code/open-source/knobs",
+    "repo": "/Users/kit/code/open-source/knobs",
+    "updatedMs": 1792523726060,
+    "viewedMs": 1792519381940
+   },
+   {
+    "id": "ses_ed125b1feffeX5uSGJiGJJ0Zq1",
+    "title": "PROBLEMS",
+    "directory": "/Users/kit/code/worktrees/team-board/task-page",
+    "repo": "/Users/kit/code/worktrees/team-board/rewrite",
+    "updatedMs": 1792523721829,
+    "viewedMs": 1792523432492
+   },
+   {
+    "id": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+    "title": "GAME ENGINE",
+    "directory": "/Users/kit/code/open-source/arcade",
+    "repo": "/Users/kit/code/open-source/arcade",
+    "updatedMs": 1792523704532,
+    "viewedMs": 1792523704725
+   },
+   {
+    "id": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+    "title": "HOME",
+    "directory": "/Users/kit/code/home",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792523694297,
+    "viewedMs": 1792523490445
+   },
+   {
+    "id": "ses_eb96316daffevhidtO7Z4W583K",
+    "title": "FLIT",
+    "directory": "/Users/kit/code/open-source/flit",
+    "repo": "/Users/kit/code/open-source/flit",
+    "updatedMs": 1792523687257,
+    "viewedMs": 1792521017828
+   },
+   {
+    "id": "ses_f501e10c4ffedeySM4jnNIe3AD",
+    "title": "OPENCODE IOS",
+    "directory": "/Users/kit/code/open-source/opencode-ios-oc380-loading",
+    "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+    "updatedMs": 1792523481115,
+    "viewedMs": 1792523079746
+   },
+   {
+    "id": "ses_edb79c155ffeZ8eqFja5zoWOlX",
+    "title": "DESKTOP",
+    "directory": "/Users/kit/code/open-source/opencode",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792523329046,
+    "viewedMs": 1792523324787
+   },
+   {
+    "id": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+    "title": "HEX",
+    "directory": "/Users/kit/code/open-source/hex",
+    "repo": "/Users/kit/code/open-source/hex",
+    "updatedMs": 1792522910906,
+    "viewedMs": 1792522328376
+   },
+   {
+    "id": "ses_edb816b31ffe4B3nexhh9rqAJp",
+    "title": "SCRAWL",
+    "directory": "/Users/kit/code/open-source/scrawl",
+    "repo": "/Users/kit/code/open-source/scrawl",
+    "updatedMs": 1792522399527,
+    "viewedMs": 1792516152471
+   },
+   {
+    "id": "ses_eb97fd4bcffeuNORqi0lEBAC73",
+    "title": "KIT MOTION",
+    "directory": "/Users/kit/code/home/research/2026-10-16-motion-v3",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792520889119,
+    "viewedMs": 1792517287142
+   },
+   {
+    "id": "ses_ec318a614ffeQvPht0qntUnIcP",
+    "title": "CANVAS",
+    "directory": "/Users/kit/code/open-source/gpu-gallery",
+    "repo": "/Users/kit/code/open-source/gpu-gallery",
+    "updatedMs": 1792480779856,
+    "viewedMs": 1792477150781
+   },
+   {
+    "id": "ses_f13460621ffeQz0u4Attrj4Z4l",
+    "title": "SLACKBOT",
+    "directory": "/Users/kit/code/open-source/opencode-slack",
+    "repo": "/Users/kit/code/open-source/opencode-slack",
+    "updatedMs": 1792478486144,
+    "viewedMs": 1792440889443
+   },
+   {
+    "id": "ses_ebd33f90bffer4eZZgeryssZt3",
+    "title": "SERVER VOICE",
+    "directory": "/Users/kit/worktrees/opencode/server-voice",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792478486119,
+    "viewedMs": 1792442360125
+   },
+   {
+    "id": "ses_f0c100c89ffeta4TCCxgTHFI2J",
+    "title": "UP DOWN APP",
+    "directory": "/Users/kit/code/open-source/life-hub-uikit",
+    "repo": "/Users/kit/code/open-source/life-hub-uikit",
+    "updatedMs": 1792454885370,
+    "viewedMs": 1792454885390
+   },
+   {
+    "id": "ses_ebea564f3ffeI16n54W8y9Mtyz",
+    "title": "CONSOLE VORTEX",
+    "directory": "/Users/kit/code/open-source/opencode-console",
+    "repo": "/Users/kit/code/open-source/opencode-console",
+    "updatedMs": 1792438810776,
+    "viewedMs": 1792438810783
+   },
+   {
+    "id": "ses_ead884a3dffephbfYhZ8yrShY4",
+    "title": "JEVAL",
+    "directory": "/Users/kit/code/home",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792436507580,
+    "viewedMs": 1792389692797
+   },
+   {
+    "id": "ses_ebe313af4ffex4Y5UKIvEiftzm",
+    "title": "OPENCODE CONSOLE",
+    "directory": "/Users/kit/code/open-source/opencode-console",
+    "repo": "/Users/kit/code/open-source/opencode-console",
+    "updatedMs": 1792431356040,
+    "viewedMs": 1792187291153
+   },
+   {
+    "id": "ses_eb480ee0affeghrrePfmjzMFLX",
+    "title": "Public-site audit fixes",
+    "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/lucky-rocket",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792429760607,
+    "viewedMs": 1792358813510
+   },
+   {
+    "id": "ses_eaf459a69ffeRF6Oq8hjTbVtvR",
+    "title": "MODEL PICKER",
+    "directory": "/Users/kit/code/open-source/opencode-ios-model-picker",
+    "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+    "updatedMs": 1792424967210,
+    "viewedMs": 1792363784492
+   },
+   {
+    "id": "ses_ead37e06cffeRfPkN2vrbdNWDs",
+    "title": "SCRAWL RECORDER",
+    "directory": "/Users/kit/code/open-source/scrawl",
+    "repo": "/Users/kit/code/open-source/scrawl",
+    "updatedMs": 1792391837251,
+    "viewedMs": 1792391837366
+   },
+   {
+    "id": "ses_eb4808112ffdq5ncWwmVhRPaRq",
+    "title": "SPR good to go?",
+    "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/quick-tiger",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792269008625,
+    "viewedMs": 1792268816383
+   },
+   {
+    "id": "ses_ec39487c0ffezso4grvaG2gs9n",
+    "title": "OPEN MONEY",
+    "directory": "/Users/kit/code/open-source/openmoney",
+    "repo": "/Users/kit/code/open-source/openmoney",
+    "updatedMs": 1792251233509,
+    "viewedMs": 1792251233513
+   },
+   {
+    "id": "ses_ebd58b4a3ffeOuHOBJ84IHoNGc",
+    "title": "DEADBOLT",
+    "directory": "/Users/kit/code/open-source/deadbolt",
+    "repo": "/Users/kit/code/open-source/deadbolt",
+    "updatedMs": 1792177126854,
+    "viewedMs": 1792172591104
+   },
+   {
+    "id": "ses_ec4dfeed7ffebmlNkG7QK04Tqq",
+    "title": "AI TALK",
+    "directory": "/Users/kit/code/open-source/ai-talk",
+    "repo": "/Users/kit/code/open-source/ai-talk",
+    "updatedMs": 1792171656850,
+    "viewedMs": 1792123145000
+   },
+   {
+    "id": "ses_ebef6c45fffevSGyuztH3R6AVp",
+    "title": "BROWSER CONTROL",
+    "directory": "/Users/kit/code/open-source/browser-control",
+    "repo": "/Users/kit/code/open-source/browser-control",
+    "updatedMs": 1792094949860,
+    "viewedMs": 1792094949875
+   },
+   {
+    "id": "ses_ec8ac0d73ffeYDTUgKZeuLdJ5X",
+    "title": "CHOOSER",
+    "directory": "/Users/kit/code/experiments/typescript/choose-gpu",
+    "repo": "/Users/kit/code/experiments/typescript/choose-gpu",
+    "updatedMs": 1791956676331,
+    "viewedMs": 1791953219243
+   }
+  ],
+  "nowMs": 1792523729944
+ }
+}

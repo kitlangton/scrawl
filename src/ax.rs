@@ -282,7 +282,7 @@ fn document_name(url: &str) -> Option<String> {
     (!decoded.is_empty()).then_some(decoded)
 }
 
-fn percent_decode(raw: &str) -> String {
+pub(crate) fn percent_decode(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

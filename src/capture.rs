@@ -121,7 +121,7 @@ pub struct ScreenRecording {
 /// Live UI events emitted by the global input monitor to drive Scrawl's HUD & Review windows.
 #[derive(Clone, Debug)]
 pub enum LiveOverlayEvent {
-    /// ⌥⇧S (or the configured shortcut) went down; `hold::Shortcut` decides what it means.
+    /// ⌥⇧S (or the configured shortcut) went down; `shortcut::Shortcut` decides what it means.
     CaptureShortcut,
     PasteLatestShortcut,
     UndoStroke,
@@ -203,6 +203,11 @@ impl ShortcutKind {
             Self::Paste => "Paste last capture",
         }
     }
+
+    /// Whether it can be turned off. Record can't: it's the way into Scrawl.
+    pub fn can_unset(self) -> bool {
+        self == Self::Paste
+    }
 }
 
 impl ShortcutConfig {
@@ -220,6 +225,20 @@ impl ShortcutConfig {
             carbon_modifiers: CARBON_OPTION_KEY | CARBON_SHIFT_KEY,
             label: shortcut_label(CARBON_OPTION_KEY | CARBON_SHIFT_KEY, "V"),
         }
+    }
+
+    /// No shortcut: nothing is registered and no key press matches. Only the paste shortcut can
+    /// be turned off.
+    pub fn unset() -> Self {
+        Self {
+            key_code: u32::MAX,
+            carbon_modifiers: 0,
+            label: String::new(),
+        }
+    }
+
+    pub fn is_unset(&self) -> bool {
+        self.label.is_empty()
     }
 
     /// Whether this is `kind`'s default, which also answers to its aliases (⌃⌥⇧, ⌘⌥⇧, ⌃⌥⌘
@@ -392,6 +411,9 @@ pub fn shortcut_matches(
     alt: bool,
     shift: bool,
 ) -> bool {
+    if cfg.is_unset() {
+        return false;
+    }
     let want_cmd = (cfg.carbon_modifiers & CARBON_CMD_KEY) != 0;
     let want_ctrl = (cfg.carbon_modifiers & CARBON_CONTROL_KEY) != 0;
     let want_alt = (cfg.carbon_modifiers & CARBON_OPTION_KEY) != 0;
@@ -417,6 +439,9 @@ pub fn layout_default_keycode(kind: ShortcutKind) -> u16 {
 /// The key codes and Carbon modifiers `cfg` registers: itself, plus for a default its aliases
 /// (⌃⌥⇧, ⌘⌥⇧, ⌃⌥⌘) on the active layout's key and the ANSI one.
 pub(crate) fn hotkey_combos(kind: ShortcutKind, cfg: &ShortcutConfig) -> Vec<(u32, u32)> {
+    if cfg.is_unset() {
+        return Vec::new();
+    }
     let mut combos = vec![(cfg.key_code, cfg.carbon_modifiers)];
     if !cfg.is_default_for(kind) {
         return combos;

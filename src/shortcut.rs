@@ -1,10 +1,7 @@
-//! The capture shortcut. Tap ⌥⇧S to record the screen at once; the recording's capsule shows
-//! Area · Window · Screen · iPhone as chips for a few seconds (`Reveal`), so the target can still
-//! change. Hold it and the picker opens instead, the same one as the menu's Choose What to
-//! Record…, and stays open after the keys come up: click a chip or a window, or drag an area.
+//! The capture shortcut. Press ⌥⇧S, briefly or held, and the display under the pointer starts
+//! recording as the keys come up; the recording's capsule shows Area · Window · Screen · iPhone
+//! as chips for a few seconds (`Reveal`), so the target can still change.
 
-/// ⌥⇧ released sooner than this after the press is a tap: record the screen, no picker.
-pub const TAP_MS: u64 = 250;
 /// A press this soon after a recording starts is a double press, not "finish".
 pub const DOUBLE_PRESS_MS: u64 = 400;
 
@@ -13,7 +10,7 @@ pub const DOUBLE_PRESS_MS: u64 = 400;
 pub enum Activity {
     /// Nothing recording (a finished capture's island may be showing).
     Free,
-    /// The picker is open.
+    /// The picker (the menu's Choose What to Record…) is open.
     Picker,
     Recording {
         elapsed_ms: u64,
@@ -24,36 +21,32 @@ pub enum Activity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     None,
-    /// A tap: record the display under the pointer, auto-cropped.
+    /// The keys came up: record the display under the pointer, auto-cropped.
     RecordScreen,
-    /// A hold: open the picker.
-    OpenPicker,
-    /// Esc before a tap or hold was decided: nothing happens.
+    /// Esc while the keys were still down: nothing happens.
     Cancel,
     /// The picker is open: record what it is on.
     RecordSelected,
     Finish,
 }
 
-/// Tells a tap of the shortcut from a hold.
+/// Waits for the shortcut's keys to come up, however long they're held, before recording.
 #[derive(Debug, Default)]
 pub struct Shortcut {
-    /// When ⌥⇧S went down, until it's a tap or a hold.
-    pending_since_ms: Option<u64>,
+    /// ⌥⇧S went down and its modifiers aren't all up yet.
+    pending: bool,
 }
 
 impl Shortcut {
-    /// Whether ⌥⇧S went down and it isn't yet known whether it's a tap or a hold.
+    /// Whether ⌥⇧S went down and the recording waits for its keys to come up.
     pub fn is_pending(&self) -> bool {
-        self.pending_since_ms.is_some()
+        self.pending
     }
 
     /// The shortcut went down.
-    pub fn press(&mut self, now_ms: u64, activity: Activity) -> Action {
-        if self.is_pending() {
-            // Pressed again before the first was decided: as good as a hold.
-            self.pending_since_ms = None;
-            return Action::OpenPicker;
+    pub fn press(&mut self, activity: Activity) -> Action {
+        if self.pending {
+            return Action::None;
         }
         match activity {
             Activity::Recording { elapsed_ms } if elapsed_ms < DOUBLE_PRESS_MS => Action::None,
@@ -61,7 +54,7 @@ impl Shortcut {
             Activity::Processing => Action::None,
             Activity::Picker => Action::RecordSelected,
             Activity::Free => {
-                self.pending_since_ms = Some(now_ms);
+                self.pending = true;
                 Action::None
             }
         }
@@ -69,23 +62,17 @@ impl Shortcut {
 
     /// Polled every few ms while pending, with whether the shortcut's modifiers are all still
     /// down.
-    pub fn tick(&mut self, now_ms: u64, held: bool) -> Action {
-        let Some(since_ms) = self.pending_since_ms else {
-            return Action::None;
-        };
-        if !held {
-            self.pending_since_ms = None;
+    pub fn tick(&mut self, held: bool) -> Action {
+        if self.pending && !held {
+            self.pending = false;
             Action::RecordScreen
-        } else if now_ms.saturating_sub(since_ms) >= TAP_MS {
-            self.pending_since_ms = None;
-            Action::OpenPicker
         } else {
             Action::None
         }
     }
 
     pub fn escape(&mut self) -> Action {
-        if self.pending_since_ms.take().is_some() {
+        if std::mem::take(&mut self.pending) {
             Action::Cancel
         } else {
             Action::None
@@ -165,44 +152,33 @@ mod tests {
     const FREE: Activity = Activity::Free;
 
     #[test]
-    fn a_tap_records_the_screen_without_opening_the_picker() {
+    fn a_tap_records_the_screen_when_the_keys_come_up() {
         let mut s = Shortcut::default();
-        assert_eq!(s.press(0, FREE), Action::None);
-        assert_eq!(s.tick(8, true), Action::None);
-        assert_eq!(s.tick(120, true), Action::None);
-        assert_eq!(s.tick(128, false), Action::RecordScreen);
+        assert_eq!(s.press(FREE), Action::None);
+        assert_eq!(s.tick(true), Action::None);
+        assert_eq!(s.tick(false), Action::RecordScreen);
         assert!(!s.is_pending());
-        assert_eq!(s.tick(200, false), Action::None);
+        assert_eq!(s.tick(false), Action::None);
     }
 
     #[test]
-    fn holding_opens_the_picker_and_letting_go_does_nothing_more() {
+    fn holding_records_the_screen_too_once_let_go() {
         let mut s = Shortcut::default();
-        s.press(0, FREE);
-        assert_eq!(s.tick(240, true), Action::None);
-        assert_eq!(s.tick(250, true), Action::OpenPicker);
-        assert!(!s.is_pending());
-        assert_eq!(s.tick(900, true), Action::None);
-        assert_eq!(s.tick(1_400, false), Action::None);
-        // Another S while it's up records what the picker is on, like the menu's picker.
-        assert_eq!(s.press(1_500, Activity::Picker), Action::RecordSelected);
+        s.press(FREE);
+        for _ in 0..500 {
+            assert_eq!(s.tick(true), Action::None);
+        }
+        // S pressed again while ⌥⇧ is still down changes nothing.
+        assert_eq!(s.press(FREE), Action::None);
+        assert_eq!(s.tick(false), Action::RecordScreen);
     }
 
     #[test]
-    fn a_quick_second_press_opens_the_picker() {
+    fn esc_before_the_keys_come_up_cancels_it() {
         let mut s = Shortcut::default();
-        s.press(0, FREE);
-        assert_eq!(s.press(150, FREE), Action::OpenPicker);
-        assert_eq!(s.tick(160, false), Action::None);
-    }
-
-    #[test]
-    fn esc_before_a_tap_or_hold_is_decided_cancels_it() {
-        let mut s = Shortcut::default();
-        s.press(0, FREE);
+        s.press(FREE);
         assert_eq!(s.escape(), Action::Cancel);
-        assert_eq!(s.tick(100, false), Action::None);
-        assert_eq!(s.tick(400, true), Action::None);
+        assert_eq!(s.tick(false), Action::None);
         assert_eq!(s.escape(), Action::None);
     }
 
@@ -210,14 +186,14 @@ mod tests {
     fn a_tap_while_recording_finishes_but_not_a_double_press() {
         let mut s = Shortcut::default();
         let at = |elapsed_ms| Activity::Recording { elapsed_ms };
-        assert_eq!(s.press(0, at(0)), Action::None);
-        assert_eq!(s.press(0, at(399)), Action::None);
-        assert_eq!(s.press(0, at(400)), Action::Finish);
-        assert_eq!(s.press(0, at(60_000)), Action::Finish);
+        assert_eq!(s.press(at(0)), Action::None);
+        assert_eq!(s.press(at(399)), Action::None);
+        assert_eq!(s.press(at(400)), Action::Finish);
+        assert_eq!(s.press(at(60_000)), Action::Finish);
         // Releasing ⌥⇧ after finishing doesn't start anything.
         assert!(!s.is_pending());
-        assert_eq!(s.tick(100, false), Action::None);
-        assert_eq!(s.press(0, Activity::Processing), Action::None);
+        assert_eq!(s.tick(false), Action::None);
+        assert_eq!(s.press(Activity::Processing), Action::None);
         assert!(!s.is_pending());
     }
 
@@ -266,7 +242,7 @@ mod tests {
     #[test]
     fn in_the_picker_the_shortcut_records_its_selection() {
         let mut s = Shortcut::default();
-        assert_eq!(s.press(0, Activity::Picker), Action::RecordSelected);
+        assert_eq!(s.press(Activity::Picker), Action::RecordSelected);
         assert!(!s.is_pending());
     }
 }

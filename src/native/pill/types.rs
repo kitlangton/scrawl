@@ -50,12 +50,13 @@ pub enum PillAction {
     SelectMode(SelectionMode),
     SwitchRecording(SelectionMode),
     RecordSelected,
-    Undo,
     Cancel,
     Finish,
     Paste(Option<[f32; 2]>),
     Inspect,
     DismissCompleted,
+    /// A session chip on the Completed island (smart routing), by position.
+    Route(usize),
 }
 
 /// Coordinator state snapshot synced to `NativePill`.

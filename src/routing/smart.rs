@@ -10,12 +10,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::Destination;
 
-/// A send needs at least this score...
+/// A send needs at least this score from clues alone (recency doesn't count toward it)...
 pub const SEND_AT: u32 = 95;
 /// ...and this lead over the second candidate.
 pub const LEAD: u32 = 15;
 /// Below this a candidate isn't worth suggesting.
 pub const OFFER_AT: u32 = 40;
+/// A runner-up needs this much from clues to be offered one click away.
+pub const ALT_AT: u32 = 15;
+/// At most this many runners-up are offered beside the best.
+const ALTERNATIVES: usize = 2;
 
 /// Everything [`decide`] needs. Plain data, saved as the bundle's `routing.json`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -29,6 +33,9 @@ pub struct Evidence {
     pub candidates: Vec<Candidate>,
     /// The capture's end, epoch ms; recency is measured from here.
     pub now_ms: u64,
+    /// The browser tab's URL, when there was one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// A destination someone stated. Obeyed, never weighed.
@@ -68,6 +75,30 @@ pub struct Clue {
     pub pointer: Pointer,
     /// What was seen, for explanations.
     pub note: String,
+    /// Full points when this clue is worth more or less than its source usually is (the viewed
+    /// session when the capture is about OpenCode's own interface, say).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<u32>,
+}
+
+impl Clue {
+    pub fn new(source: Source, pointer: Pointer, note: impl Into<String>) -> Self {
+        Self {
+            source,
+            pointer,
+            note: note.into(),
+            points: None,
+        }
+    }
+
+    pub fn worth(mut self, points: u32) -> Self {
+        self.points = Some(points);
+        self
+    }
+
+    fn full(&self) -> u32 {
+        self.points.unwrap_or_else(|| self.source.points())
+    }
 }
 
 /// Where a clue came from. Each source counts once per candidate.
@@ -78,13 +109,17 @@ pub enum Source {
     Page,
     /// The process serving the tab's port on this Mac.
     Port,
+    /// Who published the file the tab shows, when a server serves it from outside its own
+    /// project: the session the page names, or the one whose tool call wrote the file.
+    Publisher,
     /// The captured terminal's focused pane.
     Terminal,
-    /// The captured window's document.
+    /// The file the tab shows, when it's from outside the server's project: its path's words.
     Document,
     /// The session OpenCode Desktop showed last.
     Viewed,
-    /// The captured app's name (an app being built names its project).
+    /// The captured app: its name (an app being built names its project), and the checkout it's
+    /// built from when one is open.
     App,
     /// Words in the window or tab title.
     Title,
@@ -98,6 +133,7 @@ impl Source {
         match self {
             Self::Page => "sdk",
             Self::Port => "localhost",
+            Self::Publisher => "publisher",
             Self::Terminal => "terminal",
             Self::Document => "document",
             Self::Viewed => "viewed",
@@ -111,6 +147,7 @@ impl Source {
         match self {
             Self::Page => "page",
             Self::Port => "port",
+            Self::Publisher => "publisher",
             Self::Terminal => "terminal",
             Self::Document => "document",
             Self::Viewed => "viewed",
@@ -123,11 +160,11 @@ impl Source {
     /// Full points for a clue of this source that names a candidate.
     fn points(self) -> u32 {
         match self {
-            Self::Page | Self::Port => 95,
+            Self::Page | Self::Port | Self::Publisher => 95,
             Self::Terminal => 70,
-            Self::Document | Self::Viewed => 60,
+            Self::Viewed => 60,
             Self::App => 50,
-            Self::Title => 40,
+            Self::Title | Self::Document => 40,
             Self::Speech => 25,
         }
     }
@@ -190,17 +227,77 @@ impl Candidate {
         }
     }
 
-    /// The words that name it: its title's, and its folder's name split on `-`, `_` and `.`.
-    fn words(&self) -> BTreeSet<String> {
-        let folder = self
-            .directory
-            .as_deref()
-            .and_then(Path::file_name)
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        words(&format!("{} {folder}", self.title))
+    /// The words that name it, and how: its title's words, its folder's or repository's name
+    /// when that's one word, and the pieces of its folder's name split on `-`, `_` and `.`.
+    fn names(&self) -> BTreeMap<String, Naming> {
+        let mut names = BTreeMap::new();
+        let mut add = |word: String, naming: Naming| {
+            let entry = names.entry(word).or_insert(naming);
+            *entry = (*entry).min(naming);
+        };
+        let title = words(&self.title);
+        if let [whole] = title.as_slice() {
+            add(whole.clone(), Naming::Whole);
+        } else {
+            for word in title {
+                add(word, Naming::Title);
+            }
+        }
+        let base = |path: &Path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        for path in [self.directory.as_deref(), self.repo.as_deref()]
             .into_iter()
-            .collect()
+            .flatten()
+        {
+            if let [whole] = words(&base(path)).as_slice()
+                && base(path).eq_ignore_ascii_case(whole)
+            {
+                add(whole.clone(), Naming::Whole);
+            }
+        }
+        if let Some(dir) = self.directory.as_deref() {
+            // OpenCode's own worktrees get made-up names ("stellar-star"): they name nothing.
+            let made_up = dir.components().any(|c| c.as_os_str() == "worktree");
+            let worktree = self.repo.as_deref().is_some_and(|repo| repo != dir);
+            if !made_up {
+                for word in words(&base(dir)) {
+                    add(
+                        word,
+                        if worktree {
+                            Naming::Worktree
+                        } else {
+                            Naming::Folder
+                        },
+                    );
+                }
+            }
+        }
+        names
+    }
+}
+
+/// How a word names a candidate, strongest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Naming {
+    /// Its whole title, or its folder's or repository's whole name.
+    Whole,
+    /// A word of its title.
+    Title,
+    /// A piece of its folder's name.
+    Folder,
+    /// A piece of a worktree's name, worth half: worktrees are named for a task's words.
+    Worktree,
+}
+
+impl Naming {
+    /// Whether `word` names a candidate this way. Ordinary words ("loading", "search", "chat")
+    /// are in names for what the work is about, and said for everything else, so for them only a
+    /// whole name counts.
+    fn counts(self, word: &str) -> bool {
+        self == Self::Whole || !is_common(word)
     }
 }
 
@@ -226,7 +323,13 @@ pub struct Judgement {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Decision {
-    Send { to: Scored },
+    /// `instead`: runners-up the undo window offers one click away.
+    Send {
+        to: Scored,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        instead: Vec<Scored>,
+    },
+    /// The suggestion first, then its runners-up. Nothing is sent until one is picked.
     Offer { choices: Vec<Scored> },
     Keep { reason: String },
 }
@@ -272,6 +375,14 @@ impl Basis {
 }
 
 impl Scored {
+    /// The score from clues alone, without recency.
+    pub fn clues(&self) -> u32 {
+        self.reasons
+            .iter()
+            .filter(|r| r.basis != Basis::Recent)
+            .fold(0, |sum, r| sum.saturating_add(r.points))
+    }
+
     /// The reason that gave the most points (the first on a tie), which names how it was found.
     fn lead(&self) -> Option<&Reason> {
         self.reasons
@@ -289,7 +400,10 @@ pub fn decide(evidence: &Evidence, policy: Policy) -> Judgement {
     if let Some(address) = &evidence.address {
         let to = addressed(evidence, address);
         return Judgement {
-            decision: Decision::Send { to: to.clone() },
+            decision: Decision::Send {
+                to: to.clone(),
+                instead: Vec::new(),
+            },
             ranking: vec![to],
         };
     }
@@ -370,7 +484,10 @@ fn ladder(evidence: &Evidence) -> Judgement {
                 }],
             };
             Judgement {
-                decision: Decision::Send { to: to.clone() },
+                decision: Decision::Send {
+                    to: to.clone(),
+                    instead: Vec::new(),
+                },
                 ranking: vec![to],
             }
         }
@@ -430,9 +547,11 @@ fn weigh(evidence: &Evidence) -> Judgement {
         .iter()
         .filter_map(|candidate| score(candidate, evidence, &frequency, &closest))
         .collect();
+    // Clues rank; recency only breaks their ties.
     ranking.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
+        b.clues()
+            .cmp(&a.clues())
+            .then_with(|| b.score.cmp(&a.score))
             .then_with(|| a.candidate.id.cmp(&b.candidate.id))
     });
 
@@ -445,15 +564,19 @@ fn weigh(evidence: &Evidence) -> Judgement {
             },
         },
         [best, rest @ ..] => {
-            let second = rest.first();
-            let lead = best.score - second.map_or(0, |s| s.score);
-            if best.score >= SEND_AT && lead >= LEAD {
-                Decision::Send { to: best.clone() }
+            let lead = best
+                .score
+                .saturating_sub(rest.iter().map(|s| s.score).max().unwrap_or(0));
+            // Recency counts toward the lead between sessions the clues put forward equally, but
+            // never toward SEND_AT.
+            if best.clues() >= SEND_AT && lead >= LEAD {
+                Decision::Send {
+                    to: best.clone(),
+                    instead: alternatives(&ranking),
+                }
             } else if best.score >= OFFER_AT {
                 let mut choices = vec![best.clone()];
-                if let Some(second) = second.filter(|s| s.score >= OFFER_AT && lead < LEAD) {
-                    choices.push(second.clone());
-                }
+                choices.extend(alternatives(&ranking));
                 Decision::Offer { choices }
             } else {
                 Decision::Keep {
@@ -469,11 +592,36 @@ fn weigh(evidence: &Evidence) -> Judgement {
     Judgement { decision, ranking }
 }
 
-/// The candidates, plus a bare one for each session a page names that wasn't read.
+/// The runners-up worth one click: close behind the best, or resting on a different clue than
+/// it (the session a misread clue would have meant), one per clue source.
+fn alternatives(ranking: &[Scored]) -> Vec<Scored> {
+    let Some((best, rest)) = ranking.split_first() else {
+        return Vec::new();
+    };
+    let basis = |s: &Scored| s.lead().map(|r| r.basis);
+    let mut picked: Vec<Scored> = Vec::new();
+    for s in rest {
+        if picked.len() == ALTERNATIVES {
+            break;
+        }
+        let close = best.score.saturating_sub(s.score) < LEAD && s.score >= OFFER_AT;
+        let elsewhere = basis(s) != basis(best)
+            && s.clues() >= ALT_AT
+            && !picked.iter().any(|p| basis(p) == basis(s));
+        if close || elsewhere {
+            picked.push(s.clone());
+        }
+    }
+    picked
+}
+
+/// The candidates, plus a bare one for each session a page or its publisher names that wasn't
+/// read.
 fn with_named_sessions(evidence: &Evidence) -> Vec<Candidate> {
     let mut candidates = evidence.candidates.clone();
     for clue in &evidence.clues {
-        if let (Source::Page, Pointer::Session { id, .. }) = (clue.source, &clue.pointer)
+        if let (Source::Page | Source::Publisher, Pointer::Session { id, .. }) =
+            (clue.source, &clue.pointer)
             && !candidates.iter().any(|c| &c.id == id)
         {
             candidates.push(bare(id));
@@ -486,8 +634,10 @@ fn with_named_sessions(evidence: &Evidence) -> Vec<Candidate> {
 fn word_frequency(candidates: &[Candidate]) -> BTreeMap<String, u32> {
     let mut frequency = BTreeMap::new();
     for candidate in candidates {
-        for word in candidate.words() {
-            *frequency.entry(word).or_insert(0) += 1;
+        for (word, naming) in candidate.names() {
+            if naming.counts(&word) {
+                *frequency.entry(word).or_insert(0) += 1;
+            }
         }
     }
     frequency
@@ -501,7 +651,7 @@ fn score(
 ) -> Option<Scored> {
     // The best clue of each source.
     let mut best: BTreeMap<Source, Reason> = BTreeMap::new();
-    let names = candidate.words();
+    let names = candidate.names();
     for (clue, closest) in evidence.clues.iter().zip(closest) {
         let Some((points, why)) = support(clue, candidate, &names, frequency, *closest) else {
             continue;
@@ -548,22 +698,22 @@ fn score(
 fn support(
     clue: &Clue,
     candidate: &Candidate,
-    names: &BTreeSet<String>,
+    names: &BTreeMap<String, Naming>,
     frequency: &BTreeMap<String, u32>,
     closest: Option<usize>,
 ) -> Option<(u32, String)> {
     match &clue.pointer {
         Pointer::Session { id, .. } if *id == candidate.id => {
-            let points = if clue.source == Source::Page {
-                PAGE_SESSION
-            } else {
-                clue.source.points()
+            let points = match (clue.source, clue.points) {
+                (_, Some(points)) => points,
+                (Source::Page, None) => PAGE_SESSION,
+                (source, None) => source.points(),
             };
             Some((points, clue.note.clone()))
         }
         Pointer::Session { .. } => None,
         Pointer::Folder(folder) => {
-            let full = clue.source.points();
+            let full = clue.full();
             match fit(candidate, folder) {
                 Fit::Along(d) => {
                     let further = d.saturating_sub(closest.unwrap_or(d));
@@ -591,18 +741,34 @@ fn support(
             }
         }
         Pointer::Words { words } => {
-            let (word, n) = words
+            let (points, word, n, naming) = words
                 .iter()
-                .filter(|w| names.contains(*w))
-                .map(|w| (w, frequency.get(w).copied().unwrap_or(1).max(1)))
-                .min_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(b.0)))?;
-            let points = clue.source.points() / n;
+                .filter_map(|w| {
+                    let naming = *names.get(w)?;
+                    naming.counts(w).then_some(())?;
+                    let n = frequency.get(w).copied().unwrap_or(1).max(1);
+                    let points = clue.full() / n;
+                    let points = if naming == Naming::Worktree {
+                        points / 2
+                    } else {
+                        points
+                    };
+                    Some((points, w, n, naming))
+                })
+                .max_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(a.1)))?;
             let share = if n == 1 {
                 "only this session".to_owned()
             } else {
                 format!("{n} sessions")
             };
-            Some((points, format!("{}: \"{word}\" names {share}", clue.note)))
+            let how = match naming {
+                Naming::Worktree => " (in its worktree's name, half)",
+                Naming::Whole | Naming::Title | Naming::Folder => "",
+            };
+            Some((
+                points,
+                format!("{}: \"{word}\" names {share}{how}", clue.note),
+            ))
         }
     }
 }
@@ -698,6 +864,45 @@ const STOP: &str = "the and for but not you your with this that these those ther
      through being point part parts show shows says said tell take give keep put try use used \
      using time times day back able sure yes delete read write free tier settings setting";
 
+/// Ordinary words, and the words of software and its interfaces: in a folder's name they say what
+/// the folder does ("opencode-ios-oc380-loading"), so saying one names nothing. A session's title
+/// or a whole folder name still counts.
+const COMMON: &str = "able above across add added adding after again against ago ahead all almost alone \
+     along already alright always amount answer anyway anything anywhere appear apply area arent \
+     around ask asked asking away awesome bad bar base basic basically become begin behind below \
+     best between big black blank block blue body boring both bottom box break bring broke broken \
+     brown build building built busy button buttons call called calls care case cases center change \
+     changed changes changing check checked checking choose clean clear clearly click clicked \
+     clicking close closed closes come comes coming common complete completely component components \
+     content control controls copy correct could couldnt couple crazy current cut dark data dead \
+     deal default definitely design detail details didnt display does doing done double draw drawn \
+     drop easy edge edit else empty end enough entire error errors etc exactly example except \
+     expected extra fact fail failed fair fake far fast faster feature features fill final finally \
+     find fine finish fixed flash flashing flicker focus focused follow font force form forward full \
+     fun function funny further gets give given glass goes gone goodness gray great green grid group \
+     guess half hand handle hard header hell help hidden hide high hold hope hover huge idea ideas \
+     ill image images important inside instead issue issues item items keep kinds label large later \
+     layout least less level light line lines list little live load loaded loader loading local long \
+     loop lose lost loud low mad maybe menu message messages middle might mind minute missing mode \
+     move moved moving multiple must name names near nearly need never next nice nothing number \
+     obviously odd okay once ones open opened opening option options order others otherwise outside \
+     own pad padding panel past pause perfect pick picked picker picks piece place placed places \
+     plain play please plus polish pop popup possible pretty problem problems pull push quick quickly \
+     random rather ready real reason red remove removed rename render rendering reset rest result \
+     return run running safe save saved scroll scrolling search searching second section seems seen \
+     select selected send sent set sets shape short should side simple since single size slow small \
+     smooth sorry space spacing special spinner spot stack state stay step stop stuff style super \
+     support switch system take taken talk text that their theme thats theyre thing think third \
+     though thought three tiny title today together top total touch toward track true turn type \
+     types ugly under understand unless until upon usual value view visible wait walk wanted wants \
+     ways weve white whatever whether whole wide will without wonder word words working works world \
+     worse worst wrong yet zero having chat library model models server audit check typo quick \
+     game engine infinite algorithm screenshots";
+
+fn is_common(word: &str) -> bool {
+    COMMON.split_whitespace().any(|common| common == word)
+}
+
 /// Lowercased words of three letters or more that aren't on the stop list or numbers.
 pub fn words(text: &str) -> Vec<String> {
     let mut seen = BTreeSet::new();
@@ -715,10 +920,16 @@ pub fn words(text: &str) -> Vec<String> {
 // MARK: Effects
 
 /// The `destination` a send records, or `None` when nothing is sent.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn destination(judgement: &Judgement, url: Option<&str>) -> Option<Destination> {
-    let Decision::Send { to } = &judgement.decision else {
+    let Decision::Send { to, .. } = &judgement.decision else {
         return None;
     };
+    Some(destination_of(to, url))
+}
+
+/// The `destination` sending to `to` records, `via` the reason that gave it the most points.
+pub fn destination_of(to: &Scored, url: Option<&str>) -> Destination {
     let lead = to.lead();
     let via = match lead.map(|r| r.basis) {
         Some(Basis::Chosen) => "chosen",
@@ -726,7 +937,7 @@ pub fn destination(judgement: &Judgement, url: Option<&str>) -> Option<Destinati
         Some(Basis::Clue(source)) => source.via(),
         Some(Basis::Recent) | None => "weighed",
     };
-    Some(Destination {
+    Destination {
         session: to.candidate.id.clone(),
         title: to.candidate.label().to_owned(),
         via: via.to_owned(),
@@ -734,7 +945,7 @@ pub fn destination(judgement: &Judgement, url: Option<&str>) -> Option<Destinati
         directory: lead
             .and_then(|r| r.directory.as_ref())
             .map(|d| d.display().to_string()),
-    })
+    }
 }
 
 // MARK: Explaining
@@ -811,24 +1022,81 @@ pub fn explain(evidence: &Evidence, judgement: &Judgement) -> String {
         }
     }
     let _ = match &judgement.decision {
-        Decision::Send { to } => writeln!(
-            out,
-            "Decision  send to {} ({})",
-            to.candidate.label(),
-            to.candidate.id
-        ),
-        Decision::Offer { choices } => {
-            let names: Vec<&str> = choices.iter().map(|c| c.candidate.label()).collect();
-            let best = choices.first().map_or(0, |c| c.score);
-            writeln!(
+        Decision::Send { to, instead } => {
+            let _ = writeln!(
                 out,
-                "Decision  offer {} (a send needs {SEND_AT} and a lead of {LEAD}; best is {best})",
-                names.join(" or ")
-            )
+                "Decision  send to {} ({})",
+                to.candidate.label(),
+                to.candidate.id
+            );
+            if instead.is_empty() {
+                Ok(())
+            } else {
+                let names: Vec<&str> = instead.iter().map(|c| c.candidate.label()).collect();
+                writeln!(
+                    out,
+                    "          one click away while it waits: {}",
+                    names.join(", ")
+                )
+            }
+        }
+        Decision::Offer { choices } => {
+            let best = choices.first();
+            let rest: Vec<&str> = choices
+                .iter()
+                .skip(1)
+                .map(|c| c.candidate.label())
+                .collect();
+            let _ = writeln!(
+                out,
+                "Decision  ask: send to {}? ({})",
+                best.map_or("?", |c| c.candidate.label()),
+                best.map_or_else(String::new, |b| why_not_sent(
+                    b,
+                    choices,
+                    &judgement.ranking
+                ))
+            );
+            if rest.is_empty() {
+                Ok(())
+            } else {
+                writeln!(out, "          or one click: {}", rest.join(", "))
+            }
         }
         Decision::Keep { reason } => writeln!(out, "Decision  clipboard only: {reason}"),
     };
     out
+}
+
+/// Why an offered best wasn't sent, in the explanation's words.
+fn why_not_sent(best: &Scored, choices: &[Scored], ranking: &[Scored]) -> String {
+    let clues = best.clues();
+    if clues < SEND_AT {
+        let recent = best.score - clues;
+        return if recent > 0 {
+            format!(
+                "its clues give {clues}, a send needs {SEND_AT} from clues; recency only breaks ties"
+            )
+        } else {
+            format!("its clues give {clues}, a send needs {SEND_AT}")
+        };
+    }
+    let second = ranking.get(1).or_else(|| choices.get(1));
+    match second {
+        Some(s) if s.clues() > clues => {
+            format!(
+                "{} has stronger clues ({} to {clues})",
+                s.candidate.label(),
+                s.clues()
+            )
+        }
+        Some(s) => format!(
+            "{} is {} behind; a send needs a lead of {LEAD}",
+            s.candidate.label(),
+            best.score.saturating_sub(s.score)
+        ),
+        None => String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -859,6 +1127,7 @@ mod tests {
                 repo: None,
             }),
             note: format!("{source:?} in {root}"),
+            points: None,
         }
     }
 
@@ -870,6 +1139,7 @@ mod tests {
                 directory: None,
             },
             note: format!("{source:?} names {id}"),
+            points: None,
         }
     }
 
@@ -878,6 +1148,7 @@ mod tests {
             source,
             pointer: Pointer::Words { words: words(text) },
             note: format!("{source:?}"),
+            points: None,
         }
     }
 
@@ -896,12 +1167,13 @@ mod tests {
             clues,
             candidates: sessions(),
             now_ms: NOW,
+            url: None,
         }
     }
 
     fn sent_to(j: &Judgement) -> Option<&str> {
         match &j.decision {
-            Decision::Send { to } => Some(to.candidate.id.as_str()),
+            Decision::Send { to, .. } => Some(to.candidate.id.as_str()),
             _ => None,
         }
     }
@@ -960,10 +1232,98 @@ mod tests {
         e.candidates[1].viewed_ms = Some(NOW);
         let j = decide(&e, Policy::Weigh);
         assert_eq!(offered(&j), vec!["ses_ios"]);
-        // A second, independent clue that agrees sends.
+        // Saying its name and having just used it still only asks: recency never lifts a
+        // session to SEND_AT.
         e.clues
             .push(said(Source::Speech, "the iOS composer feels slow"));
+        let j = decide(&e, Policy::Weigh);
+        assert_eq!(j.ranking[0].score, 60 + 25 + 20);
+        assert_eq!(offered(&j), vec!["ses_ios"]);
+        // Clues that reach it on their own send.
+        e.clues.push(said(Source::Title, "OpenCode iOS"));
         assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_ios"));
+    }
+
+    #[test]
+    fn ordinary_words_dont_match_pieces_of_folder_names() {
+        let mut e = ev(vec![said(
+            Source::Speech,
+            "when I search, loading, the flashing",
+        )]);
+        e.candidates.push(Candidate {
+            repo: Some("/p/opencode-ios".into()),
+            ..cand("ses_wt", "OPENCODE IOS", "/p/opencode-ios-oc380-loading", 1)
+        });
+        assert!(decide(&e, Policy::Weigh).ranking.is_empty());
+        // A whole title still counts; a word of a longer one doesn't.
+        e.candidates
+            .push(cand("ses_states", "LOADING STATES", "/p/states", 1));
+        assert!(decide(&e, Policy::Weigh).ranking.is_empty());
+        e.candidates
+            .push(cand("ses_loading", "LOADING", "/p/load", 1));
+        let j = decide(&e, Policy::Weigh);
+        assert_eq!(j.ranking.len(), 1);
+        assert_eq!(j.ranking[0].candidate.id, "ses_loading");
+        // A distinctive piece of a worktree's name counts for half.
+        let e = Evidence {
+            clues: vec![said(Source::Speech, "the oc380 spinner")],
+            ..e
+        };
+        let j = decide(&e, Policy::Weigh);
+        assert_eq!(j.ranking[0].candidate.id, "ses_wt");
+        assert_eq!(j.ranking[0].clues(), 25 / 2);
+        // OpenCode's made-up worktree names name nothing.
+        let mut e = ev(vec![said(Source::Speech, "a lucky rocket")]);
+        e.candidates.push(cand(
+            "ses_made_up",
+            "AUDIT",
+            "/data/opencode/worktree/012780/lucky-rocket",
+            1,
+        ));
+        assert!(decide(&e, Policy::Weigh).ranking.is_empty());
+    }
+
+    #[test]
+    fn recency_only_breaks_ties_between_sessions_the_clues_put_forward() {
+        // A port names two sessions equally: the recent one is sent to.
+        let j = decide(&ev(vec![folder(Source::Port, "/p/scrawl")]), Policy::Weigh);
+        assert_eq!(sent_to(&j), Some("ses_scrawl"));
+        // A stronger clue for a stale session isn't overtaken by a weaker one's recency.
+        let mut e = ev(vec![
+            named(Source::Page, "ses_old"),
+            folder(Source::Port, "/p/opencode-ios"),
+        ]);
+        e.candidates[3].directory = Some("/p/elsewhere".into());
+        let j = decide(&e, Policy::Weigh);
+        assert_eq!(j.ranking[0].candidate.id, "ses_old");
+        assert_eq!(sent_to(&j), None);
+        assert_eq!(offered(&j), vec!["ses_old", "ses_ios"]);
+    }
+
+    #[test]
+    fn an_offer_keeps_the_runner_up_from_another_clue_one_click_away() {
+        let mut e = ev(vec![
+            folder(Source::App, "/p/scrawl"),
+            named(Source::Viewed, "ses_ios"),
+        ]);
+        e.clues[0].points = Some(70);
+        e.clues[1].points = Some(15);
+        let j = decide(&e, Policy::Weigh);
+        assert_eq!(offered(&j), vec!["ses_scrawl", "ses_ios"]);
+        // Another session behind the same clue at half isn't offered.
+        assert!(!offered(&j).contains(&"ses_old"));
+        // A send keeps its runner-up for the undo window.
+        e.clues[0].points = None;
+        e.clues[0].source = Source::Port;
+        let j = decide(&e, Policy::Weigh);
+        match &j.decision {
+            Decision::Send { to, instead } => {
+                assert_eq!(to.candidate.id, "ses_scrawl");
+                let ids: Vec<&str> = instead.iter().map(|s| s.candidate.id.as_str()).collect();
+                assert_eq!(ids, vec!["ses_ios"]);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -1073,6 +1433,7 @@ mod tests {
                 repo: Some("/h".into()),
             }),
             note: "port 5203".into(),
+            points: None,
         });
         let j = decide(&e, Policy::Weigh);
         assert_eq!(sent_to(&j), Some("ses_motion"));
@@ -1104,6 +1465,7 @@ mod tests {
                 repo: Some("/p/scrawl".into()),
             }),
             note: "port 5173".into(),
+            points: None,
         });
         let j = decide(&e, Policy::Weigh);
         assert_eq!(offered(&j), vec!["ses_scrawl"]);

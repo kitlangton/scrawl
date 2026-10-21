@@ -121,7 +121,6 @@ pub fn measure_metrics() -> Metrics {
         screen: measure_text_pt("Screen", HUD_TEXT, WEIGHT_MEDIUM, false),
         iphone: measure_text_pt("iPhone", HUD_TEXT, WEIGHT_MEDIUM, false),
         record: measure_text_pt("Record", HUD_TEXT, WEIGHT_SEMIBOLD, false),
-        undo: measure_text_pt("Undo", HUD_TEXT, WEIGHT_MEDIUM, false),
         cancel: measure_text_pt("Cancel", HUD_TEXT, WEIGHT_MEDIUM, false),
         finish: measure_text_pt("Finish", HUD_TEXT, WEIGHT_SEMIBOLD, false),
         processing: measure_text_pt("Processing…", HUD_TEXT, WEIGHT_SEMIBOLD, false),
@@ -298,7 +297,13 @@ pub struct GlyphAtlas {
     /// Reserved slot for the completed label string (`y = 400`, `x = 256..960`).
     completed_text: String,
     pub completed_sprite: Sprite,
+    /// Reserved rows for the Completed island's session chips (`y = 424, 468`).
+    route_text: [String; 2],
+    pub route_sprites: [Sprite; 2],
 }
+
+/// The tallest a changing label's sprite may be, in pixels, so the reserved rows don't overlap.
+const SLOT_H: u32 = 42;
 
 impl GlyphAtlas {
     pub fn new(device: &metal::DeviceRef, scale: f32) -> Self {
@@ -337,6 +342,8 @@ impl GlyphAtlas {
             clock_sprite: Sprite::default(),
             completed_text: String::new(),
             completed_sprite: Sprite::default(),
+            route_text: [String::new(), String::new()],
+            route_sprites: [Sprite::default(); 2],
         };
 
         for (kind, size_pt) in [
@@ -358,7 +365,6 @@ impl GlyphAtlas {
             ("Screen", HUD_TEXT, WEIGHT_MEDIUM),
             ("iPhone", HUD_TEXT, WEIGHT_MEDIUM),
             ("Record", HUD_TEXT, WEIGHT_SEMIBOLD),
-            ("Undo", HUD_TEXT, WEIGHT_MEDIUM),
             ("Cancel", HUD_TEXT, WEIGHT_MEDIUM),
             ("Finish", HUD_TEXT, WEIGHT_SEMIBOLD),
             ("Processing…", HUD_TEXT, WEIGHT_SEMIBOLD),
@@ -439,7 +445,7 @@ impl GlyphAtlas {
             rasterize_text(clock, HUD_TEXT, WEIGHT_SEMIBOLD, true, self.scale);
         let (x, y) = (4_u32, 380_u32);
         let w = w.min(240);
-        let h = h.min(120);
+        let h = h.min(SLOT_H);
         self.upload_at(x, y, w, h, &bytes);
         self.clock_sprite = Sprite {
             size_pt,
@@ -464,7 +470,7 @@ impl GlyphAtlas {
             rasterize_text(text, HUD_TEXT, WEIGHT_SEMIBOLD, false, self.scale);
         let (x, y) = (256_u32, 380_u32);
         let w = w.min(ATLAS_W - x - 4);
-        let h = h.min(120);
+        let h = h.min(SLOT_H);
         self.upload_at(x, y, w, h, &bytes);
         self.completed_sprite = Sprite {
             size_pt,
@@ -476,6 +482,35 @@ impl GlyphAtlas {
             ],
         };
         self.completed_sprite
+    }
+
+    pub fn route_text(&self, index: usize) -> &str {
+        self.route_text.get(index).map_or("", String::as_str)
+    }
+
+    /// Updates the `index`th session chip's label sprite only when `text` changes.
+    pub fn update_route(&mut self, index: usize, text: &str) -> Sprite {
+        let index = index.min(1);
+        if self.route_text[index] == text {
+            return self.route_sprites[index];
+        }
+        self.route_text[index] = text.to_owned();
+        let (w, h, size_pt, bytes) =
+            rasterize_text(text, HUD_TEXT, WEIGHT_MEDIUM, false, self.scale);
+        let (x, y) = (4_u32, 424_u32 + 44 * index as u32);
+        let w = w.min(ATLAS_W - x - 4);
+        let h = h.min(SLOT_H);
+        self.upload_at(x, y, w, h, &bytes);
+        self.route_sprites[index] = Sprite {
+            size_pt,
+            uv: [
+                x as f32 / ATLAS_W as f32,
+                y as f32 / ATLAS_H as f32,
+                (x + w) as f32 / ATLAS_W as f32,
+                (y + h) as f32 / ATLAS_H as f32,
+            ],
+        };
+        self.route_sprites[index]
     }
 }
 

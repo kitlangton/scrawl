@@ -1,14 +1,14 @@
 # Capture: shortcuts, Mac recording, displays
 
-Read this before changing `src/hold.rs`, `src/capture.rs`, `src/screens.rs` or the picker and capsule placement in `src/ui.rs`.
+Read this before changing `src/shortcut.rs`, `src/capture.rs`, `src/screens.rs` or the picker and capsule placement in `src/ui.rs`.
 
-## Shortcuts (`src/hold.rs`, `is_capture_shortcut` in `src/capture.rs`)
+## Shortcuts (`src/shortcut.rs`, `is_capture_shortcut` in `src/capture.rs`)
 
-A tap of `⌥⇧S` (or the shortcut set in Settings) (modifiers up within 250 ms) records the display under the pointer at once, auto-cropped, with a brief red edge glow from the overlay as the start cue, and the capsule springs open onto switch chips (Area · Window · Screen · iPhone if cabled; `hold::Reveal`, `REVEAL_*` constants at the top of `src/ui.rs`) until 3.5 s pass or the user clicks, scrolls or draws (never while hovered). A chip (`switch_recording`) restarts rather than retargets: Window/Area discard the few seconds and morph the capsule into the picker, iPhone discards and starts the phone.
+A press of `⌥⇧S` (or the shortcut set in Settings), however long it's held, records the display under the pointer as soon as its modifiers come up, auto-cropped, with a brief red edge glow from the overlay as the start cue, and the capsule springs open onto switch chips (Area · Window · Screen · iPhone if cabled; `shortcut::Reveal` and its `REVEAL_*` constants) until 3.5 s pass or the user clicks, scrolls or draws (never while hovered). A chip (`switch_recording`) restarts rather than retargets: Window/Area discard the few seconds and morph the capsule into the picker, iPhone discards and starts the phone.
 
-Held past 250 ms (or pressed twice within it), it opens the picker, the same one as the menu's **Choose What to Record…**, on the pointer's display and on the mode last used. The picker stays open after the keys come up: click a chip or a window, drag an area, or press Esc. Repeats of a held S never record in the picker (`handle_selection_key`'s `repeat`). While recording, a tap finishes, ignoring one within 400 ms of the start.
+Recording starts on the release rather than the press so nothing is captured while ⌥⇧ is still down (⇧ is the ink key), and Esc before the release cancels. The picker opens only from the menu's **Choose What to Record…** (or a chip), on the pointer's display and on the mode last used; there the shortcut records what it's on, and repeats of a held S never record (`handle_selection_key`'s `repeat`). While recording, a press finishes, ignoring one within 400 ms of the start.
 
-Carbon hotkeys and the key event tap report presses through `emit_capture_shortcut` (deduplicated within 90 ms); while a press is undecided the UI loop polls the modifiers and takes Esc from the key tap (`tick_shortcut`, `take_escape`), so the release is seen whichever window has focus. Esc from the key tap also closes an open picker when another app has the keys.
+Carbon hotkeys and the key event tap report presses through `emit_capture_shortcut` (deduplicated within 90 ms); while a press waits for its release the UI loop polls the modifiers and takes Esc from the key tap (`tick_shortcut`, `take_escape`), so the release is seen whichever window has focus. Esc from the key tap also closes an open picker when another app has the keys.
 
 ## Mac captures (`src/capture.rs`)
 

@@ -20,7 +20,7 @@ if [[ ${1:-} == --time-scale ]]; then
 fi
 scenes=("$@")
 if [[ ${#scenes[@]} -eq 0 ]]; then
-  scenes=(tap-then-area tap-then-window tap-then-screen hold-then-pick finish cancel dismiss)
+  scenes=(tap-then-area tap-then-window tap-then-screen picker finish cancel dismiss)
 fi
 
 here=$(cd "$(dirname "$0")" && pwd)

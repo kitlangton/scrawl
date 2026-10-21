@@ -8,7 +8,7 @@ export function latestRelease(xml: string): Release {
     const build = Number(tag("version") ?? 0)
     const version = tag("shortVersionString")
     if (!version || (best && build <= best.build)) continue
-    best = { build, version, macos: parseInt(tag("minimumSystemVersion") ?? "26", 10) }
+    best = { build, version, macos: parseInt(tag("minimumSystemVersion") ?? "15", 10) }
   }
-  return best ?? { version: "", build: 0, macos: 26 }
+  return best ?? { version: "", build: 0, macos: 15 }
 }

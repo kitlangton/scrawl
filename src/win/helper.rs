@@ -45,6 +45,8 @@ pub struct SpeechModelLine {
     #[serde(default)]
     pub locale: Option<String>,
     #[serde(default)]
+    pub locales: Option<Vec<String>>,
+    #[serde(default)]
     pub progress: Option<f64>,
     #[serde(default)]
     pub error: Option<String>,
@@ -52,7 +54,10 @@ pub struct SpeechModelLine {
 
 /// Windows transcribes with Parakeet (`win::speech`): Hex's installed model, else Scrawl's own
 /// copy, downloaded and checked here.
-pub fn install_speech_model(line: impl FnMut(SpeechModelLine)) -> Result<()> {
+pub fn install_speech_model(
+    _stop: &dyn Fn() -> bool,
+    line: impl FnMut(SpeechModelLine),
+) -> Result<()> {
     crate::win::speech::install(line)
 }
 

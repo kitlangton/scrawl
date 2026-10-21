@@ -419,14 +419,13 @@ impl Scene for DrawScene {
                 </text>
 
                 // Recording Dynamic Island Pill
-                <rect x="1290" y="68" width="470" height="54" rx="27" fill={PILL_BG} stroke="#343844" stroke-width="1.5" />
-                <circle cx="1324" cy="95" r="14" fill={ACCENT_RED} fill-opacity={0.28 * rec_pulse} />
-                <circle cx="1324" cy="95" r="6.5" fill={ACCENT_RED} />
-                <text x="1375" y="102" text-anchor="middle" font-family={FONT_MONO} font-weight="400" font-size="22" fill={TEXT_WHITE}>
+                <rect x="1380" y="68" width="380" height="54" rx="27" fill={PILL_BG} stroke="#343844" stroke-width="1.5" />
+                <circle cx="1414" cy="95" r="14" fill={ACCENT_RED} fill-opacity={0.28 * rec_pulse} />
+                <circle cx="1414" cy="95" r="6.5" fill={ACCENT_RED} />
+                <text x="1465" y="102" text-anchor="middle" font-family={FONT_MONO} font-weight="400" font-size="22" fill={TEXT_WHITE}>
                     {format!("0:0{}", (t.floor() as u32).min(9))}
                 </text>
-                <rect x="1422" y="83" width="1.5" height="24" fill="#2e323d" />
-                <text x="1476" y="101" text-anchor="middle" font-family={FONT_SANS} font-weight="500" font-size="20" fill={TEXT_SOFT}>"Undo"</text>
+                <rect x="1512" y="83" width="1.5" height="24" fill="#2e323d" />
                 <text x="1566" y="101" text-anchor="middle" font-family={FONT_SANS} font-weight="500" font-size="20" fill={TEXT_SOFT}>"Cancel"</text>
                 <rect x="1632" y="76" width="116" height="38" rx="19" fill={ACCENT_BLUE} />
                 <text x="1690" y="101" text-anchor="middle" font-family={FONT_DISPLAY} font-weight="700" font-size="20" fill={TEXT_WHITE}>"Finish"</text>

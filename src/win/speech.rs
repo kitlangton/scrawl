@@ -226,6 +226,7 @@ pub fn install(mut line: impl FnMut(SpeechModelLine)) -> Result<()> {
         status: status.into(),
         engine: Some("Parakeet".into()),
         locale: Some("en".into()),
+        locales: None,
         progress,
         error,
     };

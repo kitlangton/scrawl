@@ -934,6 +934,31 @@ kbd {
     transform 0.26s ease;
 }
 
+/* Recording: the lead rides the left edge while the capsule grows or folds. */
+.island.pinned {
+  justify-content: flex-start;
+}
+
+.island-trail {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.island-chips,
+.island-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.island-chips {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
 .island.copied {
   box-shadow:
     inset 0 0 0 1px rgba(105, 216, 159, 0.34),
@@ -1130,39 +1155,19 @@ kbd {
   }
 }
 
-/* ---------- Selection (laser_overlay.metal) ---------- */
+/* ---------- Start glow (laser_overlay.metal: #ff3b30 at 0.45 · e^(-d/22) from each edge) ---------- */
 
-.selection {
+.edge-glow {
   position: absolute;
   inset: 0;
-  z-index: 3;
+  z-index: 7;
   pointer-events: none;
-}
-
-.selection-svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-
-.selection-size {
-  position: absolute;
-  left: 0;
-  top: 0;
-  will-change: transform, opacity;
-  padding: 3px 7px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  color: #fff;
-  background: rgba(28, 28, 30, 0.9);
-  box-shadow:
-    0 0 0 0.5px rgba(255, 255, 255, 0.18),
-    0 4px 12px rgba(0, 0, 0, 0.4);
+  --glow: rgba(255, 59, 48, 0.45);
+  background:
+    linear-gradient(to right, var(--glow), rgba(255, 59, 48, 0.17) 22px, rgba(255, 59, 48, 0.06) 44px, transparent 88px),
+    linear-gradient(to left, var(--glow), rgba(255, 59, 48, 0.17) 22px, rgba(255, 59, 48, 0.06) 44px, transparent 88px),
+    linear-gradient(to bottom, var(--glow), rgba(255, 59, 48, 0.17) 22px, rgba(255, 59, 48, 0.06) 44px, transparent 88px),
+    linear-gradient(to top, var(--glow), rgba(255, 59, 48, 0.17) 22px, rgba(255, 59, 48, 0.06) 44px, transparent 88px);
 }
 
 /* ---------- Cursor, keys, caption ---------- */

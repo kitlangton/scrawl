@@ -705,6 +705,11 @@ impl OnboardingWindow {
                 "Camera",
                 "Show and record a cabled iPhone".to_owned(),
             ),
+            Permission::SpeechRecognition => (
+                crate::icons::MIC,
+                "Speech Recognition",
+                "Write down what you say, on this computer".to_owned(),
+            ),
         };
         let granted = row.status == Status::Granted;
         let denied = row.status == Status::Denied;

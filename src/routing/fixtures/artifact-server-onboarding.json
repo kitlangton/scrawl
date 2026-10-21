@@ -1,0 +1,3095 @@
+{
+  "capture": "scrawl-1792523507390-170ef.scrawl",
+  "savedDecision": "send HOME",
+  "server": {
+    "note": "The story folder and the tool calls as they were when this was replayed (2026-10-20, 15:3x PDT), minus the calls of the session that investigated it.",
+    "repo": "/Users/kit/code/home",
+    "folder": "artifacts/2026-10-20-onboarding/story",
+    "entries": [
+      {
+        "name": "dist",
+        "kind": "dir",
+        "modifiedMs": 1792535142823
+      },
+      {
+        "name": "bun.lock",
+        "kind": "file",
+        "modifiedMs": 1792535142745
+      },
+      {
+        "name": "src",
+        "kind": "dir",
+        "modifiedMs": 1792534946777
+      },
+      {
+        "name": "package.json",
+        "kind": "file",
+        "modifiedMs": 1792534931080
+      },
+      {
+        "name": "assets",
+        "kind": "dir",
+        "modifiedMs": 1792531046459
+      }
+    ],
+    "writes": [
+      {
+        "session": "ses_ea54163d6ffeQUJ7EZGKRV2g8j",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792529275560,
+        "done": 1792529276613
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792529826159,
+        "done": 1792529827146
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792529843228,
+        "done": 1792529996633
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792530017029,
+        "done": 1792530017563
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792530075507,
+        "done": 1792530372304
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792530417447,
+        "done": 1792530417497
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530458324,
+        "done": 1792530458345
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530458726,
+        "done": 1792530458737
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530459133,
+        "done": 1792530459144
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530459489,
+        "done": 1792530459521
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530473654,
+        "done": 1792530473661
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530473951,
+        "done": 1792530473959
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530483901,
+        "done": 1792530483909
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530484424,
+        "done": 1792530484432
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530484777,
+        "done": 1792530484788
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530485218,
+        "done": 1792530485224
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530493321,
+        "done": 1792530493338
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "shell",
+        "ran": 1792530604110,
+        "done": 1792530604150
+      },
+      {
+        "session": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "subagent",
+        "ran": 1792530616138,
+        "done": 1792530616176
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530623831,
+        "done": 1792530623839
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792530638683,
+        "done": 1792530812956
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530734126,
+        "done": 1792530734349
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530734782,
+        "done": 1792530734971
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530735049,
+        "done": 1792530735224
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530735332,
+        "done": 1792530735349
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530765626,
+        "done": 1792530765767
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530766083,
+        "done": 1792530766230
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530766541,
+        "done": 1792530766559
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530766964,
+        "done": 1792530767148
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "shell",
+        "ran": 1792530825101,
+        "done": 1792530825138
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530833367,
+        "done": 1792530833516
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530834041,
+        "done": 1792530834063
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530834249,
+        "done": 1792530834266
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530872200,
+        "done": 1792530872529
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792530872581,
+        "done": 1792530872862
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "write",
+        "ran": 1792531025613,
+        "done": 1792531025687
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "shell",
+        "ran": 1792531042766,
+        "done": 1792531046528
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531055727,
+        "done": 1792531055768
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531056170,
+        "done": 1792531056306
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531056567,
+        "done": 1792531056599
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531057045,
+        "done": 1792531057214
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531057462,
+        "done": 1792531057491
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531057915,
+        "done": 1792531057996
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "edit",
+        "ran": 1792531084055,
+        "done": 1792531084089
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "edit",
+        "ran": 1792531090731,
+        "done": 1792531090747
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531101660,
+        "done": 1792531101670
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531102039,
+        "done": 1792531102046
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531102469,
+        "done": 1792531102517
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531102849,
+        "done": 1792531102857
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "shell",
+        "ran": 1792531108299,
+        "done": 1792531110957
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531109560,
+        "done": 1792531109609
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531116073,
+        "done": 1792531116081
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531116333,
+        "done": 1792531116352
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531122893,
+        "done": 1792531122942
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531123357,
+        "done": 1792531123364
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531123650,
+        "done": 1792531123662
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531124215,
+        "done": 1792531124228
+      },
+      {
+        "session": "ses_ea58965c8ffeG0Qo1S8qZyRzFt",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "shell",
+        "ran": 1792531126067,
+        "done": 1792531193230
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531132776,
+        "done": 1792531132785
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531133229,
+        "done": 1792531133248
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531138731,
+        "done": 1792531138738
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531139255,
+        "done": 1792531139264
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531144640,
+        "done": 1792531144656
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531145021,
+        "done": 1792531145041
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531160362,
+        "done": 1792531160373
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531160917,
+        "done": 1792531160930
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531173532,
+        "done": 1792531173541
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531174010,
+        "done": 1792531174020
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531179784,
+        "done": 1792531179797
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531187708,
+        "done": 1792531187716
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531195000,
+        "done": 1792531195139
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531195332,
+        "done": 1792531195350
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531210229,
+        "done": 1792531210367
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531210612,
+        "done": 1792531210803
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531211021,
+        "done": 1792531211197
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792531211364,
+        "done": 1792531211399
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "subagent",
+        "ran": 1792531412193,
+        "done": 1792531412224
+      },
+      {
+        "session": "ses_ea4cd4b13ffeZHheY5TlKDAAqI",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792531446970,
+        "done": 1792531453353
+      },
+      {
+        "session": "ses_ea4cd4b13ffeZHheY5TlKDAAqI",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792531483522,
+        "done": 1792531486178
+      },
+      {
+        "session": "ses_ea4d970aeffesQ9AfV2x6fryFx",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "shell",
+        "ran": 1792531487063,
+        "done": 1792531487117
+      },
+      {
+        "session": "ses_ea4cd4b13ffeZHheY5TlKDAAqI",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792531494167,
+        "done": 1792531497758
+      },
+      {
+        "session": "ses_ea4cd4b13ffeZHheY5TlKDAAqI",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792531518744,
+        "done": 1792531518837
+      },
+      {
+        "session": "ses_ea4cd4b13ffeZHheY5TlKDAAqI",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792531523991,
+        "done": 1792531524587
+      },
+      {
+        "session": "ses_ea4cd4b13ffeZHheY5TlKDAAqI",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792531531813,
+        "done": 1792531534808
+      },
+      {
+        "session": "ses_ea4cd4b13ffeZHheY5TlKDAAqI",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792531539625,
+        "done": 1792531539891
+      },
+      {
+        "session": "ses_ea4cd4b13ffeZHheY5TlKDAAqI",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792531544378,
+        "done": 1792531544664
+      },
+      {
+        "session": "ses_ea4cd4b13ffeZHheY5TlKDAAqI",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792531629842,
+        "done": 1792531629913
+      },
+      {
+        "session": "ses_ea4cd4b13ffeZHheY5TlKDAAqI",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792531639585,
+        "done": 1792531641617
+      },
+      {
+        "session": "ses_ea4cd4b13ffeZHheY5TlKDAAqI",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792531646698,
+        "done": 1792531646878
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "execute",
+        "ran": 1792531672313,
+        "done": 1792531672512
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "subagent",
+        "ran": 1792532263465,
+        "done": 1792532263621
+      },
+      {
+        "session": "ses_ea4c04dadffeM0wUgo68bJ7d0Z",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792532289520,
+        "done": 1792532289633
+      },
+      {
+        "session": "ses_ea4c04dadffeM0wUgo68bJ7d0Z",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792532293036,
+        "done": 1792532293155
+      },
+      {
+        "session": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "shell",
+        "ran": 1792534265534,
+        "done": 1792534268112
+      },
+      {
+        "session": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "shell",
+        "ran": 1792534266531,
+        "done": 1792534269628
+      },
+      {
+        "session": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "read",
+        "ran": 1792534274629,
+        "done": 1792534275463
+      },
+      {
+        "session": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "shell",
+        "ran": 1792534286724,
+        "done": 1792534288038
+      },
+      {
+        "session": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "shell",
+        "ran": 1792534296424,
+        "done": 1792534297399
+      },
+      {
+        "session": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "write",
+        "ran": 1792534326048,
+        "done": 1792534326862
+      },
+      {
+        "session": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "root": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "tool": "write",
+        "ran": 1792534359456,
+        "done": 1792534363449
+      },
+      {
+        "session": "ses_ea4c04dadffeM0wUgo68bJ7d0Z",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "execute",
+        "ran": 1792534389157,
+        "done": 1792534389831
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792534929950,
+        "done": 1792534932762
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792534946547,
+        "done": 1792535143503
+      },
+      {
+        "session": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "root": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "tool": "shell",
+        "ran": 1792535174749,
+        "done": 1792535175207
+      }
+    ]
+  },
+  "bundle": {
+    "version": 1,
+    "id": "scrawl-1792523507390-170ef",
+    "createdAtMs": 1792523547849,
+    "durationMs": 40163,
+    "target": {
+      "mode": "display",
+      "app": "Brave Browser",
+      "bundleId": "com.brave.Browser",
+      "windowTitle": "How OpenCode's onboarding broke, and how we're fixing it",
+      "displayId": 3,
+      "frame": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 2560.0,
+        "height": 1440.0,
+        "scale": 2.0
+      }
+    },
+    "transcript": {
+      "source": "speech-analyzer",
+      "model": "SpeechTranscriber en_US",
+      "text": "How do we make this easier to read? Like, this is kind of terrible to understand. Also, this thing shouldn't be floating on the bottom. It covers up too much space. Um, be way more minimal and I like the right side or something. We take up the full window. And this should be like nice readable width for text at least. Are we using the new components from the problems page? I don't think so. Are we? And the problem? Did you ask the problem session? This doesn't look right. Everything's in a big box. Like these shit, this is hard to read, they should be like stacked or something, this is all very confusing.",
+      "segments": [],
+      "words": [
+        {
+          "t0": 240,
+          "t1": 540,
+          "text": "How"
+        },
+        {
+          "t0": 540,
+          "t1": 720,
+          "text": "do"
+        },
+        {
+          "t0": 720,
+          "t1": 840,
+          "text": "we"
+        },
+        {
+          "t0": 840,
+          "t1": 960,
+          "text": "make"
+        },
+        {
+          "t0": 960,
+          "t1": 1080,
+          "text": "this"
+        },
+        {
+          "t0": 1080,
+          "t1": 1260,
+          "text": "easier"
+        },
+        {
+          "t0": 1260,
+          "t1": 1440,
+          "text": "to"
+        },
+        {
+          "t0": 1440,
+          "t1": 1740,
+          "text": "read?"
+        },
+        {
+          "t0": 1800,
+          "t1": 2160,
+          "text": "Like,"
+        },
+        {
+          "t0": 2160,
+          "t1": 2280,
+          "text": "this"
+        },
+        {
+          "t0": 2280,
+          "t1": 2400,
+          "text": "is"
+        },
+        {
+          "t0": 2400,
+          "t1": 2520,
+          "text": "kind"
+        },
+        {
+          "t0": 2520,
+          "t1": 2640,
+          "text": "of"
+        },
+        {
+          "t0": 2640,
+          "t1": 2940,
+          "text": "terrible"
+        },
+        {
+          "t0": 2940,
+          "t1": 3300,
+          "text": "to"
+        },
+        {
+          "t0": 3300,
+          "t1": 3960,
+          "text": "understand."
+        },
+        {
+          "t0": 4440,
+          "t1": 4920,
+          "text": "Also,"
+        },
+        {
+          "t0": 4920,
+          "t1": 5040,
+          "text": "this"
+        },
+        {
+          "t0": 5040,
+          "t1": 5220,
+          "text": "thing"
+        },
+        {
+          "t0": 5220,
+          "t1": 5640,
+          "text": "shouldn't"
+        },
+        {
+          "t0": 5640,
+          "t1": 5700,
+          "text": "be"
+        },
+        {
+          "t0": 5700,
+          "t1": 6060,
+          "text": "floating"
+        },
+        {
+          "t0": 6060,
+          "t1": 6300,
+          "text": "on"
+        },
+        {
+          "t0": 6300,
+          "t1": 6420,
+          "text": "the"
+        },
+        {
+          "t0": 6420,
+          "t1": 6720,
+          "text": "bottom."
+        },
+        {
+          "t0": 6780,
+          "t1": 6900,
+          "text": "It"
+        },
+        {
+          "t0": 6900,
+          "t1": 7140,
+          "text": "covers"
+        },
+        {
+          "t0": 7140,
+          "t1": 7320,
+          "text": "up"
+        },
+        {
+          "t0": 7320,
+          "t1": 7440,
+          "text": "too"
+        },
+        {
+          "t0": 7440,
+          "t1": 7560,
+          "text": "much"
+        },
+        {
+          "t0": 7560,
+          "t1": 8160,
+          "text": "space."
+        },
+        {
+          "t0": 9180,
+          "t1": 9720,
+          "text": "Um,"
+        },
+        {
+          "t0": 9720,
+          "t1": 10260,
+          "text": "be"
+        },
+        {
+          "t0": 10260,
+          "t1": 10560,
+          "text": "way"
+        },
+        {
+          "t0": 10560,
+          "t1": 10800,
+          "text": "more"
+        },
+        {
+          "t0": 10800,
+          "t1": 11100,
+          "text": "minimal"
+        },
+        {
+          "t0": 11100,
+          "t1": 11280,
+          "text": "and"
+        },
+        {
+          "t0": 11280,
+          "t1": 11400,
+          "text": "I"
+        },
+        {
+          "t0": 11400,
+          "t1": 11640,
+          "text": "like"
+        },
+        {
+          "t0": 11640,
+          "t1": 11760,
+          "text": "the"
+        },
+        {
+          "t0": 11760,
+          "t1": 11820,
+          "text": "right"
+        },
+        {
+          "t0": 11820,
+          "t1": 11940,
+          "text": "side"
+        },
+        {
+          "t0": 11940,
+          "t1": 12120,
+          "text": "or"
+        },
+        {
+          "t0": 12120,
+          "t1": 12360,
+          "text": "something."
+        },
+        {
+          "t0": 12420,
+          "t1": 12600,
+          "text": "We"
+        },
+        {
+          "t0": 12600,
+          "t1": 12780,
+          "text": "take"
+        },
+        {
+          "t0": 12780,
+          "t1": 12900,
+          "text": "up"
+        },
+        {
+          "t0": 12900,
+          "t1": 13020,
+          "text": "the"
+        },
+        {
+          "t0": 13020,
+          "t1": 13080,
+          "text": "full"
+        },
+        {
+          "t0": 13080,
+          "t1": 13500,
+          "text": "window."
+        },
+        {
+          "t0": 13560,
+          "t1": 13680,
+          "text": "And"
+        },
+        {
+          "t0": 13680,
+          "t1": 13860,
+          "text": "this"
+        },
+        {
+          "t0": 13860,
+          "t1": 13980,
+          "text": "should"
+        },
+        {
+          "t0": 13980,
+          "t1": 14100,
+          "text": "be"
+        },
+        {
+          "t0": 14100,
+          "t1": 14220,
+          "text": "like"
+        },
+        {
+          "t0": 14220,
+          "t1": 14400,
+          "text": "nice"
+        },
+        {
+          "t0": 14400,
+          "t1": 15600,
+          "text": "readable"
+        },
+        {
+          "t0": 15600,
+          "t1": 15840,
+          "text": "width"
+        },
+        {
+          "t0": 15840,
+          "t1": 15960,
+          "text": "for"
+        },
+        {
+          "t0": 15960,
+          "t1": 16020,
+          "text": "text"
+        },
+        {
+          "t0": 16020,
+          "t1": 16320,
+          "text": "at"
+        },
+        {
+          "t0": 16320,
+          "t1": 16500,
+          "text": "least."
+        },
+        {
+          "t0": 18660,
+          "t1": 18960,
+          "text": "Are"
+        },
+        {
+          "t0": 18960,
+          "t1": 19140,
+          "text": "we"
+        },
+        {
+          "t0": 19140,
+          "t1": 19320,
+          "text": "using"
+        },
+        {
+          "t0": 19320,
+          "t1": 19500,
+          "text": "the"
+        },
+        {
+          "t0": 19500,
+          "t1": 19560,
+          "text": "new"
+        },
+        {
+          "t0": 19560,
+          "t1": 19980,
+          "text": "components"
+        },
+        {
+          "t0": 19980,
+          "t1": 20100,
+          "text": "from"
+        },
+        {
+          "t0": 20100,
+          "t1": 20220,
+          "text": "the"
+        },
+        {
+          "t0": 20220,
+          "t1": 20400,
+          "text": "problems"
+        },
+        {
+          "t0": 20400,
+          "t1": 20880,
+          "text": "page?"
+        },
+        {
+          "t0": 20940,
+          "t1": 21060,
+          "text": "I"
+        },
+        {
+          "t0": 21060,
+          "t1": 21240,
+          "text": "don't"
+        },
+        {
+          "t0": 21240,
+          "t1": 21300,
+          "text": "think"
+        },
+        {
+          "t0": 21300,
+          "t1": 21540,
+          "text": "so."
+        },
+        {
+          "t0": 22860,
+          "t1": 23160,
+          "text": "Are"
+        },
+        {
+          "t0": 23160,
+          "t1": 23400,
+          "text": "we?"
+        },
+        {
+          "t0": 23700,
+          "t1": 24000,
+          "text": "And"
+        },
+        {
+          "t0": 24000,
+          "t1": 24180,
+          "text": "the"
+        },
+        {
+          "t0": 24180,
+          "t1": 24540,
+          "text": "problem?"
+        },
+        {
+          "t0": 24600,
+          "t1": 24660,
+          "text": "Did"
+        },
+        {
+          "t0": 24660,
+          "t1": 24780,
+          "text": "you"
+        },
+        {
+          "t0": 24780,
+          "t1": 24900,
+          "text": "ask"
+        },
+        {
+          "t0": 24900,
+          "t1": 25080,
+          "text": "the"
+        },
+        {
+          "t0": 25080,
+          "t1": 25200,
+          "text": "problem"
+        },
+        {
+          "t0": 25200,
+          "t1": 25860,
+          "text": "session?"
+        },
+        {
+          "t0": 27000,
+          "t1": 27300,
+          "text": "This"
+        },
+        {
+          "t0": 27300,
+          "t1": 27660,
+          "text": "doesn't"
+        },
+        {
+          "t0": 27660,
+          "t1": 27780,
+          "text": "look"
+        },
+        {
+          "t0": 27780,
+          "t1": 28140,
+          "text": "right."
+        },
+        {
+          "t0": 28200,
+          "t1": 28620,
+          "text": "Everything's"
+        },
+        {
+          "t0": 28620,
+          "t1": 28740,
+          "text": "in"
+        },
+        {
+          "t0": 28740,
+          "t1": 28860,
+          "text": "a"
+        },
+        {
+          "t0": 28860,
+          "t1": 29100,
+          "text": "big"
+        },
+        {
+          "t0": 29100,
+          "t1": 30120,
+          "text": "box."
+        },
+        {
+          "t0": 34020,
+          "t1": 34320,
+          "text": "Like"
+        },
+        {
+          "t0": 34320,
+          "t1": 34620,
+          "text": "these"
+        },
+        {
+          "t0": 34620,
+          "t1": 34980,
+          "text": "shit,"
+        },
+        {
+          "t0": 34980,
+          "t1": 35100,
+          "text": "this"
+        },
+        {
+          "t0": 35100,
+          "t1": 35220,
+          "text": "is"
+        },
+        {
+          "t0": 35220,
+          "t1": 36000,
+          "text": "hard"
+        },
+        {
+          "t0": 36000,
+          "t1": 36180,
+          "text": "to"
+        },
+        {
+          "t0": 36180,
+          "t1": 36540,
+          "text": "read,"
+        },
+        {
+          "t0": 36540,
+          "t1": 36600,
+          "text": "they"
+        },
+        {
+          "t0": 36600,
+          "t1": 36720,
+          "text": "should"
+        },
+        {
+          "t0": 36720,
+          "t1": 36840,
+          "text": "be"
+        },
+        {
+          "t0": 36840,
+          "t1": 36960,
+          "text": "like"
+        },
+        {
+          "t0": 36960,
+          "t1": 37320,
+          "text": "stacked"
+        },
+        {
+          "t0": 37320,
+          "t1": 37560,
+          "text": "or"
+        },
+        {
+          "t0": 37560,
+          "t1": 38040,
+          "text": "something,"
+        },
+        {
+          "t0": 38040,
+          "t1": 38280,
+          "text": "this"
+        },
+        {
+          "t0": 38280,
+          "t1": 38520,
+          "text": "is"
+        },
+        {
+          "t0": 38520,
+          "t1": 38640,
+          "text": "all"
+        },
+        {
+          "t0": 38640,
+          "t1": 38700,
+          "text": "very"
+        },
+        {
+          "t0": 38700,
+          "t1": 39060,
+          "text": "confusing."
+        }
+      ]
+    },
+    "strokes": [],
+    "marks": [
+      {
+        "id": "m1",
+        "strokes": [
+          0
+        ],
+        "t0": 606,
+        "t1": 2282,
+        "boxNorm": [
+          0.2542,
+          0.2731,
+          0.8685,
+          0.7759
+        ],
+        "shape": "circle",
+        "on": "scroll area in studio.taila8e7c7.ts.net:4660",
+        "description": "circled region x 0.25–0.87, y 0.27–0.78 over “scroll area in studio.taila8e7c7.ts.net:4660”",
+        "frame": "frames/frame-01.png"
+      },
+      {
+        "id": "m2",
+        "strokes": [
+          1,
+          2
+        ],
+        "t0": 4737,
+        "t1": 6763,
+        "boxNorm": [
+          0.2701,
+          0.9202,
+          0.8643,
+          0.976
+        ],
+        "shape": "mark",
+        "on": "scroll area in studio.taila8e7c7.ts.net:4660",
+        "description": "marked region x 0.27–0.86, y 0.92–0.98 (2 strokes) over “scroll area in studio.taila8e7c7.ts.net:4660”",
+        "frame": "frames/frame-02.png"
+      },
+      {
+        "id": "m3",
+        "strokes": [
+          3
+        ],
+        "t0": 9462,
+        "t1": 9632,
+        "boxNorm": [
+          0.5627,
+          0.94,
+          0.6106,
+          0.9434
+        ],
+        "shape": "underline",
+        "on": "scroll area in studio.taila8e7c7.ts.net:4660",
+        "description": "underlined x 0.56–0.61 at y 0.94 over “scroll area in studio.taila8e7c7.ts.net:4660”",
+        "frame": "frames/frame-03.png"
+      },
+      {
+        "id": "m4",
+        "strokes": [
+          4,
+          5
+        ],
+        "t0": 11150,
+        "t1": 12570,
+        "boxNorm": [
+          0.0295,
+          0.1627,
+          0.9069,
+          0.2733
+        ],
+        "shape": "mark",
+        "on": "scroll area in studio.taila8e7c7.ts.net:4660",
+        "description": "marked region x 0.03–0.91, y 0.16–0.27 (2 strokes) over “scroll area in studio.taila8e7c7.ts.net:4660”",
+        "frame": "frames/frame-04.png"
+      },
+      {
+        "id": "m5",
+        "strokes": [
+          6
+        ],
+        "t0": 13774,
+        "t1": 14371,
+        "boxNorm": [
+          0.3635,
+          0.165,
+          0.6856,
+          0.483
+        ],
+        "shape": "mark",
+        "on": "scroll area in studio.taila8e7c7.ts.net:4660",
+        "description": "marked region x 0.36–0.69, y 0.17–0.48 over “scroll area in studio.taila8e7c7.ts.net:4660”",
+        "frame": "frames/frame-05.png"
+      },
+      {
+        "id": "m6",
+        "strokes": [
+          7
+        ],
+        "t0": 19836,
+        "t1": 20117,
+        "boxNorm": [
+          0.442,
+          0.5053,
+          0.5917,
+          0.5611
+        ],
+        "shape": "mark",
+        "on": "scroll area in studio.taila8e7c7.ts.net:4660",
+        "description": "marked region x 0.44–0.59, y 0.51–0.56 over “scroll area in studio.taila8e7c7.ts.net:4660”",
+        "frame": "frames/frame-06.png"
+      },
+      {
+        "id": "m7",
+        "strokes": [
+          8
+        ],
+        "t0": 28271,
+        "t1": 28517,
+        "boxNorm": [
+          0.3446,
+          0.2415,
+          0.4954,
+          0.2626
+        ],
+        "shape": "underline",
+        "on": "scroll area in studio.taila8e7c7.ts.net:4660",
+        "description": "underlined x 0.34–0.50 at y 0.25 over “scroll area in studio.taila8e7c7.ts.net:4660”",
+        "frame": "frames/frame-07.png"
+      },
+      {
+        "id": "m8",
+        "strokes": [
+          9,
+          10,
+          11
+        ],
+        "t0": 34347,
+        "t1": 35096,
+        "boxNorm": [
+          0.5297,
+          0.3718,
+          0.765,
+          0.4649
+        ],
+        "shape": "mark",
+        "on": "scroll area in studio.taila8e7c7.ts.net:4660",
+        "description": "marked region x 0.53–0.76, y 0.37–0.46 (3 strokes) over “scroll area in studio.taila8e7c7.ts.net:4660”",
+        "frame": "frames/frame-07.png"
+      }
+    ],
+    "events": [
+      {
+        "kind": "scroll",
+        "t": 3133,
+        "x": 0.32886505,
+        "y": 0.4406033,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 3153,
+        "x": 0.32886505,
+        "y": 0.4406033,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 3177,
+        "x": 0.32886505,
+        "y": 0.4406033,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 3234,
+        "x": 0.32886505,
+        "y": 0.4406033,
+        "dx": 0.0,
+        "dy": -4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 3585,
+        "x": 0.32886505,
+        "y": 0.4406033,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 3622,
+        "x": 0.32886505,
+        "y": 0.4406033,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 3646,
+        "x": 0.32886505,
+        "y": 0.4406033,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 3705,
+        "x": 0.32886505,
+        "y": 0.4406033,
+        "dx": 0.0,
+        "dy": -4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 7321,
+        "x": 0.42627412,
+        "y": 0.5566189,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 7357,
+        "x": 0.42627412,
+        "y": 0.5566189,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 7401,
+        "x": 0.42627412,
+        "y": 0.5566189,
+        "dx": 0.0,
+        "dy": 2.0
+      },
+      {
+        "kind": "scroll",
+        "t": 7489,
+        "x": 0.4261139,
+        "y": 0.5566189,
+        "dx": 0.0,
+        "dy": 3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 7588,
+        "x": 0.42547303,
+        "y": 0.5566189,
+        "dx": 0.0,
+        "dy": 3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 8051,
+        "x": 0.42547303,
+        "y": 0.5566189,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 8093,
+        "x": 0.42547303,
+        "y": 0.5566189,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 8136,
+        "x": 0.42547303,
+        "y": 0.5566189,
+        "dx": 0.0,
+        "dy": 2.0
+      },
+      {
+        "kind": "scroll",
+        "t": 8169,
+        "x": 0.42547303,
+        "y": 0.5566189,
+        "dx": 0.0,
+        "dy": 4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 10612,
+        "x": 0.6678909,
+        "y": 0.35191515,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 10662,
+        "x": 0.6674118,
+        "y": 0.3524794,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 13196,
+        "x": 0.41443938,
+        "y": 0.27726236,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 13212,
+        "x": 0.4083023,
+        "y": 0.28846028,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 13229,
+        "x": 0.4025162,
+        "y": 0.3017524,
+        "dx": 0.0,
+        "dy": 3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 13229,
+        "x": 0.40001526,
+        "y": 0.3075114,
+        "dx": 0.0,
+        "dy": 5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 13246,
+        "x": 0.3995468,
+        "y": 0.3087565,
+        "dx": 0.0,
+        "dy": 6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 13562,
+        "x": 0.39009398,
+        "y": 0.32839626,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 13612,
+        "x": 0.38945466,
+        "y": 0.32924262,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 14746,
+        "x": 0.49505156,
+        "y": 0.45753852,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 14779,
+        "x": 0.49473113,
+        "y": 0.4564019,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 14812,
+        "x": 0.49425048,
+        "y": 0.4552653,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 14829,
+        "x": 0.49425048,
+        "y": 0.4552653,
+        "dx": 0.0,
+        "dy": -4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 14855,
+        "x": 0.49425048,
+        "y": 0.4552653,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 14918,
+        "x": 0.49425048,
+        "y": 0.4552653,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 15179,
+        "x": 0.49337465,
+        "y": 0.45174426,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 15196,
+        "x": 0.49337465,
+        "y": 0.45174426,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 15218,
+        "x": 0.49337465,
+        "y": 0.45174426,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 15279,
+        "x": 0.49321443,
+        "y": 0.4514594,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 15562,
+        "x": 0.48804322,
+        "y": 0.4496528,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 15579,
+        "x": 0.487883,
+        "y": 0.4496528,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 15602,
+        "x": 0.487883,
+        "y": 0.4496528,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 15646,
+        "x": 0.48772278,
+        "y": 0.4496528,
+        "dx": 0.0,
+        "dy": -4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 16021,
+        "x": 0.48676148,
+        "y": 0.44936794,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 16052,
+        "x": 0.48676148,
+        "y": 0.44936794,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 16062,
+        "x": 0.48676148,
+        "y": 0.44936794,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 16083,
+        "x": 0.48676148,
+        "y": 0.44936794,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 16493,
+        "x": 0.48676148,
+        "y": 0.44936794,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 16712,
+        "x": 0.48676148,
+        "y": 0.44766438,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 16753,
+        "x": 0.48676148,
+        "y": 0.44737956,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 16769,
+        "x": 0.48676148,
+        "y": 0.44709474,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 16820,
+        "x": 0.48676148,
+        "y": 0.44709474,
+        "dx": 0.0,
+        "dy": -4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 17009,
+        "x": 0.48676148,
+        "y": 0.44709474,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 17036,
+        "x": 0.48676148,
+        "y": 0.44709474,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 17057,
+        "x": 0.48676148,
+        "y": 0.44709474,
+        "dx": 0.0,
+        "dy": 3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 17077,
+        "x": 0.48676148,
+        "y": 0.44709474,
+        "dx": 0.0,
+        "dy": 5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 17093,
+        "x": 0.48676148,
+        "y": 0.44709474,
+        "dx": 0.0,
+        "dy": 6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 17121,
+        "x": 0.48692018,
+        "y": 0.44709474,
+        "dx": 0.0,
+        "dy": 6.0
+      },
+      {
+        "kind": "click",
+        "t": 18646,
+        "x": 0.37898406,
+        "y": 0.57441133,
+        "button": "left",
+        "label": "in studio.taila8e7c7.ts.net:4660",
+        "role": "scroll area"
+      },
+      {
+        "kind": "click",
+        "t": 19154,
+        "x": 0.3985916,
+        "y": 0.4645128,
+        "button": "left",
+        "label": "in studio.taila8e7c7.ts.net:4660",
+        "role": "scroll area"
+      },
+      {
+        "kind": "scroll",
+        "t": 19437,
+        "x": 0.4259796,
+        "y": 0.5678521,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 19453,
+        "x": 0.4259796,
+        "y": 0.5678521,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 19470,
+        "x": 0.4259796,
+        "y": 0.5678521,
+        "dx": 0.0,
+        "dy": -4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 19496,
+        "x": 0.4259796,
+        "y": 0.5675673,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 19512,
+        "x": 0.4258194,
+        "y": 0.5655816,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "click",
+        "t": 20602,
+        "x": 0.47766417,
+        "y": 0.4687256,
+        "button": "left",
+        "label": "in studio.taila8e7c7.ts.net:4660",
+        "role": "scroll area"
+      },
+      {
+        "kind": "scroll",
+        "t": 20862,
+        "x": 0.45383757,
+        "y": 0.5963813,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 20883,
+        "x": 0.45383757,
+        "y": 0.5963813,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 20896,
+        "x": 0.45383757,
+        "y": 0.59609646,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 20912,
+        "x": 0.45383757,
+        "y": 0.59609646,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 20929,
+        "x": 0.45383757,
+        "y": 0.59609646,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 21529,
+        "x": 0.40065613,
+        "y": 0.41219348,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 21546,
+        "x": 0.40065613,
+        "y": 0.41219348,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 21567,
+        "x": 0.40065613,
+        "y": 0.41219348,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 21593,
+        "x": 0.40065613,
+        "y": 0.41219348,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 21686,
+        "x": 0.40065613,
+        "y": 0.41219348,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 21969,
+        "x": 0.40065613,
+        "y": 0.41332194,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22038,
+        "x": 0.40065613,
+        "y": 0.41332194,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22069,
+        "x": 0.40065613,
+        "y": 0.41332194,
+        "dx": 0.0,
+        "dy": -2.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22089,
+        "x": 0.40065613,
+        "y": 0.41332194,
+        "dx": 0.0,
+        "dy": -4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22505,
+        "x": 0.40065613,
+        "y": 0.41332194,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22525,
+        "x": 0.40065613,
+        "y": 0.41332194,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22536,
+        "x": 0.40065613,
+        "y": 0.41332194,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22551,
+        "x": 0.40065613,
+        "y": 0.41332194,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22568,
+        "x": 0.40065613,
+        "y": 0.41332194,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22585,
+        "x": 0.40065613,
+        "y": 0.41332194,
+        "dx": 0.0,
+        "dy": -7.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22888,
+        "x": 0.40278473,
+        "y": 0.4155626,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22901,
+        "x": 0.40278473,
+        "y": 0.4155626,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22912,
+        "x": 0.40278473,
+        "y": 0.4155626,
+        "dx": 0.0,
+        "dy": -4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22929,
+        "x": 0.40278473,
+        "y": 0.4155626,
+        "dx": 0.0,
+        "dy": -11.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22946,
+        "x": 0.40278473,
+        "y": 0.4155626,
+        "dx": 0.0,
+        "dy": -7.0
+      },
+      {
+        "kind": "scroll",
+        "t": 22962,
+        "x": 0.40278473,
+        "y": 0.4155626,
+        "dx": 0.0,
+        "dy": -8.0
+      },
+      {
+        "kind": "scroll",
+        "t": 23029,
+        "x": 0.40294343,
+        "y": 0.4169732,
+        "dx": 0.0,
+        "dy": -8.0
+      },
+      {
+        "kind": "scroll",
+        "t": 23292,
+        "x": 0.4037369,
+        "y": 0.41810167,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 23308,
+        "x": 0.4037369,
+        "y": 0.41810167,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 23336,
+        "x": 0.4037369,
+        "y": 0.41810167,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 23862,
+        "x": 0.4037369,
+        "y": 0.41810167,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 23902,
+        "x": 0.4037369,
+        "y": 0.41810167,
+        "dx": 0.0,
+        "dy": 1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 23924,
+        "x": 0.4037369,
+        "y": 0.41810167,
+        "dx": 0.0,
+        "dy": 3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 23971,
+        "x": 0.4037369,
+        "y": 0.41810167,
+        "dx": 0.0,
+        "dy": 4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 24021,
+        "x": 0.4037369,
+        "y": 0.41810167,
+        "dx": 0.0,
+        "dy": 5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 24729,
+        "x": 0.3885437,
+        "y": 0.49416232,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 24745,
+        "x": 0.3885437,
+        "y": 0.49416232,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 24762,
+        "x": 0.3885437,
+        "y": 0.49416232,
+        "dx": 0.0,
+        "dy": -9.0
+      },
+      {
+        "kind": "scroll",
+        "t": 24779,
+        "x": 0.3885437,
+        "y": 0.49416232,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 24812,
+        "x": 0.38674164,
+        "y": 0.49416232,
+        "dx": 0.0,
+        "dy": -7.0
+      },
+      {
+        "kind": "scroll",
+        "t": 25084,
+        "x": 0.38555756,
+        "y": 0.4919054,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 25100,
+        "x": 0.38555756,
+        "y": 0.4919054,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 25112,
+        "x": 0.38555756,
+        "y": 0.4919054,
+        "dx": 0.0,
+        "dy": -4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 25129,
+        "x": 0.38555756,
+        "y": 0.4919054,
+        "dx": 0.0,
+        "dy": -11.0
+      },
+      {
+        "kind": "scroll",
+        "t": 25151,
+        "x": 0.38555756,
+        "y": 0.4919054,
+        "dx": 0.0,
+        "dy": -7.0
+      },
+      {
+        "kind": "scroll",
+        "t": 25912,
+        "x": 0.3839554,
+        "y": 0.48991698,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 25929,
+        "x": 0.3839554,
+        "y": 0.48963216,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 25945,
+        "x": 0.3839554,
+        "y": 0.48963216,
+        "dx": 0.0,
+        "dy": -9.0
+      },
+      {
+        "kind": "scroll",
+        "t": 25962,
+        "x": 0.38363647,
+        "y": 0.48934734,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 25996,
+        "x": 0.38315582,
+        "y": 0.48877767,
+        "dx": 0.0,
+        "dy": -7.0
+      },
+      {
+        "kind": "drag",
+        "t": 27102,
+        "t1": 27818,
+        "x0": 0.3368637,
+        "y0": 0.65169,
+        "x1": 0.30321962,
+        "y1": 0.6371392,
+        "label": "scroll area in studio.taila8e7c7.ts.net:4660"
+      },
+      {
+        "kind": "click",
+        "t": 31229,
+        "x": 0.29060823,
+        "y": 0.3204156,
+        "button": "left",
+        "label": "in studio.taila8e7c7.ts.net:4660",
+        "role": "scroll area"
+      },
+      {
+        "kind": "click",
+        "t": 32096,
+        "x": 0.31294402,
+        "y": 0.32791883,
+        "button": "left",
+        "label": "in studio.taila8e7c7.ts.net:4660",
+        "role": "scroll area"
+      },
+      {
+        "kind": "click",
+        "t": 32462,
+        "x": 0.31757203,
+        "y": 0.32819825,
+        "button": "left",
+        "label": "in studio.taila8e7c7.ts.net:4660",
+        "role": "scroll area"
+      },
+      {
+        "kind": "click",
+        "t": 32962,
+        "x": 0.29341888,
+        "y": 0.32495117,
+        "button": "left",
+        "label": "in studio.taila8e7c7.ts.net:4660",
+        "role": "scroll area"
+      },
+      {
+        "kind": "click",
+        "t": 33595,
+        "x": 0.3220047,
+        "y": 0.31978896,
+        "button": "left",
+        "label": "in studio.taila8e7c7.ts.net:4660",
+        "role": "scroll area"
+      },
+      {
+        "kind": "scroll",
+        "t": 36104,
+        "x": 0.42594147,
+        "y": 0.43193087,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 36120,
+        "x": 0.42594147,
+        "y": 0.43193087,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 36140,
+        "x": 0.42594147,
+        "y": 0.43193087,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 36169,
+        "x": 0.42594147,
+        "y": 0.43193087,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37062,
+        "x": 0.3933792,
+        "y": 0.37013346,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37079,
+        "x": 0.3933792,
+        "y": 0.37013346,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37095,
+        "x": 0.3933792,
+        "y": 0.37013346,
+        "dx": 0.0,
+        "dy": -9.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37112,
+        "x": 0.3933792,
+        "y": 0.37013346,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37129,
+        "x": 0.3926773,
+        "y": 0.37013346,
+        "dx": 0.0,
+        "dy": -7.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37179,
+        "x": 0.39133605,
+        "y": 0.37054852,
+        "dx": 0.0,
+        "dy": -7.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37629,
+        "x": 0.39101562,
+        "y": 0.49590656,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37645,
+        "x": 0.39101562,
+        "y": 0.49562174,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37662,
+        "x": 0.39101562,
+        "y": 0.49562174,
+        "dx": 0.0,
+        "dy": -4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37679,
+        "x": 0.3908554,
+        "y": 0.49505207,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37695,
+        "x": 0.39053497,
+        "y": 0.49476725,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 37746,
+        "x": 0.3890976,
+        "y": 0.49362794,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38021,
+        "x": 0.37462005,
+        "y": 0.480797,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38034,
+        "x": 0.37462005,
+        "y": 0.480797,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38045,
+        "x": 0.37462005,
+        "y": 0.480797,
+        "dx": 0.0,
+        "dy": -4.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38062,
+        "x": 0.37462005,
+        "y": 0.480797,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38079,
+        "x": 0.37462005,
+        "y": 0.480797,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38541,
+        "x": 0.37776032,
+        "y": 0.48614094,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38562,
+        "x": 0.37776032,
+        "y": 0.48614094,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38579,
+        "x": 0.37776032,
+        "y": 0.48614094,
+        "dx": 0.0,
+        "dy": -3.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38595,
+        "x": 0.37776032,
+        "y": 0.48614094,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38612,
+        "x": 0.37776032,
+        "y": 0.48614094,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38652,
+        "x": 0.37776032,
+        "y": 0.48614094,
+        "dx": 0.0,
+        "dy": -6.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38979,
+        "x": 0.37887114,
+        "y": 0.48868,
+        "dx": 0.0,
+        "dy": -1.0
+      },
+      {
+        "kind": "scroll",
+        "t": 38995,
+        "x": 0.37887114,
+        "y": 0.48868,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 39012,
+        "x": 0.37887114,
+        "y": 0.48868,
+        "dx": 0.0,
+        "dy": -5.0
+      },
+      {
+        "kind": "scroll",
+        "t": 39029,
+        "x": 0.37887114,
+        "y": 0.48868,
+        "dx": 0.0,
+        "dy": -13.0
+      },
+      {
+        "kind": "scroll",
+        "t": 39068,
+        "x": 0.37887114,
+        "y": 0.48868,
+        "dx": 0.0,
+        "dy": -7.0
+      }
+    ],
+    "keyframes": [],
+    "contactSheet": "contact-sheet.png"
+  },
+  "evidence": {
+    "clues": [
+      {
+        "source": "port",
+        "pointer": {
+          "kind": "folder",
+          "path": "/Users/kit/code/home/artifacts/2026-10-20-onboarding/story",
+          "root": "/Users/kit/code/home",
+          "tree": true,
+          "repo": "/Users/kit/code/home"
+        },
+        "note": "port 4660 is served from /Users/kit/code/home/artifacts/2026-10-20-onboarding/story"
+      },
+      {
+        "source": "title",
+        "pointer": {
+          "kind": "words",
+          "words": [
+            "opencodes",
+            "onboarding",
+            "broke",
+            "fixing"
+          ]
+        },
+        "note": "window title \"How OpenCode's onboarding broke, and how we're fixing it\""
+      },
+      {
+        "source": "speech",
+        "pointer": {
+          "kind": "words",
+          "words": [
+            "easier",
+            "terrible",
+            "understand",
+            "shouldnt",
+            "floating",
+            "bottom",
+            "covers",
+            "space",
+            "minimal",
+            "side",
+            "full",
+            "readable",
+            "width",
+            "text",
+            "least",
+            "components",
+            "problems",
+            "problem",
+            "ask",
+            "everythings",
+            "big",
+            "box",
+            "hard",
+            "stacked",
+            "confusing"
+          ]
+        },
+        "note": "said"
+      }
+    ],
+    "candidates": [
+      {
+        "id": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "title": "HOME",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792523490402,
+        "viewedMs": 1792523421810
+      },
+      {
+        "id": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "title": "KNOBS",
+        "directory": "/Users/kit/code/open-source/knobs",
+        "repo": "/Users/kit/code/open-source/knobs",
+        "updatedMs": 1792523481829,
+        "viewedMs": 1792519381940
+      },
+      {
+        "id": "ses_f501e10c4ffedeySM4jnNIe3AD",
+        "title": "OPENCODE IOS",
+        "directory": "/Users/kit/code/open-source/opencode-ios-oc380-loading",
+        "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+        "updatedMs": 1792523481115,
+        "viewedMs": 1792523079746
+      },
+      {
+        "id": "ses_ed125b1feffeX5uSGJiGJJ0Zq1",
+        "title": "PROBLEMS",
+        "directory": "/Users/kit/code/worktrees/team-board/task-page",
+        "repo": "/Users/kit/code/worktrees/team-board/rewrite",
+        "updatedMs": 1792523432448,
+        "viewedMs": 1792522441793
+      },
+      {
+        "id": "ses_edb79c155ffeZ8eqFja5zoWOlX",
+        "title": "DESKTOP",
+        "directory": "/Users/kit/code/open-source/opencode",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792523329046,
+        "viewedMs": 1792523324787
+      },
+      {
+        "id": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "title": "HEX",
+        "directory": "/Users/kit/code/open-source/hex",
+        "repo": "/Users/kit/code/open-source/hex",
+        "updatedMs": 1792522910906,
+        "viewedMs": 1792522328376
+      },
+      {
+        "id": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "title": "GAME ENGINE",
+        "directory": "/Users/kit/code/open-source/arcade",
+        "repo": "/Users/kit/code/open-source/arcade",
+        "updatedMs": 1792522865103,
+        "viewedMs": 1792522468389
+      },
+      {
+        "id": "ses_eb96316daffevhidtO7Z4W583K",
+        "title": "FLIT",
+        "directory": "/Users/kit/code/open-source/flit",
+        "repo": "/Users/kit/code/open-source/flit",
+        "updatedMs": 1792522399577,
+        "viewedMs": 1792521017828
+      },
+      {
+        "id": "ses_edb816b31ffe4B3nexhh9rqAJp",
+        "title": "SCRAWL",
+        "directory": "/Users/kit/code/open-source/scrawl",
+        "repo": "/Users/kit/code/open-source/scrawl",
+        "updatedMs": 1792522399527,
+        "viewedMs": 1792516152471
+      },
+      {
+        "id": "ses_eb97fd4bcffeuNORqi0lEBAC73",
+        "title": "KIT MOTION",
+        "directory": "/Users/kit/code/home/research/2026-10-16-motion-v3",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792520889119,
+        "viewedMs": 1792517287142
+      },
+      {
+        "id": "ses_ea859384fffdECcdg0RfwQC1HJ",
+        "title": "PASSWORD AUDIT",
+        "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/46555d/stellar-star",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792520348990,
+        "viewedMs": 1792478242962
+      },
+      {
+        "id": "ses_ec318a614ffeQvPht0qntUnIcP",
+        "title": "CANVAS",
+        "directory": "/Users/kit/code/open-source/gpu-gallery",
+        "repo": "/Users/kit/code/open-source/gpu-gallery",
+        "updatedMs": 1792480779856,
+        "viewedMs": 1792477150781
+      },
+      {
+        "id": "ses_f13460621ffeQz0u4Attrj4Z4l",
+        "title": "SLACKBOT",
+        "directory": "/Users/kit/code/open-source/opencode-slack",
+        "repo": "/Users/kit/code/open-source/opencode-slack",
+        "updatedMs": 1792478486144,
+        "viewedMs": 1792440889443
+      },
+      {
+        "id": "ses_ebd33f90bffer4eZZgeryssZt3",
+        "title": "SERVER VOICE",
+        "directory": "/Users/kit/worktrees/opencode/server-voice",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792478486119,
+        "viewedMs": 1792442360125
+      },
+      {
+        "id": "ses_ead6919a3ffevHC33dOqB663bd",
+        "title": "Feedback synonym",
+        "directory": "/Users/kit/code/open-source/arcade",
+        "repo": "/Users/kit/code/open-source/arcade",
+        "updatedMs": 1792474285630,
+        "viewedMs": 1792473284006
+      },
+      {
+        "id": "ses_eb4805506ffdExxfN3euuGJzSR",
+        "title": "Quick check-in",
+        "directory": "/Users/kit/code/open-source/scrawl",
+        "repo": "/Users/kit/code/open-source/scrawl",
+        "updatedMs": 1792472119901,
+        "viewedMs": 1792302248443
+      },
+      {
+        "id": "ses_f0c100c89ffeta4TCCxgTHFI2J",
+        "title": "UP DOWN APP",
+        "directory": "/Users/kit/code/open-source/life-hub-uikit",
+        "repo": "/Users/kit/code/open-source/life-hub-uikit",
+        "updatedMs": 1792454885370,
+        "viewedMs": 1792454885390
+      },
+      {
+        "id": "ses_ebea564f3ffeI16n54W8y9Mtyz",
+        "title": "CONSOLE VORTEX",
+        "directory": "/Users/kit/code/open-source/opencode-console",
+        "repo": "/Users/kit/code/open-source/opencode-console",
+        "updatedMs": 1792438810776,
+        "viewedMs": 1792438810783
+      },
+      {
+        "id": "ses_ead6fc607ffeQrhX4zQOyKuUWk",
+        "title": "Streaming Markdown Profiling & Library",
+        "directory": "/Users/kit/code/open-source/streaming-markdown-lab",
+        "updatedMs": 1792437625175,
+        "viewedMs": 1792392138105
+      },
+      {
+        "id": "ses_ead884a3dffephbfYhZ8yrShY4",
+        "title": "JEVAL",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792436507580,
+        "viewedMs": 1792389692797
+      },
+      {
+        "id": "ses_ebe313af4ffex4Y5UKIvEiftzm",
+        "title": "OPENCODE CONSOLE",
+        "directory": "/Users/kit/code/open-source/opencode-console",
+        "repo": "/Users/kit/code/open-source/opencode-console",
+        "updatedMs": 1792431356040,
+        "viewedMs": 1792187291153
+      },
+      {
+        "id": "ses_eb480ee0affeghrrePfmjzMFLX",
+        "title": "Public-site audit fixes",
+        "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/lucky-rocket",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792429760607,
+        "viewedMs": 1792358813510
+      },
+      {
+        "id": "ses_eaf459a69ffeRF6Oq8hjTbVtvR",
+        "title": "MODEL PICKER",
+        "directory": "/Users/kit/code/open-source/opencode-ios-model-picker",
+        "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+        "updatedMs": 1792424967210,
+        "viewedMs": 1792363784492
+      },
+      {
+        "id": "ses_ead37e06cffeRfPkN2vrbdNWDs",
+        "title": "SCRAWL RECORDER",
+        "directory": "/Users/kit/code/open-source/scrawl",
+        "repo": "/Users/kit/code/open-source/scrawl",
+        "updatedMs": 1792391837251,
+        "viewedMs": 1792391837366
+      },
+      {
+        "id": "ses_ead693524ffew0n2o1ghgLBa6q",
+        "title": "Claude typo",
+        "directory": "/Users/kit/code",
+        "updatedMs": 1792386980319,
+        "viewedMs": 1792386977838
+      },
+      {
+        "id": "ses_eb4808112ffdq5ncWwmVhRPaRq",
+        "title": "SPR good to go?",
+        "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/quick-tiger",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792269008625,
+        "viewedMs": 1792268816383
+      },
+      {
+        "id": "ses_ec39487c0ffezso4grvaG2gs9n",
+        "title": "OPEN MONEY",
+        "directory": "/Users/kit/code/open-source/openmoney",
+        "repo": "/Users/kit/code/open-source/openmoney",
+        "updatedMs": 1792251233509,
+        "viewedMs": 1792251233513
+      },
+      {
+        "id": "ses_eb8255eacffe553A73CCAC1745",
+        "title": "Project screenshots",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792206962866,
+        "viewedMs": 1792206962871
+      },
+      {
+        "id": "ses_eb891d476ffeDD0D2B647FDC4B",
+        "title": "Taelin’s infinite-chat compaction algorithm",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792206712130,
+        "viewedMs": 1792206712132
+      },
+      {
+        "id": "ses_ebd58b4a3ffeOuHOBJ84IHoNGc",
+        "title": "DEADBOLT",
+        "directory": "/Users/kit/code/open-source/deadbolt",
+        "repo": "/Users/kit/code/open-source/deadbolt",
+        "updatedMs": 1792177126854,
+        "viewedMs": 1792172591104
+      },
+      {
+        "id": "ses_ec4dfeed7ffebmlNkG7QK04Tqq",
+        "title": "AI TALK",
+        "directory": "/Users/kit/code/open-source/ai-talk",
+        "repo": "/Users/kit/code/open-source/ai-talk",
+        "updatedMs": 1792171656850,
+        "viewedMs": 1792123145000
+      },
+      {
+        "id": "ses_ebef6c45fffevSGyuztH3R6AVp",
+        "title": "BROWSER CONTROL",
+        "directory": "/Users/kit/code/open-source/browser-control",
+        "repo": "/Users/kit/code/open-source/browser-control",
+        "updatedMs": 1792094949860,
+        "viewedMs": 1792094949875
+      },
+      {
+        "id": "ses_ec299b65affePaP87h2UYqEf3x",
+        "title": "free-tier read-only test 3 (delete me)",
+        "directory": "/private/var/folders/4t/_jnrck017r5f_jttbc19b7s40000gn/T/opencode/freetier-test",
+        "updatedMs": 1792031486314,
+        "viewedMs": 1792031486324
+      },
+      {
+        "id": "ses_ec29a0324ffekLZrOzpDctJphz",
+        "title": "free-tier read-only test 2 (delete me)",
+        "directory": "/private/var/folders/4t/_jnrck017r5f_jttbc19b7s40000gn/T/opencode/freetier-test",
+        "updatedMs": 1792031462829,
+        "viewedMs": 1792031462855
+      },
+      {
+        "id": "ses_ec29a4978ffeOYfAtDvrTaG8WG",
+        "title": "free-tier read-only test (delete me)",
+        "directory": "/private/var/folders/4t/_jnrck017r5f_jttbc19b7s40000gn/T/opencode/freetier-test",
+        "updatedMs": 1792031446084,
+        "viewedMs": 1792031446101
+      },
+      {
+        "id": "ses_ec8ac0d73ffeYDTUgKZeuLdJ5X",
+        "title": "CHOOSER",
+        "directory": "/Users/kit/code/experiments/typescript/choose-gpu",
+        "repo": "/Users/kit/code/experiments/typescript/choose-gpu",
+        "updatedMs": 1791956676331,
+        "viewedMs": 1791953219243
+      }
+    ],
+    "nowMs": 1792523547849
+  }
+}

@@ -13,39 +13,49 @@ export const PHONE: Rect = { x: 265, y: 76, w: 258, h: 556 }
 export const AGENT: Rect = { x: 760, y: 48, w: 422, h: 640 }
 export const AREA: Rect = { x: 40, y: 66, w: 708, h: 564 }
 
+// A tap of ⌥⇧S records the screen as the keys come up (`keysUp`), with a red edge glow, and the
+// capsule shows the switch chips (Area · Window · Screen · iPhone) until `REVEAL_MS` pass or the
+// first stroke. On iPhone the iPhone chip restarts the recording on the phone (`phoneRecord`).
+// The narration and the marks are timed from `record`; another tap finishes at `finish`.
 export const T = {
-  keys: 2400,
-  keysUp: 3300,
-  select: 3100,
-  dragStart: 3900,
-  dragEnd: 4900,
-  phoneClick: 4300,
-  phoneRecord: 5150,
-  record: 5300,
-  circle: [7300, 8800] as const,
-  pin1: 9300,
-  arrow: [10900, 11600] as const,
-  head: [11700, 12050] as const,
-  pin2: 12700,
-  finish: 15600,
-  copied: 16300,
-  promptClick: 16700,
-  paste: 16900,
-  submit: 17400,
-  read: 18000,
-  edit: 18500,
-  diff: 18700,
-  fix: [20000, 21000] as const,
-  done: 21400,
-  end: 23000,
+  keys: 2000,
+  keysUp: 2300,
+  phoneClick: 3450,
+  phoneRecord: 3600,
+  record: 3600,
+  circle: [5600, 7100] as const,
+  pin1: 7600,
+  arrow: [9200, 9900] as const,
+  head: [10000, 10350] as const,
+  pin2: 11000,
+  finish: 13900,
+  copied: 14600,
+  promptClick: 15000,
+  paste: 15200,
+  submit: 15700,
+  read: 16300,
+  edit: 16800,
+  diff: 17000,
+  fix: [18300, 19300] as const,
+  done: 19700,
+  end: 21300,
 }
+
+// `crate::shortcut::REVEAL_MS`.
+export const REVEAL_MS = 3500
+
+// When the recording the capsule's clock counts began: the screen on the Mac, the phone on iPhone.
+export const recStart = (mode: Mode, t = Infinity) => (mode === "iphone" && t >= T.phoneRecord ? T.phoneRecord : T.keysUp)
+
+// When the switch chips fold into Cancel · Finish.
+export const revealEnd = (mode: Mode) => (mode === "iphone" ? T.phoneRecord : Math.min(T.keysUp + REVEAL_MS, T.circle[0]))
 
 export const BEATS = [
   { label: "Broken", t: 0 },
-  { label: "Capture", t: 2200 },
-  { label: "Annotate", t: 5300 },
-  { label: "Handoff", t: 15400 },
-  { label: "Fix", t: 18300 },
+  { label: "Capture", t: 1800 },
+  { label: "Annotate", t: T.record },
+  { label: "Handoff", t: 13700 },
+  { label: "Fix", t: 16600 },
 ] as const
 
 // Word onsets in ms from the start of each narration file (measured from the ElevenLabs alignment).
@@ -157,11 +167,11 @@ export const clock = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
 }
 
-export type Pill = "notch" | "select" | "recording" | "processing" | "copied"
+export type Pill = "notch" | "reveal" | "recording" | "processing" | "copied"
 
-export const pillState = (t: number): Pill => {
-  if (t < T.select) return "notch"
-  if (t < T.record) return "select"
+export const pillState = (t: number, mode: Mode): Pill => {
+  if (t < T.keysUp) return "notch"
+  if (t < revealEnd(mode)) return "reveal"
   if (t < T.finish + 50) return "recording"
   if (t < T.copied) return "processing"
   return "copied"
@@ -176,9 +186,11 @@ export const PILL = {
   inset: 4,
   gap: 2,
   items: {
-    select: [56, 94, 66, 13, 32],
-    selectPhone: [56, 94, 66, 72, 13, 32],
-    recording: [70, 13, 58, 68, 68],
+    // Lead (dot + clock), divider, Area · Window · Screen, divider, ×.
+    reveal: [70, 13, 56, 72, 66, 13, 32],
+    // With a cabled iPhone, its chip after Screen.
+    revealPhone: [70, 13, 56, 72, 66, 66, 13, 32],
+    recording: [70, 13, 68, 68],
     processing: [132],
     copied: [98, 13, 62, 74, 32],
   },
@@ -211,7 +223,6 @@ export type Script = {
   clicks: Click[]
   path: Waypoint[]
   frames: { n: number; t: number; strokes: string[]; pins: number[] }[]
-  drag?: { from: Point; to: Point }
   narration: Narration
 }
 
@@ -305,36 +316,25 @@ export function buildScript(mode: Mode, a: Anchors): Script {
     { n: 2, t: T.pin2, at: pin2 },
   ]
 
-  const finish = chipCenter(PILL.items.recording, 4)
   const prompt: Point = PROMPT_AT
-  const clicks: Click[] = [...pins.map((p) => ({ t: p.t, at: p.at })), { t: T.finish, at: finish }, { t: T.promptClick, at: prompt }]
+  const clicks: Click[] = [...pins.map((p) => ({ t: p.t, at: p.at })), { t: T.promptClick, at: prompt }]
 
   const path: Waypoint[] = [
     { t: 0, at: [840, 540] },
     { t: 320, at: [840, 540], arc: -0.07 },
     { t: 1650, at: [520, 300], arc: 0 },
-    { t: 3150, at: [520, 300], arc: 0.06 },
   ]
 
-  let drag: Script["drag"]
   if (mode === "mac") {
-    drag = { from: [AREA.x, AREA.y], to: [AREA.x + AREA.w, AREA.y + AREA.h] }
-    path.push(
-      { t: T.dragStart - 80, at: drag.from, arc: 0 },
-      { t: T.dragStart, at: drag.from, arc: 0 },
-      { t: T.dragEnd, at: drag.to, arc: 0 },
-      { t: T.dragEnd + 1500, at: drag.to, arc: -0.08 },
-    )
+    path.push({ t: T.circle[0] - 1400, at: [520, 300], arc: 0.06 })
   } else {
-    const phoneChip = chipCenter(PILL.items.select, 2)
-    const recordChip = chipCenter(PILL.items.selectPhone, 3)
-    clicks.push({ t: T.phoneClick, at: phoneChip }, { t: T.phoneRecord, at: recordChip })
+    const phoneChip = chipCenter(PILL.items.revealPhone, 5)
+    clicks.push({ t: T.phoneClick, at: phoneChip })
     path.push(
+      { t: T.keysUp + 200, at: [520, 300], arc: 0.06 },
       { t: T.phoneClick - 80, at: phoneChip, arc: 0 },
-      { t: T.phoneClick + 120, at: phoneChip, arc: 0.04 },
-      { t: T.phoneRecord - 80, at: recordChip, arc: 0 },
-      { t: T.phoneRecord + 160, at: recordChip, arc: 0 },
-      { t: 6400, at: recordChip, arc: -0.07 },
+      { t: T.phoneClick + 160, at: phoneChip, arc: 0 },
+      { t: T.circle[0] - 1400, at: phoneChip, arc: -0.07 },
     )
   }
 
@@ -356,9 +356,7 @@ export function buildScript(mode: Mode, a: Anchors): Script {
     { t: T.pin2 - 70, at: pin2, arc: 0 },
     { t: T.pin2 + 160, at: pin2, arc: 0.04 },
     { t: T.pin2 + 650, at: restAfterPin2, arc: 0 },
-    { t: T.finish - 850, at: restAfterPin2, arc: -0.07 },
-    { t: T.finish - 90, at: finish, arc: 0 },
-    { t: T.finish + 170, at: finish, arc: 0.06 },
+    { t: T.finish + 170, at: restAfterPin2, arc: 0.06 },
     { t: T.promptClick - 90, at: prompt, arc: 0 },
     { t: T.promptClick + 130, at: prompt, arc: 0.06 },
     { t: T.paste + 680, at: [AGENT.x - 18, AGENT.y + AGENT.h - 10], arc: 0 },
@@ -370,7 +368,6 @@ export function buildScript(mode: Mode, a: Anchors): Script {
     pins,
     clicks,
     path,
-    drag,
     narration: NARRATION[mode],
     frames: [
       { n: 1, t: T.pin1 - T.record, strokes: ["circle"], pins: [1] },
@@ -416,10 +413,9 @@ export function cursorAt(script: Script, t: number): Cursor {
       const dx = b.at[0] - a.at[0]
       const dy = b.at[1] - a.at[1]
       const dist = Math.hypot(dx, dy)
-      const isDrag = !!script.drag && t >= T.dragStart && t <= T.dragEnd
       const arc = a.arc ?? 0
       let at: Point
-      if (dist > 8 && !isDrag && arc !== 0) {
+      if (dist > 8 && arc !== 0) {
         const bend = arc * Math.min(240, dist)
         const nx = -dy / dist
         const ny = dx / dist
@@ -431,7 +427,7 @@ export function cursorAt(script: Script, t: number): Cursor {
       return {
         at,
         drawing: false,
-        pressed: pressed || (!!script.drag && t > T.dragStart && t < T.dragEnd),
+        pressed,
         shift,
       }
     }
@@ -450,9 +446,10 @@ export const summaryText = (mode: Mode, short = false) => {
   const dir = short ? "~/…/captures" : "~/Library/Application Support/scrawl/captures"
   const target = mode === "mac" ? "Pulse “Deploy Activity”" : "iPhone · dev.pulse.app (212)"
   const [first, second] = clauses(mode)
+  const start = recStart(mode)
   return [
-    `[scrawl ${clock(T.finish - T.record)} · ${target} · ${dir}/scrawl-1791924018273-3a1f.scrawl]`,
-    `- #1 (${clock(T.pin1 - T.record)}) “${first}”`,
-    `- #2 (${clock(T.pin2 - T.record)}) “${second}”`,
+    `[scrawl ${clock(T.finish - start)} · ${target} · ${dir}/scrawl-1791924018273-3a1f.scrawl]`,
+    `- #1 (${clock(T.pin1 - start)}) “${first}”`,
+    `- #2 (${clock(T.pin2 - start)}) “${second}”`,
   ]
 }

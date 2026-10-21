@@ -661,12 +661,13 @@ export function demoCues(mode: Mode): Cue[] {
     ...up.map((t) => ({ t, sound: "release" as const })),
   ]
   const cues: Cue[] = [
-    ...keys([T.keys, T.keys + 150, T.keys + 300], [T.keysUp, T.keysUp + 45, T.keysUp + 90]),
-    { t: T.select, sound: "whisper" },
-    { t: T.select + 30, sound: "toggle", volume: 0.6 },
+    ...keys([T.keys, T.keys + 80, T.keys + 160], [T.keysUp, T.keysUp + 45, T.keysUp + 90]),
+    { t: T.keysUp + 20, sound: "pulse", volume: 0.7 },
+    { t: T.keysUp + 60, sound: "whisper" },
     { t: T.pin1, sound: "droplet" },
     { t: T.pin2, sound: "droplet" },
-    { t: T.finish, sound: "toggle" },
+    ...keys([T.finish - 160, T.finish - 80, T.finish], [T.finish + 120, T.finish + 165, T.finish + 210]),
+    { t: T.finish + 20, sound: "toggle" },
     { t: T.copied, sound: "chime" },
     { t: T.promptClick, sound: "tick" },
     ...keys([T.paste - 300, T.paste - 150, T.paste], [T.paste + 200, T.paste + 250, T.paste + 270]),
@@ -674,7 +675,6 @@ export function demoCues(mode: Mode): Cue[] {
     ...keys([T.submit], [T.submit + 90]),
     { t: T.fix[0], sound: "success" },
   ]
-  if (mode === "iphone") cues.push({ t: T.phoneClick, sound: "pulse" }, { t: T.phoneRecord, sound: "pulse" })
-  else cues.push({ t: T.dragStart, sound: "press", volume: 0.7 }, { t: T.dragEnd, sound: "release", volume: 0.7 }, { t: T.record, sound: "pulse", volume: 0.7 })
+  if (mode === "iphone") cues.push({ t: T.phoneClick, sound: "pulse" })
   return cues.sort((a, b) => a.t - b.t)
 }

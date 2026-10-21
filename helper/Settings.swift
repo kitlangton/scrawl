@@ -20,7 +20,8 @@ import SwiftUI
 // Clicks and key presses go back on stdout, e.g. {"action":"set","key":"autoSend","value":false},
 // {"action":"record-shortcut","kind":"record"}, {"action":"shortcut","kind":"record",
 // "keyCode":15,"modifiers":6144,"key":"r","reserved":false}, {"action":"cancel-shortcut"},
-// {"action":"reset-shortcut","kind":"paste"}, {"action":"grant","permission":"camera"},
+// {"action":"reset-shortcut","kind":"paste"}, {"action":"clear-shortcut","kind":"paste"},
+// {"action":"grant","permission":"camera"},
 // {"action":"reopen"}, {"action":"show-captures"}, {"action":"check-for-updates"},
 // {"action":"tour"}, {"action":"install-cli"}, {"action":"uninstall-cli"}, {"action":"close"}.
 
@@ -42,10 +43,13 @@ struct SettingsShortcut: Decodable, Equatable, Identifiable {
   var option = true
   var command = false
   var isDefault = true
+  /// It can be turned off (paste); `label` is empty while it is.
+  var clearable = false
   var recording = false
   var error: String?
 
   var id: String { kind }
+  var off: Bool { label.isEmpty }
 }
 
 struct SettingsModelOption: Decodable, Equatable {
@@ -76,8 +80,29 @@ struct SettingsTranscriber: Decodable, Equatable {
   var hexTitle = "Hex (not running)"
   var hexEnabled = false
   var language = "en"
+  var appleLocale = "auto"
   var models: [SettingsModelOption] = []
   var speech: SpeechStatus?
+
+  static func languageMenu(saved: String, speech: SpeechStatus?) -> (value: String, selected: String, options: [(id: String, title: String, enabled: Bool)], note: String?) {
+    func name(_ id: String) -> String { Locale.current.localizedString(forIdentifier: id) ?? id }
+    let effective = speech?.locale ?? Locale.current.identifier
+    let automatic = "Automatic (\(name(saved == "auto" ? effective : Locale.current.identifier)))"
+    let supported = (speech?.locales ?? []).map { (id: $0, title: name($0), enabled: true) }
+      .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    var options: [(id: String, title: String, enabled: Bool)] = [("auto", automatic, true), ("-", "", false)] + supported
+    if saved == "auto" { return ("Automatic", "auto", options, nil) }
+    if let match = supported.first(where: { Locale(identifier: $0.id).language.maximalIdentifier == Locale(identifier: saved).language.maximalIdentifier }) {
+      return (match.title, match.id, options, nil)
+    }
+    let unknown = supported.isEmpty
+    let title = unknown ? name(saved) : "\(name(saved)) (not available)"
+    options.append((saved, title, unknown))
+    let note = unknown ? nil : "\(name(saved)) isn't available on this Mac. Using \(name(effective))."
+    return (title, saved, options, note)
+  }
+  /// The program's file name while transcribeCommand is usable.
+  var command: String? = nil
 }
 
 struct SettingsOption: Decodable, Equatable {
@@ -121,11 +146,13 @@ struct SettingsState: Decodable, Equatable {
   var autoSend = true
   var shortcuts: [SettingsShortcut] = [
     SettingsShortcut(),
-    SettingsShortcut(kind: "paste", title: "Paste last capture", label: "⌥⇧V", key: "V"),
+    SettingsShortcut(kind: "paste", title: "Paste last capture", label: "⌥⇧V", key: "V", clearable: true),
   ]
   var microphone = SettingsMicrophone()
   var transcriber = SettingsTranscriber()
   var videoExport = false
+  var lowerPlayback = false
+  var playbackLevel = 20
   var retention = SettingsRetention()
   var capturesSize: String?
   var permissions: [SettingsPermission] = ["screen-recording", "microphone", "accessibility", "camera"]
@@ -176,19 +203,62 @@ enum SettingsPane: String, CaseIterable {
 }
 
 final class SettingsModel: ObservableObject {
-  @Published var state = SettingsState()
+  @Published private(set) var state = SettingsState()
   @Published var pane: SettingsPane
-  /// Modifiers held while a recorder listens, so their keycaps light as they go down.
-  @Published var liveModifiers: NSEvent.ModifierFlags = []
   let icon: NSImage?
   /// Rendering to PNGs: draw stand-in traffic lights where the window's would be.
   var rendering = false
+  /// Rendering: the moment the shortcut keys are drawn at, instead of the clock.
+  var renderTime: Double?
   let meter = MicMeter()
+  /// Each shortcut's keys, by kind. Not published: the keys redraw from `clock`.
+  private(set) var keys: [String: KeyController] = [:]
+  let clock = KeyClock()
   var send: ([String: Any]) -> Void = { _ in }
 
   init(pane: SettingsPane, icon: NSImage?) {
     self.pane = pane
     self.icon = icon
+  }
+
+  static var now: Double { Date.timeIntervalSinceReferenceDate }
+
+  func show(_ state: SettingsState, at t: Double = SettingsModel.now) {
+    for shortcut in state.shortcuts {
+      let labels = keyLabels(shortcut)
+      if keys[shortcut.kind] == nil {
+        keys[shortcut.kind] = KeyController(ShortcutField.metrics, shortcut: labels, reduce: SettingsMotion.reduce, at: t)
+      }
+      keys[shortcut.kind]?.update(shortcut: labels, recording: shortcut.recording, error: shortcut.error, at: t)
+    }
+    self.state = state
+    clock.wake()
+  }
+
+  /// The modifiers down right now: each shortcut presses the ones it uses.
+  func hold(_ flags: NSEvent.ModifierFlags, at t: Double = SettingsModel.now) {
+    let mods = keyLabels(flags)
+    for key in keys.values { key.hold(mods, at: t) }
+    clock.wake()
+  }
+
+  /// A key went down while `kind` listens.
+  func type(_ kind: String, _ label: String, at t: Double = SettingsModel.now) {
+    keys[kind]?.type(label, at: t)
+    clock.wake()
+  }
+
+  func advanceKeys(to t: Double) {
+    for key in keys.values { key.motion.advance(to: t) }
+  }
+
+  func keysStill(at t: Double) -> Bool {
+    keys.values.allSatisfy { $0.motion.still(t) }
+  }
+
+  /// Starts the keys from nothing (renders).
+  func resetKeys() {
+    keys = [:]
   }
 
   func act(_ action: String, _ fields: [String: Any] = [:]) {
@@ -243,11 +313,46 @@ extension EnvironmentValues {
 
 enum SettingsMotion {
   static let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-  /// Switch knobs, keycaps and captions answering Scrawl (bounce 0).
+  /// Switch knobs and captions answering Scrawl (bounce 0).
   static let state: Animation = reduce ? .easeOut(duration: 0.15) : .spring(duration: 0.25, bounce: 0)
+  /// A caption replaced in place: a little blur with the fade, the old one leaving sooner.
+  static let replace: AnyTransition = {
+    let fade: AnyTransition = reduce ? .opacity : .modifier(active: SoftFade(on: true), identity: SoftFade(on: false))
+    return .asymmetric(
+      insertion: fade.animation(reduce ? .easeOut(duration: 0.15) : .spring(duration: 0.25, bounce: 0)),
+      removal: fade.animation(reduce ? .easeOut(duration: 0.12) : .spring(duration: 0.18, bounce: 0))
+    )
+  }()
 }
 
-/// Sizes: 16 titles, 14 rows, 12 captions, 11 keycap names, 20 keycap letters.
+struct SoftFade: ViewModifier {
+  let on: Bool
+
+  func body(content: Content) -> some View {
+    content.blur(radius: on ? 3 : 0).opacity(on ? 0 : 1)
+  }
+}
+
+/// Runs the shortcut keys' TimelineView only while something moves.
+final class KeyClock: ObservableObject {
+  @Published private(set) var running = false
+  /// Bumped on every start and stop, so a paused TimelineView never keeps a stale date.
+  private(set) var revision = 0
+
+  func wake() {
+    guard !running else { return }
+    revision += 1
+    running = true
+  }
+
+  func sleep() {
+    guard running else { return }
+    revision += 1
+    running = false
+  }
+}
+
+/// Sizes: 16 titles, 14 rows, 13 keycaps, 12 captions.
 enum SettingsMetrics {
   static let width: CGFloat = 620
   static let height: CGFloat = 448
@@ -555,107 +660,107 @@ struct LevelMeter: View {
 
 // MARK: Shortcut recorder
 
-/// One key, Klack style: a modifier shows its glyph top left and its name bottom left; the key
-/// itself is a centred letter. Lit when part of the shortcut, dim otherwise.
-struct SettingsKeycap: View {
-  @Environment(\.settingsTheme) private var theme
-  let glyph: String
-  var name: String?
-  var lit: Bool
-  var center = false
-
-  var body: some View {
-    ZStack(alignment: .topLeading) {
-      RoundedRectangle(cornerRadius: 9, style: .continuous)
-        .fill(theme.key)
-        .overlay(
-          RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .strokeBorder(theme.keyLine, lineWidth: 1)
-        )
-      if center {
-        Text(glyph)
-          .font(.system(size: glyph.count > 2 ? 14 : 20, weight: .medium))
-          .foregroundStyle(lit ? theme.text : theme.tertiary)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else {
-        VStack(alignment: .leading, spacing: 0) {
-          if name != nil {
-            Text(glyph).font(.system(size: 15))
-          }
-          Spacer(minLength: 0)
-          Text(name ?? glyph).font(.system(size: name == nil ? 15 : 13))
-        }
-        .foregroundStyle(lit ? theme.text : theme.tertiary)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-      }
-    }
-    .frame(height: 52)
-  }
-}
-
+/// A shortcut's row: its name, and its keys (`ShortcutField`). Clicking the row listens for a new
+/// shortcut; clicking again, Esc, or clicking elsewhere cancels.
 struct ShortcutRecorder: View {
   @Environment(\.settingsTheme) private var theme
   @ObservedObject var model: SettingsModel
+  @ObservedObject var clock: KeyClock
   let shortcut: SettingsShortcut
+  @State private var hovering = false
 
   var body: some View {
-    let live = shortcut.recording ? model.liveModifiers : []
-    let lit = { (on: Bool, flag: NSEvent.ModifierFlags) in shortcut.recording ? live.contains(flag) : on }
     VStack(spacing: 0) {
-      SettingsHeader(title: shortcut.title) {
-        Button { model.act("reset-shortcut", ["kind": shortcut.kind]) } label: {
-          Image(systemName: "arrow.counterclockwise")
-            .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(theme.secondary)
-            .frame(width: 20, height: 20)
-            .background(Circle().fill(theme.control))
-            .contentShape(Circle())
+      SettingsGroup {
+        HStack(spacing: 8) {
+          Text(shortcut.title)
+            .font(.system(size: 14))
+            .foregroundStyle(theme.text)
+          Spacer(minLength: 8)
+          if !shortcut.isDefault && !shortcut.recording {
+            Button { model.act("reset-shortcut", ["kind": shortcut.kind]) } label: {
+              Image(systemName: "arrow.counterclockwise")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(theme.secondary)
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(theme.control))
+                .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Reset to \(shortcut.kind == "paste" ? "⌥⇧V" : "⌥⇧S")")
+            .transition(SettingsMotion.replace)
+          }
+          if shortcut.clearable && !shortcut.off && !shortcut.recording {
+            Button { model.act("clear-shortcut", ["kind": shortcut.kind]) } label: {
+              Image(systemName: "xmark")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(theme.secondary)
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(theme.control))
+                .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Turn off")
+            .accessibilityLabel("Turn off \(shortcut.title) shortcut")
+            .transition(SettingsMotion.replace)
+          }
+          field
         }
-        .buttonStyle(.plain)
-        .help("Reset to \(shortcut.kind == "paste" ? "⌥⇧V" : "⌥⇧S")")
-        .opacity(shortcut.isDefault || shortcut.recording ? 0 : 1)
-        .disabled(shortcut.isDefault || shortcut.recording)
-      }
-      Button {
-        if shortcut.recording {
-          model.act("cancel-shortcut")
-        } else {
-          model.act("record-shortcut", ["kind": shortcut.kind])
-        }
-      } label: {
-        HStack(spacing: 6) {
-          SettingsKeycap(glyph: "⇧", lit: lit(shortcut.shift, .shift))
-          SettingsKeycap(glyph: "⌃", name: "ctrl", lit: lit(shortcut.control, .control))
-          SettingsKeycap(glyph: "⌥", name: "opt", lit: lit(shortcut.option, .option))
-          SettingsKeycap(glyph: "⌘", name: "cmd", lit: lit(shortcut.command, .command))
-          SettingsKeycap(glyph: shortcut.recording ? "…" : shortcut.key, lit: !shortcut.recording, center: true)
-        }
-        .padding(7)
-        .background(RoundedRectangle(cornerRadius: SettingsMetrics.radius + 2, style: .continuous).fill(theme.group))
-        .overlay(
-          RoundedRectangle(cornerRadius: SettingsMetrics.radius + 2, style: .continuous)
-            .strokeBorder(shortcut.recording ? theme.accent : theme.groupLine, lineWidth: shortcut.recording ? 1.5 : 1)
-        )
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .frame(height: 50)
         .contentShape(Rectangle())
+        .onTapGesture {
+          model.act(shortcut.recording ? "cancel-shortcut" : "record-shortcut", ["kind": shortcut.kind])
+        }
+        .onHover { hovering = $0 }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(shortcut.title) shortcut")
+        .accessibilityValue(shortcut.recording ? "Listening" : shortcut.off ? "Off" : shortcut.label)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { model.act(shortcut.recording ? "cancel-shortcut" : "record-shortcut", ["kind": shortcut.kind]) }
       }
-      .buttonStyle(.plain)
       ZStack(alignment: .leading) {
         SettingsCaption(text: caption, error: shortcut.error != nil && !shortcut.recording)
           .id(caption)
-          .transition(.opacity)
+          .transition(SettingsMotion.replace)
       }
       .frame(height: 26, alignment: .top)
     }
     .animation(SettingsMotion.state, value: shortcut)
   }
 
+  @ViewBuilder private var field: some View {
+    if let controller = model.keys[shortcut.kind] {
+      let motion = controller.motion
+      if let t = model.renderTime {
+        ShortcutField(k: motion, t: t, theme: theme)
+      } else {
+        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !clock.running)) { context in
+          let t = clock.running ? context.date.timeIntervalSinceReferenceDate : SettingsModel.now
+          let _ = model.advanceKeys(to: t)
+          let _ = settle(at: t)
+          ShortcutField(k: motion, t: t, theme: theme, hovering: hovering)
+        }
+        .id(clock.revision)
+      }
+    }
+  }
+
+  /// Stops the clock once every shortcut's keys have come to rest.
+  private func settle(at t: Double) {
+    guard clock.running, model.keysStill(at: t) else { return }
+    DispatchQueue.main.async { [model, clock] in
+      if model.keysStill(at: SettingsModel.now) { clock.sleep() }
+    }
+  }
+
   private var caption: String {
-    if shortcut.recording { return "Press the new shortcut. Esc cancels." }
+    if shortcut.recording { return shortcut.clearable ? "Esc cancels. Delete turns it off." : "Esc cancels." }
     if let error = shortcut.error { return error }
     return shortcut.kind == "paste"
       ? "Pastes the last capture into the app in front."
-      : "Tap to record. Hold to choose what to record."
+      : "Records the screen. Press again to finish."
   }
 }
 
@@ -790,6 +895,14 @@ struct SettingsView: View {
         SettingsRow(title: "Send dev-site captures to OpenCode") {
           SettingsSwitch(on: state.autoSend) { model.set("autoSend", $0) }
         }
+        SettingsSeparator()
+        SettingsRow(title: "Lower other audio while recording") {
+          SettingsSwitch(on: state.lowerPlayback) { model.set("lowerPlayback", $0) }
+        }
+        if state.lowerPlayback {
+          SettingsSeparator()
+          PlaybackLevelRow(model: model, level: state.playbackLevel)
+        }
       }
       if state.login.needsApproval {
         SettingsCaption(text: "Allow Scrawl in System Settings › General › Login Items.")
@@ -797,15 +910,18 @@ struct SettingsView: View {
         SettingsCaption(text: "Launch at login works in the installed Scrawl.app.")
       }
       ForEach(state.shortcuts) { shortcut in
-        ShortcutRecorder(model: model, shortcut: shortcut)
+        Color.clear.frame(height: 14)
+        ShortcutRecorder(model: model, clock: model.clock, shortcut: shortcut)
       }
     }
   }
 
   private var recording: some View {
     let t = state.transcriber
+    let language = SettingsTranscriber.languageMenu(saved: t.appleLocale, speech: t.speech)
     var engines: [(id: String, title: String, enabled: Bool)] = [("apple", "Apple Speech", true)]
     engines.append(("hex", t.hexTitle, t.hexEnabled))
+    if let command = t.command { engines.append(("command", "Command (\(command))", true)) }
     let chosenModel = t.models.first(where: \.chosen)
     let mic = state.microphone
     return VStack(spacing: 0) {
@@ -827,8 +943,16 @@ struct SettingsView: View {
       Color.clear.frame(height: 20)
       SettingsGroup {
         SettingsRow(title: "Transcription") {
-          SettingsPopup(value: t.engine == "hex" ? "Hex" : "Apple Speech", options: engines, selected: t.engine) {
+          SettingsPopup(value: engines.first { $0.id == t.engine }?.title ?? "Apple Speech", options: engines, selected: t.engine) {
             model.set("transcriber", $0)
+          }
+        }
+        if t.engine == "apple" {
+          SettingsSeparator()
+          SettingsRow(title: "Language") {
+            SettingsPopup(value: language.value, options: language.options, selected: language.selected) {
+              model.set("appleLocale", $0)
+            }
           }
         }
         if t.engine == "hex", !t.models.isEmpty {
@@ -846,10 +970,15 @@ struct SettingsView: View {
           HexLanguageField(model: model, language: t.language)
         }
       }
-      SettingsCaption(text: t.hexEnabled || t.engine == "hex"
+      SettingsCaption(text: t.engine == "command"
+        ? "Command runs transcribeCommand from config.json. If it fails, that recording uses Apple Speech."
+        : t.hexEnabled || t.engine == "hex"
         ? "Apple Speech times each word. Hex uses a model you have in Hex, and its word times are estimates."
         : "Apple Speech runs on this Mac and times each word. Hex shows up here while Hex is running.")
-      if t.engine == "apple", let line = t.speech?.line {
+      if t.engine == "apple", let note = language.note {
+        SettingsCaption(text: note)
+      }
+      if t.engine == "apple", t.speech?.notReady == true, let line = t.speech?.line {
         SettingsCaption(text: line)
       }
       SettingsHeader("Experimental")
@@ -1071,6 +1200,7 @@ struct PermissionLine: View {
     case "microphone": "To hear you"
     case "accessibility": "For ⌘Z and \(paste)"
     case "camera": "To show a cabled iPhone"
+    case "speech-recognition": "To write down what you say"
     default: ""
     }
   }
@@ -1081,6 +1211,7 @@ struct PermissionLine: View {
     case "microphone": (Color(red: 1, green: 0.62, blue: 0.3), Color(red: 0.95, green: 0.44, blue: 0.12))
     case "accessibility": (Color(red: 0.36, green: 0.66, blue: 1), Color(red: 0.16, green: 0.45, blue: 0.95))
     case "camera": (Color(red: 0.36, green: 0.82, blue: 0.56), Color(red: 0.16, green: 0.66, blue: 0.4))
+    case "speech-recognition": (Color(red: 1, green: 0.42, blue: 0.56), Color(red: 0.9, green: 0.24, blue: 0.4))
     default: (Color(white: 0.62), Color(white: 0.45))
     }
   }
@@ -1089,6 +1220,23 @@ struct PermissionLine: View {
 // MARK: Recording keys
 
 enum ShortcutKeys {
+  /// The name a key is shown with, as `settings::key_label` names it; nil for Esc or a key
+  /// that types nothing.
+  static func label(keyCode: Int, typed: String) -> String? {
+    let named: [Int: String] = [
+      kVK_F1: "F1", kVK_F2: "F2", kVK_F3: "F3", kVK_F4: "F4", kVK_F5: "F5", kVK_F6: "F6",
+      kVK_F7: "F7", kVK_F8: "F8", kVK_F9: "F9", kVK_F10: "F10", kVK_F11: "F11", kVK_F12: "F12",
+      kVK_F13: "F13", kVK_F14: "F14", kVK_F15: "F15", kVK_F16: "F16",
+      kVK_Space: "Space", kVK_Return: "↩", kVK_Tab: "⇥", kVK_Delete: "⌫",
+      kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_DownArrow: "↓", kVK_UpArrow: "↑",
+    ]
+    if let name = named[keyCode] { return name }
+    if keyCode == kVK_Escape { return nil }
+    let chars = typed.filter { !$0.isWhitespace && !($0.unicodeScalars.first.map(CharacterSet.controlCharacters.contains) ?? false) }
+    guard chars.count == 1 else { return nil }
+    return chars.uppercased()
+  }
+
   static func carbon(_ flags: NSEvent.ModifierFlags) -> Int {
     var bits = 0
     if flags.contains(.command) { bits |= cmdKey }
@@ -1120,7 +1268,13 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let pane = option("--pane", in: arguments).flatMap(SettingsPane.init(rawValue:)) ?? .general
     let model = SettingsModel(pane: pane, icon: Onboarding.loadIcon(option("--icon", in: arguments)))
     if let dir = option("--render", in: arguments) {
-      MainActor.assumeIsolated { render(model: model, to: URL(filePath: dir)) }
+      MainActor.assumeIsolated {
+        if arguments.contains("--shortcut-clip") {
+          renderShortcutClip(model: model, to: URL(filePath: dir))
+        } else {
+          render(model: model, to: URL(filePath: dir))
+        }
+      }
       exit(0)
     }
     let app = NSApplication.shared
@@ -1138,6 +1292,8 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     enabled: { [weak self] in self?.model.state.recording == nil }
   )
   private var monitor: Any?
+  /// Modifiers held while Settings is in front, so each shortcut presses the keys it uses.
+  private var modifierMonitor: Any?
   private var presented = false
   private var paneWatch: AnyCancellable?
 
@@ -1176,6 +1332,10 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     self.window = window
     _ = keys
     model.send = { emit($0) }
+    modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+      self?.model.hold(event.modifierFlags)
+      return event
+    }
     paneWatch = model.$pane.sink { [weak self] pane in self?.updateMeter(pane: pane) }
     readCommands()
   }
@@ -1201,6 +1361,7 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   func windowDidResignKey(_: Notification) {
     if model.state.recording != nil { model.act("cancel-shortcut") }
+    model.hold([])
   }
 
   private func present(_ pane: SettingsPane?) {
@@ -1211,25 +1372,24 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
   /// Listens for keys only while a recorder is waiting for one.
   private func listen(_ on: Bool) {
     if on, monitor == nil {
-      model.liveModifiers = []
-      monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+      monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
         guard let self, let kind = self.model.state.recording else { return event }
-        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
-        if event.type == .flagsChanged {
-          self.model.liveModifiers = flags
-          return nil
-        }
         if event.keyCode == UInt16(kVK_Escape) {
           self.model.act("cancel-shortcut")
           return nil
         }
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
         let modifiers = ShortcutKeys.carbon(flags)
         let keyCode = Int(event.keyCode)
+        let typed = event.characters(byApplyingModifiers: []) ?? ""
+        if let label = ShortcutKeys.label(keyCode: keyCode, typed: typed) {
+          self.model.type(kind, label)
+        }
         self.model.act("shortcut", [
           "kind": kind,
           "keyCode": keyCode,
           "modifiers": modifiers,
-          "key": event.characters(byApplyingModifiers: []) ?? "",
+          "key": typed,
           "reserved": ShortcutKeys.reserved(keyCode: keyCode, modifiers: modifiers),
         ])
         return nil
@@ -1237,7 +1397,6 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     } else if !on, let monitor {
       NSEvent.removeMonitor(monitor)
       self.monitor = nil
-      model.liveModifiers = []
     }
   }
 
@@ -1255,7 +1414,7 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
           switch type {
           case "state":
             guard let state else { return }
-            self.model.state = state
+            self.model.show(state)
             self.listen(state.recording != nil)
             self.updateMeter()
             if !self.presented {
@@ -1276,7 +1435,71 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
   }
 
-  /// Every pane, dark and light, plus the recorder listening and a refused shortcut, as PNGs.
+  /// The General pane at 60 fps through one take on the shortcuts, as numbered PNGs for a video:
+  /// hold ⌥⇧, listen, a refused ⌘V, listen again with ⌥ let go and pressed again, ⌃⌥⌘R accepted
+  /// and held, then Esc on Paste.
+  @MainActor static func renderShortcutClip(model: SettingsModel, to dir: URL) {
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    model.rendering = true
+    let light = CommandLine.arguments.contains("--light")
+    let base = SettingsState()
+    var listening = base
+    listening.shortcuts[0].recording = true
+    var refused = base
+    refused.shortcuts[0].error = "Apps use ⌘V. Add ⌥ or ⌃."
+    var custom = base
+    custom.shortcuts[0] = SettingsShortcut(kind: "record", title: "Record", label: "⌃⌥⌘R", key: "R", shift: false, control: true, option: true, command: true, isDefault: false)
+    var pasteListening = custom
+    pasteListening.shortcuts[1].recording = true
+    let script: [(Double, (SettingsModel, Double) -> Void)] = [
+      (0, { m, t in m.show(base, at: t) }),
+      (0.6, { m, t in m.hold(.option, at: t) }),
+      (0.75, { m, t in m.hold([.option, .shift], at: t) }),
+      (1.45, { m, t in m.hold([], at: t) }),
+      (1.95, { m, t in m.show(listening, at: t) }),
+      (2.55, { m, t in m.hold(.command, at: t) }),
+      (2.95, { m, t in m.type("record", "V", at: t) }),
+      (2.97, { m, t in m.show(refused, at: t) }),
+      (3.25, { m, t in m.hold([], at: t) }),
+      (4.3, { m, t in m.show(listening, at: t) }),
+      (4.75, { m, t in m.hold(.control, at: t) }),
+      (4.9, { m, t in m.hold([.control, .option], at: t) }),
+      (5.05, { m, t in m.hold([.control, .option, .command], at: t) }),
+      (5.35, { m, t in m.hold([.control, .command], at: t) }),
+      (5.6, { m, t in m.hold([.control, .option, .command], at: t) }),
+      (5.95, { m, t in m.type("record", "R", at: t) }),
+      (5.97, { m, t in m.show(custom, at: t) }),
+      (6.35, { m, t in m.hold([], at: t) }),
+      (7.1, { m, t in m.hold([.control, .option, .command], at: t) }),
+      (7.7, { m, t in m.hold([], at: t) }),
+      (8.2, { m, t in m.show(pasteListening, at: t) }),
+      (9.0, { m, t in m.show(custom, at: t) }),
+    ]
+    model.resetKeys()
+    model.pane = .general
+    var next = 0
+    let fps = 60.0
+    for frame in 0..<Int(9.6 * fps) {
+      let t = Double(frame) / fps
+      while next < script.count, script[next].0 <= t {
+        model.advanceKeys(to: script[next].0)
+        script[next].1(model, script[next].0)
+        next += 1
+      }
+      model.advanceKeys(to: t)
+      model.renderTime = t
+      let view = SettingsView(model: model)
+        .environment(\.colorScheme, light ? .light : .dark)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      let renderer = ImageRenderer(content: view)
+      renderer.scale = 2
+      guard let image = renderer.cgImage else { continue }
+      let url = dir.appending(path: String(format: "%04d.png", frame))
+      try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: url)
+    }
+  }
+
+  /// Every pane, dark and light, plus each state of the shortcut keys, as PNGs.
   @MainActor static func render(model: SettingsModel, to dir: URL) {
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     model.rendering = true
@@ -1297,10 +1520,40 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var listening = base
     listening.shortcuts[0].recording = true
     var refused = base
-    refused.shortcuts[1].error = "Apps use ⌘V. Add ⌥ or ⌃."
+    refused.shortcuts[0].error = "Apps use ⌘V. Add ⌥ or ⌃."
     var custom = base
     custom.shortcuts[0] = SettingsShortcut(kind: "record", title: "Record", label: "⌃⌥⌘R", key: "R", shift: false, control: true, option: true, command: true, isDefault: false)
     custom.login.on = true
+    var pasteOff = base
+    pasteOff.shortcuts[1] = SettingsShortcut(kind: "paste", title: "Paste last capture", label: "", key: "", shift: false, option: false, isDefault: false, clearable: true)
+    var pasteListening = base
+    pasteListening.shortcuts[1].recording = true
+    var lowered = base
+    lowered.lowerPlayback = true
+    // The shortcut keys are drawn at a moment after a few steps: (time, step).
+    let rest: [(Double, (SettingsModel) -> Void)] = [(0, { $0.show(base, at: 0) })]
+    let listen = rest + [(1, { $0.show(listening, at: 1) })]
+    let refuse = listen + [
+      (1.3, { $0.hold(.command, at: 1.3) }), (1.6, { $0.type("record", "V", at: 1.6) }),
+      (1.62, { $0.show(refused, at: 1.62) }), (1.8, { $0.hold([], at: 1.8) }),
+    ]
+    let accept = listen + [
+      (1.3, { $0.hold([.control, .option, .command], at: 1.3) }), (1.6, { $0.type("record", "R", at: 1.6) }),
+      (1.62, { $0.show(custom, at: 1.62) }), (1.9, { $0.hold([], at: 1.9) }),
+    ]
+    let shortcutStages: [String: ([(Double, (SettingsModel) -> Void)], Double)] = [
+      "general": (rest, 5),
+      "general-held": (rest + [(1, { $0.hold([.option, .shift], at: 1) })], 2),
+      "general-listening": (listen, 2.5),
+      "general-partial": (listen + [(1.5, { $0.hold([.control, .option], at: 1.5) })], 2.5),
+      "general-refused": (refuse, 2.02),
+      "general-refused-reason": (refuse, 3.2),
+      "general-accepted": (accept, 1.86),
+      "general-custom": ([(0, { $0.show(custom, at: 0) })], 5),
+      "general-paste-listening": (rest + [(1, { $0.show(pasteListening, at: 1) })], 2.5),
+      "general-paste-cleared": (rest + [(1, { $0.show(pasteListening, at: 1) }), (1.5, { $0.type("paste", "⌫", at: 1.5) }), (1.52, { $0.show(pasteOff, at: 1.52) })], 1.7),
+      "general-paste-off": ([(0, { $0.show(pasteOff, at: 0) })], 5),
+    ]
     var hex = base
     hex.transcriber = SettingsTranscriber(engine: "hex", hexTitle: "Hex", hexEnabled: true, language: "nl", models: [
       SettingsModelOption(id: "parakeet-tdt-0.6b-v3", title: "Parakeet TDT v3", chosen: true),
@@ -1309,6 +1562,18 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     hex.videoExport = true
     var downloading = base
     downloading.transcriber.speech = SpeechStatus(state: "downloading", locale: "en_US", progress: 0.42)
+    let locales = ["de-DE", "en-GB", "en-US", "es-ES", "fr-FR", "ja-JP", "ko-KR", "yue-CN", "zh-CN", "zh-TW"]
+    var ready = base
+    ready.transcriber.speech = SpeechStatus(state: "ready", locale: "en_US", progress: 1, locales: locales)
+    var language = base
+    language.transcriber.appleLocale = "zh-TW"
+    language.transcriber.speech = SpeechStatus(state: "ready", locale: "zh_TW", progress: 1, locales: locales)
+    var languageLoading = language
+    languageLoading.transcriber.speech = nil
+    var languageUnsupported = ready
+    languageUnsupported.transcriber.appleLocale = "xx-XX"
+    var command = base
+    command.transcriber = SettingsTranscriber(engine: "command", command: "whisper-scrawl")
     var missing = base
     missing.permissions[0].status = "granted"
     missing.permissions[0].relaunch = true
@@ -1344,37 +1609,60 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     )
     var micNotAllowed = base
     micNotAllowed.microphone.meter = nil
-    let samples: [(String, SettingsPane, SettingsState, NSEvent.ModifierFlags)] = [
-      ("general", .general, base, []),
-      ("general-custom", .general, custom, []),
-      ("general-recording-shortcut", .general, listening, [.control, .option]),
-      ("general-refused", .general, refused, []),
-      ("recording", .recording, base, []),
-      ("recording-hex", .recording, hex, []),
-      ("recording-mic-chosen", .recording, micChosen, []),
-      ("recording-mic-missing", .recording, micMissing, []),
-      ("recording-mic-not-allowed", .recording, micNotAllowed, []),
-      ("recording-downloading", .recording, downloading, []),
-      ("storage", .storage, base, []),
-      ("permissions", .permissions, base, []),
-      ("permissions-missing", .permissions, missing, []),
-      ("agents", .agents, base, []),
-      ("agents-installed", .agents, cliInstalled, []),
-      ("agents-local", .agents, cliLocal, []),
-      ("agents-homebrew", .agents, cliHomebrew, []),
-      ("agents-taken", .agents, cliTaken, []),
-      ("agents-dev", .agents, cliDev, []),
-      ("about", .about, base, []),
-      ("about-dev", .about, noUpdates, []),
+    let samples: [(String, SettingsPane, SettingsState)] = [
+      ("general", .general, base),
+      ("general-held", .general, base),
+      ("general-listening", .general, listening),
+      ("general-partial", .general, listening),
+      ("general-refused", .general, refused),
+      ("general-refused-reason", .general, refused),
+      ("general-accepted", .general, custom),
+      ("general-custom", .general, custom),
+      ("general-paste-listening", .general, pasteListening),
+      ("general-paste-cleared", .general, pasteOff),
+      ("general-paste-off", .general, pasteOff),
+      ("general-lower-playback", .general, lowered),
+      ("recording", .recording, base),
+      ("recording-hex", .recording, hex),
+      ("recording-mic-chosen", .recording, micChosen),
+      ("recording-mic-missing", .recording, micMissing),
+      ("recording-mic-not-allowed", .recording, micNotAllowed),
+      ("recording-downloading", .recording, downloading),
+      ("recording-ready", .recording, ready),
+      ("recording-language", .recording, language),
+      ("recording-language-loading", .recording, languageLoading),
+      ("recording-language-unsupported", .recording, languageUnsupported),
+      ("recording-command", .recording, command),
+      ("storage", .storage, base),
+      ("permissions", .permissions, base),
+      ("permissions-missing", .permissions, missing),
+      ("agents", .agents, base),
+      ("agents-installed", .agents, cliInstalled),
+      ("agents-local", .agents, cliLocal),
+      ("agents-homebrew", .agents, cliHomebrew),
+      ("agents-taken", .agents, cliTaken),
+      ("agents-dev", .agents, cliDev),
+      ("about", .about, base),
+      ("about-dev", .about, noUpdates),
     ]
     var index = 0
     for scheme in [ColorScheme.dark, .light] {
-      for (name, pane, state, live) in samples {
-        if scheme == .light && name.contains("-") && name != "general-recording-shortcut" && !name.hasPrefix("recording-mic") { continue }
+      for (name, pane, state) in samples {
+        if scheme == .light && name.contains("-") && !name.hasPrefix("general-") && !name.hasPrefix("recording-mic") { continue }
         index += 1
-        model.state = state
+        model.resetKeys()
+        if let (steps, t) = shortcutStages[name] {
+          for (at, step) in steps {
+            model.advanceKeys(to: at)
+            step(model)
+          }
+          model.advanceKeys(to: t)
+          model.renderTime = t
+        } else {
+          model.show(state, at: 0)
+          model.renderTime = 5
+        }
         model.pane = pane
-        model.liveModifiers = live
         model.meter.level = 0.44
         let view = SettingsView(model: model)
           .environment(\.colorScheme, scheme)
@@ -1392,6 +1680,41 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
 }
 
 /// Commit on Return or Apply, so intermediate edits never reach the transcriber.
+/// Sends the level when the slider is let go, not on every step of the drag.
+private struct PlaybackLevelRow: View {
+  @Environment(\.settingsTheme) private var theme
+  @ObservedObject var model: SettingsModel
+  let level: Int
+  @State private var draft: Double
+
+  init(model: SettingsModel, level: Int) {
+    self.model = model
+    self.level = level
+    _draft = State(initialValue: Double(level))
+  }
+
+  var body: some View {
+    SettingsRow(title: "Lower to") {
+      // ImageRenderer cannot draw the AppKit-backed slider; previews get a plain track.
+      if model.rendering {
+        Capsule().fill(theme.track)
+          .overlay(alignment: .leading) { Capsule().fill(theme.accent).frame(width: 150 * draft / 100) }
+          .frame(width: 150, height: 4)
+      } else {
+        Slider(value: $draft, in: 0...100) { editing in
+          if !editing { model.set("playbackLevel", Int(draft.rounded())) }
+        }
+        .frame(width: 150)
+      }
+      Text("\(Int(draft.rounded()))%")
+        .font(.system(size: 14).monospacedDigit())
+        .foregroundStyle(theme.secondary)
+        .frame(width: 40, alignment: .trailing)
+    }
+    .onChange(of: level) { _, value in draft = Double(value) }
+  }
+}
+
 private struct HexLanguageField: View {
   @ObservedObject var model: SettingsModel
   let language: String

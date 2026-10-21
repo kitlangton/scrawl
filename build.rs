@@ -129,7 +129,7 @@ fn compile_metal_shader(src_rel: &str, name: &str) {
     println!("cargo:rerun-if-changed={}", source.display());
 
     let metal = Command::new("xcrun")
-        .args(["--sdk", "macosx", "metal", "-c", "-mmacosx-version-min=26.0"])
+        .args(["--sdk", "macosx", "metal", "-c", "-mmacosx-version-min=15.0"])
         .arg(&source)
         .arg("-o")
         .arg(&air)
@@ -179,7 +179,7 @@ fn compile_helper() {
     let built = out_dir.join("scrawl-helper");
     let status = Command::new("xcrun")
         .args(["swiftc", "-O", "-swift-version", "5", "-target"])
-        .arg(format!("{arch}-apple-macos26.0"))
+        .arg(format!("{arch}-apple-macos15.0"))
         .args(&sources)
         .arg("-o")
         .arg(&built)
@@ -197,7 +197,7 @@ fn compile_helper() {
         .expect("xcrun swiftc is required to build scrawl-helper");
     assert!(
         status.success(),
-        "scrawl-helper failed to compile (needs the macOS 26 SDK)"
+        "scrawl-helper failed to compile (needs the macOS 26 SDK; the result runs on macOS 15)"
     );
     let dest = profile_dir.join("scrawl-helper");
     let _ = std::fs::remove_file(&dest);

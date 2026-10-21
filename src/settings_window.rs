@@ -101,6 +101,8 @@ struct Shortcut {
     option: bool,
     command: bool,
     is_default: bool,
+    #[serde(default)]
+    clearable: bool,
     recording: bool,
     error: Option<String>,
 }
@@ -511,6 +513,7 @@ fn key_code(key: &str) -> Option<u32> {
         ("enter", 0x0D),
         ("tab", 0x09),
         ("backspace", 0x08),
+        ("delete", 0x2E),
         ("left", 0x25),
         ("up", 0x26),
         ("right", 0x27),
@@ -522,6 +525,7 @@ fn key_code(key: &str) -> Option<u32> {
         ("enter", 36),
         ("tab", 48),
         ("backspace", 51),
+        ("delete", 117),
         ("left", 123),
         ("right", 124),
         ("down", 125),
@@ -941,14 +945,21 @@ impl SettingsWindow {
         let live = self.live;
         let lit = |on: bool, held: bool| if recording { held } else { on };
         let reset_hidden = shortcut.is_default || recording;
-        let caption_text = if recording {
+        let off = shortcut.label.is_empty();
+        let clear_shown = shortcut.clearable && !off && !recording;
+        let caption_text = if recording && shortcut.clearable {
+            format!(
+                "Press the new shortcut. Esc cancels, {} turns it off.",
+                if WINDOWS { "Backspace" } else { "Delete" }
+            )
+        } else if recording {
             "Press the new shortcut. Esc cancels.".to_owned()
         } else if let Some(error) = &shortcut.error {
             error.clone()
         } else if kind == ShortcutKind::Paste {
             "Pastes the last capture into the app in front.".to_owned()
         } else {
-            "Tap to record. Hold to choose what to record.".to_owned()
+            "Records the screen. Press again to finish.".to_owned()
         };
         let key = if recording {
             "…".to_owned()
@@ -956,7 +967,16 @@ impl SettingsWindow {
             shortcut.key.clone()
         };
         // macOS draws ⇧ ⌃ ⌥ ⌘; Windows names its keys, in the order they sit on the keyboard.
-        let caps = if WINDOWS {
+        let caps = if off && !recording {
+            div()
+                .h(px(52.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(14.0))
+                .text_color(theme.secondary())
+                .child("Set shortcut")
+        } else if WINDOWS {
             div()
                 .flex()
                 .gap(px(6.0))
@@ -982,19 +1002,43 @@ impl SettingsWindow {
             .child(
                 header(theme, &shortcut.title).child(
                     div()
-                        .id(id("reset"))
-                        .size(px(20.0))
-                        .rounded_full()
-                        .bg(theme.control())
                         .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(icon(crate::icons::RESET, 10.0, theme.secondary()))
-                        .when(reset_hidden, |d| d.opacity(0.0))
-                        .when(!reset_hidden, |d| {
-                            d.cursor_pointer().on_click(cx.listener(move |view, _, _, _| {
-                                view.act(Action::ResetShortcut { kind });
-                            }))
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .id(id("reset"))
+                                .size(px(20.0))
+                                .rounded_full()
+                                .bg(theme.control())
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(icon(crate::icons::RESET, 10.0, theme.secondary()))
+                                .when(reset_hidden, |d| d.opacity(0.0))
+                                .when(!reset_hidden, |d| {
+                                    d.cursor_pointer().on_click(cx.listener(
+                                        move |view, _, _, _| {
+                                            view.act(Action::ResetShortcut { kind });
+                                        },
+                                    ))
+                                }),
+                        )
+                        .when(clear_shown, |d| {
+                            d.child(
+                                div()
+                                    .id(id("clear"))
+                                    .size(px(20.0))
+                                    .rounded_full()
+                                    .bg(theme.control())
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .child(icon(crate::icons::X, 10.0, theme.secondary()))
+                                    .on_click(cx.listener(move |view, _, _, _| {
+                                        view.act(Action::ClearShortcut { kind });
+                                    })),
+                            )
                         }),
                 ),
             )
@@ -1305,6 +1349,12 @@ impl SettingsWindow {
                 "To show a cabled iPhone".to_owned(),
                 crate::icons::IPHONE,
                 GREEN,
+            ),
+            Permission::SpeechRecognition => (
+                "Speech Recognition",
+                "To write down what you say".to_owned(),
+                crate::icons::MIC,
+                ORANGE,
             ),
         };
         let granted = row.status == Status::Granted;

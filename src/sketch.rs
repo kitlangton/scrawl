@@ -19,21 +19,40 @@ fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
+#[cfg(test)]
 pub fn shape_of(stroke: &Stroke) -> Shape {
+    ink_of(stroke).shape
+}
+
+/// One stroke's shape and what a mark needs from it, in normalized coordinates.
+struct Ink {
+    shape: Shape,
+    /// What the stroke covers: a circle's loop without its lead-in or tail, else the whole stroke.
+    region: [f32; 4],
+    /// A one-stroke arrow's shaft start and tip.
+    ends: Option<([f32; 2], [f32; 2])>,
+}
+
+fn ink_of(stroke: &Stroke) -> Ink {
+    let norm = stroke.normalized_points();
+    let region = bounds(&norm);
+    let plain = |shape| Ink {
+        shape,
+        region,
+        ends: None,
+    };
     if stroke.pin.is_some() {
-        return Shape::Pin;
+        return plain(Shape::Pin);
     }
-    let points: Vec<_> = stroke
-        .normalized_points()
-        .into_iter()
+    let points: Vec<_> = norm
+        .iter()
         .map(|p| [p[0] * stroke.fw as f32, p[1] * stroke.fh as f32])
         .collect();
     let Some(&first) = points.first() else {
-        return Shape::Tap;
+        return plain(Shape::Tap);
     };
     let b = bounds(&points);
     let (w, h) = (b[2] - b[0], b[3] - b[1]);
-    let big = w.max(h);
     let len: f32 = points.windows(2).map(|p| distance(p[0], p[1])).sum();
     let last = *points.last().unwrap();
     let chord = distance(first, last);
@@ -43,25 +62,247 @@ pub fn shape_of(stroke: &Stroke) -> Shape {
         .sum::<f32>()
         + last[0] * first[1]
         - first[0] * last[1];
-    let enclosed_area = 0.5 * shoelace.abs();
+    let loop_box = || loop_in(&points).map(|(i, j)| bounds(&norm[i..=j]));
     if w.hypot(h) < 14.0 {
-        Shape::Tap
-    } else if chord < 0.35 * big
-        && len > 2.0 * big
-        && w.min(h) >= 18.0
-        && w.min(h) > 0.42 * big
-        && enclosed_area > 0.32 * w * h
-    {
-        Shape::Circle
+        plain(Shape::Tap)
+    } else if encloses(chord, 0.35, len, b, 0.5 * shoelace.abs()) {
+        // A short tail or lead-in can still end close enough to count; what was circled is the
+        // loop inside it. A stroke that goes round more than once keeps its whole box.
+        Ink {
+            shape: Shape::Circle,
+            region: (len <= 1.5 * round(b))
+                .then(loop_box)
+                .flatten()
+                .unwrap_or(region),
+            ends: None,
+        }
     } else if chord > 0.88 * len {
-        if w > 2.5 * h {
+        plain(if w > 2.5 * h {
             Shape::Underline
         } else {
             Shape::Line
+        })
+    } else if let Some(region) = loop_box() {
+        Ink {
+            shape: Shape::Circle,
+            region,
+            ends: None,
+        }
+    } else if let Some(tip) = arrow_tip(&points, w.max(h)) {
+        Ink {
+            shape: Shape::Arrow,
+            region,
+            ends: Some((norm[0], norm[tip])),
         }
     } else {
-        Shape::Mark
+        plain(Shape::Mark)
     }
+}
+
+/// The most points [`loop_in`] tries as a loop's ends.
+const MAX_LOOP_POINTS: usize = 512;
+
+/// Ramanujan's approximation of the perimeter of the ellipse filling box `b`.
+fn round(b: [f32; 4]) -> f32 {
+    let (w, h) = (b[2] - b[0], b[3] - b[1]);
+    PI / 2.0 * (3.0 * (w + h) - ((3.0 * w + h) * (w + 3.0 * h)).sqrt())
+}
+
+/// Whether a path (pixels) with these measures goes round something: it ends within `max_gap` of
+/// its long side of where it began, is longer than twice its long side, fills a third of its box,
+/// and the box's short side is over 0.42 of its long side. Flatter loops, to 5:1, count too (a
+/// wide cell or a line of text is circled with a flat loop) when they also close well within
+/// their short side, so a flat C doesn't, and go round at most three times (with slack for
+/// jitter), so a scribble over a line of text, which closes on itself and fills its box too,
+/// doesn't either.
+fn encloses(gap: f32, max_gap: f32, len: f32, b: [f32; 4], area: f32) -> bool {
+    let (w, h) = (b[2] - b[0], b[3] - b[1]);
+    let (big, small) = (w.max(h), w.min(h));
+    gap < max_gap * big
+        && len > 2.0 * big
+        && small >= 18.0
+        && area > 0.32 * w * h
+        && (small > 0.42 * big || (small > 0.2 * big && gap < 0.6 * small && len <= 3.5 * round(b)))
+}
+
+/// The loop inside a stroke (pixels) that circles something once before or after a lead-in,
+/// tail or overshoot: the stretch `i..=j`, at least 0.6 of the stroke's length, whose ends meet
+/// (within 0.15 of its size), that [`encloses`] its box and goes round it at most one and a half
+/// times. Of several, the one whose ends meet closest.
+///
+/// Trying every pair of ends is quadratic and imported strokes have no point cap, so the ends
+/// are tried at every `step`th point only, but each stretch is judged by the recorded path's own
+/// length and area (prefix sums over every point), so sampling can't hide backtracking or turns.
+fn loop_in(points: &[[f32; 2]]) -> Option<(usize, usize)> {
+    let n = points.len();
+    if n < 3 {
+        return None;
+    }
+    // Length along the path, and twice the shoelace area, up to each point (f64: pixel products
+    // are too big to subtract precisely in f32, and long strokes add up many segments).
+    let mut run = Vec::with_capacity(n);
+    let mut twice_area = Vec::with_capacity(n);
+    run.push(0.0f64);
+    twice_area.push(0.0f64);
+    for p in points.windows(2) {
+        run.push(run.last().unwrap() + distance(p[0], p[1]) as f64);
+        twice_area.push(
+            twice_area.last().unwrap() + p[0][0] as f64 * p[1][1] as f64
+                - p[1][0] as f64 * p[0][1] as f64,
+        );
+    }
+    let total = run[n - 1];
+    let step = n.div_ceil(MAX_LOOP_POINTS);
+    let mut ends: Vec<usize> = (0..n).step_by(step).collect();
+    if ends.last() != Some(&(n - 1)) {
+        ends.push(n - 1);
+    }
+    let mut best: Option<(f32, usize, usize)> = None;
+    for (k, &i) in ends.iter().enumerate() {
+        let a = points[i];
+        let mut b = [a[0], a[1], a[0], a[1]];
+        for &j in &ends[k + 1..] {
+            let z = points[j];
+            b = [
+                b[0].min(z[0]),
+                b[1].min(z[1]),
+                b[2].max(z[0]),
+                b[3].max(z[1]),
+            ];
+            let len = run[j] - run[i];
+            if len < 0.6 * total {
+                continue;
+            }
+            let gap = distance(a, z);
+            let closeness = gap / (b[2] - b[0]).max(b[3] - b[1]);
+            if best.is_some_and(|(c, ..)| closeness >= c) {
+                continue;
+            }
+            let len = len as f32;
+            let twice = twice_area[j] - twice_area[i] + z[0] as f64 * a[1] as f64
+                - a[0] as f64 * z[1] as f64;
+            if len <= 1.5 * round(b) && encloses(gap, 0.15, len, b, 0.5 * twice.abs() as f32) {
+                best = Some((closeness, i, j));
+            }
+        }
+    }
+    best.map(|(_, i, j)| (i, j))
+}
+
+/// How far `p` is from the line through `a` and `b`.
+fn off_line(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    ((b[0] - a[0]) * (a[1] - p[1]) - (a[0] - p[0]) * (b[1] - a[1])).abs() / distance(a, b)
+}
+
+/// The tip of an arrow drawn in one stroke (pixels, `big` its box's long side): a straight shaft
+/// from the first point to the tip, where the stroke turns back into one or two straight barbs
+/// that end behind the tip, and the head reaches both sides of the shaft. Two barbs (out, back
+/// and out again) are each at most 0.9 of the shaft; a lone barb, which must then run on across
+/// the shaft, is at most 0.6 of it and clearly off it. An underline whose end hooks back to one
+/// side, check marks, V's and zigzags fail.
+fn arrow_tip(points: &[[f32; 2]], big: f32) -> Option<usize> {
+    let start = points[0];
+    // The tip is where the stroke first heads back toward its start, once half its size away.
+    let mut tip = 0;
+    let mut turned = false;
+    for (i, &p) in points.iter().enumerate() {
+        let (d, far) = (distance(start, p), distance(start, points[tip]));
+        if d >= far {
+            tip = i;
+        } else if far >= 0.5 * big && d < 0.85 * far {
+            turned = true;
+            break;
+        }
+    }
+    let t = points[tip];
+    let shaft = distance(start, t);
+    if !turned
+        || points[..tip]
+            .iter()
+            .any(|&p| off_line(p, start, t) > 0.1 * shaft)
+    {
+        return None;
+    }
+    // The direction the shaft arrives in, over its last 30%.
+    let arc: f32 = points[..=tip]
+        .windows(2)
+        .map(|p| distance(p[0], p[1]))
+        .sum();
+    let mut run = 0.0;
+    let back = (0..tip)
+        .find(|&i| {
+            run += distance(points[i], points[i + 1]);
+            run >= 0.7 * arc
+        })
+        .unwrap_or(0);
+    let along = distance(points[back], t);
+    if along < 1.0 {
+        return None;
+    }
+    let dir = [
+        (t[0] - points[back][0]) / along,
+        (t[1] - points[back][1]) / along,
+    ];
+    // Barbs: runs away from the tip by at least `slack`, each from the nearest point before it.
+    let slack = 0.15 * shaft;
+    let mut barbs: Vec<(usize, usize)> = Vec::new();
+    let (mut out, mut near, mut rising) = (tip, tip, true);
+    for (i, &p) in points.iter().enumerate().skip(tip + 1) {
+        if (p[0] - t[0]) * dir[0] + (p[1] - t[1]) * dir[1] > slack {
+            return None;
+        }
+        let d = distance(t, p);
+        if rising {
+            if d >= distance(t, points[out]) {
+                out = i;
+            } else if d < distance(t, points[out]) - slack {
+                barbs.push((near, out));
+                (near, rising) = (i, false);
+            }
+        } else if d <= distance(t, points[near]) {
+            near = i;
+        } else if d > distance(t, points[near]) + slack {
+            (out, rising) = (i, true);
+        }
+    }
+    if rising && distance(t, points[out]) >= slack {
+        barbs.push((near, out));
+    }
+    let cos = |deg: f32| deg.to_radians().cos();
+    // Each barb's length and the cosine of its angle to the shaft pointing back.
+    let mut measured = Vec::with_capacity(barbs.len());
+    for (from, end) in barbs {
+        let (a, z) = (points[from], points[end]);
+        let span = distance(a, z);
+        if points[from..=end]
+            .iter()
+            .any(|&p| off_line(p, a, z) > 0.15 * span)
+        {
+            return None;
+        }
+        let e = [z[0] - t[0], z[1] - t[1]];
+        let d = e[0].hypot(e[1]);
+        let c = -(e[0] * dir[0] + e[1] * dir[1]) / d;
+        if d > 0.9 * shaft || c < cos(75.0) {
+            return None;
+        }
+        measured.push((d, c));
+    }
+    let head = match measured[..] {
+        [(d, c)] => d <= 0.6 * shaft && c <= cos(15.0),
+        [(_, c0), (_, c1)] => c0.max(c1) <= cos(5.0),
+        _ => false,
+    };
+    // The head spreads to both sides of the shaft; an underline that hooks back doesn't.
+    let side = |p: [f32; 2]| dir[0] * (p[1] - t[1]) - dir[1] * (p[0] - t[0]);
+    let reach = |sign: f32| {
+        points[tip..]
+            .iter()
+            .map(|&p| sign * side(p))
+            .fold(0.0, f32::max)
+    };
+    let (left, right) = (reach(1.0), reach(-1.0));
+    (head && left.min(right) > 0.3 * left.max(right)).then_some(tip)
 }
 
 pub fn marks_of(strokes: &[Stroke]) -> Vec<Mark> {
@@ -123,11 +364,12 @@ pub fn marks_of(strokes: &[Stroke]) -> Vec<Mark> {
                         let pts = s.normalized_points();
                         let b = bounds(&pts);
                         let size = (b[2] - b[0]) * s.fw as f32 + (b[3] - b[1]) * s.fh as f32;
-                        (s, shape_of(s), b, pts, size)
+                        (s, ink_of(s), b, pts, size)
                     })
                     .collect();
                 sized.sort_by(|a, b| b.4.total_cmp(&a.4));
-                let (main, shape, b, pts, _) = &sized[0];
+                let (main, ink, _, pts, _) = &sized[0];
+                let shape = &ink.shape;
                 let rest = &sized[1..];
                 let a = pts.first().copied().unwrap_or([0.0; 2]);
                 let z = pts.last().copied().unwrap_or(a);
@@ -150,19 +392,35 @@ pub fn marks_of(strokes: &[Stroke]) -> Vec<Mark> {
                     }
                 }
                 if mark.shape != Shape::Arrow
-                    && (rest.iter().all(|r| r.1 == *shape) || *shape == Shape::Circle)
+                    && (rest.iter().all(|r| r.1.shape == *shape) || *shape == Shape::Circle)
                 {
                     match shape {
                         Shape::Circle => {
                             mark.shape = Shape::Circle;
-                            if !rest.iter().all(|r| r.1 == Shape::Circle) {
-                                mark.box_norm = *b;
-                            }
+                            // What was circled: the loops, without any lead-in or tail.
+                            mark.box_norm = if rest.iter().all(|r| r.1.shape == Shape::Circle) {
+                                bounds(
+                                    &sized
+                                        .iter()
+                                        .flat_map(|r| {
+                                            let [x0, y0, x1, y1] = r.1.region;
+                                            [[x0, y0], [x1, y1]]
+                                        })
+                                        .collect::<Vec<_>>(),
+                                )
+                            } else {
+                                ink.region
+                            };
                         }
                         Shape::Line if rest.is_empty() => {
                             mark.shape = Shape::Line;
                             mark.from = Some(a);
                             mark.to = Some(z);
+                        }
+                        Shape::Arrow if rest.is_empty() => {
+                            mark.shape = Shape::Arrow;
+                            mark.from = ink.ends.map(|e| e.0);
+                            mark.to = ink.ends.map(|e| e.1);
                         }
                         Shape::Tap | Shape::Underline => mark.shape = *shape,
                         _ => {}
@@ -1255,6 +1513,377 @@ mod tests {
             assert_eq!(
                 describe_mark(&marks[0]),
                 "drew an arrow from x 0.20, y 0.80 pointing to x 0.50, y 0.50"
+            );
+        }
+    }
+
+    /// Corners joined by points every 4 px (on the 1000 px test frame), as a mouse samples them.
+    fn polyline(corners: &[[f32; 2]]) -> Vec<[f32; 2]> {
+        let mut points: Vec<[f32; 2]> = corners
+            .windows(2)
+            .flat_map(|c| {
+                let n = (distance(c[0], c[1]) / 0.004).max(1.0) as usize;
+                (0..n).map(move |k| {
+                    let f = k as f32 / n as f32;
+                    [
+                        c[0][0] + (c[1][0] - c[0][0]) * f,
+                        c[0][1] + (c[1][1] - c[0][1]) * f,
+                    ]
+                })
+            })
+            .collect();
+        points.extend(corners.last());
+        points
+    }
+
+    fn ellipse(c: [f32; 2], r: [f32; 2], from: f32, to: f32) -> Vec<[f32; 2]> {
+        (0..=60)
+            .map(|k| {
+                let a = from + (to - from) * k as f32 / 60.0;
+                [c[0] + r[0] * a.cos(), c[1] + r[1] * a.sin()]
+            })
+            .collect()
+    }
+
+    /// An ellipse gone round `turns` times from its right-hand end, 120 points a turn.
+    fn ellipse_turns(c: [f32; 2], r: [f32; 2], turns: f32) -> Vec<[f32; 2]> {
+        let n = (120.0 * turns) as usize;
+        (0..=n)
+            .map(|k| {
+                let a = 2.0 * PI * turns * k as f32 / n as f32;
+                [c[0] + r[0] * a.cos(), c[1] + r[1] * a.sin()]
+            })
+            .collect()
+    }
+
+    /// The two ⇧ strokes of a real capture (`scrawl-1792536608591-641c-2`), drawn with a mouse on
+    /// a 1728×1117 screen: a flat loop round a table cell that ends just past where it began,
+    /// and an arrow drawn in one go, shaft left to right, then a barb back above it, back to the
+    /// tip and a barb below.
+    fn real_stroke(pts: &[i32], t: u64) -> Stroke {
+        Stroke {
+            fw: 1728,
+            fh: 1117,
+            pts: pts.to_vec(),
+            ..stroke(&[], t)
+        }
+    }
+
+    const REAL_LOOP: [i32; 207] = [
+        3617, 3170, 0, 3611, 3184, 48, 3595, 3194, 76, 3582, 3200, 96, 3560, 3210, 106, 3529, 3217,
+        126, 3495, 3225, 146, 3449, 3229, 156, 3399, 3229, 175, 3363, 3229, 195, 3321, 3229, 215,
+        3276, 3229, 225, 3249, 3229, 245, 3214, 3225, 263, 3192, 3218, 281, 3153, 3207, 290, 3136,
+        3199, 310, 3093, 3172, 330, 3069, 3152, 350, 3051, 3132, 370, 3040, 3117, 388, 3033, 3103,
+        397, 3026, 3084, 417, 3024, 3051, 437, 3024, 3030, 447, 3024, 3009, 457, 3024, 2971, 467,
+        3024, 2928, 487, 3026, 2890, 505, 3041, 2841, 515, 3073, 2779, 544, 3139, 2696, 562, 3197,
+        2640, 581, 3228, 2616, 591, 3330, 2563, 611, 3398, 2544, 631, 3477, 2533, 641, 3550, 2529,
+        661, 3623, 2529, 681, 3702, 2539, 691, 3780, 2579, 710, 3852, 2634, 730, 3913, 2676, 747,
+        3945, 2698, 757, 3983, 2729, 776, 4011, 2746, 785, 4035, 2767, 804, 4055, 2790, 823, 4078,
+        2823, 834, 4088, 2848, 853, 4099, 2885, 873, 4103, 2918, 883, 4103, 2990, 920, 4081, 3027,
+        938, 4045, 3067, 948, 4002, 3105, 968, 3921, 3159, 987, 3900, 3171, 997, 3849, 3192, 1017,
+        3803, 3205, 1027, 3762, 3217, 1052, 3720, 3225, 1062, 3678, 3225, 1080, 3636, 3225, 1090,
+        3594, 3225, 1110, 3566, 3225, 1128, 3535, 3225, 1148, 3516, 3222, 1158, 3502, 3218, 1178,
+    ];
+
+    const REAL_ARROW: [i32; 120] = [
+        4057, 2996, 0, 4047, 2996, 68, 4075, 2996, 199, 4130, 3004, 209, 4236, 3044, 229, 4312,
+        3073, 248, 4406, 3106, 256, 4490, 3121, 276, 4567, 3131, 296, 4606, 3131, 316, 4633, 3131,
+        326, 4653, 3131, 365, 4621, 3111, 431, 4570, 3090, 451, 4507, 3062, 469, 4404, 3018, 488,
+        4373, 3007, 506, 4345, 3000, 516, 4331, 3000, 534, 4322, 2997, 573, 4337, 2995, 624, 4376,
+        2995, 644, 4436, 2999, 664, 4509, 3023, 674, 4549, 3039, 684, 4607, 3061, 694, 4638, 3076,
+        713, 4652, 3083, 723, 4663, 3086, 733, 4674, 3092, 743, 4662, 3107, 830, 4648, 3115, 840,
+        4609, 3147, 850, 4530, 3217, 880, 4512, 3233, 889, 4494, 3249, 899, 4483, 3259, 907, 4467,
+        3275, 917, 4458, 3283, 934, 4481, 3284, 1308,
+    ];
+
+    /// Underlines from real captures (2560×1440) whose end hooks back like a lone barb.
+    const REAL_HOOKED_UNDERLINES: [&[i32]; 2] = [
+        &[
+            3589, 6331, 0, 3612, 6331, 30, 3665, 6347, 49, 3718, 6356, 68, 3787, 6365, 78, 3817,
+            6365, 86, 3856, 6365, 95, 3871, 6365, 105, 3963, 6365, 115, 4001, 6365, 134, 4062,
+            6365, 143, 4139, 6365, 153, 4169, 6365, 172, 4214, 6365, 182, 4244, 6377, 199, 4258,
+            6377, 218, 4272, 6381, 227, 4302, 6381, 247, 4355, 6390, 266, 4392, 6405, 276, 4407,
+            6405, 286, 4422, 6411, 295, 4429, 6415, 305, 4439, 6422, 314, 4445, 6431, 334, 4450,
+            6442, 353, 4453, 6451, 371, 4455, 6465, 401, 4450, 6476, 411, 4442, 6491, 430, 4436,
+            6500, 449, 4426, 6510, 458, 4415, 6519, 477, 4408, 6528, 487, 4394, 6544, 497, 4372,
+            6560, 506, 4357, 6567, 516, 4342, 6573, 524, 4305, 6573, 538, 4274, 6573, 548, 4267,
+            6573, 558, 4244, 6565, 567, 4223, 6559, 576,
+        ],
+        &[
+            7252, 494, 0, 7273, 484, 18, 7288, 477, 28, 7319, 468, 37, 7341, 468, 46, 7356, 461,
+            56, 7371, 461, 64, 7409, 461, 81, 7477, 461, 91, 7508, 461, 99, 7530, 469, 109, 7545,
+            476, 119, 7555, 476, 129, 7559, 485, 165, 7547, 504, 185, 7536, 524, 195, 7528, 532,
+            224, 7514, 541, 234, 7460, 567, 254, 7407, 601, 264,
+        ],
+    ];
+
+    #[test]
+    fn real_hooked_underlines_are_not_arrows() {
+        for pts in REAL_HOOKED_UNDERLINES {
+            let stroke = Stroke {
+                fw: 2560,
+                fh: 1440,
+                pts: pts.to_vec(),
+                ..stroke(&[], 0)
+            };
+            assert_ne!(marks_of(&[stroke])[0].shape, Shape::Arrow);
+        }
+    }
+
+    fn norm(x: i32, y: i32) -> [f32; 2] {
+        [x as f32 / SCALE as f32, y as f32 / SCALE as f32]
+    }
+
+    #[test]
+    fn real_flat_loop_is_a_circle_and_one_stroke_arrow_points_to_its_tip() {
+        let marks = marks_of(&[
+            real_stroke(&REAL_LOOP, 6208),
+            real_stroke(&REAL_ARROW, 10283),
+        ]);
+        assert_eq!(marks.len(), 2);
+        assert_eq!(marks[0].shape, Shape::Circle);
+        assert_eq!(
+            marks[0].description,
+            "circled region x 0.30–0.41, y 0.25–0.32"
+        );
+        assert_eq!(marks[1].shape, Shape::Arrow);
+        // From the shaft's start to where the head begins (its right-hand end), not to where the
+        // pen lifted at the end of the lower barb.
+        assert_eq!(marks[1].from, Some(norm(4057, 2996)));
+        assert_eq!(marks[1].to, Some(norm(4653, 3131)));
+        assert_eq!(
+            marks[1].description,
+            "drew an arrow from x 0.41, y 0.30 pointing to x 0.47, y 0.31"
+        );
+    }
+
+    /// A circle that runs on into a tail, or past where it began, or starts with a lead-in, is
+    /// still a circle, and what it circled is the loop alone.
+    #[test]
+    fn a_loop_with_a_tail_is_a_circle_round_the_loop() {
+        let mut tailed = real_stroke(&REAL_LOOP, 0);
+        tailed
+            .pts
+            .extend([3450, 3260, 0, 3380, 3330, 0, 3300, 3420, 0, 3220, 3500, 0]);
+        let marks = marks_of(&[tailed]);
+        assert_eq!(marks[0].shape, Shape::Circle);
+        let ([x0, y0], [x1, y1]) = (norm(3024, 2529), norm(4103, 3229));
+        assert_eq!(marks[0].box_norm, [x0, y0, x1, y1]);
+
+        let flat = [0.2, 0.25, 0.4, 0.35];
+        let mut tail = ellipse([0.3, 0.3], [0.1, 0.05], 0.0, 2.0 * PI);
+        tail.extend(polyline(&[[0.4, 0.3], [0.52, 0.38]]));
+        let overshoot = ellipse([0.3, 0.3], [0.1, 0.05], 0.0, 2.6 * PI);
+        let mut lead_in = polyline(&[[0.18, 0.2], [0.3, 0.25]]);
+        lead_in.extend(ellipse([0.3, 0.3], [0.1, 0.05], -PI / 2.0, 1.6 * PI));
+        // A tail or lead-in short enough that the whole stroke still ends near where it began.
+        let round = ellipse([0.3, 0.3], [0.1, 0.1], 0.0, 2.0 * PI);
+        let mut short_tail = round.clone();
+        short_tail.push([0.44, 0.32]);
+        let short_lead_in = [vec![[0.44, 0.32]], round].concat();
+        let disc = [0.2, 0.2, 0.4, 0.4];
+        for (points, want) in [
+            (tail, flat),
+            (overshoot, flat),
+            (lead_in, flat),
+            (short_tail, disc),
+            (short_lead_in, disc),
+        ] {
+            let mark = &marks_of(&[stroke(&points, 0)])[0];
+            assert_eq!(mark.shape, Shape::Circle);
+            for (got, want) in mark.box_norm.iter().zip(want) {
+                assert!((got - want).abs() < 0.002, "{:?}", mark.box_norm);
+            }
+        }
+    }
+
+    /// Imported strokes have no point cap: a loop in a long one is still found, and a 120,000
+    /// point scribble is measured quickly.
+    #[test]
+    fn a_long_imported_stroke_is_still_measured() {
+        // 3,000 points about 2 px apart on a 10,000 px frame, then a tail.
+        let mut points: Vec<_> = (0..3_000)
+            .map(|k| {
+                let a = 2.0 * PI * k as f32 / 2_500.0;
+                [0.3 + 0.1 * a.cos(), 0.3 + 0.05 * a.sin()]
+            })
+            .collect();
+        points.extend(polyline(&[[0.4, 0.3], [0.52, 0.38]]));
+        let mut long = stroke(&points, 0);
+        (long.fw, long.fh) = (10_000, 10_000);
+        let mark = &marks_of(&[long])[0];
+        assert_eq!(mark.shape, Shape::Circle);
+        for (got, want) in mark.box_norm.iter().zip([0.2, 0.25, 0.4, 0.35]) {
+            assert!((got - want).abs() < 0.002, "{:?}", mark.box_norm);
+        }
+
+        let scribble: Vec<_> = (0..120_000)
+            .map(|i| {
+                let i = i as f32;
+                [0.3 + 0.1 * (0.9 * i).sin(), 0.3 + 0.022 * (0.37 * i).sin()]
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        let mark = &marks_of(&[stroke(&scribble, 0)])[0];
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(mark.shape, Shape::Mark);
+    }
+
+    /// Recognising flatter loops never costs a circle the old rule found: round or near-closed
+    /// loops, ones gone round several times, gaps along either axis.
+    #[test]
+    fn every_loop_the_old_rule_called_a_circle_still_is() {
+        let cases = [
+            ellipse([0.3, 0.3], [0.1, 0.1], 0.0, 2.0 * PI),
+            ellipse([0.3, 0.3], [0.1, 0.05], 0.0, 2.0 * PI),
+            // Open by about 30° at one end of its long axis.
+            ellipse(
+                [0.3, 0.3],
+                [0.115, 0.05],
+                PI / 2.0,
+                PI / 2.0 + 2.0 * PI - 0.55,
+            ),
+            ellipse([0.3, 0.3], [0.1, 0.1], 0.3, 2.0 * PI - 0.3),
+            ellipse([0.3, 0.3], [0.05, 0.1], 0.2, 2.0 * PI - 0.2),
+            ellipse_turns([0.3, 0.3], [0.1, 0.08], 2.0),
+            ellipse_turns([0.3, 0.3], [0.1, 0.1], 3.0),
+            ellipse_turns([0.3, 0.3], [0.1, 0.1], 5.0),
+        ];
+        for (i, points) in cases.iter().enumerate() {
+            assert_eq!(shape_of(&stroke(points, 0)), Shape::Circle, "case {i}");
+        }
+    }
+
+    /// A flat loop counts as a circle up to three times round (with drawing jitter), not four.
+    #[test]
+    fn flat_loops_count_up_to_three_turns() {
+        for turns in [1.0, 3.0] {
+            let points = ellipse_turns([0.3, 0.3], [0.12, 0.03], turns);
+            assert_eq!(shape_of(&stroke(&points, 0)), Shape::Circle, "{turns}");
+        }
+        let points = ellipse_turns([0.3, 0.3], [0.12, 0.03], 4.0);
+        assert_eq!(shape_of(&stroke(&points, 0)), Shape::Mark);
+    }
+
+    /// The loop search tries every few points of a long stroke as a loop's ends, but judges each
+    /// stretch by the whole recorded path, so sampling can't smooth away a zigzag or fold many
+    /// turns into one.
+    #[test]
+    fn sampling_a_long_stroke_hides_neither_zigzags_nor_turns() {
+        // 1,201 points: every third point is a smooth flat ellipse, the others zigzag across it.
+        let mut zigzag = Vec::new();
+        for i in 0..400 {
+            let a = 2.0 * PI * i as f32 / 400.0;
+            let p = [0.3 + 0.12 * a.cos(), 0.3 + 0.03 * a.sin()];
+            zigzag.extend([
+                p,
+                [p[0] + 0.004, p[1] + 0.008],
+                [p[0] - 0.004, p[1] - 0.008],
+            ]);
+        }
+        zigzag.push(zigzag[0]);
+        // 501 turns in 12,000 steps: every 24th point is a single turn.
+        let turns: Vec<_> = (0..=12_000)
+            .map(|k| {
+                let a = 1002.0 * PI * k as f32 / 12_000.0;
+                [0.3 + 0.12 * a.cos(), 0.3 + 0.03 * a.sin()]
+            })
+            .collect();
+        for (name, points) in [("zigzag", zigzag), ("501 turns", turns)] {
+            assert_eq!(shape_of(&stroke(&points, 0)), Shape::Mark, "{name}");
+        }
+    }
+
+    #[test]
+    fn one_stroke_arrows_with_one_or_two_barbs() {
+        for head in [
+            vec![[0.262, 0.236], [0.272, 0.275]],
+            vec![[0.26, 0.23], [0.3, 0.25], [0.27, 0.27]],
+        ] {
+            let mut corners = vec![[0.1, 0.3], [0.3, 0.25]];
+            corners.extend(head);
+            let mark = &marks_of(&[stroke(&polyline(&corners), 0)])[0];
+            assert_eq!(mark.shape, Shape::Arrow, "{corners:?}");
+            assert_eq!(mark.from, Some([0.1, 0.3]));
+            let to = mark.to.unwrap();
+            assert!((to[0] - 0.3).abs() < 0.001 && (to[1] - 0.25).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn ticks_zigzags_scribbles_hooks_and_arcs_are_not_arrows_or_circles() {
+        // Back and forth over a line of text, drifting up and down: briefly, and for ten seconds
+        // (which closes on itself and fills its box, so only its length tells it from a circle).
+        let scribble = |n: usize| -> Vec<_> {
+            (0..n)
+                .map(|i| {
+                    let i = i as f32;
+                    [0.2 + 0.1 * (0.9 * i).sin(), 0.2 + 0.022 * (0.37 * i).sin()]
+                })
+                .collect()
+        };
+        let cases = [
+            (
+                "check mark",
+                polyline(&[[0.1, 0.2], [0.13, 0.24], [0.22, 0.12]]),
+            ),
+            ("V", polyline(&[[0.1, 0.1], [0.15, 0.25], [0.2, 0.1]])),
+            (
+                "narrow V",
+                polyline(&[[0.1, 0.1], [0.13, 0.25], [0.16, 0.1]]),
+            ),
+            (
+                "zigzag",
+                polyline(&[
+                    [0.1, 0.2],
+                    [0.13, 0.16],
+                    [0.16, 0.2],
+                    [0.19, 0.16],
+                    [0.22, 0.2],
+                ]),
+            ),
+            (
+                "back and forth",
+                polyline(&[
+                    [0.1, 0.2],
+                    [0.3, 0.21],
+                    [0.11, 0.225],
+                    [0.3, 0.24],
+                    [0.11, 0.255],
+                ]),
+            ),
+            ("scribble", scribble(60)),
+            ("long scribble", scribble(600)),
+            (
+                "hooked underline",
+                polyline(&[[0.1, 0.3], [0.4, 0.3], [0.405, 0.27]]),
+            ),
+            (
+                "curled underline",
+                polyline(&[
+                    [0.1, 0.3],
+                    [0.4, 0.3],
+                    [0.415, 0.29],
+                    [0.415, 0.275],
+                    [0.4, 0.265],
+                ]),
+            ),
+            (
+                "one-sided barb",
+                polyline(&[[0.1, 0.3], [0.3, 0.25], [0.26, 0.24]]),
+            ),
+            ("line", polyline(&[[0.1, 0.3], [0.4, 0.3]])),
+            ("C", ellipse([0.3, 0.3], [0.1, 0.1], PI / 4.0, 1.75 * PI)),
+            (
+                "flat C",
+                ellipse([0.3, 0.3], [0.1, 0.025], 0.8, 2.0 * PI - 0.8),
+            ),
+        ];
+        for (name, points) in cases {
+            let shape = shape_of(&stroke(&points, 0));
+            assert!(
+                !matches!(shape, Shape::Arrow | Shape::Circle),
+                "{name} became {shape:?}"
             );
         }
     }

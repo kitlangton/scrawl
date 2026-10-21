@@ -5,8 +5,9 @@
 //! media goes to the Trash and the prompt stays; after `bundleDays` the whole bundle goes. Both
 //! live under `"retention"` in `~/.config/scrawl/config.json` (`null` keeps forever). A bundle
 //! younger than a day or changed within the last day, one whose media is still copying
-//! (`.media-pending`, `.media-sending`), one Scrawl is working on, a pinned one (`.pinned`), and
-//! one still waiting to reach OpenCode (`.deliver.json`) are never touched.
+//! (`.media-pending`, `.media-sending`), one Scrawl is working on, a pinned one (`.pinned`), one
+//! still waiting to reach OpenCode (`.deliver.json`), and one `scrawl recover` hasn't built yet
+//! are never touched.
 //!
 //! Cabled-iPhone videos are also re-encoded to HEVC at the size keyframes use (`shrink`), which
 //! makes them about ten times smaller.
@@ -276,6 +277,7 @@ pub fn plan(captures: &Path, policy: &Policy, now: SystemTime) -> Vec<Action> {
         if dir.join(PINNED).exists()
             || dir.join(crate::delivery::PENDING).exists()
             || is_claimed(&dir)
+            || crate::recover::owed(&dir)
             || live_marker(&dir, crate::handoff::MEDIA_PENDING, now)
             || live_marker(&dir, MEDIA_SENDING, now)
         {

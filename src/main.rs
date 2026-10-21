@@ -11,13 +11,13 @@ mod autocrop_lab;
 mod capture;
 #[cfg_attr(target_os = "windows", path = "win/command_line.rs")]
 mod command_line;
+mod command_transcriber;
 mod delivery;
 mod export;
 mod handoff;
 #[cfg_attr(target_os = "windows", path = "win/helper.rs")]
 mod helper;
 mod hex;
-mod hold;
 mod icons;
 mod inbox;
 mod keyframes;
@@ -31,6 +31,9 @@ mod onboarding;
 mod onboarding_window;
 mod page;
 mod phone;
+// Lowers the output volume while recording on macOS; elsewhere a no-op.
+#[cfg_attr(not(target_os = "macos"), path = "win/playback.rs")]
+mod playback;
 mod recover;
 mod render;
 mod retention;
@@ -38,6 +41,7 @@ mod routing;
 mod screens;
 mod settings;
 mod settings_window;
+mod shortcut;
 mod sketch;
 #[cfg(target_os = "macos")]
 mod sparkle;
@@ -79,13 +83,27 @@ struct Cli {
 }
 
 fn parse_engine(name: &str) -> Result<crate::transcribe::Engine, String> {
-    crate::transcribe::Engine::parse(name).ok_or_else(|| "expected `apple` or `hex`".to_owned())
+    crate::transcribe::Engine::parse(name)
+        .ok_or_else(|| "expected `apple`, `hex` or `command`".to_owned())
 }
 
 /// `scrawl hex status`: connection, models and what the next recording would use.
 fn hex_status() {
     let preferred = transcribe::Engine::configured();
     println!("Preferred transcriber: {}", preferred.name());
+    // Never runs the program; argv is not printed.
+    let command = handoff::transcribe_command();
+    if preferred == transcribe::Engine::Command {
+        match &command {
+            Ok(program) => println!("Command: {}", program.name()),
+            Err(unusable) => println!("Command: not usable ({unusable})"),
+        }
+    }
+    let next = |hex_model: Option<&str>| match (preferred, hex_model, &command) {
+        (transcribe::Engine::Command, _, Ok(program)) => format!("Command ({})", program.name()),
+        (transcribe::Engine::Hex, Some(model), _) => format!("Hex ({model})"),
+        _ => transcribe::LOCAL_ENGINE_TITLE.to_owned(),
+    };
     let configured = handoff::hex_model();
     println!(
         "Hex model setting: {}",
@@ -96,7 +114,7 @@ fn hex_status() {
         Ok(status) => status,
         Err(error) => {
             println!("Hex: not connected ({error:#})");
-            println!("Next recording uses: {}", transcribe::LOCAL_ENGINE_TITLE);
+            println!("Next recording uses: {}", next(None));
             return;
         }
     };
@@ -114,13 +132,7 @@ fn hex_status() {
         "Hex model in use: {}",
         chosen.as_deref().unwrap_or("none ready")
     );
-    println!(
-        "Next recording uses: {}",
-        match (preferred, chosen) {
-            (transcribe::Engine::Hex, Some(model)) => format!("Hex ({model})"),
-            _ => transcribe::LOCAL_ENGINE_TITLE.to_owned(),
-        }
-    );
+    println!("Next recording uses: {}", next(chosen.as_deref()));
 }
 
 #[derive(Subcommand)]
@@ -161,7 +173,7 @@ enum HexCommand {
 
 #[derive(Subcommand)]
 enum LabCommand {
-    /// Play a capsule scene: tap-then-area, tap-then-window, tap-then-screen, hold-then-pick, finish.
+    /// Play a capsule scene: tap-then-area, tap-then-window, tap-then-screen, picker, finish.
     Pill {
         #[arg(value_enum)]
         scene: ui::LabScene,
@@ -248,7 +260,7 @@ enum Command {
         /// Copy the summary to the clipboard.
         #[arg(long)]
         clipboard: bool,
-        /// Transcribe with `apple` or `hex` instead of the configured transcriber.
+        /// Transcribe with `apple`, `hex` or `command` instead of the configured transcriber.
         #[arg(long, value_parser = parse_engine)]
         transcriber: Option<crate::transcribe::Engine>,
     },
@@ -286,7 +298,7 @@ enum Command {
         /// many times real time first, as if recording, so the finish only transcribes the tail.
         #[arg(long, hide = true, requires = "bench")]
         live_speed: Option<f64>,
-        /// Transcribe with `apple` or `hex` instead of the configured transcriber.
+        /// Transcribe with `apple`, `hex` or `command` instead of the configured transcriber.
         #[arg(long, value_parser = parse_engine)]
         transcriber: Option<crate::transcribe::Engine>,
         /// Turn an experiment on for this run, as `"experiments"` in `config.json` would
@@ -294,12 +306,14 @@ enum Command {
         #[arg(long = "experiment", value_name = "NAME")]
         experiments: Vec<String>,
     },
-    /// Build the bundles whose build died with the app (`unfinished.json`, no `scrawl.json`) from
-    /// their video, audio and input log, in place, once each. The app runs it at launch.
-    #[command(hide = true)]
+    /// Build the bundles whose build died with the app (no `scrawl.json`) in place, once each:
+    /// from their input log (`unfinished.json`) if they have one, else from `recording.mp4` and
+    /// `audio.wav` alone. The app runs it at launch.
     Recover {
+        /// One bundle to build now, even if it was tried before.
+        bundle: Option<PathBuf>,
         /// Captures folder (defaults to Scrawl's).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "bundle")]
         captures: Option<PathBuf>,
     },
     /// Motion lab: replay the capsule's states on a fixed timeline with nothing captured, for
@@ -810,8 +824,18 @@ pub fn movie_frames_at(
     offset_ms: u64,
     max_edge: u32,
 ) -> Result<Vec<RgbaFrame>> {
+    movie_frames_at_with(helper::frames, movie, times, offset_ms, max_edge)
+}
+
+fn movie_frames_at_with(
+    decode: fn(&Path, helper::FrameTimes, u32) -> Result<Vec<RgbaFrame>>,
+    movie: &Path,
+    times: &[u64],
+    offset_ms: u64,
+    max_edge: u32,
+) -> Result<Vec<RgbaFrame>> {
     let at: Vec<u64> = times.iter().map(|t| t.saturating_sub(offset_ms)).collect();
-    let mut frames = helper::frames(movie, helper::FrameTimes::At(&at), max_edge)?;
+    let mut frames = decode(movie, helper::FrameTimes::At(&at), max_edge)?;
     // The helper stamps each frame with the time it was asked for, clamped to the movie (the
     // last keyframe can fall just past its end); map it back to the bundle time.
     for frame in &mut frames {
@@ -966,6 +990,16 @@ pub fn finalize_capture_bundle(
 /// Builds a Screen capture's bundle in `out`, which holds its video and `audio.wav`, from them
 /// and what the recording logged: `scrawl reprocess` and `scrawl recover`.
 pub fn rebuild_screen_bundle(out: &Path, old: recover::Unfinished) -> Result<String> {
+    rebuild_screen_bundle_with(out, old, None, &recover::Media::SYSTEM)
+}
+
+/// `autocrop` as in `SourceExtras`: `None` follows the config, `Some(None)` keeps the whole frame.
+pub fn rebuild_screen_bundle_with(
+    out: &Path,
+    old: recover::Unfinished,
+    autocrop: Option<Option<autocrop::Settings>>,
+    media: &recover::Media,
+) -> Result<String> {
     let started_at = std::time::Instant::now();
     let video = old
         .video
@@ -983,12 +1017,11 @@ pub fn rebuild_screen_bundle(out: &Path, old: recover::Unfinished) -> Result<Str
     let ((transcript, transcribe_ms), joined) = std::thread::scope(|scope| {
         let frames = scope.spawn(|| {
             let t0 = std::time::Instant::now();
-            let res = helper::frames(&video, helper::FrameTimes::Every(220), 640);
+            let res = (media.frames)(&video, helper::FrameTimes::Every(220), 640);
             (res, t0.elapsed().as_millis() as u64)
         });
         let t0 = std::time::Instant::now();
-        let tr =
-            transcribe::transcribe(recorded.as_ref().map(|_| wav.as_path()), recorded.as_ref());
+        let tr = (media.transcribe)(recorded.as_ref().map(|_| wav.as_path()), recorded.as_ref());
         ((tr, t0.elapsed().as_millis() as u64), frames.join())
     });
     let (frames, candidates_ms) = joined.map_err(|_| anyhow::anyhow!("Frame decoding panicked"))?;
@@ -996,7 +1029,10 @@ pub fn rebuild_screen_bundle(out: &Path, old: recover::Unfinished) -> Result<Str
     for frame in &mut frames {
         frame.t_ms += offset;
     }
-    let full_frames = Some(movie_keyframes(video.clone(), offset));
+    let (decode, movie) = (media.frames, video.clone());
+    let full_frames: Option<FullFrames> = Some(Box::new(move |times: &[u64]| {
+        movie_frames_at_with(decode, &movie, times, offset, 0)
+    }));
     Ok(build_bundle_from_parts(
         out,
         old.target,
@@ -1015,6 +1051,7 @@ pub fn rebuild_screen_bundle(out: &Path, old: recover::Unfinished) -> Result<Str
             },
             full_frames,
             video_offset_ms: offset,
+            autocrop,
             timings: StageTimings {
                 started_at: Some(started_at),
                 candidates_ms: Some(candidates_ms),
@@ -1599,6 +1636,7 @@ fn main() -> Result<()> {
                     .ok()
                     .and_then(|mut d| d.drain(..).next().map(|p| p.id))
             });
+            let playback = playback::Guard::start();
             let session = phone::PhoneSession::start(
                 &bundle_dir.join("recording.mov"),
                 dev_id.as_deref(),
@@ -1616,6 +1654,7 @@ fn main() -> Result<()> {
             while !session.has_ended() && record_started.elapsed() < target_dur {
                 std::thread::sleep(Duration::from_millis(50));
             }
+            drop(playback);
             let recording = session.stop()?;
             let (_dir, _bundle, summary) =
                 phone::finalize_live_capture(&bundle_dir, recording, Vec::new(), Vec::new(), note)?;
@@ -1635,6 +1674,7 @@ fn main() -> Result<()> {
             });
             std::fs::create_dir_all(&bundle_dir)?;
             let video_path = bundle_dir.join("recording.mp4");
+            let playback = playback::Guard::start();
             let audio = AudioRecorder::start().ok();
             let session = ScreenCaptureSession::start(
                 target.clone(),
@@ -1649,6 +1689,7 @@ fn main() -> Result<()> {
                 )
             });
             std::thread::sleep(Duration::from_secs(duration.max(1)));
+            drop(playback);
             let recording = session.stop();
             let activity = window_log
                 .map(windows::WindowLogger::stop)
@@ -1925,7 +1966,17 @@ fn main() -> Result<()> {
             print!("{summary}");
             Ok(())
         }
-        Command::Recover { captures } => {
+        Command::Recover {
+            bundle: Some(bundle),
+            ..
+        } => {
+            print!("{}", recover::rebuild(&bundle, &recover::Media::SYSTEM)?);
+            Ok(())
+        }
+        Command::Recover {
+            bundle: None,
+            captures,
+        } => {
             let captures = captures.unwrap_or_else(handoff::default_captures_dir);
             let results = recover::run(&captures);
             let failed = results.iter().filter(|(_, r)| r.is_err()).count();

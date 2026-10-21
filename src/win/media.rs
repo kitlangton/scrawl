@@ -615,6 +615,30 @@ impl Recorder {
     }
 }
 
+/// A movie of solid colours, each `(ms, rgb)` shown until the next, through the recorder's
+/// encoder. `width` and `height` must be multiples of 16.
+#[cfg(test)]
+pub fn write_test_movie(
+    path: &Path,
+    width: u32,
+    height: u32,
+    frames: &[(u64, [u8; 3])],
+) -> Result<()> {
+    media_startup();
+    let mut encoder = Encoder::new(path, width, height)?;
+    let pixels = (width * height) as usize;
+    for &(ms, [r, g, b]) in frames {
+        let (r, g, b) = (f64::from(r), f64::from(g), f64::from(b));
+        let y = (16.0 + 0.257 * r + 0.504 * g + 0.098 * b) as u8;
+        let u = (128.0 - 0.148 * r - 0.291 * g + 0.439 * b) as u8;
+        let v = (128.0 + 0.439 * r - 0.368 * g - 0.071 * b) as u8;
+        let mut nv12 = vec![y; pixels];
+        nv12.extend([u, v].repeat(pixels / 4));
+        encoder.write(&nv12, ms as i64 * 10_000)?;
+    }
+    encoder.finish()
+}
+
 /// The recording thread: see `crate::capture::Sampler`.
 pub fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
     media_startup();

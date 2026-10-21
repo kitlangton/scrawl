@@ -9,7 +9,7 @@
 //! command) and About.
 //!
 //! Shortcuts live under `"shortcuts"` (`{"record": {"keyCode", "modifiers", "label"}}`, Carbon
-//! modifier bits; absent means the default). While the window records one, Scrawl's hotkeys are
+//! modifier bits; absent means the default, and `"paste": null` turns paste off). While the window records one, Scrawl's hotkeys are
 //! paused (`capture::pause_shortcuts`) so the current combo reaches the recorder.
 
 use std::collections::BTreeSet;
@@ -83,8 +83,10 @@ impl Shortcuts {
         let mut shortcuts = Self::default();
         let stored = config.get("shortcuts");
         for kind in ShortcutKind::ALL {
-            if let Some(cfg) = stored
-                .and_then(|s| s.get(kind_key(kind)))
+            let value = stored.and_then(|s| s.get(kind_key(kind)));
+            if kind.can_unset() && value.is_some_and(serde_json::Value::is_null) {
+                shortcuts.set(kind, ShortcutConfig::unset());
+            } else if let Some(cfg) = value
                 .and_then(|v| serde_json::from_value::<Stored>(v.clone()).ok())
                 .and_then(|s| from_stored(kind, s))
             {
@@ -160,7 +162,7 @@ fn read_json(path: &Path) -> serde_json::Value {
         .unwrap_or_else(|| serde_json::json!({}))
 }
 
-/// Saves one shortcut; a default is removed rather than written.
+/// Saves one shortcut; a default is removed rather than written, and one turned off is `null`.
 pub fn save_shortcut(kind: ShortcutKind, cfg: &ShortcutConfig) {
     if let Err(error) = save_shortcut_in(&crate::handoff::default_config_path(), kind, cfg) {
         crate::capture::scrawl_log(format!("Saving the {kind:?} shortcut failed: {error:#}"));
@@ -180,6 +182,12 @@ pub fn save_shortcut_in(
     let map = shortcuts.as_object_mut().expect("an object");
     if cfg.is_default_for(kind) {
         map.remove(kind_key(kind));
+    } else if cfg.is_unset() {
+        anyhow::ensure!(
+            kind.can_unset(),
+            "the {kind:?} shortcut can't be turned off"
+        );
+        map.insert(kind_key(kind).to_owned(), serde_json::Value::Null);
     } else {
         map.insert(
             kind_key(kind).to_owned(),
@@ -193,13 +201,19 @@ pub fn save_shortcut_in(
     crate::handoff::set_config_value_in(path, "shortcuts", shortcuts)
 }
 
-/// The label of the paste shortcut, for hints (`⌥⇧V`, or `Alt+Shift+V`, unless changed).
+/// The label of the paste shortcut, for hints (`⌥⇧V`, or `Alt+Shift+V`, unless changed; "the
+/// paste shortcut" while it's off).
 pub fn paste_label() -> String {
-    PASTE_LABEL
+    let label = PASTE_LABEL
         .lock()
         .ok()
         .and_then(|label| label.clone())
-        .unwrap_or_else(|| ShortcutConfig::default_paste().label)
+        .unwrap_or_else(|| ShortcutConfig::default_paste().label);
+    if label.is_empty() {
+        "the paste shortcut".to_owned()
+    } else {
+        label
+    }
 }
 
 static PASTE_LABEL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -226,6 +240,22 @@ pub struct Pressed {
     #[serde(default)]
     pub reserved: bool,
 }
+
+impl Pressed {
+    /// Delete or forward delete with no modifier, which turns a shortcut off.
+    pub fn is_delete(&self) -> bool {
+        let modifiers = self.modifiers
+            & (CARBON_CMD_KEY | CARBON_CONTROL_KEY | CARBON_OPTION_KEY | CARBON_SHIFT_KEY);
+        modifiers == 0 && DELETE_KEYS.contains(&self.key_code)
+    }
+}
+
+#[cfg(target_os = "windows")]
+const DELETE_KEYS: [u32; 2] = [0x08, 0x2E];
+
+/// `kVK_Delete`, `kVK_ForwardDelete`.
+#[cfg(not(target_os = "windows"))]
+const DELETE_KEYS: [u32; 2] = [51, 117];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rejection {
@@ -594,6 +624,8 @@ pub struct View {
     pub shortcuts: Vec<ShortcutView>,
     pub microphone: MicrophoneView,
     pub transcriber: TranscriberView,
+    pub lower_playback: bool,
+    pub playback_level: u8,
     pub video_export: bool,
     pub retention: RetentionView,
     /// How much the captures folder takes, once measured.
@@ -709,6 +741,8 @@ pub struct ShortcutView {
     pub option: bool,
     pub command: bool,
     pub is_default: bool,
+    /// It can be turned off (paste); `label` is empty while it is.
+    pub clearable: bool,
     /// The recorder is waiting for a new combination.
     pub recording: bool,
     /// Why the last combination was turned down.
@@ -792,12 +826,16 @@ fn microphone_view(
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriberView {
-    /// What recordings use now: "apple" or "hex".
+    /// What recordings use now: "apple", "hex" or "command".
     pub engine: &'static str,
     pub hex_title: &'static str,
     pub hex_enabled: bool,
     pub language: String,
+    pub apple_locale: String,
     pub models: Vec<ModelView>,
+    /// The program's file name while `transcribeCommand` is usable (read, never run); Command
+    /// is offered only then.
+    pub command: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -882,6 +920,7 @@ fn shortcut_view(
         option: mods & CARBON_OPTION_KEY != 0,
         command: mods & CARBON_CMD_KEY != 0,
         is_default: cfg.is_default_for(kind),
+        clearable: kind.can_unset(),
         recording,
         error: error.cloned(),
     }
@@ -895,6 +934,8 @@ fn shortcut_view(
 pub enum Action {
     /// A settings control: `launchAtLogin`, `autoSend`, `videoExport` (bool), `microphone`
     /// ("default" or a device id), `transcriber` ("apple"/"hex"), `hexModel` (an id),
+    /// `hexLanguage` (a code), `appleLocale` (a locale id or "auto"), `retention` (a preset id).
+    /// ("default" or a device id), `transcriber` ("apple"/"hex"/"command"), `hexModel` (an id),
     /// `hexLanguage` (a code), `retention` (a preset id).
     Set {
         key: String,
@@ -913,6 +954,10 @@ pub enum Action {
     /// Esc, a click elsewhere, or the window losing focus.
     CancelShortcut,
     ResetShortcut {
+        kind: ShortcutKind,
+    },
+    /// The × beside the paste shortcut, or Delete while it records: no shortcut at all.
+    ClearShortcut {
         kind: ShortcutKind,
     },
     /// A permission row's button.
@@ -944,6 +989,8 @@ pub enum Effect {
     CheckForUpdates,
     /// The captures folder may have changed size.
     Measure,
+    /// The Apple Speech language changed.
+    SpeechModel,
     Relaunch,
     Tour,
     Close,
@@ -1013,6 +1060,10 @@ impl Panel {
                 }
                 self.stop_recording(host);
                 let mut shortcuts = host.shortcuts();
+                if kind.can_unset() && pressed.is_delete() {
+                    self.apply(kind, ShortcutConfig::unset(), &mut shortcuts, host);
+                    return Effect::None;
+                }
                 let other = match kind {
                     ShortcutKind::Record => &shortcuts.paste,
                     ShortcutKind::Paste => &shortcuts.record,
@@ -1027,6 +1078,14 @@ impl Panel {
                 self.stop_recording(host);
                 let mut shortcuts = host.shortcuts();
                 self.apply(kind, kind.default_config(), &mut shortcuts, host);
+                Effect::None
+            }
+            Action::ClearShortcut { kind } => {
+                self.stop_recording(host);
+                if kind.can_unset() {
+                    let mut shortcuts = host.shortcuts();
+                    self.apply(kind, ShortcutConfig::unset(), &mut shortcuts, host);
+                }
                 Effect::None
             }
             Action::Grant { permission } => self.grant(permission),
@@ -1109,7 +1168,14 @@ impl Panel {
                     return Effect::OpenLoginItems;
                 }
             }
-            ("autoSend" | "videoExport", serde_json::Value::Bool(on)) => write(key, (*on).into()),
+            ("autoSend" | "videoExport" | "lowerPlayback", serde_json::Value::Bool(on)) => {
+                write(key, (*on).into())
+            }
+            ("playbackLevel", serde_json::Value::Number(level))
+                if level.as_u64().is_some_and(|n| n <= 100) =>
+            {
+                write(key, value.clone());
+            }
             ("microphone", serde_json::Value::String(id)) => {
                 let inputs = self.inputs.clone().unwrap_or_default();
                 if let Err(error) = crate::mic::save_in(&path, id, &inputs) {
@@ -1129,6 +1195,17 @@ impl Panel {
             ("hexLanguage", serde_json::Value::String(language)) => {
                 if let Some(language) = crate::hex::language_code(language) {
                     write("hexLanguage", language.into());
+                }
+            }
+            ("appleLocale", serde_json::Value::String(locale)) => {
+                let locale = locale.trim();
+                if locale.is_empty() || locale.eq_ignore_ascii_case("auto") {
+                    write("appleLocale", serde_json::Value::Null);
+                    return Effect::SpeechModel;
+                }
+                if let Some(locale) = crate::speech_model::locale_id(locale) {
+                    write("appleLocale", locale.into());
+                    return Effect::SpeechModel;
                 }
             }
             ("retention", serde_json::Value::String(id)) => {
@@ -1183,6 +1260,9 @@ impl Panel {
             .and_then(crate::transcribe::Engine::parse)
             .unwrap_or_default();
         let menu = crate::transcribe::menu_state(engine, hex.as_ref(), config.hex_model.as_deref());
+        let command = crate::command_transcriber::Program::load_from(&host.config_path())
+            .ok()
+            .map(|program| program.name());
         let policy = crate::retention::Policy::load_from(&host.config_path());
         let login = login_item();
         // Windows asks for no screen or accessibility grant, and has no cabled iPhone.
@@ -1194,6 +1274,7 @@ impl Panel {
                 Permission::Microphone,
                 Permission::Accessibility,
                 Permission::Camera,
+                Permission::SpeechRecognition,
             ]
         };
         View {
@@ -1225,16 +1306,25 @@ impl Panel {
                 self.inputs.as_ref(),
                 self.status(Permission::Microphone) == Status::Granted,
             ),
+            lower_playback: config.lower_playback.unwrap_or(false),
+            playback_level: config.recording_volume(),
             transcriber: TranscriberView {
-                engine: if menu.hex_checked { "hex" } else { "apple" },
+                engine: match engine {
+                    crate::transcribe::Engine::Command if command.is_some() => "command",
+                    _ if menu.hex_checked => "hex",
+                    _ => "apple",
+                },
                 hex_title: menu.hex_title,
                 hex_enabled: menu.hex_enabled,
                 language: crate::handoff::hex_language_from(&config),
+                apple_locale: crate::handoff::apple_locale_from(&config)
+                    .unwrap_or_else(|| "auto".into()),
                 models: menu
                     .models
                     .into_iter()
                     .map(|(id, title, chosen)| ModelView { id, title, chosen })
                     .collect(),
+                command,
             },
             video_export: config.video_export.unwrap_or(false),
             retention: RetentionView {
@@ -1251,6 +1341,7 @@ impl Panel {
             captures_size: self.captures_size.map(crate::retention::format_bytes),
             permissions: order
                 .iter()
+                .filter(|p| p.asked(self.grants.as_ref()))
                 .map(|&permission| PermissionView {
                     permission,
                     status: self.status(permission),
@@ -1527,6 +1618,10 @@ impl Session {
                         crate::retention::captures_size(&crate::handoff::default_captures_dir());
                     events(Event::CapturesSize(size));
                 });
+                Effect::None
+            }
+            Effect::SpeechModel => {
+                crate::speech_model::restart();
                 Effect::None
             }
             other => other,
@@ -2039,6 +2134,122 @@ mod tests {
     }
 
     #[test]
+    fn the_paste_shortcut_can_be_turned_off_and_back_on() {
+        let dir = TempDir::new("clear");
+        let mut host = fake(&dir);
+        let mut panel = Panel::default();
+        std::fs::write(&host.path, r#"{"ingestToken":"secret"}"#).unwrap();
+        panel.on(
+            Action::ClearShortcut {
+                kind: ShortcutKind::Paste,
+            },
+            &mut host,
+        );
+        assert!(host.shortcuts.paste.is_unset());
+        assert!(host.shortcuts.record.is_default_for(ShortcutKind::Record));
+        let config = read_json(&host.path);
+        assert!(config["shortcuts"]["paste"].is_null());
+        assert!(config["shortcuts"].get("paste").is_some(), "stored as null");
+        assert_eq!(config["ingestToken"], "secret");
+        let (loaded, _) = Shortcuts::load_from(&host.path, &dir.0.join("legacy.json"));
+        assert!(loaded.paste.is_unset());
+        assert!(loaded.record.is_default_for(ShortcutKind::Record));
+
+        let view = panel.view(&host);
+        let paste = &view.shortcuts[1];
+        assert_eq!((paste.label.as_str(), paste.key.as_str()), ("", ""));
+        assert!(paste.clearable && !paste.is_default);
+        assert!(!(paste.shift || paste.control || paste.option || paste.command));
+        assert!(!view.shortcuts[0].clearable);
+
+        // Nothing is registered for it and no key press matches it.
+        assert!(crate::capture::hotkey_combos(ShortcutKind::Paste, &loaded.paste).is_empty());
+        assert!(!crate::capture::shortcut_matches(
+            ShortcutKind::Paste,
+            &loaded.paste,
+            V as u16,
+            V as u16,
+            false,
+            false,
+            true,
+            true,
+        ));
+
+        // With paste off, any combination is free for Record, and Reset brings ⌥⇧V back.
+        let free = validate(
+            ShortcutKind::Record,
+            &pressed(R, CARBON_CONTROL_KEY | CARBON_OPTION_KEY, "r"),
+            &host.shortcuts.paste,
+        );
+        assert_eq!(free.map(|c| c.label), Ok(label(CTRL_OPT, "R")));
+        panel.on(
+            Action::ResetShortcut {
+                kind: ShortcutKind::Paste,
+            },
+            &mut host,
+        );
+        assert!(host.shortcuts.paste.is_default_for(ShortcutKind::Paste));
+        assert!(read_json(&host.path)["shortcuts"].get("paste").is_none());
+    }
+
+    #[test]
+    fn delete_while_recording_turns_paste_off_but_never_record() {
+        let dir = TempDir::new("clear-delete");
+        let mut host = fake(&dir);
+        let mut panel = Panel::default();
+        let delete = if WIN { 0x08 } else { 51 };
+        let press = |panel: &mut Panel, host: &mut Fake, kind: ShortcutKind, p: Pressed| {
+            panel.on(Action::RecordShortcut { kind }, host);
+            panel.on(Action::Shortcut { kind, pressed: p }, host);
+        };
+        press(
+            &mut panel,
+            &mut host,
+            ShortcutKind::Record,
+            pressed(delete, 0, ""),
+        );
+        assert_eq!(host.shortcuts, Shortcuts::default());
+        assert_eq!(
+            panel.view(&host).shortcuts[0].error,
+            Some(Rejection::NoModifier.message())
+        );
+        panel.on(
+            Action::ClearShortcut {
+                kind: ShortcutKind::Record,
+            },
+            &mut host,
+        );
+        assert_eq!(host.shortcuts, Shortcuts::default());
+        assert!(!host.path.exists(), "nothing saved");
+        assert!(
+            save_shortcut_in(&host.path, ShortcutKind::Record, &ShortcutConfig::unset()).is_err()
+        );
+        // A `null` record shortcut written by hand is read as the default.
+        std::fs::write(&host.path, r#"{"shortcuts":{"record":null}}"#).unwrap();
+        let (loaded, _) = Shortcuts::load_from(&host.path, &dir.0.join("legacy.json"));
+        assert_eq!(loaded, Shortcuts::default());
+        std::fs::remove_file(&host.path).unwrap();
+
+        press(
+            &mut panel,
+            &mut host,
+            ShortcutKind::Paste,
+            pressed(delete, CARBON_OPTION_KEY, ""),
+        );
+        assert!(!host.shortcuts.paste.is_unset(), "⌥⌫ is a combination");
+        press(
+            &mut panel,
+            &mut host,
+            ShortcutKind::Paste,
+            pressed(delete, 0, ""),
+        );
+        assert!(host.shortcuts.paste.is_unset());
+        assert_eq!(panel.recording(), None);
+        assert_eq!(host.paused.last(), Some(&false));
+        assert!(panel.view(&host).shortcuts[1].error.is_none());
+    }
+
+    #[test]
     fn toggles_and_popups_write_their_keys() {
         let dir = TempDir::new("set");
         let mut host = fake(&dir);
@@ -2054,6 +2265,15 @@ mod tests {
             )
         };
         assert!(panel.view(&host).auto_send);
+        assert!(!panel.view(&host).lower_playback);
+        assert_eq!(panel.view(&host).playback_level, 20);
+        set(&mut panel, &mut host, "lowerPlayback", true.into());
+        set(&mut panel, &mut host, "playbackLevel", 35.into());
+        set(&mut panel, &mut host, "playbackLevel", 101.into());
+        set(&mut panel, &mut host, "playbackLevel", (-1).into());
+        set(&mut panel, &mut host, "playbackLevel", 0.5.into());
+        assert!(Panel::default().view(&host).lower_playback);
+        assert_eq!(Panel::default().view(&host).playback_level, 35);
         set(&mut panel, &mut host, "autoSend", false.into());
         set(&mut panel, &mut host, "videoExport", true.into());
         set(&mut panel, &mut host, "transcriber", "hex".into());
@@ -2091,6 +2311,24 @@ mod tests {
         assert_eq!(panel.view(&host).transcriber.language, "auto");
         set(&mut panel, &mut host, "hexLanguage", "".into());
         assert_eq!(panel.view(&host).transcriber.language, "en");
+        assert_eq!(panel.view(&host).transcriber.apple_locale, "auto");
+        assert_eq!(
+            set(&mut panel, &mut host, "appleLocale", "zh-TW".into()),
+            Effect::SpeechModel
+        );
+        assert_eq!(read_json(&host.path)["appleLocale"], "zh-TW");
+        assert_eq!(panel.view(&host).transcriber.apple_locale, "zh-TW");
+        assert_eq!(
+            set(&mut panel, &mut host, "appleLocale", "zh-TW --install".into()),
+            Effect::None
+        );
+        assert_eq!(read_json(&host.path)["appleLocale"], "zh-TW");
+        assert_eq!(
+            set(&mut panel, &mut host, "appleLocale", "auto".into()),
+            Effect::SpeechModel
+        );
+        assert!(read_json(&host.path).get("appleLocale").is_none());
+        assert_eq!(panel.view(&host).transcriber.apple_locale, "auto");
         set(&mut panel, &mut host, "retention", "forever".into());
         // "Forever" says it all; no caption.
         assert_eq!(panel.view(&host).retention.note, "");
@@ -2194,6 +2432,36 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn command_shows_only_while_it_is_configured() {
+        let dir = TempDir::new("command");
+        let mut host = fake(&dir);
+        let mut panel = Panel::default();
+        std::fs::write(&host.path, r#"{"transcriber":"command"}"#).unwrap();
+        let view = panel.view(&host).transcriber;
+        assert_eq!((view.engine, view.command), ("apple", None));
+
+        std::fs::write(
+            &host.path,
+            r#"{"transcriber":"apple","transcribeCommand":["/opt/stt/whisper-scrawl","{audio}"]}"#,
+        )
+        .unwrap();
+        let view = panel.view(&host).transcriber;
+        assert_eq!(view.engine, "apple");
+        assert_eq!(view.command.as_deref(), Some("whisper-scrawl"));
+
+        panel.on(
+            Action::Set {
+                key: "transcriber".into(),
+                value: "command".into(),
+            },
+            &mut host,
+        );
+        assert_eq!(read_json(&host.path)["transcriber"], "command");
+        assert_eq!(panel.view(&host).transcriber.engine, "command");
+    }
+
+    #[test]
     fn permission_rows_ask_once_then_open_settings() {
         let dir = TempDir::new("grant");
         let mut host = fake(&dir);
@@ -2277,6 +2545,12 @@ mod tests {
             parse(r#"{"action":"record-shortcut","kind":"record"}"#),
             Action::RecordShortcut {
                 kind: ShortcutKind::Record
+            }
+        );
+        assert_eq!(
+            parse(r#"{"action":"clear-shortcut","kind":"paste"}"#),
+            Action::ClearShortcut {
+                kind: ShortcutKind::Paste
             }
         );
         assert_eq!(

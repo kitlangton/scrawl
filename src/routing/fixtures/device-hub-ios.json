@@ -1,0 +1,457 @@
+{
+ "capture": "scrawl-1792518491486-15cec-52.scrawl",
+ "savedDecision": "keep",
+ "bundle": {
+  "version": 1,
+  "id": "scrawl-1792518491486-15cec-52",
+  "createdAtMs": 1792518519092,
+  "durationMs": 27277,
+  "target": {
+   "mode": "display",
+   "app": "Device Hub",
+   "bundleId": "com.apple.dt.Devices",
+   "displayId": 3,
+   "frame": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 2560.0,
+    "height": 1440.0,
+    "scale": 2.0
+   }
+  },
+  "transcript": {
+   "source": "speech-analyzer",
+   "text": "I also want to test in this simulator, the new model picker, so we can do both. Because this is the old one. Definitely has issues. You can just see here, like, Um, why is that line there? Like, why are there no other models too when you have the simulator, show more models? And why is it fixture and recent? I guess that makes sense because it's just a fixed one. Yeah, we need more realistic models.",
+   "segments": []
+  },
+  "strokes": [],
+  "marks": [
+   {
+    "id": "m1",
+    "strokes": [
+     0
+    ],
+    "t0": 1883,
+    "t1": 2178,
+    "boxNorm": [
+     0.758,
+     0.7343,
+     0.8124,
+     0.7651
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.76\u20130.81, y 0.73\u20130.77 over group \u201cdismiss popup\u201d #PopoverDismissRegion",
+    "on": "group \u201cdismiss popup\u201d #PopoverDismissRegion"
+   },
+   {
+    "id": "m2",
+    "strokes": [
+     1
+    ],
+    "t0": 3400,
+    "t1": 3649,
+    "boxNorm": [
+     0.7418,
+     0.7824,
+     0.7772,
+     0.795
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.74\u20130.78, y 0.78\u20130.80 over \u201cGroup #transcript-list\u201d",
+    "on": "Group #transcript-list"
+   },
+   {
+    "id": "m3",
+    "strokes": [
+     2
+    ],
+    "t0": 11602,
+    "t1": 12140,
+    "boxNorm": [
+     0.7238,
+     0.7335,
+     0.8516,
+     0.7594
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.72\u20130.85, y 0.73\u20130.76 over group \u201cdismiss popup\u201d #PopoverDismissRegion",
+    "on": "group \u201cdismiss popup\u201d #PopoverDismissRegion"
+   },
+   {
+    "id": "m4",
+    "strokes": [
+     3,
+     4
+    ],
+    "t0": 13884,
+    "t1": 14967,
+    "boxNorm": [
+     0.7349,
+     0.6586,
+     0.8121,
+     0.8332
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.73\u20130.81, y 0.66\u20130.83 (2 strokes) over group \u201cdismiss popup\u201d #PopoverDismissRegion",
+    "on": "group \u201cdismiss popup\u201d #PopoverDismissRegion"
+   },
+   {
+    "id": "m5",
+    "strokes": [
+     5,
+     6,
+     7
+    ],
+    "t0": 19869,
+    "t1": 22337,
+    "boxNorm": [
+     0.7569,
+     0.5769,
+     0.7978,
+     0.7346
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.76\u20130.80, y 0.58\u20130.73 (3 strokes) over group \u201cdismiss popup\u201d #PopoverDismissRegion",
+    "on": "group \u201cdismiss popup\u201d #PopoverDismissRegion"
+   },
+   {
+    "id": "m6",
+    "strokes": [
+     8
+    ],
+    "t0": 23965,
+    "t1": 24302,
+    "boxNorm": [
+     0.7459,
+     0.6275,
+     0.7953,
+     0.73
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.75\u20130.80, y 0.63\u20130.73 over group \u201cdismiss popup\u201d #PopoverDismissRegion",
+    "on": "group \u201cdismiss popup\u201d #PopoverDismissRegion"
+   }
+  ],
+  "events": [
+   {
+    "kind": "click",
+    "t": 1081,
+    "x": 0.76658326,
+    "y": 0.7845649,
+    "button": "left",
+    "label": "#transcript-list",
+    "role": "Group"
+   },
+   {
+    "kind": "click",
+    "t": 2578,
+    "x": 0.8470627,
+    "y": 0.53226453,
+    "button": "left",
+    "label": "\u201cdismiss popup\u201d #PopoverDismissRegion",
+    "role": "group"
+   },
+   {
+    "kind": "click",
+    "t": 4062,
+    "x": 0.7526611,
+    "y": 0.7889404,
+    "button": "left",
+    "label": "#transcript-list",
+    "role": "Group"
+   },
+   {
+    "kind": "click",
+    "t": 5202,
+    "x": 0.77910155,
+    "y": 0.60714245,
+    "button": "left",
+    "label": "\u201cdismiss popup\u201d #PopoverDismissRegion",
+    "role": "group"
+   },
+   {
+    "kind": "click",
+    "t": 5483,
+    "x": 0.7846649,
+    "y": 0.6382677,
+    "button": "left",
+    "label": "\u201cOpen attached image 1 of 2\u201d",
+    "role": "button"
+   },
+   {
+    "kind": "click",
+    "t": 6099,
+    "x": 0.7453171,
+    "y": 0.80118275,
+    "button": "left"
+   },
+   {
+    "kind": "click",
+    "t": 7133,
+    "x": 0.75083464,
+    "y": 0.7235026,
+    "button": "left",
+    "label": "\u201cdismiss popup\u201d #PopoverDismissRegion",
+    "role": "group"
+   },
+   {
+    "kind": "click",
+    "t": 8066,
+    "x": 0.7425598,
+    "y": 0.7918565,
+    "button": "left"
+   },
+   {
+    "kind": "click",
+    "t": 18928,
+    "x": 0.8108322,
+    "y": 0.68181694,
+    "button": "left",
+    "label": "\u201cdismiss popup\u201d #PopoverDismissRegion",
+    "role": "group"
+   },
+   {
+    "kind": "click",
+    "t": 25911,
+    "x": 0.84732515,
+    "y": 0.52182615,
+    "button": "left",
+    "label": "\u201cdismiss popup\u201d #PopoverDismissRegion",
+    "role": "group"
+   },
+   {
+    "kind": "click",
+    "t": 27186,
+    "x": 0.5449387,
+    "y": 0.0597385,
+    "button": "left",
+    "role": "group"
+   }
+  ],
+  "keyframes": [],
+  "contactSheet": "contact-sheet.png"
+ },
+ "evidence": {
+  "clues": [
+   {
+    "source": "speech",
+    "pointer": {
+     "kind": "words",
+     "words": []
+    },
+    "note": "said"
+   }
+  ],
+  "candidates": [
+   {
+    "id": "ses_f501e10c4ffedeySM4jnNIe3AD",
+    "title": "OPENCODE IOS",
+    "directory": "/Users/kit/code/open-source/opencode-ios-oc380-loading",
+    "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+    "updatedMs": 1792518514289,
+    "viewedMs": 1792518463010
+   },
+   {
+    "id": "ses_edb79c155ffeZ8eqFja5zoWOlX",
+    "title": "DESKTOP",
+    "directory": "/Users/kit/code/open-source/opencode",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792518449665,
+    "viewedMs": 1792518304501
+   },
+   {
+    "id": "ses_ed125b1feffeX5uSGJiGJJ0Zq1",
+    "title": "PROBLEMS",
+    "directory": "/Users/kit/code/worktrees/team-board/task-page",
+    "repo": "/Users/kit/code/worktrees/team-board/rewrite",
+    "updatedMs": 1792518167584,
+    "viewedMs": 1792516443667
+   },
+   {
+    "id": "ses_edb816b31ffe4B3nexhh9rqAJp",
+    "title": "SCRAWL",
+    "directory": "/Users/kit/code/open-source/scrawl",
+    "repo": "/Users/kit/code/open-source/scrawl",
+    "updatedMs": 1792518150815,
+    "viewedMs": 1792516152471
+   },
+   {
+    "id": "ses_eb96316daffevhidtO7Z4W583K",
+    "title": "FLIT",
+    "directory": "/Users/kit/code/open-source/flit",
+    "repo": "/Users/kit/code/open-source/flit",
+    "updatedMs": 1792517740252,
+    "viewedMs": 1792516638611
+   },
+   {
+    "id": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+    "title": "HOME",
+    "directory": "/Users/kit/code/home",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792517637780,
+    "viewedMs": 1792517637797
+   },
+   {
+    "id": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+    "title": "HEX",
+    "directory": "/Users/kit/code/open-source/hex",
+    "repo": "/Users/kit/code/open-source/hex",
+    "updatedMs": 1792517562887,
+    "viewedMs": 1792516474681
+   },
+   {
+    "id": "ses_eb97fd4bcffeuNORqi0lEBAC73",
+    "title": "KIT MOTION",
+    "directory": "/Users/kit/code/home/research/2026-10-16-motion-v3",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792517287091,
+    "viewedMs": 1792517287142
+   },
+   {
+    "id": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+    "title": "KNOBS",
+    "directory": "/Users/kit/code/open-source/knobs",
+    "repo": "/Users/kit/code/open-source/knobs",
+    "updatedMs": 1792516674330,
+    "viewedMs": 1792516127066
+   },
+   {
+    "id": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+    "title": "GAME ENGINE",
+    "directory": "/Users/kit/code/open-source/arcade",
+    "repo": "/Users/kit/code/open-source/arcade",
+    "updatedMs": 1792515941518,
+    "viewedMs": 1792515941551
+   },
+   {
+    "id": "ses_ec318a614ffeQvPht0qntUnIcP",
+    "title": "CANVAS",
+    "directory": "/Users/kit/code/open-source/gpu-gallery",
+    "repo": "/Users/kit/code/open-source/gpu-gallery",
+    "updatedMs": 1792480779856,
+    "viewedMs": 1792477150781
+   },
+   {
+    "id": "ses_f13460621ffeQz0u4Attrj4Z4l",
+    "title": "SLACKBOT",
+    "directory": "/Users/kit/code/open-source/opencode-slack",
+    "repo": "/Users/kit/code/open-source/opencode-slack",
+    "updatedMs": 1792478486144,
+    "viewedMs": 1792440889443
+   },
+   {
+    "id": "ses_ebd33f90bffer4eZZgeryssZt3",
+    "title": "SERVER VOICE",
+    "directory": "/Users/kit/worktrees/opencode/server-voice",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792478486119,
+    "viewedMs": 1792442360125
+   },
+   {
+    "id": "ses_f0c100c89ffeta4TCCxgTHFI2J",
+    "title": "UP DOWN APP",
+    "directory": "/Users/kit/code/open-source/life-hub-uikit",
+    "repo": "/Users/kit/code/open-source/life-hub-uikit",
+    "updatedMs": 1792454885370,
+    "viewedMs": 1792454885390
+   },
+   {
+    "id": "ses_ebea564f3ffeI16n54W8y9Mtyz",
+    "title": "CONSOLE VORTEX",
+    "directory": "/Users/kit/code/open-source/opencode-console",
+    "repo": "/Users/kit/code/open-source/opencode-console",
+    "updatedMs": 1792438810776,
+    "viewedMs": 1792438810783
+   },
+   {
+    "id": "ses_ead884a3dffephbfYhZ8yrShY4",
+    "title": "JEVAL",
+    "directory": "/Users/kit/code/home",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792436507580,
+    "viewedMs": 1792389692797
+   },
+   {
+    "id": "ses_ebe313af4ffex4Y5UKIvEiftzm",
+    "title": "OPENCODE CONSOLE",
+    "directory": "/Users/kit/code/open-source/opencode-console",
+    "repo": "/Users/kit/code/open-source/opencode-console",
+    "updatedMs": 1792431356040,
+    "viewedMs": 1792187291153
+   },
+   {
+    "id": "ses_eb480ee0affeghrrePfmjzMFLX",
+    "title": "Public-site audit fixes",
+    "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/lucky-rocket",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792429760607,
+    "viewedMs": 1792358813510
+   },
+   {
+    "id": "ses_eaf459a69ffeRF6Oq8hjTbVtvR",
+    "title": "MODEL PICKER",
+    "directory": "/Users/kit/code/open-source/opencode-ios-model-picker",
+    "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+    "updatedMs": 1792424967210,
+    "viewedMs": 1792363784492
+   },
+   {
+    "id": "ses_ead37e06cffeRfPkN2vrbdNWDs",
+    "title": "SCRAWL RECORDER",
+    "directory": "/Users/kit/code/open-source/scrawl",
+    "repo": "/Users/kit/code/open-source/scrawl",
+    "updatedMs": 1792391837251,
+    "viewedMs": 1792391837366
+   },
+   {
+    "id": "ses_eb4808112ffdq5ncWwmVhRPaRq",
+    "title": "SPR good to go?",
+    "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/quick-tiger",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792269008625,
+    "viewedMs": 1792268816383
+   },
+   {
+    "id": "ses_ec39487c0ffezso4grvaG2gs9n",
+    "title": "OPEN MONEY",
+    "directory": "/Users/kit/code/open-source/openmoney",
+    "repo": "/Users/kit/code/open-source/openmoney",
+    "updatedMs": 1792251233509,
+    "viewedMs": 1792251233513
+   },
+   {
+    "id": "ses_ebd58b4a3ffeOuHOBJ84IHoNGc",
+    "title": "DEADBOLT",
+    "directory": "/Users/kit/code/open-source/deadbolt",
+    "repo": "/Users/kit/code/open-source/deadbolt",
+    "updatedMs": 1792177126854,
+    "viewedMs": 1792172591104
+   },
+   {
+    "id": "ses_ec4dfeed7ffebmlNkG7QK04Tqq",
+    "title": "AI TALK",
+    "directory": "/Users/kit/code/open-source/ai-talk",
+    "repo": "/Users/kit/code/open-source/ai-talk",
+    "updatedMs": 1792171656850,
+    "viewedMs": 1792123145000
+   },
+   {
+    "id": "ses_ebef6c45fffevSGyuztH3R6AVp",
+    "title": "BROWSER CONTROL",
+    "directory": "/Users/kit/code/open-source/browser-control",
+    "repo": "/Users/kit/code/open-source/browser-control",
+    "updatedMs": 1792094949860,
+    "viewedMs": 1792094949875
+   },
+   {
+    "id": "ses_ec8ac0d73ffeYDTUgKZeuLdJ5X",
+    "title": "CHOOSER",
+    "directory": "/Users/kit/code/experiments/typescript/choose-gpu",
+    "repo": "/Users/kit/code/experiments/typescript/choose-gpu",
+    "updatedMs": 1791956676331,
+    "viewedMs": 1791953219243
+   }
+  ],
+  "nowMs": 1792518519092
+ }
+}

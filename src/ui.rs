@@ -101,8 +101,8 @@ impl Spring {
 // The capsule's springs and durations live in `motion::Tune` (defaults in `Tune::DEFAULT`, live
 // overrides from `~/.config/scrawl/tune.json` in debug builds; `scrawl tune`).
 //
-// Switch chips on a tap-started recording (`crate::hold::Reveal`). One shape: the recording pill
-// grows into the chip row and folds back. The width leads the morph palette (.42/.16 open,
+// Switch chips on a tap-started recording (`crate::shortcut::Reveal`). One shape: the recording
+// pill grows into the chip row and folds back. The width leads the morph palette (.42/.16 open,
 // .38/.08 close) on a slightly faster spring; the lead (dot + clock) stays pinned to the left
 // edge, and each trailing item fades in as the moving edge uncovers it, on the same frame. The
 // chips ↔ controls swap fades in place with a sine blur pulse (sharp at both ends) and no content
@@ -287,7 +287,7 @@ fn segment_width(window: &Window, mode: SelectionMode) -> f32 {
 }
 
 /// Widths of the items after a Recording capsule's divider: the switch chips while the reveal
-/// is open (`crate::hold::Reveal`), else Undo · Cancel · Finish.
+/// is open (`crate::shortcut::Reveal`), else Cancel · Finish.
 fn recording_trail_widths(window: &Window, chips: bool, iphone: bool) -> Vec<f32> {
     if chips {
         SelectionMode::available(iphone)
@@ -296,7 +296,6 @@ fn recording_trail_widths(window: &Window, chips: bool, iphone: bool) -> Vec<f32
             .collect()
     } else {
         vec![
-            chip_width(window, "Undo", FontWeight::MEDIUM),
             chip_width(window, "Cancel", FontWeight::MEDIUM),
             chip_width(window, "Finish", FontWeight::SEMIBOLD),
         ]
@@ -316,7 +315,7 @@ fn trail_keys(
             .map(|m| format!("chip:{}", m.label()))
             .collect()
     } else {
-        ["undo", "cancel", "finish"].map(String::from).to_vec()
+        ["cancel", "finish"].map(String::from).to_vec()
     };
     names
         .into_iter()
@@ -350,7 +349,7 @@ fn edge_alpha(inner_now: f32, x: f32, w: f32) -> f32 {
 }
 
 /// The switch chips' clock: the animation clock, so they stay open as long in slow motion
-/// (`motion::time_scale`). The shortcut keeps the real clock: it times a tap against a hold.
+/// (`motion::time_scale`).
 fn reveal_clock_ms() -> u64 {
     (motion::now() * 1000.0) as u64
 }
@@ -373,6 +372,7 @@ fn island_content_width(
     iphone: bool,
     chips: bool,
     completed_note: Option<&str>,
+    routes: &[String],
 ) -> f32 {
     let divider = 1.0 + 2.0 * DIVIDER_MX;
     let inner = match phase {
@@ -418,6 +418,10 @@ fn island_content_width(
                 + LEAD_TRAIL
                 + divider
                 + chip_width(window, "Paste", FontWeight::SEMIBOLD)
+                + routes
+                    .iter()
+                    .map(|label| chip_width(window, label, FontWeight::MEDIUM) + CHIP_GAP)
+                    .sum::<f32>()
                 + chip_width(window, "Inspect", FontWeight::MEDIUM)
                 + CHIP_H
                 + 3.0 * CHIP_GAP
@@ -669,6 +673,7 @@ impl ActiveRecording {
 pub struct ScrawlCoordinator {
     telemetry: Arc<SharedCaptureTelemetry>,
     active_recording: Option<ActiveRecording>,
+    playback: Option<crate::playback::Guard>,
     picker_metal_overlay: Option<LaserOverlay>,
     native_pill: Option<crate::native::pill::NativePill>,
     iphone_preview: Option<PhoneSession>,
@@ -687,8 +692,8 @@ pub struct ScrawlCoordinator {
     island_opacity: f32,
     /// Which width spring the current morph uses.
     island_morph: Morph,
-    /// Switch chips on a tap-started recording (`crate::hold::Reveal`).
-    reveal: crate::hold::Reveal,
+    /// Switch chips on a tap-started recording (`crate::shortcut::Reveal`).
+    reveal: crate::shortcut::Reveal,
     /// When the chips last opened or folded, for the in-place swap of the trailing group.
     reveal_since: f64,
     /// The trailing group fading out after that change: `Some(true)` the chips, `Some(false)` the
@@ -738,6 +743,9 @@ pub struct ScrawlCoordinator {
     /// A local capture copied while its route is still being worked out; ✕ or Paste clears it,
     /// keeping the capture on the clipboard whatever the route says.
     routing: Option<PathBuf>,
+    /// Sessions the Completed island offers one click away (smart routing): when it asks, the
+    /// suggestion then a runner-up; during the undo window, the runner-up to switch to.
+    route_chips: Vec<RouteChip>,
     /// When this Mac last finished a capture, so ⌥⇧V prefers it over older inbox items.
     last_local_capture_ms: u64,
     inbox: crate::inbox::Inbox,
@@ -754,11 +762,10 @@ pub struct ScrawlCoordinator {
     grants: Option<crate::onboarding::Grants>,
     /// Holds the permissions window until the shortcut's modifiers are up.
     gate: crate::onboarding::Gate,
-    /// ⌥⇧S tapped or held (`crate::hold`).
-    shortcut: crate::hold::Shortcut,
-    /// The modifiers held when the shortcut went down; releasing any of them makes it a tap.
+    /// ⌥⇧S waiting for its keys to come up (`crate::shortcut`).
+    shortcut: crate::shortcut::Shortcut,
+    /// The modifiers held when the shortcut went down; releasing any of them starts the recording.
     hold_mods: u64,
-    clock: Instant,
     /// `scrawl lab pill`: recordings are pretend (`CaptureSource::Lab`), the picker takes no
     /// input and opens no overlay, and nothing looks for windows or phones.
     lab: bool,
@@ -775,9 +782,11 @@ impl ScrawlCoordinator {
         telemetry: Arc<SharedCaptureTelemetry>,
         initial_bundle: Option<(PathBuf, ScrawlBundle)>,
     ) -> Self {
+        crate::playback::warm_up();
         Self {
             telemetry,
             active_recording: None,
+            playback: None,
             picker_metal_overlay: None,
             native_pill: None,
             iphone_preview: None,
@@ -794,7 +803,7 @@ impl ScrawlCoordinator {
             island_y_velocity: 0.0,
             island_opacity: 0.0,
             island_morph: Morph::Phase,
-            reveal: crate::hold::Reveal::default(),
+            reveal: crate::shortcut::Reveal::default(),
             reveal_since: motion::now(),
             reveal_outgoing: None,
             reveal_prev_chips: false,
@@ -824,6 +833,7 @@ impl ScrawlCoordinator {
             completed_note: None,
             pending_send: None,
             routing: None,
+            route_chips: Vec::new(),
             last_local_capture_ms: 0,
             inbox: crate::inbox::Inbox::load_default(),
             last_mode: SelectionMode::load_last_used(),
@@ -832,9 +842,8 @@ impl ScrawlCoordinator {
             settings: None,
             grants: None,
             gate: crate::onboarding::Gate::default(),
-            shortcut: crate::hold::Shortcut::default(),
+            shortcut: crate::shortcut::Shortcut::default(),
             hold_mods: 0,
-            clock: Instant::now(),
             lab: false,
         }
     }
@@ -1153,8 +1162,8 @@ impl ScrawlCoordinator {
         }
     }
 
-    fn activity(&self) -> crate::hold::Activity {
-        use crate::hold::Activity;
+    fn activity(&self) -> crate::shortcut::Activity {
+        use crate::shortcut::Activity;
         if let Some(rec) = &self.active_recording {
             Activity::Recording {
                 elapsed_ms: rec.started.elapsed().as_millis() as u64,
@@ -1168,8 +1177,10 @@ impl ScrawlCoordinator {
         }
     }
 
-    fn clock_ms(&self) -> u64 {
-        self.clock.elapsed().as_millis() as u64
+    fn begin_playback(&mut self) {
+        if !self.lab && self.playback.is_none() {
+            self.playback = crate::playback::Guard::start();
+        }
     }
 
     /// The capture shortcut went down (from Carbon, the event tap or the HID poller).
@@ -1178,7 +1189,7 @@ impl ScrawlCoordinator {
         if self.gate.is_pending() {
             return;
         }
-        if !self.shortcut.is_pending() && activity == crate::hold::Activity::Free {
+        if !self.shortcut.is_pending() && activity == crate::shortcut::Activity::Free {
             // No picker or overlay before the permissions are on: they sit above
             // macOS's permission prompts and take the clicks meant for them.
             let missing = self.missing_to_record();
@@ -1186,16 +1197,17 @@ impl ScrawlCoordinator {
                 scrawl_log("Shortcut held back: a required permission is off");
                 return;
             }
+            self.begin_playback();
             self.hold_mods = crate::capture::modifier_flags();
             // An Esc from before this press doesn't cancel it.
             self.telemetry.take_escape();
         }
-        let action = self.shortcut.press(self.clock_ms(), activity);
+        let action = self.shortcut.press(activity);
         self.apply_shortcut(action, cx);
     }
 
-    /// Polled from the UI loop while a press is pending: watches for ⌥⇧ coming up (a tap) and
-    /// Esc, whichever app or window has focus.
+    /// Polled from the UI loop while a press is pending: watches for ⌥⇧ coming up and Esc,
+    /// whichever app or window has focus.
     pub fn tick_shortcut(&mut self, cx: &mut Context<Self>) {
         if !self.shortcut.is_pending() {
             return;
@@ -1205,20 +1217,23 @@ impl ScrawlCoordinator {
         } else {
             let mods = crate::capture::modifier_flags();
             let held = self.hold_mods != 0 && mods & self.hold_mods == self.hold_mods;
-            self.shortcut.tick(self.clock_ms(), held)
+            self.shortcut.tick(held)
         };
         self.apply_shortcut(action, cx);
     }
 
-    fn apply_shortcut(&mut self, action: crate::hold::Action, cx: &mut Context<Self>) {
-        use crate::hold::Action;
+    fn apply_shortcut(&mut self, action: crate::shortcut::Action, cx: &mut Context<Self>) {
+        use crate::shortcut::Action;
         if action != Action::None {
             scrawl_log(format!("shortcut -> {action:?}"));
         }
         match action {
-            Action::None | Action::Cancel => {}
+            Action::None => {}
+            Action::Cancel => {
+                // Esc can cancel before the picker or a recording exists.
+                self.playback.take();
+            }
             Action::RecordScreen => self.record_screen_now(cx),
-            Action::OpenPicker => self.open_picker(None, cx),
             Action::RecordSelected => self.record_selected_mode(cx),
             Action::Finish => self.finish_recording(cx),
         }
@@ -1569,8 +1584,7 @@ impl ScrawlCoordinator {
         true
     }
 
-    /// `repeat`: the key is held and repeating, which never records: the S of a held ⌥⇧S keeps
-    /// repeating into the picker it opened.
+    /// `repeat`: the key is held and repeating, which never records.
     pub fn handle_selection_key(
         &mut self,
         keystroke: &Keystroke,
@@ -1864,14 +1878,6 @@ impl ScrawlCoordinator {
         let elapsed_ms = recording_ms.unwrap_or(self.last_elapsed_ms);
         let clock = format_clock(elapsed_ms);
         let has_iphone = self.iphone.is_some();
-        let stroke_count = self
-            .telemetry
-            .strokes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .filter(|s| !s.laser)
-            .count();
 
         let pres = match self.island_phase {
             IslandPhase::Hidden | IslandPhase::Dismissing => Pres::Hidden,
@@ -1879,11 +1885,11 @@ impl ScrawlCoordinator {
             IslandPhase::Recording => Pres::Recording {
                 chips: self.reveal.is_open(),
                 has_iphone,
-                stroke_count,
             },
             IslandPhase::Processing => Pres::Processing,
             IslandPhase::Completed { inbox_count, .. } => Pres::Completed {
                 label: completed_label(inbox_count, self.completed_note.as_deref()),
+                routes: self.route_chip_labels(),
             },
         };
         PillSnapshot {
@@ -1909,16 +1915,19 @@ impl ScrawlCoordinator {
             PillAction::SelectMode(mode) => self.click_selection_mode(mode, cx),
             PillAction::SwitchRecording(mode) => self.switch_recording(mode, cx),
             PillAction::RecordSelected => self.record_selected_mode(cx),
-            PillAction::Undo => self.undo_stroke(cx),
             PillAction::Cancel => self.cancel_recording(cx),
             PillAction::Finish => self.finish_recording(cx),
             PillAction::Paste(target) => self.paste_completed_bundle(target, cx),
             PillAction::Inspect => self.inspect_completed_bundle(cx),
             PillAction::DismissCompleted => self.dismiss_completed_bundle(cx),
+            PillAction::Route(index) => self.choose_route(index, cx),
         }
     }
 
     pub fn dismiss_island(&mut self, cx: &mut Context<Self>) {
+        if !self.is_recording() {
+            self.playback.take();
+        }
         if matches!(
             self.island_phase,
             IslandPhase::Hidden | IslandPhase::Dismissing
@@ -1987,7 +1996,9 @@ impl ScrawlCoordinator {
     }
 
     /// Acts on smart routing's decision for a finished local capture (the clipboard already has
-    /// it): a send waits out the undo window first; an offer is only named in the review window.
+    /// it): a send waits out the undo window first, with the runner-up one click away; an offer
+    /// asks on the Completed island ("Send to DESKTOP" beside Paste) and sends nothing until a
+    /// session is picked.
     fn act_on_route(
         &mut self,
         dir: PathBuf,
@@ -1996,13 +2007,22 @@ impl ScrawlCoordinator {
         cx: &mut Context<Self>,
     ) {
         use crate::routing::smart::Decision;
+        let showing = self.completed_dir.as_deref() == Some(dir.as_path());
         match &judgement.decision {
-            Decision::Send { .. } => {
-                if let Some(dest) = crate::routing::smart::destination(&judgement, url.as_deref()) {
-                    self.send_after_undo(dir, dest, cx);
+            Decision::Send { to, instead } => {
+                if showing {
+                    self.route_chips = RouteChip::switches(instead, url.as_deref());
                 }
+                self.send_after_undo(
+                    dir,
+                    crate::routing::smart::destination_of(to, url.as_deref()),
+                    cx,
+                );
             }
             Decision::Offer { choices } => {
+                if showing {
+                    self.route_chips = RouteChip::asks(choices, url.as_deref());
+                }
                 let names: Vec<String> = choices
                     .iter()
                     .map(|c| island_title(c.candidate.label()))
@@ -2017,6 +2037,37 @@ impl ScrawlCoordinator {
             }
             Decision::Keep { .. } => {}
         }
+    }
+
+    /// The labels of the Completed island's route chips.
+    fn route_chip_labels(&self) -> Vec<String> {
+        self.route_chips
+            .iter()
+            .map(|chip| chip.label.clone())
+            .collect()
+    }
+
+    /// A route chip on the Completed island was clicked: the capture goes to that session now,
+    /// as Kit's choice (it replaces a send waiting out its undo window).
+    pub fn choose_route(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(dir) = self.completed_dir.clone() else {
+            return;
+        };
+        let Some(chip) = self.route_chips.get(index).cloned() else {
+            return;
+        };
+        self.route_chips.clear();
+        self.routing = None;
+        self.pending_send = None;
+        self.mark_handled(&dir);
+        scrawl_log(format!(
+            "routing (smart): chose {} ({}) for {}",
+            chip.dest.title,
+            chip.dest.session,
+            dir.display()
+        ));
+        self.send_completed(dir, chip.dest, cx);
+        cx.notify();
     }
 
     /// Shows "Sending to …" for `SMART_SEND_UNDO`, then records the destination and sends,
@@ -2038,6 +2089,7 @@ impl ScrawlCoordinator {
                     return;
                 }
                 coord.pending_send = None;
+                coord.route_chips.clear();
                 coord.send_completed(dir, dest, cx);
                 cx.notify();
             });
@@ -2047,6 +2099,9 @@ impl ScrawlCoordinator {
 
     /// Cancels an automatic send of `dir` (while its route is worked out or during its undo window).
     fn keep_pending_send(&mut self, dir: &std::path::Path) {
+        if self.completed_dir.as_deref() == Some(dir) {
+            self.route_chips.clear();
+        }
         if self.routing.as_deref() == Some(dir) {
             self.routing = None;
             scrawl_log(format!(
@@ -2451,6 +2506,7 @@ impl ScrawlCoordinator {
             self.cancel_recording(cx);
             return;
         }
+        self.begin_playback();
         let started = Instant::now();
         scrawl_log(format!(
             "start_recording_with_target invoked: mode={:?} frame={:?}",
@@ -2607,6 +2663,7 @@ impl ScrawlCoordinator {
             self.cancel_recording(cx);
             return;
         }
+        self.begin_playback();
         self.remember_mode(SelectionMode::Iphone);
         self.recording_shortcut_key = false;
         self.selection_drag = None;
@@ -2712,12 +2769,14 @@ impl ScrawlCoordinator {
     }
 
     pub fn cancel_recording(&mut self, cx: &mut Context<Self>) {
+        self.playback.take();
         scrawl_log("cancel_recording invoked");
         self.discard_recording();
         self.dismiss_island(cx);
     }
 
     pub fn finish_recording(&mut self, cx: &mut Context<Self>) {
+        self.playback.take();
         scrawl_log("finish_recording invoked");
         set_escape_hotkey_enabled(false);
         let Some(rec) = self.active_recording.take() else {
@@ -2733,6 +2792,7 @@ impl ScrawlCoordinator {
         drop(rec._metal_overlay);
         self.set_island_phase(IslandPhase::Processing);
         self.completed_note = None;
+        self.route_chips.clear();
         cx.notify();
         if matches!(source, CaptureSource::Lab) {
             let duration_ms = rec.started.elapsed().as_millis() as u64;
@@ -2931,6 +2991,67 @@ impl ScrawlCoordinator {
     }
 }
 
+/// A session offered one click away on the Completed island.
+#[derive(Clone, Debug)]
+struct RouteChip {
+    label: String,
+    dest: crate::model::Destination,
+}
+
+impl RouteChip {
+    /// How many fit beside Paste.
+    const MAX: usize = 2;
+
+    fn chosen(scored: &crate::routing::smart::Scored, url: Option<&str>, label: String) -> Self {
+        let mut dest = crate::routing::smart::destination_of(scored, url);
+        dest.via = "chosen".into();
+        Self { label, dest }
+    }
+
+    /// An offer's chips: "Send to DESKTOP", then the runner-up by name.
+    fn asks(choices: &[crate::routing::smart::Scored], url: Option<&str>) -> Vec<Self> {
+        choices
+            .iter()
+            .take(Self::MAX)
+            .enumerate()
+            .map(|(i, scored)| {
+                let title = chip_title(scored.candidate.label());
+                let label = if i == 0 {
+                    format!("Send to {title}")
+                } else {
+                    title
+                };
+                Self::chosen(scored, url, label)
+            })
+            .collect()
+    }
+
+    /// The undo window's chip beside "Sending to DESKTOP…": "Send to OPENCODE IOS" instead.
+    fn switches(instead: &[crate::routing::smart::Scored], url: Option<&str>) -> Vec<Self> {
+        instead
+            .iter()
+            .take(1)
+            .map(|scored| {
+                let label = format!("Send to {}", chip_title(scored.candidate.label()));
+                Self::chosen(scored, url, label)
+            })
+            .collect()
+    }
+}
+
+/// A session title short enough for a chip.
+fn chip_title(title: &str) -> String {
+    const MAX: usize = 16;
+    if title.chars().count() > MAX {
+        format!(
+            "{}…",
+            title.chars().take(MAX - 1).collect::<String>().trim_end()
+        )
+    } else {
+        title.to_owned()
+    }
+}
+
 enum RouteOutcome {
     None,
     Send(crate::model::Destination),
@@ -3001,18 +3122,10 @@ impl Render for HudPillWindow {
         let island_velocity = coord.island_velocity;
         let highlight_prev = coord.highlight_prev;
         let highlight_p = ease_out_cubic(motion::age(coord.highlight_since) / HIGHLIGHT_FADE_S);
-        let stroke_count = coord
-            .telemetry
-            .strokes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .filter(|s| !s.laser)
-            .count();
-
         let clock = format_clock(elapsed_ms);
         let has_iphone = coord.iphone.is_some();
         let completed_note = coord.completed_note.clone();
+        let routes = coord.route_chip_labels();
         // The Recording capsule's trailing group: switch chips or controls, and the swap between.
         let chips = if matches!(phase, IslandPhase::Recording) {
             coord.reveal.is_open()
@@ -3038,6 +3151,7 @@ impl Render for HudPillWindow {
             has_iphone,
             chips,
             completed_note.as_deref(),
+            &routes,
         );
         let snap_initial_width =
             phase_age < 0.025 && matches!(phase, IslandPhase::Selecting { .. }) && opacity < 0.35;
@@ -3150,6 +3264,7 @@ impl Render for HudPillWindow {
         let c_paste_out = self.coordinator.clone();
         let c_inspect = self.coordinator.clone();
         let c_dismiss = self.coordinator.clone();
+        let c_route = self.coordinator.clone();
         let c_record = self.coordinator.clone();
         let c_sel_cancel = self.coordinator.clone();
 
@@ -3308,7 +3423,13 @@ impl Render for HudPillWindow {
             }
             IslandPhase::Completed { inbox_count, .. } => traced(
                 row,
-                named(&["done.lead", "divider.lead", "paste", "inspect", "close"]),
+                ["done.lead", "divider.lead", "paste"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .chain((0..routes.len()).map(|i| format!("route:{i}")))
+                    .chain(["inspect".to_owned(), "close".to_owned()])
+                    .map(|name| Some((name, 1.0)))
+                    .collect(),
             )
             .child(
                 island_lead()
@@ -3363,8 +3484,14 @@ impl Render for HudPillWindow {
                         });
                     }),
             )
+            .children(routes.iter().enumerate().map(|(i, label)| {
+                let c_route = c_route.clone();
+                pill_chip(("hud-route", i), label.clone()).on_click(move |_, _, cx| {
+                    c_route.update(cx, |coord, cx| coord.choose_route(i, cx));
+                })
+            }))
             .child(
-                pill_chip("hud-inspect", "Inspect", true).on_click(move |_, _, cx| {
+                pill_chip("hud-inspect", "Inspect").on_click(move |_, _, cx| {
                     c_inspect.update(cx, |coord, cx| coord.inspect_completed_bundle(cx));
                 }),
             )
@@ -3455,13 +3582,7 @@ impl Render for HudPillWindow {
                         (fade > 0.002).then(|| {
                             let (out_alphas, _) = alphas(out_chips, fade);
                             traced(
-                                self.recording_trail(
-                                    out_chips,
-                                    has_iphone,
-                                    stroke_count,
-                                    &out_alphas,
-                                    false,
-                                ),
+                                self.recording_trail(out_chips, has_iphone, &out_alphas, false),
                                 trail_keys(out_chips, has_iphone, &out_alphas, "out:"),
                             )
                         })
@@ -3477,7 +3598,7 @@ impl Render for HudPillWindow {
                             slot.child(div().absolute().left(px(0.0)).top(px(0.0)).child(group))
                         })
                         .child(traced(
-                            self.recording_trail(chips, has_iphone, stroke_count, &in_alphas, true),
+                            self.recording_trail(chips, has_iphone, &in_alphas, true),
                             trail_keys(chips, has_iphone, &in_alphas, ""),
                         ))
                 })
@@ -3658,13 +3779,12 @@ impl SwitchLayout {
 
 impl HudPillWindow {
     /// One trailing group of the Recording capsule, each item faded by `alphas`: the switch chips
-    /// (Screen selected, as a tap records the screen) or Undo · Cancel · Finish. An outgoing
+    /// (Screen selected, as a tap records the screen) or Cancel · Finish. An outgoing
     /// group isn't `interactive`.
     fn recording_trail(
         &self,
         chips: bool,
         has_iphone: bool,
-        stroke_count: usize,
         alphas: &[f32],
         interactive: bool,
     ) -> Div {
@@ -3684,22 +3804,12 @@ impl HudPillWindow {
                 },
             ));
         }
-        let c_undo = self.coordinator.clone();
         let c_cancel = self.coordinator.clone();
         let c_finish = self.coordinator.clone();
         group
             .child(
-                pill_chip("hud-undo", "Undo", stroke_count > 0)
+                pill_chip("hud-cancel", "Cancel")
                     .opacity(alpha(0))
-                    .when(interactive && stroke_count > 0, |d| {
-                        d.on_click(move |_, _, cx| {
-                            c_undo.update(cx, |coord, cx| coord.undo_stroke(cx));
-                        })
-                    }),
-            )
-            .child(
-                pill_chip("hud-cancel", "Cancel", true)
-                    .opacity(alpha(1))
                     .when(interactive, |d| {
                         d.on_click(move |_, _, cx| {
                             c_cancel.update(cx, |coord, cx| coord.cancel_recording(cx));
@@ -3708,7 +3818,7 @@ impl HudPillWindow {
             )
             .child(
                 primary_chip("hud-done", "Finish")
-                    .opacity(alpha(2))
+                    .opacity(alpha(1))
                     .when(interactive, |d| {
                         d.on_click(move |_, _, cx| {
                             c_finish.update(cx, |coord, cx| coord.finish_recording(cx));
@@ -3739,7 +3849,7 @@ fn island_divider() -> Div {
         .bg(rgba(0xffffff1a))
 }
 
-fn hud_chip(id: &'static str) -> gpui::Stateful<Div> {
+fn hud_chip(id: impl Into<gpui::ElementId>) -> gpui::Stateful<Div> {
     div()
         .id(id)
         .h(px(CHIP_H))
@@ -3752,19 +3862,16 @@ fn hud_chip(id: &'static str) -> gpui::Stateful<Div> {
         .whitespace_nowrap()
 }
 
-fn pill_chip(id: &'static str, label: &'static str, enabled: bool) -> gpui::Stateful<Div> {
+fn pill_chip(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<Div> {
     hud_chip(id)
         .font_weight(FontWeight::MEDIUM)
-        .text_color(if enabled {
-            rgb(TEXT_SOFT)
-        } else {
-            rgb(0x56565a)
-        })
-        .when(enabled, |d| {
-            d.cursor_pointer()
-                .hover(|s| s.bg(rgba(0xffffff14)).text_color(rgb(TEXT_COLOR)))
-        })
-        .child(label)
+        .text_color(rgb(TEXT_SOFT))
+        .cursor_pointer()
+        .hover(|s| s.bg(rgba(0xffffff14)).text_color(rgb(TEXT_COLOR)))
+        .child(label.into())
 }
 
 fn primary_chip(id: &'static str, label: &'static str) -> gpui::Stateful<Div> {
@@ -5423,6 +5530,7 @@ pub fn run_app(
                                 let duration_ms = bundle.duration_ms;
                                 let inbox_count = coord.add_to_inbox(&dir, &bundle);
                                 coord.completed_dir = Some(dir.clone());
+                                coord.route_chips.clear();
                                 coord.set_review_bundle((dir, *bundle), status);
                                 coord.set_island_phase(IslandPhase::Completed {
                                     finished_at: Instant::now(),

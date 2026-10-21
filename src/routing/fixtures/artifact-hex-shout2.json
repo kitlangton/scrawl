@@ -1,0 +1,660 @@
+{
+  "capture": "scrawl-1792476731395-8c0.scrawl",
+  "savedDecision": "send CANVAS",
+  "page": {
+    "url": "https://studio.taila8e7c7.ts.net:8444/raw/2026-10-19-hex-shout2/index.html",
+    "served": "https://studio.taila8e7c7.ts.net:8444/raw/",
+    "file": "2026-10-19-hex-shout2/index.html",
+    "modifiedMs": 1792476552399,
+    "writes": [
+      {
+        "session": "ses_ea8791bb7ffeVCVYOeBnieStlu",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "shell",
+        "ran": 1792476302407,
+        "done": 1792476308481
+      },
+      {
+        "session": "ses_ea8791bb7ffeVCVYOeBnieStlu",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "shell",
+        "ran": 1792476322620,
+        "done": 1792476328859
+      },
+      {
+        "session": "ses_ea8791bb7ffeVCVYOeBnieStlu",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "read",
+        "ran": 1792476323648,
+        "done": 1792476330656
+      },
+      {
+        "session": "ses_ea8791bb7ffeVCVYOeBnieStlu",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "shell",
+        "ran": 1792476383629,
+        "done": 1792476387928
+      },
+      {
+        "session": "ses_ea8791bb7ffeVCVYOeBnieStlu",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "shell",
+        "ran": 1792476413724,
+        "done": 1792476417096
+      },
+      {
+        "session": "ses_ea8791bb7ffeVCVYOeBnieStlu",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "read",
+        "ran": 1792476415113,
+        "done": 1792476418375
+      },
+      {
+        "session": "ses_ea8791bb7ffeVCVYOeBnieStlu",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "write",
+        "ran": 1792476474091,
+        "done": 1792476478892
+      },
+      {
+        "session": "ses_ea8791bb7ffeVCVYOeBnieStlu",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "shell",
+        "ran": 1792476501923,
+        "done": 1792476506385
+      },
+      {
+        "session": "ses_ea8791bb7ffeVCVYOeBnieStlu",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "shell",
+        "ran": 1792476545752,
+        "done": 1792476558159
+      },
+      {
+        "session": "ses_ea8791bb7ffeVCVYOeBnieStlu",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "shell",
+        "ran": 1792476576238,
+        "done": 1792476578166
+      },
+      {
+        "session": "ses_ea8791bb7ffeVCVYOeBnieStlu",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "shell",
+        "ran": 1792476591205,
+        "done": 1792476598433
+      },
+      {
+        "session": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "shell",
+        "ran": 1792476595377,
+        "done": 1792476604738
+      },
+      {
+        "session": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "root": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "tool": "shell",
+        "ran": 1792476631192,
+        "done": 1792476635972
+      }
+    ]
+  },
+  "bundle": {
+    "version": 1,
+    "id": "scrawl-1792476731395-8c0",
+    "createdAtMs": 1792476745821,
+    "durationMs": 14048,
+    "target": {
+      "mode": "display",
+      "app": "Brave Browser",
+      "bundleId": "com.brave.Browser",
+      "windowTitle": "Hex hero · Shout v2",
+      "displayId": 3,
+      "frame": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 2560.0,
+        "height": 1440.0,
+        "scale": 2.0
+      }
+    },
+    "transcript": {
+      "source": "speech-analyzer",
+      "model": "SpeechTranscriber en_US",
+      "text": "The transition between a closed mouth and the open mouth needs to be better. Uh, and the reflection needs to be better, and the eyes.",
+      "segments": [],
+      "words": [
+        {
+          "t0": 300,
+          "t1": 600,
+          "text": "The"
+        },
+        {
+          "t0": 600,
+          "t1": 1020,
+          "text": "transition"
+        },
+        {
+          "t0": 1020,
+          "t1": 1260,
+          "text": "between"
+        },
+        {
+          "t0": 1260,
+          "t1": 1500,
+          "text": "a"
+        },
+        {
+          "t0": 1500,
+          "t1": 1620,
+          "text": "closed"
+        },
+        {
+          "t0": 1620,
+          "t1": 1920,
+          "text": "mouth"
+        },
+        {
+          "t0": 1920,
+          "t1": 2160,
+          "text": "and"
+        },
+        {
+          "t0": 2160,
+          "t1": 2220,
+          "text": "the"
+        },
+        {
+          "t0": 2220,
+          "t1": 2340,
+          "text": "open"
+        },
+        {
+          "t0": 2340,
+          "t1": 2640,
+          "text": "mouth"
+        },
+        {
+          "t0": 2640,
+          "t1": 3000,
+          "text": "needs"
+        },
+        {
+          "t0": 3000,
+          "t1": 3120,
+          "text": "to"
+        },
+        {
+          "t0": 3120,
+          "t1": 3240,
+          "text": "be"
+        },
+        {
+          "t0": 3240,
+          "t1": 3660,
+          "text": "better."
+        },
+        {
+          "t0": 4860,
+          "t1": 5400,
+          "text": "Uh,"
+        },
+        {
+          "t0": 5400,
+          "t1": 5700,
+          "text": "and"
+        },
+        {
+          "t0": 5700,
+          "t1": 5880,
+          "text": "the"
+        },
+        {
+          "t0": 5880,
+          "t1": 6420,
+          "text": "reflection"
+        },
+        {
+          "t0": 6420,
+          "t1": 6720,
+          "text": "needs"
+        },
+        {
+          "t0": 6720,
+          "t1": 6900,
+          "text": "to"
+        },
+        {
+          "t0": 6900,
+          "t1": 7020,
+          "text": "be"
+        },
+        {
+          "t0": 7020,
+          "t1": 7500,
+          "text": "better,"
+        },
+        {
+          "t0": 7500,
+          "t1": 9540,
+          "text": "and"
+        },
+        {
+          "t0": 9540,
+          "t1": 9780,
+          "text": "the"
+        },
+        {
+          "t0": 9780,
+          "t1": 11580,
+          "text": "eyes."
+        }
+      ]
+    },
+    "strokes": [],
+    "marks": [
+      {
+        "id": "m1",
+        "strokes": [
+          0,
+          1,
+          2
+        ],
+        "t0": 1147,
+        "t1": 2748,
+        "boxNorm": [
+          0.4919,
+          0.5023,
+          0.5104,
+          0.5316
+        ],
+        "shape": "mark",
+        "on": "scroll area in index.html",
+        "description": "marked region x 0.49–0.51, y 0.50–0.53 (3 strokes) over “scroll area in index.html”",
+        "frame": "frames/frame-01.png"
+      },
+      {
+        "id": "m2",
+        "strokes": [
+          3,
+          4,
+          5
+        ],
+        "t0": 5764,
+        "t1": 7001,
+        "boxNorm": [
+          0.4663,
+          0.4295,
+          0.5051,
+          0.4866
+        ],
+        "shape": "mark",
+        "on": "scroll area in index.html",
+        "description": "marked region x 0.47–0.51, y 0.43–0.49 (3 strokes) over “scroll area in index.html”",
+        "frame": "frames/frame-02.png"
+      },
+      {
+        "id": "m3",
+        "strokes": [
+          6,
+          7
+        ],
+        "t0": 8814,
+        "t1": 9329,
+        "boxNorm": [
+          0.4807,
+          0.4742,
+          0.5103,
+          0.4879
+        ],
+        "shape": "underline",
+        "on": "scroll area in index.html",
+        "description": "underlined x 0.48–0.51 at y 0.48 (2 strokes) over “scroll area in index.html”",
+        "frame": "frames/frame-03.png"
+      }
+    ],
+    "events": [
+      {
+        "kind": "click",
+        "t": 13947,
+        "x": 0.53608096,
+        "y": 0.05272895,
+        "button": "left",
+        "label": "“Finish”",
+        "role": "text"
+      }
+    ],
+    "keyframes": [],
+    "contactSheet": "contact-sheet.png"
+  },
+  "evidence": {
+    "clues": [
+      {
+        "source": "port",
+        "pointer": {
+          "kind": "folder",
+          "path": "/Users/kit/code/open-source/gpu-gallery",
+          "root": "/Users/kit/code/open-source/gpu-gallery",
+          "tree": true,
+          "repo": "/Users/kit/code/open-source/gpu-gallery"
+        },
+        "note": "https://studio.taila8e7c7.ts.net:8444 (port 8460 here) is served from /Users/kit/code/open-source/gpu-gallery"
+      },
+      {
+        "source": "title",
+        "pointer": {
+          "kind": "words",
+          "words": [
+            "hex",
+            "hero",
+            "shout"
+          ]
+        },
+        "note": "window title \"Hex hero · Shout v2\""
+      },
+      {
+        "source": "speech",
+        "pointer": {
+          "kind": "words",
+          "words": [
+            "transition",
+            "between",
+            "closed",
+            "mouth",
+            "needs",
+            "reflection",
+            "eyes"
+          ]
+        },
+        "note": "said"
+      }
+    ],
+    "candidates": [
+      {
+        "id": "ses_eb96316daffevhidtO7Z4W583K",
+        "title": "FLIT",
+        "directory": "/Users/kit/code/open-source/flit",
+        "repo": "/Users/kit/code/open-source/flit",
+        "updatedMs": 1792476710725,
+        "viewedMs": 1792476338776
+      },
+      {
+        "id": "ses_edb79c155ffeZ8eqFja5zoWOlX",
+        "title": "DESKTOP",
+        "directory": "/Users/kit/code/open-source/opencode",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792476710072,
+        "viewedMs": 1792476256361
+      },
+      {
+        "id": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+        "title": "HEX",
+        "directory": "/Users/kit/code/open-source/hex",
+        "repo": "/Users/kit/code/open-source/hex",
+        "updatedMs": 1792476689995,
+        "viewedMs": 1792474513485
+      },
+      {
+        "id": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+        "title": "GAME ENGINE",
+        "directory": "/Users/kit/code/open-source/arcade",
+        "repo": "/Users/kit/code/open-source/arcade",
+        "updatedMs": 1792476687371,
+        "viewedMs": 1792475877700
+      },
+      {
+        "id": "ses_edb816b31ffe4B3nexhh9rqAJp",
+        "title": "SCRAWL",
+        "directory": "/Users/kit/code/open-source/scrawl",
+        "repo": "/Users/kit/code/open-source/scrawl",
+        "updatedMs": 1792476585178,
+        "viewedMs": 1792476405630
+      },
+      {
+        "id": "ses_f501e10c4ffedeySM4jnNIe3AD",
+        "title": "OPENCODE IOS",
+        "directory": "/Users/kit/code/open-source/opencode-ios-oc380-loading",
+        "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+        "updatedMs": 1792476495405,
+        "viewedMs": 1792476495806
+      },
+      {
+        "id": "ses_eb97fd4bcffeuNORqi0lEBAC73",
+        "title": "KIT MOTION",
+        "directory": "/Users/kit/code/home/research/2026-10-16-motion-v3",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792476310382,
+        "viewedMs": 1792476311233
+      },
+      {
+        "id": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+        "title": "HOME",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792475703304,
+        "viewedMs": 1792475703342
+      },
+      {
+        "id": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+        "title": "KNOBS",
+        "directory": "/Users/kit/code/open-source/knobs",
+        "repo": "/Users/kit/code/open-source/knobs",
+        "updatedMs": 1792475370581,
+        "viewedMs": 1792475371813
+      },
+      {
+        "id": "ses_ec318a614ffeQvPht0qntUnIcP",
+        "title": "CANVAS",
+        "directory": "/Users/kit/code/open-source/gpu-gallery",
+        "repo": "/Users/kit/code/open-source/gpu-gallery",
+        "updatedMs": 1792474857323,
+        "viewedMs": 1792444363518
+      },
+      {
+        "id": "ses_f13460621ffeQz0u4Attrj4Z4l",
+        "title": "SLACKBOT",
+        "directory": "/Users/kit/code/open-source/opencode-slack",
+        "repo": "/Users/kit/code/open-source/opencode-slack",
+        "updatedMs": 1792474854987,
+        "viewedMs": 1792440889443
+      },
+      {
+        "id": "ses_ebd33f90bffer4eZZgeryssZt3",
+        "title": "SERVER VOICE",
+        "directory": "/Users/kit/worktrees/opencode/server-voice",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792474848714,
+        "viewedMs": 1792442360125
+      },
+      {
+        "id": "ses_ed125b1feffeX5uSGJiGJJ0Zq1",
+        "title": "PROBLEMS",
+        "directory": "/Users/kit/code/worktrees/team-board/task-page",
+        "repo": "/Users/kit/code/worktrees/team-board/rewrite",
+        "updatedMs": 1792474539426,
+        "viewedMs": 1792469646701
+      },
+      {
+        "id": "ses_ea859384fffdECcdg0RfwQC1HJ",
+        "title": "Slack thread issue",
+        "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/46555d/stellar-star",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792474285660,
+        "viewedMs": 1792473070094
+      },
+      {
+        "id": "ses_ead6919a3ffevHC33dOqB663bd",
+        "title": "Feedback synonym",
+        "directory": "/Users/kit/code/open-source/arcade",
+        "repo": "/Users/kit/code/open-source/arcade",
+        "updatedMs": 1792474285630,
+        "viewedMs": 1792473284006
+      },
+      {
+        "id": "ses_eb4805506ffdExxfN3euuGJzSR",
+        "title": "Quick check-in",
+        "directory": "/Users/kit/code/open-source/scrawl",
+        "repo": "/Users/kit/code/open-source/scrawl",
+        "updatedMs": 1792472119901,
+        "viewedMs": 1792302248443
+      },
+      {
+        "id": "ses_f0c100c89ffeta4TCCxgTHFI2J",
+        "title": "UP DOWN APP",
+        "directory": "/Users/kit/code/open-source/life-hub-uikit",
+        "repo": "/Users/kit/code/open-source/life-hub-uikit",
+        "updatedMs": 1792454885370,
+        "viewedMs": 1792454885390
+      },
+      {
+        "id": "ses_ebea564f3ffeI16n54W8y9Mtyz",
+        "title": "CONSOLE VORTEX",
+        "directory": "/Users/kit/code/open-source/opencode-console",
+        "repo": "/Users/kit/code/open-source/opencode-console",
+        "updatedMs": 1792438810776,
+        "viewedMs": 1792438810783
+      },
+      {
+        "id": "ses_ead6fc607ffeQrhX4zQOyKuUWk",
+        "title": "Streaming Markdown Profiling & Library",
+        "directory": "/Users/kit/code/open-source/streaming-markdown-lab",
+        "updatedMs": 1792437625175,
+        "viewedMs": 1792392138105
+      },
+      {
+        "id": "ses_ead884a3dffephbfYhZ8yrShY4",
+        "title": "JEVAL",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792436507580,
+        "viewedMs": 1792389692797
+      },
+      {
+        "id": "ses_ebe313af4ffex4Y5UKIvEiftzm",
+        "title": "OPENCODE CONSOLE",
+        "directory": "/Users/kit/code/open-source/opencode-console",
+        "repo": "/Users/kit/code/open-source/opencode-console",
+        "updatedMs": 1792431356040,
+        "viewedMs": 1792187291153
+      },
+      {
+        "id": "ses_eb480ee0affeghrrePfmjzMFLX",
+        "title": "Public-site audit fixes",
+        "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/lucky-rocket",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792429760607,
+        "viewedMs": 1792358813510
+      },
+      {
+        "id": "ses_eaf459a69ffeRF6Oq8hjTbVtvR",
+        "title": "MODEL PICKER",
+        "directory": "/Users/kit/code/open-source/opencode-ios-model-picker",
+        "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+        "updatedMs": 1792424967210,
+        "viewedMs": 1792363784492
+      },
+      {
+        "id": "ses_ead37e06cffeRfPkN2vrbdNWDs",
+        "title": "SCRAWL RECORDER",
+        "directory": "/Users/kit/code/open-source/scrawl",
+        "repo": "/Users/kit/code/open-source/scrawl",
+        "updatedMs": 1792391837251,
+        "viewedMs": 1792391837366
+      },
+      {
+        "id": "ses_ead693524ffew0n2o1ghgLBa6q",
+        "title": "Claude typo",
+        "directory": "/Users/kit/code",
+        "updatedMs": 1792386980319,
+        "viewedMs": 1792386977838
+      },
+      {
+        "id": "ses_eb4808112ffdq5ncWwmVhRPaRq",
+        "title": "SPR good to go?",
+        "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/quick-tiger",
+        "repo": "/Users/kit/code/open-source/opencode",
+        "updatedMs": 1792269008625,
+        "viewedMs": 1792268816383
+      },
+      {
+        "id": "ses_ec39487c0ffezso4grvaG2gs9n",
+        "title": "OPEN MONEY",
+        "directory": "/Users/kit/code/open-source/openmoney",
+        "repo": "/Users/kit/code/open-source/openmoney",
+        "updatedMs": 1792251233509,
+        "viewedMs": 1792251233513
+      },
+      {
+        "id": "ses_eb8255eacffe553A73CCAC1745",
+        "title": "Project screenshots",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792206962866,
+        "viewedMs": 1792206962871
+      },
+      {
+        "id": "ses_eb891d476ffeDD0D2B647FDC4B",
+        "title": "Taelin’s infinite-chat compaction algorithm",
+        "directory": "/Users/kit/code/home",
+        "repo": "/Users/kit/code/home",
+        "updatedMs": 1792206712130,
+        "viewedMs": 1792206712132
+      },
+      {
+        "id": "ses_ebd58b4a3ffeOuHOBJ84IHoNGc",
+        "title": "DEADBOLT",
+        "directory": "/Users/kit/code/open-source/deadbolt",
+        "repo": "/Users/kit/code/open-source/deadbolt",
+        "updatedMs": 1792177126854,
+        "viewedMs": 1792172591104
+      },
+      {
+        "id": "ses_ec4dfeed7ffebmlNkG7QK04Tqq",
+        "title": "AI TALK",
+        "directory": "/Users/kit/code/open-source/ai-talk",
+        "repo": "/Users/kit/code/open-source/ai-talk",
+        "updatedMs": 1792171656850,
+        "viewedMs": 1792123145000
+      },
+      {
+        "id": "ses_ebef6c45fffevSGyuztH3R6AVp",
+        "title": "BROWSER CONTROL",
+        "directory": "/Users/kit/code/open-source/browser-control",
+        "repo": "/Users/kit/code/open-source/browser-control",
+        "updatedMs": 1792094949860,
+        "viewedMs": 1792094949875
+      },
+      {
+        "id": "ses_ec299b65affePaP87h2UYqEf3x",
+        "title": "free-tier read-only test 3 (delete me)",
+        "directory": "/private/var/folders/4t/_jnrck017r5f_jttbc19b7s40000gn/T/opencode/freetier-test",
+        "updatedMs": 1792031486314,
+        "viewedMs": 1792031486324
+      },
+      {
+        "id": "ses_ec29a0324ffekLZrOzpDctJphz",
+        "title": "free-tier read-only test 2 (delete me)",
+        "directory": "/private/var/folders/4t/_jnrck017r5f_jttbc19b7s40000gn/T/opencode/freetier-test",
+        "updatedMs": 1792031462829,
+        "viewedMs": 1792031462855
+      },
+      {
+        "id": "ses_ec29a4978ffeOYfAtDvrTaG8WG",
+        "title": "free-tier read-only test (delete me)",
+        "directory": "/private/var/folders/4t/_jnrck017r5f_jttbc19b7s40000gn/T/opencode/freetier-test",
+        "updatedMs": 1792031446084,
+        "viewedMs": 1792031446101
+      },
+      {
+        "id": "ses_ec8ac0d73ffeYDTUgKZeuLdJ5X",
+        "title": "CHOOSER",
+        "directory": "/Users/kit/code/experiments/typescript/choose-gpu",
+        "repo": "/Users/kit/code/experiments/typescript/choose-gpu",
+        "updatedMs": 1791956676331,
+        "viewedMs": 1791953219243
+      }
+    ],
+    "nowMs": 1792476745821
+  }
+}

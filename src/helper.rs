@@ -117,20 +117,22 @@ struct Transcript {
     text: String,
     segments: Vec<TranscriptSegment>,
     words: Vec<WordTiming>,
-    /// No usable speech model: `downloading`, `unsupported` or `failed` (with `error`).
+    /// No usable speech model: `downloading`, `unsupported` or `failed` (with `error`); on macOS
+    /// 15 also `permission` (Speech Recognition is off) or `dictation` (no Dictation model).
     #[serde(default)]
     missing: Option<String>,
     #[serde(default)]
     error: Option<String>,
 }
 
-/// On-device SpeechAnalyzer transcription with measured word timings. Without a speech model
-/// the transcript is empty and `missing` says why.
+/// On-device transcription with measured word timings: SpeechAnalyzer on macOS 26,
+/// SFSpeechRecognizer on macOS 15. Without a speech model the transcript is empty and `missing`
+/// says why.
 pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
-    let transcript: Transcript = run(
-        &[os("transcribe"), audio.as_os_str()],
-        Duration::from_secs(180),
-    )?;
+    let locale = crate::speech_model::locale_args();
+    let mut args = vec![os("transcribe"), audio.as_os_str()];
+    args.extend(locale.iter().map(|arg| arg.as_os_str()));
+    let transcript: Transcript = run(&args, Duration::from_secs(180))?;
     let engine = transcript
         .engine
         .unwrap_or_else(|| "SpeechTranscriber".into());
@@ -140,6 +142,8 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
     Ok(TranscriptData {
         source: if missing.is_some() {
             "offline".into()
+        } else if engine == "SFSpeechRecognizer" {
+            "sf-speech-recognizer".into()
         } else {
             "speech-analyzer".into()
         },
@@ -161,29 +165,70 @@ pub struct SpeechModelLine {
     #[serde(default)]
     pub locale: Option<String>,
     #[serde(default)]
+    pub locales: Option<Vec<String>>,
+    #[serde(default)]
     pub progress: Option<f64>,
     #[serde(default)]
     pub error: Option<String>,
 }
 
-/// Runs `scrawl-helper speech-model --install`, handing each line to `line` as it comes. The
-/// download can take minutes; the helper exits when it's done or has failed.
-pub fn install_speech_model(mut line: impl FnMut(SpeechModelLine)) -> Result<()> {
+/// Runs `scrawl-helper speech-model --install` for the chosen language, handing each line to
+/// `line` as it comes. The download can take minutes; the helper exits when it's done or has
+/// failed, and is killed as soon as `stop` says a newer check superseded it.
+pub fn install_speech_model(
+    stop: &dyn Fn() -> bool,
+    line: impl FnMut(SpeechModelLine),
+) -> Result<()> {
+    let mut command = Command::new(path()?);
+    command.args(["speech-model", "--install"]);
+    command.args(crate::speech_model::locale_args());
+    install_with(command, stop, line)
+}
+
+fn install_with(
+    mut command: Command,
+    stop: &dyn Fn() -> bool,
+    mut line: impl FnMut(SpeechModelLine),
+) -> Result<()> {
     use std::io::BufRead;
-    let mut child = Command::new(path()?)
-        .args(["speech-model", "--install"])
+    use std::sync::mpsc::RecvTimeoutError;
+
+    if stop() {
+        return Ok(());
+    }
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("Could not start scrawl-helper")?;
     let stdout = child.stdout.take().context("No helper stdout")?;
-    for text in std::io::BufReader::new(stdout)
-        .lines()
-        .map_while(Result::ok)
-    {
-        if let Ok(parsed) = serde_json::from_str(&text) {
-            line(parsed);
+    // Lines come through a thread so `stop` is checked while the helper is quiet.
+    let (sender, lines) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for text in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if sender.send(text).is_err() {
+                break;
+            }
+        }
+    });
+    loop {
+        if stop() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(());
+        }
+        match lines.recv_timeout(Duration::from_millis(250)) {
+            Ok(text) => {
+                if let Ok(parsed) = serde_json::from_str(&text) {
+                    line(parsed);
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     }
     let status = child.wait()?;
@@ -353,4 +398,30 @@ struct QrOutput {
 pub fn qr(text: &str) -> Result<String> {
     let out: QrOutput = run(&[os("qr"), os(text)], Duration::from_secs(5))?;
     Ok(out.qr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_superseded_install_stops_without_waiting_for_the_helper() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            r#"echo '{"status":"downloading","progress":0.1}'; sleep 60"#,
+        ]);
+        let stop = AtomicBool::new(false);
+        let started = Instant::now();
+        let mut lines = Vec::new();
+        install_with(command, &|| stop.load(Ordering::Relaxed), |l| {
+            lines.push(l);
+            stop.store(true, Ordering::Relaxed);
+        })
+        .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(lines[0].status, "downloading");
+    }
 }

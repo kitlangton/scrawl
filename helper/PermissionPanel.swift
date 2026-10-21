@@ -550,7 +550,7 @@ extension PermissionPanel {
   /// One card surface: a two-layer shadow, frosted Liquid Glass, and the content clipped to it.
   /// The flight and the docked panel use the same class so the hand-off is pixel for pixel.
   final class CardSurface: NSView {
-    let glass = NSGlassEffectView()
+    let glass = CardSurface.makeGlass()
     let clip = NSView()
     let frost = Frost()
     let content: NSView
@@ -572,7 +572,6 @@ extension PermissionPanel {
       contact.shadowRadius = 1.5
       contact.shadowOffset = CGSize(width: 0, height: -0.5)
       ambient.shadowOffset = CGSize(width: 0, height: -8)
-      glass.style = .regular
       addSubview(glass)
       clip.wantsLayer = true
       clip.layer?.masksToBounds = true
@@ -589,11 +588,40 @@ extension PermissionPanel {
     @available(*, unavailable)
     required init?(coder _: NSCoder) { fatalError() }
 
+    /// Liquid Glass on macOS 26 (when built with its SDK); a frosted popover material before that.
+    static func makeGlass() -> NSView {
+      #if compiler(>=6.2)
+      if #available(macOS 26, *) {
+        let glass = NSGlassEffectView()
+        glass.style = .regular
+        return glass
+      }
+      #endif
+      let material = NSVisualEffectView()
+      material.material = .popover
+      material.blendingMode = .behindWindow
+      material.state = .active
+      material.wantsLayer = true
+      material.layer?.masksToBounds = true
+      material.layer?.cornerCurve = .continuous
+      return material
+    }
+
+    static func setCornerRadius(_ radius: CGFloat, of glass: NSView) {
+      #if compiler(>=6.2)
+      if #available(macOS 26, *), let glass = glass as? NSGlassEffectView {
+        glass.cornerRadius = radius
+        return
+      }
+      #endif
+      glass.layer?.cornerRadius = radius
+    }
+
     /// `lift` 0 is docked; 1 is the top of the arc, with a deeper, softer shadow.
     func apply(size: NSSize, radius: CGFloat, lift: CGFloat) {
       let bounds = NSRect(origin: .zero, size: size)
       glass.frame = bounds
-      glass.cornerRadius = radius
+      CardSurface.setCornerRadius(radius, of: glass)
       clip.frame = bounds
       clip.layer?.cornerRadius = radius
       frost.frame = bounds

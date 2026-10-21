@@ -1,0 +1,1003 @@
+{
+ "capture": "scrawl-1792525569367-170ef-15.scrawl",
+ "savedDecision": "send KNOBS",
+ "bundle": {
+  "version": 1,
+  "id": "scrawl-1792525569367-170ef-15",
+  "createdAtMs": 1792525685934,
+  "durationMs": 116210,
+  "target": {
+   "mode": "display",
+   "app": "Brave Browser",
+   "bundleId": "com.brave.Browser",
+   "windowTitle": "knobs",
+   "displayId": 3,
+   "frame": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 2560.0,
+    "height": 1440.0,
+    "scale": 2.0
+   }
+  },
+  "transcript": {
+   "source": "speech-analyzer",
+   "text": "Um, I don't want this to grow the size necessarily. So we can just fuse them down the middle at their same size, I think. I guess it depends, but there's also in the kid motion session had a really cool fusion animation that we were using elsewhere. I do like this symbol, but this symbol should probably be in the middle. But it should probably do the fusion thing. Interesting. And like this stuff's getting cut off here. And that's, yeah, that's weird. And can I zoom in and out of a timeline? I'm not sure. And like this style is so much different than the other styles, maybe for this. Page. I don't know, right now, these are not in the containers, right? So maybe, I mean, it probably looks, these all look better as the kind of the void containers of anything. which is almost like not even a container. Oh, that looks weird, actually. I mean, these are looking better, like the minimal colors, the minimal icons. This is much better than it was before. Um But yeah. I feel like we want the simpler look for this walkthrough stuff. I guess it's not exactly knobs. Maybe this should be like, these components should be separated out into their own sort of subsystem here. Because it's not exactly the same kind of thing that we have everywhere else. It's very interesting.",
+   "segments": []
+  },
+  "strokes": [],
+  "marks": [
+   {
+    "id": "m1",
+    "strokes": [
+     0
+    ],
+    "t0": 594,
+    "t1": 1100,
+    "boxNorm": [
+     0.4793,
+     0.3514,
+     0.7155,
+     0.5283
+    ],
+    "shape": "circle",
+    "description": "circled region x 0.48\u20130.72, y 0.35\u20130.53 over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m2",
+    "strokes": [
+     1
+    ],
+    "t0": 5092,
+    "t1": 5361,
+    "boxNorm": [
+     0.5534,
+     0.3533,
+     0.5722,
+     0.4868
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.55\u20130.57, y 0.35\u20130.49 over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m3",
+    "strokes": [
+     2
+    ],
+    "t0": 10869,
+    "t1": 11541,
+    "boxNorm": [
+     0.5604,
+     0.3559,
+     0.564,
+     0.5688
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.56\u20130.56, y 0.36\u20130.57 over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m4",
+    "strokes": [
+     3,
+     4,
+     5,
+     6
+    ],
+    "t0": 25427,
+    "t1": 27729,
+    "boxNorm": [
+     0.3901,
+     0.5648,
+     0.7512,
+     0.5886
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.39\u20130.75, y 0.56\u20130.59 (4 strokes) over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m5",
+    "strokes": [
+     7
+    ],
+    "t0": 32752,
+    "t1": 33199,
+    "boxNorm": [
+     0.6145,
+     0.568,
+     0.6417,
+     0.5782
+    ],
+    "shape": "underline",
+    "description": "underlined x 0.61\u20130.64 at y 0.57 over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m6",
+    "strokes": [
+     8
+    ],
+    "t0": 35005,
+    "t1": 35507,
+    "boxNorm": [
+     0.5076,
+     0.4412,
+     0.5644,
+     0.4477
+    ],
+    "shape": "underline",
+    "description": "underlined x 0.51\u20130.56 at y 0.44 over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m7",
+    "strokes": [
+     9,
+     10
+    ],
+    "t0": 45538,
+    "t1": 46954,
+    "boxNorm": [
+     0.3919,
+     0.2027,
+     0.7505,
+     0.6755
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.39\u20130.75, y 0.20\u20130.68 (2 strokes) over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m8",
+    "strokes": [
+     11
+    ],
+    "t0": 53453,
+    "t1": 53621,
+    "boxNorm": [
+     0.3854,
+     0.6056,
+     0.391,
+     0.6943
+    ],
+    "shape": "line",
+    "description": "drew a line from x 0.39, y 0.61 to x 0.39, y 0.69 over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m9",
+    "strokes": [
+     12,
+     13
+    ],
+    "t0": 56833,
+    "t1": 57462,
+    "boxNorm": [
+     0.4078,
+     0.3859,
+     0.7652,
+     0.4104
+    ],
+    "shape": "underline",
+    "description": "underlined x 0.41\u20130.77 at y 0.40 (2 strokes) over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m10",
+    "strokes": [
+     14
+    ],
+    "t0": 65939,
+    "t1": 66093,
+    "boxNorm": [
+     0.4686,
+     0.7867,
+     0.4805,
+     0.7888
+    ],
+    "shape": "underline",
+    "description": "underlined x 0.47\u20130.48 at y 0.79 over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m11",
+    "strokes": [
+     15,
+     16,
+     17,
+     18
+    ],
+    "t0": 76305,
+    "t1": 78819,
+    "boxNorm": [
+     0.4121,
+     0.541,
+     0.4293,
+     0.6589
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.41\u20130.43, y 0.54\u20130.66 (4 strokes) over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m12",
+    "strokes": [
+     19,
+     20
+    ],
+    "t0": 82786,
+    "t1": 83528,
+    "boxNorm": [
+     0.4765,
+     0.6298,
+     0.5397,
+     0.7799
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.48\u20130.54, y 0.63\u20130.78 (2 strokes) over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m13",
+    "strokes": [
+     21,
+     22
+    ],
+    "t0": 87957,
+    "t1": 88846,
+    "boxNorm": [
+     0.51,
+     0.4862,
+     0.7525,
+     0.6324
+    ],
+    "shape": "underline",
+    "description": "underlined x 0.51\u20130.75 at y 0.56 (2 strokes) over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m14",
+    "strokes": [
+     23
+    ],
+    "t0": 90700,
+    "t1": 90915,
+    "boxNorm": [
+     0.3796,
+     0.4968,
+     0.4598,
+     0.5293
+    ],
+    "shape": "underline",
+    "description": "underlined x 0.38\u20130.46 at y 0.51 over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m15",
+    "strokes": [
+     24
+    ],
+    "t0": 94071,
+    "t1": 94178,
+    "boxNorm": [
+     0.4687,
+     0.4463,
+     0.4977,
+     0.4556
+    ],
+    "shape": "underline",
+    "description": "underlined x 0.47\u20130.50 at y 0.45 over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m16",
+    "strokes": [
+     25
+    ],
+    "t0": 98155,
+    "t1": 98443,
+    "boxNorm": [
+     0.3118,
+     0.4857,
+     0.4152,
+     0.4942
+    ],
+    "shape": "underline",
+    "description": "underlined x 0.31\u20130.42 at y 0.49 over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   },
+   {
+    "id": "m17",
+    "strokes": [
+     26,
+     27
+    ],
+    "t0": 100095,
+    "t1": 101000,
+    "boxNorm": [
+     0.3176,
+     0.387,
+     0.4783,
+     0.5787
+    ],
+    "shape": "mark",
+    "description": "marked region x 0.32\u20130.48, y 0.39\u20130.58 (2 strokes) over \u201cscroll area in controls.html#walkthrough\u201d",
+    "on": "scroll area in controls.html#walkthrough"
+   }
+  ],
+  "events": [
+   {
+    "kind": "click",
+    "t": 1683,
+    "x": 0.4061157,
+    "y": 0.325,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 2250,
+    "x": 0.3983841,
+    "y": 0.33156466,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 3401,
+    "x": 0.3975342,
+    "y": 0.31537816,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 5698,
+    "x": 0.42251435,
+    "y": 0.32369792,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 6697,
+    "x": 0.38892668,
+    "y": 0.3228597,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 7240,
+    "x": 0.41793364,
+    "y": 0.3228597,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 7933,
+    "x": 0.4043396,
+    "y": 0.32520887,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 8490,
+    "x": 0.40242308,
+    "y": 0.32577312,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 8757,
+    "x": 0.39107665,
+    "y": 0.32548827,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 9323,
+    "x": 0.40716553,
+    "y": 0.3239122,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 9985,
+    "x": 0.38536683,
+    "y": 0.32365993,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 12385,
+    "x": 0.41248018,
+    "y": 0.3262017,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 13523,
+    "x": 0.3932953,
+    "y": 0.3312473,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 14023,
+    "x": 0.40269622,
+    "y": 0.32811686,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 16540,
+    "x": 0.5638092,
+    "y": 0.54481065,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 18956,
+    "x": 0.5730988,
+    "y": 0.539407,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 21807,
+    "x": 0.39780426,
+    "y": 0.32876247,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 22675,
+    "x": 0.41249236,
+    "y": 0.3273953,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 23107,
+    "x": 0.39546204,
+    "y": 0.32390136,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 28940,
+    "x": 0.38640898,
+    "y": 0.57858884,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 29731,
+    "x": 0.38640442,
+    "y": 0.57999945,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 30073,
+    "x": 0.38640442,
+    "y": 0.57999945,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 31840,
+    "x": 0.38049164,
+    "y": 0.5785563,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 36856,
+    "x": 0.38341674,
+    "y": 0.4508599,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 37973,
+    "x": 0.47969818,
+    "y": 0.457959,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 38499,
+    "x": 0.43374175,
+    "y": 0.4495714,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 39198,
+    "x": 0.38031158,
+    "y": 0.44530165,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 39690,
+    "x": 0.45690003,
+    "y": 0.5243815,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 40123,
+    "x": 0.45244598,
+    "y": 0.54262424,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 40557,
+    "x": 0.4542694,
+    "y": 0.52017415,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 48506,
+    "x": 0.43152007,
+    "y": 0.53036565,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 49049,
+    "x": 0.5853165,
+    "y": 0.5383084,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 49530,
+    "x": 0.48657686,
+    "y": 0.5261285,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 49973,
+    "x": 0.6131439,
+    "y": 0.5313504,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 50406,
+    "x": 0.49916688,
+    "y": 0.53440213,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 51953,
+    "x": 0.62286836,
+    "y": 0.392749,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 52256,
+    "x": 0.5191849,
+    "y": 0.41416287,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 59590,
+    "x": 0.85703886,
+    "y": 0.24535319,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 61156,
+    "x": 0.8266907,
+    "y": 0.25910375,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 61632,
+    "x": 0.8684372,
+    "y": 0.30230033,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 109449,
+    "x": 0.36805114,
+    "y": 0.681977,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 109849,
+    "x": 0.36725616,
+    "y": 0.63702255,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 110139,
+    "x": 0.36854553,
+    "y": 0.6190348,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 110631,
+    "x": 0.40305024,
+    "y": 0.6156711,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 110973,
+    "x": 0.40527192,
+    "y": 0.61282283,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 111701,
+    "x": 0.33650056,
+    "y": 0.600708,
+    "button": "left",
+    "label": "in controls.html#walkthrough",
+    "role": "scroll area"
+   },
+   {
+    "kind": "click",
+    "t": 116114,
+    "x": 0.5393219,
+    "y": 0.053285047,
+    "button": "left",
+    "label": "\u201cFinish\u201d",
+    "role": "text"
+   }
+  ],
+  "keyframes": [],
+  "contactSheet": "contact-sheet.png"
+ },
+ "evidence": {
+  "clues": [
+   {
+    "source": "port",
+    "pointer": {
+     "kind": "folder",
+     "path": "/Users/kit/code/open-source/knobs-design",
+     "root": "/Users/kit/code/open-source/knobs-design",
+     "tree": true,
+     "repo": "/Users/kit/code/open-source/knobs"
+    },
+    "note": "port 8452 is served from /Users/kit/code/open-source/knobs-design"
+   },
+   {
+    "source": "title",
+    "pointer": {
+     "kind": "words",
+     "words": [
+      "knobs"
+     ]
+    },
+    "note": "window title \"knobs\""
+   },
+   {
+    "source": "speech",
+    "pointer": {
+     "kind": "words",
+     "words": []
+    },
+    "note": "said"
+   }
+  ],
+  "candidates": [
+   {
+    "id": "ses_f501e10c4ffedeySM4jnNIe3AD",
+    "title": "OPENCODE IOS",
+    "directory": "/Users/kit/code/open-source/opencode-ios-oc380-loading",
+    "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+    "updatedMs": 1792525637252,
+    "viewedMs": 1792525562929
+   },
+   {
+    "id": "ses_edb79c155ffeZ8eqFja5zoWOlX",
+    "title": "DESKTOP",
+    "directory": "/Users/kit/code/open-source/opencode",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792525591996,
+    "viewedMs": 1792525478840
+   },
+   {
+    "id": "ses_edb816b31ffe4B3nexhh9rqAJp",
+    "title": "SCRAWL",
+    "directory": "/Users/kit/code/open-source/scrawl",
+    "repo": "/Users/kit/code/open-source/scrawl",
+    "updatedMs": 1792525437004,
+    "viewedMs": 1792519144207
+   },
+   {
+    "id": "ses_ee2d10e0bffeibMGwlBmCwZoQI",
+    "title": "GAME ENGINE",
+    "directory": "/Users/kit/code/open-source/arcade",
+    "repo": "/Users/kit/code/open-source/arcade",
+    "updatedMs": 1792525260184,
+    "viewedMs": 1792525260404
+   },
+   {
+    "id": "ses_efcd8972fffeT5zZbj9YtIl3LU",
+    "title": "HOME",
+    "directory": "/Users/kit/code/home",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792525133918,
+    "viewedMs": 1792525133964
+   },
+   {
+    "id": "ses_ec3d5c5d4ffeYKYSkmxIUdMuzn",
+    "title": "HEX",
+    "directory": "/Users/kit/code/open-source/hex",
+    "repo": "/Users/kit/code/open-source/hex",
+    "updatedMs": 1792524934029,
+    "viewedMs": 1792524934058
+   },
+   {
+    "id": "ses_ec318a614ffeQvPht0qntUnIcP",
+    "title": "CANVAS",
+    "directory": "/Users/kit/code/open-source/gpu-gallery",
+    "repo": "/Users/kit/code/open-source/gpu-gallery",
+    "updatedMs": 1792524901681,
+    "viewedMs": 1792524901843
+   },
+   {
+    "id": "ses_eb96316daffevhidtO7Z4W583K",
+    "title": "FLIT",
+    "directory": "/Users/kit/code/open-source/flit",
+    "repo": "/Users/kit/code/open-source/flit",
+    "updatedMs": 1792524728204,
+    "viewedMs": 1792523687397
+   },
+   {
+    "id": "ses_ec91ede28ffeFpn6L7FZtGoka0",
+    "title": "KNOBS",
+    "directory": "/Users/kit/code/open-source/knobs",
+    "repo": "/Users/kit/code/open-source/knobs",
+    "updatedMs": 1792524428015,
+    "viewedMs": 1792524428209
+   },
+   {
+    "id": "ses_ed125b1feffeX5uSGJiGJJ0Zq1",
+    "title": "PROBLEMS",
+    "directory": "/Users/kit/code/worktrees/team-board/task-page",
+    "repo": "/Users/kit/code/worktrees/team-board/rewrite",
+    "updatedMs": 1792524255031,
+    "viewedMs": 1792524255129
+   },
+   {
+    "id": "ses_eb97fd4bcffeuNORqi0lEBAC73",
+    "title": "KIT MOTION",
+    "directory": "/Users/kit/code/home/research/2026-10-16-motion-v3",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792523767105,
+    "viewedMs": 1792517287142
+   },
+   {
+    "id": "ses_f13460621ffeQz0u4Attrj4Z4l",
+    "title": "SLACKBOT",
+    "directory": "/Users/kit/code/open-source/opencode-slack",
+    "repo": "/Users/kit/code/open-source/opencode-slack",
+    "updatedMs": 1792478486144,
+    "viewedMs": 1792440889443
+   },
+   {
+    "id": "ses_ebd33f90bffer4eZZgeryssZt3",
+    "title": "SERVER VOICE",
+    "directory": "/Users/kit/worktrees/opencode/server-voice",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792478486119,
+    "viewedMs": 1792442360125
+   },
+   {
+    "id": "ses_f0c100c89ffeta4TCCxgTHFI2J",
+    "title": "UP DOWN APP",
+    "directory": "/Users/kit/code/open-source/life-hub-uikit",
+    "repo": "/Users/kit/code/open-source/life-hub-uikit",
+    "updatedMs": 1792454885370,
+    "viewedMs": 1792454885390
+   },
+   {
+    "id": "ses_ebea564f3ffeI16n54W8y9Mtyz",
+    "title": "CONSOLE VORTEX",
+    "directory": "/Users/kit/code/open-source/opencode-console",
+    "repo": "/Users/kit/code/open-source/opencode-console",
+    "updatedMs": 1792438810776,
+    "viewedMs": 1792438810783
+   },
+   {
+    "id": "ses_ead884a3dffephbfYhZ8yrShY4",
+    "title": "JEVAL",
+    "directory": "/Users/kit/code/home",
+    "repo": "/Users/kit/code/home",
+    "updatedMs": 1792436507580,
+    "viewedMs": 1792389692797
+   },
+   {
+    "id": "ses_ebe313af4ffex4Y5UKIvEiftzm",
+    "title": "OPENCODE CONSOLE",
+    "directory": "/Users/kit/code/open-source/opencode-console",
+    "repo": "/Users/kit/code/open-source/opencode-console",
+    "updatedMs": 1792431356040,
+    "viewedMs": 1792187291153
+   },
+   {
+    "id": "ses_eb480ee0affeghrrePfmjzMFLX",
+    "title": "Public-site audit fixes",
+    "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/lucky-rocket",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792429760607,
+    "viewedMs": 1792358813510
+   },
+   {
+    "id": "ses_eaf459a69ffeRF6Oq8hjTbVtvR",
+    "title": "MODEL PICKER",
+    "directory": "/Users/kit/code/open-source/opencode-ios-model-picker",
+    "repo": "/Users/kit/code/open-source/opencode-ios-sf-picks",
+    "updatedMs": 1792424967210,
+    "viewedMs": 1792363784492
+   },
+   {
+    "id": "ses_ead37e06cffeRfPkN2vrbdNWDs",
+    "title": "SCRAWL RECORDER",
+    "directory": "/Users/kit/code/open-source/scrawl",
+    "repo": "/Users/kit/code/open-source/scrawl",
+    "updatedMs": 1792391837251,
+    "viewedMs": 1792391837366
+   },
+   {
+    "id": "ses_eb4808112ffdq5ncWwmVhRPaRq",
+    "title": "SPR good to go?",
+    "directory": "/Users/kit/.local/share/opencode-studio-migration/data/opencode/worktree/012780/quick-tiger",
+    "repo": "/Users/kit/code/open-source/opencode",
+    "updatedMs": 1792269008625,
+    "viewedMs": 1792268816383
+   },
+   {
+    "id": "ses_ec39487c0ffezso4grvaG2gs9n",
+    "title": "OPEN MONEY",
+    "directory": "/Users/kit/code/open-source/openmoney",
+    "repo": "/Users/kit/code/open-source/openmoney",
+    "updatedMs": 1792251233509,
+    "viewedMs": 1792251233513
+   },
+   {
+    "id": "ses_ebd58b4a3ffeOuHOBJ84IHoNGc",
+    "title": "DEADBOLT",
+    "directory": "/Users/kit/code/open-source/deadbolt",
+    "repo": "/Users/kit/code/open-source/deadbolt",
+    "updatedMs": 1792177126854,
+    "viewedMs": 1792172591104
+   },
+   {
+    "id": "ses_ec4dfeed7ffebmlNkG7QK04Tqq",
+    "title": "AI TALK",
+    "directory": "/Users/kit/code/open-source/ai-talk",
+    "repo": "/Users/kit/code/open-source/ai-talk",
+    "updatedMs": 1792171656850,
+    "viewedMs": 1792123145000
+   },
+   {
+    "id": "ses_ebef6c45fffevSGyuztH3R6AVp",
+    "title": "BROWSER CONTROL",
+    "directory": "/Users/kit/code/open-source/browser-control",
+    "repo": "/Users/kit/code/open-source/browser-control",
+    "updatedMs": 1792094949860,
+    "viewedMs": 1792094949875
+   },
+   {
+    "id": "ses_ec8ac0d73ffeYDTUgKZeuLdJ5X",
+    "title": "CHOOSER",
+    "directory": "/Users/kit/code/experiments/typescript/choose-gpu",
+    "repo": "/Users/kit/code/experiments/typescript/choose-gpu",
+    "updatedMs": 1791956676331,
+    "viewedMs": 1791953219243
+   }
+  ],
+  "nowMs": 1792525685934
+ }
+}

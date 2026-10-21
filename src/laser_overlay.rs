@@ -1543,7 +1543,7 @@ mod tests {
         }
     }
 
-    /// The shader must load on the oldest macOS Scrawl supports (`LSMinimumSystemVersion` 26.0).
+    /// The shader must load on the oldest macOS Scrawl supports (`LSMinimumSystemVersion` 15.0).
     /// Without `-mmacosx-version-min`, `xcrun metal` targets the build machine's macOS and the
     /// overlay (ink, laser, edge glow) silently fails to open on older systems.
     #[test]
@@ -1557,6 +1557,6 @@ mod tests {
             .next()
             .and_then(|v| v.parse().ok())
             .expect("target has a major version");
-        assert!(major <= 26, "laser shader targets macOS {major}, newer than 26.0");
+        assert!(major <= 15, "laser shader targets macOS {major}, newer than 15.0");
     }
 }
