@@ -1113,6 +1113,25 @@ impl Panel {
                 }
             }
             ("autoSend" | "videoExport", serde_json::Value::Bool(on)) => write(key, (*on).into()),
+            ("agentHost", serde_json::Value::String(host)) => {
+                let host = host.trim();
+                if host.is_empty() {
+                    write("agentHost", serde_json::Value::Null);
+                } else if crate::handoff::valid_agent_host(host) {
+                    write("agentHost", host.into());
+                }
+            }
+            ("agentPath", serde_json::Value::String(dir)) => {
+                let dir = dir.trim();
+                if dir.is_empty() {
+                    write("agentPath", serde_json::Value::Null);
+                } else if crate::handoff::valid_agent_path(dir) {
+                    write("agentPath", dir.into());
+                }
+            }
+            ("agentHost" | "agentPath", serde_json::Value::Null) => {
+                write(key, serde_json::Value::Null);
+            }
             ("microphone", serde_json::Value::String(id)) => {
                 let inputs = self.inputs.clone().unwrap_or_default();
                 if let Err(error) = crate::mic::save_in(&path, id, &inputs) {
@@ -2132,6 +2151,16 @@ mod tests {
         set(&mut panel, &mut host, "retention", "forever".into());
         // "Forever" says it all; no caption.
         assert_eq!(panel.view(&host).retention.note, "");
+
+        set(&mut panel, &mut host, "agentHost", " kitbox.exe.xyz ".into());
+        set(&mut panel, &mut host, "agentPath", "~/.scrawl/captures".into());
+        set(&mut panel, &mut host, "agentHost", "-bad".into());
+        set(&mut panel, &mut host, "agentPath", "../bad".into());
+        let config = read_json(&host.path);
+        assert_eq!(config["agentHost"], "kitbox.exe.xyz");
+        assert_eq!(config["agentPath"], "~/.scrawl/captures");
+        set(&mut panel, &mut host, "agentHost", "".into());
+        assert!(read_json(&host.path).get("agentHost").is_none());
     }
 
     #[test]

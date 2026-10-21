@@ -463,7 +463,8 @@ fn context_value(raw: &str) -> String {
 
 pub fn summary_markdown(bundle: &ScrawlBundle, bundle_dir: &std::path::Path) -> String {
     let agent_context = crate::handoff::experiment(crate::handoff::AGENT_CONTEXT);
-    summary_markdown_with(bundle, bundle_dir, agent_context)
+    let shown = crate::handoff::shown_bundle_dir(bundle_dir);
+    summary_markdown_with(bundle, &shown, agent_context)
 }
 
 /// `agent_context` is the `agentContext` experiment (`agent_context::keyframe_texts`).

@@ -41,6 +41,18 @@ inspect --marks` lists them) makes a dense sheet of frames around a moment, `scr
 frames` pulls a range, `scrawl send` queues a capture into an OpenCode session, and `scrawl export`
 makes a shareable `.mp4`. `scrawl skill` prints the skill without installing anything.
 
+### Agents on another machine
+
+When your coding agent runs in an SSH terminal on another machine (an `exe.dev` VM, a remote Linux box, or another Mac), set `"agentHost"` in `~/.config/scrawl/config.json`:
+
+```json
+{
+  "agentHost": "kitbox.exe.xyz"
+}
+```
+
+(Or set `SCRAWL_AGENT_HOST`, and optionally `"agentPath"` / `SCRAWL_AGENT_PATH`, which defaults to `"~/.scrawl/captures"`.) When a capture finishes, Scrawl streams the light bundle files (`contact-sheet.png`, `frames/*.png`, `scrawl.json`, `summary.md`) to `~/.scrawl/captures/<id>.scrawl` on that host over SSH (`ControlMaster`), then streams `recording.mp4` and `audio.wav` in the background (marked by `.media-pending` until complete). `⌘V`, `⌥⇧V` in a terminal, and `scrawl send` all use the remote path on that host so OpenCode, Claude Code, and Codex can open the images directly.
+
 ## Usage
 
 ```sh

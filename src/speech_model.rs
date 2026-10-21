@@ -364,6 +364,7 @@ pub fn transcribe_again(dir: &Path) -> Result<bool> {
         dir.join("summary.md"),
         crate::sketch::summary_markdown(&bundle, &dir),
     )?;
+    let _ = crate::handoff::sync_for_agent_host(&dir);
     let _ = std::fs::remove_file(dir.join(PENDING));
     Ok(true)
 }

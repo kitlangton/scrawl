@@ -196,8 +196,18 @@ pub fn copy_png_to_clipboard(png_bytes: &[u8]) -> Result<()> {
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn copy_bundle_to_clipboard(bundle_dir: &Path) -> Result<()> {
     let (directory, bundle) = load_bundle(bundle_dir)?;
-    let summary = crate::sketch::summary_markdown(&bundle, &directory);
+    let shown = ensure_synced(&directory);
+    let summary = crate::sketch::summary_markdown(&bundle, &shown);
     copy_string_to_clipboard(&summary)
+}
+
+/// The contact-sheet path (for terminal paste) and summary text (for the second paste or `⌘V`)
+/// for `bundle` in `directory`, using the remote path when synced to [`agent_host`].
+pub fn bundle_paste_payload(directory: &Path, bundle: &ScrawlBundle) -> (String, String) {
+    let shown = ensure_synced(directory);
+    let sheet = shown.join(&bundle.contact_sheet).display().to_string();
+    let summary = crate::sketch::summary_markdown(bundle, &shown);
+    (sheet, summary)
 }
 
 /// Pastes both the contact-sheet image and the transcript/keyframe text into the active app
@@ -220,14 +230,14 @@ pub fn paste_bundle_image_and_text(bundle_dir: &Path) -> Result<()> {
     let (directory, bundle) = load_bundle(bundle_dir)?;
     let sheet_path = directory.join(&bundle.contact_sheet);
     let image = fs::read(&sheet_path).context("Could not read contact sheet")?;
-    let summary = crate::sketch::summary_markdown(&bundle, &directory);
+    let (terminal_sheet, summary) = bundle_paste_payload(&directory, &bundle);
 
     crate::capture::wait_for_modifiers_released(350);
 
     if crate::capture::is_frontmost_terminal() {
         // In terminals (Ghostty / OpenCode TUI / Claude Code), pasting the image path first
         // resolves and attaches `[Image 1]`, and the second paste inserts the text summary.
-        copy_string_to_clipboard(&sheet_path.display().to_string())?;
+        copy_string_to_clipboard(&terminal_sheet)?;
     } else {
         // In GUI apps (OpenCode Desktop, Slack, Linear, browsers), PNG-only attaches the image.
         copy_png_to_clipboard(&image)?;
@@ -371,6 +381,8 @@ fn opencode_binary() -> Result<PathBuf> {
 pub struct Config {
     #[serde(default)]
     pub agent_host: Option<String>,
+    #[serde(default)]
+    pub agent_path: Option<String>,
     #[serde(default)]
     pub agent_opencode: Option<String>,
     #[serde(default)]
@@ -801,30 +813,110 @@ pub fn usb_apps() -> Vec<String> {
 /// Safe to put unquoted in a remote shell command (host names, `~/bin/tool` paths).
 fn safe_word(text: &str) -> bool {
     !text.is_empty()
+        && !text.starts_with('-')
         && text
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.@/~".contains(&b))
 }
 
-/// The Mac whose OpenCode server holds Kit's sessions when it isn't this one: an SSH host from
-/// `SCRAWL_AGENT_HOST` or `~/.config/scrawl/config.json` (`{"agentHost": "studio"}`).
-pub fn agent_host() -> Option<String> {
-    std::env::var("SCRAWL_AGENT_HOST")
-        .ok()
-        .or_else(|| config().agent_host)
-        .filter(|h| safe_word(h))
+/// Whether `text` is a valid SSH host or alias for `agentHost`.
+pub fn valid_agent_host(text: &str) -> bool {
+    safe_word(text) && !text.contains('/') && !text.contains('~')
 }
 
-/// The `opencode2` command to run on the agent host (`agentOpencode`, default `opencode2`).
+/// Whether `text` is a safe remote captures directory (`~/...`, `~`, or `/...`) for `agentPath`.
+pub fn valid_agent_path(text: &str) -> bool {
+    safe_word(text)
+        && (text == "~" || text.starts_with("~/") || text.starts_with('/'))
+        && !text.split('/').any(|part| part == "..")
+}
+
+/// Default folder on the agent host where synced `.scrawl` bundles unpack.
+pub const DEFAULT_AGENT_PATH: &str = "~/.scrawl/captures";
+
+/// Written inside a local bundle once its light files are on the agent host.
+pub const REMOTE_SYNC: &str = ".remote.json";
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteSync {
+    pub host: String,
+    pub path: PathBuf,
+}
+
+pub fn remote_sync(bundle_dir: &Path) -> Option<RemoteSync> {
+    let bytes = fs::read(bundle_dir.join(REMOTE_SYNC)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// The bundle path to show an agent: the synced path on [`agent_host`] when `.remote.json`
+/// records one, otherwise `bundle_dir`.
+pub fn shown_bundle_dir(bundle_dir: &Path) -> PathBuf {
+    if let Some(sync) = remote_sync(bundle_dir)
+        && (cfg!(test) || agent_host().as_deref() == Some(sync.host.as_str()))
+    {
+        return sync.path;
+    }
+    bundle_dir.to_path_buf()
+}
+
+/// The machine where coding agents run when it isn't this one: an SSH host from
+/// `SCRAWL_AGENT_HOST` or `~/.config/scrawl/config.json` (`{"agentHost": "kitbox.exe.xyz"}`).
+/// Tests see `None` unless passed explicitly to [`sync_bundle_to_with`].
+pub fn agent_host() -> Option<String> {
+    if cfg!(test) {
+        return None;
+    }
+    agent_host_from(
+        &config(),
+        std::env::var("SCRAWL_AGENT_HOST").ok().as_deref(),
+    )
+}
+
+pub fn agent_host_from(config: &Config, env: Option<&str>) -> Option<String> {
+    env.map(str::to_owned)
+        .or_else(|| config.agent_host.clone())
+        .map(|h| h.trim().to_owned())
+        .filter(|h| valid_agent_host(h))
+}
+
+/// The folder on the agent host where synced `.scrawl` bundles unpack (`SCRAWL_AGENT_PATH` or
+/// `agentPath` in `config.json`, default [`DEFAULT_AGENT_PATH`]).
+pub fn agent_path() -> String {
+    agent_path_from(
+        &config(),
+        std::env::var("SCRAWL_AGENT_PATH").ok().as_deref(),
+    )
+}
+
+pub fn agent_path_from(config: &Config, env: Option<&str>) -> String {
+    env.map(str::to_owned)
+        .or_else(|| config.agent_path.clone())
+        .map(|p| p.trim().to_owned())
+        .filter(|p| valid_agent_path(p))
+        .unwrap_or_else(|| DEFAULT_AGENT_PATH.to_owned())
+}
+
+/// The `opencode` command to run on the agent host (`agentOpencode`, default `opencode2` with
+/// fallback to `opencode`).
 fn agent_opencode() -> String {
     config()
         .agent_opencode
         .filter(|c| safe_word(c))
-        .unwrap_or_else(|| "opencode2".to_owned())
+        .unwrap_or_else(|| "\"$(command -v opencode2 || echo opencode)\"".to_owned())
 }
 
 fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+fn remote_dir_expr(remote_dir: &str) -> String {
+    if remote_dir == "~" {
+        "\"$HOME\"".to_owned()
+    } else if let Some(rest) = remote_dir.strip_prefix("~/") {
+        format!("\"$HOME\"/{}", shell_quote(rest))
+    } else {
+        shell_quote(remote_dir)
+    }
 }
 
 /// A system command: `/usr/bin/<name>` on macOS; on Windows the copy in System32 (OpenSSH and
@@ -839,7 +931,17 @@ fn system_tool(name: &str) -> PathBuf {
 
 fn ssh(host: &str) -> Command {
     let mut command = Command::new(system_tool("ssh"));
-    command.args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host]);
+    command.args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]);
+    #[cfg(unix)]
+    command.args([
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        "ControlPersist=60",
+        "-o",
+        "ControlPath=/tmp/scrawl-ssh-%C",
+    ]);
+    command.arg(host);
     command
 }
 
@@ -854,48 +956,36 @@ pub const HEAVY_MEDIA: [&str; 5] = [
 /// Present in a copied bundle while its heavy media is still arriving.
 pub const MEDIA_PENDING: &str = ".media-pending";
 
-/// Copies a bundle to the same path on `host`, so the agent there can open its files.
-/// Syncs the contact sheet, keyframe PNGs, manifest, and summary synchronously so the session
-/// can be queued immediately, then streams heavy media (`recording.mp4`/`.mov`, `frames-full`)
-/// in the background for `scrawl zoom`, marked by [`MEDIA_PENDING`] until it lands.
-pub fn sync_bundle_to(host: &str, bundle_dir: &Path) -> Result<()> {
+/// The outside steps of [`sync_bundle_to_with`], swappable in tests.
+#[derive(Clone, Copy)]
+pub struct SyncHooks {
+    /// Streams `tar <tar_args>` into `ssh <host> <remote_cmd>` and returns stdout.
+    pub remote_tar: fn(host: &str, tar_args: &[String], remote_cmd: &str) -> Result<String>,
+    /// Streams heavy media on a detached thread in production; `false` in tests so both stages
+    /// finish before assertions run.
+    pub background_heavy: bool,
+}
+
+impl Default for SyncHooks {
+    fn default() -> Self {
+        Self {
+            remote_tar: ssh_tar,
+            background_heavy: true,
+        }
+    }
+}
+
+fn ssh_tar(host: &str, tar_args: &[String], remote_cmd: &str) -> Result<String> {
     use std::process::Stdio;
-    let parent = bundle_dir.parent().context("Bundle has no parent")?;
-    let name = bundle_dir.file_name().context("Bundle has no name")?;
     let mut tar = Command::new(system_tool("tar"))
-        .arg("-C")
-        .arg(parent)
-        .args([
-            "--exclude=*/recording.mp4",
-            "--exclude=*/recording.mov",
-            "--exclude=*/audio.wav",
-            "--exclude=*/frames-full",
-            "--exclude=*/contact-sheet-full.png",
-            "--exclude=*/.media-sending",
-        ])
-        .arg("-cf")
-        .arg("-")
-        .arg(name)
+        .env("COPYFILE_DISABLE", "1")
+        .args(tar_args)
         .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()
         .context("Could not start tar")?;
-    let parent_q = shell_quote(&parent.to_string_lossy());
-    let name_str = name.to_string_lossy().into_owned();
-    let heavy: Vec<String> = HEAVY_MEDIA
-        .iter()
-        .filter(|rel| bundle_dir.join(rel).exists())
-        .map(|rel| format!("{name_str}/{rel}"))
-        .collect();
-    let bundle_q = shell_quote(&parent.join(&name_str).to_string_lossy());
-    // The marker goes up with the light files, before the session is prompted, so `scrawl zoom`
-    // there knows the video is still on its way rather than missing.
-    let mark_pending = if heavy.is_empty() {
-        String::new()
-    } else {
-        format!(" && touch {bundle_q}/{MEDIA_PENDING}")
-    };
     let output = ssh(host)
-        .arg(format!("mkdir -p {parent_q} && tar -C {parent_q} -xf -{mark_pending}"))
+        .arg(remote_cmd)
         .stdin(tar.stdout.take().context("No tar output")?)
         .output()
         .context("Could not start ssh")?;
@@ -905,14 +995,148 @@ pub fn sync_bundle_to(host: &str, bundle_dir: &Path) -> Result<()> {
         "Copying the bundle to {host} failed: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     );
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+static REMOTE_ROOTS: std::sync::Mutex<Vec<((String, String), PathBuf)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn cached_remote_root(host: &str, remote_dir: &str) -> Option<PathBuf> {
+    let cache = REMOTE_ROOTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache
+        .iter()
+        .find(|((h, d), _)| h == host && d == remote_dir)
+        .map(|(_, path)| path.clone())
+}
+
+fn note_remote_root(host: &str, remote_dir: &str, resolved: PathBuf) {
+    let mut cache = REMOTE_ROOTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, slot)) = cache
+        .iter_mut()
+        .find(|((h, d), _)| h == host && d == remote_dir)
+    {
+        *slot = resolved;
+    } else {
+        cache.push(((host.to_owned(), remote_dir.to_owned()), resolved));
+    }
+}
+
+/// Copies a bundle to [`agent_path`] on `host` and returns the remote bundle directory.
+/// Syncs the contact sheet, keyframe PNGs, manifest, and summary synchronously so the agent can
+/// read them immediately, then streams heavy media (`recording.mp4`/`.mov`, `frames-full`) in
+/// the background for `scrawl zoom`, marked by [`MEDIA_PENDING`] until it lands.
+pub fn sync_bundle_to(host: &str, bundle_dir: &Path) -> Result<PathBuf> {
+    sync_bundle_to_with(host, &agent_path(), bundle_dir, &SyncHooks::default())
+}
+
+pub fn sync_bundle_to_with(
+    host: &str,
+    remote_dir: &str,
+    bundle_dir: &Path,
+    hooks: &SyncHooks,
+) -> Result<PathBuf> {
+    let parent = bundle_dir.parent().context("Bundle has no parent")?;
+    let name = bundle_dir.file_name().context("Bundle has no name")?;
+    let name_str = name.to_string_lossy().into_owned();
+    let name_q = shell_quote(&name_str);
+    let already_synced = remote_sync(bundle_dir).is_some_and(|s| s.host == host)
+        || bundle_dir.join(crate::retention::MEDIA_SENDING).exists();
+
+    let pre_known_root = cached_remote_root(host, remote_dir)
+        .or_else(|| remote_dir.starts_with('/').then(|| PathBuf::from(remote_dir)));
+    let initial_remote = pre_known_root
+        .as_ref()
+        .map_or_else(|| Path::new(remote_dir).join(&name_str), |r| r.join(&name_str));
+    if let Ok((_, bundle)) = load_bundle(bundle_dir) {
+        let summary = crate::sketch::summary_markdown_with(
+            &bundle,
+            &initial_remote,
+            experiment(AGENT_CONTEXT),
+        );
+        let _ = fs::write(bundle_dir.join("summary.md"), summary.as_bytes());
+    }
+
+    let mut heavy: Vec<String> = if already_synced {
+        Vec::new()
+    } else {
+        HEAVY_MEDIA
+            .iter()
+            .filter(|rel| bundle_dir.join(rel).exists())
+            .map(|rel| format!("{name_str}/{rel}"))
+            .collect()
+    };
+
+    let dir_expr = remote_dir_expr(remote_dir);
+    // The marker goes up with the light files, before the session is prompted, so `scrawl zoom`
+    // there knows the video is still on its way rather than missing.
+    let mark_pending = if heavy.is_empty() {
+        String::new()
+    } else {
+        format!(" && touch \"$d\"/{name_q}/{MEDIA_PENDING}")
+    };
+    let remote_cmd =
+        format!("d={dir_expr} && mkdir -p \"$d\" && tar -C \"$d\" -xf -{mark_pending} && cd \"$d\" && pwd");
+    let tar_args = vec![
+        "-C".to_owned(),
+        parent.to_string_lossy().into_owned(),
+        "--exclude=*/recording.mp4".to_owned(),
+        "--exclude=*/recording.mov".to_owned(),
+        "--exclude=*/audio.wav".to_owned(),
+        "--exclude=*/frames-full".to_owned(),
+        "--exclude=*/contact-sheet-full.png".to_owned(),
+        "--exclude=*/.media-sending".to_owned(),
+        "--exclude=*/.remote.json".to_owned(),
+        "-cf".to_owned(),
+        "-".to_owned(),
+        name_str.clone(),
+    ];
+    let stdout = (hooks.remote_tar)(host, &tar_args, &remote_cmd)?;
+    let remote_root = stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with('/'))
+        .map(PathBuf::from)
+        .or(pre_known_root)
+        .unwrap_or_else(|| PathBuf::from(remote_dir));
+    if remote_root.starts_with("/") {
+        note_remote_root(host, remote_dir, remote_root.clone());
+    }
+    let remote_bundle = remote_root.join(&name_str);
+
+    let sync_record = RemoteSync {
+        host: host.to_owned(),
+        path: remote_bundle.clone(),
+    };
+    if let Ok(bytes) = serde_json::to_vec(&sync_record) {
+        let _ = fs::write(bundle_dir.join(REMOTE_SYNC), bytes);
+    }
+    if remote_bundle != initial_remote
+        && let Ok((_, bundle)) = load_bundle(bundle_dir)
+    {
+        let summary = crate::sketch::summary_markdown_with(
+            &bundle,
+            &remote_bundle,
+            experiment(AGENT_CONTEXT),
+        );
+        let _ = fs::write(bundle_dir.join("summary.md"), summary.as_bytes());
+        if !heavy.is_empty() {
+            heavy.push(format!("{name_str}/summary.md"));
+        }
+    }
 
     if !heavy.is_empty() {
         let host_owned = host.to_owned();
         let parent_owned = parent.to_path_buf();
+        let bundle_q = shell_quote(&remote_bundle.to_string_lossy());
         // Unpack into a staging folder and move into the bundle only once complete, so nothing on
         // the other side ever reads a half-copied video; then clear the marker.
         let staging_q = shell_quote(
-            &parent
+            &remote_root
                 .join(format!(".{name_str}.incoming"))
                 .to_string_lossy(),
         );
@@ -921,36 +1145,58 @@ pub fn sync_bundle_to(host: &str, bundle_dir: &Path) -> Result<()> {
              for f in {staging_q}/*/*; do rm -rf {bundle_q}/\"$(basename \"$f\")\" && mv \"$f\" {bundle_q}/; done; \
              rm -rf {staging_q} {bundle_q}/{MEDIA_PENDING}"
         );
+        let mut bg_args = vec![
+            "-C".to_owned(),
+            parent_owned.to_string_lossy().into_owned(),
+            "-cf".to_owned(),
+            "-".to_owned(),
+        ];
+        bg_args.extend(heavy);
         // Held until the media lands, so the iPhone video isn't re-encoded or cleaned up under
         // the copy (see `retention`).
         let sending = bundle_dir.join(crate::retention::MEDIA_SENDING);
         let _ = fs::write(&sending, host);
-        std::thread::spawn(move || {
+        let remote_tar = hooks.remote_tar;
+        let run_heavy = move || {
             let _done = RemoveOnDrop(sending);
-            let Ok(mut bg_tar) = Command::new(system_tool("tar"))
-                .arg("-C")
-                .arg(&parent_owned)
-                .arg("-cf")
-                .arg("-")
-                .args(&heavy)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-            else {
-                return;
-            };
-            if let Some(stdout) = bg_tar.stdout.take() {
-                let _ = ssh(&host_owned)
-                    .arg(remote)
-                    .stdin(stdout)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
-            let _ = bg_tar.wait();
-        });
+            let _ = remote_tar(&host_owned, &bg_args, &remote);
+        };
+        if hooks.background_heavy {
+            std::thread::spawn(run_heavy);
+        } else {
+            run_heavy();
+        }
     }
-    Ok(())
+    Ok(remote_bundle)
+}
+
+/// Syncs `bundle_dir` to [`agent_host`] when configured, returning the remote path or `None` if
+/// no agent host is set or the copy failed.
+pub fn sync_for_agent_host(bundle_dir: &Path) -> Option<PathBuf> {
+    let host = agent_host()?;
+    match sync_bundle_to(&host, bundle_dir) {
+        Ok(remote) => Some(remote),
+        Err(error) => {
+            crate::capture::scrawl_log(format!("remote sync to {host} failed: {error:#}"));
+            None
+        }
+    }
+}
+
+/// Returns the remote bundle path if [`agent_host`] is configured (syncing first when needed),
+/// falling back to `bundle_dir` if not configured or if syncing fails.
+pub fn ensure_synced(bundle_dir: &Path) -> PathBuf {
+    if let Some(host) = agent_host() {
+        if let Some(sync) = remote_sync(bundle_dir)
+            && sync.host == host
+        {
+            return sync.path;
+        }
+        if let Ok(remote) = sync_bundle_to(&host, bundle_dir) {
+            return remote;
+        }
+    }
+    shown_bundle_dir(bundle_dir)
 }
 
 struct RemoveOnDrop(PathBuf);
@@ -964,7 +1210,7 @@ impl Drop for RemoveOnDrop {
 fn opencode_api(method: &str, path: &str, data: Option<&serde_json::Value>) -> Result<Vec<u8>> {
     let mut command = if let Some(host) = agent_host() {
         let mut remote = format!(
-            "PATH=\"$HOME/bin:$HOME/.opencode/bin:/opt/homebrew/bin:$PATH\" {} api {} {}",
+            "PATH=\"$HOME/.local/bin:$HOME/.bun/bin:$HOME/bin:$HOME/.opencode/bin:/opt/homebrew/bin:$PATH\" {} api {} {}",
             agent_opencode(),
             shell_quote(method),
             shell_quote(path)
@@ -1412,7 +1658,6 @@ pub fn resolve_opencode_session_with(
 /// Queues a bundle's summary and pointers into an OpenCode session.
 pub fn send_bundle_to_session(bundle_dir: &Path, session: &str) -> Result<()> {
     let (directory, bundle) = load_bundle(bundle_dir)?;
-    let summary = crate::sketch::summary_markdown(&bundle, &directory);
     ensure!(
         session.starts_with("ses")
             && session
@@ -1420,35 +1665,43 @@ pub fn send_bundle_to_session(bundle_dir: &Path, session: &str) -> Result<()> {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
         "Invalid OpenCode session ID"
     );
-    if let Some(host) = agent_host() {
-        sync_bundle_to(&host, &directory)?;
-    }
-    let quoted_directory = shell_quote(&directory.to_string_lossy());
-    let contact_sheet = directory.join(&bundle.contact_sheet);
+    let shown = if let Some(host) = agent_host() {
+        sync_bundle_to(&host, &directory)?
+    } else {
+        shown_bundle_dir(&directory)
+    };
+    let payload = session_prompt_payload(&bundle, &shown);
+    // The server reads `file://` attachments from its own disk; the bundle is at `shown`
+    // there (copied above when the agents run on another machine).
+    opencode_api(
+        "post",
+        &format!("/api/session/{session}/prompt"),
+        Some(&payload),
+    )?;
+    Ok(())
+}
+
+pub fn session_prompt_payload(bundle: &ScrawlBundle, shown_dir: &Path) -> serde_json::Value {
+    let summary = crate::sketch::summary_markdown(bundle, shown_dir);
+    let quoted_directory = shell_quote(&shown_dir.to_string_lossy());
+    let contact_sheet = shown_dir.join(&bundle.contact_sheet);
     let text = format!(
         "{}\n\nThe contact sheet is attached ({}); read {} for timestamped transcript, marks, and interactions.\nTo look closely at a moment (an animation, a glitch, what the narration points at), run:\nscrawl zoom {} --at <M:SS or \"a phrase that was said\"> [--span 2] [--frames 12]\nIt saves a dense contact sheet of that moment with each frame's time and prints what was said; open the PNG before acting on the feedback. This capture is {} ms long.",
         summary.trim_end(),
         contact_sheet.display(),
-        directory.join("scrawl.json").display(),
+        shown_dir.join("scrawl.json").display(),
         quoted_directory,
         bundle.duration_ms,
     );
-    // The server reads `file://` attachments from its own disk; the bundle is at the same path
-    // there (copied above when the agents run on another Mac).
-    opencode_api(
-        "post",
-        &format!("/api/session/{session}/prompt"),
-        Some(&serde_json::json!({
-            "text": text,
-            "files": [{
-                "uri": file_uri(&contact_sheet),
-                "name": "contact-sheet.png",
-                "description": "Scrawl contact sheet: the capture's keyframes in order",
-            }],
-            "delivery": "queue",
-        })),
-    )?;
-    Ok(())
+    serde_json::json!({
+        "text": text,
+        "files": [{
+            "uri": file_uri(&contact_sheet),
+            "name": "contact-sheet.png",
+            "description": "Scrawl contact sheet: the capture's keyframes in order",
+        }],
+        "delivery": "queue",
+    })
 }
 
 /// A `file://` URL for an absolute path, percent-encoding everything but unreserved
@@ -2092,6 +2345,182 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
         let _ = server.join();
     }
+
+    #[test]
+    fn agent_host_and_path_validate_and_default() {
+        let cfg = Config {
+            agent_host: Some("kitbox.exe.xyz".into()),
+            agent_path: None,
+            ..Config::default()
+        };
+        assert_eq!(agent_host_from(&cfg, None).as_deref(), Some("kitbox.exe.xyz"));
+        assert_eq!(
+            agent_host_from(&cfg, Some("exedev@kitbox.exe.xyz")).as_deref(),
+            Some("exedev@kitbox.exe.xyz")
+        );
+        assert_eq!(agent_path_from(&cfg, None), DEFAULT_AGENT_PATH);
+        assert_eq!(
+            agent_path_from(&cfg, Some("~/custom/captures")),
+            "~/custom/captures"
+        );
+        assert_eq!(
+            agent_path_from(&cfg, Some("/var/tmp/scrawl")),
+            "/var/tmp/scrawl"
+        );
+        // Unsafe flags, relative paths, and parent traversals are rejected.
+        assert_eq!(agent_host_from(&Config::default(), Some("-oProxyCommand=bad")), None);
+        assert_eq!(agent_host_from(&Config::default(), Some("bad/host")), None);
+        assert_eq!(
+            agent_path_from(&cfg, Some("../escape")),
+            DEFAULT_AGENT_PATH
+        );
+        assert_eq!(
+            agent_path_from(&cfg, Some("~/foo/../bar")),
+            DEFAULT_AGENT_PATH
+        );
+        assert_eq!(
+            agent_path_from(&cfg, Some("relative/path")),
+            DEFAULT_AGENT_PATH
+        );
+    }
+
+    #[test]
+    fn remote_sync_unpacks_light_then_heavy_and_rewrites_paths_for_paste_and_session() {
+        use std::process::Stdio;
+        use std::sync::Mutex;
+
+        static REMOTE_HOME: Mutex<Option<PathBuf>> = Mutex::new(None);
+        static CALLS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+        fn fake_remote_tar(host: &str, tar_args: &[String], remote_cmd: &str) -> Result<String> {
+            let home = REMOTE_HOME.lock().unwrap().clone().unwrap();
+            CALLS
+                .lock()
+                .unwrap()
+                .push((host.to_owned(), remote_cmd.to_owned()));
+            let mut tar = Command::new(system_tool("tar"))
+                .env("COPYFILE_DISABLE", "1")
+                .args(tar_args)
+                .stdout(Stdio::piped())
+                .spawn()?;
+            let output = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(remote_cmd)
+                .env("HOME", &home)
+                .stdin(tar.stdout.take().unwrap())
+                .output()?;
+            let _ = tar.wait();
+            ensure!(
+                output.status.success(),
+                "fake remote command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+
+        let fixture = Fixture::new();
+        let remote_home = fixture.0.join("remote-home/exedev");
+        fs::create_dir_all(&remote_home).unwrap();
+        *REMOTE_HOME.lock().unwrap() = Some(remote_home.clone());
+        CALLS.lock().unwrap().clear();
+
+        let local_bundle = fixture.bundle("remote-demo", 500);
+        fs::write(local_bundle.join("contact-sheet.png"), b"sheet-png").unwrap();
+        fs::write(local_bundle.join("recording.mp4"), vec![9_u8; 4096]).unwrap();
+        fs::create_dir_all(local_bundle.join("frames-full")).unwrap();
+        fs::write(local_bundle.join("frames-full/frame-000.png"), b"full-0").unwrap();
+        let (_, loaded) = load_bundle(&local_bundle).unwrap();
+        fs::write(
+            local_bundle.join("summary.md"),
+            crate::sketch::summary_markdown(&loaded, &local_bundle),
+        )
+        .unwrap();
+
+        let hooks = SyncHooks {
+            remote_tar: fake_remote_tar,
+            background_heavy: false,
+        };
+        let remote_bundle =
+            sync_bundle_to_with("kitbox.exe.xyz", DEFAULT_AGENT_PATH, &local_bundle, &hooks)
+                .unwrap();
+
+        let expected_remote = remote_home.join(".scrawl/captures/remote-demo.scrawl");
+        assert_eq!(remote_bundle, expected_remote);
+        assert_eq!(shown_bundle_dir(&local_bundle), expected_remote);
+
+        // Both stage 1 (light files) and stage 2 (heavy media) ran against the fake host.
+        let calls = CALLS.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "kitbox.exe.xyz");
+        assert!(calls[0].1.contains(".media-pending"));
+        assert!(remote_bundle.join("contact-sheet.png").is_file());
+        assert!(remote_bundle.join("scrawl.json").is_file());
+        assert!(remote_bundle.join("frames/frame-000.png").is_file());
+        assert_eq!(fs::read(remote_bundle.join("recording.mp4")).unwrap().len(), 4096);
+        assert!(remote_bundle.join("frames-full/frame-000.png").is_file());
+        assert!(!remote_bundle.join(MEDIA_PENDING).exists());
+        assert!(!remote_bundle.join(REMOTE_SYNC).exists());
+        assert!(!local_bundle.join(crate::retention::MEDIA_SENDING).exists());
+
+        // Local and remote summary.md, terminal paste, and OpenCode session payload all use the
+        // remote path rather than the local Mac path.
+        let local_summary = fs::read_to_string(local_bundle.join("summary.md")).unwrap();
+        let remote_summary = fs::read_to_string(remote_bundle.join("summary.md")).unwrap();
+        assert!(
+            local_summary.contains(&expected_remote.display().to_string()),
+            "{local_summary}"
+        );
+        assert!(
+            !local_summary.contains(&local_bundle.display().to_string()),
+            "{local_summary}"
+        );
+        assert_eq!(local_summary, remote_summary);
+
+        let (sheet_paste, summary_paste) = bundle_paste_payload(&local_bundle, &loaded);
+        assert_eq!(
+            sheet_paste,
+            expected_remote.join("contact-sheet.png").display().to_string()
+        );
+        assert_eq!(summary_paste, local_summary);
+
+        let prompt = session_prompt_payload(&loaded, &shown_bundle_dir(&local_bundle));
+        let text = prompt["text"].as_str().unwrap();
+        assert!(
+            text.contains(&expected_remote.join("scrawl.json").display().to_string()),
+            "{text}"
+        );
+        assert_eq!(
+            prompt["files"][0]["uri"].as_str().unwrap(),
+            file_uri(&expected_remote.join("contact-sheet.png"))
+        );
+    }
+
+    #[test]
+    fn failed_remote_sync_leaves_local_paths_intact() {
+        fn failing_tar(_host: &str, _args: &[String], _cmd: &str) -> Result<String> {
+            bail!("ssh: connect to host offline.exe.xyz port 22: Operation timed out")
+        }
+
+        let fixture = Fixture::new();
+        let local_bundle = fixture.bundle("offline-demo", 600);
+        fs::write(local_bundle.join("contact-sheet.png"), b"sheet-png").unwrap();
+        let (_, loaded) = load_bundle(&local_bundle).unwrap();
+        let hooks = SyncHooks {
+            remote_tar: failing_tar,
+            background_heavy: false,
+        };
+        assert!(
+            sync_bundle_to_with("offline.exe.xyz", DEFAULT_AGENT_PATH, &local_bundle, &hooks)
+                .is_err()
+        );
+        assert_eq!(shown_bundle_dir(&local_bundle), local_bundle);
+        let (sheet_paste, summary_paste) = bundle_paste_payload(&local_bundle, &loaded);
+        assert_eq!(
+            sheet_paste,
+            local_bundle.join("contact-sheet.png").display().to_string()
+        );
+        assert!(summary_paste.contains(&local_bundle.display().to_string()));
+    }
 }
 
 #[cfg(test)]
@@ -2108,8 +2537,8 @@ mod sync_live_check {
         std::fs::write(bundle.join("summary.md"), "hi").unwrap();
         std::fs::write(bundle.join("recording.mp4"), vec![7u8; 8_000_000]).unwrap();
         std::fs::write(bundle.join("frames-full/frame-01.png"), b"png").unwrap();
-        super::sync_bundle_to("pro", &bundle).unwrap();
-        let q = super::shell_quote(&bundle.to_string_lossy());
+        let remote = super::sync_bundle_to("pro", &bundle).unwrap();
+        let q = super::shell_quote(&remote.to_string_lossy());
         let check = format!("ls -a {q}; ls {q}/frames-full; wc -c < {q}/recording.mp4");
         let mut out = String::new();
         for _ in 0..40 {
@@ -2120,7 +2549,8 @@ mod sync_live_check {
                 break;
             }
         }
-        let _ = super::ssh("pro").arg(format!("rm -rf {}", super::shell_quote(&base.to_string_lossy()))).status();
+        let _ = super::ssh("pro").arg(format!("rm -rf {q}")).status();
+        let _ = std::fs::remove_dir_all(&base);
         assert!(out.contains("8000000") && out.contains("frame-01.png") && !out.contains(super::MEDIA_PENDING), "{out}");
     }
 }
