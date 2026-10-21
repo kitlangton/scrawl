@@ -90,6 +90,14 @@ pub fn export_audio(movie: &Path, wav: &Path) -> Result<()> {
     crate::win::media::export_audio(movie, wav)
 }
 
+/// Text recognition in frames needs Apple Vision (macOS).
+pub fn read_text(
+    _movie: &Path,
+    _regions: &[(u64, [f32; 4])],
+) -> Result<Vec<crate::screen_text::Region>> {
+    bail!("Reading screen text needs Vision (macOS)")
+}
+
 pub enum FrameTimes<'a> {
     /// Nearest decodable frame every N ms, stamped with its actual time.
     Every(u64),

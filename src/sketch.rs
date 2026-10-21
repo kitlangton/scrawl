@@ -214,10 +214,21 @@ pub fn describe_mark(mark: &Mark) -> String {
     text
 }
 
+/// What `crate::ax` names an unlabelled input field by (its kind alone, so its typed value is
+/// never read): shown unquoted, as a kind rather than text on the screen.
+pub(crate) const FIELD_NAMES: [&str; 5] = [
+    "secure text field",
+    "text field",
+    "text area",
+    "combo box",
+    "search field",
+];
+
 /// A label in curly quotes, unless it already quotes its own parts (`button “Area” #area` from
-/// `crate::ax`, `<div.capsule> in Pill (src/Pill.tsx:42)` from `crate::page`).
+/// `crate::ax`, `<div.capsule> in Pill (src/Pill.tsx:42)` from `crate::page`) or is an input
+/// field's kind alone (`search field`).
 pub(crate) fn quote_label(label: &str) -> String {
-    if label.contains('“') || label.starts_with('<') {
+    if label.contains('“') || label.starts_with('<') || FIELD_NAMES.contains(&label) {
         label.to_owned()
     } else {
         format!("“{label}”")
@@ -372,22 +383,22 @@ pub fn describe_event(event: &InteractionEvent) -> String {
             {
                 format!("long-pressed “{target}” ({})", at([*x0, *y0]))
             } else {
-                format!(
-                    "{}{} {} ({} → {})",
-                    if button.as_deref() == Some("touch") {
-                        "swiped"
-                    } else {
-                        "dragged"
-                    },
-                    label
-                        .as_ref()
-                        .filter(|s| !s.is_empty())
-                        .map(|s| format!(" {}", quote_label(s)))
-                        .unwrap_or_default(),
-                    direction(x1 - x0, y1 - y0, 0.04),
-                    at([*x0, *y0]),
-                    at([*x1, *y1])
-                )
+                let verb = if button.as_deref() == Some("touch") {
+                    "swiped"
+                } else {
+                    "dragged"
+                };
+                let label = label.as_deref().filter(|s| !s.is_empty());
+                let way = direction(x1 - x0, y1 - y0, 0.04);
+                let (from, to) = (at([*x0, *y0]), at([*x1, *y1]));
+                match label {
+                    // Text read off the screen is what the drag went across, not what it moved.
+                    Some(text) if crate::screen_text::is_read(text) => {
+                        format!("{verb} {way} across {text} ({from} → {to})")
+                    }
+                    Some(name) => format!("{verb} {} {way} ({from} → {to})", quote_label(name)),
+                    None => format!("{verb} {way} ({from} → {to})"),
+                }
             }
         }
         InteractionEvent::Scroll { dx, dy, label, .. } => match label.as_deref() {

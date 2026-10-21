@@ -379,12 +379,16 @@ fn fold_repeats(items: Vec<(u64, String)>) -> Vec<(u64, String)> {
         .collect()
 }
 
-/// A drag worth a line: one that names what it moved, or an unnamed one that went far.
+/// A drag worth a line: one that names what it moved or the text it crossed, or an unnamed one
+/// that went far.
 #[derive(Clone, Debug, PartialEq)]
 struct Drag {
     verb: &'static str,
     name: Option<String>,
     direction: String,
+    /// The text read off the screen where it crossed (`crate::screen_text`): a drag is not always
+    /// a selection, so it is worded as what it went across.
+    across: Option<String>,
 }
 
 fn drag_text(event: &InteractionEvent) -> Option<Drag> {
@@ -407,10 +411,19 @@ fn drag_text(event: &InteractionEvent) -> Option<Drag> {
             verb: "long-pressed",
             name: (!name.is_empty()).then(|| name.to_owned()),
             direction: String::new(),
+            across: None,
         });
     }
     let touch = button.as_deref() == Some("touch");
     let (dx, dy) = (x1 - x0, y1 - y0);
+    if let Some(text) = label.filter(|l| crate::screen_text::is_read(l)) {
+        return Some(Drag {
+            verb: if touch { "swiped" } else { "dragged" },
+            name: None,
+            direction: direction(dx, dy, 0.04),
+            across: Some(text.to_owned()),
+        });
+    }
     match label {
         Some(name) => {
             let lower = name.to_lowercase();
@@ -427,12 +440,14 @@ fn drag_text(event: &InteractionEvent) -> Option<Drag> {
                 },
                 name: Some(name.to_owned()),
                 direction: direction(dx, dy, 0.04),
+                across: None,
             })
         }
         None if dx.hypot(dy) >= MIN_DRAG => Some(Drag {
             verb: if touch { "swiped" } else { "dragged" },
             name: None,
             direction: direction(dx, dy, 0.04),
+            across: None,
         }),
         None => None,
     }
@@ -456,7 +471,10 @@ impl DragRun {
 
     fn joins(&self, drag: &Drag, t: u64) -> bool {
         let first = &self.drags[0];
-        first.verb == drag.verb && first.name == drag.name && t <= self.end + REPEAT_MS
+        first.verb == drag.verb
+            && first.name == drag.name
+            && first.across == drag.across
+            && t <= self.end + REPEAT_MS
     }
 
     fn add(&mut self, drag: Drag, end: u64) {
@@ -481,6 +499,10 @@ impl DragRun {
             } else if !same_way {
                 text.push_str(" back and forth");
             }
+        }
+        if let Some(crossed) = &first.across {
+            text.push_str(" across ");
+            text.push_str(crossed);
         }
         if count > 1 && first.verb != "scrubbed" {
             text.push_str(&format!(" ×{count}"));
@@ -1161,6 +1183,98 @@ mod tests {
             ],
             "{text:?}"
         );
+    }
+
+    #[test]
+    fn text_read_off_the_screen_names_marks_and_what_a_drag_went_across() {
+        let mut b = bundle(
+            Vec::new(),
+            vec![keyframe(1, 9_000, KeyframeReason::Mark, "")],
+        );
+        b.strokes = vec![Stroke {
+            on: Some("text “Hold ⇧ (Shift) and move the mouse”".into()),
+            ..stroke(1_000, 0.1, 0.2)
+        }];
+        b.marks = crate::sketch::marks_of(&b.strokes);
+        b.marks[0].frame = Some("frames/frame-01.png".into());
+        let drag = |t, x1, text: &str| InteractionEvent::Drag {
+            t,
+            t1: t + 700,
+            x0: 0.31,
+            y0: 0.59,
+            x1,
+            y1: 0.61,
+            label: Some(text.into()),
+            button: None,
+            path: Vec::new(),
+        };
+        let sentence = "text “They'd work out most of it…”";
+        b.events = vec![
+            drag(5_000, 0.62, sentence),
+            drag(5_900, 0.62, sentence),
+            // Too short to list unnamed, but it crossed text.
+            drag(8_000, 0.33, "text “Do”"),
+        ];
+        let text = &keyframe_texts(&b)[0];
+        let lines: Vec<&str> = text.lines.iter().map(String::as_str).collect();
+        assert_eq!(
+            lines,
+            [
+                "✎ 0:01 underlined text “Hold ⇧ (Shift) and move the mouse”",
+                "· 0:05 dragged right across text “They'd work out most of it…” ×2",
+                "· 0:08 dragged across text “Do”",
+            ],
+            "{text:?}"
+        );
+        assert_eq!(
+            crate::sketch::describe_event(&b.events[0]),
+            "dragged right across text “They'd work out most of it…” (x 0.31, y 0.59 → x 0.62, y 0.61)"
+        );
+    }
+
+    #[test]
+    fn an_input_field_named_by_its_kind_is_not_quoted() {
+        let mut b = bundle(
+            Vec::new(),
+            vec![keyframe(1, 9_000, KeyframeReason::Mark, "")],
+        );
+        b.strokes = vec![Stroke {
+            on: Some("search field".into()),
+            ..stroke(1_000, 0.1, 0.2)
+        }];
+        b.marks = crate::sketch::marks_of(&b.strokes);
+        b.marks[0].frame = Some("frames/frame-01.png".into());
+        let drag = |label: &str| InteractionEvent::Drag {
+            t: 5_000,
+            t1: 5_500,
+            x0: 0.2,
+            y0: 0.5,
+            x1: 0.6,
+            y1: 0.5,
+            label: Some(label.into()),
+            button: None,
+            path: Vec::new(),
+        };
+        b.events = vec![drag("secure text field")];
+        let text = &keyframe_texts(&b)[0];
+        let lines: Vec<&str> = text.lines.iter().map(String::as_str).collect();
+        assert_eq!(
+            lines,
+            [
+                "✎ 0:01 underlined search field",
+                "· 0:05 dragged secure text field right",
+            ],
+            "{text:?}"
+        );
+        assert!(b.marks[0].description.ends_with(" over search field"));
+        // Every other label renders as before.
+        assert_eq!(quote_label("Header"), "“Header”");
+        assert_eq!(quote_label("button “Area”"), "button “Area”");
+        assert_eq!(
+            quote_label("<div.capsule> in Pill"),
+            "<div.capsule> in Pill"
+        );
+        assert_eq!(quote_label("text field “Search”"), "text field “Search”");
     }
 
     #[test]

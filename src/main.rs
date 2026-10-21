@@ -34,6 +34,7 @@ mod phone;
 mod render;
 mod retention;
 mod routing;
+mod screen_text;
 mod screens;
 mod settings;
 mod settings_window;
@@ -634,6 +635,8 @@ pub struct StageTimings {
     pub audio_ms: Option<u64>,
     pub candidates_ms: Option<u64>,
     pub transcribe_ms: Option<u64>,
+    /// Reading the text under marks and drags (`screen_text`), alongside transcription.
+    pub text_ms: Option<u64>,
 }
 
 /// Pre-rendered keyframe visuals and encoded PNGs computed while transcription is running.
@@ -848,7 +851,9 @@ pub fn finalize_capture_bundle(
     let crop_settings = (target.mode == CaptureMode::Display)
         .then(autocrop::Settings::configured)
         .flatten();
-    let ((transcript, transcribe_ms), (predecoded, prepared)) = std::thread::scope(|scope| {
+    // Text under marks and drags is read alongside transcription, so it adds no wait of its own
+    // unless it outlasts it.
+    let ((transcript, transcribe_ms), (predecoded, prepared), read) = std::thread::scope(|scope| {
         let transcribe_handle = scope.spawn(|| {
             let t0 = std::time::Instant::now();
             let tr = transcribe::transcribe(
@@ -856,6 +861,12 @@ pub fn finalize_capture_bundle(
                 recorded_audio.as_ref(),
             );
             (tr, t0.elapsed().as_millis() as u64)
+        });
+        let text_handle = screen_text::enabled().then(|| {
+            scope.spawn(|| {
+                let movie = video_path.as_deref();
+                screen_text::read(movie, video_offset_ms, &target.frame, &strokes, &events)
+            })
         });
         let pre = if let Some(ref movie) = video_path
             && !frames.is_empty()
@@ -902,8 +913,13 @@ pub fn finalize_capture_bundle(
         } else {
             (Vec::new(), None)
         };
-        (transcribe_handle.join().unwrap(), pre)
+        let text = text_handle.and_then(|h| h.join().ok().flatten());
+        (transcribe_handle.join().unwrap(), pre, text)
     });
+    let (mut strokes, mut events) = (strokes, events);
+    if let Some(found) = &read {
+        found.apply(&mut strokes, &mut events);
+    }
 
     build_bundle_from_parts(
         bundle_dir,
@@ -926,6 +942,7 @@ pub fn finalize_capture_bundle(
                 started_at: Some(started_at),
                 stop_ms,
                 transcribe_ms: Some(transcribe_ms),
+                text_ms: read.as_ref().map(|found| found.ms),
                 ..StageTimings::default()
             },
             ..SourceExtras::default()
@@ -1088,6 +1105,9 @@ pub fn build_bundle_from_parts(
         if let Some(ms) = extras.timings.transcribe_ms {
             parts.push(format!("transcribe {ms}ms"));
         }
+        if let Some(ms) = extras.timings.text_ms {
+            parts.push(format!("text {ms}ms"));
+        }
         parts.extend([
             format!("select {select_ms}ms"),
             format!("decode {decode_ms}ms"),
@@ -1248,6 +1268,9 @@ pub fn build_bundle_from_parts(
     }
     if let Some(ms) = extras.timings.transcribe_ms {
         parts.push(format!("transcribe {ms}ms"));
+    }
+    if let Some(ms) = extras.timings.text_ms {
+        parts.push(format!("text {ms}ms"));
     }
     parts.extend([
         format!("select {select_ms}ms"),
@@ -1818,19 +1841,31 @@ fn main() -> Result<()> {
                 };
                 let wav = out.join("audio.wav");
                 let offset = old.video_offset_ms;
-                let ((transcript, transcribe_ms), joined) = std::thread::scope(|scope| {
+                let (mut strokes, mut events) = (old.strokes, old.events);
+                let ((transcript, transcribe_ms), joined, read) = std::thread::scope(|scope| {
                     let frames = scope.spawn(|| {
                         let t0 = std::time::Instant::now();
                         let res = helper::frames(&copied, helper::FrameTimes::Every(220), 640);
                         (res, t0.elapsed().as_millis() as u64)
+                    });
+                    let text = screen_text::enabled().then(|| {
+                        scope.spawn(|| {
+                            let (movie, frame) = (Some(copied.as_path()), &old.target.frame);
+                            screen_text::read(movie, offset, frame, &strokes, &events)
+                        })
                     });
                     let t0 = std::time::Instant::now();
                     let tr = transcribe::transcribe(
                         recorded.as_ref().map(|_| wav.as_path()),
                         recorded.as_ref(),
                     );
-                    ((tr, t0.elapsed().as_millis() as u64), frames.join())
+                    let heard = (tr, t0.elapsed().as_millis() as u64);
+                    let text = text.and_then(|h| h.join().ok().flatten());
+                    (heard, frames.join(), text)
                 });
+                if let Some(found) = &read {
+                    found.apply(&mut strokes, &mut events);
+                }
                 let (frames, candidates_ms) =
                     joined.map_err(|_| anyhow::anyhow!("Frame decoding panicked"))?;
                 let mut frames = frames?;
@@ -1843,8 +1878,8 @@ fn main() -> Result<()> {
                     old.target,
                     old.duration_ms,
                     frames,
-                    old.strokes,
-                    old.events,
+                    strokes,
+                    events,
                     transcript,
                     Some(copied),
                     old.note,
@@ -1860,6 +1895,7 @@ fn main() -> Result<()> {
                             started_at: Some(started_at),
                             candidates_ms: Some(candidates_ms),
                             transcribe_ms: Some(transcribe_ms),
+                            text_ms: read.as_ref().map(|found| found.ms),
                             ..Default::default()
                         },
                         ..SourceExtras::default()

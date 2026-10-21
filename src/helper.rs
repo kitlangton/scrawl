@@ -2,7 +2,7 @@
 //!
 //! It owns the Apple frameworks that are Swift-only or absent from the objc2 bindings Scrawl
 //! uses: SpeechAnalyzer transcription, CoreMediaIO/AVFoundation iPhone capture with a live
-//! mirror window, and AVFoundation movie decoding.
+//! mirror window, AVFoundation movie decoding and Vision text recognition.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -214,6 +214,31 @@ pub struct Probe {
 
 pub fn probe(movie: &Path) -> Result<Probe> {
     run(&[os("probe"), movie.as_os_str()], Duration::from_secs(30))
+}
+
+/// The text Vision recognises in each region (`[x0, y0, x1, y1]`, normalized, top-left) of the
+/// movie's frame at that time (ms on the movie's clock), in request order.
+pub fn read_text(
+    movie: &Path,
+    regions: &[(u64, [f32; 4])],
+) -> Result<Vec<crate::screen_text::Region>> {
+    let specs: Vec<String> = regions
+        .iter()
+        .map(|(t, [x0, y0, x1, y1])| format!("{t}:{x0:.4},{y0:.4},{x1:.4},{y1:.4}"))
+        .collect();
+    let mut args = vec![os("read-text"), movie.as_os_str()];
+    for spec in &specs {
+        args.extend([os("--at"), os(spec)]);
+    }
+    // It runs beside transcription at finish; a stuck helper must not hold the capture up long.
+    let read: Vec<crate::screen_text::Region> = run(&args, Duration::from_secs(8))?;
+    ensure!(
+        read.len() == regions.len(),
+        "read-text answered {} of {} regions",
+        read.len(),
+        regions.len()
+    );
+    Ok(read)
 }
 
 /// Re-encodes `movie` into `out` as HEVC with its long edge at most `max_edge`, audio copied and
