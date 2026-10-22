@@ -256,6 +256,25 @@ fn completed_delivery_note(delivery: &crate::delivery::Delivery, title: &str) ->
     }
 }
 
+/// The Completed island's lead while a capture's `onCapture` command runs.
+const ON_CAPTURE_SENDING: &str = "Sending…";
+
+/// Whether `onCapture` may show its outcome over the island's current lead: nothing yet, or its
+/// own "Sending…". A send to OpenCode ("Sending to …", "Sent to …") keeps the island.
+fn on_capture_may_report(note: Option<&str>) -> bool {
+    note.is_none_or(|note| note == ON_CAPTURE_SENDING)
+}
+
+/// The Completed island's lead once a capture's `onCapture` command is done.
+fn on_capture_note(outcome: &crate::on_capture::Outcome) -> String {
+    use crate::on_capture::Outcome;
+    match outcome {
+        Outcome::Delivered { to: Some(to) } => format!("Sent to {}", island_title(to)),
+        Outcome::Delivered { to: None } => "Sent".to_owned(),
+        Outcome::Failed(_) => "Copied · onCapture failed".to_owned(),
+    }
+}
+
 /// Inner width of the Selecting row: mode segments, an optional Record chip, divider, and ✕.
 fn selecting_row_width(label_widths: &[f32], record_width: Option<f32>) -> f32 {
     let segments: f32 = label_widths
@@ -2172,6 +2191,45 @@ impl ScrawlCoordinator {
         .detach();
     }
 
+    /// Runs the user's `onCapture` command for a finished capture, if there is one, and says how
+    /// it went on the Completed island ("Sent to …") unless a send to OpenCode has the island.
+    fn run_on_capture(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
+        let (sender, receiver) = flume::bounded(1);
+        if !crate::on_capture::spawn(&dir, move |outcome| {
+            let _ = sender.send(outcome);
+        }) {
+            return;
+        }
+        if on_capture_may_report(self.completed_note.as_deref()) {
+            self.completed_note = Some(ON_CAPTURE_SENDING.to_owned());
+        }
+        cx.spawn(async move |entity, cx| {
+            // No outcome means its thread died: drop "Sending…" rather than leave it up.
+            let note = receiver
+                .recv_async()
+                .await
+                .ok()
+                .map(|o| on_capture_note(&o));
+            let _ = entity.update(cx, |coord, cx| {
+                if coord.completed_dir.as_deref() == Some(dir.as_path())
+                    && on_capture_may_report(coord.completed_note.as_deref())
+                {
+                    coord.completed_note = note.clone();
+                }
+                if coord
+                    .review_bundle
+                    .as_ref()
+                    .is_some_and(|(shown, _)| *shown == dir)
+                    && on_capture_may_report(coord.review_status.as_deref())
+                {
+                    coord.review_status = note;
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// The UI loop's tick: advances the springs unless a new capsule window awaits its second
     /// frame (`island_await_frame`).
     pub fn island_tick(&mut self, cx: &mut Context<Self>) {
@@ -2909,6 +2967,7 @@ impl ScrawlCoordinator {
                             coord.routing = Some(dir.clone());
                             routed = Some((dir.clone(), look.is_some().then(|| bundle.clone())));
                         }
+                        coord.run_on_capture(dir.clone(), cx);
                         coord.set_review_bundle((dir, bundle), coord.completed_note.clone());
                     }
                     coord.set_island_phase(IslandPhase::Completed {
@@ -5844,5 +5903,27 @@ mod tests {
             title: "SCRAWL".into(),
         };
         assert_eq!(completed_delivery_note(&sent, "SCRAWL"), "Sent to SCRAWL");
+    }
+
+    #[test]
+    fn on_capture_island_text() {
+        use crate::on_capture::Outcome;
+        let to = |to: &str| Outcome::Delivered {
+            to: Some(to.into()),
+        };
+        assert_eq!(on_capture_note(&to("Hermes")), "Sent to Hermes");
+        assert_eq!(
+            on_capture_note(&to("Make Mac captures route to the site session")),
+            "Sent to Make Mac captures route…"
+        );
+        assert_eq!(on_capture_note(&Outcome::Delivered { to: None }), "Sent");
+        assert!(on_capture_may_report(None));
+        assert!(on_capture_may_report(Some(ON_CAPTURE_SENDING)));
+        assert!(!on_capture_may_report(Some("Sending to SCRAWL…")));
+        assert!(!on_capture_may_report(Some("Sent to SCRAWL")));
+        assert_eq!(
+            on_capture_note(&Outcome::Failed("exit status: 1".into())),
+            "Copied · onCapture failed"
+        );
     }
 }
