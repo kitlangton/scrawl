@@ -1,0 +1,42 @@
+# Maintainer: Dax Raad <dax@anoma.ly>
+#
+# Published to https://aur.archlinux.org/packages/scrawl-linux-bin by .github/workflows/release-linux.yml,
+# which sets pkgver and the checksums for each v* tag (scripts/linux/aur.sh).
+
+pkgname=scrawl-linux-bin
+pkgver=0.3.13
+pkgrel=1
+pkgdesc="Show an agent a problem: mark up, record, send"
+arch=('x86_64' 'aarch64')
+url="https://github.com/kitlangton/scrawl"
+license=('MIT')
+# The AppImage bundles GStreamer and most libraries; these are the ones linuxdeploy leaves to the host.
+depends=('alsa-lib' 'fontconfig' 'freetype2' 'fribidi' 'fuse3' 'harfbuzz' 'libdrm' 'libglvnd'
+         'libpipewire' 'libx11' 'libxcb' 'mesa' 'vulkan-icd-loader' 'wayland')
+optdepends=('vulkan-driver: GPU rendering for the app windows'
+            'xdg-desktop-portal: screen capture and shortcuts on Wayland')
+provides=('scrawl')
+conflicts=('scrawl')
+# Stripping an AppImage breaks its embedded filesystem.
+options=('!strip' '!debug')
+_raw="https://raw.githubusercontent.com/kitlangton/scrawl/v$pkgver"
+source=("dev.kitlangton.scrawl.desktop::$_raw/packaging/linux/dev.kitlangton.scrawl.desktop"
+        "dev.kitlangton.scrawl.png::$_raw/packaging/linux/dev.kitlangton.scrawl.png"
+        "LICENSE-$pkgver::$_raw/LICENSE")
+source_x86_64=("Scrawl-$pkgver-x86_64.AppImage::$url/releases/download/v$pkgver/Scrawl-$pkgver-linux-x86_64.AppImage")
+source_aarch64=("Scrawl-$pkgver-aarch64.AppImage::$url/releases/download/v$pkgver/Scrawl-$pkgver-linux-aarch64.AppImage")
+noextract=("Scrawl-$pkgver-x86_64.AppImage" "Scrawl-$pkgver-aarch64.AppImage")
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP')
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+  install -Dm755 "Scrawl-$pkgver-$CARCH.AppImage" "$pkgdir/opt/scrawl/Scrawl.AppImage"
+  install -dm755 "$pkgdir/usr/bin"
+  ln -s /opt/scrawl/Scrawl.AppImage "$pkgdir/usr/bin/scrawl"
+  install -Dm644 dev.kitlangton.scrawl.desktop "$pkgdir/usr/share/applications/dev.kitlangton.scrawl.desktop"
+  install -Dm644 dev.kitlangton.scrawl.png "$pkgdir/usr/share/icons/hicolor/1024x1024/apps/dev.kitlangton.scrawl.png"
+  install -Dm644 "LICENSE-$pkgver" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

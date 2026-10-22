@@ -69,6 +69,8 @@ Both Linux workflows run `scripts/linux/check-cpu-tiers.py` before stripping sym
 
 Linux previews are published manually from the checked AppImage artifacts as `linux-preview-N`, with `--prerelease --latest=false` and a combined `SHA256SUMS`. These tags do not trigger the `v*` release jobs, and neither the site nor the Sparkle appcast selects them.
 
+Arch Linux gets the AppImages from the AUR as [`scrawl-linux-bin`](https://aur.archlinux.org/packages/scrawl-linux-bin) (`scrawl-bin` is an unrelated project). After a `v*` tag's AppImages are attached, the `aur` job in `release-linux.yml` runs `scripts/linux/aur.sh <version> --publish` in an Arch container: it fills `packaging/aur/PKGBUILD` with the version and the release's checksums, builds the package, runs the installed `scrawl --help`, and pushes `PKGBUILD`, `.SRCINFO` and `LICENSE` to the AUR. Rebuilding a released version bumps `pkgrel`. It needs the `AUR_SSH_PRIVATE_KEY` secret, a key on the maintainer's AUR account used only for this. On Arch, `./scripts/linux/aur.sh <version>` does the same without pushing, leaving the files in `target/aur/scrawl-linux-bin`.
+
 ## Building and testing
 
 Build dependencies (Ubuntu/Debian; CI installs the same):
