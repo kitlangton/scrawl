@@ -116,3 +116,39 @@ jobs:
             gh release create "$TAG" --verify-tag --title "Scrawl ${TAG#v}" --notes "Release notes to follow." || \
             gh release view "$TAG" >/dev/null
           gh release upload "$TAG" dist/* --clobber
+
+  aur:
+    name: AUR (scrawl-linux-bin)
+    needs: linux
+    if: startsWith(inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '', 'v')
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    timeout-minutes: 30
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Install packaging tools
+        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      # makepkg refuses to run as root; the builder installs the package's dependencies with sudo.
+      - name: Set up the builder
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$AUR_SSH_PRIVATE_KEY" ]]; then
+            echo "AUR_SSH_PRIVATE_KEY is not set" >&2
+            exit 1
+          fi
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: /usr/bin/pacman' > /etc/sudoers.d/builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          install -d -m 700 -o builder ~builder/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~builder/.ssh/id_ed25519
+          echo 'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' \
+            > ~builder/.ssh/known_hosts
+          chown builder ~builder/.ssh/*
+          chmod 600 ~builder/.ssh/id_ed25519
+      - name: Publish
+        run: su builder -c "./scripts/linux/aur.sh '$TAG' --publish"
