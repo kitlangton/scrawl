@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Scrawl
+Comment=Show an agent what you mean
+Exec=scrawl
+Icon=dev.kitlangton.scrawl
+Categories=Utility;Development;
+Terminal=false
+StartupWMClass=dev.kitlangton.scrawl

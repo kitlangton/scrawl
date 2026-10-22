@@ -14,6 +14,7 @@ use gpui::{
 // window levels and styles, and the pill's native shell. Each module provides the same items.
 #[cfg_attr(target_os = "macos", path = "ui/macos.rs")]
 #[cfg_attr(target_os = "windows", path = "ui/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "ui/linux.rs")]
 mod platform;
 use platform::{
     PillChrome, install_status_bar, pointer_on_hud_pill, reduce_motion, set_status_inbox_count,
@@ -21,6 +22,8 @@ use platform::{
 };
 #[cfg(target_os = "windows")]
 pub(crate) use platform::{gpui_display_for, hwnd_of, set_app_icon};
+#[cfg(target_os = "linux")]
+pub(crate) use platform::set_app_icon;
 
 use crate::audio::AudioRecorder;
 use crate::capture::{
@@ -37,6 +40,8 @@ use crate::phone::PhoneSession;
 use crate::sketch::timeline;
 #[cfg(target_os = "windows")]
 use crate::win::overlay::InkOverlay as LaserOverlay;
+#[cfg(target_os = "linux")]
+use crate::linux::overlay::InkOverlay as LaserOverlay;
 
 const SIDEBAR_BG: u32 = 0x111111;
 const CANVAS_BG: u32 = 0x161616;
@@ -2897,20 +2902,28 @@ impl ScrawlCoordinator {
             let routed = entity
                 .update(cx, |coord, cx| {
                     let (finalized, duration_ms) = result;
-                    let mut frame_count = 1;
                     let mut routed = None;
                     coord.completed_dir = None;
-                    if let Ok((dir, bundle, _)) = finalized {
-                        frame_count = bundle.keyframes.len();
-                        let _ = crate::handoff::copy_bundle_to_clipboard(&dir);
-                        coord.completed_dir = Some(dir.clone());
-                        coord.last_local_capture_ms = crate::now_epoch_ms();
-                        if route.is_some() || look.is_some() {
-                            coord.routing = Some(dir.clone());
-                            routed = Some((dir.clone(), look.is_some().then(|| bundle.clone())));
+                    let (dir, bundle, _) = match finalized {
+                        Ok(capture) => capture,
+                        Err(error) => {
+                            scrawl_log(format!("Capture failed: {error:#}"));
+                            #[cfg(target_os = "linux")]
+                            crate::linux::shell::notify("Capture failed", &error.to_string());
+                            coord.set_island_phase(IslandPhase::Dismissing);
+                            cx.notify();
+                            return None;
                         }
-                        coord.set_review_bundle((dir, bundle), coord.completed_note.clone());
+                    };
+                    let frame_count = bundle.keyframes.len();
+                    let _ = crate::handoff::copy_bundle_to_clipboard(&dir);
+                    coord.completed_dir = Some(dir.clone());
+                    coord.last_local_capture_ms = crate::now_epoch_ms();
+                    if route.is_some() || look.is_some() {
+                        coord.routing = Some(dir.clone());
+                        routed = Some((dir.clone(), look.is_some().then(|| bundle.clone())));
                     }
+                    coord.set_review_bundle((dir, bundle), coord.completed_note.clone());
                     coord.set_island_phase(IslandPhase::Completed {
                         finished_at: Instant::now(),
                         frame_count,
@@ -5117,8 +5130,19 @@ fn ensure_hud_pill_open(coord_entity: &Entity<ScrawlCoordinator>, cx: &mut App) 
     restack_soon(cx);
     for handle in cx.windows() {
         if let Some(pill) = handle.downcast::<HudPillWindow>() {
+            let telemetry = Arc::clone(&coord_entity.read(cx).telemetry);
             let _ = pill.update(cx, |view, _, cx| {
                 view.chrome.raise();
+                // A new session cleared the excluded windows; the open pill is still on screen.
+                if let Some(num) = view.chrome.window_number() {
+                    let mut ids = telemetry
+                        .excluded_window_ids
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if !ids.contains(&num) {
+                        ids.push(num);
+                    }
+                }
                 cx.notify();
             });
             return;
@@ -5239,8 +5263,8 @@ fn open_review_window(coord_entity: &Entity<ScrawlCoordinator>, cx: &mut App) {
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(gpui::TitlebarOptions {
-                // The taskbar and Alt+Tab show it on Windows; macOS draws no title here.
-                title: cfg!(target_os = "windows").then(|| "Scrawl".into()),
+                // The taskbar and Alt+Tab show it on Windows and Linux; macOS draws no title here.
+                title: cfg!(not(target_os = "macos")).then(|| "Scrawl".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(16.0), px(16.0))),
             }),

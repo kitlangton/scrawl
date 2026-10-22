@@ -329,8 +329,9 @@ impl Content {
         if w < 2 || h < 2 {
             return Self { cols, rows, sum };
         }
+        // A frame can be smaller than one pixel per cell, so neighbours clamp to the edge.
         let luma = |x: usize, y: usize| {
-            let i = (y * w + x) * 4;
+            let i = (y.min(h - 1) * w + x.min(w - 1)) * 4;
             let p = &frame.rgba[i..i + 3];
             (i32::from(p[0]) * 3 + i32::from(p[1]) * 6 + i32::from(p[2])) / 10
         };
@@ -2089,6 +2090,15 @@ mod tests {
         let r = ctx.snap([0.28, 0.25, 0.6, 0.55], &content, [0.4, 0.3, 0.5, 0.4]);
         assert!(r[2] >= 0.70 && r[2] < 0.76, "right edge {r:?}");
         assert!(r[0] <= 0.30 && r[0] > 0.26, "left edge {r:?}");
+    }
+
+    /// A Linux capture without a movie: 480x270 candidates of a 1920x1080 screen, fewer
+    /// pixels than 3 pt cells, read past the frame's last row.
+    #[test]
+    fn content_of_a_frame_smaller_than_its_cells() {
+        let frame = solid(480, 270, 255);
+        let content = Content::from_frame(&frame, [1920.0, 1080.0]);
+        assert_eq!((content.cols, content.rows), (640, 360));
     }
 
     /// Kit's capture: a tall Focus crop whose right edge ran through a ragged paragraph,

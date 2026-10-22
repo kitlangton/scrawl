@@ -11,6 +11,7 @@ const REPO = "https://github.com/kitlangton/scrawl"
 const RAW_SKILL = "https://raw.githubusercontent.com/kitlangton/scrawl/main/skills/scrawl/SKILL.md"
 const DMG = `${SITE}/releases/Scrawl-latest-arm64.dmg`
 const WINDOWS_ZIP = `${SITE}/releases/Scrawl-latest-windows-x64.zip`
+const linuxDownload = (version: string) => `${REPO}/releases/download/v${version}/Scrawl-${version}-linux-x86_64.AppImage`
 
 const repo = (path: string) => readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8")
 
@@ -79,7 +80,7 @@ export function agentFiles(): Record<string, string> {
   const requires = `Apple silicon Mac, macOS ${macos} or later`
   const tagline = readme.split("\n").find((l) => l && !l.startsWith("#"))!.trim()
   const intro = readme.split(/\n## /)[0].split("\n\n").slice(2).join("\n\n").trim()
-  const summary = `> ${tagline} Scrawl is a Mac and Windows app that records your screen, voice, clicks and drawings and packs them into a bundle an AI coding agent can read. Version ${version}, for an ${requires}, with a preview for Windows 10 and 11 (x64).`
+  const summary = `> ${tagline} Scrawl records your screen, voice, clicks and drawings and packs them into a bundle an AI coding agent can read. Version ${version}, for an ${requires}, with previews for Windows 10 and 11 (x64) and Linux (Ubuntu 24.04+, X11 or GNOME/KDE Wayland).`
 
   const llms = `# Scrawl
 
@@ -92,6 +93,7 @@ ${intro}
 - [Download for Mac](${DMG}): the DMG of version ${version}, for an ${requires}. The app updates itself with Sparkle.
 - [Homebrew tap](https://github.com/kitlangton/homebrew-tap): \`brew install --cask kitlangton/tap/scrawl\`.
 - [Download for Windows](${WINDOWS_ZIP}): a zip with \`scrawl.exe\` for Windows 10 (2004) and later on x64, version ${version}. It's a preview and isn't signed yet, so SmartScreen may warn ("More info", then "Run anyway"), and it doesn't update itself.
+- [Download for Linux](${linuxDownload(version)}): x86_64 AppImage preview. Make it executable and run it with \`app\`. On Wayland, run \`sudo usermod -aG input "$USER"\`, then log out and back in for clicks and Shift ink. Ubuntu 24.04 uses \`libfuse2t64\`; \`--appimage-extract-and-run\` works without FUSE. ARM64 is also available on the GitHub release.
 
 ## Agents
 
@@ -124,7 +126,7 @@ ${intro}
 
 Website: ${SITE}
 Source: ${REPO}
-Download: ${DMG} (Mac), ${WINDOWS_ZIP} (Windows preview)
+Download: ${DMG} (Mac), ${WINDOWS_ZIP} (Windows preview), ${linuxDownload(version)} (Linux preview)
 
 ## Install
 
@@ -164,10 +166,10 @@ export function jsonLd(): string {
     name: "Scrawl",
     description: "Show an agent a problem instead of describing it. Scrawl records your screen, voice, clicks and drawings and packs them into a bundle an AI coding agent can read.",
     url: `${SITE}/`,
-    operatingSystem: `macOS ${macos}, Windows 10, Windows 11`,
+    operatingSystem: `macOS ${macos}, Windows 10, Windows 11, Linux`,
     applicationCategory: "DeveloperApplication",
     softwareVersion: version,
-    downloadUrl: [DMG, WINDOWS_ZIP],
+    downloadUrl: [DMG, WINDOWS_ZIP, linuxDownload(version)],
     image: `${SITE}/og.png`,
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
     author: { "@type": "Person", name: "Kit Langton" },

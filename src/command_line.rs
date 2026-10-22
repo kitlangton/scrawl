@@ -27,6 +27,15 @@ pub struct Places {
 impl Places {
     pub fn system() -> Self {
         let home = std::env::var_os("HOME").map(PathBuf::from);
+        // On Linux the AppImage is the app (`$APPIMAGE` names it while it runs).
+        #[cfg(target_os = "linux")]
+        if let Some(appimage) = std::env::var_os("APPIMAGE").map(PathBuf::from) {
+            return Self {
+                target: std::fs::canonicalize(&appimage).ok(),
+                install: home.iter().map(|h| h.join(".local/bin")).collect(),
+                also: home.map(|h| h.join("bin")).into_iter().collect(),
+            };
+        }
         let target = std::env::current_exe()
             .and_then(std::fs::canonicalize)
             .ok()

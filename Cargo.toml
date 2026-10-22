@@ -94,10 +94,29 @@ windows = { version = "0.61.3", features = [
 [target.'cfg(target_os = "windows")'.build-dependencies]
 embed-resource = "3"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+ab_glyph = "0.2.32"
+arboard = { version = "3.6.1", default-features = false, features = ["image-data"] }
+ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
+futures-lite = "2"
+# X11 only: GPUI 0.2.2's Wayland windows can't be placed or kept on top, so Scrawl's windows
+# go through XWayland on a Wayland session (see docs/linux.md).
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "x11"] }
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-video = "0.25"
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
+lyon = "1.0.19"
+sha2 = "0.10.9"
+# Runtime CPU selection; never compile ggml for the CI runner's CPU (#82).
+# x86_64 gets one module per ISA tier; aarch64 gets a portable CPU module.
+transcribe-cpp = { version = "=0.2.4", default-features = false, features = ["dynamic-backends"] }
+x11rb = { version = "0.13.1", features = ["allow-unsafe-code", "randr", "shape", "xfixes", "xinput", "xtest", "res"] }
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
 [profile.dev]
 debug = 0
 opt-level = 2
 
 [profile.dev.package."*"]
 opt-level = 2
-

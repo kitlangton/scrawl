@@ -57,12 +57,14 @@ impl Engine {
     }
 }
 
-/// The on-device engine's name in menus: Apple's SpeechAnalyzer on macOS; on Windows, Parakeet
-/// through `transcribe.cpp` (`crate::win::speech`). Both are `Engine::Apple` in the config.
+/// The on-device engine's name in menus: Apple's SpeechAnalyzer on macOS; on Windows and Linux,
+/// Parakeet through `transcribe.cpp` (`crate::speech`). Both are `Engine::Apple` in the config.
 #[cfg(target_os = "macos")]
 pub const LOCAL_ENGINE_TITLE: &str = "Apple Speech";
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 pub const LOCAL_ENGINE_TITLE: &str = "Parakeet (on this PC)";
+#[cfg(target_os = "linux")]
+pub const LOCAL_ENGINE_TITLE: &str = "Parakeet (on this computer)";
 
 static OVERRIDE: AtomicU8 = AtomicU8::new(0);
 static LOGGED_NOT_CONNECTED: std::sync::Once = std::sync::Once::new();

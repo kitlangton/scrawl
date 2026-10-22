@@ -1,7 +1,7 @@
 import { useId, useState } from "react"
 import { Copy } from "./Copy"
 import { usePlatform, type Platform } from "./platform"
-import { BREW, MAC_DMG, RELEASE, WINDOWS_DOWNLOAD } from "./release"
+import { BREW, LINUX_DOWNLOAD, MAC_DMG, RELEASE, WINDOWS_DOWNLOAD } from "./release"
 
 const SITE = "https://scrawl.kitlangton.com/"
 const REQUIRES = `Apple silicon · macOS ${RELEASE.macos} or later`
@@ -55,7 +55,7 @@ function SendLink() {
       className="btn-primary"
       onClick={async () => {
         if (canShare) {
-          await navigator.share({ title: "Scrawl", text: "Scrawl for Mac and Windows", url: SITE }).catch(() => {})
+          await navigator.share({ title: "Scrawl", text: "Scrawl for Mac, Windows and Linux", url: SITE }).catch(() => {})
           return
         }
         await navigator.clipboard?.writeText(SITE)
@@ -90,7 +90,9 @@ function Primary({ platform }: { platform: Platform }) {
         <Unavailable icon={<Windows />} label="Windows: coming soon" />
       )
     case "linux":
-      return <Unavailable icon={null} label="Linux: coming soon" />
+      return LINUX_DOWNLOAD ? (
+        <a className="btn-primary" href={LINUX_DOWNLOAD}>Download for Linux</a>
+      ) : <Unavailable icon={null} label="Linux: coming soon" />
     case "mobile":
       return <SendLink />
   }
@@ -109,7 +111,7 @@ function meta(platform: Platform): string {
         ? `Preview ${RELEASE.version} · Windows 10 and 11, x64 · Not signed yet: if Windows warns, click More info, then Run anyway.`
         : "Scrawl is Mac-only today. Windows is on the way."
     case "linux":
-      return WINDOWS_DOWNLOAD ? "Scrawl runs on Mac and Windows today." : "Scrawl is Mac-only today."
+      return LINUX_DOWNLOAD ? `Preview ${RELEASE.version} · x86_64 AppImage · Ubuntu 24.04+ · X11 or GNOME/KDE Wayland` : "Linux is on the way."
     case "mobile":
       return WINDOWS_DOWNLOAD ? "Scrawl runs on your Mac or PC." : "Scrawl runs on your Mac."
   }
@@ -117,6 +119,17 @@ function meta(platform: Platform): string {
 
 function Soon() {
   return <span className="soon">Soon</span>
+}
+
+function LinuxNotes() {
+  const command = 'sudo usermod -aG input "$USER"'
+  return (
+    <div className="linux-notes">
+      <p>On Wayland, enable clicks and Shift ink, then log out and back in:</p>
+      <div className="platform-brew"><code>{command}</code><Copy text={command} /></div>
+      <p>If the AppImage asks for libfuse.so.2, install <code>libfuse2t64</code> on Ubuntu 24.04, or run it with <code>--appimage-extract-and-run</code>.</p>
+    </div>
+  )
 }
 
 export function Platforms({ brew }: { brew: boolean }) {
@@ -156,7 +169,8 @@ export function Platforms({ brew }: { brew: boolean }) {
       <li>
         <div className="platform-row">
           <span className="platform-name">Linux</span>
-          <Soon />
+          <span className="platform-detail">x86_64 AppImage, preview</span>
+          {LINUX_DOWNLOAD ? <a className="platform-action" href={LINUX_DOWNLOAD}>Download</a> : <Soon />}
         </div>
       </li>
     </ul>
@@ -174,6 +188,7 @@ export function Download({ brew = true }: { brew?: boolean }) {
       <p className="download-meta" key={platform.kind}>
         {meta(platform)}
       </p>
+      {platform.kind === "linux" && LINUX_DOWNLOAD && <LinuxNotes />}
       <button
         className="download-more"
         aria-expanded={open}
@@ -199,5 +214,6 @@ export function useDownloadHref(): string {
   const platform = usePlatform()
   if (platform.kind === "mac") return MAC_DMG
   if (platform.kind === "windows" && WINDOWS_DOWNLOAD) return WINDOWS_DOWNLOAD
+  if (platform.kind === "linux" && LINUX_DOWNLOAD) return LINUX_DOWNLOAD
   return "#install"
 }

@@ -100,10 +100,15 @@ struct ViewState {
 }
 
 /// Permissions this platform asks for. Windows has no Screen Recording, Input Monitoring or
-/// Accessibility switch, so those rows never show there.
+/// Accessibility switch, so those rows never show there. Linux shows the microphone, and on
+/// Wayland the input devices (the Accessibility row); it has no cabled iPhone.
 fn shown_on_this_platform(permission: Permission) -> bool {
-    !cfg!(target_os = "windows")
-        || matches!(permission, Permission::Microphone | Permission::Camera)
+    #[cfg(target_os = "linux")]
+    return permission == Permission::Microphone
+        || permission == Permission::Accessibility && crate::linux::wayland_session();
+    #[cfg(not(target_os = "linux"))]
+    return !cfg!(target_os = "windows")
+        || matches!(permission, Permission::Microphone | Permission::Camera);
 }
 
 impl ViewState {
@@ -166,7 +171,7 @@ fn open(request: Request, cx: &mut App) {
             ..Default::default()
         },
         move |window, cx| {
-            #[cfg(target_os = "windows")]
+            #[cfg(not(target_os = "macos"))]
             crate::ui::set_app_icon(window);
             window.on_window_should_close(cx, move |_, _| {
                 close_events(Event::Action("close".into()));
@@ -304,7 +309,12 @@ fn open_settings(permission: Permission) {
     crate::win::privacy::open_settings(permission);
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+fn open_settings(permission: Permission) {
+    crate::linux::privacy::open_settings(permission);
+}
+
+#[cfg(target_os = "macos")]
 fn open_settings(_permission: Permission) {}
 
 #[cfg(target_os = "windows")]
@@ -315,7 +325,14 @@ fn set_visible(window: Option<&mut Window>, visible: bool) {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+fn set_visible(window: Option<&mut Window>, visible: bool) {
+    if let Some(id) = window.and_then(|w| crate::linux::x11::window_id(w)) {
+        crate::linux::x11::set_visible(id, visible);
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn set_visible(_window: Option<&mut Window>, _visible: bool) {}
 
 use crate::ui::ease_out_cubic;
@@ -459,7 +476,7 @@ fn spinner(phase: f32) -> gpui::Svg {
 impl OnboardingWindow {
     fn labels(&self) -> (String, String, String) {
         let paste = crate::capture::system_paste_label().to_owned();
-        let shift = if cfg!(target_os = "windows") {
+        let shift = if cfg!(not(target_os = "macos")) {
             "Shift"
         } else {
             "⇧"
@@ -597,7 +614,7 @@ impl OnboardingWindow {
 
     fn how_it_works(&self) -> Div {
         let (s, paste, shift) = self.labels();
-        let pick = if cfg!(target_os = "windows") {
+        let pick = if cfg!(not(target_os = "macos")) {
             "a window or an area"
         } else {
             "a window, an area or your iPhone"
@@ -689,6 +706,11 @@ impl OnboardingWindow {
                 "Input Monitoring",
                 "Notice your clicks and shortcuts in every app".to_owned(),
             ),
+            Permission::Accessibility if cfg!(target_os = "linux") => (
+                crate::icons::CLICK,
+                "Input devices",
+                "See ⇧ ink, clicks and Esc over other apps (the input group)".to_owned(),
+            ),
             Permission::Accessibility => (
                 crate::icons::PERSON,
                 "Accessibility",
@@ -738,8 +760,11 @@ impl OnboardingWindow {
                     .and_then(|v| v.as_str().map(str::to_owned))
                     .unwrap_or_default()
             );
-            // Windows has no prompt for desktop apps: the button always opens Settings.
-            let title = if row.requested || denied || cfg!(target_os = "windows") {
+            // Windows and Linux have no prompt for desktop apps: the button always opens
+            // Settings (on Linux, the guide to the input group).
+            let title = if cfg!(target_os = "linux") && row.permission == Permission::Accessibility {
+                "Copy command"
+            } else if row.requested || denied || cfg!(not(target_os = "macos")) {
                 "Open Settings"
             } else {
                 "Allow"
@@ -751,7 +776,14 @@ impl OnboardingWindow {
                 .when(row.requested && !denied, |d| d.child(spinner(phase)))
                 .child(
                     row_button(SharedString::from(action.clone()), title).on_click(
-                        cx.listener(move |_, _, _, _| events(Event::Action(action.clone()))),
+                        cx.listener(move |_, _, _, _| {
+                            #[cfg(target_os = "linux")]
+                            if title == "Copy command" {
+                                crate::linux::privacy::copy_input_command();
+                                return;
+                            }
+                            events(Event::Action(action.clone()));
+                        }),
                     ),
                 )
                 .into_any_element()
@@ -822,13 +854,15 @@ impl OnboardingWindow {
     fn permissions(&self, state: &ViewState, phase: f32, cx: &mut Context<Self>) -> Div {
         let rows = state.rows();
         let windows = cfg!(target_os = "windows");
-        let note = if windows {
+        let note = if cfg!(not(target_os = "macos")) {
             ""
         } else {
             "If macOS offers to Quit & Reopen Scrawl, choose Later; Scrawl reopens once when you're done."
         };
         let settings = if windows {
             "Windows Settings"
+        } else if cfg!(target_os = "linux") {
+            "a short guide"
         } else {
             "the macOS prompt or System Settings"
         };
@@ -837,6 +871,11 @@ impl OnboardingWindow {
             (
                 "Camera, for your iPhone".to_owned(),
                 "macOS treats a cabled iPhone's screen as a camera, so Scrawl needs Camera access to show and record it. Pick iPhone again once it's on.".to_owned(),
+            )
+        } else if state.fix && only(Permission::Accessibility) && cfg!(target_os = "linux") {
+            (
+                "The input devices, for ⇧ ink".to_owned(),
+                "On Wayland, clicks and Shift ink need access to input devices.".to_owned(),
             )
         } else if state.fix && only(Permission::Accessibility) {
             (
@@ -858,6 +897,8 @@ impl OnboardingWindow {
                     .trim_end()
                     .to_owned(),
             )
+        } else if cfg!(target_os = "linux") {
+            ("Ready to record".to_owned(), "On Wayland, clicks and Shift ink need access to input devices.".to_owned())
         } else {
             let count = rows.iter().filter(|r| r.required).count();
             (
@@ -884,6 +925,14 @@ impl OnboardingWindow {
                 card = card.child(div().ml(px(14.0)).h(px(1.0)).bg(rgba(LINE)));
             }
             card = card.child(self.permission_row(row, phase, cx));
+        }
+        #[cfg(target_os = "linux")]
+        if rows.iter().any(|r| r.permission == Permission::Accessibility && r.status != Status::Granted) {
+            card = card.child(
+                div().px(px(14.0)).pb(px(14.0)).text_size(px(12.0)).text_color(rgb(SOFT))
+                    .child(div().child(crate::linux::privacy::INPUT_COMMAND))
+                    .child(div().mt(px(6.0)).child("Run this in a terminal, then log out and back in. Reopen Scrawl to continue; access is checked automatically."))
+            );
         }
         div()
             .flex()
@@ -1056,7 +1105,7 @@ impl Render for OnboardingWindow {
             return root;
         };
         let (s, paste, _) = self.labels();
-        let tray = if cfg!(target_os = "windows") {
+        let tray = if cfg!(not(target_os = "macos")) {
             "system tray"
         } else {
             "menu bar"

@@ -1,0 +1,118 @@
+name: Release (Linux)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release-linux.yml
+      - scripts/linux/**
+      - packaging/linux/**
+      - Cargo.toml
+      - build.rs
+      - src/speech.rs
+      - .cargo/config.toml
+  push:
+    tags: ["v*"]
+    branches: ["release/**"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build and attach to. Empty builds the branch without publishing.
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-linux-${{ github.ref }}-${{ inputs.tag }}
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Install build and packaging dependencies
+        run: ./scripts/linux/dependencies.sh
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-linux-${{ matrix.arch }}
+          cache-on-failure: true
+      - run: cargo build --release --locked
+      - name: Unit tests and model test executable
+        run: |
+          cargo test --release --locked speech:: -- --nocapture
+          cargo test --release --locked --bin scrawl --no-run --message-format=json > target/test-artifacts.jsonl
+          test=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "scrawl" and .profile.test) | .executable // empty' target/test-artifacts.jsonl)
+          test -f "$test"
+          echo "SPEECH_TEST=$test" >> "$GITHUB_ENV"
+      - name: No build-machine CPU specialization
+        run: |
+          mapfile -t caches < <(jq -r 'select(.reason == "build-script-executed" and (.package_id | contains("transcribe-cpp-sys"))) | .out_dir + "/build/CMakeCache.txt"' target/test-artifacts.jsonl)
+          test "${#caches[@]}" -gt 0
+          for cache in "${caches[@]}"; do
+            grep -x 'GGML_NATIVE:BOOL=OFF' "$cache"
+            grep -x 'GGML_BACKEND_DL:BOOL=ON' "$cache"
+          done
+      - name: CPU tiers contain only their declared instructions
+        if: matrix.arch == 'x86_64'
+        run: python3 scripts/linux/check-cpu-tiers.py target/release
+      - name: Package
+        id: package
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [[ -n "$TAG" && "$TAG" != "v$version" ]]; then
+            echo "Tag $TAG does not match Cargo.toml $version" >&2
+            exit 1
+          fi
+          ./scripts/linux/appimage.sh target/release/scrawl
+          name="Scrawl-$version-linux-${{ matrix.arch }}.AppImage"
+          mkdir -p dist
+          cp "target/appimage/Scrawl-${{ matrix.arch }}.AppImage" "dist/$name"
+          (cd dist && sha256sum "$name" > "$name.sha256")
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - name: AppImage runs headless without FUSE
+        run: APPIMAGE_EXTRACT_AND_RUN=1 "dist/${{ steps.package.outputs.name }}" --help
+      - name: Run two seconds of audio with the packaged CPU backend
+        run: bash scripts/linux/smoke-cpu.sh "dist/${{ steps.package.outputs.name }}" "$SPEECH_TEST"
+      - uses: petarpetrovt/setup-sde@v6.0
+        if: matrix.arch == 'x86_64'
+      - name: Run packaged model on Ice Lake (AVX512-VNNI, no AVX-VNNI)
+        if: matrix.arch == 'x86_64'
+        timeout-minutes: 30
+        env:
+          SCRAWL_TEST_NO_AVX_VNNI: "1"
+        run: |
+          sde=$(find "$SDE_PATH" -type f -name sde64 -print -quit)
+          test -x "$sde"
+          # Pin needs this on Ubuntu 24.04 runners.
+          sudo sysctl -w kernel.yama.ptrace_scope=0
+          bash scripts/linux/smoke-cpu.sh "dist/${{ steps.package.outputs.name }}" "$SPEECH_TEST" "$sde" -icl
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: dist/*
+      - name: Attach to the release
+        if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The Mac/Windows job may create it concurrently. Re-read on a create conflict.
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --verify-tag --title "Scrawl ${TAG#v}" --notes "Release notes to follow." || \
+            gh release view "$TAG" >/dev/null
+          gh release upload "$TAG" dist/* --clobber

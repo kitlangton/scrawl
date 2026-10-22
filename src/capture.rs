@@ -14,6 +14,7 @@ use crate::model::{
 // displays and windows, and the screen recorder. Each platform module provides the same items.
 #[cfg_attr(target_os = "macos", path = "capture/macos.rs")]
 #[cfg_attr(target_os = "windows", path = "capture/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "capture/linux.rs")]
 mod platform;
 pub use platform::*;
 
@@ -250,10 +251,10 @@ impl ShortcutConfig {
     }
 }
 
-/// `⌃⌥⇧⌘` in the order macOS writes them, for Carbon modifier bits; on Windows the same
-/// modifiers as `Ctrl+Win+Alt+Shift+` (ready to take a key).
+/// `⌃⌥⇧⌘` in the order macOS writes them, for Carbon modifier bits; on Windows and Linux the
+/// same modifiers as `Ctrl+Win+Alt+Shift+` (`Super` on Linux), ready to take a key.
 pub fn modifier_symbols(carbon_modifiers: u32) -> String {
-    if cfg!(target_os = "windows") {
+    if cfg!(not(target_os = "macos")) {
         let label = shortcut_label(carbon_modifiers, "");
         return label;
     }
@@ -269,14 +270,14 @@ pub fn modifier_symbols(carbon_modifiers: u32) -> String {
     .collect()
 }
 
-/// A shortcut as this platform writes it: `⌥⇧S` on macOS, `Alt+Shift+S` on Windows.
+/// A shortcut as this platform writes it: `⌥⇧S` on macOS, `Alt+Shift+S` on Windows and Linux.
 pub fn shortcut_label(carbon_modifiers: u32, key: &str) -> String {
     let held = |bit: u32| carbon_modifiers & bit != 0;
-    if cfg!(target_os = "windows") {
+    if cfg!(not(target_os = "macos")) {
         let mut parts = Vec::new();
         for (bit, name) in [
             (CARBON_CONTROL_KEY, "Ctrl"),
-            (CARBON_CMD_KEY, "Win"),
+            (CARBON_CMD_KEY, SUPER_KEY),
             (CARBON_OPTION_KEY, "Alt"),
             (CARBON_SHIFT_KEY, "Shift"),
         ] {
@@ -303,9 +304,16 @@ pub fn shortcut_label(carbon_modifiers: u32, key: &str) -> String {
     }
 }
 
-/// The system paste keystroke: `⌘V` on macOS, `Ctrl+V` on Windows.
+/// The name of the key in ⌘'s place: the Windows key, Linux's Super.
+const SUPER_KEY: &str = if cfg!(target_os = "linux") {
+    "Super"
+} else {
+    "Win"
+};
+
+/// The system paste keystroke: `⌘V` on macOS, `Ctrl+V` on Windows and Linux.
 pub fn system_paste_label() -> &'static str {
-    if cfg!(target_os = "windows") {
+    if cfg!(not(target_os = "macos")) {
         "Ctrl+V"
     } else {
         "⌘V"
@@ -563,7 +571,7 @@ pub(crate) struct Sampler {
     pub target: TargetInfo,
     pub video_output_path: Option<PathBuf>,
     /// Scrawl's own windows to leave out of the recording.
-    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub excluded_window_ids: Arc<Mutex<Vec<u32>>>,
     pub started_at: Instant,
     pub stopping: Arc<AtomicBool>,
@@ -658,7 +666,7 @@ impl ScreenCaptureSession {
             CandidateBuffer::new(0),
         );
         let mut collected = buffer.into_frames();
-        if collected.is_empty() {
+        if !cfg!(target_os = "linux") && collected.is_empty() {
             collected.push(crate::render::render_synthetic_demo_frame(1280, 800, 0, 0));
         }
         let valid_video =
@@ -716,16 +724,16 @@ pub struct SharedCaptureTelemetry {
     /// The last `on_scrawl_window` answer (when, where, what), reused for a burst of scrolls.
     scrawl_hit: Mutex<Option<(Instant, f64, f64, bool)>>,
     /// macOS's key event tap (`CFMachPortRef`), made once Accessibility is on (`check_key_tap`).
-    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     tap_port: AtomicU64,
     /// The key event tap thread's run loop (retained), so `check_key_tap` can stop it.
-    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     tap_run_loop: AtomicU64,
     /// A key tap thread is being started.
-    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     tap_starting: AtomicBool,
     /// When the last key tap was tried (ms since `UNIX_EPOCH`), to space out retries.
-    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     tap_tried_ms: AtomicU64,
     /// Whether key presses are arriving (macOS's key tap, Windows' keyboard hook).
     tap_live: AtomicBool,
@@ -1461,6 +1469,16 @@ pub fn is_frontmost_terminal() -> bool {
         "pwsh",
         "cmd.exe",
         "mintty",
+        // Linux (the window's class): GNOME Terminal and Console, Ptyxis, Konsole, XTerm…
+        "konsole",
+        "xterm",
+        "kgx",
+        "org.gnome.console",
+        "ptyxis",
+        "tilix",
+        "terminator",
+        "foot",
+        "urxvt",
     ]
     .iter()
     .any(|needle| a.contains(needle) || b.contains(needle))
@@ -1770,6 +1788,11 @@ mod tests {
             modifier_symbols(CARBON_CMD_KEY | CARBON_CONTROL_KEY | CARBON_SHIFT_KEY),
             "Ctrl+Win+Shift+"
         );
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            modifier_symbols(CARBON_CMD_KEY | CARBON_CONTROL_KEY | CARBON_SHIFT_KEY),
+            "Ctrl+Super+Shift+"
+        );
 
         assert_eq!(shortcut_parts("⌥⇧S"), ("⌥⇧", "S"));
         assert_eq!(shortcut_parts("⌃⌥⌘R"), ("⌃⌥⌘", "R"));
@@ -2035,7 +2058,7 @@ mod tests {
         assert_eq!(capture_size(&display, CANDIDATE_EDGE), (480, 310));
         let region = target(CaptureMode::Region, 480.0, 320.0);
         assert_eq!(capture_size(&region, CANDIDATE_EDGE), (480, 320));
-        if cfg!(target_os = "windows") {
+        if cfg!(not(target_os = "macos")) {
             // Frames are in pixels: never upscaled past the screen's own.
             assert_eq!(capture_size(&display, 2560.0), (1728, 1116));
             assert_eq!(capture_size(&region, 1280.0), (480, 320));

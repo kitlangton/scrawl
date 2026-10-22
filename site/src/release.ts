@@ -14,3 +14,6 @@ export const SKILL = "bunx skills add kitlangton/scrawl"
 export const WINDOWS_DOWNLOAD: string | null = "/releases/Scrawl-latest-windows-x64.zip"
 
 export const RELEASE = latestRelease(appcast)
+
+// Published by release-linux.yml. Build/deploy the site only after the tag's assets exist.
+export const LINUX_DOWNLOAD: string | null = `https://github.com/kitlangton/scrawl/releases/download/v${RELEASE.version}/Scrawl-${RELEASE.version}-linux-x86_64.AppImage`

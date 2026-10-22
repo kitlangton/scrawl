@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -368,7 +368,19 @@ pub fn trash(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+/// The freedesktop Trash (`~/.local/share/Trash`), as the file manager uses it.
+#[cfg(target_os = "linux")]
+pub fn trash(path: &Path) -> Result<()> {
+    crate::linux::shell::trash(path)?;
+    ensure!(
+        !path.exists(),
+        "Could not move {} to the Trash",
+        path.display()
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 pub fn trash(path: &Path) -> Result<()> {
     let output = Command::new("/usr/bin/trash")
         .arg(path)
@@ -670,6 +682,11 @@ fn lower_priority() {
     }
     #[cfg(windows)]
     crate::win::shell::background_thread();
+    // SAFETY: only lowers the calling thread's own priority.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS, libc::gettid() as libc::id_t, 10);
+    }
 }
 
 /// Starts the app's cleanup: a pass shortly after launch, then hourly, plus shrinking each

@@ -250,11 +250,12 @@ impl Pressed {
     }
 }
 
-#[cfg(target_os = "windows")]
+/// Windows virtual keys (Linux stores shortcuts the same way): Backspace, Delete.
+#[cfg(not(target_os = "macos"))]
 const DELETE_KEYS: [u32; 2] = [0x08, 0x2E];
 
 /// `kVK_Delete`, `kVK_ForwardDelete`.
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 const DELETE_KEYS: [u32; 2] = [51, 117];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -277,14 +278,25 @@ impl Rejection {
             Self::NoModifier if cfg!(target_os = "windows") => {
                 "Hold Ctrl, Alt or Win with the key.".to_owned()
             }
+            Self::NoModifier if cfg!(target_os = "linux") => {
+                "Hold Ctrl, Alt or Super with the key.".to_owned()
+            }
             Self::NoModifier => "Hold ⌘, ⌥ or ⌃ with the key.".to_owned(),
             Self::UnsupportedKey => "Scrawl can't use that key. Try a letter or number.".to_owned(),
-            Self::Reserved(label) if cfg!(target_os = "windows") => {
-                if label.starts_with("Ctrl+") && !label.contains("Alt+") && !label.contains("Win+")
+            Self::Reserved(label) if cfg!(not(target_os = "macos")) => {
+                let system = if cfg!(target_os = "windows") {
+                    "Windows"
+                } else {
+                    "Your desktop"
+                };
+                if label.starts_with("Ctrl+")
+                    && !label.contains("Alt+")
+                    && !label.contains("Win+")
+                    && !label.contains("Super+")
                 {
                     format!("Apps use {label}. Add Alt.")
                 } else {
-                    format!("Windows uses {label}.")
+                    format!("{system} uses {label}.")
                 }
             }
             Self::Reserved(label) if label.starts_with('⌘') && !label.contains(['⌃', '⌥']) => {
@@ -297,8 +309,9 @@ impl Rejection {
     }
 }
 
-/// Virtual-key codes: F1–F16, then the keys named rather than typed.
-#[cfg(target_os = "windows")]
+/// Virtual-key codes (Linux stores shortcuts as them too): F1–F16, then the keys named rather
+/// than typed.
+#[cfg(not(target_os = "macos"))]
 const FUNCTION_KEYS: [(u32, &str); 16] = [
     (0x70, "F1"),
     (0x71, "F2"),
@@ -318,7 +331,7 @@ const FUNCTION_KEYS: [(u32, &str); 16] = [
     (0x7F, "F16"),
 ];
 
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 const NAMED_KEYS: [(u32, &str); 8] = [
     (0x20, "Space"),
     (0x0D, "Enter"),
@@ -330,11 +343,11 @@ const NAMED_KEYS: [(u32, &str); 8] = [
     (0x26, "Up"),
 ];
 
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 const KEY_ESCAPE: u32 = 0x1B;
 
 /// macOS virtual key codes (`kVK_*`).
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 const FUNCTION_KEYS: [(u32, &str); 16] = [
     (122, "F1"),
     (120, "F2"),
@@ -354,7 +367,7 @@ const FUNCTION_KEYS: [(u32, &str); 16] = [
     (106, "F16"),
 ];
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 const NAMED_KEYS: [(u32, &str); 8] = [
     (49, "Space"),
     (36, "↩"),
@@ -366,7 +379,7 @@ const NAMED_KEYS: [(u32, &str); 8] = [
     (126, "↑"),
 ];
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 const KEY_ESCAPE: u32 = 53;
 
 /// The name a key is shown with: a function key, a named key, or the typed character in capitals.
@@ -415,6 +428,28 @@ fn reserved(modifiers: u32, key: &str) -> bool {
                 (OPT, "Space"),
                 (CTRL | OPT, "Tab"),
                 (CTRL | CMD | OPT, "Space"),
+            ]
+            .contains(&(modifiers, key));
+    }
+    if cfg!(target_os = "linux") {
+        // Super (⌘'s bit) with a key, alone or with Shift, is the desktop's (Super+A, the
+        // workspaces…); Ctrl with one key is an app's. Then Alt+Tab, Alt+F2, Ctrl+Alt+T…
+        return modifiers & CMD != 0 && modifiers & (CTRL | OPT) == 0
+            || modifiers & (CTRL | CMD | OPT) == CTRL
+            || [
+                (OPT, "Tab"),
+                (OPT | SHIFT, "Tab"),
+                (OPT, "F2"),
+                (OPT, "F4"),
+                (OPT, "Space"),
+                (OPT, "F7"),
+                (OPT, "F8"),
+                (CTRL | OPT, "Tab"),
+                (CTRL | OPT, "T"),
+                (CTRL | OPT, "Left"),
+                (CTRL | OPT, "Right"),
+                (CTRL | OPT, "Up"),
+                (CTRL | OPT, "Down"),
             ]
             .contains(&(modifiers, key));
     }
@@ -599,6 +634,25 @@ fn open_login_items_settings() {
     crate::win::login::open_startup_settings();
 }
 
+#[cfg(target_os = "linux")]
+pub fn login_item() -> LoginItem {
+    match crate::linux::login::status() {
+        (false, _) => LoginItem::Off,
+        (true, false) => LoginItem::On,
+        (true, true) => LoginItem::NeedsApproval,
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn set_login_item(on: bool) -> anyhow::Result<()> {
+    crate::linux::login::set(on)
+}
+
+#[cfg(target_os = "linux")]
+fn open_login_items_settings() {
+    crate::linux::login::open_startup_settings();
+}
+
 // MARK: What the window shows
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -710,8 +764,12 @@ impl CommandLineView {
             }
             State::Unavailable => {
                 view.enabled = false;
-                view.caption =
-                    "The command-line tool works in the installed Scrawl.app.".to_owned();
+                view.caption = if cfg!(target_os = "linux") {
+                    "The command-line tool links to Scrawl's AppImage; run Scrawl from one."
+                } else {
+                    "The command-line tool works in the installed Scrawl.app."
+                }
+                .to_owned();
             }
         }
         if let Some(error) = error {
@@ -1307,9 +1365,16 @@ impl Panel {
             .map(|program| program.name());
         let policy = crate::retention::Policy::load_from(&host.config_path());
         let login = login_item();
-        // Windows asks for no screen or accessibility grant, and has no cabled iPhone.
+        // Windows asks for no screen or accessibility grant, and has no cabled iPhone. Linux
+        // asks for the input devices on Wayland only (the Accessibility row).
         let order: &[Permission] = if cfg!(target_os = "windows") {
             &[Permission::Microphone]
+        } else if cfg!(target_os = "linux") {
+            if wayland() {
+                &[Permission::Microphone, Permission::Accessibility]
+            } else {
+                &[Permission::Microphone]
+            }
         } else {
             &[
                 Permission::ScreenRecording,
@@ -1401,6 +1466,16 @@ impl Panel {
             skill_command: SKILL_COMMAND,
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn wayland() -> bool {
+    crate::linux::wayland_session()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wayland() -> bool {
+    false
 }
 
 /// Whether this copy can check for updates: Sparkle in Scrawl.app; on Windows the releases
@@ -1503,7 +1578,7 @@ impl Session {
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let events: std::sync::Arc<dyn Fn(Event) + Send + Sync> = std::sync::Arc::new(events);
-        let transport = if cfg!(target_os = "windows") {
+        let transport = if cfg!(not(target_os = "macos")) {
             let (sender, receiver) = flume::unbounded();
             crate::settings_window::request_open(receiver, pane, std::sync::Arc::clone(&events));
             Transport::InProcess(Some(sender))
@@ -1738,7 +1813,8 @@ mod tests {
     use super::*;
 
     // Key codes: macOS `kVK_*` (ANSI), Windows virtual keys.
-    const WIN: bool = cfg!(target_os = "windows");
+    /// Windows and Linux store virtual keys.
+    const WIN: bool = cfg!(not(target_os = "macos"));
     const R: u32 = if WIN { 0x52 } else { 15 };
     const V: u32 = if WIN { 0x56 } else { 9 };
     const F1: u32 = if WIN { 0x70 } else { 122 };
@@ -1856,7 +1932,9 @@ mod tests {
         .unwrap();
         assert_eq!(
             ok.label,
-            if WIN {
+            if cfg!(target_os = "linux") {
+                "Ctrl+Super+Alt+Shift+R"
+            } else if WIN {
                 "Ctrl+Win+Alt+Shift+R"
             } else {
                 "⌃⌥⇧⌘R"
@@ -2332,7 +2410,7 @@ mod tests {
             view.retention.note,
             format!(
                 "Video and audio go to the {} after 30 days, the rest of each capture after 90 days.",
-                if WIN { "Recycle Bin" } else { "Trash" }
+                if cfg!(target_os = "windows") { "Recycle Bin" } else { "Trash" }
             )
         );
         let config = read_json(&host.path);
@@ -2578,7 +2656,8 @@ mod tests {
         );
         let view = panel.view(&host);
         if WIN {
-            // Only the microphone has a switch on Windows.
+            // Only the microphone has a switch on Windows (and on Linux under X11; the tests
+            // run without a Wayland session).
             assert_eq!(view.permissions.len(), 1);
             assert_eq!(view.permissions[0].permission, Permission::Microphone);
         } else {
@@ -2664,7 +2743,11 @@ mod tests {
         assert_eq!((row.button, row.enabled), (Some("install"), false));
         assert_eq!(
             row.caption,
-            "The command-line tool works in the installed Scrawl.app."
+            if cfg!(target_os = "linux") {
+                "The command-line tool links to Scrawl's AppImage; run Scrawl from one."
+            } else {
+                "The command-line tool works in the installed Scrawl.app."
+            }
         );
         assert_eq!(
             panel.view(&host).skill_command,

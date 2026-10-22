@@ -1,10 +1,10 @@
-//! On-device transcription on Windows, with measured word timings: Parakeet through
+//! On-device transcription on Windows and Linux, with measured word timings: Parakeet through
 //! `transcribe.cpp`, the engine Hex uses. It loads a model Hex has already installed
-//! (`%APPDATA%\voice-control\models`), else Scrawl's own copy of Hex's Parakeet Unified English
-//! (`%LOCALAPPDATA%\Scrawl\models`), which `install` downloads once in the background and checks
-//! against its SHA-256. Like the Hex client, it transcribes each speech island on its own; unlike
-//! it, every word keeps the time the model heard it (`estimated: false`), so spoken cues ("look
-//! here") can cut keyframes.
+//! (`voice-control/models` in the user's data folder), else Scrawl's own copy of Hex's Parakeet
+//! Unified English (`%LOCALAPPDATA%\Scrawl\models`, `~/.local/share/scrawl/models`), which
+//! `install` downloads once in the background and checks against its SHA-256. Like the Hex
+//! client, it transcribes each speech island on its own; unlike it, every word keeps the time the
+//! model heard it (`estimated: false`), so spoken cues ("look here") can cut keyframes.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -44,7 +44,19 @@ pub fn own_models_dir() -> PathBuf {
     std::env::var_os("SCRAWL_MODELS_DIR")
         .map(PathBuf::from)
         .filter(|dir| !dir.as_os_str().is_empty())
-        .unwrap_or_else(|| crate::win::local_dir().join("models"))
+        .unwrap_or_else(default_models_dir)
+}
+
+#[cfg(target_os = "windows")]
+fn default_models_dir() -> PathBuf {
+    crate::win::local_dir().join("models")
+}
+
+#[cfg(target_os = "linux")]
+fn default_models_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("scrawl/models")
 }
 
 fn receipt_path(model: &Path) -> PathBuf {
@@ -206,8 +218,8 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
     Ok(transcript)
 }
 
-/// Loads ggml's CPU backend DLL for this CPU (beside `transcribe.dll`), once per process: the
-/// registry it fills isn't safe to change while another thread loads a model.
+/// Register the runtime-selected CPU backend once, before any thread loads a model.
+/// The native registry cannot be mutated concurrently with model loading.
 fn init_backends() -> Result<()> {
     static INIT: std::sync::OnceLock<std::result::Result<(), String>> = std::sync::OnceLock::new();
     INIT.get_or_init(|| {
@@ -286,34 +298,10 @@ fn verify(path: &Path, artifact: &Artifact) -> Result<()> {
     Ok(())
 }
 
-/// Windows' own `curl.exe` (in System32 since Windows 10 1803), without a console window.
+/// Fetches `url` into `partial` (resuming it), reporting how much of `total` has arrived.
 fn fetch(url: &str, partial: &Path, total: u64, progress: &mut dyn FnMut(f64)) -> Result<()> {
     use std::io::Read;
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let curl = std::env::var_os("SystemRoot")
-        .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
-        .join(r"System32\curl.exe");
-    let mut child = std::process::Command::new(&curl)
-        .args([
-            "--fail",
-            "--location",
-            "--silent",
-            "--show-error",
-            "--retry",
-            "3",
-            "--continue-at",
-            "-",
-            "--output",
-        ])
-        .arg(partial)
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .with_context(|| format!("Could not run {}", curl.display()))?;
+    let (program, mut child) = spawn_fetch(url, partial)?;
     loop {
         if let Some(status) = child.try_wait()? {
             if status.success() {
@@ -324,12 +312,72 @@ fn fetch(url: &str, partial: &Path, total: u64, progress: &mut dyn FnMut(f64)) -
             if let Some(mut stderr) = child.stderr.take() {
                 let _ = stderr.read_to_string(&mut error);
             }
-            bail!("the download failed ({status}): {}", error.trim());
+            bail!("the download failed ({program}, {status}): {}", error.trim());
         }
         let have = std::fs::metadata(partial).map_or(0, |m| m.len());
         progress((have as f64 / total as f64).min(0.99));
         std::thread::sleep(Duration::from_millis(500));
     }
+}
+
+const CURL_ARGS: [&str; 9] = [
+    "--fail",
+    "--location",
+    "--silent",
+    "--show-error",
+    "--retry",
+    "3",
+    "--continue-at",
+    "-",
+    "--output",
+];
+
+/// Windows' own `curl.exe` (in System32 since Windows 10 1803), without a console window.
+#[cfg(target_os = "windows")]
+fn spawn_fetch(url: &str, partial: &Path) -> Result<(String, std::process::Child)> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let curl = std::env::var_os("SystemRoot")
+        .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+        .join(r"System32\curl.exe");
+    let child = std::process::Command::new(&curl)
+        .args(CURL_ARGS)
+        .arg(partial)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .with_context(|| format!("Could not run {}", curl.display()))?;
+    Ok(("curl".into(), child))
+}
+
+/// `curl`, else `wget`: one of them is on nearly every desktop Linux.
+#[cfg(target_os = "linux")]
+fn spawn_fetch(url: &str, partial: &Path) -> Result<(String, std::process::Child)> {
+    let mut command = if crate::handoff::on_path("curl").is_some() {
+        let mut command = std::process::Command::new("curl");
+        command.args(CURL_ARGS).arg(partial).arg(url);
+        command
+    } else if crate::handoff::on_path("wget").is_some() {
+        let mut command = std::process::Command::new("wget");
+        command
+            .args(["--quiet", "--continue", "--tries=3", "--output-document"])
+            .arg(partial)
+            .arg(url);
+        command
+    } else {
+        bail!("downloading the speech model needs curl or wget");
+    };
+    let program = command.get_program().to_string_lossy().into_owned();
+    let child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .with_context(|| format!("Could not run {program}"))?;
+    Ok((program, child))
 }
 
 #[cfg(test)]
@@ -371,9 +419,8 @@ mod tests {
         assert!(verified_in(&dir).is_empty());
     }
 
-    /// Downloads the real model (731 MB), loads it and runs it on two seconds of sound. CI's
-    /// release job runs it, then again under Intel SDE as a CPU without AVX-512 (#58), with
-    /// `SCRAWL_TEST_MODEL_DIR` keeping the download between the two.
+    /// Exercise the actual compute kernels, not just model loading. Linux release CI
+    /// also runs this with the packaged libraries under SDE Ice Lake (no AVX-VNNI).
     #[test]
     #[ignore]
     fn downloads_and_runs_parakeet() {
@@ -385,9 +432,15 @@ mod tests {
         if fresh {
             assert_eq!(last, 1.0);
         }
+        #[cfg(target_arch = "x86_64")]
         if std::env::var_os("SCRAWL_TEST_NO_AVX512").is_some() {
-            // Under SDE: proves the emulated CPU is the one without AVX-512.
+            // Under SDE: proves the emulated CPU is the one without AVX-512 (#58).
             assert!(!std::arch::is_x86_feature_detected!("avx512f"));
+        }
+        #[cfg(target_arch = "x86_64")]
+        if std::env::var_os("SCRAWL_TEST_NO_AVX_VNNI").is_some() {
+            assert!(!std::arch::is_x86_feature_detected!("avxvnni"));
+            assert!(std::arch::is_x86_feature_detected!("avx512vnni"));
         }
         init_backends().unwrap();
         for device in transcribe_cpp::devices() {

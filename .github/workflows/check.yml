@@ -49,3 +49,29 @@ jobs:
             target/debug/scrawl.exe
             target/debug/transcribe.dll
             target/debug/ggml*.dll
+
+  linux:
+    name: Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the build dependencies
+        run: ./scripts/linux/dependencies.sh
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: cargo build --locked
+      - run: cargo test --locked
+      - name: Check CPU tier instructions
+        # dlopen-only CPU tiers are checked before linuxdeploy strips symbols.
+        run: python3 scripts/linux/check-cpu-tiers.py target/debug
+      - name: Package the AppImage
+        run: ./scripts/linux/appimage.sh target/debug/scrawl
+      - name: AppImage runs headless without FUSE
+        run: APPIMAGE_EXTRACT_AND_RUN=1 target/appimage/Scrawl-x86_64.AppImage --help
+      - uses: actions/upload-artifact@v5
+        with:
+          name: scrawl-linux-x86_64
+          path: target/appimage/Scrawl-x86_64.AppImage

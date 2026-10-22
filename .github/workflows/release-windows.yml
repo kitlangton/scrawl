@@ -104,7 +104,7 @@ jobs:
       - name: Downloads and runs the speech model
         env:
           SCRAWL_TEST_MODEL_DIR: ${{ runner.temp }}\speech-model
-        run: cargo test ${{ env.BUILD }} win::speech -- --ignored --nocapture
+        run: cargo test ${{ env.BUILD }} speech -- --ignored --nocapture
 
       # The runner has AVX-512; Intel SDE runs the model again as a Lunar Lake CPU (AVX2 and
       # AVX-VNNI, no AVX-512), the one that crashed in #58. ggml then loads the alderlake backend.
@@ -122,7 +122,7 @@ jobs:
             Select-Object -ExpandProperty executable -First 1
           "test binary: $test"
           $sde = Get-ChildItem $env:SDE_PATH -Recurse -Filter sde.exe | Select-Object -First 1
-          & $sde.FullName -lnl -- $test win::speech::tests::downloads_and_runs_parakeet --exact --ignored --nocapture
+          & $sde.FullName -lnl -- $test speech::tests::downloads_and_runs_parakeet --exact --ignored --nocapture
           if ($LASTEXITCODE -ne 0) { throw "failed under SDE -lnl (exit $LASTEXITCODE)" }
 
       - name: Package

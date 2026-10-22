@@ -16,10 +16,13 @@ mod delivery;
 mod export;
 mod handoff;
 #[cfg_attr(target_os = "windows", path = "win/helper.rs")]
+#[cfg_attr(target_os = "linux", path = "linux/helper.rs")]
 mod helper;
 mod hex;
 mod icons;
 mod inbox;
+#[cfg(not(target_os = "macos"))]
+mod ink_view;
 mod ingest_http;
 mod keyframes;
 #[cfg(target_os = "macos")]
@@ -46,12 +49,16 @@ mod shortcut;
 mod sketch;
 #[cfg(target_os = "macos")]
 mod sparkle;
+#[cfg(not(target_os = "macos"))]
+mod speech;
 mod speech_model;
 mod transcribe;
 mod ui;
 mod web;
 #[cfg(target_os = "windows")]
 mod win;
+#[cfg(target_os = "linux")]
+mod linux;
 mod windows;
 mod zoom;
 
@@ -217,6 +224,14 @@ enum Command {
         /// Start capturing the cabled iPhone immediately on launch.
         #[arg(long, conflicts_with = "record")]
         iphone: bool,
+    },
+    /// Hand a shortcut press to the running app (Linux: GNOME's custom keybindings run this
+    /// where there's no GlobalShortcuts portal).
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    Shortcut {
+        #[arg(value_parser = ["record", "paste"])]
+        which: String,
     },
     /// Generate a realistic annotated demo bundle (contact sheet + keyframes + transcript).
     Demo {
@@ -872,6 +887,10 @@ pub fn finalize_capture_bundle(
         duration_ms,
         video_offset_ms,
     } = recording;
+    anyhow::ensure!(
+        !frames.is_empty(),
+        "No screen frames were captured. Choose a screen in the sharing dialog and try again."
+    );
     if let Some(ref audio) = recorded_audio {
         let wav_path = bundle_dir.join("audio.wav");
         let _ = std::fs::create_dir_all(bundle_dir);
@@ -1552,6 +1571,8 @@ pub fn generate_demo_bundle(out: Option<PathBuf>) -> Result<(PathBuf, ScrawlBund
 }
 
 fn main() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    linux::prepare_process();
     if std::env::var_os("SCRAWL_BENCH_START").is_some() {
         ui::run_start_benchmark();
         return Ok(());
@@ -1562,8 +1583,10 @@ fn main() -> Result<()> {
         // `scrawl` typed in a terminal (on PATH through Settings › Agents or Homebrew) would
         // start a second menu-bar app. macOS opens the app with stdin on /dev/null.
         // On Windows `scrawl.exe` is a console program and Explorer gives it a console too, so a
-        // bare launch always starts the app.
-        None if cfg!(target_os = "macos") && std::io::IsTerminal::is_terminal(&std::io::stdin()) => {
+        // bare launch always starts the app. Linux desktops start `scrawl app` (scrawl.desktop).
+        None if cfg!(any(target_os = "macos", target_os = "linux"))
+            && std::io::IsTerminal::is_terminal(&std::io::stdin()) =>
+        {
             <Cli as clap::CommandFactory>::command().print_help()?;
             return Ok(());
         }
@@ -1579,7 +1602,28 @@ fn main() -> Result<()> {
                 win::shell::release_own_console();
                 win::shell::wait_for_relauncher();
             }
+            // Launching Scrawl again (from the app grid) opens the running one's Settings: GNOME
+            // shows no tray icon without the AppIndicator extension.
+            #[cfg(target_os = "linux")]
+            if linux::ipc::running() {
+                linux::ipc::send(if record { "shortcut record" } else { "open" })?;
+                return Ok(());
+            }
             ui::run_app(None, record, iphone, None);
+            Ok(())
+        }
+        #[cfg(target_os = "linux")]
+        Command::Shortcut { which } => {
+            if linux::ipc::send(&format!("shortcut {which}")).is_err() && which == "record" {
+                // Not running: start it, recording.
+                let exe = std::env::var_os("APPIMAGE")
+                    .map(PathBuf::from)
+                    .map_or_else(std::env::current_exe, Ok)?;
+                std::process::Command::new(exe)
+                    .args(["app", "--record"])
+                    .stdin(std::process::Stdio::null())
+                    .spawn()?;
+            }
             Ok(())
         }
         Command::Demo { out, clipboard } => {

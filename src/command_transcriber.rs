@@ -579,7 +579,7 @@ mod tests {
                     "printf '%s' \"$1\" > \"$2\" && chmod 755 \"$2\"",
                     "sh",
                 ])
-                .arg(format!("#!/bin/sh\n{body}\n"))
+                .arg(format!("#!/bin/bash\n{body}\n"))
                 .arg(&path)
                 .status()
                 .unwrap();

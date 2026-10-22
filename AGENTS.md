@@ -43,5 +43,6 @@ Read the matching `docs/` file before changing a subsystem. Each one holds that 
 | Capsule motion, the pill lab, tuning | `src/ui/lab.rs`, `src/ui/motion.rs`, `perf/pill/` | `docs/motion.md` |
 | Video export, retention and shrinking | `src/export/`, `src/retention.rs`, `helper/Export.swift`, `helper/Media.swift` | `docs/export-and-retention.md` |
 | Windows: the OS shell behind `platform::`, overlay, hotkeys, Media Foundation, Parakeet, GPUI Settings and tour | `src/capture/windows.rs`, `src/ui/windows.rs`, `src/win/`, `src/settings_window.rs`, `src/onboarding_window.rs`, `src/ax_other.rs` | `docs/windows.md` |
+| Linux: X11 and Wayland shell, portals, input devices, GStreamer, AppImage | `src/capture/linux.rs`, `src/ui/linux.rs`, `src/linux/`, `src/ink_view.rs`, `src/speech.rs`, `scripts/linux/` | `docs/linux.md` |
 
 `docs/brief.md` is the original product brief.

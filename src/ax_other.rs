@@ -37,3 +37,24 @@ pub fn apply(_hits: &HashMap<Target, Hit>, _events: &mut [InteractionEvent], _st
 pub fn stroke_probe_point(_stroke: &Stroke, _frame: TargetFrame) -> Option<(f64, f64)> {
     None
 }
+
+pub(crate) fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3])
+                .ok()
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        {
+            out.push(byte);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}

@@ -64,9 +64,10 @@ pub fn configured_captures_dir(value: &str) -> Option<PathBuf> {
 }
 
 /// `~/Library/Application Support/scrawl/captures` on macOS, `%LOCALAPPDATA%\scrawl\captures`
-/// on Windows (local, not roaming: the movies are large).
+/// on Windows (local, not roaming: the movies are large), `~/.local/share/scrawl/captures` on
+/// Linux.
 pub fn builtin_captures_dir() -> PathBuf {
-    if cfg!(target_os = "windows") {
+    if cfg!(not(target_os = "macos")) {
         dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("scrawl")
@@ -84,7 +85,11 @@ pub fn open_path(target: &Path) -> Result<()> {
     {
         crate::win::shell::open(target)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux::shell::open(target)
+    }
+    #[cfg(target_os = "macos")]
     {
         let status = Command::new("/usr/bin/open").arg(target).status()?;
         ensure!(status.success(), "open {} failed", target.display());
@@ -92,13 +97,17 @@ pub fn open_path(target: &Path) -> Result<()> {
     }
 }
 
-/// Shows a file selected in Finder or Explorer.
+/// Shows a file selected in Finder, Explorer or the Linux file manager.
 pub fn reveal_path(target: &Path) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         crate::win::shell::reveal(target)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux::shell::reveal(target)
+    }
+    #[cfg(target_os = "macos")]
     {
         Command::new("/usr/bin/open")
             .arg("-R")
@@ -153,20 +162,16 @@ fn newest_bundle(captures: &Path) -> Result<PathBuf> {
         let entry = entry?;
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "scrawl") && path.is_dir() {
-            // Bundle creation time is stable even after later zoom-frame extraction.
-            let created = fs::read(path.join("scrawl.json"))
+            // A cancelled or still-processing capture has a directory but no manifest.
+            // Never let it hide the last completed capture from paste/inspect latest.
+            let Some(bundle) = fs::read(path.join("scrawl.json"))
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<ScrawlBundle>(&bytes).ok())
-                .map(|bundle| bundle.created_at_ms)
-                .unwrap_or_else(|| {
-                    entry
-                        .metadata()
-                        .ok()
-                        .and_then(|m| m.created().or_else(|_| m.modified()).ok())
-                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map_or(0, |time| time.as_millis() as u64)
-                });
-            candidates.push((created, path));
+            else {
+                continue;
+            };
+            // Bundle creation time is stable even after later zoom-frame extraction.
+            candidates.push((bundle.created_at_ms, path));
         }
     }
     candidates.sort_unstable();
@@ -245,7 +250,16 @@ pub fn copy_png_to_clipboard(png_bytes: &[u8]) -> Result<()> {
     crate::win::clipboard::set_png(png_bytes)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "linux")]
+pub fn copy_string_to_clipboard(content: &str) -> Result<()> {
+    crate::linux::clipboard::set_text(content)
+}
+
+#[cfg(target_os = "linux")]
+pub fn copy_png_to_clipboard(png_bytes: &[u8]) -> Result<()> {
+    crate::linux::clipboard::set_png(png_bytes)
+}
+
 pub fn copy_bundle_to_clipboard(bundle_dir: &Path) -> Result<()> {
     let (directory, bundle) = load_bundle(bundle_dir)?;
     let summary = crate::sketch::summary_markdown(&bundle, &directory);
@@ -260,10 +274,10 @@ pub fn copy_bundle_to_clipboard(bundle_dir: &Path) -> Result<()> {
 }
 
 /// Pastes both the contact-sheet image and the transcript/keyframe text into the active app
-/// as a two-step sequence (`⌘V` image, then `⌘V` text; Ctrl+V on Windows). If `click_target` is
+/// as a two-step sequence (`⌘V` image, then `⌘V` text; Ctrl+V on Windows and Linux, Ctrl+Shift+V
+/// in a Linux terminal). If `click_target` is
 /// provided (from dragging the Paste chip onto a window/input), clicks at that screen coordinate
 /// first to focus it.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn paste_bundle_at_target(bundle_dir: &Path, click_target: Option<[f32; 2]>) -> Result<()> {
     if let Some([x, y]) = click_target {
         crate::capture::post_synthetic_click(f64::from(x), f64::from(y));
@@ -274,7 +288,6 @@ pub fn paste_bundle_at_target(bundle_dir: &Path, click_target: Option<[f32; 2]>)
     paste_bundle_image_and_text(bundle_dir)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn paste_bundle_image_and_text(bundle_dir: &Path) -> Result<()> {
     let (directory, bundle) = load_bundle(bundle_dir)?;
     let sheet_path = directory.join(&bundle.contact_sheet);
@@ -299,21 +312,6 @@ pub fn paste_bundle_image_and_text(bundle_dir: &Path) -> Result<()> {
     std::thread::sleep(std::time::Duration::from_millis(20));
     crate::capture::post_synthetic_cmd_v();
     Ok(())
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn copy_bundle_to_clipboard(_bundle_dir: &Path) -> Result<()> {
-    bail!("Image and text clipboard handoff requires macOS or Windows")
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn paste_bundle_image_and_text(_bundle_dir: &Path) -> Result<()> {
-    bail!("Image and text paste handoff requires macOS or Windows")
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn paste_bundle_at_target(_bundle_dir: &Path, _click_target: Option<[f32; 2]>) -> Result<()> {
-    bail!("Image and text paste handoff requires macOS or Windows")
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -913,9 +911,9 @@ fn shell_quote(text: &str) -> String {
 }
 
 /// A system command: `/usr/bin/<name>` on macOS; on Windows the copy in System32 (OpenSSH and
-/// bsdtar ship with Windows 10 and later), found through `PATH`.
+/// bsdtar ship with Windows 10 and later), and on Linux the one on `PATH`.
 fn system_tool(name: &str) -> PathBuf {
-    if cfg!(windows) {
+    if cfg!(not(target_os = "macos")) {
         on_path(name).unwrap_or_else(|| PathBuf::from(name))
     } else {
         Path::new("/usr/bin").join(name)
@@ -1526,7 +1524,7 @@ pub fn send_bundle_to_session(bundle_dir: &Path, session: &str) -> Result<()> {
 /// A `file://` URL for an absolute path, percent-encoding everything but unreserved
 /// characters and `/` ("Application Support" → "Application%20Support"). A Windows path
 /// (`C:\Users\…`, or `\\?\C:\…` after `canonicalize`) becomes `file:///C:/Users/…`.
-fn file_uri(path: &Path) -> String {
+pub(crate) fn file_uri(path: &Path) -> String {
     let mut text = path.to_string_lossy().into_owned();
     let mut uri = String::from("file://");
     let windows_path = cfg!(windows) || text.as_bytes().get(1) == Some(&b':');
@@ -1760,6 +1758,23 @@ mod tests {
         );
         assert!(resolve_bundle_dir(&fixture.0).is_err());
         assert!(resolve_bundle_dir(&fixture.0.join("missing.scrawl")).is_err());
+    }
+
+    #[test]
+    fn latest_skips_cancelled_and_partial_captures() {
+        let fixture = Fixture::new();
+        let cancelled = fixture.0.join("cancelled.scrawl");
+        fs::create_dir(&cancelled).unwrap();
+        fs::write(cancelled.join("audio.wav"), b"partial recording").unwrap();
+        let partial = fixture.bundle("partial", 300);
+        fs::write(partial.join("scrawl.json"), b"{\"version\":").unwrap();
+        assert!(newest_bundle(&fixture.0).is_err());
+
+        let completed = fixture.bundle("completed", 100);
+        assert_eq!(
+            newest_bundle(&fixture.0).unwrap(),
+            plain_path(completed.canonicalize().unwrap())
+        );
     }
 
     #[test]

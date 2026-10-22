@@ -251,9 +251,13 @@ pub fn pointer() -> Option<[f64; 2]> {
 }
 
 /// Every display, the primary first, in global pixels; `id` is its index (`TargetInfo::display_id`).
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 pub fn displays() -> Vec<Screen> {
-    crate::win::monitors()
+    #[cfg(target_os = "windows")]
+    use crate::win as os;
+    #[cfg(target_os = "linux")]
+    use crate::linux as os;
+    os::monitors()
         .into_iter()
         .enumerate()
         .map(|(i, m)| Screen {
@@ -266,7 +270,7 @@ pub fn displays() -> Vec<Screen> {
         .collect()
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 pub fn current() -> Vec<Screen> {
     displays()
 }
@@ -275,6 +279,12 @@ pub fn current() -> Vec<Screen> {
 #[cfg(target_os = "windows")]
 pub fn pointer() -> Option<[f64; 2]> {
     crate::win::cursor_position().map(|(x, y)| [x, y])
+}
+
+/// The global pointer, X root-window pixels (on Wayland, where XWayland last saw it).
+#[cfg(target_os = "linux")]
+pub fn pointer() -> Option<[f64; 2]> {
+    crate::linux::cursor_position().map(|(x, y)| [x, y])
 }
 
 #[cfg(test)]

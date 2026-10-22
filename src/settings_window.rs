@@ -40,6 +40,7 @@ const INSET: f32 = 20.0;
 const ROW: f32 = 42.0;
 const RADIUS: f32 = 12.0;
 const WINDOWS: bool = cfg!(target_os = "windows");
+const LINUX: bool = cfg!(target_os = "linux");
 
 type Events = Arc<dyn Fn(Event) + Send + Sync>;
 
@@ -120,6 +121,7 @@ struct Transcriber {
     engine: String,
     hex_title: String,
     hex_enabled: bool,
+    command: Option<String>,
     models: Vec<ModelOption>,
     speech: Speech,
 }
@@ -342,7 +344,7 @@ fn open(request: Request, cx: &mut App) {
             ..Default::default()
         },
         move |window, cx| {
-            #[cfg(target_os = "windows")]
+            #[cfg(not(target_os = "macos"))]
             crate::ui::set_app_icon(window);
             window.on_window_should_close(cx, move |_, _| {
                 close_events(Event::Exited);
@@ -507,7 +509,7 @@ impl SettingsWindow {
 
 /// The platform key code for a key GPUI names (`r`, `f5`, `space`), as the hotkeys register it.
 fn key_code(key: &str) -> Option<u32> {
-    #[cfg(target_os = "windows")]
+    #[cfg(not(target_os = "macos"))]
     let named: &[(&str, u32)] = &[
         ("space", 0x20),
         ("enter", 0x0D),
@@ -519,7 +521,7 @@ fn key_code(key: &str) -> Option<u32> {
         ("right", 0x27),
         ("down", 0x28),
     ];
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     let named: &[(&str, u32)] = &[
         ("space", 49),
         ("enter", 36),
@@ -537,9 +539,9 @@ fn key_code(key: &str) -> Option<u32> {
     if let Some(n) = key.strip_prefix('f').and_then(|n| n.parse::<u32>().ok())
         && (1..=16).contains(&n)
     {
-        #[cfg(target_os = "windows")]
+        #[cfg(not(target_os = "macos"))]
         return Some(0x6F + n);
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
         return Some([122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106][n as usize - 1]);
     }
     let mut chars = key.chars();
@@ -555,7 +557,12 @@ fn open_privacy_settings(permission: Permission) {
     crate::win::privacy::open_settings(permission);
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+fn open_privacy_settings(permission: Permission) {
+    crate::linux::privacy::open_settings(permission);
+}
+
+#[cfg(target_os = "macos")]
 fn open_privacy_settings(_permission: Permission) {}
 
 // MARK: Building blocks
@@ -921,6 +928,8 @@ impl SettingsWindow {
                 theme,
                 if WINDOWS {
                     "Turn Scrawl on in Settings › Apps › Startup."
+                } else if LINUX {
+                    "Your desktop's startup settings turned Scrawl off. Turn it on there."
                 } else {
                     "Allow Scrawl in System Settings › General › Login Items."
                 },
@@ -950,7 +959,7 @@ impl SettingsWindow {
         let caption_text = if recording && shortcut.clearable {
             format!(
                 "Press the new shortcut. Esc cancels, {} turns it off.",
-                if WINDOWS { "Backspace" } else { "Delete" }
+                if WINDOWS || LINUX { "Backspace" } else { "Delete" }
             )
         } else if recording {
             "Press the new shortcut. Esc cancels.".to_owned()
@@ -966,7 +975,8 @@ impl SettingsWindow {
         } else {
             shortcut.key.clone()
         };
-        // macOS draws ⇧ ⌃ ⌥ ⌘; Windows names its keys, in the order they sit on the keyboard.
+        // macOS draws ⇧ ⌃ ⌥ ⌘; Windows and Linux name their keys, in the order they sit on the
+        // keyboard.
         let caps = if off && !recording {
             div()
                 .h(px(52.0))
@@ -976,13 +986,14 @@ impl SettingsWindow {
                 .text_size(px(14.0))
                 .text_color(theme.secondary())
                 .child("Set shortcut")
-        } else if WINDOWS {
+        } else if WINDOWS || LINUX {
+            let super_key = if LINUX { "Super" } else { "Win" };
             div()
                 .flex()
                 .gap(px(6.0))
                 .child(keycap(theme, "Shift", None, lit(shortcut.shift, live.shift), false))
                 .child(keycap(theme, "Ctrl", None, lit(shortcut.control, live.control), false))
-                .child(keycap(theme, "Win", None, lit(shortcut.command, live.platform), false))
+                .child(keycap(theme, super_key, None, lit(shortcut.command, live.platform), false))
                 .child(keycap(theme, "Alt", None, lit(shortcut.option, live.alt), false))
                 .child(keycap(theme, &key, None, !recording, true))
         } else {
@@ -1077,17 +1088,26 @@ impl SettingsWindow {
     fn recording_pane(&self, theme: Theme, state: &ViewState, cx: &mut Context<Self>) -> Div {
         let t = &state.transcriber;
         let hex = t.engine == "hex";
+        let command = t.engine == "command";
         let local = crate::transcribe::LOCAL_ENGINE_TITLE;
-        let engines = vec![
+        let mut engines = vec![
             ("apple".to_owned(), local.to_owned(), true),
             ("hex".to_owned(), t.hex_title.clone(), t.hex_enabled),
         ];
+        if let Some(program) = &t.command {
+            engines.push(("command".to_owned(), format!("Command ({program})"), true));
+        }
+        let engine_title = match (&t.command, hex) {
+            (Some(program), _) if command => format!("Command ({program})"),
+            (_, true) => "Hex".to_owned(),
+            _ => local.to_owned(),
+        };
         let chosen = t.models.iter().find(|m| m.chosen);
         let mut rows = vec![row(
             theme,
             "Transcription",
             true,
-            popup(theme, "settings-transcriber", if hex { "Hex" } else { local }).on_click(
+            popup(theme, "settings-transcriber", &engine_title).on_click(
                 cx.listener({
                     let selected = t.engine.clone();
                     move |view, event: &ClickEvent, _, cx| {
@@ -1125,22 +1145,29 @@ impl SettingsWindow {
                 .into_any_element(),
             );
         }
-        let note = match (WINDOWS, t.hex_enabled || hex) {
-            (true, true) => {
-                "Parakeet runs on this PC and times each word. Hex uses a model you have in Hex, and its word times are estimates."
+        let here = if LINUX { "this computer" } else { "this PC" };
+        let note = match (WINDOWS || LINUX, t.hex_enabled || hex) {
+            _ if command => {
+                let fallback = if WINDOWS || LINUX { "Parakeet" } else { "Apple Speech" };
+                format!(
+                "Command runs transcribeCommand from config.json. If it fails, that recording uses {fallback}."
+                )
             }
-            (true, false) => {
-                "Parakeet runs on this PC and times each word. Scrawl downloads its 730 MB model once, unless Hex already has it. Hex shows up here while Hex is running."
-            }
+            (true, true) => format!(
+                "Parakeet runs on {here} and times each word. Hex uses a model you have in Hex, and its word times are estimates."
+            ),
+            (true, false) => format!(
+                "Parakeet runs on {here} and times each word. Scrawl downloads its 730 MB model once, unless Hex already has it. Hex shows up here while Hex is running."
+            ),
             (false, true) => {
-                "Apple Speech times each word. Hex uses a model you have in Hex, and its word times are estimates."
+                "Apple Speech times each word. Hex uses a model you have in Hex, and its word times are estimates.".to_owned()
             }
             (false, false) => {
-                "Apple Speech runs on this Mac and times each word. Hex shows up here while Hex is running."
+                "Apple Speech runs on this Mac and times each word. Hex shows up here while Hex is running.".to_owned()
             }
         };
         let speech = match t.speech.state.as_str() {
-            _ if !WINDOWS || hex => None,
+            _ if !(WINDOWS || LINUX) || hex || command => None,
             "downloading" => Some((
                 format!(
                     "Downloading the speech model: {:.0}%",
@@ -1166,7 +1193,7 @@ impl SettingsWindow {
             .flex()
             .flex_col()
             .child(group(theme, rows))
-            .child(caption(theme, note, false))
+            .child(caption(theme, &note, false))
             .when_some(speech, |pane, (text, error)| {
                 pane.child(caption(theme, &text, error))
             })
@@ -1209,6 +1236,8 @@ impl SettingsWindow {
         let selected = r.preset.clone();
         let show = if WINDOWS {
             "Show in File Explorer"
+        } else if LINUX {
+            "Show in Files"
         } else {
             "Show in Finder"
         };
@@ -1281,6 +1310,10 @@ impl SettingsWindow {
                 theme,
                 if WINDOWS {
                     "Scrawl needs the microphone to hear you. Recording the screen, clicks and shortcuts need no permission on Windows."
+                } else if LINUX && required.len() > 1 {
+                    "Scrawl needs the microphone to hear you, and on Wayland the input devices to see ⇧ ink, clicks and Esc over other apps."
+                } else if LINUX {
+                    "Scrawl needs the microphone to hear you. On X11, the screen, clicks and shortcuts need no permission."
                 } else {
                     "Scrawl needs these three to record."
                 },
@@ -1335,6 +1368,12 @@ impl SettingsWindow {
                 crate::icons::CLICK,
                 GREY,
             ),
+            Permission::Accessibility if LINUX => (
+                "Input devices",
+                "For Shift ink and clicks. Run the copied command in a terminal, then log out and back in.".to_owned(),
+                crate::icons::CLICK,
+                BLUE,
+            ),
             Permission::Accessibility => (
                 "Accessibility",
                 format!(
@@ -1375,17 +1414,27 @@ impl SettingsWindow {
                 .child("Allowed")
                 .into_any_element()
         } else {
-            let title = if row.requested || row.status == Status::Denied {
+            let title = if LINUX && permission == Permission::Accessibility {
+                "Copy command"
+            } else if row.requested || row.status == Status::Denied {
                 "Open Settings"
             } else {
                 "Allow"
             };
             button(theme, id, title, true)
-                .on_click(cx.listener(move |view, _, _, _| view.act(Action::Grant { permission })))
+                .on_click(cx.listener(move |view, _, _, _| {
+                    #[cfg(target_os = "linux")]
+                    if permission == Permission::Accessibility {
+                        crate::linux::privacy::copy_input_command();
+                        return;
+                    }
+                    view.act(Action::Grant { permission });
+                }))
                 .into_any_element()
         };
         div()
-            .h(px(52.0))
+            .min_h(px(52.0))
+            .py(px(8.0))
             .px(px(12.0))
             .flex()
             .items_center()
@@ -1394,6 +1443,7 @@ impl SettingsWindow {
             .child(
                 div()
                     .flex_1()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .gap(px(1.0))
@@ -1793,3 +1843,16 @@ impl Render for SettingsWindow {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_command_transcriber_is_read_from_the_view() {
+        let t: Transcriber =
+            serde_json::from_str(r#"{"engine":"command","command":"whisper-scrawl"}"#).unwrap();
+        assert_eq!(t.engine, "command");
+        assert_eq!(t.command.as_deref(), Some("whisper-scrawl"));
+        assert_eq!(Transcriber::default().command, None);
+    }
+}

@@ -1,6 +1,6 @@
 //! The Windows side of `scrawl-helper`: the same calls as `src/helper.rs`, answered in process.
 //! Movies go through Media Foundation (`win::media`), transcription through `transcribe.cpp`
-//! with Hex's model or Scrawl's own copy of it (`win::speech`), and permissions through the privacy settings
+//! with Hex's model or Scrawl's own copy of it (`speech`), and permissions through the privacy settings
 //! (`win::privacy`). There is no cabled-iPhone mirror on Windows.
 
 use std::path::{Path, PathBuf};
@@ -52,18 +52,18 @@ pub struct SpeechModelLine {
     pub error: Option<String>,
 }
 
-/// Windows transcribes with Parakeet (`win::speech`): Hex's installed model, else Scrawl's own
+/// Windows transcribes with Parakeet (`speech`): Hex's installed model, else Scrawl's own
 /// copy, downloaded and checked here.
 pub fn install_speech_model(
     _stop: &dyn Fn() -> bool,
     line: impl FnMut(SpeechModelLine),
 ) -> Result<()> {
-    crate::win::speech::install(line)
+    crate::speech::install(line)
 }
 
 /// On-device transcription with measured word timings (Parakeet through `transcribe.cpp`).
 pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
-    crate::win::speech::transcribe(audio)
+    crate::speech::transcribe(audio)
 }
 
 #[derive(Debug, Deserialize)]

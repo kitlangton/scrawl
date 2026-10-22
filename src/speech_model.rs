@@ -278,7 +278,7 @@ pub fn note_grants(grants: &crate::onboarding::Grants) {
 /// The plain sentence for a capture without a transcript, from the helper's `missing`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn missing(why: &str, locale: &str, error: Option<&str>) -> MissingTranscript {
-    let model = if cfg!(target_os = "windows") {
+    let model = if cfg!(not(target_os = "macos")) {
         format!("The Parakeet speech model ({locale})")
     } else {
         format!("Apple's speech model ({locale})")

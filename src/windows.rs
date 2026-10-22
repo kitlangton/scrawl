@@ -398,9 +398,13 @@ fn app_meta_of(pid: i32) -> AppMeta {
 
 /// The taskbar's strip on the display at `frame` (global pixels): the difference between the
 /// display and its work area.
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 pub fn dock_rect(frame: TargetFrame) -> Option<[f64; 4]> {
-    let monitor = crate::win::monitors().into_iter().find(|m| {
+    #[cfg(target_os = "windows")]
+    use crate::win as os;
+    #[cfg(target_os = "linux")]
+    use crate::linux as os;
+    let monitor = os::monitors().into_iter().find(|m| {
         let [x, y, w, h] = m.rect;
         (x - frame.x).abs() < 1.0
             && (y - frame.y).abs() < 1.0
@@ -429,8 +433,65 @@ pub fn dock_rect(frame: TargetFrame) -> Option<[f64; 4]> {
     }
 }
 
+/// Reads the visible top-level windows (front to back): Scrawl's own floating windows, then the
+/// window manager's list. Panels (GNOME's top bar, KDE's) are the `Dock` (layer 20), windows
+/// kept above sit above layer 0, and hidden ones have no alpha. On Wayland only X11 apps'
+/// windows are listed.
+#[cfg(target_os = "linux")]
+pub fn raw_windows() -> Vec<RawWindow> {
+    use crate::linux::x11::{self, WindowKind};
+    let mut names: HashMap<u32, String> = HashMap::new();
+    x11::own_floating_windows()
+        .into_iter()
+        .chain(crate::linux::top_level_windows())
+        .map(|w| {
+            let panel = w.kind == WindowKind::Dock;
+            let owner = if panel {
+                "Dock".to_owned()
+            } else {
+                names
+                    .entry(w.pid)
+                    .or_insert_with(|| {
+                        crate::linux::app_identity(w.pid)
+                            .map(|(name, _)| name)
+                            .unwrap_or_else(|| w.class.clone())
+                    })
+                    .clone()
+            };
+            let layer = if panel {
+                20
+            } else if w.is_app_window() && !w.topmost() {
+                0
+            } else {
+                3
+            };
+            RawWindow {
+                id: w.hwnd as u32,
+                pid: w.pid as i32,
+                owner,
+                title: w.title.clone(),
+                bounds: w.rect,
+                layer,
+                alpha: if w.on_screen() { 1.0 } else { 0.0 },
+            }
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn app_meta_of(pid: i32) -> AppMeta {
+    let id = crate::linux::app_identity(pid as u32).map(|(_, id)| id);
+    let regular = crate::linux::top_level_windows()
+        .iter()
+        .any(|w| w.pid == pid as u32 && w.is_app_window());
+    AppMeta {
+        bundle_id: id,
+        regular,
+    }
+}
+
 /// One timed snapshot of the windows overlapping `frame`.
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 pub fn snapshot(
     frame: TargetFrame,
     dock: Option<[f64; 4]>,

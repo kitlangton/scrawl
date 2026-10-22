@@ -3,3 +3,11 @@
 # through `cc` (psm, ring) take the build machine's SDK version as their minimum, and that ends
 # up in the `scrawl` binary's LC_BUILD_VERSION.
 MACOSX_DEPLOYMENT_TARGET = "15.0"
+
+# Distribution baselines. Optional instructions belong in runtime-dispatched code,
+# not in every Rust function just because the build machine supports them.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=generic"]

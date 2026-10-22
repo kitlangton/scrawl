@@ -272,6 +272,17 @@ kbd {
   text-wrap: balance;
 }
 
+.linux-notes {
+  max-width: 480px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: left;
+}
+
+.linux-notes p { margin: 0 0 8px; }
+.linux-notes .platform-brew { margin: 0 0 10px; }
+
 .download-more {
   display: inline-flex;
   align-items: center;
