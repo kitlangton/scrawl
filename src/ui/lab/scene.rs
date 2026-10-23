@@ -28,6 +28,8 @@ pub enum Scene {
     Cancel,
     /// Open the picker, then dismiss it.
     Dismiss,
+    /// Every scene above, one after another (`--repeat 0` loops them).
+    All,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,8 +53,20 @@ impl Scene {
             Self::Finish => "finish",
             Self::Cancel => "cancel",
             Self::Dismiss => "dismiss",
+            Self::All => "all",
         }
     }
+
+    /// Every scene but `All`, in the order `All` plays them.
+    pub const EACH: [Scene; 7] = [
+        Self::TapThenArea,
+        Self::TapThenWindow,
+        Self::TapThenScreen,
+        Self::Picker,
+        Self::Finish,
+        Self::Cancel,
+        Self::Dismiss,
+    ];
 
     /// Steps at animation seconds from the scene's start.
     fn steps(self) -> Vec<(f32, Step)> {
@@ -92,6 +106,18 @@ impl Scene {
             ],
             Self::Cancel => vec![(0.0, Step::Tap), (1.2, Step::Cancel)],
             Self::Dismiss => vec![(0.0, Step::Open), (1.2, Step::Dismiss)],
+            Self::All => {
+                // Each scene starts after the last one's tail and a lead-in, as a repeat would.
+                let mut steps = Vec::new();
+                let mut start = 0.0;
+                for scene in Self::EACH {
+                    let own = scene.steps();
+                    let end = own.last().map_or(0.0, |(at, _)| *at);
+                    steps.extend(own.into_iter().map(|(at, step)| (start + at, step)));
+                    start += end + TAIL_S + LEAD_IN_S;
+                }
+                steps
+            }
         }
     }
 }
@@ -185,5 +211,16 @@ mod tests {
         assert_eq!(due.steps.len(), 5);
         assert!(!due.done, "repeat 0 loops");
         assert!(t.next_at().is_some_and(|at| at > 100.0));
+    }
+
+    #[test]
+    fn all_plays_every_scene_in_order_with_gaps() {
+        let all = Scene::All.steps();
+        let count: usize = Scene::EACH.iter().map(|s| s.steps().len()).sum();
+        assert_eq!(all.len(), count);
+        assert!(all.windows(2).all(|w| w[0].0 < w[1].0), "steps keep their order");
+        let first = Scene::EACH[0].steps();
+        let second_start = first.last().unwrap().0 + TAIL_S + LEAD_IN_S;
+        assert_eq!(all[first.len()], (second_start, Step::Tap));
     }
 }

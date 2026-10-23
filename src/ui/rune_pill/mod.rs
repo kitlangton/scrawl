@@ -5,10 +5,10 @@
 //!
 //! What it shows and where everything rests is decided in `surface` (one `Surface`, Rune's
 //! state); the view below only draws it, and Rune's springs animate between commits. The red
-//! dot and the spinner animate through `Live` values a pretend meter thread publishes, without
-//! re-running the view.
+//! dot and the spinner animate through `Live` values a pretend meter thread publishes, and the
+//! timer's digits through `LiveText` cells, without re-running the view.
 
-mod surface;
+pub(crate) mod surface;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,15 +17,18 @@ use std::time::{Duration, Instant};
 
 use rune::color::srgb_decode;
 use rune::{
-    App, AppSpec, Color, Compositor, Cx, DisplayTarget, El, Frame, LineCap, Live, NativeDisplayId, OverlayHandle,
-    OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Path, RunOptions, Shape, SpringPair,
-    TextStyle, Transition, Tx, WindowSpec, canvas, el, row, text,
+    Align, App, AppSpec, Color, Compositor, Cx, DisplayTarget, El, Frame, LineCap, Live, LiveText, NativeDisplayId,
+    OverlayHandle, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Path, RunOptions, Shape,
+    SpringPair, TextStyle, Transition, Tx, WindowSpec, canvas, el, row, text,
 };
 
-use self::surface::{DONE_TEXT_X, LEAD_TEXT_X, PANEL_H, PROCESSING_TEXT_X, Shown, Surface};
+pub(crate) use self::surface::{PANEL_H, Shown, Surface};
+use self::surface::{DONE_TEXT_X, LEAD_TEXT_X, PROCESSING_TEXT_X};
 use super::lab::{BACKDROP, Scene, Step, Timeline};
 use super::{SelectionMode, motion};
-use crate::native::pill::model::{CHIP_H, ElemId, HUD_TEXT, PANEL_W, PANEL_Y, Pres};
+use crate::native::pill::PillAction;
+pub(crate) use crate::native::pill::model::{PANEL_W, PANEL_Y};
+use crate::native::pill::model::{CHIP_H, ElemId, HUD_TEXT, Pres};
 
 pub struct Options {
     pub scene: Scene,
@@ -114,7 +117,7 @@ thread_local! {
     });
 }
 
-fn families(fonts: &[&[u8]]) -> (&'static str, &'static str) {
+pub(crate) fn families(fonts: &[&[u8]]) -> (&'static str, &'static str) {
     if fonts.is_empty() { ("Inter", "Inter") } else { ("System Font", "System Font") }
 }
 
@@ -123,6 +126,21 @@ fn families(fonts: &[&[u8]]) -> (&'static str, &'static str) {
 pub fn measure(text: &str, semibold: bool) -> f32 {
     let style = if semibold { SEMIBOLD } else { MEDIUM };
     TEXT.with_borrow_mut(|t| t.measure(text, style, 2.0).0)
+}
+
+/// A timer digit's cell: the widest digit, centred in it, so the digits stay put as they change
+/// (SwiftUI's `monospacedDigit()`; Rune has no font features to ask SF for `tnum`).
+fn digit_cell() -> f32 {
+    ('0'..='9').map(|d| measure(d.encode_utf8(&mut [0; 4]), true)).fold(0.0, f32::max)
+}
+
+fn clock_cell(c: char, digit: f32) -> f32 {
+    if c.is_ascii_digit() { digit } else { measure(c.encode_utf8(&mut [0; 4]), true) }
+}
+
+fn clock_width(clock: &str) -> f32 {
+    let digit = digit_cell();
+    clock.chars().map(|c| clock_cell(c, digit)).sum()
 }
 
 fn metrics() -> crate::native::pill::model::Metrics {
@@ -137,9 +155,107 @@ fn metrics() -> crate::native::pill::model::Metrics {
         processing: measure("Processing…", true),
         paste: measure("Paste", true),
         inspect: measure("Inspect", false),
-        clock_000: measure("0:00", true),
-        clock_0000: measure("00:00", true),
+        clock_000: clock_width("0:00"),
+        clock_0000: clock_width("00:00"),
     }
+}
+
+const PROCESSING: &str = "Processing…";
+const PROCESSING_GLYPHS: usize = 11;
+
+/// "Processing…" split into glyphs, each with its x and width as the whole label shapes them.
+fn processing_glyphs() -> [(char, f32, f32); PROCESSING_GLYPHS] {
+    let mut out = [(' ', 0.0, 0.0); PROCESSING_GLYPHS];
+    for (k, (at, c)) in PROCESSING.char_indices().enumerate() {
+        let end = at + c.len_utf8();
+        let x = if at == 0 { 0.0 } else { measure(&PROCESSING[..at], true) };
+        out[k] = (c, x, measure(&PROCESSING[..end], true) - x);
+    }
+    out
+}
+
+/// The timer's characters, one `LiveText` each, so a new second redraws its digits without
+/// re-running the view; only a change of length (9:59 → 10:00) re-lays the capsule out.
+const CLOCK_CELLS: usize = 6;
+
+/// A `Surface` laid out with the capsule's real label widths (call `fonts` first).
+pub(crate) fn new_surface() -> Surface {
+    Surface::new(motion::tune(), metrics())
+}
+
+/// What the capsule draws beside its `Surface`: the live values (the dot, the spinner and the
+/// edge glow, from a meter thread) and the timer's cells. Whoever owns the surface owns one of
+/// these: publish the clock through `set_clock`, call `sync` after changing the surface, and
+/// draw with `capsule`.
+pub(crate) struct Capsule {
+    meter: Meter,
+    clock: [LiveText; CLOCK_CELLS],
+    /// `surface.morphs` as last passed to the meter's edge glow.
+    morphs: u32,
+}
+
+impl Capsule {
+    /// Starts the thread that animates the live values (one per capsule).
+    pub(crate) fn new(surface: &Surface) -> Self {
+        let capsule = Self::with_meter(surface, Meter::new());
+        capsule.meter.clone().spawn();
+        capsule
+    }
+
+    fn with_meter(surface: &Surface, meter: Meter) -> Self {
+        let mut chars = surface.clock.chars();
+        let clock = std::array::from_fn(|_| LiveText::new(chars.next().map(String::from).unwrap_or_default()));
+        Self { meter, clock, morphs: surface.morphs }
+    }
+
+    /// Shows `clock`: its characters go to the cells, and the surface re-lays out only when its
+    /// length or width changes. True when the view must re-run.
+    pub(crate) fn set_clock(&self, surface: &mut Surface, clock: &str, now: f64) -> bool {
+        let mut chars = clock.chars();
+        for cell in &self.clock {
+            cell.set(chars.next().map(String::from).unwrap_or_default());
+        }
+        surface.set_clock(clock, now)
+    }
+
+    /// Tells the meter what the surface shows: which animations run, at what speed, and when a
+    /// morph lights the edge.
+    pub(crate) fn sync(&mut self, surface: &Surface) {
+        let activity = match surface.pres {
+            Pres::Recording { .. } => 1,
+            Pres::Processing => 2,
+            _ => 0,
+        };
+        self.meter.activity.store(activity, Ordering::Relaxed);
+        self.meter.time_scale.store(surface.time_scale.to_bits(), Ordering::Relaxed);
+        if surface.morphs != self.morphs {
+            self.morphs = surface.morphs;
+            self.meter.kick.store(surface.morph_settle.max(0.2).to_bits(), Ordering::Release);
+        }
+    }
+}
+
+/// What a press on `id` asks the app to do, as `NativePill::dispatch_click` decides it.
+#[allow(dead_code, reason = "the app mounts the capsule on rune/app; the lab plays presses itself")]
+pub(crate) fn action(pres: &Pres, id: ElemId) -> Option<PillAction> {
+    let selecting = matches!(pres, Pres::Selecting { .. });
+    let mode = |m| if selecting { PillAction::SelectMode(m) } else { PillAction::SwitchRecording(m) };
+    Some(match id {
+        ElemId::ChipArea => mode(SelectionMode::Area),
+        ElemId::ChipWindow => mode(SelectionMode::Window),
+        ElemId::ChipScreen => mode(SelectionMode::Screen),
+        ElemId::ChipIphone => mode(SelectionMode::Iphone),
+        ElemId::Record => PillAction::RecordSelected,
+        ElemId::Cancel => PillAction::Cancel,
+        ElemId::Finish => PillAction::Finish,
+        ElemId::Close if matches!(pres, Pres::Completed { .. }) => PillAction::DismissCompleted,
+        ElemId::Close => PillAction::Cancel,
+        ElemId::Paste => PillAction::Paste(None),
+        ElemId::Inspect => PillAction::Inspect,
+        ElemId::Route0 => PillAction::Route(0),
+        ElemId::Route1 => PillAction::Route(1),
+        _ => return None,
+    })
 }
 
 // ─── Live values ─────────────────────────────────────────────────────────────────────────────
@@ -153,9 +269,29 @@ struct Meter {
     ring_alpha: Live<f32>,
     /// The spinner's eight dots.
     spin: [Live<f32>; 8],
+    /// "Processing…" one glyph each, lit by a band of light passing across (`pillShimmer`).
+    shimmer: [Live<f32>; PROCESSING_GLYPHS],
+    /// Each glyph's centre across the label, 0…1.
+    shimmer_at: [f32; PROCESSING_GLYPHS],
+    /// The glow inside the capsule's edge while it morphs (SwiftUI's `pillEdgeGlow` energy).
+    glow: Live<f32>,
+    /// A morph's settle time in seconds (`f32` bits), for the thread to start a glow; 0 when none.
+    kick: Arc<AtomicU32>,
     /// 0 idle, 1 recording, 2 processing (written by the UI, read by the thread).
     activity: Arc<AtomicU8>,
     time_scale: Arc<AtomicU32>,
+}
+
+/// The edge glow `dt` seconds into a morph that settles in `settle`: from `from` up to 1 over
+/// 0.05 s, then a critically damped spring back to 0 (SwiftUI's keyframes).
+fn glow_at(dt: f32, settle: f32, from: f32) -> f32 {
+    const RISE: f32 = 0.05;
+    if dt < RISE {
+        return from + (1.0 - from) * dt / RISE;
+    }
+    let w = std::f32::consts::TAU / settle.max(0.2);
+    let t = dt - RISE;
+    (1.0 + w * t) * (-w * t).exp()
 }
 
 impl Meter {
@@ -165,6 +301,14 @@ impl Meter {
             ring_scale: Live::new(0.4),
             ring_alpha: Live::new(0.0),
             spin: std::array::from_fn(|_| Live::new(0.18)),
+            shimmer: std::array::from_fn(|_| Live::new(1.0)),
+            shimmer_at: {
+                let total = measure(PROCESSING, true).max(1.0);
+                let glyphs = processing_glyphs();
+                std::array::from_fn(|k| (glyphs[k].1 + glyphs[k].2 * 0.5) / total)
+            },
+            glow: Live::new(0.0),
+            kick: Arc::default(),
             activity: Arc::default(),
             time_scale: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
         };
@@ -184,6 +328,13 @@ impl Meter {
             let phase = (head - k as f32).rem_euclid(8.0);
             dot.set((1.0 - phase / 7.5).clamp(0.18, 1.0));
         }
+        // A 1.8 s ease-in-out sweep from left of the label to right of it, repeating.
+        let sweep = (t / 1.8).fract() as f32;
+        let centre = -0.3 + 1.6 * (0.5 - 0.5 * (std::f32::consts::PI * sweep).cos());
+        for (glyph, x) in self.shimmer.iter().zip(self.shimmer_at) {
+            let d = (x - centre) / 0.14;
+            glyph.set(0.62 + 0.38 * (-d * d).exp());
+        }
     }
 
     /// Publishes at 120 Hz while something animates, the way an audio callback would.
@@ -193,6 +344,8 @@ impl Meter {
             .spawn(move || {
                 let mut t = 0.0_f64;
                 let mut last = Instant::now();
+                let mut morph: Option<(f64, f32, f32)> = None;
+                let mut glow = 0.0_f32;
                 loop {
                     std::thread::sleep(Duration::from_millis(8));
                     let now = Instant::now();
@@ -201,6 +354,18 @@ impl Meter {
                     last = now;
                     if self.activity.load(Ordering::Relaxed) != 0 {
                         self.publish(t);
+                    }
+                    let kick = f32::from_bits(self.kick.swap(0, Ordering::AcqRel));
+                    if kick > 0.0 {
+                        morph = Some((t, kick, glow));
+                    }
+                    if let Some((since, settle, from)) = morph {
+                        glow = glow_at((t - since) as f32, settle, from);
+                        if t - since > 0.05 && glow < 0.002 {
+                            glow = 0.0;
+                            morph = None;
+                        }
+                        self.glow.set(glow);
                     }
                 }
             })
@@ -216,7 +381,7 @@ pub struct Lab {
     /// A headless golden: the state rests, nothing plays.
     still: bool,
     surface: Surface,
-    meter: Meter,
+    live: Capsule,
     /// The scene's steps, shared with the Metal lab.
     timeline: Timeline,
     recording_since: Option<f64>,
@@ -253,14 +418,16 @@ impl Ctl {
 }
 
 impl Lab {
-    fn capsule(scene: Scene, repeat: u32, meter: Meter) -> Self {
+    /// `animate`: the live values run (the capsule overlay's; a backdrop or a golden has none).
+    fn capsule(scene: Scene, repeat: u32, animate: bool) -> Self {
         motion::poll_tune();
-        let metrics = metrics();
+        let surface = new_surface();
+        let live = if animate { Capsule::new(&surface) } else { Capsule::with_meter(&surface, Meter::new()) };
         Self {
             backdrop: None,
             still: false,
-            surface: Surface::new(motion::tune(), metrics),
-            meter,
+            surface,
+            live,
             timeline: Timeline::new(scene, repeat),
             recording_since: None,
             // Hidden since long before the run, so the overlay starts hidden.
@@ -268,6 +435,23 @@ impl Lab {
             now: 0.0,
             ctl: Arc::default(),
         }
+    }
+
+    fn set_clock(&mut self, clock: &str, now: f64) -> bool {
+        self.live.set_clock(&mut self.surface, clock, now)
+    }
+
+    /// A click on the capsule, as the lab plays it (the app sends `action` instead).
+    fn press(&mut self, id: ElemId) {
+        let now = self.now;
+        let anim = self.surface.anim(now);
+        match id {
+            ElemId::Close | ElemId::Cancel | ElemId::Paste | ElemId::Inspect | ElemId::Route0 | ElemId::Route1 => {
+                self.surface.set(Pres::Hidden, now);
+            }
+            _ => self.surface.click(id, now),
+        }
+        self.track_recording(anim);
     }
 
     fn apply(&mut self, step: Step, now: f64) {
@@ -292,17 +476,12 @@ impl Lab {
             }
             _ => self.recording_since = None,
         }
-        let activity = match self.surface.pres {
-            Pres::Recording { .. } => 1,
-            Pres::Processing => 2,
-            _ => 0,
-        };
-        self.meter.activity.store(activity, Ordering::Relaxed);
+        self.live.sync(&self.surface);
     }
 }
 
 fn init() -> Lab {
-    Lab::capsule(Scene::Picker, 1, Meter::new())
+    Lab::capsule(Scene::Picker, 1, false)
 }
 
 /// How long the capsule's exit gets before its overlay hides, in animation seconds.
@@ -327,7 +506,6 @@ fn poll(s: &mut Lab, now: f64, tx: &mut Tx) -> bool {
     let tune = motion::tune();
     s.surface.tune = tune;
     s.surface.set_time_scale(now, tune.time_scale);
-    s.meter.time_scale.store(s.surface.time_scale.to_bits(), Ordering::Relaxed);
     let scale = f64::from(s.surface.time_scale);
     let anim = s.surface.anim(now);
 
@@ -340,6 +518,7 @@ fn poll(s: &mut Lab, now: f64, tx: &mut Tx) -> bool {
     if changed {
         s.track_recording(anim);
     }
+    s.live.sync(&s.surface);
     if due.done {
         motion::trace_close();
         s.ctl.done.store(true, Ordering::Release);
@@ -353,10 +532,7 @@ fn poll(s: &mut Lab, now: f64, tx: &mut Tx) -> bool {
         let secs = (anim - since).max(0.0);
         let whole = secs as u64;
         let clock = format!("{}:{:02}", whole / 60, whole % 60);
-        if clock != s.surface.clock {
-            s.surface.set_clock(&clock, now);
-            changed = true;
-        }
+        changed |= s.set_clock(&clock, now);
         let tick = (whole as f64 + 1.0 - secs) / scale;
         wake = Some(wake.map_or(tick, |w| w.min(tick)));
     }
@@ -410,20 +586,39 @@ fn view(s: &Lab, cx: &mut Cx<Lab>) -> El {
     if let Some(fill) = s.backdrop {
         return el().w_full().h_full().fill(fill);
     }
-    let surface = &s.surface;
+    let capsule = capsule(&s.surface, &s.live, cx, Lab::press);
+    if s.still {
+        // Goldens show the capsule over the lab's backdrop, so its shadow and rim read.
+        return el().size(PANEL_W, PANEL_H).fill(srgb(0.851, 0.851, 0.871, 1.0)).child(capsule);
+    }
+    capsule
+}
+
+/// The capsule in its `PANEL_W` × `PANEL_H` panel, as `surface` and `live` say. A press on a
+/// chip, button or ✕ calls `on_press` (`action` says what it means to the app); the shell and
+/// those are the only `.hit()` boxes, for `OverlayInput::Regions`.
+pub(crate) fn capsule<S: 'static>(
+    surface: &Surface,
+    live: &Capsule,
+    cx: &mut Cx<S>,
+    on_press: impl Fn(&mut S, ElemId) + Clone + 'static,
+) -> El {
     cx.time_scale(surface.time_scale);
     cx.reduced_motion(surface.reduced);
     let mut root = el().size(PANEL_W, PANEL_H);
-    if s.still {
-        // Goldens show the capsule over the lab's backdrop, so its shadow and rim read.
-        root = root.fill(srgb(0.851, 0.851, 0.871, 1.0));
-    }
-    root = root.child(shell(surface));
-    let presence = Transition::blur(surface.tune.reveal_blur_px)
+    root = root.child(shell(surface, &live.meter));
+    let blur = if surface.reduced { 0.0 } else { PRESENCE_BLUR };
+    let presence = Transition::blur(blur)
         .combined(Transition::scale(0.96))
-        .springs(SpringPair::with_exit_ratio(presence_spring(surface), surface::EXIT_RATIO));
+        .springs(SpringPair::new(surface.presence(), surface::PRESENCE_EXIT));
+    // Everything inside is masked by the capsule as it moves (SwiftUI's `.mask`): a box on the
+    // shell's rect and spring clips to its rounded shape, and the box inside it moves back by
+    // the same amount on the same spring, so the content stays where it's laid out in panel
+    // points while the walls pass over it.
+    let [x, y, w, h] = surface.shell;
+    let mut inner = el().key("inner").absolute(-x, -y).size(PANEL_W, PANEL_H).motion(surface.shell_motion);
     if let Some(h) = &surface.highlight {
-        root = root.child(
+        inner = inner.child(
             placed(el(), h)
                 .radius(CHIP_H * 0.5)
                 .gradient(veil(0.216), veil(0.16))
@@ -431,38 +626,53 @@ fn view(s: &Lab, cx: &mut Cx<Lab>) -> El {
         );
     }
     // Content entering over content that leaves (lead → Processing → done, chips → Finish)
-    // crossfades additively, without a midpoint alpha dip. The shell and the highlight are shared
-    // backgrounds, so they stay outside; nothing inside overlaps at rest.
+    // crossfades additively, without a midpoint alpha dip. The highlight is a shared background,
+    // so it stays outside; nothing inside overlaps at rest.
     let mut content = el().key("content").absolute(0.0, 0.0).size(PANEL_W, PANEL_H).dissolve();
     for shown in &surface.items {
-        content = content.child(item(s, shown).transition(presence));
+        content = content.child(item(surface, live, shown, on_press.clone()).transition(presence));
     }
-    root.child(content)
+    let clip = el().key("clip").absolute(x, y).size(w, h).motion(surface.shell_motion).clip_rounded(h * 0.5);
+    root.child(clip.child(inner.child(content)))
 }
 
-fn presence_spring(surface: &Surface) -> rune::Spring {
-    rune::Spring::new((surface.tune.reveal_enter_s * 1.6).clamp(0.05, 2.0), 0.0)
-}
+/// Peak blur sigma (pt) of content entering or leaving in place: the SwiftUI capsule's `pill.blur`.
+const PRESENCE_BLUR: f32 = 1.5;
 
 fn placed(e: El, shown: &Shown) -> El {
     let [x, y, w, h] = shown.rect;
-    let e = e.key(shown.key.clone()).absolute(x, y).size(w, h);
-    if shown.moved { e.motion(shown.motion) } else { e }
+    e.key(shown.key.clone()).absolute(x, y).size(w, h).motion(shown.motion)
 }
 
-fn shell(surface: &Surface) -> El {
+fn shell(surface: &Surface, meter: &Meter) -> El {
     let [x, y, w, h] = surface.shell;
     let completed = matches!(surface.pres, Pres::Completed { .. });
-    let (rim_w, rim) = if completed { (0.75, green().alpha(0.5)) } else { (0.5, veil(0.09)) };
-    el().key("shell")
+    let inset = |y: f32, blur: f32, spread: f32, color: Color| rune::Shadow { x: 0.0, y, blur, spread, color, inset: true };
+    // SwiftUI's rim is a 0.5 pt hairline lit from above (white 0.15 at the top, 0.04 at the
+    // bottom): a 0.04 ring with a 0.5 pt highlight dropped in from the top edge, which thins out
+    // down the sides the same way.
+    let mut shell = el().key("shell")
         .absolute(x, y)
         .size(w, h)
         .radius(h * 0.5)
         // SwiftUI's 0.96, blended in sRGB there; in Rune's linear blend a light desktop would
         // lift it visibly, so nearly opaque.
         .fill(srgb(SHELL[0], SHELL[1], SHELL[2], 0.99))
-        .border(rim_w, rim)
+        .box_shadow(inset(0.5, 0.0, 0.0, veil(0.11)));
+    shell = if completed {
+        shell.border(0.75, green().alpha(0.5))
+    } else {
+        shell.box_shadow(inset(0.0, 0.0, 0.5, veil(0.04)))
+    };
+    shell
         .shadow(4.0, 18.0, Color::BLACK.alpha(0.34))
+        // The glow inside the edge while the shape morphs, stronger at the top.
+        .child(
+            el().key("glow").absolute(0.0, 0.0).size(w, h).radius(h * 0.5)
+                .box_shadow(inset(1.5, 8.0, 0.0, veil(0.07)))
+                .live_opacity(&meter.glow)
+                .motion(surface.shell_motion),
+        )
         .opacity(if surface.shell_on { 1.0 } else { 0.0 })
         .motion(surface.shell_motion)
         .opacity_motion(surface.shell_fade)
@@ -475,19 +685,9 @@ fn label(content: &str, style: TextStyle, color: Color) -> El {
     text(content).font(style).color(color)
 }
 
-fn item(s: &Lab, shown: &Shown) -> El {
+fn item<S: 'static>(surface: &Surface, live: &Capsule, shown: &Shown, on_press: impl Fn(&mut S, ElemId) + 'static) -> El {
     let id = shown.id;
-    let press = move |lab: &mut Lab| {
-        let now = lab.now;
-        let anim = lab.surface.anim(now);
-        match id {
-            ElemId::Close | ElemId::Cancel | ElemId::Paste | ElemId::Inspect | ElemId::Route0 | ElemId::Route1 => {
-                lab.surface.set(Pres::Hidden, now);
-            }
-            _ => lab.surface.click(id, now),
-        }
-        lab.track_recording(anim);
-    };
+    let press = move |state: &mut S| on_press(state, id);
     let base = placed(row().center(), shown);
     match id {
         ElemId::ChipArea | ElemId::ChipWindow | ElemId::ChipScreen | ElemId::ChipIphone => {
@@ -511,7 +711,7 @@ fn item(s: &Lab, shown: &Shown) -> El {
                 .hit().on_press(press)
         }
         ElemId::Cancel | ElemId::Inspect | ElemId::Route0 | ElemId::Route1 => {
-            let name = match (id, &s.surface.pres) {
+            let name = match (id, &surface.pres) {
                 (ElemId::Route0, Pres::Completed { routes, .. }) => routes.first().cloned().unwrap_or_default(),
                 (ElemId::Route1, Pres::Completed { routes, .. }) => routes.get(1).cloned().unwrap_or_default(),
                 _ => id.accessibility_label().to_owned(),
@@ -527,20 +727,14 @@ fn item(s: &Lab, shown: &Shown) -> El {
                 .child(canvas(icon(id, 12.0 * 2.4 / 24.0, white(0.61))).size(12.0, 12.0))
                 .hit().on_press(press),
         ),
-        ElemId::Lead => placed(el(), shown)
-            .child(dot(&s.meter))
-            .child(
-                row().center_y().absolute(LEAD_TEXT_X, 0.0).h(CHIP_H)
-                    .child(label(&s.surface.clock, SEMIBOLD, text_color())),
-            ),
+        ElemId::Lead => placed(el(), shown).child(dot(&live.meter)).child(timer(surface, live)),
         ElemId::Processing => placed(el(), shown)
-            .child(spinner(&s.meter))
+            .child(spinner(&live.meter))
             .child(
-                row().center_y().absolute(PROCESSING_TEXT_X, 0.0).h(CHIP_H)
-                    .child(label("Processing…", SEMIBOLD, text_color())),
+                processing_label(&live.meter),
             ),
         ElemId::DoneLead => {
-            let done = match &s.surface.pres {
+            let done = match &surface.pres {
                 Pres::Completed { label, .. } => label.clone(),
                 _ => String::new(),
             };
@@ -556,6 +750,34 @@ fn item(s: &Lab, shown: &Shown) -> El {
         }
         ElemId::DividerLead | ElemId::DividerClose => placed(el(), shown),
     }
+}
+
+/// The timer, one fixed cell per character, each centred and bound to its `LiveText`.
+fn timer(surface: &Surface, live: &Capsule) -> El {
+    let digit = digit_cell();
+    let mut cells = row().center_y().absolute(LEAD_TEXT_X, 0.0).h(CHIP_H);
+    for (c, live) in surface.clock.chars().zip(&live.clock) {
+        cells = cells.child(
+            label(c.encode_utf8(&mut [0; 4]), SEMIBOLD, text_color())
+                .live_text(live)
+                .align(Align::Center)
+                .w(clock_cell(c, digit)),
+        );
+    }
+    cells
+}
+
+/// "Processing…", each glyph at its place in the shaped label and lit by the shimmer.
+fn processing_label(meter: &Meter) -> El {
+    let mut glyphs = el().absolute(PROCESSING_TEXT_X, 0.0).h(CHIP_H).w(measure(PROCESSING, true));
+    for ((c, x, w), live) in processing_glyphs().into_iter().zip(&meter.shimmer) {
+        glyphs = glyphs.child(
+            row().center_y().absolute(x, 0.0).h(CHIP_H).w(w)
+                .child(label(c.encode_utf8(&mut [0; 4]), SEMIBOLD, text_color()))
+                .live_opacity(live),
+        );
+    }
+    glyphs
 }
 
 /// The recording dot: a breathing core with a glow, and a ripple ring every 1.6 s.
@@ -655,6 +877,27 @@ fn icon(id: ElemId, width: f32, color: Color) -> Shape {
 /// (`shell`, `lead`, `chip:Area`, … in screen points), so the two traces compare.
 struct TraceFrames {
     origin: [f32; 2],
+    /// The last frame's stamp and the wall time it was written (ms on the trace's clock).
+    last: Option<(f64, f64)>,
+}
+
+impl TraceFrames {
+    fn new(origin: [f32; 2]) -> Self {
+        Self { origin, last: None }
+    }
+
+    /// Rune samples a frame at its display link's target time and steps by `dt` between targets,
+    /// so back-to-back frames are stamped `dt` apart; after a pause or drift, the wall clock.
+    fn stamp(&mut self, wall_ms: f64, dt: f64) -> f64 {
+        let t = match self.last {
+            Some((t, wall)) if wall_ms - wall < 50.0 && dt > 0.0 && (t + dt * 1000.0 - wall_ms).abs() < 40.0 => {
+                t + dt * 1000.0
+            }
+            _ => wall_ms,
+        };
+        self.last = Some((t, wall_ms));
+        t
+    }
 }
 
 impl Compositor<Lab> for TraceFrames {
@@ -665,13 +908,20 @@ impl Compositor<Lab> for TraceFrames {
         }
         let [ox, oy] = self.origin;
         let at = |r: [f32; 4]| [ox + r[0], oy + r[1], r[2], r[3]];
+        let dt = f.dt;
+        motion::trace_frame_at(|wall_ms| self.stamp(wall_ms, dt));
         let elements = f.rt.elements();
-        motion::trace_frame();
         motion::trace_element("window", [ox, oy, PANEL_W, PANEL_H], 0.0, 0.0, None, None);
         let Some(shell) = elements.iter().find(|e| e.key.as_deref() == Some("shell")) else { return };
         let shell_rect = at(shell.rect);
         motion::trace_element("shell", shell_rect, shell.opacity, shell.rect[3] * 0.5, None, None);
-        motion::trace_channel("content.blur", "level", 0.0);
+        // The blur anyone sees: an item fading out keeps its full blur until it unmounts, at
+        // opacity 0, so weight each by how visible it is.
+        let blur = elements
+            .iter()
+            .filter(|e| e.key.as_deref().is_some_and(|k| k.contains('#')))
+            .map(|e| e.blur * e.opacity.clamp(0.0, 1.0));
+        motion::trace_channel("content.blur", "level", blur.fold(0.0, f32::max));
         motion::trace_channel("content.alpha", "level", shell.opacity);
         // Entry lands its pose while invisible: a width jump there isn't motion anyone sees.
         if shell.opacity > 0.001 {
@@ -715,44 +965,14 @@ fn spec(size: (f32, f32), fonts: &'static [&'static [u8]]) -> AppSpec<Lab> {
     }
 }
 
-/// SF (the capsule's face), read from the system at run time; Rune's Inter when it's missing.
-fn system_fonts() -> &'static [&'static [u8]] {
-    match std::fs::read("/System/Library/Fonts/SFNS.ttf") {
+/// SF (the capsule's face), read from the system once; Rune's Inter when it's missing. The
+/// capsule measures its labels with these, so load them before the first `new_surface`, and give
+/// them and `families` to the app that draws it.
+pub(crate) fn fonts() -> &'static [&'static [u8]] {
+    FONTS.get_or_init(|| match std::fs::read("/System/Library/Fonts/SFNS.ttf") {
         Ok(bytes) => Box::leak(vec![&*Box::leak(bytes.into_boxed_slice())].into_boxed_slice()),
         Err(_) => &[],
-    }
-}
-
-/// Rune reads its tooling flags from the process's arguments, so the lab re-execs itself with
-/// arguments Rune reads the way clap did (`rune_args`) when they differ.
-fn exec_with_rune_args() {
-    use std::os::unix::process::CommandExt;
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(args) = rune_args(&args) else { return };
-    let Ok(exe) = std::env::current_exe() else { return };
-    let error = std::process::Command::new(exe).args(args).exec();
-    eprintln!("rune lab: couldn't re-exec for Rune's argument parser: {error}");
-    std::process::exit(1);
-}
-
-/// `args` without Scrawl's `--trace` (a motion-lint file, already in `SCRAWL_MOTION_TRACE`),
-/// which Rune would take for its own headless trace, and with `--snap=PATH` split into
-/// `--snap PATH`, the only form Rune reads. `None` when nothing changes.
-fn rune_args(args: &[String]) -> Option<Vec<String>> {
-    let mut out = Vec::with_capacity(args.len());
-    let mut rest = args.iter();
-    while let Some(arg) = rest.next() {
-        if arg == "--trace" {
-            rest.next();
-        } else if arg.starts_with("--trace=") {
-            continue;
-        } else if let Some(path) = arg.strip_prefix("--snap=") {
-            out.extend(["--snap".to_owned(), path.to_owned()]);
-        } else {
-            out.push(arg.clone());
-        }
-    }
-    (out != args).then_some(out)
+    })
 }
 
 /// `--snap DIR`: one headless run per state, each `--snap DIR/<state>.png --state <state>`.
@@ -778,22 +998,22 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     {
         return snap_all(&options, snap);
     }
-    exec_with_rune_args();
-    let fonts = system_fonts();
-    let _ = FONTS.set(fonts);
+    let fonts = fonts();
     let still = match options.snap.as_ref().map(|_| options.state.as_deref().unwrap_or("picker")) {
         Some(name) => Some(state_pres(name).ok_or_else(|| {
             anyhow::anyhow!("unknown state {name}; one of {}", STATES.join(", "))
         })?),
         None => None,
     };
-    let Options { scene, repeat, backdrop, capture, .. } = options;
+    let Options { scene, repeat, backdrop, capture, snap, .. } = options;
     if let Some((pres, clock)) = still {
-        // Headless (Rune draws no overlays there): one window with the state at rest.
-        rune::run_windows_with(RunOptions { accessory: true }, move |_| {
-            let mut lab = Lab::capsule(scene, repeat, Meter::new());
+        // Headless (Rune draws no overlays there): one window with the state at rest. Rune gets
+        // only its own flag, never Scrawl's.
+        let args = ["--snap".to_owned(), snap.unwrap_or_default().to_string_lossy().into_owned()];
+        rune::run_windows_with_args(RunOptions { accessory: true }, args, move |_| {
+            let mut lab = Lab::capsule(scene, repeat, false);
             lab.still = true;
-            lab.surface.clock = clock.to_owned();
+            lab.set_clock(clock, 0.0);
             let surface = std::mem::replace(&mut lab.surface, Surface::new(motion::tune(), Default::default()));
             lab.surface = surface.settled(pres);
             let app = App::new(spec((PANEL_W, PANEL_H), fonts));
@@ -801,7 +1021,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         });
         return Ok(());
     }
-    rune::run_windows_with(RunOptions { accessory: true }, move |_| {
+    rune::run_windows_with_args(RunOptions { accessory: true }, Vec::new(), move |_| {
         let places = places();
         let start = crate::screens::pointer()
             .and_then(|p| crate::screens::index_at(&crate::screens::current(), p))
@@ -822,13 +1042,11 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             BACKDROP[3]
         );
 
-        let meter = Meter::new();
-        meter.clone().spawn();
         // Only the capsule polls (`ConfiguredOverlay::poll`): overlays whose state type matches
         // inherit the app's poll, and the backdrop is a `Lab` too.
         let mut app = App::new(AppSpec { poll: None, ..spec((PANEL_W, PANEL_H), fonts) }).windowless();
         let backdrop = backdrop.then(|| {
-            let mut state = Lab::capsule(scene, repeat, meter.clone());
+            let mut state = Lab::capsule(scene, repeat, false);
             state.backdrop = Some(backdrop_fill());
             let overlay = app.overlay(
                 OverlaySpec::new("Scrawl capsule backdrop (Rune)", (BACKDROP[2], BACKDROP[3]), view).options(
@@ -841,7 +1059,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             overlay
         });
 
-        let lab = Lab::capsule(scene, repeat, meter);
+        let lab = Lab::capsule(scene, repeat, true);
         let ctl = lab.ctl.clone();
         let excluded: Arc<std::sync::Mutex<Vec<u32>>> = Arc::default();
         let capture = capture.map(|dir| Arc::new(Capture::new(dir, excluded.clone())));
@@ -858,7 +1076,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
                     ..Default::default()
                 })
                 .poll(poll)
-                .compositor(TraceFrames { origin })
+                .compositor(TraceFrames::new(origin))
                 .on_created(move |made| {
                     eprintln!(
                         "rune lab: capsule overlay window {:?}, native capture exclusion {:?}",
@@ -1063,19 +1281,26 @@ fn drive(mut d: Driver, quit: rune::AppHandle<Lab>) {
 
 #[cfg(test)]
 mod tests {
-    use super::rune_args;
+    use super::*;
 
-    fn args(s: &str) -> Vec<String> {
-        s.split(' ').map(str::to_owned).collect()
+    #[test]
+    fn the_shimmer_has_a_glyph_per_character() {
+        assert_eq!(PROCESSING.chars().count(), PROCESSING_GLYPHS);
     }
 
     #[test]
-    fn rune_gets_snap_as_two_tokens_and_no_trace() {
-        assert_eq!(
-            rune_args(&args("lab pill finish --rune --snap=out.png --trace t.jsonl")),
-            Some(args("lab pill finish --rune --snap out.png"))
-        );
-        assert_eq!(rune_args(&args("lab pill finish --trace=t.jsonl --rune")), Some(args("lab pill finish --rune")));
-        assert_eq!(rune_args(&args("lab pill finish --rune --snap out.png")), None);
+    fn presses_ask_for_what_the_metal_capsule_sends() {
+        let picker = Pres::Selecting { mode: SelectionMode::Screen, has_iphone: false };
+        let recording = Pres::Recording { chips: true, has_iphone: false };
+        let done = Pres::Completed { label: "Copied".into(), routes: Vec::new() };
+        assert!(matches!(action(&picker, ElemId::ChipArea), Some(PillAction::SelectMode(SelectionMode::Area))));
+        assert!(matches!(
+            action(&recording, ElemId::ChipWindow),
+            Some(PillAction::SwitchRecording(SelectionMode::Window))
+        ));
+        assert!(matches!(action(&recording, ElemId::Close), Some(PillAction::Cancel)));
+        assert!(matches!(action(&done, ElemId::Close), Some(PillAction::DismissCompleted)));
+        assert!(matches!(action(&done, ElemId::Route1), Some(PillAction::Route(1))));
+        assert!(action(&recording, ElemId::Lead).is_none());
     }
 }

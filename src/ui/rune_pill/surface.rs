@@ -4,10 +4,11 @@
 //! here; Rune animates between the targets.
 //!
 //! Timing that a spring can't express lives here too, as pending steps the app's poll hook runs:
-//! narrowing waits `COLLAPSE_WAIT_S` so leaving chips fade before a wall crosses them, and an
-//! entering chip mounts once the walls have room for it (predicted from the same analytic spring
-//! Rune animates the walls on). Content entering over content that leaves crossfades with it (the
-//! view's `dissolve` scope).
+//! narrowing, the walls start `SHELL_WAIT_S` after the content so leaving chips are already
+//! fading when a wall reaches them (the SwiftUI capsule's delay), and an entering chip mounts
+//! once the walls have room for it (predicted from the same analytic spring Rune animates the
+//! walls on). The view masks the content by the capsule, and content entering over content that
+//! leaves crossfades with it (its `dissolve` scope).
 
 use rune::Spring;
 
@@ -32,10 +33,10 @@ const PROCESSING_TRAIL: f32 = 8.5;
 pub const DONE_TEXT_X: f32 = 35.0;
 /// The capsule unfolds from this fraction of its height, anchored on its top edge.
 const TOP_FROM: f32 = 0.7;
-const COLLAPSE_WAIT_S: f32 = 0.07;
-/// Leaving content fades on this fraction of the entering fade, so it's mostly gone (≈ 0.3
-/// opacity) by the time a wall crosses it: Rune has no capsule mask to hide it behind.
-pub const EXIT_RATIO: f32 = 0.6;
+const SHELL_WAIT_S: f32 = 0.06;
+/// Content leaves on the SwiftUI capsule's exit, `pill.exit` (0.20 s) × 0.85: exits run
+/// shorter than entrances.
+pub const PRESENCE_EXIT: Spring = Spring::new(0.20 * 0.85, 0.0);
 const ENTRY_CONTENT_DELAY_S: f32 = 0.016;
 const STAGGER_S: f32 = 0.008;
 /// Opening, sliding content takes this many times the walls' duration (`pill.follow`).
@@ -211,15 +212,12 @@ pub struct Shown {
     pub enabled: bool,
     /// The spring for this element's next layout change.
     pub motion: Spring,
-    /// It has moved since it mounted. Until then the view leaves its motion unset: Rune takes an
-    /// element's presence springs from a motion set while it mounts, overriding its transition's.
-    pub moved: bool,
 }
 
 #[derive(Clone, Debug)]
 enum Step {
-    /// The walls and the items that stay, after a collapse wait.
-    Geometry,
+    /// The capsule's walls narrowing, after the content has started (`SHELL_WAIT_S`).
+    Shell([f32; 4], Spring),
     /// The second frame of an entry: from the origin pose to rest.
     Entry,
     Mount(Shown),
@@ -251,6 +249,9 @@ pub struct Surface {
     pub highlight: Option<Shown>,
     /// The next commit lands with no animation (an entry's origin pose).
     pub instant: bool,
+    /// Counts the width morphs (each one lights the edge glow) and the last one's settle time.
+    pub morphs: u32,
+    pub morph_settle: f32,
     /// App events for the motion trace (`phase:*`, `lab:*`).
     pub events: Vec<String>,
     /// Session routes the Completed island offers ("Send to …"; state only for now).
@@ -282,6 +283,8 @@ impl Surface {
             items: Vec::new(),
             highlight: None,
             instant: false,
+            morphs: 0,
+            morph_settle: 0.0,
             events: Vec::new(),
             routes: Vec::new(),
             pending: Vec::new(),
@@ -333,12 +336,11 @@ impl Surface {
             active: item.active,
             enabled: item.enabled,
             motion,
-            moved: false,
         }
     }
 
-    /// The fade an element enters with; it leaves on 0.8× of it.
-    fn presence(&self) -> Spring {
+    /// The fade an element enters with (it leaves on `PRESENCE_EXIT`).
+    pub fn presence(&self) -> Spring {
         Spring::new((self.tune.reveal_enter_s * 1.6).clamp(0.05, 2.0), 0.0)
     }
 
@@ -352,20 +354,23 @@ impl Surface {
             active: true,
             enabled: false,
             motion,
-            moved: false,
         })
     }
 
-    pub fn set_clock(&mut self, clock: &str, now: f64) {
+    /// The timer reads `clock`. True when the capsule re-lays out for it (a wider timer); the
+    /// view draws the digits themselves from live cells.
+    pub fn set_clock(&mut self, clock: &str, now: f64) -> bool {
         if self.clock == clock {
-            return;
+            return false;
         }
-        let resize = self.metrics.clock_width(&self.clock) != self.metrics.clock_width(clock);
+        let resize = self.clock.len() != clock.len()
+            || self.metrics.clock_width(&self.clock) != self.metrics.clock_width(clock);
         self.clock = clock.to_owned();
         if resize && matches!(self.pres, Pres::Recording { .. }) {
             let same = self.pres.clone();
             self.transition(same, now, false);
         }
+        resize
     }
 
     /// Shows `next`. Retargets keep every element's position and velocity (Rune's springs).
@@ -444,16 +449,13 @@ impl Surface {
         }
         let narrowing = rest[2] < self.shell[2] - 1.0;
         self.target = Some((rest, items, change));
-        if narrowing && leaving && !self.reduced {
-            self.pending.push((now + self.real(COLLAPSE_WAIT_S), self.seq, Step::Geometry));
-        } else {
-            self.apply_geometry(now);
-        }
+        let wait = if narrowing && leaving && !self.reduced { SHELL_WAIT_S } else { 0.0 };
+        self.apply_geometry(now, wait);
     }
 
-    /// The walls and staying items move to the target; entering items are scheduled for when
-    /// the walls have room for them.
-    fn apply_geometry(&mut self, now: f64) {
+    /// The walls (after `wait` animation seconds) and staying items move to the target; entering
+    /// items are scheduled for when the walls have room for them.
+    fn apply_geometry(&mut self, now: f64, wait: f32) {
         let Some((rest, items, change)) = self.target.take() else { return };
         let t = self.anim(now);
         let tune = self.tune;
@@ -476,23 +478,30 @@ impl Surface {
         let entry = !self.shell_on;
         if entry {
             let enter = spring(tune.island_scale);
+            self.shell = rest;
             self.shell_motion = enter;
             self.shell_fade = Spring::new((enter.duration * 0.9).max(0.04), 0.0);
             self.walls[2].to(t, rest[1] + rest[3], enter);
         } else {
-            self.shell_motion = shell_spring;
-            self.shell_fade = shell_spring;
-            self.walls[0].to(t, rest[0], shell_spring);
-            self.walls[1].to(t, rest[0] + rest[2], shell_spring);
-            self.walls[2].to(t, rest[1] + rest[3], shell_spring);
+            if (rest[2] - self.shell[2]).abs() > 1.0 && !self.reduced {
+                self.morphs = self.morphs.wrapping_add(1);
+                self.morph_settle = shell_spring.duration;
+            }
+            let at = t + f64::from(wait);
+            self.walls[0].to(at, rest[0], shell_spring);
+            self.walls[1].to(at, rest[0] + rest[2], shell_spring);
+            self.walls[2].to(at, rest[1] + rest[3], shell_spring);
+            if wait <= 0.0 {
+                self.move_shell(rest, shell_spring);
+            } else {
+                self.pending.push((now + self.real(wait), self.seq, Step::Shell(rest, shell_spring)));
+            }
         }
-        self.shell = rest;
         self.shell_on = true;
 
         for item in &items {
             if let Some(shown) = self.items.iter_mut().find(|s| s.id == item.id) {
                 shown.motion = item_spring;
-                shown.moved = true;
                 shown.rect = item.rect;
                 shown.active = item.active;
                 shown.enabled = item.enabled;
@@ -503,7 +512,6 @@ impl Surface {
         match (&mut self.highlight, &active) {
             (Some(h), Some(a)) => {
                 h.motion = if h.id == a.id { item_spring } else { HIGHLIGHT };
-                h.moved = true;
                 h.id = a.id;
                 h.rect = a.rect;
             }
@@ -537,6 +545,12 @@ impl Surface {
             }
         }
         self.sort_items();
+    }
+
+    fn move_shell(&mut self, rest: [f32; 4], spring: Spring) {
+        self.shell = rest;
+        self.shell_motion = spring;
+        self.shell_fade = spring;
     }
 
     /// Animation seconds until the walls clear `rect` by most of its resting inset (and, on
@@ -577,7 +591,8 @@ impl Surface {
             let (_, _, step) = self.pending.remove(i);
             changed = true;
             match step {
-                Step::Geometry | Step::Entry => self.apply_geometry(now),
+                Step::Entry => self.apply_geometry(now, 0.0),
+                Step::Shell(rest, spring) => self.move_shell(rest, spring),
                 Step::Mount(shown) if shown.key.starts_with("highlight") => self.highlight = Some(shown),
                 Step::Mount(shown) => {
                     self.items.push(shown);
@@ -696,22 +711,22 @@ mod tests {
     }
 
     #[test]
-    fn narrowing_waits_for_leaving_chips_and_opening_waits_for_room() {
+    fn narrowing_walls_follow_the_content_and_opening_waits_for_room() {
         let mut s = surface();
         s.set(recording(true), 0.0);
         let now = run(&mut s, 0.0, 1.0);
         let wide = s.shell;
         s.set(recording(false), now);
-        assert_eq!(s.shell, wide, "walls wait while the chips fade");
-        assert_eq!(s.items.len(), 1, "only the lead stays");
+        assert_eq!(s.shell, wide, "walls start after the chips begin to fade");
+        assert!(!s.items.iter().any(|i| i.id == ElemId::ChipArea), "chips leave at once");
         let now = run(&mut s, now, now + 0.03);
         assert_eq!(s.shell, wide);
-        let now = run(&mut s, now, now + 0.05);
-        assert!(s.shell[2] < wide[2]);
         assert!(
             s.items.iter().any(|i| i.id == ElemId::Finish),
-            "Finish crossfades over the chips leaving under it"
+            "Finish crossfades over the chips leaving under it, before the walls move"
         );
+        let now = run(&mut s, now, now + 0.05);
+        assert!(s.shell[2] < wide[2]);
 
         let now = run(&mut s, now, now + 1.0);
         s.finish(now);
