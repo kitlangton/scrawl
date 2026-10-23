@@ -226,16 +226,34 @@ pub(super) fn check_for_updates() {
     crate::sparkle::check_for_updates();
 }
 
-/// The `.app` bundle path for `bundle_id`, for `ImageCache::app_icon`.
+/// The `.app` bundle path for `bundle_id`, for `ImageCache::app_icon`. Cached per bundle ID.
 pub(super) fn app_bundle_path(bundle_id: &str) -> Option<PathBuf> {
     use objc2_app_kit::NSWorkspace;
     use objc2_foundation::NSURL;
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(bundle_id)
+    {
+        return cached.clone();
+    }
     let id = NSString::from_str(bundle_id);
     let url: Option<Retained<NSURL>> = unsafe {
         msg_send![&NSWorkspace::sharedWorkspace(), URLForApplicationWithBundleIdentifier: &*id]
     };
-    let path = url?.path()?;
-    Some(PathBuf::from(path.to_string()))
+    let resolved = url
+        .and_then(|u| u.path())
+        .map(|p| PathBuf::from(p.to_string()));
+    cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(bundle_id.to_owned(), resolved.clone());
+    resolved
 }
 
 pub(super) fn open_overlay(

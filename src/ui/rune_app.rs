@@ -21,7 +21,7 @@ use super::{
     ACCENT_COLOR, ACCENT_HOVER, ActiveRecording, BADGE_H, BADGE_MARGIN, BADGE_PX, BADGE_TEXT,
     BadgeAnchor, CANVAS_BG, CaptureSource, INK_RED, IslandPhase, LINE_COLOR, LaserOverlay,
     MUTED_COLOR, MenuAction, ReviewTab, RouteChip, RouteOutcome, SIDEBAR_BG, SMART_SEND_UNDO,
-     SURFACE_BG, SURFACE_HOVER, SURFACE_SELECTED, SelectionMode, TEXT_COLOR, TEXT_SOFT, area_rect,
+    SURFACE_BG, SURFACE_HOVER, SURFACE_SELECTED, SelectionMode, TEXT_COLOR, TEXT_SOFT, area_rect,
     clamp_point, clip_rect, clock_template, completed_delivery_note, completed_label, island_title,
     motion, place_badge, reveal_clock_ms, split_timeline_line, start_metric, start_video_export,
 };
@@ -133,8 +133,9 @@ struct PillState {
     live: Capsule,
     hidden_since: Option<f64>,
     shown: bool,
+    fully_hidden: Arc<AtomicBool>,
     pending: Arc<Mutex<Option<PillSnapshot>>>,
-    pill_handle: Arc< std::sync::OnceLock<OverlayHandle<PillState>> >,
+    pill_handle: Arc<std::sync::OnceLock<OverlayHandle<PillState>>>,
     events_tx: Option<flume::Sender<InternalEvent>>,
     app_handle: Option<AppHandle<ReviewState>>,
 }
@@ -142,6 +143,7 @@ struct PillState {
 impl PillState {
     fn new(
         pending: Arc<Mutex<Option<PillSnapshot>>>,
+        fully_hidden: Arc<AtomicBool>,
         pill_handle: Arc<std::sync::OnceLock<OverlayHandle<PillState>>>,
         events_tx: Option<flume::Sender<InternalEvent>>,
         app_handle: Option<AppHandle<ReviewState>>,
@@ -154,6 +156,7 @@ impl PillState {
             live,
             hidden_since: None,
             shown: false,
+            fully_hidden,
             pending,
             pill_handle,
             events_tx,
@@ -216,6 +219,7 @@ fn pill_poll(s: &mut PillState, now: f64, tx: &mut Tx) -> bool {
         wake = Some(wake.map_or(leaving, |w| w.min(leaving)));
     }
     let shown = !hidden || leaving > 0.0;
+    s.fully_hidden.store(hidden && !shown, Ordering::Release);
     if s.shown != shown {
         s.shown = shown;
         if let Some(pill) = s.pill_handle.get() {
@@ -224,6 +228,9 @@ fn pill_poll(s: &mut PillState, now: f64, tx: &mut Tx) -> bool {
             } else {
                 pill.hide();
             }
+        }
+        if !shown && let Some(ref app) = s.app_handle {
+            app.wake();
         }
     }
     if let Some(wake) = wake {
@@ -240,19 +247,39 @@ fn pill_poll(s: &mut PillState, now: f64, tx: &mut Tx) -> bool {
 
 // ─── Full-Display Target Picker Overlay (`PickerState`) ──────────────────────────────────────
 
-#[derive(Clone, Debug)]
+fn window_highlight_info(t: &TargetInfo, animated_rect: Option<[f32; 4]>) -> ([f32; 4], String) {
+    let title = match (&t.app, &t.window_title) {
+        (Some(app), Some(win)) if !win.is_empty() && win != app => {
+            format!("{app} — {win}")
+        }
+        (Some(app), _) => app.clone(),
+        _ => format!(
+            "{} × {}",
+            t.frame.width.round() as i32,
+            t.frame.height.round() as i32
+        ),
+    };
+    let rect = animated_rect.unwrap_or([
+        t.frame.x as f32,
+        t.frame.y as f32,
+        t.frame.width as f32,
+        t.frame.height as f32,
+    ]);
+    (rect, title)
+}
+
+#[derive(Clone, Debug, PartialEq)]
 struct PickerSnapshot {
     active: bool,
     mode: SelectionMode,
     pointer: Option<[f32; 2]>,
     drag: Option<([f32; 2], [f32; 2])>,
-    hovered_window: Option<TargetInfo>,
-    animated_window_rect: Option<[f32; 4]>,
+    hovered_window_rect: Option<[f32; 4]>,
+    hovered_window_label: Option<String>,
     app_bundle_path: Option<PathBuf>,
     iphone_rect: Option<[f32; 4]>,
     iphone_name: String,
     has_iphone: bool,
-    selectable_windows: Vec<TargetInfo>,
 }
 
 impl Default for PickerSnapshot {
@@ -262,13 +289,12 @@ impl Default for PickerSnapshot {
             mode: SelectionMode::Area,
             pointer: None,
             drag: None,
-            hovered_window: None,
-            animated_window_rect: None,
+            hovered_window_rect: None,
+            hovered_window_label: None,
             app_bundle_path: None,
             iphone_rect: None,
             iphone_name: "iPhone".to_owned(),
             has_iphone: false,
-            selectable_windows: Vec::new(),
         }
     }
 }
@@ -279,9 +305,11 @@ struct PickerState {
     images: Option<ImageCache>,
     events_tx: Option<flume::Sender<InternalEvent>>,
     app_handle: Option<AppHandle<ReviewState>>,
+    last_emitted_pointer: Option<[f32; 2]>,
     /// True in headless `--snap` / `--script` runs so the picker draws its own backdrop scrim and
     /// selection cutout border without `MetalLaserOverlay`.
     still: bool,
+    still_windows: Vec<TargetInfo>,
 }
 
 impl PickerState {
@@ -303,7 +331,9 @@ impl PickerState {
             images,
             events_tx,
             app_handle,
+            last_emitted_pointer: None,
             still,
+            still_windows: Vec::new(),
         }
     }
 
@@ -379,7 +409,9 @@ fn crosshair_cursor(x: f32, y: f32) -> El {
 fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
     let screen = [s.display_frame[2], s.display_frame[3]];
     if !s.snapshot.active && !s.still {
-        return el().key("scrawl-target-picker-idle").size(screen[0], screen[1]);
+        return el()
+            .key("scrawl-target-picker-idle")
+            .size(screen[0], screen[1]);
     }
     let origin = [s.display_frame[0], s.display_frame[1]];
     let mode = s.snapshot.mode;
@@ -390,35 +422,15 @@ fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
             let w = (a[0] - b[0]).abs().max(1.0);
             let h = (a[1] - b[1]).abs().max(1.0);
             (
-                [
-                    a[0].min(b[0]) - origin[0],
-                    a[1].min(b[1]) - origin[1],
-                    w,
-                    h,
-                ],
+                [a[0].min(b[0]) - origin[0], a[1].min(b[1]) - origin[1], w, h],
                 format!("{} × {}", w.round() as i32, h.round() as i32),
             )
         }),
-        SelectionMode::Window => s.snapshot.hovered_window.as_ref().map(|t| {
-            let title = match (&t.app, &t.window_title) {
-                (Some(app), Some(win)) if !win.is_empty() && win != app => {
-                    format!("{app} — {win}")
-                }
-                (Some(app), _) => app.clone(),
-                _ => format!(
-                    "{} × {}",
-                    t.frame.width.round() as i32,
-                    t.frame.height.round() as i32
-                ),
-            };
-            let [rx, ry, rw, rh] = s.snapshot.animated_window_rect.unwrap_or([
-                t.frame.x as f32,
-                t.frame.y as f32,
-                t.frame.width as f32,
-                t.frame.height as f32,
-            ]);
-            ([rx - origin[0], ry - origin[1], rw, rh], title)
-        }),
+        SelectionMode::Window => s
+            .snapshot
+            .hovered_window_rect
+            .zip(s.snapshot.hovered_window_label.clone())
+            .map(|([rx, ry, rw, rh], title)| ([rx - origin[0], ry - origin[1], rw, rh], title)),
         SelectionMode::Screen => Some((
             [0.0, 0.0, screen[0], screen[1]],
             "Full screen · Click to record".to_owned(),
@@ -433,25 +445,23 @@ fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
     .map(|(rect, label)| (clip_rect(rect, screen), label));
 
     let icon_img: Option<Image> = if mode == SelectionMode::Window {
-        s.snapshot
-            .app_bundle_path
-            .as_ref()
-            .and_then(|path| {
-                s.images.as_ref().map(|cache| {
-                    let img = cache.app_icon(path, 16.0);
-                    if s.still {
-                        let _ = img.wait();
-                    }
-                    img
-                })
+        s.snapshot.app_bundle_path.as_ref().and_then(|path| {
+            s.images.as_ref().map(|cache| {
+                let img = cache.app_icon(path, 16.0);
+                if s.still {
+                    let _ = img.wait();
+                }
+                img
             })
+        })
     } else {
         None
     };
     let icon_extra = if icon_img.is_some() { 20.0 } else { 0.0 };
 
     let badge = highlight.as_ref().map(|(rect, label)| {
-        let max_text = (screen[0] - 2.0 * BADGE_MARGIN - 2.0 * BADGE_PX - 2.0 - icon_extra).min(480.0);
+        let max_text =
+            (screen[0] - 2.0 * BADGE_MARGIN - 2.0 * BADGE_PX - 2.0 - icon_extra).min(480.0);
         let measured_label = if mode == SelectionMode::Area {
             clock_template(label)
         } else {
@@ -490,32 +500,31 @@ fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
                 current_mouse_screen()
                     .unwrap_or([state.display_frame[0] + p.x, state.display_frame[1] + p.y])
             };
-            state.snapshot.pointer = Some(global);
-            if state.snapshot.mode == SelectionMode::Window {
-                let found = selectable_window_at(
-                    &state.snapshot.selectable_windows,
-                    f64::from(global[0]),
-                    f64::from(global[1]),
-                )
-                .cloned();
-                state.snapshot.animated_window_rect = found.as_ref().map(|w| {
-                    [
-                        w.frame.x as f32,
-                        w.frame.y as f32,
-                        w.frame.width as f32,
-                        w.frame.height as f32,
-                    ]
-                });
-                state.snapshot.app_bundle_path = found
-                    .as_ref()
-                    .and_then(|w| w.bundle_id.as_deref())
-                    .and_then(super::platform::app_bundle_path);
-                state.snapshot.hovered_window = found;
+            if state.still {
+                state.snapshot.pointer = Some(global);
+                if state.snapshot.mode == SelectionMode::Window {
+                    let found = selectable_window_at(
+                        &state.still_windows,
+                        f64::from(global[0]),
+                        f64::from(global[1]),
+                    )
+                    .cloned();
+                    let info = found.as_ref().map(|w| window_highlight_info(w, None));
+                    state.snapshot.hovered_window_rect = info.as_ref().map(|(r, _)| *r);
+                    state.snapshot.hovered_window_label = info.map(|(_, l)| l);
+                    state.snapshot.app_bundle_path = found
+                        .as_ref()
+                        .and_then(|w| w.bundle_id.as_deref())
+                        .and_then(super::platform::app_bundle_path);
+                }
             }
-            state.emit(InternalEvent::PickerMove {
-                x: global[0],
-                y: global[1],
-            });
+            if state.last_emitted_pointer != Some(global) {
+                state.last_emitted_pointer = Some(global);
+                state.emit(InternalEvent::PickerMove {
+                    x: global[0],
+                    y: global[1],
+                });
+            }
         })
         .on_drag(|state: &mut PickerState, drag: &mut Drag, _tx: &mut Tx| {
             let global = if state.still {
@@ -529,10 +538,13 @@ fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
                     state.display_frame[1] + drag.y,
                 ])
             };
-            state.snapshot.pointer = Some(global);
+            if state.still {
+                state.snapshot.pointer = Some(global);
+            }
+            state.last_emitted_pointer = Some(global);
             match drag.phase {
                 Phase::Down => {
-                    if state.snapshot.mode == SelectionMode::Area {
+                    if state.still && state.snapshot.mode == SelectionMode::Area {
                         state.snapshot.drag = Some((global, global));
                     }
                     state.emit(InternalEvent::PickerDown {
@@ -541,7 +553,8 @@ fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
                     });
                 }
                 Phase::Move => {
-                    if state.snapshot.mode == SelectionMode::Area
+                    if state.still
+                        && state.snapshot.mode == SelectionMode::Area
                         && let Some((start, _)) = state.snapshot.drag
                     {
                         state.snapshot.drag = Some((start, global));
@@ -572,7 +585,11 @@ fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
                 el().key("picker-cutout")
                     .absolute(rx, ry)
                     .size(rw, rh)
-                    .radius(if mode == SelectionMode::Window { 10.0 } else { 4.0 })
+                    .radius(if mode == SelectionMode::Window {
+                        10.0
+                    } else {
+                        4.0
+                    })
                     .fill(rgb_color(0x232631))
                     .border(1.5, Color::WHITE.alpha(0.88))
                     .shadow(0.0, 18.0, rgb_color(ACCENT_COLOR).alpha(0.35)),
@@ -620,6 +637,11 @@ fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
 }
 
 fn picker_on_key(s: &mut PickerState, event: &KeyEvent, _tx: &mut Tx) -> bool {
+    if !s.still {
+        // Coordinator alone owns selection mode and key handling in the live app.
+        s.emit(InternalEvent::PickerKey(event.clone()));
+        return true;
+    }
     let has_iphone = s.snapshot.has_iphone;
     match &event.key {
         Key::Escape => {
@@ -648,11 +670,12 @@ fn picker_on_key(s: &mut PickerState, event: &KeyEvent, _tx: &mut Tx) -> bool {
         }
         _ => {}
     }
-    s.emit(InternalEvent::PickerKey(event.clone()));
     true
 }
 
 // ─── Main-Thread Coordinator (`RuneCoordinator`) ────────────────────────────────────────────
+
+const MAX_PICKER_DISPLAYS: usize = 6;
 
 struct DisplaySlot {
     id: u32,
@@ -660,6 +683,41 @@ struct DisplaySlot {
     pill_local: [f32; 2],
     pill_global: [f64; 4],
     picker: OverlayHandle<PickerState>,
+    pool_index: usize,
+    last_snapshot: Option<PickerSnapshot>,
+    last_active: Option<bool>,
+    last_display_frame: [f32; 4],
+}
+
+fn nearest_display_index(displays: &[DisplaySlot], point: [f64; 2]) -> Option<usize> {
+    if let Some(idx) = displays
+        .iter()
+        .position(|d| crate::screens::contains(d.frame, point))
+    {
+        return Some(idx);
+    }
+    displays
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            let ca = [a.frame[0] + a.frame[2] * 0.5, a.frame[1] + a.frame[3] * 0.5];
+            let cb = [b.frame[0] + b.frame[2] * 0.5, b.frame[1] + b.frame[3] * 0.5];
+            let da = (ca[0] - point[0]).powi(2) + (ca[1] - point[1]).powi(2);
+            let db = (cb[0] - point[0]).powi(2) + (cb[1] - point[1]).powi(2);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(idx, _)| idx)
+}
+
+fn screens_match(a: &[crate::screens::Screen], b: &[crate::screens::Screen]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b.iter()).all(|(x, y)| {
+            x.id == y.id
+                && (0..4).all(|k| (x.frame[k] - y.frame[k]).abs() < 0.5)
+                && (0..4).all(|k| (x.visible[k] - y.visible[k]).abs() < 0.5)
+                && (x.scale - y.scale).abs() < 0.01
+                && (x.safe_top - y.safe_top).abs() < 0.5
+        })
 }
 
 struct RuneCoordinator {
@@ -675,9 +733,16 @@ struct RuneCoordinator {
     app_handle: Option<AppHandle<ReviewState>>,
     pill_overlay: Option<OverlayHandle<PillState>>,
     pill_pending: Arc<Mutex<Option<PillSnapshot>>>,
+    pill_fully_hidden: Arc<AtomicBool>,
+    island_active_flag: Arc<AtomicBool>,
     last_pill_snapshot: Option<PillSnapshot>,
+    last_pill_placement: Option<(u32, [f32; 2])>,
     pill_global_rect: [f64; 4],
+    picker_pool: Vec<OverlayHandle<PickerState>>,
+    known_screens: Vec<crate::screens::Screen>,
+    last_displays_check: Instant,
     displays: Vec<DisplaySlot>,
+    last_picker_rect: Option<Option<([f32; 4], u8)>>,
     persistent_excluded_window_ids: Arc<Mutex<Vec<u32>>>,
     review_open: bool,
 
@@ -686,6 +751,7 @@ struct RuneCoordinator {
     picker_metal_overlay: Option<LaserOverlay>,
     iphone_preview: Option<PhoneSession>,
     island_phase: IslandPhase,
+    dismiss_started: Option<Instant>,
     reveal: crate::shortcut::Reveal,
     reduced_motion: bool,
     island_stepped: Instant,
@@ -735,6 +801,10 @@ impl RuneCoordinator {
         app_handle: Option<AppHandle<ReviewState>>,
         pill_overlay: Option<OverlayHandle<PillState>>,
         pill_pending: Arc<Mutex<Option<PillSnapshot>>>,
+        pill_fully_hidden: Arc<AtomicBool>,
+        island_active_flag: Arc<AtomicBool>,
+        picker_pool: Vec<OverlayHandle<PickerState>>,
+        known_screens: Vec<crate::screens::Screen>,
         displays: Vec<DisplaySlot>,
         persistent_excluded_window_ids: Arc<Mutex<Vec<u32>>>,
     ) -> Self {
@@ -761,9 +831,16 @@ impl RuneCoordinator {
             app_handle,
             pill_overlay,
             pill_pending,
+            pill_fully_hidden,
+            island_active_flag,
             last_pill_snapshot: None,
+            last_pill_placement: None,
             pill_global_rect,
+            picker_pool,
+            known_screens,
+            last_displays_check: Instant::now(),
             displays,
+            last_picker_rect: None,
             persistent_excluded_window_ids,
             review_open,
             active_recording: None,
@@ -771,6 +848,7 @@ impl RuneCoordinator {
             picker_metal_overlay: None,
             iphone_preview: None,
             island_phase: IslandPhase::Hidden,
+            dismiss_started: None,
             reveal: crate::shortcut::Reveal::default(),
             reduced_motion: false,
             island_stepped: Instant::now(),
@@ -826,25 +904,143 @@ impl RuneCoordinator {
         }
     }
 
-    fn place_pill_on(&mut self, point: [f64; 2]) {
-        let Some(slot_idx) = self
+    /// Rebuilds display slots and reassigns picker overlays when monitors are plugged in,
+    /// unplugged, or rearranged.
+    fn refresh_displays(&mut self) -> bool {
+        self.last_displays_check = Instant::now();
+        if self.picker_pool.is_empty() {
+            return false;
+        }
+        let screens = crate::screens::current();
+        if screens.is_empty() || screens_match(&screens, &self.known_screens) {
+            return false;
+        }
+        scrawl_log(format!(
+            "displays changed: {} -> {} screen(s)",
+            self.known_screens.len(),
+            screens.len()
+        ));
+
+        let mut old_slots = std::mem::take(&mut self.displays);
+        let mut used_pool = vec![false; self.picker_pool.len()];
+        let mut new_slots = Vec::with_capacity(screens.len().min(self.picker_pool.len()));
+
+        // First pass: preserve pool assignments for displays whose ID is still connected.
+        let mut matched: Vec<Option<DisplaySlot>> = (0..screens.len().min(self.picker_pool.len()))
+            .map(|_| None)
+            .collect();
+        for (i, screen) in screens.iter().take(self.picker_pool.len()).enumerate() {
+            if let Some(pos) = old_slots.iter().position(|s| s.id == screen.id) {
+                let prev = old_slots.swap_remove(pos);
+                used_pool[prev.pool_index] = true;
+                matched[i] = Some(prev);
+            }
+        }
+
+        for (i, screen) in screens.iter().take(self.picker_pool.len()).enumerate() {
+            let [px, py] =
+                crate::screens::pill_origin(screen, f64::from(PANEL_W), f64::from(PANEL_Y));
+            let f = screen.frame;
+            let pill_local = [(px - f[0]) as f32, (py - f[1]) as f32];
+            let pill_global = [px, py, f64::from(PANEL_W), f64::from(PANEL_H)];
+
+            let (pool_index, picker, same_geometry, prev_snap, prev_active, prev_frame) =
+                if let Some(prev) = matched[i].take() {
+                    let same = (0..4).all(|k| (prev.frame[k] - f[k]).abs() < 0.5);
+                    (
+                        prev.pool_index,
+                        prev.picker,
+                        same,
+                        prev.last_snapshot,
+                        prev.last_active,
+                        prev.last_display_frame,
+                    )
+                } else {
+                    let pool_idx = used_pool
+                        .iter()
+                        .position(|u| !*u)
+                        .expect("available picker pool slot");
+                    used_pool[pool_idx] = true;
+                    (
+                        pool_idx,
+                        self.picker_pool[pool_idx].clone(),
+                        false,
+                        None,
+                        None,
+                        [0.0; 4],
+                    )
+                };
+
+            if !same_geometry {
+                picker.set_display(DisplayTarget::Native(NativeDisplayId::MacOS(screen.id)));
+                picker.set_placement(Some(OverlayPlacement::FullScreen));
+            }
+
+            new_slots.push(DisplaySlot {
+                id: screen.id,
+                frame: f,
+                pill_local,
+                pill_global,
+                picker,
+                pool_index,
+                last_snapshot: if same_geometry { prev_snap } else { None },
+                last_active: if same_geometry { prev_active } else { None },
+                last_display_frame: if same_geometry { prev_frame } else { [0.0; 4] },
+            });
+        }
+
+        for (pool_idx, used) in used_pool.into_iter().enumerate() {
+            if !used {
+                let picker = &self.picker_pool[pool_idx];
+                picker.update(|state, _| state.snapshot.active = false);
+                picker.set_input(OverlayInput::None);
+                picker.hide();
+            }
+        }
+
+        self.displays = new_slots;
+        self.known_screens = screens;
+        self.last_pill_placement = None;
+
+        let rect_still_valid = self
             .displays
             .iter()
-            .position(|d| crate::screens::contains(d.frame, point))
-            .or_else(|| (!self.displays.is_empty()).then_some(0))
-        else {
+            .any(|d| (0..4).all(|k| (d.frame[k] as f32 - self.display_rect[k]).abs() < 2.0));
+        if !rect_still_valid && !self.displays.is_empty() {
+            let fallback_pt = crate::screens::pointer().unwrap_or([
+                f64::from(self.display_rect[0] + self.display_rect[2] * 0.5),
+                f64::from(self.display_rect[1] + self.display_rect[3] * 0.5),
+            ]);
+            if let Some(idx) = nearest_display_index(&self.displays, fallback_pt) {
+                let frame = self.displays[idx].frame;
+                self.display_rect = frame.map(|v| v as f32);
+                if let Some(ref mut overlay) = self.picker_metal_overlay {
+                    overlay.move_to(frame);
+                }
+            }
+        }
+        true
+    }
+
+    fn place_pill_on(&mut self, point: [f64; 2]) {
+        self.refresh_displays();
+        let Some(slot_idx) = nearest_display_index(&self.displays, point) else {
             return;
         };
         let slot = &self.displays[slot_idx];
         self.pill_global_rect = slot.pill_global;
-        if let Some(ref pill) = self.pill_overlay {
-            pill.set_display(DisplayTarget::Native(NativeDisplayId::MacOS(slot.id)));
-            pill.set_placement(Some(OverlayPlacement::Rect {
-                x: slot.pill_local[0],
-                y: slot.pill_local[1],
-                width: PANEL_W,
-                height: PANEL_H,
-            }));
+        let target_placement = (slot.id, slot.pill_local);
+        if self.last_pill_placement != Some(target_placement) {
+            self.last_pill_placement = Some(target_placement);
+            if let Some(ref pill) = self.pill_overlay {
+                pill.set_display(DisplayTarget::Native(NativeDisplayId::MacOS(slot.id)));
+                pill.set_placement(Some(OverlayPlacement::Rect {
+                    x: slot.pill_local[0],
+                    y: slot.pill_local[1],
+                    width: PANEL_W,
+                    height: PANEL_H,
+                }));
+            }
         }
     }
 
@@ -909,6 +1105,7 @@ impl RuneCoordinator {
         let snap = self.pill_snapshot();
         if self.last_pill_snapshot.as_ref() != Some(&snap) {
             self.last_pill_snapshot = Some(snap.clone());
+            self.pill_fully_hidden.store(false, Ordering::Release);
             *self
                 .pill_pending
                 .lock()
@@ -919,49 +1116,105 @@ impl RuneCoordinator {
         }
     }
 
-    fn sync_picker_overlays(&self) {
+    fn sync_picker_overlays(&mut self) {
         let selecting_mode = match self.island_phase {
             IslandPhase::Selecting { mode } => Some(mode),
             _ => None,
         };
-        let iphone_rect = self.iphone_preview.as_ref().and_then(PhoneSession::rect);
-        let iphone_name = self
-            .iphone_preview
-            .as_ref()
-            .and_then(PhoneSession::device)
-            .or_else(|| self.iphone.clone())
-            .map_or_else(|| "iPhone".to_owned(), |d| d.name);
-        let app_bundle_path = self
-            .hovered_window
-            .as_ref()
-            .and_then(|w| w.bundle_id.as_deref())
-            .and_then(super::platform::app_bundle_path);
+        let Some(mode) = selecting_mode else {
+            for slot in &mut self.displays {
+                if slot.last_active != Some(false) {
+                    slot.last_active = Some(false);
+                    slot.last_snapshot = None;
+                    slot.picker.update(|state, _| state.snapshot.active = false);
+                    slot.picker.set_input(OverlayInput::None);
+                    slot.picker.hide();
+                }
+            }
+            return;
+        };
+
+        let active_idx = self
+            .displays
+            .iter()
+            .position(|slot| {
+                (0..4).all(|k| (slot.frame[k] as f32 - self.display_rect[k]).abs() < 2.0)
+            })
+            .or_else(|| {
+                let centre = [
+                    f64::from(self.display_rect[0] + self.display_rect[2] * 0.5),
+                    f64::from(self.display_rect[1] + self.display_rect[3] * 0.5),
+                ];
+                nearest_display_index(&self.displays, centre)
+            });
+
+        let iphone_rect = if mode == SelectionMode::Iphone {
+            self.iphone_preview.as_ref().and_then(PhoneSession::rect)
+        } else {
+            None
+        };
+        let iphone_name = if mode == SelectionMode::Iphone {
+            self.iphone_preview
+                .as_ref()
+                .and_then(PhoneSession::device)
+                .or_else(|| self.iphone.clone())
+                .map_or_else(|| "iPhone".to_owned(), |d| d.name)
+        } else {
+            "iPhone".to_owned()
+        };
+        let (hovered_window_rect, hovered_window_label, app_bundle_path) =
+            if mode == SelectionMode::Window {
+                let info = self
+                    .hovered_window
+                    .as_ref()
+                    .map(|w| window_highlight_info(w, self.animated_window_rect));
+                let path = self
+                    .hovered_window
+                    .as_ref()
+                    .and_then(|w| w.bundle_id.as_deref())
+                    .and_then(super::platform::app_bundle_path);
+                (info.as_ref().map(|(r, _)| *r), info.map(|(_, l)| l), path)
+            } else {
+                (None, None, None)
+            };
         let has_iphone = self.iphone.is_some();
 
-        for slot in &self.displays {
-            let on_this_display = selecting_mode.is_some()
-                && (0..4).all(|k| (slot.frame[k] as f32 - self.display_rect[k]).abs() < 2.0);
-            let snap = PickerSnapshot {
-                active: on_this_display,
-                mode: selecting_mode.unwrap_or(SelectionMode::Area),
-                pointer: self.selection_pointer,
-                drag: self.selection_drag,
-                hovered_window: self.hovered_window.clone(),
-                animated_window_rect: self.animated_window_rect,
-                app_bundle_path: app_bundle_path.clone(),
-                iphone_rect,
-                iphone_name: iphone_name.clone(),
-                has_iphone,
-                selectable_windows: self.selectable_windows.clone(),
-            };
-            slot.picker.update(move |state, _| {
-                state.snapshot = snap;
-            });
+        for (idx, slot) in self.displays.iter_mut().enumerate() {
+            let on_this_display = Some(idx) == active_idx;
             if on_this_display {
-                slot.picker.set_input(OverlayInput::All);
-                slot.picker.show();
-                slot.picker.request_keys();
-            } else {
+                let frame_f32 = slot.frame.map(|v| v as f32);
+                let snap = PickerSnapshot {
+                    active: true,
+                    mode,
+                    pointer: self.selection_pointer,
+                    drag: self.selection_drag,
+                    hovered_window_rect,
+                    hovered_window_label: hovered_window_label.clone(),
+                    app_bundle_path: app_bundle_path.clone(),
+                    iphone_rect,
+                    iphone_name: iphone_name.clone(),
+                    has_iphone,
+                };
+                if slot.last_snapshot.as_ref() != Some(&snap)
+                    || slot.last_display_frame != frame_f32
+                {
+                    slot.last_snapshot = Some(snap.clone());
+                    slot.last_display_frame = frame_f32;
+                    slot.picker.update(move |state, _| {
+                        state.display_frame = frame_f32;
+                        state.snapshot = snap;
+                    });
+                }
+                if slot.last_active != Some(true) {
+                    slot.last_active = Some(true);
+                    slot.picker.set_input(OverlayInput::All);
+                    slot.picker.show();
+                    slot.picker.request_keys();
+                }
+            } else if slot.last_active != Some(false) {
+                slot.last_active = Some(false);
+                slot.last_snapshot = None;
+                slot.picker.update(|state, _| state.snapshot.active = false);
                 slot.picker.set_input(OverlayInput::None);
                 slot.picker.hide();
             }
@@ -1448,7 +1701,7 @@ impl RuneCoordinator {
         Some((rec.target, rec._metal_overlay))
     }
 
-    fn sync_picker_overlay(&self) {
+    fn sync_picker_overlay(&mut self) {
         let rect = match self.island_phase {
             IslandPhase::Selecting {
                 mode: SelectionMode::Area,
@@ -1483,7 +1736,10 @@ impl RuneCoordinator {
                 .map(|r| (r, 3)),
             _ => None,
         };
-        self.telemetry.set_picker_rect(rect);
+        if self.last_picker_rect != Some(rect) {
+            self.last_picker_rect = Some(rect);
+            self.telemetry.set_picker_rect(rect);
+        }
     }
 
     fn set_selection_mode(&mut self, mode: SelectionMode) {
@@ -1634,13 +1890,9 @@ impl RuneCoordinator {
         let m = event.mods;
         if let Key::Text(ref ch) = event.key
             && let Some(cfg) = shortcut_from_key_and_mods(ch, m.cmd, m.ctrl, m.alt, m.shift)
-            && self.telemetry.matches_shortcut(
-                cfg.key_code as u16,
-                m.cmd,
-                m.ctrl,
-                m.alt,
-                m.shift,
-            )
+            && self
+                .telemetry
+                .matches_shortcut(cfg.key_code as u16, m.cmd, m.ctrl, m.alt, m.shift)
         {
             self.telemetry.emit_capture_shortcut();
             return true;
@@ -1716,6 +1968,11 @@ impl RuneCoordinator {
             if matches!(self.island_phase, IslandPhase::Hidden) {
                 self.island_stepped = Instant::now();
             }
+            if matches!(phase, IslandPhase::Dismissing) {
+                self.dismiss_started = Some(Instant::now());
+            } else {
+                self.dismiss_started = None;
+            }
             motion::trace_event(format!("phase:{}", phase.trace_name()));
         }
         let appearing = matches!(
@@ -1723,6 +1980,8 @@ impl RuneCoordinator {
             IslandPhase::Hidden | IslandPhase::Dismissing
         );
         self.island_phase = phase;
+        self.island_active_flag
+            .store(!matches!(phase, IslandPhase::Hidden), Ordering::Release);
         let place = changed
             && (appearing
                 || matches!(
@@ -1772,11 +2031,11 @@ impl RuneCoordinator {
         if crate::screens::contains(current, p) {
             return;
         }
-        let screens = crate::screens::current();
-        let Some(i) = crate::screens::index_at(&screens, p) else {
+        self.refresh_displays();
+        let Some(idx) = nearest_display_index(&self.displays, p) else {
             return;
         };
-        let frame = screens[i].frame;
+        let frame = self.displays[idx].frame;
         if (0..4).all(|k| (frame[k] - current[k]).abs() < 1.0) {
             return;
         }
@@ -1854,12 +2113,9 @@ impl RuneCoordinator {
             }
             SelectionMode::Screen => {}
             SelectionMode::Window => {
-                let found = selectable_window_at(
-                    &self.selectable_windows,
-                    f64::from(sx),
-                    f64::from(sy),
-                )
-                .cloned();
+                let found =
+                    selectable_window_at(&self.selectable_windows, f64::from(sx), f64::from(sy))
+                        .cloned();
                 if self.hovered_window.as_ref().and_then(|w| w.window_id)
                     != found.as_ref().and_then(|w| w.window_id)
                 {
@@ -1916,13 +2172,14 @@ impl RuneCoordinator {
             return;
         }
         self.telemetry.selecting.store(false, Ordering::Release);
+        self.last_picker_rect = Some(None);
         self.telemetry.set_picker_rect(None);
         self.picker_metal_overlay = None;
         self.iphone_preview = None;
         self.selection_drag = None;
         self.hovered_window = None;
         self.animated_window_rect = None;
-        self.set_island_phase(IslandPhase::Hidden);
+        self.set_island_phase(IslandPhase::Dismissing);
         self.hand_back_keys_if_idle();
     }
 
@@ -2126,11 +2383,33 @@ impl RuneCoordinator {
         if let IslandPhase::Completed { finished_at, .. } = self.island_phase
             && finished_at.elapsed() >= Duration::from_millis(25_000)
         {
-            self.set_island_phase(IslandPhase::Hidden);
-            return;
+            self.set_island_phase(IslandPhase::Dismissing);
+        }
+        if matches!(self.island_phase, IslandPhase::Dismissing) {
+            let dismiss_done = if self.pill_overlay.is_some() {
+                self.pill_fully_hidden.load(Ordering::Acquire)
+                    || self
+                        .dismiss_started
+                        .is_some_and(|t| t.elapsed() >= Duration::from_secs_f64(HIDE_AFTER_S))
+            } else {
+                true
+            };
+            if dismiss_done {
+                self.set_island_phase(IslandPhase::Hidden);
+                return;
+            }
         }
         if let IslandPhase::Selecting { mode } = self.island_phase {
-            if let Some(pos) = current_mouse_screen() {
+            if self.last_displays_check.elapsed() >= Duration::from_millis(500)
+                && self.refresh_displays()
+            {
+                self.place_capsule();
+                self.sync_picker_overlay();
+                self.sync_picker_overlays();
+            }
+            if let Some(pos) = current_mouse_screen()
+                && self.selection_pointer != Some(pos)
+            {
                 self.follow_pointer_display(pos);
                 self.selection_pointer = Some(pos);
                 if mode == SelectionMode::Area
@@ -2145,19 +2424,15 @@ impl RuneCoordinator {
                         f64::from(pos[1]),
                     )
                     .cloned();
+                    self.animated_window_rect = self.hovered_window.as_ref().map(|win| {
+                        [
+                            win.frame.x as f32,
+                            win.frame.y as f32,
+                            win.frame.width as f32,
+                            win.frame.height as f32,
+                        ]
+                    });
                 }
-            }
-            if mode == SelectionMode::Window
-                && let Some(ref win) = self.hovered_window
-            {
-                self.animated_window_rect = Some([
-                    win.frame.x as f32,
-                    win.frame.y as f32,
-                    win.frame.width as f32,
-                    win.frame.height as f32,
-                ]);
-            } else {
-                self.animated_window_rect = None;
             }
             self.sync_picker_overlay();
             self.sync_picker_overlays();
@@ -2191,11 +2466,12 @@ impl RuneCoordinator {
         self.hovered_window = None;
         self.animated_window_rect = None;
         self.selection_pointer = current_mouse_screen();
-        let screens = crate::screens::current();
-        if let Some(i) =
-            crate::screens::pointer().and_then(|p| crate::screens::index_at(&screens, p))
+        self.refresh_displays();
+        if let Some(idx) = crate::screens::pointer()
+            .and_then(|p| nearest_display_index(&self.displays, p))
+            .or_else(|| (!self.displays.is_empty()).then_some(0))
         {
-            self.display_rect = screens[i].frame.map(|v| v as f32);
+            self.display_rect = self.displays[idx].frame.map(|v| v as f32);
         }
         if let Some(ref mut overlay) = self.picker_metal_overlay {
             overlay.move_to(self.display_rect.map(f64::from));
@@ -2823,19 +3099,18 @@ impl RuneCoordinator {
                         let app = self.app_handle.clone();
                         let route_dir = dir.clone();
                         std::thread::spawn(move || {
-                            let outcome = if let Some(dest) =
-                                route.and_then(|r| r.join().ok().flatten())
-                            {
-                                RouteOutcome::Send(dest)
-                            } else if let (Some(bundle), Some(live)) =
-                                (bundle, look.and_then(|l| l.join().ok().flatten()))
-                            {
-                                let (judgement, url) =
-                                    crate::routing::judge_capture(&route_dir, &bundle, live);
-                                RouteOutcome::Judged(judgement, url)
-                            } else {
-                                RouteOutcome::None
-                            };
+                            let outcome =
+                                if let Some(dest) = route.and_then(|r| r.join().ok().flatten()) {
+                                    RouteOutcome::Send(dest)
+                                } else if let (Some(bundle), Some(live)) =
+                                    (bundle, look.and_then(|l| l.join().ok().flatten()))
+                                {
+                                    let (judgement, url) =
+                                        crate::routing::judge_capture(&route_dir, &bundle, live);
+                                    RouteOutcome::Judged(judgement, url)
+                                } else {
+                                    RouteOutcome::None
+                                };
                             let _ = tx.send(InternalEvent::RouteResolved {
                                 dir,
                                 route: outcome,
@@ -3098,11 +3373,15 @@ fn action_button(
                 .color(rgb_color(TEXT_COLOR)),
         );
     if let Some(hint) = hint {
-        btn = btn.child(text(hint).font(TextStyle::new(12.5, 500.0)).color(if primary {
-            rgba_color(0xffffffb3)
-        } else {
-            rgb_color(MUTED_COLOR)
-        }));
+        btn = btn.child(
+            text(hint)
+                .font(TextStyle::new(12.5, 500.0))
+                .color(if primary {
+                    rgba_color(0xffffffb3)
+                } else {
+                    rgb_color(MUTED_COLOR)
+                }),
+        );
     }
     btn
 }
@@ -3539,7 +3818,7 @@ fn picker_scene_area(s: &mut PickerState) {
     s.snapshot.mode = SelectionMode::Area;
     s.snapshot.pointer = Some([860.0, 520.0]);
     s.snapshot.drag = Some(([260.0, 180.0], [860.0, 520.0]));
-    s.snapshot.selectable_windows = sample_windows();
+    s.still_windows = sample_windows();
 }
 
 fn picker_scene_window(s: &mut PickerState) {
@@ -3548,27 +3827,21 @@ fn picker_scene_window(s: &mut PickerState) {
     s.snapshot.active = true;
     s.snapshot.mode = SelectionMode::Window;
     s.snapshot.pointer = Some([540.0, 360.0]);
-    s.snapshot.animated_window_rect = hovered.as_ref().map(|w| {
-        [
-            w.frame.x as f32,
-            w.frame.y as f32,
-            w.frame.width as f32,
-            w.frame.height as f32,
-        ]
-    });
+    let info = hovered.as_ref().map(|w| window_highlight_info(w, None));
+    s.snapshot.hovered_window_rect = info.as_ref().map(|(r, _)| *r);
+    s.snapshot.hovered_window_label = info.map(|(_, l)| l);
     s.snapshot.app_bundle_path = hovered
         .as_ref()
         .and_then(|w| w.bundle_id.as_deref())
         .and_then(super::platform::app_bundle_path);
-    s.snapshot.hovered_window = hovered;
-    s.snapshot.selectable_windows = windows;
+    s.still_windows = windows;
 }
 
 fn picker_scene_screen(s: &mut PickerState) {
     s.snapshot.active = true;
     s.snapshot.mode = SelectionMode::Screen;
     s.snapshot.pointer = Some([720.0, 450.0]);
-    s.snapshot.selectable_windows = sample_windows();
+    s.still_windows = sample_windows();
 }
 
 const PICKER_SCENES: &[(&str, fn(&mut PickerState))] = &[
@@ -3623,6 +3896,10 @@ fn dummy_review_init() -> ReviewState {
         None,
         None,
         Arc::default(),
+        Arc::new(AtomicBool::new(true)),
+        Arc::new(AtomicBool::new(false)),
+        Vec::new(),
+        Vec::new(),
         Vec::new(),
         Arc::default(),
     );
@@ -3805,10 +4082,13 @@ pub fn run_app(
     let (events_tx, events_rx) = flume::unbounded();
     let persistent_excluded: Arc<Mutex<Vec<u32>>> = Arc::default();
     let pill_pending: Arc<Mutex<Option<PillSnapshot>>> = Arc::default();
+    let pill_fully_hidden = Arc::new(AtomicBool::new(true));
+    let island_active_flag = Arc::new(AtomicBool::new(false));
     let pill_slot: Arc<std::sync::OnceLock<OverlayHandle<PillState>>> = Arc::default();
 
     let pill_state = PillState::new(
         Arc::clone(&pill_pending),
+        Arc::clone(&pill_fully_hidden),
         Arc::clone(&pill_slot),
         Some(events_tx.clone()),
         Some(app_handle.clone()),
@@ -3827,6 +4107,8 @@ pub fn run_app(
             })
             .poll(pill_poll)
             .on_created(move |made| {
+                #[cfg(target_os = "macos")]
+                guard_rune_overlay_source_style_mask();
                 if let Some(id) = made.window_number {
                     pill_excluded
                         .lock()
@@ -3844,38 +4126,43 @@ pub fn run_app(
     let _ = pill_slot.set(pill_overlay.clone());
 
     let screens = crate::screens::current();
+    let pool_cap = screens.len().max(MAX_PICKER_DISPLAYS);
+    let mut picker_pool = Vec::with_capacity(pool_cap);
     let mut displays = Vec::with_capacity(screens.len());
-    for screen in &screens {
-        let [px, py] = crate::screens::pill_origin(screen, f64::from(PANEL_W), f64::from(PANEL_Y));
-        let f = screen.frame;
-        let pill_local = [(px - f[0]) as f32, (py - f[1]) as f32];
-        let pill_global = [px, py, f64::from(PANEL_W), f64::from(PANEL_H)];
+    for slot_idx in 0..pool_cap {
+        let initial_screen = screens.get(slot_idx);
+        let init_frame = initial_screen.map_or([0.0, 0.0, 1440.0, 900.0], |s| s.frame);
         let picker_state = PickerState::new(
-            f.map(|v| v as f32),
+            init_frame.map(|v| v as f32),
             Some(events_tx.clone()),
             Some(app_handle.clone()),
             false,
         );
         let picker_excluded = Arc::clone(&persistent_excluded);
         let picker_telem = Arc::clone(&telemetry);
+        let display_target = initial_screen.map_or(DisplayTarget::Primary, |s| {
+            DisplayTarget::Native(NativeDisplayId::MacOS(s.id))
+        });
         let picker = app.overlay(
             OverlaySpec::new(
                 "Scrawl picker (Rune)",
-                (f[2] as f32, f[3] as f32),
+                (init_frame[2] as f32, init_frame[3] as f32),
                 picker_view,
             )
             .options(OverlayOptions {
-                display: DisplayTarget::Native(NativeDisplayId::MacOS(screen.id)),
+                display: display_target,
                 placement: Some(OverlayPlacement::FullScreen),
                 level: OverlayLevel::AboveStatus,
                 input: OverlayInput::None,
                 keys: KeyPolicy::OnDemand,
                 exclude_from_capture: true,
-                prewarm: true,
+                prewarm: initial_screen.is_some(),
                 ..Default::default()
             })
             .on_key(picker_on_key)
             .on_created(move |made| {
+                #[cfg(target_os = "macos")]
+                guard_rune_overlay_source_style_mask();
                 if let Some(id) = made.window_number {
                     picker_excluded
                         .lock()
@@ -3895,13 +4182,25 @@ pub fn run_app(
             }),
             picker_state,
         );
-        displays.push(DisplaySlot {
-            id: screen.id,
-            frame: f,
-            pill_local,
-            pill_global,
-            picker,
-        });
+        if let Some(screen) = initial_screen {
+            let [px, py] =
+                crate::screens::pill_origin(screen, f64::from(PANEL_W), f64::from(PANEL_Y));
+            let f = screen.frame;
+            let pill_local = [(px - f[0]) as f32, (py - f[1]) as f32];
+            let pill_global = [px, py, f64::from(PANEL_W), f64::from(PANEL_H)];
+            displays.push(DisplaySlot {
+                id: screen.id,
+                frame: f,
+                pill_local,
+                pill_global,
+                picker: picker.clone(),
+                pool_index: slot_idx,
+                last_snapshot: None,
+                last_active: None,
+                last_display_frame: [0.0; 4],
+            });
+        }
+        picker_pool.push(picker);
     }
 
     if let Some(first) = displays.first() {
@@ -3914,14 +4213,34 @@ pub fn run_app(
         }));
     }
 
+    let (ui_forwarded_tx, ui_forwarded_rx) = flume::unbounded();
+    let ui_wake_handle = app_handle.clone();
+    std::thread::Builder::new()
+        .name("rune-scrawl-ui-waker".into())
+        .spawn(move || {
+            while let Ok(ev) = ui_receiver.recv() {
+                if ui_forwarded_tx.send(ev).is_err() {
+                    break;
+                }
+                ui_wake_handle.wake();
+            }
+        })
+        .expect("ui waker thread");
+
     let wake_handle = app_handle.clone();
     let stop_ticker = Arc::new(AtomicBool::new(false));
     let stop_flag = Arc::clone(&stop_ticker);
+    let ticker_active = Arc::clone(&island_active_flag);
     std::thread::Builder::new()
         .name("rune-scrawl-ticker".into())
         .spawn(move || {
             while !stop_flag.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_millis(8));
+                let sleep_ms = if ticker_active.load(Ordering::Acquire) {
+                    16
+                } else {
+                    200
+                };
+                std::thread::sleep(Duration::from_millis(sleep_ms));
                 wake_handle.wake();
             }
         })
@@ -3930,7 +4249,7 @@ pub fn run_app(
     let app = app.init(move || {
         let coord = RuneCoordinator::new(
             telemetry,
-            Some(ui_receiver),
+            Some(ui_forwarded_rx),
             events_tx,
             events_rx,
             initial_bundle,
@@ -3939,6 +4258,10 @@ pub fn run_app(
             Some(app_handle),
             Some(pill_overlay),
             pill_pending,
+            pill_fully_hidden,
+            island_active_flag,
+            picker_pool,
+            screens,
             displays,
             persistent_excluded,
         );
@@ -4038,5 +4361,9 @@ mod tests {
         assert_eq!(review.coord.selection_mode(), Some(SelectionMode::Window));
         review.coord.dismiss_island();
         assert!(!review.coord.is_selecting());
+        assert!(matches!(review.coord.island_phase, IslandPhase::Dismissing));
+        std::thread::sleep(Duration::from_millis(1));
+        review.coord.step_island();
+        assert!(matches!(review.coord.island_phase, IslandPhase::Hidden));
     }
 }
