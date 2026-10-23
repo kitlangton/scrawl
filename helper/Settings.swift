@@ -104,6 +104,8 @@ struct SettingsTranscriber: Decodable, Equatable {
   }
   /// The program's file name while transcribeCommand is usable.
   var command: String? = nil
+  /// Whether Handy is installed.
+  var handy = false
 }
 
 struct SettingsOption: Decodable, Equatable {
@@ -945,6 +947,7 @@ struct SettingsView: View {
     let language = SettingsTranscriber.languageMenu(saved: t.appleLocale, speech: t.speech)
     var engines: [(id: String, title: String, enabled: Bool)] = [("apple", "Apple Speech", true)]
     engines.append(("hex", t.hexTitle, t.hexEnabled))
+    if t.handy { engines.append(("handy", "Handy", true)) }
     if let command = t.command { engines.append(("command", "Command (\(command))", true)) }
     let chosenModel = t.models.first(where: \.chosen)
     let mic = state.microphone
@@ -996,6 +999,8 @@ struct SettingsView: View {
       }
       SettingsCaption(text: t.engine == "command"
         ? "Command runs transcribeCommand from config.json. If it fails, that recording uses Apple Speech."
+        : t.engine == "handy"
+        ? "Handy uses the model and language you chose in Handy, and its word times are estimates. If it fails, that recording uses Apple Speech."
         : t.hexEnabled || t.engine == "hex"
         ? "Apple Speech times each word. Hex uses a model you have in Hex, and its word times are estimates."
         : "Apple Speech runs on this Mac and times each word. Hex shows up here while Hex is running.")
@@ -1616,6 +1621,8 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     languageUnsupported.transcriber.appleLocale = "xx-XX"
     var command = base
     command.transcriber = SettingsTranscriber(engine: "command", command: "whisper-scrawl")
+    var handy = base
+    handy.transcriber = SettingsTranscriber(engine: "handy", handy: true)
     var missing = base
     missing.permissions[0].status = "granted"
     missing.permissions[0].relaunch = true
@@ -1677,6 +1684,7 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
       ("recording-language-loading", .recording, languageLoading),
       ("recording-language-unsupported", .recording, languageUnsupported),
       ("recording-command", .recording, command),
+      ("recording-handy", .recording, handy),
       ("storage", .storage, base),
       ("storage-custom", .storage, storageCustom),
       ("permissions", .permissions, base),

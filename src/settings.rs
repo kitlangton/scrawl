@@ -827,7 +827,7 @@ fn microphone_view(
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriberView {
-    /// What recordings use now: "apple", "hex" or "command".
+    /// What recordings use now: "apple", "hex", "handy" or "command".
     pub engine: &'static str,
     pub hex_title: &'static str,
     pub hex_enabled: bool,
@@ -837,6 +837,8 @@ pub struct TranscriberView {
     /// The program's file name while `transcribeCommand` is usable (read, never run); Command
     /// is offered only then.
     pub command: Option<String>,
+    /// Whether Handy is installed (looked for, never run); Handy is offered only then.
+    pub handy: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1031,6 +1033,8 @@ pub trait Host {
     fn set_login_item(&mut self, on: bool) -> anyhow::Result<()>;
     /// Scrawl's binary and the folders `scrawl` may be linked into.
     fn command_line(&self) -> crate::command_line::Places;
+    /// Whether Handy is installed (`handy::executable`).
+    fn handy_installed(&self) -> bool;
 }
 
 /// The window's own state: what it's recording, what failed, what was asked for.
@@ -1305,6 +1309,7 @@ impl Panel {
         let command = crate::command_transcriber::Program::load_from(&host.config_path())
             .ok()
             .map(|program| program.name());
+        let handy = host.handy_installed();
         let policy = crate::retention::Policy::load_from(&host.config_path());
         let login = login_item();
         // Windows asks for no screen or accessibility grant, and has no cabled iPhone.
@@ -1353,6 +1358,7 @@ impl Panel {
             transcriber: TranscriberView {
                 engine: match engine {
                     crate::transcribe::Engine::Command if command.is_some() => "command",
+                    crate::transcribe::Engine::Handy if handy => "handy",
                     _ if menu.hex_checked => "hex",
                     _ => "apple",
                 },
@@ -1367,6 +1373,7 @@ impl Panel {
                     .map(|(id, title, chosen)| ModelView { id, title, chosen })
                     .collect(),
                 command,
+                handy,
             },
             video_export: config.video_export.unwrap_or(false),
             retention: RetentionView {
@@ -1459,6 +1466,10 @@ impl Host for AppHost<'_> {
 
     fn command_line(&self) -> crate::command_line::Places {
         crate::command_line::Places::system()
+    }
+
+    fn handy_installed(&self) -> bool {
+        crate::handy::executable().is_some()
     }
 }
 
@@ -1760,6 +1771,7 @@ mod tests {
         paused: Vec<bool>,
         refuse: Option<String>,
         cli: crate::command_line::Places,
+        handy: bool,
     }
 
     impl Host for Fake {
@@ -1786,6 +1798,9 @@ mod tests {
         }
         fn command_line(&self) -> crate::command_line::Places {
             self.cli.clone()
+        }
+        fn handy_installed(&self) -> bool {
+            self.handy
         }
     }
 
@@ -1829,6 +1844,7 @@ mod tests {
                 install: vec![dir.0.join("bin")],
                 also: Vec::new(),
             },
+            handy: false,
         }
     }
 
@@ -2544,6 +2560,37 @@ mod tests {
         );
         assert_eq!(read_json(&host.path)["transcriber"], "command");
         assert_eq!(panel.view(&host).transcriber.engine, "command");
+    }
+
+    #[test]
+    fn handy_shows_only_while_it_is_installed() {
+        let dir = TempDir::new("handy");
+        let mut host = fake(&dir);
+        let mut panel = Panel::default();
+        std::fs::write(&host.path, r#"{"transcriber":"handy"}"#).unwrap();
+        let view = panel.view(&host).transcriber;
+        assert_eq!((view.engine, view.handy), ("apple", false));
+
+        host.handy = true;
+        assert_eq!(panel.view(&host).transcriber.engine, "handy");
+        panel.on(
+            Action::Set {
+                key: "transcriber".into(),
+                value: "apple".into(),
+            },
+            &mut host,
+        );
+        let view = panel.view(&host).transcriber;
+        assert_eq!((view.engine, view.handy), ("apple", true));
+        panel.on(
+            Action::Set {
+                key: "transcriber".into(),
+                value: "handy".into(),
+            },
+            &mut host,
+        );
+        assert_eq!(read_json(&host.path)["transcriber"], "handy");
+        assert_eq!(panel.view(&host).transcriber.engine, "handy");
     }
 
     #[test]
