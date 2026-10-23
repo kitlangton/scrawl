@@ -126,6 +126,8 @@ impl X {
 pub struct Monitor {
     /// The RandR monitor's name atom; stable while it stays connected.
     pub handle: isize,
+    /// The output's name (`DP-3`), empty when the server doesn't say.
+    pub name: String,
     pub rect: [f64; 4],
     pub work: [f64; 4],
     pub scale: f64,
@@ -188,8 +190,16 @@ pub fn monitors() -> Vec<Monitor> {
                 f64::from(m.width),
                 f64::from(m.height),
             ];
+            let name = x
+                .conn
+                .get_atom_name(m.name)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .map(|r| String::from_utf8_lossy(&r.name).into_owned())
+                .unwrap_or_default();
             Monitor {
                 handle: m.name as isize,
+                name,
                 rect,
                 work: workarea.and_then(|w| intersect(rect, w)).unwrap_or(rect),
                 scale,
@@ -207,6 +217,7 @@ pub fn monitors() -> Vec<Monitor> {
         ];
         list.push(Monitor {
             handle: 0,
+            name: String::new(),
             rect,
             work: workarea.and_then(|w| intersect(rect, w)).unwrap_or(rect),
             scale,
@@ -606,10 +617,31 @@ fn configure(x: &X, id: u32, rect: [f64; 4]) {
 /// Moves and resizes one of Scrawl's windows to `rect` (global pixels).
 pub fn place(id: u32, rect: [f64; 4]) {
     if let Some(x) = x() {
+        // Hyprland takes an override-redirect window's position when it maps it and ignores
+        // later moves, so the window stays where it was drawn while X believes it moved, and
+        // its clicks stop landing. Mapping it again makes Hyprland look.
+        let remap = super::hyprland() && !at(x, id, rect);
+        if remap {
+            let _ = x.conn.unmap_window(id);
+        }
         configure(x, id, rect);
+        if remap {
+            let _ = x.conn.map_window(id);
+        }
         raise_on(x, id);
         x.flush();
     }
+}
+
+/// Whether the window already has this geometry (global pixels).
+fn at(x: &X, id: u32, rect: [f64; 4]) -> bool {
+    x.conn
+        .get_geometry(id)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .is_some_and(|g| {
+            [g.x, g.y, g.width as i16, g.height as i16] == rect.map(|v| v.round() as i16)
+        })
 }
 
 fn raise_on(x: &X, id: u32) {
@@ -688,6 +720,32 @@ pub fn set_click_through(id: u32, through: bool) {
         let _ = x.conn.xfixes_destroy_region(region);
     }
     x.flush();
+}
+
+/// Lets a window of Scrawl's take clicks on Hyprland, where a click on the pill or the picker
+/// otherwise lands on the app below it, for two reasons. Omarchy's `windows.lua` gives
+/// `no_focus` to floating XWayland windows with an empty class and title, which Hyprland's hit
+/// test then skips: GPUI sets no class on these, so they get one. And for an override-redirect
+/// window of GPUI's `_NET_WM_WINDOW_TYPE_NOTIFICATION` (or tooltip, menu, splash, utility…)
+/// the hit test answers "the window in focus"; a toolbar window gets the pointer, and Hyprland
+/// doesn't focus it when it maps. Call before `float`, which maps the window again for
+/// Hyprland to look at both.
+pub fn accept_pointer(id: u32) {
+    if !super::hyprland() {
+        return;
+    }
+    let Some(x) = x() else {
+        return;
+    };
+    let _ = x.conn.change_property32(
+        PropMode::REPLACE,
+        id,
+        x.atom("_NET_WM_WINDOW_TYPE"),
+        AtomEnum::ATOM,
+        &[x.atom("_NET_WM_WINDOW_TYPE_TOOLBAR")],
+    );
+    x.flush();
+    set_class(id);
 }
 
 /// Scrawl's own windows, including KWin's frame → wrapper → client nesting.

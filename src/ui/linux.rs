@@ -268,6 +268,7 @@ pub(super) fn configure_picker_window(
 ) -> Option<u32> {
     let id = x11::window_id(window)?;
     PICKER_WINDOW.store(id, Ordering::Release);
+    x11::accept_pointer(id);
     x11::float(id, frame);
     cx.spawn(async move |_| {
         x11::place(id, frame);
@@ -346,6 +347,7 @@ impl PillChrome {
                     f64::from(f32::from(b.size.height)) * s,
                 ]
             });
+            x11::accept_pointer(id);
             x11::float(id, rect);
         }
         Self { id }
