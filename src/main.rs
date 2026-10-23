@@ -225,7 +225,7 @@ enum TuneCommand {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Launch the GPUI menu-bar and review application (the default when macOS opens Scrawl.app).
+    /// Launch the menu-bar and review application (the default when macOS opens Scrawl.app).
     App {
         /// Start a capture session immediately on launch.
         #[arg(long)]
@@ -233,6 +233,15 @@ enum Command {
         /// Start capturing the cabled iPhone immediately on launch.
         #[arg(long, conflicts_with = "record")]
         iphone: bool,
+        /// Render a Rune app surface headless to this `.png` or directory.
+        #[arg(long, hide = true)]
+        snap: Option<PathBuf>,
+        /// With --snap: the scene to render (picker-area, picker-window, picker-screen, review-empty, review-contact-sheet, review-keyframes).
+        #[arg(long, hide = true)]
+        scene: Option<String>,
+        /// With --snap: synthetic input script JSON to replay before the snapshot.
+        #[arg(long, hide = true)]
+        script: Option<PathBuf>,
     },
     /// Generate a realistic annotated demo bundle (contact sheet + keyframes + transcript).
     Demo {
@@ -1586,15 +1595,41 @@ fn main() -> Result<()> {
         None => Command::App {
             record: false,
             iphone: false,
+            snap: None,
+            scene: None,
+            script: None,
         },
     };
     match command {
-        Command::App { record, iphone } => {
+        Command::App {
+            record,
+            iphone,
+            snap,
+            scene,
+            script,
+        } => {
             #[cfg(target_os = "windows")]
             {
                 win::shell::release_own_console();
                 win::shell::wait_for_relauncher();
             }
+            #[cfg(target_os = "macos")]
+            if snap.is_some() || scene.is_some() || script.is_some() {
+                ui::rune_app::run_app(
+                    None,
+                    record,
+                    iphone,
+                    None,
+                    ui::RuneAppOptions {
+                        snap,
+                        scene,
+                        script,
+                    },
+                );
+                return Ok(());
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (&snap, &scene, &script);
             ui::run_app(None, record, iphone, None);
             Ok(())
         }
