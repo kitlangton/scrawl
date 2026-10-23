@@ -84,7 +84,12 @@ const SHELL: [f32; 3] = [20.0 / 255.0, 20.0 / 255.0, 22.0 / 255.0];
 /// White at `alpha` over the capsule, as AppKit composites it (in sRGB): Rune blends in linear
 /// light, where the same alpha reads far brighter.
 fn veil(alpha: f32) -> Color {
-    rune::theme::srgb_equivalent(Color::WHITE.alpha(alpha), srgb(SHELL[0], SHELL[1], SHELL[2], 1.0))
+    over_shell(Color::WHITE, alpha)
+}
+
+/// `color` at `alpha` over the capsule, blended as AppKit would (see `veil`).
+fn over_shell(color: Color, alpha: f32) -> Color {
+    rune::theme::srgb_equivalent(color.alpha(alpha), srgb(SHELL[0], SHELL[1], SHELL[2], 1.0))
 }
 
 fn text_color() -> Color {
@@ -739,7 +744,7 @@ fn item<S: 'static>(surface: &Surface, live: &Capsule, shown: &Shown, on_press: 
                 _ => String::new(),
             };
             placed(el(), shown)
-                .child(el().absolute(5.0, 5.0).size(22.0, 22.0).radius(11.0).fill(green().alpha(0.22)))
+                .child(el().absolute(5.0, 5.0).size(22.0, 22.0).radius(11.0).fill(over_shell(green(), 0.22)))
                 .child(
                     canvas(icon(id, 13.0 * 2.6 / 24.0, green())).absolute(9.5, 9.5).size(13.0, 13.0),
                 )
@@ -787,7 +792,7 @@ fn dot(meter: &Meter) -> El {
     el().absolute(0.0, 0.0).size(CHIP_H, CHIP_H)
         .child(
             el().absolute((CHIP_H - ring) * 0.5, (CHIP_H - ring) * 0.5).size(ring, ring).radius(ring * 0.5)
-                .fill(red().alpha(0.5))
+                .fill(over_shell(red(), 0.5))
                 .live_scale(&meter.ring_scale)
                 .live_opacity(&meter.ring_alpha),
         )
