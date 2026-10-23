@@ -358,7 +358,7 @@ impl Surface {
     }
 
     /// The timer reads `clock`. True when the capsule re-lays out for it (a wider timer); the
-    /// view draws the digits themselves from live cells.
+    /// view draws the digits themselves from a `LiveText`.
     pub fn set_clock(&mut self, clock: &str, now: f64) -> bool {
         if self.clock == clock {
             return false;

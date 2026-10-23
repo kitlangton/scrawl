@@ -6,7 +6,7 @@
 //! What it shows and where everything rests is decided in `surface` (one `Surface`, Rune's
 //! state); the view below only draws it, and Rune's springs animate between commits. The red
 //! dot and the spinner animate through `Live` values a pretend meter thread publishes, and the
-//! timer's digits through `LiveText` cells, without re-running the view.
+//! timer through a `LiveText`, without re-running the view.
 
 pub(crate) mod surface;
 
@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use rune::color::srgb_decode;
 use rune::{
-    Align, App, AppSpec, Color, Compositor, Cx, DisplayTarget, El, Frame, LineCap, Live, LiveText, NativeDisplayId,
+    App, AppSpec, Color, Compositor, Cx, DisplayTarget, El, Frame, LineCap, Live, LiveText, NativeDisplayId,
     OverlayHandle, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Path, RunOptions, Shape,
     SpringPair, TextStyle, Transition, Tx, WindowSpec, canvas, el, row, text,
 };
@@ -110,6 +110,8 @@ fn accent(hover: bool) -> Color {
 
 const MEDIUM: TextStyle = TextStyle::new(HUD_TEXT, 500.0);
 const SEMIBOLD: TextStyle = TextStyle::new(HUD_TEXT, 600.0);
+/// The timer: SF's tabular digits, so a new second never changes its width (`monospacedDigit()`).
+const TIMER: TextStyle = SEMIBOLD.features("'tnum' 1");
 
 // ─── Text ────────────────────────────────────────────────────────────────────────────────────
 
@@ -133,19 +135,8 @@ pub fn measure(text: &str, semibold: bool) -> f32 {
     TEXT.with_borrow_mut(|t| t.measure(text, style, 2.0).0)
 }
 
-/// A timer digit's cell: the widest digit, centred in it, so the digits stay put as they change
-/// (SwiftUI's `monospacedDigit()`; Rune has no font features to ask SF for `tnum`).
-fn digit_cell() -> f32 {
-    ('0'..='9').map(|d| measure(d.encode_utf8(&mut [0; 4]), true)).fold(0.0, f32::max)
-}
-
-fn clock_cell(c: char, digit: f32) -> f32 {
-    if c.is_ascii_digit() { digit } else { measure(c.encode_utf8(&mut [0; 4]), true) }
-}
-
 fn clock_width(clock: &str) -> f32 {
-    let digit = digit_cell();
-    clock.chars().map(|c| clock_cell(c, digit)).sum()
+    TEXT.with_borrow_mut(|t| t.measure(clock, TIMER, 2.0).0)
 }
 
 fn metrics() -> crate::native::pill::model::Metrics {
@@ -179,22 +170,20 @@ fn processing_glyphs() -> [(char, f32, f32); PROCESSING_GLYPHS] {
     out
 }
 
-/// The timer's characters, one `LiveText` each, so a new second redraws its digits without
-/// re-running the view; only a change of length (9:59 → 10:00) re-lays the capsule out.
-const CLOCK_CELLS: usize = 6;
-
 /// A `Surface` laid out with the capsule's real label widths (call `fonts` first).
 pub(crate) fn new_surface() -> Surface {
     Surface::new(motion::tune(), metrics())
 }
 
 /// What the capsule draws beside its `Surface`: the live values (the dot, the spinner and the
-/// edge glow, from a meter thread) and the timer's cells. Whoever owns the surface owns one of
+/// edge glow, from a meter thread) and the timer's text. Whoever owns the surface owns one of
 /// these: publish the clock through `set_clock`, call `sync` after changing the surface, and
 /// draw with `capsule`.
 pub(crate) struct Capsule {
     meter: Meter,
-    clock: [LiveText; CLOCK_CELLS],
+    /// The timer, so a new second redraws without re-running the view; only a change of
+    /// length (9:59 → 10:00) re-lays the capsule out.
+    clock: LiveText,
     /// `surface.morphs` as last passed to the meter's edge glow.
     morphs: u32,
 }
@@ -208,18 +197,13 @@ impl Capsule {
     }
 
     fn with_meter(surface: &Surface, meter: Meter) -> Self {
-        let mut chars = surface.clock.chars();
-        let clock = std::array::from_fn(|_| LiveText::new(chars.next().map(String::from).unwrap_or_default()));
-        Self { meter, clock, morphs: surface.morphs }
+        Self { meter, clock: LiveText::new(surface.clock.clone()), morphs: surface.morphs }
     }
 
-    /// Shows `clock`: its characters go to the cells, and the surface re-lays out only when its
-    /// length or width changes. True when the view must re-run.
+    /// Shows `clock`; the surface re-lays out only when its length changes. True when the view
+    /// must re-run.
     pub(crate) fn set_clock(&self, surface: &mut Surface, clock: &str, now: f64) -> bool {
-        let mut chars = clock.chars();
-        for cell in &self.clock {
-            cell.set(chars.next().map(String::from).unwrap_or_default());
-        }
+        self.clock.set(clock.to_owned());
         surface.set_clock(clock, now)
     }
 
@@ -757,19 +741,11 @@ fn item<S: 'static>(surface: &Surface, live: &Capsule, shown: &Shown, on_press: 
     }
 }
 
-/// The timer, one fixed cell per character, each centred and bound to its `LiveText`.
+/// The timer in tabular digits, bound to its `LiveText` in a box as wide as the clock.
 fn timer(surface: &Surface, live: &Capsule) -> El {
-    let digit = digit_cell();
-    let mut cells = row().center_y().absolute(LEAD_TEXT_X, 0.0).h(CHIP_H);
-    for (c, live) in surface.clock.chars().zip(&live.clock) {
-        cells = cells.child(
-            label(c.encode_utf8(&mut [0; 4]), SEMIBOLD, text_color())
-                .live_text(live)
-                .align(Align::Center)
-                .w(clock_cell(c, digit)),
-        );
-    }
-    cells
+    row().center_y().absolute(LEAD_TEXT_X, 0.0).h(CHIP_H).child(
+        label(&surface.clock, TIMER, text_color()).live_text(&live.clock).w(clock_width(&surface.clock)),
+    )
 }
 
 /// "Processing…", each glyph at its place in the shaped label and lit by the shimmer.
@@ -1287,6 +1263,15 @@ fn drive(mut d: Driver, quit: rune::AppHandle<Lab>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_timer_keeps_its_width_as_the_seconds_change() {
+        fonts();
+        let widths: Vec<f32> = ["0:00", "0:11", "1:11", "1:47"].map(clock_width).into();
+        assert!(widths.iter().all(|w| (w - widths[0]).abs() < 0.01), "{widths:?}");
+        // Without `tnum` SF's ones are narrower, so the check above means something.
+        assert!(measure("1:11", true) < measure("0:00", true) - 1.0);
+    }
 
     #[test]
     fn the_shimmer_has_a_glyph_per_character() {
