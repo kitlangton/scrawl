@@ -585,6 +585,19 @@ pub fn transcribe_clips(
 }
 
 /// Transcribes a recording with `model`, as `transcribe_clips` over its speech islands.
+/// The clips of `samples` (16 kHz) worth transcribing: its speech islands joined by
+/// `plan_clips`, or the whole recording when it's too quiet to find speech by energy. Handy
+/// spreads its words over the same clips (`crate::handy`).
+pub fn speech_clips(samples: &[f32]) -> Vec<(u64, u64)> {
+    let duration_ms = samples.len() as u64 / SAMPLE_RATE_KHZ;
+    let mut clips = plan_clips(&audio::speech_islands(samples), duration_ms);
+    if clips.is_empty() && duration_ms >= MIN_ISLAND_MS * 4 {
+        // Too quiet to find speech by energy: hear the whole thing.
+        clips.push((0, duration_ms));
+    }
+    clips
+}
+
 pub fn transcribe_audio(
     client: &Client,
     model: &str,
@@ -592,12 +605,7 @@ pub fn transcribe_audio(
     audio: &RecordedAudio,
 ) -> Result<TranscriptData> {
     let samples = audio::decode_wav_16k(&audio.wav_bytes)?;
-    let duration_ms = samples.len() as u64 / SAMPLE_RATE_KHZ;
-    let mut clips = plan_clips(&audio::speech_islands(&samples), duration_ms);
-    if clips.is_empty() && duration_ms >= MIN_ISLAND_MS * 4 {
-        // Too quiet to find speech by energy: let Hex hear the whole thing.
-        clips.push((0, duration_ms));
-    }
+    let clips = speech_clips(&samples);
     transcribe_clips(&samples, &clips, model, |wav| {
         client.transcribe_retrying(wav, model, language)
     })

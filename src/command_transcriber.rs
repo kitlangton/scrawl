@@ -125,8 +125,9 @@ impl std::fmt::Display for Failure {
 impl std::error::Error for Failure {}
 
 impl Program {
-    /// `argv[0]` must be an absolute path; `timeout` replaces the default limit.
-    fn new(argv: Vec<String>, timeout: Option<Duration>) -> Result<Self, Unusable> {
+    /// `argv[0]` must be an absolute path; `timeout` replaces the default limit. Also how Scrawl
+    /// runs an app it knows the command of (`crate::handy`).
+    pub fn new(argv: Vec<String>, timeout: Option<Duration>) -> Result<Self, Unusable> {
         if cfg!(not(unix)) {
             return Err(Unusable::Unsupported);
         }
@@ -206,6 +207,12 @@ impl Program {
             arguments.push(wav.into());
         }
         arguments
+    }
+
+    /// Runs the program on `wav` (`sample_count` 16 kHz samples) within `limit` and returns
+    /// its stdout, for an app whose output isn't this protocol's (`crate::handy`).
+    pub fn output(&self, wav: &Path, sample_count: usize) -> Result<Vec<u8>, Failure> {
+        self.run(wav, self.limit(sample_count))
     }
 
     /// Runs the program to completion and returns its stdout.
@@ -394,7 +401,7 @@ pub fn transcribe(
     sample_count: usize,
     log: &mut dyn FnMut(&str),
 ) -> Result<TranscriptData, Failure> {
-    let stdout = program.run(wav, program.limit(sample_count))?;
+    let stdout = program.output(wav, sample_count)?;
     parse(
         &stdout,
         &program.name(),
