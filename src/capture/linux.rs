@@ -4,7 +4,8 @@
 //! On X11 the X server answers everything: shortcuts are passive key grabs on the root window,
 //! and the pointer, buttons and keys are polled. On a Wayland session the compositor keeps
 //! other apps' input to itself, so the shortcuts come from the GlobalShortcuts portal (or, on
-//! GNOME without it, custom keybindings that run `scrawl shortcut record`), and ⇧, clicks and
+//! GNOME without it, custom keybindings that run `scrawl shortcut record`, and on Hyprland
+//! runtime binds that do the same), and ⇧, clicks and
 //! Esc from the input devices when the user may read them (`crate::linux::input`). See
 //! `docs/linux.md`.
 //!
@@ -595,6 +596,8 @@ enum Backend {
     Gnome,
     /// Plasma 5's native KGlobalAccel service.
     Kde,
+    /// Hyprland runtime binds running `scrawl shortcut …` (`linux::hyprland`).
+    Hyprland,
     /// Polled from the input devices: the press also reaches the app in front.
     Devices,
 }
@@ -795,6 +798,27 @@ fn bind_gnome(record: &ShortcutConfig, paste: &ShortcutConfig, paused: bool) -> 
     linux::portal::bind_gnome_keybindings(&[("record", binding(record)), ("paste", binding(paste))])
 }
 
+/// Hyprland's runtime binds for both shortcuts, or none while paused. The refused one is
+/// returned.
+fn bind_hyprland(
+    record: &ShortcutConfig,
+    paste: &ShortcutConfig,
+    paused: bool,
+) -> Result<(), ShortcutKind> {
+    for (id, cfg, kind) in [
+        ("record", record, ShortcutKind::Record),
+        ("paste", paste, ShortcutKind::Paste),
+    ] {
+        let key = shortcut_key(cfg);
+        let chord = (!paused && !cfg.is_unset()).then_some((cfg.carbon_modifiers, key.as_str()));
+        if let Err(error) = linux::hyprland::bind(id, chord) {
+            scrawl_log(format!("Hyprland {id}: {error:#}"));
+            return Err(kind);
+        }
+    }
+    Ok(())
+}
+
 /// Sets up the shortcuts for this session on a thread of its own (the portal may show a
 /// dialog), and listens for `scrawl shortcut …` from GNOME's keybindings.
 pub fn install_global_hotkeys(telemetry: &Arc<SharedCaptureTelemetry>) {
@@ -823,6 +847,24 @@ pub fn install_global_hotkeys(telemetry: &Arc<SharedCaptureTelemetry>) {
                 set_backend(Backend::X11);
                 run_grab_events(telemetry);
                 return;
+            }
+            // Hyprland's portal needs an app id and a hand-written bind, so Scrawl binds its own
+            // chords, which the compositor consumes. A config reload drops them.
+            if linux::hyprland() {
+                match bind_hyprland(&record, &paste, false) {
+                    Ok(()) => {
+                        let reloads = Arc::clone(&telemetry);
+                        if let Err(error) = linux::hyprland::watch_reloads(move || {
+                            let (record, paste) = reloads.shortcuts();
+                            let paused = reloads.shortcuts_paused.load(Ordering::Acquire);
+                            let _ = bind_hyprland(&record, &paste, paused);
+                        }) {
+                            scrawl_log(format!("Hyprland events: {error:#}"));
+                        }
+                        return set_backend(Backend::Hyprland);
+                    }
+                    Err(kind) => scrawl_log(format!("Hyprland: {kind:?} shortcut was refused")),
+                }
             }
             // Plasma 5's portal opens System Settings but never binds the requested keys.
             // KGlobalAccel consumes the chord; Plasma 6 uses the portal normally.
@@ -905,6 +947,12 @@ pub fn set_shortcuts(
                     return Err(kind);
                 }
             }
+            Backend::Hyprland => {
+                if let Err(kind) = bind_hyprland(&record, &paste, false) {
+                    let _ = bind_hyprland(&old_record, &old_paste, false);
+                    return Err(kind);
+                }
+            }
             Backend::Devices | Backend::None => {}
         }
     }
@@ -941,6 +989,9 @@ pub fn pause_shortcuts(telemetry: &SharedCaptureTelemetry, paused: bool) {
         }
         Backend::Kde => {
             let _ = linux::shortcuts::bind(&record, &paste, paused);
+        }
+        Backend::Hyprland => {
+            let _ = bind_hyprland(&record, &paste, paused);
         }
         Backend::Portal | Backend::Devices | Backend::None => {}
     }

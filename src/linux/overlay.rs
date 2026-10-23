@@ -51,10 +51,13 @@ impl InkOverlay {
         let placement = Arc::new(Mutex::new(Placement { rect, scale }));
         let view_placement = Arc::clone(&placement);
         // KWin 5's XWayland overlay intercepts native Wayland clicks even with an empty
-        // X input shape. Keep it mapped only while drawing, so the sharing dialog and the
-        // app underneath stay usable. The bundle still contains the complete ink.
-        let hide_between_strokes =
-            super::kde() && super::wayland_session() && telemetry.active.load(Ordering::Acquire);
+        // X input shape, and so does Hyprland's, which also sends the pill's and the picker's
+        // clicks to the focused app when a full-screen notification window sits above them.
+        // Keep it mapped only while drawing, so the sharing dialog, the pill and the app
+        // underneath stay usable. The bundle still contains the complete ink.
+        let hide_between_strokes = (super::kde() || super::hyprland())
+            && super::wayland_session()
+            && telemetry.active.load(Ordering::Acquire);
         let handle = cx
             .open_window(
                 WindowOptions {

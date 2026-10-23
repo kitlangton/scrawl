@@ -40,6 +40,29 @@ Screen and Area work on the tested desktops. The Window picker lists X11/XWaylan
 
 Plasma 5 can report successful GlobalShortcuts binding with an empty result. Scrawl validates both returned bindings and uses KGlobalAccel directly on Plasma 5, so the shortcut does not also type into the focused app.
 
+### Hyprland
+
+Tried on Omarchy 4 (Hyprland 0.56, Lua config), Wayland. `linux::hyprland` binds the shortcuts at runtime with `hyprctl eval hl.bind(…)` (a hyprlang config takes `keyword bindd` instead, untested), each running `scrawl shortcut record|paste`. Hyprland consumes the chord, so it doesn't also reach the app in front, and nothing needs the `input` group. The binds are described `Scrawl: record` and `Scrawl: paste`. A chord some other bind holds is left alone and reported as taken; a bind with Scrawl's description (a permanent one in the user's config, which a config reload doesn't drop) is left in place:
+
+```lua
+hl.bind("ALT + SHIFT + S", hl.dsp.exec_cmd("scrawl shortcut record"), { description = "Scrawl: record" })
+```
+
+A config reload drops runtime binds, so Scrawl binds them again on the event socket's `configreloaded`. The GlobalShortcuts portal can't stand in: `xdg-desktop-portal` refuses an app without an app id, and `xdg-desktop-portal-hyprland` only fires shortcuts the user bound by hand with `bind = …, global, <app id>:<name>`.
+
+Clicks on the pill and the picker need four things, found in Hyprland's source (`ViewHitTester.cpp`, `XSurface.cpp`) and Omarchy's `windows.lua`, because the symptom is always the same: the click lands on the app below.
+
+- Omarchy gives `no_focus` to floating XWayland windows with an empty class and title, which Hyprland's hit test skips. GPUI sets no class on these windows, so `x11::accept_pointer` gives them one.
+- For an override-redirect window of `_NET_WM_WINDOW_TYPE_NOTIFICATION` (GPUI's pop-up type), tooltip, menu, splash or utility, the hit test answers "the window in focus" instead of the window. `accept_pointer` makes them toolbar windows, which get the pointer and aren't focused when they map.
+- Hyprland takes an override-redirect window's position when it maps it and ignores later moves, so `x11::place` maps the window again when it moves on Hyprland.
+- The full-screen ink overlay is a notification window above the pill, so it shares the KDE treatment: mapped only while ⇧ is held (`hide_between_strokes`).
+
+XWayland sees the pointer only over X11 windows and keeps the last place it saw it over the rest, which picked the wrong display for a recording and started an area selection in the wrong place. On Hyprland `linux::cursor_position` asks Hyprland (`j/cursorpos`) and maps the point to the same place on the same output in XWayland's layout (`hyprland::cursor_in_x_space`): XWayland can put a monitor at y 0 where Hyprland has it at y 1080, so outputs are matched by name and the point is moved by the difference.
+
+The clipboard goes through `wl-copy`, as on KDE Wayland.
+
+Not done: a click's position still comes from XWayland (see above; `j/cursorpos` would answer it), and a Region capture of the second monitor failed in testing with a PipeWire `not-negotiated` error while Display on it and Region on the first monitor worked.
+
 ## Scrawl's own windows are in the recording
 
 Neither X11 nor GNOME's or KDE's screencasts let an app leave its windows out, so the pill and the ink are in `recording.mp4` and the keyframes. The ink is drawn again at the same place on the keyframes, so it doesn't double. The candidate frames used to pick keyframes paint over the pill (`linux::media::own_window_masks`), so its ticking clock never counts as activity.

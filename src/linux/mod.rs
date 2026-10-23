@@ -9,11 +9,12 @@
 //! What Scrawl can see depends on the session: on X11 it reads the window list, the pointer and
 //! the keys straight from the X server (`x11`). On Wayland the compositor keeps those to itself:
 //! the screen comes from the ScreenCast portal (or GNOME's own screencast API), the shortcut
-//! from the GlobalShortcuts portal, and clicks and ⇧ from the input devices when the user may
+//! from the GlobalShortcuts portal (or runtime binds on Hyprland), and clicks and ⇧ from the input devices when the user may
 //! read them (`input`). See `docs/linux.md`.
 
 pub mod atspi;
 pub mod clipboard;
+pub mod hyprland;
 pub mod input;
 pub mod ipc;
 pub mod login;
@@ -73,12 +74,35 @@ pub fn wayland_session() -> bool {
 /// (`input::absolute_pointer`).
 pub fn cursor_position() -> Option<(f64, f64)> {
     if wayland_session()
+        && hyprland::running()
+        && let Some(point) = hyprland::cursor_in_x_space(&output_rects())
+    {
+        return Some(point);
+    }
+    if wayland_session()
         && let Some([nx, ny]) = input::absolute_pointer()
         && let Some([x, y, w, h]) = desktop_rect()
     {
         return Some((x + nx * w, y + ny * h));
     }
     x11::cursor_position()
+}
+
+/// Each output's name and X11 rectangle, read at most once a second.
+fn output_rects() -> Vec<(String, [f64; 4])> {
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<(String, [f64; 4])>)>> =
+        std::sync::Mutex::new(None);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((at, rects)) = cache.as_ref()
+        && at.elapsed() < std::time::Duration::from_secs(1)
+    {
+        return rects.clone();
+    }
+    let rects: Vec<_> = monitors().into_iter().map(|m| (m.name, m.rect)).collect();
+    *cache = Some((std::time::Instant::now(), rects.clone()));
+    rects
 }
 
 /// The bounding box of every monitor (global pixels), read at most once a second.
@@ -116,6 +140,20 @@ pub fn gnome() -> bool {
 
 pub fn kde() -> bool {
     desktop().split(':').any(|d| d == "kde")
+}
+
+/// A Hyprland session (Omarchy's, for one). `XDG_CURRENT_DESKTOP` says `Hyprland` there, but a
+/// session started another way may leave it out, so the compositor's socket counts too.
+pub fn hyprland() -> bool {
+    desktop().split(':').any(|d| d == "hyprland") || hyprland::running()
+}
+
+/// What a keybinding or launcher should run for Scrawl: the AppImage while one runs, else this
+/// executable.
+pub fn scrawl_exe() -> std::io::Result<PathBuf> {
+    std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .map_or_else(std::env::current_exe, Ok)
 }
 
 /// What the session is, for logs and Settings: "GNOME on Wayland", "KDE Plasma on X11", …
