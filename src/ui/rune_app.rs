@@ -94,7 +94,10 @@ enum InternalEvent {
         x: f32,
         y: f32,
     },
-    PickerKey(KeyEvent),
+    PickerKey {
+        event: KeyEvent,
+        repeat: bool,
+    },
     WindowsLoaded {
         generation: u64,
         windows: Vec<TargetInfo>,
@@ -636,10 +639,14 @@ fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
     root
 }
 
-fn picker_on_key(s: &mut PickerState, event: &KeyEvent, _tx: &mut Tx) -> bool {
+fn picker_on_key(s: &mut PickerState, event: &KeyEvent, tx: &mut Tx) -> bool {
+    let repeat = tx.key_repeat();
     if !s.still {
         // Coordinator alone owns selection mode and key handling in the live app.
-        s.emit(InternalEvent::PickerKey(event.clone()));
+        s.emit(InternalEvent::PickerKey {
+            event: event.clone(),
+            repeat,
+        });
         return true;
     }
     let has_iphone = s.snapshot.has_iphone;
@@ -1876,7 +1883,8 @@ impl RuneCoordinator {
         }
     }
 
-    fn handle_selection_key_event(&mut self, event: &KeyEvent) -> bool {
+    /// `repeat`: the key is held and repeating, which never records.
+    fn handle_selection_key_event(&mut self, event: &KeyEvent, repeat: bool) -> bool {
         let Some(mode) = self.selection_mode() else {
             return false;
         };
@@ -1894,7 +1902,9 @@ impl RuneCoordinator {
                 .telemetry
                 .matches_shortcut(cfg.key_code as u16, m.cmd, m.ctrl, m.alt, m.shift)
         {
-            self.telemetry.emit_capture_shortcut();
+            if !repeat {
+                self.telemetry.emit_capture_shortcut();
+            }
             return true;
         }
         if m.cmd || m.ctrl || m.alt {
@@ -1903,7 +1913,10 @@ impl RuneCoordinator {
         let has_iphone = self.iphone.is_some();
         let label = self.shortcut_label();
         let record_key = crate::capture::shortcut_parts(&label).1;
+        let records = matches!(&event.key, Key::Enter)
+            || matches!(&event.key, Key::Text(ch) if ch.eq_ignore_ascii_case(record_key));
         match &event.key {
+            _ if repeat && records => {}
             Key::Text(ch) if ch == " " => self.toggle_selection_mode(),
             Key::Enter => self.record_selected_mode(),
             Key::Text(ch) if ch.eq_ignore_ascii_case(record_key) => self.record_selected_mode(),
@@ -3011,8 +3024,8 @@ impl RuneCoordinator {
                 InternalEvent::PickerDown { x, y, .. } => self.handle_picker_down(x, y),
                 InternalEvent::PickerMove { x, y, .. } => self.handle_picker_move(x, y),
                 InternalEvent::PickerUp { x, y, .. } => self.handle_picker_up(x, y),
-                InternalEvent::PickerKey(key) => {
-                    let _ = self.handle_selection_key_event(&key);
+                InternalEvent::PickerKey { event, repeat } => {
+                    let _ = self.handle_selection_key_event(&event, repeat);
                 }
                 InternalEvent::WindowsLoaded {
                     generation,
@@ -3293,7 +3306,9 @@ fn review_on_key(s: &mut ReviewState, event: &KeyEvent, tx: &mut Tx) -> bool {
             .telemetry
             .matches_shortcut(cfg.key_code as u16, m.cmd, m.ctrl, m.alt, m.shift)
     {
-        s.coord.telemetry.emit_capture_shortcut();
+        if !tx.key_repeat() {
+            s.coord.telemetry.emit_capture_shortcut();
+        }
         return true;
     }
     let is_close = event.key == Key::Escape
@@ -4359,6 +4374,26 @@ mod tests {
         assert!(review.coord.is_selecting());
         review.coord.toggle_selection_mode();
         assert_eq!(review.coord.selection_mode(), Some(SelectionMode::Window));
+        // Held key-repeat on Enter or record key ("s") must not trigger recording,
+        // while held Tab still cycles selection modes.
+        let enter_ev = KeyEvent {
+            key: Key::Enter,
+            mods: rune::Mods::default(),
+        };
+        assert!(review.coord.handle_selection_key_event(&enter_ev, true));
+        assert_eq!(review.coord.selection_mode(), Some(SelectionMode::Window));
+        let s_ev = KeyEvent {
+            key: Key::Text("s".into()),
+            mods: rune::Mods::default(),
+        };
+        assert!(review.coord.handle_selection_key_event(&s_ev, true));
+        assert_eq!(review.coord.selection_mode(), Some(SelectionMode::Window));
+        let tab_ev = KeyEvent {
+            key: Key::Tab,
+            mods: rune::Mods::default(),
+        };
+        assert!(review.coord.handle_selection_key_event(&tab_ev, true));
+        assert_eq!(review.coord.selection_mode(), Some(SelectionMode::Screen));
         review.coord.dismiss_island();
         assert!(!review.coord.is_selecting());
         assert!(matches!(review.coord.island_phase, IslandPhase::Dismissing));

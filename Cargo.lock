@@ -5276,11 +5276,12 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?rev=3a608d6fc4f4f1bc38e9d53ce0778bfb32f2e8df#3a608d6fc4f4f1bc38e9d53ce0778bfb32f2e8df"
+source = "git+https://github.com/anomalyco/rune?rev=892da9413415cc431f33574674f78272bcd13d6a#892da9413415cc431f33574674f78272bcd13d6a"
 dependencies = [
  "arboard",
  "blake3",
  "block2 0.5.1",
+ "block2 0.6.2",
  "bytemuck",
  "futures-util",
  "half",
@@ -5324,7 +5325,7 @@ dependencies = [
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+https://github.com/anomalyco/rune?rev=3a608d6fc4f4f1bc38e9d53ce0778bfb32f2e8df#3a608d6fc4f4f1bc38e9d53ce0778bfb32f2e8df"
+source = "git+https://github.com/anomalyco/rune?rev=892da9413415cc431f33574674f78272bcd13d6a#892da9413415cc431f33574674f78272bcd13d6a"
 
 [[package]]
 name = "rust-embed"
