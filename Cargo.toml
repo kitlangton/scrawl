@@ -34,7 +34,7 @@ metal = "0.29.0"
 screencapturekit = { version = "=11.0.0", features = ["macos_15_0"] }
 # Rune (anomalyco/rune), pinned to a `dev` rev and bumped deliberately. Only `scrawl lab pill --rune`
 # uses it for now; the app's normal run path stays on GPUI.
-rune = { git = "https://github.com/anomalyco/rune", rev = "b5495265b1fe7d088ee20baa49cfe8709f93b8eb" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "330f0ac5d7756202063471980f36e2673c95bccd" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 ab_glyph = "0.2.32"

@@ -637,21 +637,22 @@ fn shell(surface: &Surface, meter: &Meter) -> El {
     let [x, y, w, h] = surface.shell;
     let completed = matches!(surface.pres, Pres::Completed { .. });
     let inset = |y: f32, blur: f32, spread: f32, color: Color| rune::Shadow { x: 0.0, y, blur, spread, color, inset: true };
-    // SwiftUI's rim is a 0.5 pt hairline lit from above (white 0.15 at the top, 0.04 at the
-    // bottom): a 0.04 ring with a 0.5 pt highlight dropped in from the top edge, which thins out
-    // down the sides the same way.
-    let mut shell = el().key("shell")
+    let shell = el().key("shell")
         .absolute(x, y)
         .size(w, h)
         .radius(h * 0.5)
         // SwiftUI's 0.96, blended in sRGB there; in Rune's linear blend a light desktop would
         // lift it visibly, so nearly opaque.
-        .fill(srgb(SHELL[0], SHELL[1], SHELL[2], 0.99))
-        .box_shadow(inset(0.5, 0.0, 0.0, veil(0.11)));
-    shell = if completed {
-        shell.border(0.75, green().alpha(0.5))
+        .fill(srgb(SHELL[0], SHELL[1], SHELL[2], 0.99));
+    // SwiftUI's rim, a `strokeBorder` over the fill: a 0.5 pt hairline lit from above (white
+    // 0.15 at the top, 0.04 at the bottom), or the done state's 0.75 pt green. A Rune border
+    // replaces its own fill under the ring, so the ring goes on an unfilled child to sit over it.
+    let bw = if completed { 0.75 } else { 0.5 };
+    let rim = el().key("rim").absolute(0.0, 0.0).size(w, h).radius(h * 0.5);
+    let rim = if completed {
+        rim.border(bw, over_shell(green(), 0.5))
     } else {
-        shell.box_shadow(inset(0.0, 0.0, 0.5, veil(0.04)))
+        rim.border_gradient(bw, veil(0.15), veil(0.04))
     };
     shell
         .shadow(4.0, 18.0, Color::BLACK.alpha(0.34))
@@ -662,6 +663,7 @@ fn shell(surface: &Surface, meter: &Meter) -> El {
                 .live_opacity(&meter.glow)
                 .motion(surface.shell_motion),
         )
+        .child(rim.motion(surface.shell_motion))
         .opacity(if surface.shell_on { 1.0 } else { 0.0 })
         .motion(surface.shell_motion)
         .opacity_motion(surface.shell_fade)
