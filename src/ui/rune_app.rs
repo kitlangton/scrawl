@@ -322,16 +322,10 @@ impl PickerState {
         app_handle: Option<AppHandle<ReviewState>>,
         still: bool,
     ) -> Self {
-        let waker_app = app_handle.clone();
-        let images = Some(ImageCache::new(Arc::new(move || {
-            if let Some(ref app) = waker_app {
-                app.wake();
-            }
-        })));
         Self {
             display_frame,
             snapshot: PickerSnapshot::default(),
-            images,
+            images: None,
             events_tx,
             app_handle,
             last_emitted_pointer: None,
@@ -487,8 +481,9 @@ fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
     });
 
     let cursor = match mode {
+        SelectionMode::Area => Cursor::Crosshair,
+        SelectionMode::Window => Cursor::Hidden,
         SelectionMode::Screen | SelectionMode::Iphone => Cursor::Pointer,
-        SelectionMode::Area | SelectionMode::Window => Cursor::Default,
     };
 
     let mut root = el()
@@ -605,7 +600,7 @@ fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
         let cy_local = py_screen - origin[1];
         if mode == SelectionMode::Window {
             root = root.child(camera_cursor_badge(cx_local, cy_local));
-        } else if mode == SelectionMode::Area {
+        } else if s.still && mode == SelectionMode::Area {
             root = root.child(crosshair_cursor(cx_local, cy_local));
         }
     }
@@ -1193,7 +1188,9 @@ impl RuneCoordinator {
                 let snap = PickerSnapshot {
                     active: true,
                     mode,
-                    pointer: self.selection_pointer,
+                    pointer: (mode == SelectionMode::Window)
+                        .then_some(self.selection_pointer)
+                        .flatten(),
                     drag: self.selection_drag,
                     hovered_window_rect,
                     hovered_window_label: hovered_window_label.clone(),
@@ -2142,8 +2139,8 @@ impl RuneCoordinator {
                     });
                     self.hovered_window = found;
                     self.sync_picker_overlay();
-                    self.sync_picker_overlays();
                 }
+                self.sync_picker_overlays();
             }
         }
     }
@@ -4174,6 +4171,7 @@ pub fn run_app(
                 prewarm: initial_screen.is_some(),
                 ..Default::default()
             })
+            .setup(picker_setup)
             .on_key(picker_on_key)
             .on_created(move |made| {
                 #[cfg(target_os = "macos")]
