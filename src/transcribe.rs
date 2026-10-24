@@ -1,8 +1,9 @@
 //! Transcription: Apple's SpeechAnalyzer through `scrawl-helper` (measured word and segment
 //! timings), Hex when `"transcriber": "hex"` is set and Hex is connected (`crate::hex`; word
-//! times estimated), or a program of the user's when `"transcriber": "command"`
-//! (`crate::command_transcriber`). Any Hex or command trouble falls back to Apple for that
-//! recording.
+//! times estimated), Handy's headless mode when `"transcriber": "handy"` and Handy is installed
+//! (`crate::handy`; word times estimated), or a program of the user's when
+//! `"transcriber": "command"` (`crate::command_transcriber`). Any Hex, Handy or command trouble
+//! falls back to Apple for that recording.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -17,6 +18,7 @@ pub enum Engine {
     #[default]
     Apple,
     Hex,
+    Handy,
     Command,
 }
 
@@ -25,6 +27,7 @@ impl Engine {
         match name.trim().to_ascii_lowercase().as_str() {
             "apple" => Some(Self::Apple),
             "hex" => Some(Self::Hex),
+            "handy" => Some(Self::Handy),
             "command" => Some(Self::Command),
             _ => None,
         }
@@ -34,6 +37,7 @@ impl Engine {
         match self {
             Self::Apple => "apple",
             Self::Hex => "hex",
+            Self::Handy => "handy",
             Self::Command => "command",
         }
     }
@@ -52,6 +56,7 @@ impl Engine {
             1 => Self::Apple,
             2 => Self::Hex,
             3 => Self::Command,
+            4 => Self::Handy,
             _ => Self::configured(),
         }
     }
@@ -67,6 +72,7 @@ pub const LOCAL_ENGINE_TITLE: &str = "Parakeet (on this PC)";
 static OVERRIDE: AtomicU8 = AtomicU8::new(0);
 static LOGGED_NOT_CONNECTED: std::sync::Once = std::sync::Once::new();
 static LOGGED_NO_COMMAND: std::sync::Once = std::sync::Once::new();
+static LOGGED_NO_HANDY: std::sync::Once = std::sync::Once::new();
 
 /// What the Settings window's Transcription controls show. A Hex preference stays saved while Hex
 /// is away, but the active choice follows what recordings would really use.
@@ -124,6 +130,7 @@ pub fn set_override(engine: Engine) {
             Engine::Apple => 1,
             Engine::Hex => 2,
             Engine::Command => 3,
+            Engine::Handy => 4,
         },
         Ordering::Relaxed,
     );
@@ -144,6 +151,7 @@ pub fn transcribe(wav: Option<&Path>, audio: Option<&RecordedAudio>) -> Transcri
         || match engine {
             Engine::Apple => Ok(None),
             Engine::Hex => try_hex(audio),
+            Engine::Handy => try_handy(wav, audio),
             Engine::Command => try_command(wav, audio),
         },
         || {
@@ -180,7 +188,7 @@ fn finish_live(
 
 /// The preferred engine when it isn't Apple, with Apple as the answer to anything it can't do.
 /// `other` returns `Ok(None)` when that engine isn't there at all (Hex not connected or without a
-/// ready model, no usable `transcribeCommand`).
+/// ready model, Handy not installed, no usable `transcribeCommand`).
 fn run(
     engine: Engine,
     other: impl FnOnce() -> Result<Option<TranscriptData>>,
@@ -189,6 +197,7 @@ fn run(
     let name = match engine {
         Engine::Apple => return apple(),
         Engine::Hex => "Hex",
+        Engine::Handy => "Handy",
         Engine::Command => "Command",
     };
     match other() {
@@ -220,6 +229,24 @@ fn try_command(wav: &Path, audio: &RecordedAudio) -> Result<Option<TranscriptDat
             crate::capture::scrawl_log(line)
         })?;
     Ok(Some(transcript))
+}
+
+/// Runs Handy's headless mode. Like the command's, its errors never hold what Handy printed.
+fn try_handy(wav: &Path, audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
+    let Some(executable) = crate::handy::executable() else {
+        LOGGED_NO_HANDY.call_once(|| {
+            let reason = if cfg!(any(target_os = "macos", target_os = "windows")) {
+                "Handy 0.9.0 or later isn't installed"
+            } else {
+                "Scrawl uses Handy only on macOS and Windows"
+            };
+            crate::capture::scrawl_log(format!(
+                "Handy preferred, but {reason}; using {LOCAL_ENGINE_TITLE}"
+            ));
+        });
+        return Ok(None);
+    };
+    crate::handy::transcribe(&executable, wav, audio).map(Some)
 }
 
 fn try_hex(audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
@@ -280,6 +307,8 @@ mod tests {
         assert_eq!(Engine::parse("hex"), Some(Engine::Hex));
         assert_eq!(Engine::parse(" Apple "), Some(Engine::Apple));
         assert_eq!(Engine::parse("Command"), Some(Engine::Command));
+        assert_eq!(Engine::parse("handy"), Some(Engine::Handy));
+        assert_eq!(Engine::Handy.name(), "handy");
         assert_eq!(Engine::parse("whisper"), None);
         assert_eq!(Engine::default(), Engine::Apple);
     }
@@ -298,6 +327,7 @@ mod tests {
     fn the_preferred_engine_is_used_when_it_answers() {
         for (engine, source) in [
             (Engine::Hex, "hex:parakeet_v3"),
+            (Engine::Handy, "handy:parakeet-tdt-0.6b-v3"),
             (Engine::Command, "command:whisper-scrawl"),
         ] {
             let result = run(
@@ -311,7 +341,7 @@ mod tests {
 
     #[test]
     fn an_unavailable_or_failing_engine_falls_back_to_apple() {
-        for engine in [Engine::Hex, Engine::Command] {
+        for engine in [Engine::Hex, Engine::Handy, Engine::Command] {
             let apple = || named("speech-analyzer");
             assert_eq!(run(engine, || Ok(None), apple).source, "speech-analyzer");
             let failed = run(engine, || Err(anyhow::anyhow!("took too long")), apple);

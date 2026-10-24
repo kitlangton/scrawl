@@ -17,6 +17,7 @@ mod export;
 #[cfg(test)]
 mod feature_map;
 mod handoff;
+mod handy;
 #[cfg_attr(target_os = "windows", path = "win/helper.rs")]
 mod helper;
 mod hex;
@@ -87,7 +88,7 @@ struct Cli {
 
 fn parse_engine(name: &str) -> Result<crate::transcribe::Engine, String> {
     crate::transcribe::Engine::parse(name)
-        .ok_or_else(|| "expected `apple`, `hex` or `command`".to_owned())
+        .ok_or_else(|| "expected `apple`, `hex`, `handy` or `command`".to_owned())
 }
 
 /// `scrawl hex status`: connection, models and what the next recording would use.
@@ -102,8 +103,17 @@ fn hex_status() {
             Err(unusable) => println!("Command: not usable ({unusable})"),
         }
     }
+    // Only looks for the app; Handy isn't run.
+    let handy = handy::executable();
+    if preferred == transcribe::Engine::Handy {
+        match &handy {
+            Some(executable) => println!("Handy: {}", executable.display()),
+            None => println!("Handy: not installed (needs 0.9.0 or later)"),
+        }
+    }
     let next = |hex_model: Option<&str>| match (preferred, hex_model, &command) {
         (transcribe::Engine::Command, _, Ok(program)) => format!("Command ({})", program.name()),
+        (transcribe::Engine::Handy, ..) if handy.is_some() => "Handy".to_owned(),
         (transcribe::Engine::Hex, Some(model), _) => format!("Hex ({model})"),
         _ => transcribe::LOCAL_ENGINE_TITLE.to_owned(),
     };
@@ -263,7 +273,8 @@ enum Command {
         /// Copy the summary to the clipboard.
         #[arg(long)]
         clipboard: bool,
-        /// Transcribe with `apple`, `hex` or `command` instead of the configured transcriber.
+        /// Transcribe with `apple`, `hex`, `handy` or `command` instead of the configured
+        /// transcriber.
         #[arg(long, value_parser = parse_engine)]
         transcriber: Option<crate::transcribe::Engine>,
     },
@@ -301,7 +312,8 @@ enum Command {
         /// many times real time first, as if recording, so the finish only transcribes the tail.
         #[arg(long, hide = true, requires = "bench")]
         live_speed: Option<f64>,
-        /// Transcribe with `apple`, `hex` or `command` instead of the configured transcriber.
+        /// Transcribe with `apple`, `hex`, `handy` or `command` instead of the configured
+        /// transcriber.
         #[arg(long, value_parser = parse_engine)]
         transcriber: Option<crate::transcribe::Engine>,
         /// Turn an experiment on for this run, as `"experiments"` in `config.json` would

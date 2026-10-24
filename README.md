@@ -169,8 +169,8 @@ granted and each on-demand sheet: `target/debug/scrawl-helper onboarding --rende
 - **General**: Launch at login, Send dev-site captures to OpenCode, and the two shortcuts, Record
   (`⌥⇧S`) and Paste last capture (`⌥⇧V`, which can be turned off).
 - **Recording**: the microphone, with its input level, the transcriber (Apple Speech with its
-  language, Hex while it runs, with its model and language, or Command when it's configured) and,
-  under Experimental, Video export.
+  language, Hex while it runs, with its model and language, Handy when it's installed, or Command
+  when it's configured) and, under Experimental, Video export.
 - **Storage**: how long recordings are kept, where new captures go (Change…/Reset on macOS, `"capturesDir"` in
   `~/.config/scrawl/config.json` everywhere; captures already made stay put, and an unusable folder falls back to the built-in one), how much space they take, and Show in Finder.
 - **Permissions**: the onboarding checklist, so a permission can be turned on later.
@@ -710,7 +710,7 @@ Or in
 { "transcriber": "hex", "hexModel": "whisper_large_v3_turbo", "hexLanguage": "nl" }
 ```
 
-`"transcriber"` is `"apple"` (default), `"hex"` or `"command"` (below); `hexModel` defaults to the
+`"transcriber"` is `"apple"` (default), `"hex"`, `"handy"` or `"command"` (below); `hexModel` defaults to the
 first ready one of `parakeet_unified_en`, `parakeet_v3`, `parakeet_v2`, `whisper_large_v3_turbo`.
 Scrawl never downloads or prepares a Hex model: install it in Hex first.
 
@@ -736,16 +736,40 @@ and ignore the hint.
   `"estimated": true`; because those times are approximate, spoken cues ("now", "here") don't cut
   keyframes from a Hex transcript. Marks, clicks, laser and scene changes still do.
 - `scrawl hex status` shows whether Hex is connected, its ready models and what the next recording
-  will use. `scrawl reprocess <bundle> --out … --transcriber hex|apple|command` (also
+  will use. `scrawl reprocess <bundle> --out … --transcriber hex|apple|handy|command` (also
   `scrawl import`) picks an engine for one run.
+
+### Handy
+
+If you dictate with [Handy](https://handy.computer) (0.9.0 or later), Scrawl can transcribe with
+the model and language you chose in Handy: Settings › Recording › **Transcription** → **Handy**,
+or in `~/.config/scrawl/config.json`:
+
+```json
+{ "transcriber": "handy" }
+```
+
+- Scrawl runs `handy --transcribe-file <audio> --json` on the recording, once, under the same
+  rules as the command transcriber below (no shell, a time limit, Handy's stderr discarded).
+  Handy doesn't need to be running and nothing reaches the network. Scrawl never downloads or
+  picks a Handy model: change it, or its language, in Handy.
+- Scrawl looks for Handy 0.9.0 or later in `/Applications` and `~/Applications`, or on Windows
+  for `handy.exe` in `%LOCALAPPDATA%\Handy` (Handy's own installer) or `%ProgramFiles%\Handy`.
+  **Handy** shows in Settings only when it's there; otherwise recordings use Apple Speech (Parakeet
+  on Windows), whatever the saved preference. If Handy fails on a recording (no model downloaded, for example), that recording
+  falls back to Apple Speech (see `~/Library/Logs/Scrawl`).
+- Handy returns text without word times, so Scrawl spreads its words over the stretches of speech
+  by length. The transcript says `"source": "handy:<model file>"` (for example
+  `handy:parakeet-unified-en-0.6b-Q8_0.gguf`) and `"estimated": true`, and spoken cues don't cut
+  keyframes from it, as for Hex.
 
 ### Your own model (command)
 
 Any other local model (whisper.cpp, MLX Whisper, faster-whisper, Parakeet, a Core ML model…) can
 transcribe through a small wrapper program. Scrawl runs it on the recording's audio and reads a
 JSON transcript from its stdout; it knows nothing about the model, adds no network requests and
-doesn't sandbox the program. It runs on macOS only for now; on Windows recordings keep the local
-engine. In `~/.config/scrawl/config.json` (Settings shows **Command** once it is set; editing it
+doesn't sandbox the program. On Windows it runs without a console window, in a job object that
+ends whatever it started when it finishes or times out. In `~/.config/scrawl/config.json` (Settings shows **Command** once it is set; editing it
 stays in the file):
 
 ```json
@@ -849,7 +873,7 @@ system owns differ:
 | Screen and window capture | ScreenCaptureKit | Windows.Graphics.Capture, H.264 through Media Foundation |
 | Clicks, keys, Shift ink | Mouse monitor, Accessibility key tap, modifier state | Low-level hooks and key state |
 | Ink overlay | Metal panel | Click-through GPUI window, left out of recordings |
-| Transcription | SpeechAnalyzer, or Hex | Parakeet on device (`transcribe.cpp`), Hex's model or Scrawl's own copy |
+| Transcription | SpeechAnalyzer, Hex, Handy or Command | Parakeet on device (`transcribe.cpp`), Hex's model or Scrawl's own copy; Hex, Handy or Command |
 | Movie decoding | `scrawl-helper` (AVFoundation) | Media Foundation, in process |
 | Paste | `⌘V` | `Ctrl+V` |
 | Settings and welcome tour | SwiftUI (`scrawl-helper`) | GPUI windows in process, same panes and protocol |

@@ -11,8 +11,10 @@
 //! can hold what the user said, so none of it is logged or put in an error: every failure is a
 //! fixed reason, plus an exit status, a signal or a field location such as `words[12].t1`.
 //!
-//! Only Unix runs the program for now. Elsewhere there's no `Program` (`Unusable::Unsupported`),
-//! so recordings use the local engine.
+//! On Windows the program runs in a job object that kills everything in it when it's closed,
+//! with no console window and stdout read on a thread of its own (an anonymous pipe can't be
+//! polled). Elsewhere there's no `Program` (`Unusable::Unsupported`), so recordings use the
+//! local engine.
 #![cfg_attr(not(unix), allow(dead_code, unused_imports))]
 
 use std::ffi::OsString;
@@ -78,7 +80,7 @@ impl std::fmt::Display for Unusable {
             Self::NotAList => "transcribeCommand is not a list of strings",
             Self::NotAbsolute => "transcribeCommand[0] is not an absolute path",
             Self::BadTimeout => "transcribeTimeoutSeconds is not a positive number",
-            Self::Unsupported => "the command transcriber only runs on macOS for now",
+            Self::Unsupported => "the command transcriber only runs on macOS and Windows for now",
         })
     }
 }
@@ -125,9 +127,10 @@ impl std::fmt::Display for Failure {
 impl std::error::Error for Failure {}
 
 impl Program {
-    /// `argv[0]` must be an absolute path; `timeout` replaces the default limit.
-    fn new(argv: Vec<String>, timeout: Option<Duration>) -> Result<Self, Unusable> {
-        if cfg!(not(unix)) {
+    /// `argv[0]` must be an absolute path; `timeout` replaces the default limit. Also how Scrawl
+    /// runs an app it knows the command of (`crate::handy`).
+    pub fn new(argv: Vec<String>, timeout: Option<Duration>) -> Result<Self, Unusable> {
+        if cfg!(not(any(unix, windows))) {
             return Err(Unusable::Unsupported);
         }
         let program = argv.first().ok_or(Unusable::NotAList)?;
@@ -206,6 +209,12 @@ impl Program {
             arguments.push(wav.into());
         }
         arguments
+    }
+
+    /// Runs the program on `wav` (`sample_count` 16 kHz samples) within `limit` and returns
+    /// its stdout, for an app whose output isn't this protocol's (`crate::handy`).
+    pub fn output(&self, wav: &Path, sample_count: usize) -> Result<Vec<u8>, Failure> {
+        self.run(wav, self.limit(sample_count))
     }
 
     /// Runs the program to completion and returns its stdout.
@@ -294,9 +303,164 @@ impl Program {
         })
     }
 
-    #[cfg(not(unix))]
+    /// Runs the program to completion and returns its stdout, as the Unix `run` does. The job
+    /// takes the program just after it starts (std can't start it suspended), so whatever it
+    /// starts from then on is killed with it.
+    #[cfg(windows)]
+    fn run(&self, wav: &Path, limit: Duration) -> Result<Vec<u8>, Failure> {
+        use std::os::windows::process::CommandExt;
+        use std::sync::mpsc::{RecvTimeoutError, channel};
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let deadline = Instant::now() + limit;
+        let job = Job::new().ok_or(Failure::Read)?;
+        let mut child = std::process::Command::new(&self.argv[0])
+            .args(self.arguments(wav))
+            .env("SCRAWL_TRANSCRIBE_VERSION", VERSION.to_string())
+            .env("SCRAWL_AUDIO", wav)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|error| Failure::Spawn(error.kind()))?;
+        if !job.assign(&child) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Failure::Read);
+        }
+        let Some(mut pipe) = child.stdout.take() else {
+            job.kill();
+            let _ = child.wait();
+            return Err(Failure::Read);
+        };
+        // `None` at end of file. The reader ends with the pipe, which the job's kill closes.
+        let (chunks, received) = channel::<std::io::Result<Option<Vec<u8>>>>();
+        std::thread::spawn(move || {
+            let mut chunk = vec![0_u8; 64 * 1024];
+            loop {
+                let read = match pipe.read(&mut chunk) {
+                    Ok(0) => Ok(None),
+                    Ok(read) => Ok(Some(chunk[..read].to_vec())),
+                    Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                    Err(error) => Err(error),
+                };
+                let last = !matches!(read, Ok(Some(_)));
+                if chunks.send(read).is_err() || last {
+                    break;
+                }
+            }
+        });
+        let mut output = Vec::new();
+        let mut open = true;
+        let mut exited: Option<Instant> = None;
+        let stop = loop {
+            let wait = POLL.min(deadline.saturating_duration_since(Instant::now()));
+            if open {
+                match received.recv_timeout(wait) {
+                    Ok(Ok(Some(bytes))) => {
+                        output.extend_from_slice(&bytes);
+                        if output.len() > OUTPUT_LIMIT {
+                            break Failure::TooMuchOutput;
+                        }
+                    }
+                    Ok(Ok(None)) => open = false,
+                    Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => break Failure::Read,
+                    Err(RecvTimeoutError::Timeout) => {}
+                }
+            } else {
+                std::thread::sleep(wait);
+            }
+            if exited.is_none() {
+                match child.try_wait() {
+                    Ok(Some(_)) => exited = Some(Instant::now() + LEFTOVER_GRACE),
+                    Ok(None) => {}
+                    Err(_) => break Failure::Read,
+                }
+            }
+            let now = Instant::now();
+            match exited {
+                // Exited and stdout closed; closing the job ends anything it left running.
+                Some(_) if !open => {
+                    let status = child.wait().map_err(|_| Failure::Read)?;
+                    return if status.success() {
+                        Ok(output)
+                    } else {
+                        Err(ended(status))
+                    };
+                }
+                Some(grace) if now >= grace.min(deadline) => {
+                    break if now >= deadline {
+                        Failure::Timeout(limit)
+                    } else {
+                        Failure::Leftover
+                    };
+                }
+                None if now >= deadline => break Failure::Timeout(limit),
+                _ => {}
+            }
+        };
+        job.kill();
+        let status = child.wait().map_err(|_| Failure::Read)?;
+        Err(match stop {
+            Failure::Leftover if !status.success() => ended(status),
+            stop => stop,
+        })
+    }
+
+    #[cfg(not(any(unix, windows)))]
     fn run(&self, _wav: &Path, _limit: Duration) -> Result<Vec<u8>, Failure> {
-        unreachable!("there's no Program off Unix (Program::new)")
+        unreachable!("there's no Program here (Program::new)")
+    }
+}
+
+/// A job object that kills the processes in it when it's closed (`Program::run` on Windows).
+#[cfg(windows)]
+struct Job(windows::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Job {
+    fn new() -> Option<Self> {
+        use windows::Win32::System::JobObjects::{
+            CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+        // SAFETY: plain calls; the handle is owned by the `Job` from here on.
+        unsafe {
+            let job = Self(CreateJobObjectW(None, windows::core::PCWSTR::null()).ok()?);
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast(),
+                std::mem::size_of_val(&limits) as u32,
+            )
+            .ok()?;
+            Some(job)
+        }
+    }
+
+    fn assign(&self, child: &std::process::Child) -> bool {
+        use std::os::windows::io::AsRawHandle;
+        let process = windows::Win32::Foundation::HANDLE(child.as_raw_handle());
+        // SAFETY: both handles are open for the call.
+        unsafe { windows::Win32::System::JobObjects::AssignProcessToJobObject(self.0, process) }
+            .is_ok()
+    }
+
+    fn kill(&self) {
+        // SAFETY: plain call on the open job handle.
+        let _ = unsafe { windows::Win32::System::JobObjects::TerminateJobObject(self.0, 1) };
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        // SAFETY: the handle is the job's own; closing it kills what's left in the job.
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
     }
 }
 
@@ -377,6 +541,11 @@ fn kill_group(pid: libc::pid_t) {
     }
 }
 
+#[cfg(windows)]
+fn ended(status: ExitStatus) -> Failure {
+    Failure::Exit(status.code().unwrap_or(-1))
+}
+
 #[cfg(unix)]
 fn ended(status: ExitStatus) -> Failure {
     match (status.code(), status.signal()) {
@@ -394,7 +563,7 @@ pub fn transcribe(
     sample_count: usize,
     log: &mut dyn FnMut(&str),
 ) -> Result<TranscriptData, Failure> {
-    let stdout = program.run(wav, program.limit(sample_count))?;
+    let stdout = program.output(wav, sample_count)?;
     parse(
         &stdout,
         &program.name(),
@@ -1314,16 +1483,62 @@ exit 0"#,
     }
 }
 
-#[cfg(all(test, not(unix)))]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 
+    /// A batch file in a fresh folder, removed with it.
+    struct Script(std::path::PathBuf);
+
+    impl Script {
+        fn new(name: &str, body: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("scrawl {name} {}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("run.cmd"), format!("@echo off\r\n{body}\r\n")).unwrap();
+            Self(dir)
+        }
+
+        fn program(&self, timeout: Option<Duration>) -> Program {
+            let run = self.0.join("run.cmd").to_string_lossy().into_owned();
+            Program::new(vec![run, "{audio}".into()], timeout).unwrap()
+        }
+    }
+
+    impl Drop for Script {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
-    fn there_is_no_program_off_unix() {
-        let program = std::env::temp_dir().join("whisper-scrawl");
-        assert_eq!(
-            Program::new(vec![program.to_string_lossy().into_owned()], None),
-            Err(Unusable::Unsupported)
+    fn runs_the_program_on_the_recording() {
+        let script = Script::new(
+            "run",
+            "if not \"%~1\"==\"%SCRAWL_AUDIO%\" exit /b 2\r\necho {\"version\":1,\"text\":\"hello\"}",
         );
+        let wav = script.0.join("audio.wav");
+        let stdout = script.program(None).output(&wav, 16_000).unwrap();
+        assert_eq!(String::from_utf8_lossy(&stdout).trim(), r#"{"version":1,"text":"hello"}"#);
+    }
+
+    #[test]
+    fn a_failing_program_reports_its_status() {
+        let script = Script::new("exit", "exit /b 3");
+        let wav = script.0.join("audio.wav");
+        assert_eq!(script.program(None).output(&wav, 16_000), Err(Failure::Exit(3)));
+    }
+
+    #[test]
+    fn a_program_past_its_limit_is_killed() {
+        // `ping` stands in for a slow model and is in the job, so the kill reaches it too.
+        let script = Script::new("slow", "ping -n 30 127.0.0.1 >nul");
+        let wav = script.0.join("audio.wav");
+        let limit = Duration::from_millis(500);
+        let started = Instant::now();
+        assert_eq!(
+            script.program(Some(limit)).output(&wav, 16_000),
+            Err(Failure::Timeout(limit))
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 }

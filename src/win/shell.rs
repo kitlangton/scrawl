@@ -100,6 +100,16 @@ pub fn recycle(path: &Path) -> Result<()> {
 
 /// The `FileDescription` in an executable's version info ("Google Chrome").
 pub fn file_description(path: &Path) -> Option<String> {
+    version_string(path, "FileDescription")
+}
+
+/// The `ProductVersion` in an executable's version info ("0.9.8").
+pub fn product_version(path: &Path) -> Option<String> {
+    version_string(path, "ProductVersion")
+}
+
+/// One string of an executable's version info, in its first language and code page.
+fn version_string(path: &Path, field: &str) -> Option<String> {
     let name = wide(&path.to_string_lossy());
     let size = unsafe { GetFileVersionInfoSizeW(PCWSTR(name.as_ptr()), None) };
     if size == 0 {
@@ -126,7 +136,7 @@ pub fn file_description(path: &Path) -> Option<String> {
         (0x0409, 0x04B0)
     };
     let key = wide(&format!(
-        r"\StringFileInfo\{lang:04x}{page:04x}\FileDescription"
+        r"\StringFileInfo\{lang:04x}{page:04x}\{field}"
     ));
     let mut value: *mut u16 = std::ptr::null_mut();
     let mut chars = 0_u32;

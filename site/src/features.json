@@ -382,7 +382,7 @@
       "platforms": ["mac"],
       "note": "Windows and Linux use Parakeet on device.",
       "config": [
-        { "key": "transcriber", "value": "\"apple\" | \"hex\" | \"command\"", "does": "Which engine transcribes" },
+        { "key": "transcriber", "value": "\"apple\" | \"hex\" | \"handy\" | \"command\"", "does": "Which engine transcribes" },
         { "key": "appleLocale", "value": "\"zh-TW\"", "does": "Apple Speech language; absent follows the Mac" }
       ],
       "docs": ["README.md#transcription"]
@@ -411,13 +411,24 @@
       "docs": ["README.md#apple-or-hex"]
     },
     {
+      "id": "handy",
+      "group": "agent",
+      "name": "Handy",
+      "says": "Transcribes with the model chosen in an installed Handy, through its headless mode; falls back to Apple Speech if Handy fails.",
+      "status": "main",
+      "platforms": ["mac", "windows"],
+      "added": "2026-10-23",
+      "note": "Needs Handy 0.9.0 or later. On Windows, from Handy's install folder in %LOCALAPPDATA% or %ProgramFiles%.",
+      "docs": ["README.md#handy"]
+    },
+    {
       "id": "command-transcriber",
       "group": "agent",
       "name": "Your own model",
       "says": "Runs your own program on the audio and reads a JSON transcript from it.",
       "status": "stable@0.3.13",
-      "platforms": ["mac"],
-      "note": "Windows keeps the local engine for now.",
+      "platforms": ["mac", "windows"],
+      "note": "Windows runs it in a job object, without a console window.",
       "config": [
         { "key": "transcribeCommand", "value": "[\"/abs/cmd\", \"{audio}\"]", "does": "Program to run" },
         { "key": "transcribeTimeoutSeconds", "value": "600", "does": "Its time limit" }
