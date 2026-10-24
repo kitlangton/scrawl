@@ -2300,7 +2300,7 @@ impl RuneCoordinator {
     fn send_after_undo(&mut self, dir: PathBuf, dest: crate::model::Destination) {
         self.pending_send = Some(dir.clone());
         if self.completed_dir.as_deref() == Some(dir.as_path()) {
-            self.completed_note = Some(format!("Sending to {}…", island_title(&dest.title)));
+            self.completed_note = Some(sending_to_note(&dest.title));
             self.sync_rune_pill();
         }
         let tx = self.events_tx.clone();
@@ -2338,15 +2338,16 @@ impl RuneCoordinator {
 
     fn send_completed(&mut self, dir: PathBuf, dest: crate::model::Destination) {
         let title = island_title(&dest.title);
+        let sending = sending_to_note(&dest.title);
         if self.completed_dir.as_deref() == Some(dir.as_path()) {
-            self.completed_note = Some(format!("Sending to {title}…"));
+            self.completed_note = Some(sending.clone());
         }
         if self
             .review_bundle
             .as_ref()
             .is_some_and(|(shown, _)| *shown == dir)
         {
-            self.review_status = Some(format!("Sending to {title}…"));
+            self.review_status = Some(sending);
         }
         self.sync_rune_pill();
         let tx = self.events_tx.clone();
@@ -4279,6 +4280,11 @@ pub fn run_app(
     stop_ticker.store(true, Ordering::Relaxed);
 }
 
+fn sending_to_note(title: &str) -> String {
+    let short = island_title(title);
+    format!("Sending to {}…", short.trim_end_matches('…'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4294,6 +4300,9 @@ mod tests {
         );
         assert_eq!(pill.hidden_since, Some(f64::NEG_INFINITY));
         assert!(!pill.shown);
+        assert_eq!(sending_to_note("DESKTOP"), "Sending to DESKTOP…");
+        let long_sending = sending_to_note("Make Mac captures route to the site session");
+        assert!(long_sending.ends_with('…') && !long_sending.ends_with("……"));
         assert_eq!(ALL_SCENES.len(), PICKER_SCENES.len() + REVIEW_SCENES.len());
         let mut picker = dummy_picker_init();
         for &(name, apply) in PICKER_SCENES {
