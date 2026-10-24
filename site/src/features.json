@@ -797,6 +797,19 @@
       "docs": ["README.md#windows", "docs/windows.md"]
     },
     {
+      "id": "beta-updates",
+      "group": "install",
+      "name": "Beta updates",
+      "says": "Get beta updates in Settings › General opts into early builds; the menu and About then add \"· Beta updates on\" and the menu adds Report a Problem…. Turning it off keeps the installed build until a newer stable release arrives. A tested build is promoted to stable unchanged.",
+      "status": "main",
+      "platforms": ["mac"],
+      "added": "2026-10-22",
+      "note": "Windows betas are zips on GitHub prereleases, installed by hand; Windows doesn't update itself yet.",
+      "pr": 87,
+      "config": [{ "key": "updateChannel", "value": "\"beta\"", "does": "Opt into beta updates; absent means stable" }],
+      "docs": ["README.md#beta-updates", "docs/release.md"]
+    },
+    {
       "id": "linux-appimage",
       "group": "install",
       "name": "Linux AppImage",

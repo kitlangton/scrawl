@@ -40,6 +40,14 @@ The sidebar is the helper's alone: a row selects on mouse-down and its pane repl
 
 Launch at login is `SMAppService.mainApp` (only inside Scrawl.app). There's no Dock icon: gpui 0.2.2 makes the app Regular after launch despite `LSUIElement`, so `ui::stay_out_of_dock` sets Accessory again at the top of `run_app`. The menu keeps Record, Choose What to Record…, Open Latest Capture, Export (flag), Settings…, Check for Updates…, Quit.
 
+General › Get beta updates writes `"updateChannel": "beta"`, or removes the key when off. It is
+off by default. `src/sparkle.rs` reads that setting each time `allowedChannelsForUpdater:` runs;
+stable items are always eligible and Sparkle only offers a higher build, so turning it off never
+downgrades. A build never knows its channel (see [release.md](release.md)): the menu's disabled
+version row and About show the bundle's version and build from `src/updates.rs`, plus
+`· Beta updates on` while the setting is on, and the menu shows Report a Problem… (an issue
+draft with version, build and macOS version) only then. `menuNeedsUpdate:` re-reads both.
+
 Agents › Command-line tool (`src/command_line.rs`) symlinks the app's own binary (its real path, which is how it finds `scrawl-helper`) into the first writable of `/opt/homebrew/bin`, `/usr/local/bin`, else `~/.local/bin`; it never asks for admin, never touches a `scrawl` that doesn't link to a Scrawl.app, and the Homebrew cask's `binary` link reads as installed. A bare `scrawl` from a terminal prints help instead of starting a second app. Agents › Agent skill shows `bunx skills add kitlangton/scrawl` (`skills/scrawl/SKILL.md`, also printed by `scrawl skill`); keep that file true to the CLI.
 
 Render every pane (dark, light, each shortcut state: held, listening, partial, refused, accepted, custom; microphone chosen/missing/not allowed) with `scrawl-helper settings --render DIR`, and one take on the shortcuts as 60 fps PNGs for a video with `--render DIR --shortcut-clip [--light]`; test with `cargo test settings::`.

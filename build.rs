@@ -2,6 +2,18 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    // A release build is a plain version plus a build number. "Beta" is the update channel,
+    // never part of the binary, so a promoted build reads the same as it did in beta.
+    println!("cargo:rerun-if-env-changed=SCRAWL_VERSION");
+    println!("cargo:rerun-if-env-changed=SCRAWL_BUILD_NUMBER");
+    let version = release_version();
+    let build = std::env::var("SCRAWL_BUILD_NUMBER").unwrap_or_else(|_| "dev".into());
+    assert!(
+        build == "dev" || build.parse::<u32>().is_ok_and(|n| n > 0),
+        "SCRAWL_BUILD_NUMBER must be a positive integer, got {build:?}"
+    );
+    println!("cargo:rustc-env=SCRAWL_RELEASE_VERSION={version}");
+    println!("cargo:rustc-env=SCRAWL_RELEASE_BUILD={build}");
     #[cfg(windows)]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         embed_windows_resources();
@@ -58,6 +70,18 @@ fn stage_transcribe_dlls() {
     }
 }
 
+/// `SCRAWL_VERSION` (set by release builds) or Cargo's version: always `X.Y.Z`.
+fn release_version() -> String {
+    let version = std::env::var("SCRAWL_VERSION")
+        .unwrap_or_else(|_| std::env::var("CARGO_PKG_VERSION").unwrap());
+    let parts: Vec<_> = version.split('.').collect();
+    assert!(
+        parts.len() == 3 && parts.iter().all(|p| p.parse::<u16>().is_ok()),
+        "SCRAWL_VERSION must be a plain X.Y.Z version, got {version:?}"
+    );
+    version
+}
+
 /// The app icon (Explorer, the taskbar, Alt+Tab, and each window's title bar icon) and version
 /// info. GPUI's `windows-manifest` feature embeds the DPI-aware manifest, so none is added here.
 #[cfg(windows)]
@@ -66,13 +90,16 @@ fn embed_windows_resources() {
     let output_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let icon = manifest_dir.join("assets/Scrawl.ico");
     println!("cargo:rerun-if-changed={}", icon.display());
-    let version = std::env::var("CARGO_PKG_VERSION").unwrap();
+    let version = release_version();
+    let build = std::env::var("SCRAWL_BUILD_NUMBER")
+        .ok()
+        .and_then(|n| n.parse::<u16>().ok())
+        .unwrap_or(0);
     let numeric = version
-        .split(['.', '-'])
-        .take(3)
-        .map(|part| part.parse::<u16>().unwrap_or(0).to_string())
-        .chain(std::iter::repeat("0".to_owned()))
-        .take(4)
+        .split('.')
+        .map(|part| part.parse::<u16>().unwrap_or(0))
+        .chain([build])
+        .map(|part| part.to_string())
         .collect::<Vec<_>>()
         .join(",");
     let script = format!(

@@ -25,10 +25,11 @@ export type Audit = {
 const repoPath = (path: string) => fileURLToPath(new URL(`../../${path}`, import.meta.url))
 const DAY = 86_400_000
 
-// The newest appcast item: its version and the day it was published.
+// The newest stable appcast item: its version and the day it was published.
 export function latestRelease(xml: string): { version: string; date: string } {
   let best = { build: -1, version: "", date: "" }
   for (const item of xml.split("<item>").slice(1)) {
+    if (/<sparkle:channel>[^<]+<\/sparkle:channel>/.test(item)) continue
     const build = Number(item.match(/<sparkle:version>(\d+)</)?.[1] ?? -1)
     const version = item.match(/<sparkle:shortVersionString>([^<]+)</)?.[1] ?? ""
     const pub = item.match(/<pubDate>([^<]+)</)?.[1]

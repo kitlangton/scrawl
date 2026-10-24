@@ -149,6 +149,7 @@ struct SettingsCommandLine: Decodable, Equatable {
 
 struct SettingsState: Decodable, Equatable {
   var version = "0.3.2"
+  var betaUpdates = false
   var login = SettingsLogin()
   var autoSend = true
   var shortcuts: [SettingsShortcut] = [
@@ -916,6 +917,10 @@ struct SettingsView: View {
           SettingsSwitch(on: state.login.on, enabled: state.login.available) { model.set("launchAtLogin", $0) }
         }
         SettingsSeparator()
+        SettingsRow(title: "Get beta updates") {
+          SettingsSwitch(on: state.betaUpdates) { model.set("betaUpdates", $0) }
+        }
+        SettingsSeparator()
         SettingsRow(title: "Send dev-site captures to OpenCode") {
           SettingsSwitch(on: state.autoSend) { model.set("autoSend", $0) }
         }
@@ -1653,8 +1658,12 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     )
     var micNotAllowed = base
     micNotAllowed.microphone.meter = nil
+    var beta = base
+    beta.betaUpdates = true
+    beta.version = "0.3.14 (18) · Beta updates on"
     let samples: [(String, SettingsPane, SettingsState)] = [
       ("general", .general, base),
+      ("general-beta", .general, beta),
       ("general-held", .general, base),
       ("general-listening", .general, listening),
       ("general-partial", .general, listening),
@@ -1688,6 +1697,7 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
       ("agents-taken", .agents, cliTaken),
       ("agents-dev", .agents, cliDev),
       ("about", .about, base),
+      ("about-beta", .about, beta),
       ("about-dev", .about, noUpdates),
     ]
     var index = 0

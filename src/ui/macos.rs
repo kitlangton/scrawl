@@ -403,6 +403,11 @@ objc2::define_class!(
     unsafe impl NSObjectProtocol for ScrawlMenuTarget {}
 
     impl ScrawlMenuTarget {
+        #[unsafe(method(reportProblem:))]
+        fn report_problem(&self, _sender: &AnyObject) {
+            crate::updates::report_problem();
+        }
+
         #[unsafe(method(toggleCapture:))]
         fn toggle_capture(&self, _sender: &AnyObject) {
             let _ = self.ivars().sender.try_send(MenuAction::ToggleCapture);
@@ -460,6 +465,13 @@ objc2::define_class!(
             if let Some(item) = menu.itemWithTag(EXPORT_VIDEO_MENU_TAG) {
                 item.setHidden(!crate::handoff::video_export());
             }
+            let beta = crate::updates::beta_updates();
+            if let Some(item) = menu.itemWithTag(REPORT_PROBLEM_MENU_TAG) {
+                item.setHidden(!beta);
+            }
+            if let Some(item) = menu.itemWithTag(VERSION_MENU_TAG) {
+                item.setTitle(&NSString::from_str(&version_menu_title(beta)));
+            }
         }
     }
 );
@@ -470,6 +482,14 @@ const INBOX_MENU_TAG: isize = 0x5c4a;
 const EXPORT_VIDEO_MENU_TAG: isize = 0x5c4e;
 /// Tag on **Record Screen**, whose title carries the record shortcut.
 const RECORD_MENU_TAG: isize = 0x5c4d;
+/// Tag on **Report a Problem…**, shown while `"updateChannel": "beta"` is set.
+const REPORT_PROBLEM_MENU_TAG: isize = 0x5c4f;
+/// Tag on the disabled `Scrawl 0.3.14 (18)` row, which also says when beta updates are on.
+const VERSION_MENU_TAG: isize = 0x5c50;
+
+fn version_menu_title(beta: bool) -> String {
+    format!("Scrawl {}", crate::updates::display(beta))
+}
 
 /// "Record Screen" with the record shortcut as it is now (Settings can change it).
 fn record_menu_title() -> String {
@@ -635,6 +655,23 @@ pub(super) fn install_status_bar() -> Option<flume::Receiver<MenuAction>> {
         item.setKeyEquivalent(&NSString::from_str(","));
     }
     add("Check for Updates…", sel!(checkForUpdates:));
+    let beta = crate::updates::beta_updates();
+    add("Report a Problem…", sel!(reportProblem:));
+    if let Some(item) = menu.itemAtIndex(menu.numberOfItems() - 1) {
+        item.setTag(REPORT_PROBLEM_MENU_TAG);
+        item.setHidden(!beta);
+    }
+    let version = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str(&version_menu_title(beta)),
+            None,
+            &NSString::new(),
+        )
+    };
+    version.setEnabled(false);
+    version.setTag(VERSION_MENU_TAG);
+    menu.addItem(&version);
     add("Quit Scrawl", sel!(quitApp:));
     if let Some(item) = menu.itemAtIndex(menu.numberOfItems() - 1) {
         item.setKeyEquivalent(&NSString::from_str("q"));
