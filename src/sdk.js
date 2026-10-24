@@ -5,7 +5,9 @@
 // session. It does nothing outside localhost unless data-token (the ingest token) is set.
 // When Scrawl asks for it (loopback pages only), it also tells Scrawl what's under clicks and
 // ⇧ marks (element, component, source file:line), video seeks, console errors and failed
-// requests. It never sends request bodies, headers, cookies, query strings or typed values.
+// requests. Registering sends the tab's full URL, query string included, so a capture can be
+// matched to that exact tab. It never sends request bodies, headers, cookies or typed values,
+// and failed requests are reported by path only, without their query strings.
 (() => {
   const script = document.currentScript;
   if (!script || window.__scrawlSdk) return;
