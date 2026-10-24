@@ -334,10 +334,11 @@ pub enum ElemId {
     /// The Completed island's sessions one click away (smart routing).
     Route0 = 15,
     Route1 = 16,
+    ChipRecentArea = 17,
 }
 
 impl ElemId {
-    pub const COUNT: usize = 17;
+    pub const COUNT: usize = 18;
     pub const ROUTES: [ElemId; 2] = [Self::Route0, Self::Route1];
     pub const ALL: [ElemId; Self::COUNT] = [
         Self::Lead,
@@ -357,6 +358,7 @@ impl ElemId {
         Self::Inspect,
         Self::Route0,
         Self::Route1,
+        Self::ChipRecentArea,
     ];
 
     pub const fn trace_key(self) -> &'static str {
@@ -364,6 +366,7 @@ impl ElemId {
             Self::Lead => "lead",
             Self::DividerLead => "divider.lead",
             Self::ChipArea => "chip:Area",
+            Self::ChipRecentArea => "chip:Recent Area",
             Self::ChipWindow => "chip:Window",
             Self::ChipScreen => "chip:Screen",
             Self::ChipIphone => "chip:iPhone",
@@ -384,6 +387,7 @@ impl ElemId {
     pub const fn from_mode(mode: SelectionMode) -> Self {
         match mode {
             SelectionMode::Area => Self::ChipArea,
+            SelectionMode::RecentArea => Self::ChipRecentArea,
             SelectionMode::Window => Self::ChipWindow,
             SelectionMode::Screen => Self::ChipScreen,
             SelectionMode::Iphone => Self::ChipIphone,
@@ -393,6 +397,7 @@ impl ElemId {
     pub const fn mode(self) -> Option<SelectionMode> {
         match self {
             Self::ChipArea => Some(SelectionMode::Area),
+            Self::ChipRecentArea => Some(SelectionMode::RecentArea),
             Self::ChipWindow => Some(SelectionMode::Window),
             Self::ChipScreen => Some(SelectionMode::Screen),
             Self::ChipIphone => Some(SelectionMode::Iphone),
@@ -412,6 +417,7 @@ impl ElemId {
             Self::Lead => "Recording timer",
             Self::DividerLead | Self::DividerClose => "",
             Self::ChipArea => "Area",
+            Self::ChipRecentArea => "Recent Area",
             Self::ChipWindow => "Window",
             Self::ChipScreen => "Screen",
             Self::ChipIphone => "iPhone",
@@ -491,6 +497,7 @@ impl Pres {
 #[derive(Clone, Debug)]
 pub struct Metrics {
     pub area: f32,
+    pub recent_area: f32,
     pub window: f32,
     pub screen: f32,
     pub iphone: f32,
@@ -508,6 +515,7 @@ impl Default for Metrics {
     fn default() -> Self {
         Self {
             area: 30.0,
+            recent_area: 76.0,
             window: 50.0,
             screen: 44.0,
             iphone: 43.0,
@@ -527,6 +535,7 @@ impl Metrics {
     pub fn mode_label(&self, mode: SelectionMode) -> f32 {
         match mode {
             SelectionMode::Area => self.area,
+            SelectionMode::RecentArea => self.recent_area,
             SelectionMode::Window => self.window,
             SelectionMode::Screen => self.screen,
             SelectionMode::Iphone => self.iphone,

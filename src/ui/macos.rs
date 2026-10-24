@@ -468,13 +468,13 @@ objc2::define_class!(
 const INBOX_MENU_TAG: isize = 0x5c4a;
 /// Tag on **Export Last Capture as Video…**, shown only with `"videoExport": true`.
 const EXPORT_VIDEO_MENU_TAG: isize = 0x5c4e;
-/// Tag on **Record Screen**, whose title carries the record shortcut.
+/// Tag on **Record**, whose title carries the record shortcut.
 const RECORD_MENU_TAG: isize = 0x5c4d;
 
-/// "Record Screen" with the record shortcut as it is now (Settings can change it).
+/// "Record" with the record shortcut as it is now (Settings can change it).
 fn record_menu_title() -> String {
     format!(
-        "Record Screen  {}",
+        "Record  {}",
         crate::settings::Shortcuts::load().record.label
     )
 }

@@ -53,7 +53,7 @@ pub enum IconKind {
 impl IconKind {
     pub const fn from_mode(mode: SelectionMode) -> Self {
         match mode {
-            SelectionMode::Area => Self::Area,
+            SelectionMode::Area | SelectionMode::RecentArea => Self::Area,
             SelectionMode::Window => Self::Window,
             SelectionMode::Screen => Self::Screen,
             SelectionMode::Iphone => Self::Iphone,
@@ -116,6 +116,7 @@ pub fn measure_text_pt(text: &str, size_pt: f32, weight: f64, monospaced_digits:
 /// Measures all standard capsule strings with CoreText to build a `Metrics` table.
 pub fn measure_metrics() -> Metrics {
     Metrics {
+        recent_area: measure_text_pt("Recent Area", HUD_TEXT, WEIGHT_MEDIUM, false),
         area: measure_text_pt("Area", HUD_TEXT, WEIGHT_MEDIUM, false),
         window: measure_text_pt("Window", HUD_TEXT, WEIGHT_MEDIUM, false),
         screen: measure_text_pt("Screen", HUD_TEXT, WEIGHT_MEDIUM, false),
@@ -361,6 +362,7 @@ impl GlyphAtlas {
 
         for (text, size_pt, weight) in [
             ("Area", HUD_TEXT, WEIGHT_MEDIUM),
+            ("Recent Area", HUD_TEXT, WEIGHT_MEDIUM),
             ("Window", HUD_TEXT, WEIGHT_MEDIUM),
             ("Screen", HUD_TEXT, WEIGHT_MEDIUM),
             ("iPhone", HUD_TEXT, WEIGHT_MEDIUM),

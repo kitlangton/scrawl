@@ -613,10 +613,10 @@ fn tray_icon_image() -> Option<tray_icon::Icon> {
     tray_icon::Icon::from_rgba(out, size as u32, size as u32).ok()
 }
 
-/// "Record Screen" with the record shortcut as it is now (Settings can change it).
+/// "Record" with the record shortcut as it is now (Settings can change it).
 fn record_title() -> String {
     format!(
-        "Record Screen\t{}",
+        "Record\t{}",
         crate::settings::Shortcuts::load().record.label
     )
 }
