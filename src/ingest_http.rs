@@ -1,5 +1,7 @@
-//! Connection admission and header deadlines for ingest. Body reads keep their existing
-//! per-read timeout, so a progressing upload can take longer than the header deadline.
+//! Connection admission and header deadlines for ingest. Upload bodies keep their existing
+//! per-read timeout, so a progressing upload can take longer than the header deadline. The small
+//! `/web/*` bodies get a total deadline instead (`read_body`), because those routes read their
+//! body before deciding whether to answer, while holding a connection slot.
 
 use std::io::{self, Read};
 use std::net::TcpStream;
@@ -9,6 +11,8 @@ use std::time::{Duration, Instant};
 
 pub const MAX_CONNECTIONS: usize = 8;
 pub const HEADER_TIMEOUT: Duration = Duration::from_secs(5);
+/// Total time for a small `/web/*` body, like `HEADER_TIMEOUT` for headers.
+pub const SMALL_BODY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 pub struct Connections(Arc<AtomicUsize>);
@@ -69,6 +73,37 @@ fn read_header_until(stream: &mut TcpStream, deadline: Instant) -> io::Result<Op
         io::ErrorKind::InvalidData,
         "HTTP header too large",
     ))
+}
+
+/// Reads exactly `len` bytes within `timeout`, so a client trickling a body can't hold a
+/// connection slot. Always restores the socket's original timeout, including on failure.
+pub fn read_body(stream: &mut TcpStream, len: usize, timeout: Duration) -> io::Result<Vec<u8>> {
+    let previous_timeout = stream.read_timeout()?;
+    let result = read_body_until(stream, len, Instant::now() + timeout);
+    stream.set_read_timeout(previous_timeout)?;
+    result
+}
+
+fn read_body_until(stream: &mut TcpStream, len: usize, deadline: Instant) -> io::Result<Vec<u8>> {
+    let mut body = vec![0_u8; len];
+    let mut filled = 0;
+    while filled < len {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "HTTP body deadline exceeded",
+            ));
+        }
+        stream.set_read_timeout(Some(remaining))?;
+        match stream.read(&mut body[filled..]) {
+            Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+            Ok(n) => filled += n,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(body)
 }
 
 #[cfg(test)]
@@ -189,6 +224,66 @@ mod tests {
         server.read_exact(&mut body).unwrap();
         assert_eq!(&body, b"abcdefghijkl");
         assert!(started.elapsed() > Duration::from_millis(600));
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn small_body_reader_returns_the_body_and_restores_the_timeout() {
+        let (mut server, mut client) = pair();
+        let original = Some(Duration::from_secs(30));
+        server.set_read_timeout(original).unwrap();
+        client.write_all(b"{\"ok\":1}").unwrap();
+        assert_eq!(
+            read_body(&mut server, 8, SMALL_BODY_TIMEOUT).unwrap(),
+            b"{\"ok\":1}"
+        );
+        assert_eq!(server.read_timeout().unwrap(), original);
+    }
+
+    #[test]
+    fn empty_small_body_reads_nothing() {
+        let (mut server, _client) = pair();
+        assert!(
+            read_body(&mut server, 0, SMALL_BODY_TIMEOUT)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn truncated_small_body_is_an_error_and_restores_the_timeout() {
+        let (mut server, mut client) = pair();
+        let original = Some(Duration::from_secs(30));
+        server.set_read_timeout(original).unwrap();
+        client.write_all(b"ab").unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        assert_eq!(
+            read_body(&mut server, 4, SMALL_BODY_TIMEOUT)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+        assert_eq!(server.read_timeout().unwrap(), original);
+    }
+
+    #[test]
+    fn trickled_small_body_has_a_total_deadline() {
+        let (mut server, mut client) = pair();
+        let writer = std::thread::spawn(move || {
+            for _ in 0..50 {
+                if client.write_all(b"x").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let error = read_body(&mut server, 1024, Duration::from_millis(100)).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+        ));
+        assert_eq!(server.read_timeout().unwrap(), None);
+        drop(server);
         writer.join().unwrap();
     }
 }
