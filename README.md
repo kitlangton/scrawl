@@ -16,6 +16,9 @@ brew install --cask kitlangton/tap/scrawl
 
 The app updates itself (Sparkle), so Homebrew leaves updates to it.
 
+To show an agent what's on your phone, build [Scrawl for iPhone](#scrawl-for-iphone) from `ios/`:
+it sends recordings of any app to Scrawl on your Mac.
+
 On Windows 10 (2004) or later (x64), download the zip from the same page or the
 [latest GitHub release](https://github.com/kitlangton/scrawl/releases/latest), unzip it and run
 `scrawl.exe`. The Windows build is a preview and isn't signed yet, so Windows may say "Windows
@@ -382,10 +385,38 @@ phone on the right of the screen and starts recording:
 - Finish from the island as usual. Unplugging the phone finishes the capture with what was recorded.
 
 Phone bundles are ordinary bundles: `scrawl.json` adds `"source": "iphone"` and a `device` object
-(name, capture `mirror` or `scrawlkit`, id, native size, screen points and scale, app and version
-for SDK recordings), and the target's `mode` is `device`. Keyframes fit a 1600 px long edge
-(736×1600 for a 1320×2868 phone); `scrawl frames` and `scrawl zoom` extract more frames from the
-video when you need them.
+(name, capture `mirror`, `scrawlkit`, `broadcast` or `shared`, id, native size, screen points and
+scale, app and version for SDK recordings), and the target's `mode` is `device`. Keyframes fit a
+1600 px long edge (736×1600 for a 1320×2868 phone); `scrawl frames` and `scrawl zoom` extract more
+frames from the video when you need them.
+
+### Scrawl for iPhone
+
+An iPhone app (`ios/`) that records the whole screen, whatever app you open, while you talk, and
+sends it to Scrawl on your Mac without a cable: the Mac builds the bundle and queues it into an
+OpenCode session, as it does for ScrawlKit (it speaks the same protocol). Its share extension sends
+screenshots or a screen recording from any app, with a note.
+
+- **Pair:** run `scrawl link` on the Mac and scan the QR code with the iPhone's Camera. `link`'s
+  scheme is now `scrawl` (this app) unless `--scheme` names a ScrawlKit app.
+- **Record:** **Record Screen** in the app, or Control Center's Screen Recording (hold it, pick
+  Scrawl), with the microphone on. Stop from the red indicator; a notification says where it went.
+  iOS doesn't let one app see another's touches or draw over it, so there's no ink: say "look here"
+  as the screen changes, or flag the moment with the **Flag Moment** shortcut (Action button, Back
+  Tap, Siri), which gets a keyframe marked `⚑`.
+- **Send to:** the app lists the Mac's open OpenCode sessions (`GET /sessions` on the ingest port,
+  with the token) and addresses captures to the one you pick, through the timeline's `session`.
+  **Newest session** leaves it to the Mac.
+- **Share:** screenshots (the first ten) become a short movie with a keyframe each, named
+  `⟨Screenshot 2 of 3⟩` in the summary; a screen recording goes as it is. The note lands as `Note:`.
+- Uploads continue in the background after the extension exits, and wait on the phone (retried with
+  backoff) while the Mac is out of reach. Timelines say `"capture": "broadcast"` or `"shared"`
+  (`device.capture` in the bundle) and carry the note (`"note"`). The Mac also takes the token as
+  `X-Scrawl-Token`, which background uploads send because iOS may drop `Authorization`.
+
+Build it with XcodeGen and Xcode, and sign it with your own team: see [`ios/README.md`](ios/README.md).
+`ios/scripts/e2e.sh` checks the whole way in the simulator, against a sandboxed `scrawl serve` and a
+stand-in OpenCode.
 
 ### ScrawlKit (iOS)
 
@@ -470,6 +501,8 @@ terminal QR code) and open it on the phone:
 scrawl link --scheme updown [--session ses_…]
 # updown://scrawl?url=http%3A%2F%2F100.64.0.12%3A47777&url=http%3A%2F%2F192.168.1.20%3A47777&token=…
 ```
+
+Without `--scheme`, the link is for the Scrawl iPhone app (`scrawl://scrawl?…`).
 
 `scrawl link` reads (or generates with mode `0600`) `ingestToken` in
 `~/.config/scrawl/config.json` and defaults to this Mac's Tailscale and LAN IPs on port `47777`.
@@ -910,6 +943,10 @@ which normally leave them out.
   `swift test` runs the outbox tests on the Mac against a `URLProtocol` stub of the ingest endpoint
   (persisting, retry classification, resends, deletion only on 2xx, and what the strip says through
   slow uploads, no network, and retries).
+- **Scrawl for iPhone:** `cd ios && xcodegen generate`, then `xcodebuild test` (see
+  `ios/README.md`); `ios/scripts/e2e.sh` runs the app, the share extension and `scrawl serve`
+  together in the simulator, against a stand-in OpenCode. The broadcast extension needs a device:
+  record a few seconds of any app with the microphone on and check the bundle.
 - **Transcription:** `scrawl-helper transcribe <wav or movie>` prints words with timings;
   `scrawl reprocess <bundle> --out …` reruns transcription and keyframe selection on a real bundle.
 

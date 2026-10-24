@@ -566,11 +566,13 @@ enum Command {
         #[arg(long)]
         capture_screenshot: Option<PathBuf>,
     },
-    /// Print a `<scheme>://scrawl?url=…&token=…` setup link (and QR code) for ScrawlKit on iPhone.
+    /// Print a `<scheme>://scrawl?url=…&token=…` setup link (and QR code) that pairs an iPhone:
+    /// the Scrawl iPhone app, or an app with ScrawlKit.
     #[command(alias = "tether-link")]
     Link {
-        /// URL scheme of the iOS app (for example `updown`).
-        #[arg(long)]
+        /// URL scheme of the iOS app: `scrawl` for the Scrawl iPhone app, or a ScrawlKit app's
+        /// own (for example `updown`).
+        #[arg(long, default_value = "scrawl")]
         scheme: String,
         /// Scrawl ingest base URL(s); defaults to this Mac's Tailscale and LAN IPs on `--port`.
         #[arg(long = "url")]

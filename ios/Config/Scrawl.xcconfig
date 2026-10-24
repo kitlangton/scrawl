@@ -1,0 +1,11 @@
+// Identifiers and signing for the app and its extensions.
+//
+// To install on your own iPhone, copy Local.xcconfig.example to Local.xcconfig (ignored by git)
+// and set your team and an app ID of your own; the extensions, app group and Keychain group
+// follow from the app ID.
+
+SCRAWL_APP_ID = dev.kitlangton.scrawl.ios
+
+#include? "Local.xcconfig"
+
+SCRAWL_APP_GROUP = group.$(SCRAWL_APP_ID)

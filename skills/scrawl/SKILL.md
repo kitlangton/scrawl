@@ -24,6 +24,7 @@ Cropped to: the activity in OpenCode (full frames in frames-full/)
 - Each `#N (M:SS)` line is a keyframe: what they did at that moment in brackets, then what they said while it was on screen. A line with no quote has the action alone.
 - `⚑` means they flagged the moment on purpose. `⟨Name⟩` means the app reported a new screen. Lines starting `·` are events or values the app logged.
 - Optional lines near the top: `For session:` (where Scrawl sent it), `Screen:` with app context, `Note:`, and `Cropped to:`.
+- `iPhone` after the length means it came from a phone. One recorded with the Scrawl iPhone app (`device.capture` is `broadcast` in `scrawl.json`) shows the whole phone screen, any app, with no taps or ink: go by what was said, the `⚑` flags and what changes between frames. `shared` is screenshots (a keyframe each, `⟨Screenshot 2 of 3⟩`) or a screen recording someone shared, usually with a `Note:` saying what to look at.
 - Coordinates are fractions of the captured area, from the top left (x 0.51 is just right of centre).
 
 When you answer, refer to moments the same way, as in "#3 (0:10)", so the person can find them on the contact sheet.

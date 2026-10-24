@@ -1,6 +1,7 @@
-//! iPhone sources: a live cabled capture mirrored through `scrawl-helper`, and recordings made
-//! in-app with ScrawlKit. Both become ordinary `.scrawl` bundles whose keyframes are decoded
-//! from the phone's own video, never from a screenshot of the mirror window.
+//! iPhone sources: a live cabled capture mirrored through `scrawl-helper`, recordings made
+//! in-app with ScrawlKit, and the Scrawl iPhone app's recordings of the whole screen (or of what
+//! was shared into it), which arrive like ScrawlKit's. All become ordinary `.scrawl` bundles whose
+//! keyframes are decoded from the phone's own video, never from a screenshot of the mirror window.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -698,6 +699,23 @@ pub struct Timeline {
     /// Screen changes; the first is at 0 when the app named a screen before recording.
     #[serde(default)]
     pub screens: Vec<TimelineScreen>,
+    /// How the phone recorded it: ScrawlKit's `appFrames` or `replayKit`, or the Scrawl iPhone
+    /// app's `broadcast` (the whole screen, whatever app is in front) or `shared` (a screen
+    /// recording or screenshots shared into it).
+    #[serde(default)]
+    pub capture: Option<String>,
+    /// What the person typed to go with it (the Scrawl iPhone app's share sheet).
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// `device.capture` for a phone recording: what the Scrawl iPhone app recorded, else ScrawlKit.
+fn device_capture(capture: Option<&str>) -> &'static str {
+    match capture {
+        Some("broadcast") => "broadcast",
+        Some("shared") => "shared",
+        _ => "scrawlkit",
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1016,7 +1034,7 @@ pub fn import(
     let nonempty = |s: &Option<String>| s.clone().filter(|s| !s.is_empty());
     let device = DeviceInfo {
         name: name.clone(),
-        capture: "scrawlkit".into(),
+        capture: device_capture(timeline.capture.as_deref()).into(),
         system: timeline.system.clone(),
         width: probe.width,
         height: probe.height,
@@ -1042,7 +1060,10 @@ pub fn import(
             events,
             strokes,
             flags: timeline.markers.iter().map(|&t| ms(t)).collect(),
-            note,
+            note: note.or_else(|| {
+                let typed = timeline.note.as_deref().map(str::trim).unwrap_or_default();
+                (!typed.is_empty()).then(|| typed.to_owned())
+            }),
             context: timeline.context(),
             context_changes: timeline.context_changes(),
             screens: timeline.screen_spans(probe.duration_ms),
@@ -1081,6 +1102,8 @@ struct IngestHooks {
     /// Movie, timeline, bundle directory → the built bundle.
     build: fn(&Path, &Path, &Path) -> Result<(PathBuf, Option<ScrawlBundle>)>,
     forward: crate::delivery::Forward,
+    /// The sessions a phone may address its recordings to (`GET /sessions`).
+    sessions: fn() -> Result<Vec<crate::handoff::OpenCodeSession>>,
 }
 
 impl Default for IngestHooks {
@@ -1092,9 +1115,19 @@ impl Default for IngestHooks {
                 Ok((dir, Some(bundle)))
             },
             forward: crate::handoff::send_bundle_to_session,
+            sessions: || {
+                crate::handoff::recent_root_sessions(
+                    &mut |path| crate::handoff::api_get_within(path, SESSIONS_WAIT),
+                    SESSIONS_LISTED,
+                )
+            },
         }
     }
 }
+
+/// How many sessions `GET /sessions` lists, and how long it waits for OpenCode to answer.
+const SESSIONS_LISTED: usize = 40;
+const SESSIONS_WAIT: Duration = Duration::from_secs(3);
 
 /// How long an upload waits for its bundle to be built and sent before the Mac answers
 /// "processing". The phone can ask for less with `X-Scrawl-Wait` (seconds); without it the Mac
@@ -1119,19 +1152,82 @@ pub fn constant_time_eq(provided: &str, expected: &str) -> bool {
     diff == 0 && a.len() == b.len()
 }
 
-fn bearer_token(header: &str) -> Option<&str> {
-    header.lines().skip(1).find_map(|line| {
+/// The tokens a request presents: an `Authorization: Bearer` and an `X-Scrawl-Token`, which
+/// background `URLSession` uploads send too because iOS may drop or replace `Authorization`.
+fn provided_tokens(header: &str) -> impl Iterator<Item = &str> {
+    header.lines().skip(1).filter_map(|line| {
         let (k, v) = line.split_once(':')?;
-        if !k.trim().eq_ignore_ascii_case("authorization") {
+        let (k, v) = (k.trim(), v.trim());
+        let tok = if k.eq_ignore_ascii_case("authorization") {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))?
+                .trim()
+        } else if k.eq_ignore_ascii_case("x-scrawl-token") {
+            v
+        } else {
             return None;
-        }
-        let v = v.trim();
-        let rest = v
-            .strip_prefix("Bearer ")
-            .or_else(|| v.strip_prefix("bearer "))?;
-        let tok = rest.trim();
+        };
         (!tok.is_empty()).then_some(tok)
     })
+}
+
+/// What `GET /sessions` answers: the open root OpenCode sessions a phone can send its
+/// recordings to, newest first, and this Mac's name. With routing off there are none to pick.
+fn sessions_reply(config: &IngestConfig) -> (&'static str, serde_json::Value) {
+    let host = mac_name();
+    if !config.route_opencode {
+        return (
+            "200 OK",
+            serde_json::json!({"ok": true, "routing": false, "host": host, "sessions": []}),
+        );
+    }
+    match (config.hooks.sessions)() {
+        Ok(sessions) => {
+            let sessions: Vec<serde_json::Value> = sessions
+                .iter()
+                .map(|session| {
+                    serde_json::json!({
+                        "id": session.id,
+                        "title": session.label(),
+                        "directory": session.directory(),
+                        "updated": session.time.updated,
+                    })
+                })
+                .collect();
+            (
+                "200 OK",
+                serde_json::json!({"ok": true, "routing": true, "host": host, "sessions": sessions}),
+            )
+        }
+        Err(err) => {
+            scrawl_log(format!("ingest: could not list sessions ({err:#})"));
+            (
+                "502 Bad Gateway",
+                serde_json::json!({"ok": false, "routing": true, "host": host, "error": format!("{err:#}")}),
+            )
+        }
+    }
+}
+
+/// This computer's name as its owner sees it ("Kit's Mac Studio"), for a paired phone to show.
+fn mac_name() -> Option<String> {
+    static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let named = if cfg!(target_os = "macos") {
+            Command::new("/usr/sbin/scutil")
+                .args(["--get", "ComputerName"])
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        } else {
+            std::env::var("COMPUTERNAME")
+                .or_else(|_| std::env::var("HOSTNAME"))
+                .ok()
+        };
+        named.filter(|name| !name.is_empty())
+    })
+    .clone()
 }
 
 /// Discovers this Mac's candidate Scrawl ingest base URLs on `port`: Tailscale IPv4 first,
@@ -1583,14 +1679,24 @@ fn handle_ingest_connection_with_token(
     if crate::web::handle(&mut stream, &header, expected_token)? {
         return Ok(());
     }
-    let authorized = bearer_token(&header)
-        .is_some_and(|provided| constant_time_eq(provided, expected_token));
+    let authorized =
+        provided_tokens(&header).any(|provided| constant_time_eq(provided, expected_token));
     if !authorized {
         http_unauthorized(&mut stream);
         return Ok(());
     }
 
     let first_line = header.lines().next().unwrap_or("");
+    let path = first_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|target| target.split('?').next())
+        .unwrap_or("");
+    if first_line.starts_with("GET ") && path == "/sessions" {
+        let (status, body) = sessions_reply(config);
+        http_json(&mut stream, status, &body);
+        return Ok(());
+    }
     if first_line.starts_with("GET ") {
         http_json(&mut stream, "200 OK", &serde_json::json!({ "ok": true }));
         return Ok(());
@@ -2173,6 +2279,18 @@ mod tests {
         Ok((session.unwrap_or("ses_up").to_owned(), "UP DOWN".to_owned()))
     }
 
+    fn fake_sessions() -> Result<Vec<crate::handoff::OpenCodeSession>> {
+        use crate::handoff::fake_api::session;
+        // An untitled session from a server that still puts `directory` at the top level.
+        let mut untitled = session("ses_new", "", "", 300);
+        untitled.location = None;
+        untitled.directory = Some("/p/new".into());
+        Ok(vec![
+            untitled,
+            session("ses_up", "UP DOWN", "/p/updown", 200),
+        ])
+    }
+
     fn test_config(captures: &Path, route_opencode: bool) -> IngestConfig {
         IngestConfig {
             route_opencode,
@@ -2181,8 +2299,124 @@ mod tests {
                 resolve: fake_resolve,
                 build: fake_build,
                 forward: fake_forward,
+                sessions: fake_sessions,
             },
             ..IngestConfig::default()
+        }
+    }
+
+    /// Sends one request to an ingest server running `config`; returns the status line and body.
+    fn request(config: &IngestConfig, request: String) -> (String, String) {
+        use std::io::Read as _;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cfg = config.clone();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_ingest_connection_with_token(stream, SECRET, &cfg).unwrap();
+        });
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        client.write_all(request.as_bytes()).unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        server.join().unwrap();
+        let (head, body) = response.split_once("\r\n\r\n").unwrap();
+        (head.lines().next().unwrap().to_owned(), body.to_owned())
+    }
+
+    #[test]
+    fn sessions_lists_the_sessions_a_phone_can_send_to() {
+        let captures = temp_captures();
+        let get = format!("GET /sessions HTTP/1.1\r\nAuthorization: Bearer {SECRET}\r\n\r\n");
+        let (status, body) = request(&test_config(&captures, true), get.clone());
+        assert_eq!(status, "HTTP/1.1 200 OK");
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["routing"], true);
+        assert_eq!(
+            body["sessions"],
+            serde_json::json!([
+                {"id": "ses_new", "title": "ses_new", "directory": "/p/new", "updated": 300},
+                {"id": "ses_up", "title": "UP DOWN", "directory": "/p/updown", "updated": 200},
+            ])
+        );
+
+        // Routing off: nothing to pick, and OpenCode isn't asked.
+        let (status, body) = request(&test_config(&captures, false), get);
+        assert_eq!(status, "HTTP/1.1 200 OK");
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["routing"], false);
+        assert_eq!(body["sessions"], serde_json::json!([]));
+
+        // The list is the token holder's alone.
+        let (status, body) = request(
+            &test_config(&captures, true),
+            "GET /sessions HTTP/1.1\r\n\r\n".into(),
+        );
+        assert_eq!(status, "HTTP/1.1 401 Unauthorized");
+        assert!(body.is_empty());
+        std::fs::remove_dir_all(captures).unwrap();
+    }
+
+    #[test]
+    fn sessions_says_when_opencode_did_not_answer() {
+        let captures = temp_captures();
+        let mut config = test_config(&captures, true);
+        config.hooks.sessions =
+            || anyhow::bail!("Could not reach server at http://127.0.0.1:49374");
+        let (status, body) = request(
+            &config,
+            format!("GET /sessions?fresh=1 HTTP/1.1\r\nAuthorization: Bearer {SECRET}\r\n\r\n"),
+        );
+        assert_eq!(status, "HTTP/1.1 502 Bad Gateway");
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["ok"], false);
+        assert_eq!(
+            body["error"],
+            "Could not reach server at http://127.0.0.1:49374"
+        );
+        std::fs::remove_dir_all(captures).unwrap();
+    }
+
+    #[test]
+    fn the_token_header_authorizes_when_authorization_is_missing_or_replaced() {
+        let captures = temp_captures();
+        let config = test_config(&captures, true);
+        for headers in [
+            format!("X-Scrawl-Token: {SECRET}\r\n"),
+            format!("Authorization: Basic b3BlbmNvZGU6eA==\r\nx-scrawl-token: {SECRET}\r\n"),
+            format!("Authorization: Bearer stale\r\nX-Scrawl-Token: {SECRET}\r\n"),
+        ] {
+            let (status, _) = request(&config, format!("GET /health HTTP/1.1\r\n{headers}\r\n"));
+            assert_eq!(status, "HTTP/1.1 200 OK", "{headers}");
+        }
+        for headers in ["X-Scrawl-Token: wrong\r\n", "X-Scrawl-Token: \r\n"] {
+            let (status, _) = request(&config, format!("GET /health HTTP/1.1\r\n{headers}\r\n"));
+            assert_eq!(status, "HTTP/1.1 401 Unauthorized", "{headers}");
+        }
+        std::fs::remove_dir_all(captures).unwrap();
+    }
+
+    #[test]
+    fn timelines_from_the_iphone_app_say_how_they_were_recorded() {
+        let broadcast: Timeline = serde_json::from_str(
+            r#"{"capture":"broadcast","device":"iPhone","duration":4,"session":"ses_up"}"#,
+        )
+        .unwrap();
+        assert_eq!(device_capture(broadcast.capture.as_deref()), "broadcast");
+        let shared: Timeline =
+            serde_json::from_str(r#"{"capture":"shared","note":"  the badge is cut off "}"#)
+                .unwrap();
+        assert_eq!(device_capture(shared.capture.as_deref()), "shared");
+        assert_eq!(shared.note.as_deref(), Some("  the badge is cut off "));
+        // ScrawlKit's own capture methods, and timelines from before `capture`, are ScrawlKit's.
+        for capture in [
+            r#"{"capture":"appFrames"}"#,
+            r#"{"capture":"replayKit"}"#,
+            "{}",
+        ] {
+            let timeline: Timeline = serde_json::from_str(capture).unwrap();
+            assert_eq!(device_capture(timeline.capture.as_deref()), "scrawlkit");
         }
     }
 

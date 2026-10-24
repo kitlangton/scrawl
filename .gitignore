@@ -6,3 +6,7 @@
 /.swiftpm
 /artifacts
 /*.scrawl
+# Scrawl for iPhone: XcodeGen makes the project from ios/project.yml; your signing stays yours.
+/ios/Scrawl.xcodeproj
+/ios/.build
+/ios/Config/Local.xcconfig

@@ -1355,6 +1355,23 @@ pub fn find_root_session(
     Ok(None)
 }
 
+/// The newest open root sessions, at most `limit`, from the first page of root sessions.
+pub fn recent_root_sessions(get: &mut ApiGet, limit: usize) -> Result<Vec<OpenCodeSession>> {
+    let mut sessions = Vec::new();
+    if limit == 0 {
+        return Ok(sessions);
+    }
+    find_root_session(get, "", 1, |session| {
+        sessions.push(session.clone());
+        if sessions.len() >= limit {
+            Scan::Stop
+        } else {
+            Scan::Skip
+        }
+    })?;
+    Ok(sessions)
+}
+
 pub(crate) fn normalize_slug(text: &str) -> String {
     text.chars()
         .filter(|c| c.is_ascii_alphanumeric())
@@ -2389,5 +2406,22 @@ mod session_lookup {
             resolve_opencode_session_with(get, None, Some("Nothing"), None).unwrap()
         });
         assert_eq!(result.0, "ses_00000");
+    }
+
+    #[test]
+    fn recent_roots_are_the_newest_open_ones_from_one_page() {
+        let mut sessions = many(500);
+        sessions[0].time.archived = Some(1);
+        sessions[1].parent_id = Some("ses_00002".into());
+        let (result, paths) = counting(&sessions, |get| recent_root_sessions(get, 3).unwrap());
+        let ids: Vec<&str> = result.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["ses_00002", "ses_00003", "ses_00004"]);
+        assert_eq!(paths, ["/api/session?parentID=null&limit=100"]);
+        // Never more than the first page, however many are asked for.
+        let (result, paths) = counting(&sessions, |get| recent_root_sessions(get, 1_000).unwrap());
+        assert_eq!(result.len(), 99);
+        assert_eq!(paths.len(), 1);
+        let (result, paths) = counting(&sessions, |get| recent_root_sessions(get, 0).unwrap());
+        assert!(result.is_empty() && paths.is_empty());
     }
 }

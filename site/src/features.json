@@ -14,7 +14,7 @@
     { "id": "platforms", "title": "Platforms" }
   ],
   "flow": [
-    { "title": "Capture", "detail": "⌥⇧S, the picker, a cabled iPhone or ScrawlKit", "group": "start" },
+    { "title": "Capture", "detail": "⌥⇧S, the picker, a cabled iPhone, ScrawlKit or Scrawl for iPhone", "group": "start" },
     { "title": "Record", "detail": "Screen, voice, clicks and ⇧ ink on one clock", "group": "record" },
     { "title": "Bundle", "detail": "Keyframes, contact sheet, summary.md, scrawl.json", "group": "agent" },
     { "title": "Deliver", "detail": "Clipboard and ⌥⇧V, or straight to a session", "group": "delivery" },
@@ -584,6 +584,40 @@
       "platforms": ["mac"],
       "note": "The iPhone path is Mac only.",
       "docs": ["README.md#headless-ingest-server-scrawl-serve"]
+    },
+    {
+      "id": "iphone-app",
+      "group": "iphone",
+      "name": "Scrawl for iPhone",
+      "says": "An iPhone app records the whole screen, any app, with your voice, from the app or Control Center's Screen Recording; the Mac builds the bundle and queues it into the session you picked.",
+      "status": "review:#100",
+      "platforms": ["mac"],
+      "added": "2026-10-23",
+      "pr": 100,
+      "note": "Built from ios/ with your own signing; recording needs a device. No ink or taps (iOS hides other apps' touches): spoken cues and the Flag Moment shortcut mark moments.",
+      "docs": ["README.md#scrawl-for-iphone", "ios/README.md", "docs/iphone-and-routing.md"]
+    },
+    {
+      "id": "iphone-share",
+      "group": "iphone",
+      "name": "Share to Scrawl",
+      "says": "Share screenshots or a screen recording from any iPhone app to Scrawl with a note; each screenshot gets a keyframe.",
+      "status": "review:#100",
+      "platforms": ["mac"],
+      "added": "2026-10-23",
+      "pr": 100,
+      "docs": ["README.md#scrawl-for-iphone", "ios/README.md"]
+    },
+    {
+      "id": "iphone-sessions",
+      "group": "iphone",
+      "name": "Pick the session from the phone",
+      "says": "The ingest port lists the Mac's open OpenCode sessions (GET /sessions); the phone addresses its captures to the one you pick.",
+      "status": "review:#100",
+      "platforms": ["mac"],
+      "added": "2026-10-23",
+      "pr": 100,
+      "docs": ["README.md#scrawl-for-iphone", "docs/iphone-and-routing.md"]
     },
 
     {

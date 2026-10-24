@@ -1,0 +1,108 @@
+# Scrawl for iPhone. Generate the Xcode project with XcodeGen 2.46 or newer:
+#   cd ios && xcodegen generate
+name: Scrawl
+options:
+  bundleIdPrefix: dev.kitlangton
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Scrawl.xcconfig
+  Release: Config/Scrawl.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_ENTITLEMENTS: Config/Scrawl.entitlements
+    TARGETED_DEVICE_FAMILY: "1"
+    GENERATE_INFOPLIST_FILE: false
+    ENABLE_USER_SCRIPT_SANDBOXING: true
+    # Shared/ is compiled into the app and both extensions, so it sticks to extension-safe API.
+    APPLICATION_EXTENSION_API_ONLY: false
+targets:
+  Scrawl:
+    type: application
+    platform: iOS
+    sources:
+      - path: Scrawl
+        excludes:
+          - Info.plist
+      - path: Shared
+      - path: ../assets/AppIcon.icon
+        buildPhase: resources
+      - path: Config/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(SCRAWL_APP_ID)
+        INFOPLIST_FILE: Scrawl/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: ScrawlBroadcast
+        embed: true
+      - target: ScrawlShare
+        embed: true
+    scheme:
+      testTargets:
+        - ScrawlTests
+        - ScrawlUITests
+  # Records the whole screen with the microphone (Control Center › Screen Recording › Scrawl).
+  ScrawlBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ScrawlBroadcast
+        excludes:
+          - Info.plist
+      - path: Shared
+      - path: Config/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(SCRAWL_APP_ID).broadcast
+        INFOPLIST_FILE: ScrawlBroadcast/Info.plist
+        APPLICATION_EXTENSION_API_ONLY: true
+  # Screenshots and screen recordings shared from any app.
+  ScrawlShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ScrawlShare
+        excludes:
+          - Info.plist
+      - path: Shared
+      - path: Config/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(SCRAWL_APP_ID).share
+        INFOPLIST_FILE: ScrawlShare/Info.plist
+        APPLICATION_EXTENSION_API_ONLY: true
+  ScrawlTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ScrawlTests
+    dependencies:
+      - target: Scrawl
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(SCRAWL_APP_ID).tests
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGN_ENTITLEMENTS: ""
+  # The end-to-end test; skipped unless scripts/e2e.sh gives it a Scrawl to send to.
+  ScrawlUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ScrawlUITests
+    dependencies:
+      - target: Scrawl
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(SCRAWL_APP_ID).uitests
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGN_ENTITLEMENTS: ""
+        TEST_TARGET_NAME: Scrawl

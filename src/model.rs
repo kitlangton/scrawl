@@ -242,7 +242,9 @@ pub struct ContextChange {
 #[serde(rename_all = "camelCase")]
 pub struct DeviceInfo {
     pub name: String,
-    /// `"mirror"` for a cabled capture through Scrawl, `"scrawlkit"` for an in-app SDK recording.
+    /// `"mirror"` for a cabled capture through Scrawl, `"scrawlkit"` for an in-app SDK recording,
+    /// and from the Scrawl iPhone app `"broadcast"` (the whole screen, whatever app is in front)
+    /// or `"shared"` (a screen recording or screenshots shared into it).
     pub capture: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,

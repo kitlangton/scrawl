@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Captures, the destination and pings, shared by the app and both extensions. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>$(SCRAWL_APP_GROUP)</string>
+	</array>
+	<!-- The pairing (the Mac's addresses and token), readable by the extensions too. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(SCRAWL_APP_ID)</string>
+	</array>
+</dict>
+</plist>

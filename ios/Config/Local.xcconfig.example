@@ -1,0 +1,8 @@
+// Copy to Local.xcconfig (ignored by git) to sign with your own team.
+
+// Your Apple Developer team ID (Xcode › Settings › Accounts, or developer.apple.com › Membership).
+DEVELOPMENT_TEAM = ABCDE12345
+
+// An app ID you own. The broadcast and share extensions get `.broadcast` and `.share` after it,
+// and the app group is `group.<this>`; automatic signing registers them.
+SCRAWL_APP_ID = com.example.scrawl
