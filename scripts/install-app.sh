@@ -6,7 +6,7 @@ export LC_ALL=C
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # SCRAWL_APP_DIR builds the signed bundle somewhere else (staging for remote installs, see
 # install-app-remote.sh); SCRAWL_NO_LAUNCH=1 skips the ~/bin link and the restart.
-APP_DIR="${SCRAWL_APP_DIR:-${HOME}/Applications/Scrawl.app}"
+APP_DIR="${SCRAWL_APP_DIR:-/Applications/Scrawl.app}"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
@@ -132,6 +132,10 @@ if scrawl_running; then
   pgrep -fl "Scrawl.app/Contents/MacOS/scrawl" >&2 || true
   echo "the old Scrawl is still running; quit it and run this again" >&2
   exit 1
+fi
+# Older installs went to ~/Applications; leave only one copy.
+if [[ "${APP_DIR}" != "${HOME}/Applications/Scrawl.app" ]]; then
+  rm -rf "${HOME}/Applications/Scrawl.app"
 fi
 open -a "${APP_DIR}" || (sleep 0.3 && open -n -a "${APP_DIR}")
 sleep 0.3
