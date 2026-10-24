@@ -157,7 +157,7 @@ impl PillState {
         Self {
             surface,
             live,
-            hidden_since: None,
+            hidden_since: Some(f64::NEG_INFINITY),
             shown: false,
             fully_hidden,
             pending,
@@ -4285,6 +4285,15 @@ mod tests {
 
     #[test]
     fn headless_scenes_and_coordinator_state_transitions_are_valid() {
+        let pill = PillState::new(
+            Arc::new(Mutex::new(None)),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(std::sync::OnceLock::new()),
+            None,
+            None,
+        );
+        assert_eq!(pill.hidden_since, Some(f64::NEG_INFINITY));
+        assert!(!pill.shown);
         assert_eq!(ALL_SCENES.len(), PICKER_SCENES.len() + REVIEW_SCENES.len());
         let mut picker = dummy_picker_init();
         for &(name, apply) in PICKER_SCENES {
