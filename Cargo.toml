@@ -32,6 +32,9 @@ objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSData", "NSStri
 objc2-quartz-core = { version = "0.3.2", features = ["CALayer"] }
 metal = "0.29.0"
 screencapturekit = { version = "=11.0.0", features = ["macos_15_0"] }
+# Rune (anomalyco/rune), pinned to a `dev` rev and bumped deliberately. Only `scrawl lab pill --rune`
+# uses it for now; the app's normal run path stays on GPUI.
+rune = { git = "https://github.com/anomalyco/rune", rev = "3a608d6fc4f4f1bc38e9d53ce0778bfb32f2e8df" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 ab_glyph = "0.2.32"
