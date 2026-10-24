@@ -1596,14 +1596,16 @@ fn recorder(s: &SettingsWin, shortcut: &Shortcut, theme: Theme) -> El {
         let default = if kind == "paste" { "⌥⇧V" } else { "⌥⇧S" };
         line = line.child(
             circle_button(&icons::RESET, 9.0, theme, bg, format!("reset-{kind}"), move |s| s.act_kind("reset-shortcut", &k))
-                .label(format!("Reset to {default}")),
+                .label(format!("Reset to {default}"))
+                .help(format!("Reset to {default}")),
         );
     }
     if shortcut.clearable && !shortcut.off() && !shortcut.recording {
         let k = kind.clone();
         line = line.child(
             circle_button(&icons::X, 8.0, theme, bg, format!("clear-{kind}"), move |s| s.act_kind("clear-shortcut", &k))
-                .label(format!("Turn off {} shortcut", shortcut.title)),
+                .label(format!("Turn off {} shortcut", shortcut.title))
+                .help("Turn off"),
         );
     }
     if let Some(keys) = s.keys.get(&kind) {
@@ -1726,7 +1728,9 @@ fn hex_language(s: &SettingsWin, theme: Theme) -> El {
         .radius(5.0)
         .fill(field_bg.color())
         .border(1.0, theme.control_line().over(field_bg));
-    setting_row("Hex language", true, theme, vec![field, system_button("Apply", valid && changed, theme, bg, apply_hex)])
+    setting_row("Hex language", true, theme, vec![field, system_button("Apply", valid && changed, theme, bg, apply_hex)]).help(
+        "Language code, e.g. en, nl or auto. Support depends on the Hex model; some ignore it. This does not follow Hex’s dictation language.",
+    )
 }
 
 /// A plain SwiftUI `Button` (bordered, no custom style): unlike `SettingsButton` it greys its
@@ -2166,7 +2170,16 @@ fn agents(s: &SettingsWin, theme: Theme) -> Vec<El> {
                     .px(12.0)
                     .gap(12.0)
                     .center_y()
-                    .child(text(&v.skill_command).font(MONO).color(theme.text().over(bg)).single_line().truncate().shrink())
+                    .child(
+                        text(&v.skill_command)
+                            .font(MONO)
+                            .color(theme.text().over(bg))
+                            .single_line()
+                            .truncate()
+                            .shrink()
+                            .selectable(true)
+                            .selection_color(theme.accent().alpha(0.3).color()),
+                    )
                     .child(spacer().min_w(8.0))
                     .child(button(if copied { "Copied" } else { "Copy" }, true, theme, bg, move |s, tx| {
                         tx.copy(command.clone());
