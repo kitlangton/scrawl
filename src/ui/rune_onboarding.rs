@@ -1135,8 +1135,7 @@ impl OnboardingWin {
 
     fn present(&mut self, tx: &mut Tx) {
         self.visible = true;
-        #[cfg(target_os = "macos")]
-        super::platform::take_keys_now();
+        take_keys();
         tx.wake_after(Duration::from_millis(16));
     }
 
@@ -1178,8 +1177,7 @@ impl OnboardingWin {
     }
 
     fn bring_forward(&self) {
-        #[cfg(target_os = "macos")]
-        super::platform::take_keys_now();
+        take_keys();
         if let Some(handle) = HANDLE.get() {
             handle.open();
         }
@@ -1924,8 +1922,25 @@ fn on_close(s: &mut OnboardingWin, _tx: &mut Tx) {
         events(crate::onboarding::Event::Action("close".into()));
         events(crate::onboarding::Event::Exited);
     }
+    hand_back_keys();
+}
+
+/// Takes the keys, remembering the app in front, and holds them while the window shows.
+fn take_keys() {
     #[cfg(target_os = "macos")]
-    super::platform::hand_back_keys_now();
+    {
+        super::platform::hold_keys(super::platform::KeyHolder::Onboarding, true);
+        super::platform::take_keys_now();
+    }
+}
+
+/// Gives the remembered app its keys back, unless another Scrawl window still has them.
+fn hand_back_keys() {
+    #[cfg(target_os = "macos")]
+    {
+        super::platform::hold_keys(super::platform::KeyHolder::Onboarding, false);
+        super::platform::hand_back_keys_now();
+    }
 }
 
 fn on_key(s: &mut OnboardingWin, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
@@ -2065,7 +2080,11 @@ pub(crate) fn request_open(messages: flume::Receiver<Value>, shortcut: String, p
                         super::rune_permissions::open_settings(&permission, s.screen_frame(&permission));
                     }),
                     "hide" => {
-                        handle.update(|s, _| s.visible = false);
+                        handle.update(|s, _| {
+                            s.visible = false;
+                            #[cfg(target_os = "macos")]
+                            super::platform::hold_keys(super::platform::KeyHolder::Onboarding, false);
+                        });
                         handle.hide();
                     }
                     "show" => {
@@ -2077,8 +2096,7 @@ pub(crate) fn request_open(messages: flume::Receiver<Value>, shortcut: String, p
                             s.events = None;
                             s.follow = None;
                             s.visible = false;
-                            #[cfg(target_os = "macos")]
-                            super::platform::hand_back_keys_now();
+                            hand_back_keys();
                         });
                         handle.hide();
                         break;

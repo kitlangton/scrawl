@@ -2359,6 +2359,25 @@ fn on_close(s: &mut SettingsWin, _tx: &mut Tx) {
         events(crate::settings::Event::Action(crate::settings::Action::Close));
         events(crate::settings::Event::Exited);
     }
+    hand_back_keys();
+}
+
+/// As the SwiftUI window's `bringForward`: the app in front is remembered on every show, so
+/// closing the window gives it its keys back (unless another Scrawl window still has them).
+fn take_keys() {
+    #[cfg(target_os = "macos")]
+    {
+        super::platform::hold_keys(super::platform::KeyHolder::Settings, true);
+        super::platform::take_keys_now();
+    }
+}
+
+fn hand_back_keys() {
+    #[cfg(target_os = "macos")]
+    {
+        super::platform::hold_keys(super::platform::KeyHolder::Settings, false);
+        super::platform::hand_back_keys_now();
+    }
 }
 
 fn on_key(s: &mut SettingsWin, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
@@ -2453,6 +2472,7 @@ pub(crate) fn request_open(
                     handle.update(|s, _| {
                         s.events = None;
                         s.meter_watch = None;
+                        hand_back_keys();
                     });
                     handle.hide();
                     break;
@@ -2460,6 +2480,7 @@ pub(crate) fn request_open(
                 handle.update(move |s, tx| s.message(&message, tx));
                 if (kind == "state" && !presented) || kind == "show" {
                     presented = true;
+                    handle.update(|_, _| take_keys());
                     handle.open();
                 }
             }

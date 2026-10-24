@@ -812,6 +812,7 @@ impl RuneCoordinator {
     ) -> Self {
         crate::playback::warm_up();
         let review_open = initial_bundle.is_some();
+        super::platform::hold_keys(super::platform::KeyHolder::Review, review_open);
         let pill_global_rect = displays
             .first()
             .map_or([0.0, 0.0, f64::from(PANEL_W), f64::from(PANEL_H)], |d| {
@@ -1227,6 +1228,7 @@ impl RuneCoordinator {
 
     fn open_review_window(&mut self) {
         self.review_open = true;
+        super::platform::hold_keys(super::platform::KeyHolder::Review, true);
         if let Some(ref app) = self.app_handle {
             app.open();
             app.focus();
@@ -1237,6 +1239,7 @@ impl RuneCoordinator {
     fn close_review_window(&mut self) {
         if self.review_open {
             self.review_open = false;
+            super::platform::hold_keys(super::platform::KeyHolder::Review, false);
             if let Some(ref app) = self.app_handle {
                 app.hide();
             }
@@ -3270,6 +3273,7 @@ fn review_poll(s: &mut ReviewState, _now: f64, tx: &mut Tx) -> bool {
 
 fn on_review_close(s: &mut ReviewState, _tx: &mut Tx) {
     s.coord.review_open = false;
+    super::platform::hold_keys(super::platform::KeyHolder::Review, false);
     s.coord.hand_back_keys_if_idle();
 }
 
