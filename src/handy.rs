@@ -11,8 +11,9 @@
 //! times are estimates (`TranscriptData::estimated`), as for Hex: spoken cues never cut
 //! keyframes from them.
 //!
-//! Only macOS looks for Handy for now: the runner needs Unix process groups, and Windows
-//! recordings keep the local engine.
+//! On Windows Handy is `handy.exe` in its per-user (`%LOCALAPPDATA%\Handy`) or per-machine
+//! (`%ProgramFiles%\Handy`) install folder, its version read from the executable's version
+//! info, and the runner keeps it in a job object instead of a process group.
 
 use std::path::{Path, PathBuf};
 
@@ -26,13 +27,12 @@ use crate::model::{TranscriptData, TranscriptSegment, WordTiming};
 /// The first Handy with `--transcribe-file`, as (major, minor).
 const HEADLESS_SINCE: (u64, u64) = (0, 9);
 
-/// Handy's executable in `/Applications/Handy.app` or `~/Applications/Handy.app`, or `None`
-/// (not installed, older than 0.9.0, or not macOS). An older Handy isn't offered at all: it
+/// Handy's executable in `/Applications/Handy.app` or `~/Applications/Handy.app` (macOS), or
+/// `%LOCALAPPDATA%\Handy\handy.exe` or `%ProgramFiles%\Handy\handy.exe` (Windows), or `None`
+/// (not installed, older than 0.9.0, or another OS). An older Handy isn't offered at all: it
 /// doesn't know `--transcribe-file`.
+#[cfg(target_os = "macos")]
 pub fn executable() -> Option<PathBuf> {
-    if !cfg!(target_os = "macos") {
-        return None;
-    }
     let mut apps = vec![PathBuf::from("/Applications/Handy.app")];
     apps.extend(dirs::home_dir().map(|home| home.join("Applications/Handy.app")));
     apps.into_iter()
@@ -44,13 +44,38 @@ pub fn executable() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
+#[cfg(target_os = "windows")]
+pub fn executable() -> Option<PathBuf> {
+    ["LOCALAPPDATA", "ProgramFiles"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(|folder| PathBuf::from(folder).join(r"Handy\handy.exe"))
+        .filter(|path| path.is_file())
+        .find(|path| {
+            crate::win::shell::product_version(path)
+                .and_then(|value| major_minor(&value))
+                .is_some_and(|v| v >= HEADLESS_SINCE)
+        })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn executable() -> Option<PathBuf> {
+    None
+}
+
 /// The major and minor `CFBundleShortVersionString` of an XML `Info.plist` (Handy's is XML).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn version(plist: &str) -> Option<(u64, u64)> {
     let (_, rest) = plist.split_once("<key>CFBundleShortVersionString</key>")?;
     let (value, _) = rest
         .trim_start()
         .strip_prefix("<string>")?
         .split_once("</string>")?;
+    major_minor(value)
+}
+
+/// The major and minor of a version such as `0.9.8`.
+fn major_minor(value: &str) -> Option<(u64, u64)> {
     let mut parts = value.trim().split('.').map(|part| part.parse::<u64>().ok());
     Some((parts.next()??, parts.next().flatten().unwrap_or(0)))
 }
@@ -279,21 +304,34 @@ mod tests {
         assert!(silent.text.is_empty() && silent.words.is_empty() && silent.segments.is_empty());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn runs_handy_headlessly_on_the_recording() {
-        use std::os::unix::fs::PermissionsExt;
-
         let dir = std::env::temp_dir().join(format!("scrawl handy {}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // A stand-in for Handy that answers only the headless call Scrawl makes.
-        let fake = dir.join("handy");
-        std::fs::write(
-            &fake,
-            "#!/bin/sh\n[ \"$1 $3\" = \"--transcribe-file --json\" ] && [ -f \"$2\" ] || exit 2\necho 'loading' >&2\necho '{\"model\":\"parakeet-tdt-0.6b-v3\",\"text\":\"Open the menu. Click the button.\"}'\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        #[cfg(unix)]
+        let (fake, failing) = {
+            use std::os::unix::fs::PermissionsExt;
+            let fake = dir.join("handy");
+            std::fs::write(
+                &fake,
+                "#!/bin/sh\n[ \"$1 $3\" = \"--transcribe-file --json\" ] && [ -f \"$2\" ] || exit 2\necho 'loading' >&2\necho '{\"model\":\"parakeet-tdt-0.6b-v3\",\"text\":\"Open the menu. Click the button.\"}'\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+            (fake, "#!/bin/sh\nexit 1\n")
+        };
+        #[cfg(windows)]
+        let (fake, failing) = {
+            let fake = dir.join("handy.cmd");
+            std::fs::write(
+                &fake,
+                "@echo off\r\nif not \"%~1 %~3\"==\"--transcribe-file --json\" exit /b 2\r\nif not exist \"%~2\" exit /b 2\r\necho loading 1>&2\r\necho {\"model\":\"parakeet-tdt-0.6b-v3\",\"text\":\"Open the menu. Click the button.\"}\r\n",
+            )
+            .unwrap();
+            (fake, "@echo off\r\nexit /b 1\r\n")
+        };
         // Speech from 1 s to 2 s and from 4 s to 5 s of six.
         let mut samples = vec![0.0_f32; 16_000 * 6];
         samples[16_000..16_000 * 2].fill(0.2);
@@ -324,7 +362,7 @@ mod tests {
                 .all(|w| w.t0 >= 4_000 && w.t1 <= 5_000)
         );
 
-        std::fs::write(&fake, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::write(&fake, failing).unwrap();
         let failed = transcribe(&fake, &wav, &recorded).unwrap_err();
         assert_eq!(failed.to_string(), Failure::Exit(1).to_string());
         let _ = std::fs::remove_dir_all(&dir);

@@ -235,10 +235,10 @@ fn try_command(wav: &Path, audio: &RecordedAudio) -> Result<Option<TranscriptDat
 fn try_handy(wav: &Path, audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
     let Some(executable) = crate::handy::executable() else {
         LOGGED_NO_HANDY.call_once(|| {
-            let reason = if cfg!(target_os = "macos") {
+            let reason = if cfg!(any(target_os = "macos", target_os = "windows")) {
                 "Handy 0.9.0 or later isn't installed"
             } else {
-                "Scrawl uses Handy only on macOS"
+                "Scrawl uses Handy only on macOS and Windows"
             };
             crate::capture::scrawl_log(format!(
                 "Handy preferred, but {reason}; using {LOCAL_ENGINE_TITLE}"

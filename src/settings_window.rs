@@ -122,6 +122,10 @@ struct Transcriber {
     hex_enabled: bool,
     models: Vec<ModelOption>,
     speech: Speech,
+    /// The program's file name while `transcribeCommand` is usable.
+    command: Option<String>,
+    /// Whether Handy is installed.
+    handy: bool,
 }
 
 /// `speech_model::Status`: the local model's download.
@@ -1077,17 +1081,31 @@ impl SettingsWindow {
     fn recording_pane(&self, theme: Theme, state: &ViewState, cx: &mut Context<Self>) -> Div {
         let t = &state.transcriber;
         let hex = t.engine == "hex";
+        let handy = t.engine == "handy";
         let local = crate::transcribe::LOCAL_ENGINE_TITLE;
-        let engines = vec![
+        let mut engines = vec![
             ("apple".to_owned(), local.to_owned(), true),
             ("hex".to_owned(), t.hex_title.clone(), t.hex_enabled),
         ];
+        if t.handy {
+            engines.push(("handy".to_owned(), "Handy".to_owned(), true));
+        }
+        let command_title = t.command.as_ref().map(|name| format!("Command ({name})"));
+        if let Some(title) = &command_title {
+            engines.push(("command".to_owned(), title.clone(), true));
+        }
+        let engine_title = match t.engine.as_str() {
+            "hex" => "Hex",
+            "handy" => "Handy",
+            "command" => command_title.as_deref().unwrap_or(local),
+            _ => local,
+        };
         let chosen = t.models.iter().find(|m| m.chosen);
         let mut rows = vec![row(
             theme,
             "Transcription",
             true,
-            popup(theme, "settings-transcriber", if hex { "Hex" } else { local }).on_click(
+            popup(theme, "settings-transcriber", engine_title).on_click(
                 cx.listener({
                     let selected = t.engine.clone();
                     move |view, event: &ClickEvent, _, cx| {
@@ -1126,6 +1144,12 @@ impl SettingsWindow {
             );
         }
         let note = match (WINDOWS, t.hex_enabled || hex) {
+            _ if handy => {
+                "Handy uses the model and language you chose in Handy, and its word times are estimates. If it fails, that recording uses Scrawl's own transcriber."
+            }
+            _ if t.engine == "command" => {
+                "Command runs transcribeCommand from config.json. If it fails, that recording uses Scrawl's own transcriber."
+            }
             (true, true) => {
                 "Parakeet runs on this PC and times each word. Hex uses a model you have in Hex, and its word times are estimates."
             }
@@ -1140,7 +1164,7 @@ impl SettingsWindow {
             }
         };
         let speech = match t.speech.state.as_str() {
-            _ if !WINDOWS || hex => None,
+            _ if !WINDOWS || hex || handy => None,
             "downloading" => Some((
                 format!(
                     "Downloading the speech model: {:.0}%",
