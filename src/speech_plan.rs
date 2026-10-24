@@ -99,11 +99,21 @@ fn cuts(rms: &[f64], duration: u64) -> Vec<(u64, u64)> {
 pub enum Heard {
     /// Text without times (Hex): its words are spread over the chunk's voiced spans.
     Text(String),
+    /// Text with the times the recognizer measured, in milliseconds from the chunk's start
+    /// (Windows' Parakeet). Without words, the text is spread as `Text` is.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    Timed {
+        text: String,
+        words: Vec<WordTiming>,
+        segments: Vec<TranscriptSegment>,
+    },
 }
 
 /// Runs `recognize` on each chunk of `plan` in order (given that chunk's samples) and joins what
-/// it heard into one transcript. Any error fails the whole recording, so the caller can use
-/// another transcriber: skipping a refused chunk would silently lose up to 30 s of speech.
+/// it heard into one transcript, measured times moved to the recording's clock. Any chunk
+/// spread from text makes the whole transcript `estimated`. Any error fails the whole
+/// recording, so the caller can use another transcriber: skipping a refused chunk would
+/// silently lose up to 30 s of speech.
 pub fn transcribe(
     samples_16k: &[f32],
     plan: &Plan,
@@ -123,15 +133,50 @@ pub fn transcribe(
         if from >= to {
             continue;
         }
-        let Heard::Text(text) = recognize(&samples_16k[from..to])?;
+        let (text, words, segments) = match recognize(&samples_16k[from..to])? {
+            Heard::Text(text) => (text, Vec::new(), Vec::new()),
+            Heard::Timed {
+                text,
+                words,
+                segments,
+            } => (text, words, segments),
+        };
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
         if text.is_empty() {
             continue;
         }
-        let (segments, words) = spread(&text, &plan.voiced_in(start, end));
-        transcript.estimated = true;
-        transcript.segments.extend(segments);
-        transcript.words.extend(words);
+        if words.is_empty() {
+            let (segments, words) = spread(&text, &plan.voiced_in(start, end));
+            transcript.estimated = true;
+            transcript.segments.extend(segments);
+            transcript.words.extend(words);
+        } else {
+            let at = |t0: u64, t1: u64| (start + t0, start + t1.max(t0));
+            let words: Vec<WordTiming> = words
+                .into_iter()
+                .map(|word| {
+                    let (t0, t1) = at(word.t0, word.t1);
+                    WordTiming { t0, t1, ..word }
+                })
+                .collect();
+            let segments: Vec<TranscriptSegment> = segments
+                .into_iter()
+                .map(|segment| {
+                    let (t0, t1) = at(segment.t0, segment.t1);
+                    TranscriptSegment { t0, t1, ..segment }
+                })
+                .collect();
+            transcript.segments.extend(if segments.is_empty() {
+                vec![TranscriptSegment {
+                    t0: words[0].t0,
+                    t1: words[words.len() - 1].t1,
+                    text: text.clone(),
+                }]
+            } else {
+                segments
+            });
+            transcript.words.extend(words);
+        }
         texts.push(text);
     }
     transcript.text = texts.join(" ");
@@ -422,5 +467,64 @@ mod tests {
         });
         assert!(result.is_err());
         assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn timed_answers_move_to_the_recording_clock() {
+        let plan = Plan {
+            chunks: vec![(0, 10_000), (10_000, 20_000), (20_000, 30_000)],
+            voiced: vec![(22_000, 23_000)],
+        };
+        let samples = vec![0.0; 16_000 * 30];
+        let word = |t0, t1, text: &str| WordTiming {
+            t0,
+            t1,
+            text: text.into(),
+        };
+        let mut answers = [
+            Heard::Timed {
+                text: "Look here.".into(),
+                words: vec![word(100, 300, "Look"), word(300, 600, "here.")],
+                segments: vec![TranscriptSegment {
+                    t0: 100,
+                    t1: 600,
+                    text: "Look here.".into(),
+                }],
+            },
+            Heard::Timed {
+                text: "Now this".into(),
+                words: vec![word(50, 40, "Now"), word(200, 400, "this")],
+                segments: Vec::new(),
+            },
+        ]
+        .into_iter();
+        let transcript = transcribe(&samples, &plan, "parakeet:m".into(), None, |_| {
+            Ok(answers.next().unwrap_or(Heard::Text(String::new())))
+        })
+        .unwrap();
+        assert!(!transcript.estimated);
+        let times: Vec<_> = transcript.words.iter().map(|w| (w.t0, w.t1)).collect();
+        assert_eq!(
+            times,
+            [(100, 300), (300, 600), (10_050, 10_050), (10_200, 10_400)]
+        );
+        assert_eq!(transcript.segments.len(), 2);
+        assert_eq!(
+            (transcript.segments[1].t0, transcript.segments[1].t1),
+            (10_050, 10_400)
+        );
+        assert_eq!(transcript.text, "Look here. Now this");
+        // A timed answer without words is spread like text, and says so.
+        let mut once = Some(Heard::Timed {
+            text: "no times".into(),
+            words: Vec::new(),
+            segments: Vec::new(),
+        });
+        let spread_out = transcribe(&samples, &plan, "parakeet:m".into(), None, |_| {
+            Ok(once.take().unwrap_or(Heard::Text(String::new())))
+        })
+        .unwrap();
+        assert!(spread_out.estimated);
+        assert_eq!(spread_out.words.len(), 2);
     }
 }

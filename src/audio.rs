@@ -312,8 +312,8 @@ const ISLAND_MERGE_SILENCE_MS: u64 = 350;
 /// Energy-based speech spans in milliseconds, quantized to 50 ms. These are not recognizer
 /// timestamps. The speech threshold follows the recording's own noise floor (10th percentile of
 /// window energy) so a quiet microphone and a noisy room both find their speech.
-// Only Windows' Parakeet plans by islands now; Hex hears everything (`speech_plan`).
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+/// The spans Hex and Windows were once sent; tests check that `speech_plan` hears more.
+#[cfg(test)]
 pub fn speech_islands(samples_16k: &[f32]) -> Vec<(u64, u64)> {
     let rms = window_rms(samples_16k);
     if rms.is_empty() {
