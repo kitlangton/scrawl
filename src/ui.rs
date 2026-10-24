@@ -79,7 +79,21 @@ pub(crate) mod motion;
 #[cfg(target_os = "macos")]
 pub(crate) mod rune_app;
 #[cfg(target_os = "macos")]
+mod rune_keys;
+#[cfg(target_os = "macos")]
+pub(crate) mod rune_onboarding;
+#[cfg(target_os = "macos")]
+pub(crate) mod rune_permission_panel;
+#[cfg(target_os = "macos")]
+pub(crate) mod rune_permissions;
+#[cfg(target_os = "macos")]
 pub(crate) mod rune_pill;
+#[cfg(target_os = "macos")]
+mod rune_session;
+#[cfg(target_os = "macos")]
+pub(crate) mod rune_settings;
+#[cfg(target_os = "macos")]
+pub(crate) mod rune_symbols;
 
 pub use lab::{Options as LabOptions, Scene as LabScene, run as run_lab};
 #[cfg(target_os = "macos")]

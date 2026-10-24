@@ -39,7 +39,7 @@ Read the matching `docs/` file before changing a subsystem. Each one holds that 
 |---|---|---|
 | Shortcuts (a press records the screen; the menu opens the picker), Mac recording, more than one display | `src/shortcut.rs`, `src/capture.rs`, `src/screens.rs`, `src/ui.rs` | `docs/capture.md` |
 | Keyframe selection, transcription (SpeechAnalyzer, Hex, command), `summary.md`, frames and contact sheet | `src/keyframes.rs`, `src/transcribe.rs`, `src/hex.rs`, `src/command_transcriber.rs`, `src/speech_model.rs`, `src/sketch.rs`, `src/render.rs` | `docs/keyframes-and-text.md` |
-| Onboarding, permissions, Settings, command-line tool and agent skill | `src/onboarding.rs`, `src/settings.rs`, `src/command_line.rs`, `helper/Onboarding.swift`, `helper/PermissionPanel.swift`, `helper/Settings.swift` | `docs/onboarding-and-settings.md` |
+| Onboarding, permissions, Settings, command-line tool and agent skill | `src/onboarding.rs`, `src/settings.rs`, `src/command_line.rs`, `helper/Onboarding.swift`, `helper/PermissionPanel.swift`, `helper/Settings.swift`, `src/ui/rune_settings.rs`, `src/ui/rune_onboarding.rs` | `docs/onboarding-and-settings.md` |
 | iPhone capture, ScrawlKit ingest and delivery, dev-site routing and `sdk.js` | `src/phone.rs`, `src/delivery.rs`, `src/routing.rs`, `src/web.rs`, `src/sdk.js`, `Sources/ScrawlKit/`, `helper/` | `docs/iphone-and-routing.md` |
 | Capsule motion, the pill lab, tuning | `src/ui/lab.rs`, `src/ui/motion.rs`, `perf/pill/` | `docs/motion.md` |
 | Video export, retention and shrinking | `src/export/`, `src/retention.rs`, `helper/Export.swift`, `helper/Media.swift` | `docs/export-and-retention.md` |

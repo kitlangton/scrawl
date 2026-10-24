@@ -200,8 +200,31 @@ pub(super) fn hand_back_keys(cx: &mut App) {
     hand_back_keys_now();
 }
 
+/// The Rune windows that keep the keys while they're open, so closing one hands them back only
+/// once the others are gone too.
+#[derive(Clone, Copy)]
+pub(super) enum KeyHolder {
+    Review = 1,
+    Settings = 2,
+    Onboarding = 4,
+}
+
+static KEY_HOLDERS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub(super) fn hold_keys(holder: KeyHolder, held: bool) {
+    use std::sync::atomic::Ordering::AcqRel;
+    if held {
+        KEY_HOLDERS.fetch_or(holder as u8, AcqRel);
+    } else {
+        KEY_HOLDERS.fetch_and(!(holder as u8), AcqRel);
+    }
+}
+
 pub(super) fn hand_back_keys_now() {
     use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+    if KEY_HOLDERS.load(std::sync::atomic::Ordering::Acquire) != 0 {
+        return;
+    }
     let previous = PREVIOUS_FRONT_APP.swap(0, std::sync::atomic::Ordering::AcqRel);
     let Some(mtm) = MainThreadMarker::new() else {
         return;
