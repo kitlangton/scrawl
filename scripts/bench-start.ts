@@ -2,6 +2,12 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+// Times recording start (`recording_start_ms`, main-thread time in `start_recording_with_target`)
+// and its stages, through the real picker, Metal overlay, microphone and ScreenCaptureKit.
+//   bun scripts/bench-start.ts [--quick-stop]
+// `--quick-stop` stops both workers at once, checking clean joins rather than timing. Needs Screen
+// Recording and Microphone grants, `ffprobe`, and an awake screen someone is using:
+// `perf/screen-guard.sh` refuses on the Studio, so run it on the MacBook Pro under `/tmp/pro-gui.lock`.
 // One process: warmup + seven starts, matching repeated captures in the menu-bar app.
 // Build separately so compiler/cache state never enters the timing.
 const binary = resolve(process.env.SCRAWL_BIN ?? "target/debug/scrawl");
