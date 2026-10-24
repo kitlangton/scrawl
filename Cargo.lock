@@ -4017,6 +4017,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "procwatch"
+version = "0.1.0"
+source = "git+https://github.com/anomalyco/rune.git?rev=edf78ccc741c640b0251de38aa4fea9285d4916f#edf78ccc741c640b0251de38aa4fea9285d4916f"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4720,6 +4728,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-quartz-core",
  "png 0.18.1",
+ "procwatch",
  "raw-window-handle",
  "screencapturekit",
  "serde",
