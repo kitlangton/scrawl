@@ -39,7 +39,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release
+          key: release-crt-static
           cache-on-failure: true
 
       - run: cargo build ${{ env.BUILD }}
@@ -50,9 +50,6 @@ jobs:
       - name: No AVX-512 outside the CPU backends that need it
         run: scripts\check-windows-cpu-tiers.ps1 target\x86_64-pc-windows-msvc\release
 
-      # transcribe.cpp builds against the DLL C runtime, so the Visual C++ runtime DLLs scrawl.exe
-      # and transcribe.cpp's DLLs import go beside them in the zip (app-local, as Microsoft
-      # allows): a fresh Windows has no Visual C++ redistributable.
       # A fresh runner has no Scrawl config, so the app opens the welcome window. Scrawl leaves its
       # own windows out of screen captures unless SCRAWL_SHOW_OWN_WINDOWS is set.
       - name: The welcome window opens on a fresh profile
@@ -82,24 +79,20 @@ jobs:
           path: dist/welcome.png
           if-no-files-found: warn
 
-      - name: Collect the Visual C++ runtime DLLs
+      - name: Check the executable and DLLs need no Visual C++ Redistributable
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vs = & $vswhere -latest -products * -property installationPath
           $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
           $files = @($env:EXE) + (Get-ChildItem target\x86_64-pc-windows-msvc\release\transcribe.dll, target\x86_64-pc-windows-msvc\release\ggml*.dll).FullName
-          $deps = $files | ForEach-Object { & $dumpbin.FullName /nologo /dependents $_ } | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() } | Sort-Object -Unique
+          $deps = $files | ForEach-Object {
+            & $dumpbin.FullName /nologo /dependents $_
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $_ with exit code $LASTEXITCODE" }
+          } | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() } | Sort-Object -Unique
           "imports:"; $deps
-          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
-          "runtime from $($crt.FullName)"
-          New-Item -ItemType Directory -Force runtime | Out-Null
-          foreach ($dll in $deps | Where-Object { $_ -match '^(vcruntime|msvcp|concrt|vcomp)' }) {
-            $file = Join-Path $crt.FullName $dll
-            if (-not (Test-Path $file)) { throw "no $dll in $($crt.FullName)" }
-            Copy-Item $file runtime\
-          }
-          Get-ChildItem runtime | Format-Table Name, Length
+          $redist = $deps | Where-Object { $_ -match '^(vcruntime|msvcp|concrt|vcomp)' }
+          if ($redist) { throw "Scrawl imports Visual C++ runtime DLLs: $redist" }
 
       - name: Downloads and runs the speech model
         env:
@@ -135,7 +128,6 @@ jobs:
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item $env:EXE "$dir\scrawl.exe"
           Copy-Item target\x86_64-pc-windows-msvc\release\transcribe.dll, target\x86_64-pc-windows-msvc\release\ggml*.dll $dir
-          Copy-Item runtime\*.dll $dir
           Copy-Item LICENSE "$dir\LICENSE.txt"
           @"
           Scrawl $version for Windows (preview)
