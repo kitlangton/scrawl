@@ -1507,6 +1507,13 @@ impl Session {
             let (sender, receiver) = flume::unbounded();
             crate::settings_window::request_open(receiver, pane, std::sync::Arc::clone(&events));
             Transport::InProcess(Some(sender))
+        } else if Self::rune_window() {
+            let (sender, receiver) = flume::unbounded();
+            #[cfg(target_os = "macos")]
+            crate::ui::rune_settings::request_open(receiver, pane, std::sync::Arc::clone(&events));
+            #[cfg(not(target_os = "macos"))]
+            drop(receiver);
+            Transport::InProcess(Some(sender))
         } else {
             Self::spawn_helper(pane, std::sync::Arc::clone(&events))?
         };
@@ -1553,6 +1560,18 @@ impl Session {
             last_view: String::new(),
             _microphones: microphones,
         })
+    }
+
+    /// Under `"ui": "rune"`, the Rune window in this process draws Settings.
+    fn rune_window() -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            crate::handoff::rune_ui() && crate::ui::rune_settings::available()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
     }
 
     /// `scrawl-helper settings`, reading its actions off stdout.
