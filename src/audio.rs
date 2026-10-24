@@ -5,6 +5,8 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 const SAMPLE_RATE: u32 = 16_000;
+/// Samples in one millisecond of `SAMPLE_RATE` audio.
+pub const SAMPLES_PER_MS: u64 = SAMPLE_RATE as u64 / 1_000;
 
 #[derive(Clone, Debug)]
 pub struct RecordedAudio {

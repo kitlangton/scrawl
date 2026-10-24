@@ -35,7 +35,6 @@ const VERSION: u64 = 1;
 const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 
 const AUDIO: &str = "{audio}";
-const SAMPLES_PER_MS: u64 = 16;
 /// Spans may end this far past the audio (padding, rounding); they're clamped to it.
 const END_PAD_MS: u64 = 500;
 const MIN_LIMIT: Duration = Duration::from_secs(300);
@@ -180,7 +179,7 @@ impl Program {
     pub fn limit(&self, sample_count: usize) -> Duration {
         self.timeout.unwrap_or_else(|| {
             MIN_LIMIT.max(Duration::from_millis(
-                60_000 + 10 * sample_count as u64 / SAMPLES_PER_MS,
+                60_000 + 10 * sample_count as u64 / crate::audio::SAMPLES_PER_MS,
             ))
         })
     }
@@ -398,7 +397,7 @@ pub fn transcribe(
     parse(
         &stdout,
         &program.name(),
-        sample_count as u64 / SAMPLES_PER_MS,
+        sample_count as u64 / crate::audio::SAMPLES_PER_MS,
         log,
     )
 }
@@ -461,12 +460,12 @@ fn parse(
     transcript.words = if words.is_empty() {
         // No word times: spread the text over each segment, else over the recording.
         let mut spread: Vec<WordTiming> = if segments.is_empty() {
-            crate::hex::spread_words(text, 0, audio_ms).1
+            crate::speech_plan::spread(text, &[(0, audio_ms)]).1
         } else {
             segments
                 .iter()
                 .flat_map(|segment| {
-                    crate::hex::spread_words(&segment.text, segment.t0, segment.t1).1
+                    crate::speech_plan::spread(&segment.text, &[(segment.t0, segment.t1)]).1
                 })
                 .collect()
         };

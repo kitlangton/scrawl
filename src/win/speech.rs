@@ -15,7 +15,7 @@ use transcribe_cpp::{Model, RunOptions, TimestampKind};
 use crate::helper::SpeechModelLine;
 use crate::model::{TranscriptData, TranscriptSegment, WordTiming};
 
-const KHZ: u64 = 16;
+const KHZ: u64 = crate::audio::SAMPLES_PER_MS;
 /// Silence kept around each clip, so first and last words aren't clipped.
 const CLIP_PAD_MS: u64 = 200;
 
@@ -174,7 +174,7 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
             .collect();
         if words.is_empty() {
             // No word times from this model: spread the text over the clip, and say so.
-            let (segments, words) = crate::hex::spread_words(&text, start, end);
+            let (segments, words) = crate::speech_plan::spread(&text, &[(start, end)]);
             transcript.estimated = true;
             transcript.segments.extend(segments);
             transcript.words.extend(words);

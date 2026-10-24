@@ -22,7 +22,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
 use crate::audio::{self, RecordedAudio};
-use crate::model::{TranscriptData, TranscriptSegment, WordTiming};
+use crate::model::TranscriptData;
 
 /// Tried in this order when no model is configured. Anything else is the user's explicit pick.
 pub const PREFERRED_MODELS: [&str; 4] = [
@@ -49,7 +49,6 @@ pub fn language_code(value: &str) -> Option<String> {
         && value.as_bytes()[0].is_ascii_alphabetic())
     .then(|| value.to_ascii_lowercase())
 }
-const SAMPLE_RATE_KHZ: u64 = 16;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(300);
 const QUICK_READ_TIMEOUT: Duration = Duration::from_secs(2);
 /// A cold model may need to load before the first answer.
@@ -486,50 +485,6 @@ pub fn plan_clips(islands: &[(u64, u64)], duration_ms: u64) -> Vec<(u64, u64)> {
     clips
 }
 
-fn ends_sentence(word: &str) -> bool {
-    word.trim_end_matches(['"', '\'', '”', '’', ')', ']'])
-        .ends_with(['.', '!', '?', ';', ':'])
-}
-
-/// Spreads `text` over `start..end`, each word's share weighted by its length. Words tile the
-/// span exactly (no gaps, no overlap), so the first begins at `start` and the last ends at `end`.
-pub fn spread_words(text: &str, start: u64, end: u64) -> (Vec<TranscriptSegment>, Vec<WordTiming>) {
-    let tokens: Vec<&str> = text.split_whitespace().collect();
-    let end = end.max(start);
-    let total: u128 = tokens
-        .iter()
-        .map(|token| token.chars().count().max(1) as u128)
-        .sum();
-    let mut words: Vec<WordTiming> = Vec::with_capacity(tokens.len());
-    let mut segments = Vec::new();
-    let mut segment_start = 0;
-    let mut weight: u128 = 0;
-    for (index, token) in tokens.iter().enumerate() {
-        let at = |weight: u128| start + (u128::from(end - start) * weight / total) as u64;
-        let t0 = at(weight);
-        weight += token.chars().count().max(1) as u128;
-        words.push(WordTiming {
-            t0,
-            t1: at(weight),
-            text: (*token).to_owned(),
-        });
-        if ends_sentence(token) || index + 1 == tokens.len() {
-            let phrase = &words[segment_start..];
-            segments.push(TranscriptSegment {
-                t0: phrase[0].t0,
-                t1: phrase[phrase.len() - 1].t1,
-                text: phrase
-                    .iter()
-                    .map(|word| word.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            });
-            segment_start = words.len();
-        }
-    }
-    (segments, words)
-}
-
 /// Transcribes each clip with `send` (given that clip's WAV) and spreads its words over it.
 /// A clip Hex refuses is skipped; any other failure (or every clip refused) fails the whole
 /// recording so the caller can use another transcriber.
@@ -550,8 +505,8 @@ pub fn transcribe_clips(
     let mut texts: Vec<String> = Vec::new();
     for &(start, end) in clips {
         ensure!(Instant::now() < deadline, "Hex took too long");
-        let from = (start.saturating_sub(CLIP_PAD_MS) * SAMPLE_RATE_KHZ) as usize;
-        let to = (((end + CLIP_PAD_MS) * SAMPLE_RATE_KHZ) as usize).min(samples.len());
+        let from = (start.saturating_sub(CLIP_PAD_MS) * audio::SAMPLES_PER_MS) as usize;
+        let to = (((end + CLIP_PAD_MS) * audio::SAMPLES_PER_MS) as usize).min(samples.len());
         if from >= to {
             continue;
         }
@@ -571,7 +526,7 @@ pub fn transcribe_clips(
         if text.is_empty() {
             continue;
         }
-        let (segments, words) = spread_words(&text, start, end);
+        let (segments, words) = crate::speech_plan::spread(&text, &[(start, end)]);
         transcript.segments.extend(segments);
         transcript.words.extend(words);
         texts.push(text);
@@ -592,7 +547,7 @@ pub fn transcribe_audio(
     audio: &RecordedAudio,
 ) -> Result<TranscriptData> {
     let samples = audio::decode_wav_16k(&audio.wav_bytes)?;
-    let duration_ms = samples.len() as u64 / SAMPLE_RATE_KHZ;
+    let duration_ms = samples.len() as u64 / audio::SAMPLES_PER_MS;
     let mut clips = plan_clips(&audio::speech_islands(&samples), duration_ms);
     if clips.is_empty() && duration_ms >= MIN_ISLAND_MS * 4 {
         // Too quiet to find speech by energy: let Hex hear the whole thing.
@@ -863,24 +818,6 @@ mod tests {
             client(bad.port).transcribe(b"x", "m", "en"),
             Err(Failure::Rejected { status: 400, .. })
         ));
-    }
-
-    #[test]
-    fn spreading_tiles_the_span_by_word_length() {
-        let (segments, words) = spread_words("Hi there. Longer words follow", 1_000, 2_000);
-        assert_eq!(words.first().unwrap().t0, 1_000);
-        assert_eq!(words.last().unwrap().t1, 2_000);
-        assert!(words.windows(2).all(|pair| pair[0].t1 == pair[1].t0));
-        assert!(words.iter().all(|word| word.t0 <= word.t1));
-        let length = |i: usize| words[i].t1 - words[i].t0;
-        assert!(length(3) > length(0), "longer words get longer spans");
-        assert_eq!(segments.len(), 2);
-        assert_eq!(segments[0].text, "Hi there.");
-        assert_eq!((segments[0].t0, segments[1].t1), (1_000, 2_000));
-        assert_eq!(segments[0].t1, words[1].t1);
-        assert_eq!(spread_words("  ", 0, 10), (vec![], vec![]));
-        let (_, instant) = spread_words("a b", 500, 500);
-        assert!(instant.iter().all(|word| word.t0 == 500 && word.t1 == 500));
     }
 
     #[test]
