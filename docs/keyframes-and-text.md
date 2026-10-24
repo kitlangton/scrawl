@@ -1,6 +1,6 @@
 # Keyframes, transcription and the text agents read
 
-Read this before changing `src/keyframes.rs`, `src/transcribe.rs`, `src/hex.rs`, `src/command_transcriber.rs`, `src/sketch.rs` (`summary.md`) or `src/render.rs` (frames and the contact sheet).
+Read this before changing `src/keyframes.rs`, `src/transcribe.rs`, `src/hex.rs`, `src/speech_plan.rs`, `src/command_transcriber.rs`, `src/sketch.rs` (`summary.md`) or `src/render.rs` (frames and the contact sheet).
 
 ## Images and text
 
@@ -9,12 +9,12 @@ Read this before changing `src/keyframes.rs`, `src/transcribe.rs`, `src/hex.rs`,
 
 ## Transcription (`src/transcribe.rs`, `src/hex.rs`, `src/command_transcriber.rs`)
 
-Apple SpeechAnalyzer by default (measured word times). `"transcriber": "hex"` + `"hexModel"` in `~/.config/scrawl/config.json` (Settings › Recording, `scrawl hex status`, `--transcriber` on `reprocess`/`import`) uses Hex's local API v2 (discovery file `local-api.json`, bearer token, never logged) only when Hex answers `/health` and has a ready model (`installed && verified`; Scrawl never downloads). Hex gives text only, so each speech island (`audio::speech_islands`, clips merged to ≤ 24) is transcribed on its own and its words are spread over it by length: `source: "hex:<model>"`, `estimated: true`, which `keyframes.rs` reads to skip spoken cues. Any Hex failure falls back to Apple for that recording; Hex absent falls back silently (logged once). `"transcriber": "command"` (`src/command_transcriber.rs`) runs the argv in `"transcribeCommand"` (no shell, own process group, wall-clock limit, 8 MiB stdout cap) and reads one versioned JSON transcript: `source: "command:<name>"`; any failure means Apple for that recording (Hex never tried; a missing or malformed command is logged once, like Hex being away), and nothing the program says or is given reaches the log. It gets no language from Scrawl: `appleLocale` is Apple's, and the user's argv carries the model's. Its keys are read on their own (`Program::load_from`), never through `handoff::Config`. Settings reads `hex::cached_status` (a background poller), never the network.
+Apple SpeechAnalyzer by default (measured word times). `"transcriber": "hex"` + `"hexModel"` in `~/.config/scrawl/config.json` (Settings › Recording, `scrawl hex status`, `--transcriber` on `reprocess`/`import`) uses Hex's local API v2 (discovery file `local-api.json`, bearer token, never logged) only when Hex answers `/health` and has a ready model (`installed && verified`; Scrawl never downloads). Hex hears the whole recording, in chunks of at most 30 s cut at the quietest 50 ms window (`src/speech_plan.rs`; only chunks with no voiced window, silence or steady noise, are left out), so quiet or very short speech is never dropped. Hex gives text only, so each chunk's words are spread by length over the voiced spans inside it: `source: "hex:<model>"`, `estimated: true`, which `keyframes.rs` reads to skip spoken cues. Any Hex failure, a refused chunk included, falls back to Apple for that recording; Hex absent falls back silently (logged once). `"transcriber": "command"` (`src/command_transcriber.rs`) runs the argv in `"transcribeCommand"` (no shell, own process group, wall-clock limit, 8 MiB stdout cap) and reads one versioned JSON transcript: `source: "command:<name>"`; any failure means Apple for that recording (Hex never tried; a missing or malformed command is logged once, like Hex being away), and nothing the program says or is given reaches the log. It gets no language from Scrawl: `appleLocale` is Apple's, and the user's argv carries the model's. Its keys are read on their own (`Program::load_from`), never through `handoff::Config`. Settings reads `hex::cached_status` (a background poller), never the network.
 
 Hex requests use `"hexLanguage"` (Settings › Recording › Hex language), default `en`.
 The field accepts a language code or `auto`, trims/lowercases it, and saves on Return/Apply;
 blank resets to `en`. Scrawl validates URL-safe code syntax only, leaving supported languages
-to Hex. The selection is read once per recording and reused for all speech islands/retries.
+to Hex. The selection is read once per recording and reused for all chunks/retries.
 It does not inherit Hex's dictation settings. An unsupported code follows the existing
 Hex-failure fallback. Models may ignore language hints (e.g. Parakeet v3).
 

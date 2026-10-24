@@ -1,8 +1,142 @@
-//! Word times for a recognizer that answers with text only (Hex, a command transcriber without
-//! words, a Parakeet model without word times): `spread` places the words over the speech they
-//! came from, by length. The times are estimates (`TranscriptData::estimated`).
+//! What a speech recognizer hears of a recording, and when the words of a text-only answer
+//! were said.
+//!
+//! `Plan` cuts the whole recording into chunks of at most 30 s, each cut at its quietest 50 ms
+//! window, so every word is heard however quietly or briefly it was said. Only a chunk with no
+//! voiced window (silence, steady noise) is left out, as a recognizer may invent words there.
+//! Loudness never decides what is heard, only when: `transcribe` spreads a text-only answer
+//! (Hex) over the voiced spans of its own chunk by length (`spread`, also used by the command
+//! transcriber and Windows' Parakeet when they lack word times). Those times are estimates
+//! (`TranscriptData::estimated`), so spoken cues never cut keyframes from them.
 
-use crate::model::{TranscriptSegment, WordTiming};
+use anyhow::Result;
+
+use crate::audio::{self, SAMPLES_PER_MS, WINDOW_MS};
+use crate::model::{TranscriptData, TranscriptSegment, WordTiming};
+
+/// The longest chunk sent in one request.
+const MAX_CHUNK_MS: u64 = 30_000;
+/// No cut is made earlier than this into a chunk, so each keeps enough context.
+const MIN_CHUNK_MS: u64 = 15_000;
+/// A window is voiced above this many times the noise floor, within these levels: more
+/// sensitive than `audio::speech_islands`, as it only places words and skips dead chunks.
+const VOICED_OVER_FLOOR: f64 = 2.0;
+const VOICED_MIN_RMS: f64 = 0.001;
+const VOICED_MAX_RMS: f64 = 0.01;
+
+/// What a recognizer is given of one recording, and where its speech is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Plan {
+    chunks: Vec<(u64, u64)>,
+    voiced: Vec<(u64, u64)>,
+}
+
+impl Plan {
+    pub fn new(samples_16k: &[f32]) -> Plan {
+        let rms = audio::window_rms(samples_16k);
+        let duration = samples_16k.len() as u64 / SAMPLES_PER_MS;
+        let threshold =
+            (audio::noise_floor(&rms) * VOICED_OVER_FLOOR).clamp(VOICED_MIN_RMS, VOICED_MAX_RMS);
+        let voiced = audio::islands_above(&rms, threshold, duration);
+        let chunks = cuts(&rms, duration)
+            .into_iter()
+            .filter(|&(start, end)| voiced.iter().any(|&(a, b)| a < end && b > start))
+            .collect();
+        Plan { chunks, voiced }
+    }
+
+    /// The spans sent to the recognizer, in milliseconds: they tile the recording, each at most
+    /// 30 s, except that chunks without a voiced window are left out.
+    pub fn chunks(&self) -> &[(u64, u64)] {
+        &self.chunks
+    }
+
+    /// Where the speech is, for timing only: energy islands at a sensitive threshold, with no
+    /// minimum length.
+    pub fn voiced(&self) -> &[(u64, u64)] {
+        &self.voiced
+    }
+
+    /// The voiced spans inside `start..end`, else the whole of it.
+    fn voiced_in(&self, start: u64, end: u64) -> Vec<(u64, u64)> {
+        let spans: Vec<(u64, u64)> = self
+            .voiced()
+            .iter()
+            .map(|&(a, b)| (a.max(start), b.min(end)))
+            .filter(|&(a, b)| b > a)
+            .collect();
+        if spans.is_empty() {
+            vec![(start, end)]
+        } else {
+            spans
+        }
+    }
+}
+
+/// `0..duration` cut into chunks of at most `MAX_CHUNK_MS`, each cut in the middle of the
+/// quietest window (the latest of equals) from `MIN_CHUNK_MS` into its chunk.
+fn cuts(rms: &[f64], duration: u64) -> Vec<(u64, u64)> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while duration - start > MAX_CHUNK_MS {
+        let level = |window: u64| rms.get(window as usize).copied().unwrap_or(f64::INFINITY);
+        let windows = (start + MIN_CHUNK_MS) / WINDOW_MS..(start + MAX_CHUNK_MS) / WINDOW_MS;
+        let Some(quietest) = windows.min_by(|&a, &b| level(a).total_cmp(&level(b)).then(b.cmp(&a)))
+        else {
+            break;
+        };
+        let cut = quietest * WINDOW_MS + WINDOW_MS / 2;
+        chunks.push((start, cut));
+        start = cut;
+    }
+    if duration > start {
+        chunks.push((start, duration));
+    }
+    chunks
+}
+
+/// What a recognizer made of one chunk.
+pub enum Heard {
+    /// Text without times (Hex): its words are spread over the chunk's voiced spans.
+    Text(String),
+}
+
+/// Runs `recognize` on each chunk of `plan` in order (given that chunk's samples) and joins what
+/// it heard into one transcript. Any error fails the whole recording, so the caller can use
+/// another transcriber: skipping a refused chunk would silently lose up to 30 s of speech.
+pub fn transcribe(
+    samples_16k: &[f32],
+    plan: &Plan,
+    source: String,
+    model: Option<String>,
+    mut recognize: impl FnMut(&[f32]) -> Result<Heard>,
+) -> Result<TranscriptData> {
+    let mut transcript = TranscriptData {
+        source,
+        model,
+        ..Default::default()
+    };
+    let mut texts = Vec::new();
+    for &(start, end) in plan.chunks() {
+        let from = (start * SAMPLES_PER_MS) as usize;
+        let to = ((end * SAMPLES_PER_MS) as usize).min(samples_16k.len());
+        if from >= to {
+            continue;
+        }
+        let Heard::Text(text) = recognize(&samples_16k[from..to])?;
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if text.is_empty() {
+            continue;
+        }
+        let (segments, words) = spread(&text, &plan.voiced_in(start, end));
+        transcript.estimated = true;
+        transcript.segments.extend(segments);
+        transcript.words.extend(words);
+        texts.push(text);
+    }
+    transcript.text = texts.join(" ");
+    Ok(transcript)
+}
 
 /// Spreads `text` over `spans` (in order, not overlapping), each word's share weighted by its
 /// length. A span gets the words whose middle falls in its share of the spans' total length,
@@ -128,5 +262,165 @@ mod tests {
         assert!(halves[2..].iter().all(|word| word.t0 >= 1_000));
         assert_eq!(spread("Hi.", &[]), (vec![], vec![]));
         assert_eq!(spread("", &spans), (vec![], vec![]));
+    }
+
+    /// `ms` of a square wave whose RMS level is `level`.
+    fn tone(level: f32, ms: u64) -> Vec<f32> {
+        (0..ms * SAMPLES_PER_MS)
+            .map(|i| if i % 2 == 0 { level } else { -level })
+            .collect()
+    }
+
+    fn recording(parts: &[(f32, u64)]) -> Vec<f32> {
+        parts
+            .iter()
+            .flat_map(|&(level, ms)| tone(level, ms))
+            .collect()
+    }
+
+    /// The millisecond spans of `samples` that `transcribe` hands its recognizer.
+    fn heard(samples: &[f32], plan: &Plan) -> Vec<(u64, u64)> {
+        let mut spans = Vec::new();
+        transcribe(samples, plan, "test".into(), None, |chunk| {
+            let from =
+                (chunk.as_ptr() as usize - samples.as_ptr() as usize) / std::mem::size_of::<f32>();
+            let to = from + chunk.len();
+            spans.push((from as u64 / SAMPLES_PER_MS, to as u64 / SAMPLES_PER_MS));
+            Ok(Heard::Text(String::new()))
+        })
+        .unwrap();
+        spans
+    }
+
+    fn covers(spans: &[(u64, u64)], start: u64, end: u64) -> bool {
+        spans.iter().any(|&(a, b)| a <= start && end <= b)
+    }
+
+    #[test]
+    fn chunks_tile_the_whole_recording_and_stay_under_30_s() {
+        let samples = recording(&[(0.05, 95_000)]);
+        let plan = Plan::new(&samples);
+        let chunks = plan.chunks();
+        assert!(chunks.len() >= 4, "{chunks:?}");
+        assert_eq!(chunks[0].0, 0);
+        assert_eq!(chunks.last().unwrap().1, 95_000);
+        assert!(chunks.windows(2).all(|pair| pair[0].1 == pair[1].0));
+        assert!(chunks.iter().all(|&(a, b)| b > a && b - a <= MAX_CHUNK_MS));
+        let sent: u64 = heard(&samples, &plan).iter().map(|(a, b)| b - a).sum();
+        assert_eq!(sent, 95_000);
+        assert_eq!(Plan::new(&tone(0.05, 2_000)).chunks(), [(0, 2_000)]);
+        assert_eq!(Plan::new(&[]), Plan::default());
+    }
+
+    #[test]
+    fn quiet_speech_beside_loud_speech_is_heard() {
+        // #89: a phrase at about a quarter of the level of the one before it, over a noise floor.
+        let noise = 0.004;
+        let samples = recording(&[
+            (noise, 1_000),
+            (0.04, 1_500),
+            (noise, 1_000),
+            (0.011, 1_500),
+            (noise, 1_000),
+        ]);
+        // The old planner's islands miss the quiet phrase, so Hex never got it.
+        let islands = crate::audio::speech_islands(&samples);
+        assert!(islands.iter().all(|&(_, end)| end <= 2_500), "{islands:?}");
+        let plan = Plan::new(&samples);
+        assert!(covers(&heard(&samples, &plan), 3_500, 5_000));
+        assert!(covers(plan.voiced(), 3_500, 5_000), "{:?}", plan.voiced());
+    }
+
+    #[test]
+    fn a_lone_short_word_is_heard() {
+        // #90: a 100 ms word on its own, shorter than any island the old planner kept.
+        let samples = recording(&[
+            (0.0, 500),
+            (0.05, 1_000),
+            (0.0, 1_500),
+            (0.05, 100),
+            (0.0, 900),
+        ]);
+        assert!(crate::audio::speech_islands(&samples).contains(&(3_000, 3_100)));
+        let plan = Plan::new(&samples);
+        assert!(covers(&heard(&samples, &plan), 3_000, 3_100));
+        assert!(covers(plan.voiced(), 3_000, 3_100));
+    }
+
+    #[test]
+    fn a_cut_lands_on_the_quietest_window() {
+        let mut samples = tone(0.05, 40_000);
+        let window =
+            |ms: u64| (ms * SAMPLES_PER_MS) as usize..((ms + 50) * SAMPLES_PER_MS) as usize;
+        samples[window(18_000)].iter_mut().for_each(|s| *s *= 0.2);
+        samples[window(21_000)].iter_mut().for_each(|s| *s *= 0.02);
+        samples[window(35_000)].fill(0.0); // Past 30 s: out of reach of the first cut.
+        assert_eq!(
+            Plan::new(&samples).chunks(),
+            [(0, 21_025), (21_025, 40_000)]
+        );
+    }
+
+    #[test]
+    fn silence_and_steady_noise_send_nothing() {
+        for samples in [vec![0.0; 16_000 * 10], tone(0.004, 10_000)] {
+            let plan = Plan::new(&samples);
+            assert!(plan.chunks().is_empty() && plan.voiced().is_empty());
+            let transcript = transcribe(&samples, &plan, "test".into(), None, |_| {
+                panic!("nothing should be sent")
+            })
+            .unwrap();
+            assert!(transcript.text.is_empty() && transcript.words.is_empty());
+        }
+        // A noise-only chunk after speech is left out too.
+        let samples = recording(&[(0.05, 10_000), (0.004, 40_000)]);
+        assert_eq!(Plan::new(&samples).chunks(), [(0, 29_975)]);
+    }
+
+    #[test]
+    fn text_is_spread_over_the_voiced_spans_of_its_own_chunk() {
+        let plan = Plan {
+            chunks: vec![(0, 10_000), (10_000, 20_000), (20_000, 30_000)],
+            voiced: vec![(1_000, 2_000), (4_000, 5_000)],
+        };
+        let samples = vec![0.0; 16_000 * 30];
+        let mut answers = ["First part here. Then more", "  ", "No voiced span"].into_iter();
+        let transcript = transcribe(&samples, &plan, "hex:m".into(), Some("m".into()), |_| {
+            Ok(Heard::Text(answers.next().unwrap().into()))
+        })
+        .unwrap();
+        assert_eq!(transcript.source, "hex:m");
+        assert_eq!(transcript.model.as_deref(), Some("m"));
+        assert!(transcript.estimated);
+        assert_eq!(transcript.text, "First part here. Then more No voiced span");
+        let (voiced, unvoiced) = transcript.words.split_at(5);
+        assert!(voiced.iter().all(|word| {
+            (1_000..=2_000).contains(&word.t0) && word.t1 <= 2_000
+                || (4_000..=5_000).contains(&word.t0) && word.t1 <= 5_000
+        }));
+        assert_eq!((unvoiced[0].t0, unvoiced[2].t1), (20_000, 30_000));
+        assert!(
+            transcript
+                .words
+                .windows(2)
+                .all(|pair| pair[0].t1 <= pair[1].t0)
+        );
+    }
+
+    #[test]
+    fn any_failure_fails_the_whole_recording() {
+        let samples = recording(&[(0.05, 45_000)]);
+        let plan = Plan::new(&samples);
+        assert_eq!(plan.chunks().len(), 2);
+        let mut calls = 0;
+        let result = transcribe(&samples, &plan, "test".into(), None, |_| {
+            calls += 1;
+            if calls == 2 {
+                anyhow::bail!("refused")
+            }
+            Ok(Heard::Text("kept".into()))
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 2);
     }
 }

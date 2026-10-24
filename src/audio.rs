@@ -305,15 +305,29 @@ fn wav_16k_reader(wav_bytes: &[u8]) -> Result<hound::WavReader<Cursor<&[u8]>>> {
     Ok(reader)
 }
 
-const ISLAND_WINDOW_MS: u64 = 50;
+/// The window `window_rms` measures loudness over.
+pub const WINDOW_MS: u64 = 50;
 const ISLAND_MERGE_SILENCE_MS: u64 = 350;
 
 /// Energy-based speech spans in milliseconds, quantized to 50 ms. These are not recognizer
 /// timestamps. The speech threshold follows the recording's own noise floor (10th percentile of
 /// window energy) so a quiet microphone and a noisy room both find their speech.
+// Only Windows' Parakeet plans by islands now; Hex hears everything (`speech_plan`).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn speech_islands(samples_16k: &[f32]) -> Vec<(u64, u64)> {
-    let window = (u64::from(SAMPLE_RATE) * ISLAND_WINDOW_MS / 1_000) as usize;
-    let rms: Vec<f64> = samples_16k
+    let rms = window_rms(samples_16k);
+    if rms.is_empty() {
+        return Vec::new();
+    }
+    let threshold = (noise_floor(&rms) * 3.0).clamp(0.005, 0.02);
+    let duration = samples_16k.len() as u64 * 1_000 / u64::from(SAMPLE_RATE);
+    islands_above(&rms, threshold, duration)
+}
+
+/// The RMS level of each `WINDOW_MS` window of `samples_16k` (the last one may be shorter).
+pub fn window_rms(samples_16k: &[f32]) -> Vec<f64> {
+    let window = (u64::from(SAMPLE_RATE) * WINDOW_MS / 1_000) as usize;
+    samples_16k
         .chunks(window)
         .map(|chunk| {
             (chunk
@@ -329,27 +343,31 @@ pub fn speech_islands(samples_16k: &[f32]) -> Vec<(u64, u64)> {
                 / chunk.len() as f64)
                 .sqrt()
         })
-        .collect();
-    if rms.is_empty() {
-        return Vec::new();
-    }
-    let mut sorted = rms.clone();
+        .collect()
+}
+
+/// A recording's noise floor: the 10th percentile of its window levels (0 without windows).
+pub fn noise_floor(rms: &[f64]) -> f64 {
+    let mut sorted = rms.to_vec();
     sorted.sort_by(f64::total_cmp);
-    let floor = sorted[sorted.len() / 10];
-    let threshold = (floor * 3.0).clamp(0.005, 0.02);
+    sorted.get(sorted.len() / 10).copied().unwrap_or(0.0)
+}
+
+/// Runs of `window_rms` windows louder than `threshold`, joined across silences shorter than
+/// 350 ms, in milliseconds and clamped to `duration`.
+pub fn islands_above(rms: &[f64], threshold: f64, duration: u64) -> Vec<(u64, u64)> {
     let mut islands: Vec<(u64, u64)> = Vec::new();
     for (index, &level) in rms.iter().enumerate() {
         if level <= threshold {
             continue;
         }
-        let start = index as u64 * ISLAND_WINDOW_MS;
-        let end = start + ISLAND_WINDOW_MS;
+        let start = index as u64 * WINDOW_MS;
+        let end = start + WINDOW_MS;
         match islands.last_mut() {
             Some(last) if start.saturating_sub(last.1) < ISLAND_MERGE_SILENCE_MS => last.1 = end,
             _ => islands.push((start, end)),
         }
     }
-    let duration = samples_16k.len() as u64 * 1_000 / u64::from(SAMPLE_RATE);
     for island in &mut islands {
         island.1 = island.1.min(duration);
     }

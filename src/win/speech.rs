@@ -2,9 +2,9 @@
 //! `transcribe.cpp`, the engine Hex uses. It loads a model Hex has already installed
 //! (`%APPDATA%\voice-control\models`), else Scrawl's own copy of Hex's Parakeet Unified English
 //! (`%LOCALAPPDATA%\Scrawl\models`), which `install` downloads once in the background and checks
-//! against its SHA-256. Like the Hex client, it transcribes each speech island on its own; unlike
-//! it, every word keeps the time the model heard it (`estimated: false`), so spoken cues ("look
-//! here") can cut keyframes.
+//! against its SHA-256. It transcribes each speech island (`plan_clips`) on its own, and every
+//! word keeps the time the model heard it (`estimated: false`), so spoken cues ("look here") can
+//! cut keyframes.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -18,6 +18,12 @@ use crate::model::{TranscriptData, TranscriptSegment, WordTiming};
 const KHZ: u64 = crate::audio::SAMPLES_PER_MS;
 /// Silence kept around each clip, so first and last words aren't clipped.
 const CLIP_PAD_MS: u64 = 200;
+
+const MIN_ISLAND_MS: u64 = 120;
+const MERGE_GAP_MS: u64 = 700;
+const MAX_MERGED_MS: u64 = 30_000;
+const MAX_FORCED_MERGE_MS: u64 = 8 * 60_000;
+const MAX_CLIPS: usize = 24;
 
 /// The model Scrawl downloads when Hex hasn't installed one: the same file, revision and
 /// checksum as Hex's `PARAKEET_UNIFIED_ENGLISH_ARTIFACT`.
@@ -125,7 +131,7 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
         std::fs::read(audio).with_context(|| format!("Could not read {}", audio.display()))?;
     let samples = crate::audio::decode_wav_16k(&wav)?;
     let duration_ms = samples.len() as u64 / KHZ;
-    let mut clips = crate::hex::plan_clips(&crate::audio::speech_islands(&samples), duration_ms);
+    let mut clips = plan_clips(&crate::audio::speech_islands(&samples), duration_ms);
     if clips.is_empty() && duration_ms >= 480 {
         clips.push((0, duration_ms));
     }
@@ -204,6 +210,37 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
     }
     transcript.text = texts.join(" ");
     Ok(transcript)
+}
+
+/// Speech spans worth one request each: tiny blips dropped, near neighbours joined so a clip
+/// holds whole phrases, and never more than `MAX_CLIPS`.
+pub fn plan_clips(islands: &[(u64, u64)], duration_ms: u64) -> Vec<(u64, u64)> {
+    let mut clips: Vec<(u64, u64)> = Vec::new();
+    for &(start, end) in islands {
+        let (start, end) = (start.min(duration_ms), end.min(duration_ms));
+        if end.saturating_sub(start) < MIN_ISLAND_MS {
+            continue;
+        }
+        match clips.last_mut() {
+            Some(last)
+                if start.saturating_sub(last.1) < MERGE_GAP_MS && end - last.0 <= MAX_MERGED_MS =>
+            {
+                last.1 = end;
+            }
+            _ => clips.push((start, end)),
+        }
+    }
+    while clips.len() > MAX_CLIPS {
+        let Some(index) = (1..clips.len())
+            .filter(|&i| clips[i].1 - clips[i - 1].0 <= MAX_FORCED_MERGE_MS)
+            .min_by_key(|&i| clips[i].0 - clips[i - 1].1)
+        else {
+            break;
+        };
+        clips[index - 1].1 = clips[index].1;
+        clips.remove(index);
+    }
+    clips
 }
 
 /// Loads ggml's CPU backend DLL for this CPU (beside `transcribe.dll`), once per process: the
@@ -369,6 +406,29 @@ mod tests {
         assert!(format!("{error:#}").contains("checksum"));
         assert!(!dir.join("fixture.gguf").exists());
         assert!(verified_in(&dir).is_empty());
+    }
+
+    #[test]
+    fn clips_drop_blips_merge_neighbours_and_stay_bounded() {
+        assert_eq!(
+            plan_clips(
+                &[(0, 50), (1_000, 1_500), (1_900, 2_400), (5_000, 5_300)],
+                10_000
+            ),
+            vec![(1_000, 2_400), (5_000, 5_300)]
+        );
+        assert!(plan_clips(&[], 1_000).is_empty());
+        let many: Vec<_> = (0..100).map(|i| (i * 2_000, i * 2_000 + 500)).collect();
+        let clips = plan_clips(&many, 300_000);
+        assert!(clips.len() <= MAX_CLIPS);
+        assert_eq!(clips[0].0, 0);
+        assert_eq!(clips.last().unwrap().1, 99 * 2_000 + 500);
+        assert!(clips.windows(2).all(|pair| pair[0].1 <= pair[1].0));
+        // A long unbroken stretch is not glued to its neighbour.
+        assert_eq!(
+            plan_clips(&[(0, 29_800), (30_000, 31_000)], 40_000).len(),
+            2
+        );
     }
 
     /// Downloads the real model (731 MB), loads it and runs it on two seconds of sound. CI's
