@@ -9,7 +9,7 @@ use std::time::Duration;
 use rune::{
     Align, App, AppHandle, AppSpec, Chrome, Color, Cx, El, Family, Icon, Phase, PhysicalInput,
     PhysicalKeyCode, Pixels, Side, Spring, SpringPair, TextEdit, TextStyle, Transition, Tx,
-    WindowOptions, WindowSpec, col, el, icon, row, spacer, text, text_input,
+    WindowOptions, WindowSpec, col, el, row, spacer, text, text_input,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -1668,7 +1668,9 @@ fn hex_language(s: &SettingsWin, theme: Theme) -> El {
     let valid = draft.is_empty() || valid_language(&draft);
     let changed = (if draft.is_empty() { "en" } else { draft.as_str() }) != s.view.transcriber.language;
     let field_bg = if theme.dark { Rgba::WHITE.alpha(0.06).over_rgba(bg) } else { Rgba::WHITE };
-    let field = text_input(&s.hex, style(13.0, 400.0))
+    let field_style = style(13.0, 400.0);
+    let line = field_style.line_px();
+    let field = text_input(&s.hex, field_style)
         .single_line()
         .placeholder("en", theme.tertiary().over(field_bg))
         .caret(theme.accent().color(), theme.accent().alpha(0.3).color())
@@ -1679,16 +1681,28 @@ fn hex_language(s: &SettingsWin, theme: Theme) -> El {
         .w(120.0)
         .h(22.0)
         .px(6.0)
-        .center_y()
+        .pt(((22.0 - line) / 2.0).max(0.0))
         .radius(5.0)
         .fill(field_bg.color())
         .border(1.0, theme.control_line().over(field_bg));
-    setting_row(
-        "Hex language",
-        true,
-        theme,
-        vec![field, button("Apply", valid && changed, theme, bg, |s, _| apply_hex(s))],
-    )
+    setting_row("Hex language", true, theme, vec![field, system_button("Apply", valid && changed, theme, bg, apply_hex)])
+}
+
+/// A plain SwiftUI `Button` (bordered, no custom style): unlike `SettingsButton` it greys its
+/// fill and title when disabled rather than fading the whole capsule.
+fn system_button(title: &str, enabled: bool, theme: Theme, bg: Rgba, f: fn(&mut SettingsWin)) -> El {
+    let dark = theme.dark;
+    let fill = if enabled { theme.control().over_rgba(bg) } else { theme.ink(if dark { 0.05 } else { 0.04 }).over_rgba(bg) };
+    let ink = if enabled { theme.text().over(fill) } else { theme.ink(if dark { 0.25 } else { 0.3 }).over(fill) };
+    let e = el().h(24.0).px(11.0).center().radius(7.0).fill(fill.color()).child(label(title, 13.0, 400.0, ink));
+    if enabled {
+        e.border(1.0, theme.control_line().over(fill))
+            .hover(theme.ink(if dark { 0.13 } else { 0.1 }).over(bg))
+            .press(theme.ink(if dark { 0.18 } else { 0.14 }).over(bg))
+            .on_press(f)
+    } else {
+        e
+    }
 }
 
 fn valid_language(s: &str) -> bool {

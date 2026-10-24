@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use rune::{El, Spring, TextStyle, el, text};
+use rune::{El, Spring, el, text};
 
 use super::rune_settings::{Rgba, Theme};
 
