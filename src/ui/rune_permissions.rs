@@ -101,8 +101,9 @@ pub(crate) fn open_settings(permission: &str, from: Option<[f32; 4]>) {
         }
         command.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
         let mut panels = panels().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(mut old) = panels.remove(permission) {
-            tell(&mut old, "cancel");
+        reap(&mut panels);
+        if let Some(old) = panels.remove(permission) {
+            retire(old, "cancel");
         }
         match command.spawn() {
             Ok(child) => {
@@ -125,9 +126,27 @@ pub(crate) fn open_settings(permission: &str, from: Option<[f32; 4]>) {
 /// Tells this permission's drag panel that the row turned on, so it says so and goes.
 pub(crate) fn close_guide(permission: &str) {
     let mut panels = panels().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(mut child) = panels.remove(permission) {
-        tell(&mut child, "granted");
+    reap(&mut panels);
+    if let Some(child) = panels.remove(permission) {
+        retire(child, "granted");
     }
+}
+
+/// Forgets the panels that have exited by themselves (closed by the user, or done).
+fn reap(panels: &mut HashMap<String, Child>) {
+    panels.retain(|_, child| matches!(child.try_wait(), Ok(None)));
+}
+
+/// Tells a panel its last command and closes its stdin; a thread waits for it to finish its
+/// animation and exit, so it doesn't linger as a zombie.
+fn retire(mut child: Child, command: &str) {
+    tell(&mut child, command);
+    drop(child.stdin.take());
+    let _ = std::thread::Builder::new()
+        .name("permission-panel-wait".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
 }
 
 fn open_url(url: &str) {

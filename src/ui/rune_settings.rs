@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::rune_keys::{self, FIELD, KeyController};
+use super::rune_session::{Attached, Host, Link};
 use super::rune_symbols::{symbol, weight};
 
 // MARK: Colours
@@ -813,6 +814,18 @@ pub(crate) struct SettingsWin {
     meter_watch: Option<Meter>,
     events: Option<Events>,
     icon: Option<Pixels>,
+    /// The session driving the window (`rune_session`).
+    session: u64,
+}
+
+impl Attached for SettingsWin {
+    fn session(&self) -> u64 {
+        self.session
+    }
+
+    fn set_session(&mut self, id: u64) {
+        self.session = id;
+    }
 }
 
 impl SettingsWin {
@@ -837,6 +850,7 @@ impl SettingsWin {
             meter_watch: None,
             events: None,
             icon: app_icon(),
+            session: 0,
         }
     }
 
@@ -874,9 +888,9 @@ impl SettingsWin {
                 .or_insert_with(|| KeyController::new(FIELD, labels.clone(), reduce, t))
                 .update(labels, shortcut.recording, shortcut.error.is_some(), t);
         }
-        if view.transcriber.language != self.hex_for {
+        if view.transcriber.language != self.hex_for || view.transcriber.engine != "hex" {
             self.hex_for = view.transcriber.language.clone();
-            self.hex = TextEdit::new(self.hex_for.clone());
+            self.discard_hex_draft();
         }
         if view.playback_level != self.view.playback_level {
             self.playback = None;
@@ -931,7 +945,7 @@ impl SettingsWin {
             }
             Some("show") => {
                 if let Some(pane) = message["pane"].as_str().and_then(Pane::parse) {
-                    self.pane = pane;
+                    self.set_pane(pane);
                     self.update_meter();
                 }
             }
@@ -954,8 +968,24 @@ impl SettingsWin {
             self.act("cancel-shortcut");
         }
         self.menu = None;
-        self.pane = pane;
+        self.set_pane(pane);
         self.update_meter();
+    }
+
+    fn set_pane(&mut self, pane: Pane) {
+        if self.pane != pane {
+            self.discard_hex_draft();
+        }
+        self.pane = pane;
+    }
+
+    /// The Hex language field commits on Return or Apply. As in SwiftUI, where its draft is the
+    /// field's own state, an unapplied draft goes once the field does: on a pane switch, when
+    /// Hex is no longer the engine, and when the window closes or another session takes it.
+    fn discard_hex_draft(&mut self) {
+        if self.hex.text != self.hex_for {
+            self.hex = TextEdit::new(self.hex_for.clone());
+        }
     }
 
     /// The level shows only while it can be seen: the Recording pane, with Microphone allowed.
@@ -2355,6 +2385,7 @@ fn on_focus(s: &mut SettingsWin, focused: bool, tx: &mut Tx) {
 fn on_close(s: &mut SettingsWin, _tx: &mut Tx) {
     s.meter_watch = None;
     s.menu = None;
+    s.discard_hex_draft();
     if let Some(events) = s.events.take() {
         events(crate::settings::Event::Action(crate::settings::Action::Close));
         events(crate::settings::Event::Exited);
@@ -2456,36 +2487,60 @@ pub(crate) fn request_open(
         .and_then(|p| serde_json::to_value(p).ok())
         .and_then(|v| v.as_str().and_then(Pane::parse))
         .unwrap_or(Pane::General);
-    handle.update(move |s, _tx| {
-        s.events = Some(events);
-        s.pane = pane;
-        s.menu = None;
-        s.update_meter();
-    });
+    let link = attach(handle, pane, events);
     std::thread::Builder::new()
         .name("rune-settings".into())
         .spawn(move || {
             let mut presented = false;
             while let Ok(message) = messages.recv() {
-                let kind = message["type"].as_str().unwrap_or_default().to_owned();
-                if kind == "close" {
-                    handle.update(|s, _| {
-                        s.events = None;
-                        s.meter_watch = None;
-                        hand_back_keys();
-                    });
-                    handle.hide();
-                    break;
-                }
-                handle.update(move |s, tx| s.message(&message, tx));
-                if (kind == "state" && !presented) || kind == "show" {
-                    presented = true;
-                    handle.update(|_, _| take_keys());
-                    handle.open();
+                if !on_message(&link, message, &mut presented) {
+                    return;
                 }
             }
+            close(&link);
         })
         .is_ok()
+}
+
+fn attach<H: Host<SettingsWin>>(host: H, pane: Pane, events: Events) -> Link<SettingsWin, H> {
+    Link::attach(host, move |s: &mut SettingsWin, _tx| {
+        s.events = Some(events);
+        s.reduce = reduce_motion();
+        s.discard_hex_draft();
+        s.pane = pane;
+        s.menu = None;
+        s.update_meter();
+    })
+}
+
+/// One message from the session. False once it has closed the window.
+fn on_message<H: Host<SettingsWin>>(link: &Link<SettingsWin, H>, message: Value, presented: &mut bool) -> bool {
+    let kind = message["type"].as_str().unwrap_or_default().to_owned();
+    if kind == "close" {
+        close(link);
+        return false;
+    }
+    link.update(move |s, tx| s.message(&message, tx));
+    if (kind == "state" && !*presented) || kind == "show" {
+        *presented = true;
+        link.update(|s, _| {
+            s.reduce = reduce_motion();
+            take_keys();
+        });
+        link.open();
+    }
+    true
+}
+
+/// The session has ended: its window goes, unless a newer session has it by now.
+fn close<H: Host<SettingsWin>>(link: &Link<SettingsWin, H>) {
+    link.update(|s, _| {
+        s.events = None;
+        s.meter_watch = None;
+        s.discard_hex_draft();
+        hand_back_keys();
+    });
+    link.hide();
 }
 
 // MARK: Renders
@@ -2896,6 +2951,62 @@ mod tests {
         assert_eq!(view.version, "1.0");
         assert_eq!(view.shortcuts.len(), 2);
         assert!(view.login.available);
+    }
+
+    #[test]
+    fn a_replaced_session_leaves_the_new_one_alone() {
+        use super::super::rune_session::test_host::Recorder;
+        let state = json!({"type": "state", "version": "1.0"});
+        let close = json!({"type": "close"});
+        for close_first in [true, false] {
+            let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let events = |tag: &'static str| -> Events {
+                let seen = Arc::clone(&seen);
+                Arc::new(move |_| seen.lock().unwrap().push(tag))
+            };
+            let host = Recorder::default();
+            let (mut win, mut visible) = (SettingsWin::new(), false);
+            let old = attach(host.clone(), Pane::General, events("old"));
+            assert!(on_message(&old, state.clone(), &mut false));
+            host.run(&mut win, &mut visible);
+            assert!(visible);
+
+            let new = attach(host.clone(), Pane::Storage, events("new"));
+            if close_first {
+                assert!(!on_message(&old, close.clone(), &mut true));
+                assert!(on_message(&new, state.clone(), &mut false));
+            } else {
+                assert!(on_message(&new, state.clone(), &mut false));
+                assert!(!on_message(&old, close.clone(), &mut true));
+            }
+            host.run(&mut win, &mut visible);
+            assert!(visible, "close_first: {close_first}");
+            assert_eq!(win.pane, Pane::Storage);
+            (win.events.as_ref().expect("the new session's events"))(crate::settings::Event::Exited);
+            assert_eq!(*seen.lock().unwrap(), ["new"]);
+
+            assert!(!on_message(&new, close.clone(), &mut true));
+            host.run(&mut win, &mut visible);
+            assert!(!visible && win.events.is_none());
+        }
+    }
+
+    #[test]
+    fn an_unapplied_hex_language_goes_with_its_field() {
+        let state = json!({"type": "state", "transcriber": {"engine": "hex", "language": "nl"}});
+        let mut win = SettingsWin::new();
+        win.message(&state, &mut Tx::default());
+        win.select(Pane::Recording);
+        assert_eq!(win.hex.text, "nl");
+        win.hex = TextEdit::new("fr".to_owned());
+        win.message(&state, &mut Tx::default());
+        assert_eq!(win.hex.text, "fr", "a state with the same language keeps the draft");
+        win.select(Pane::General);
+        assert_eq!(win.hex.text, "nl");
+        win.select(Pane::Recording);
+        win.hex = TextEdit::new("fr".to_owned());
+        on_close(&mut win, &mut Tx::default());
+        assert_eq!(win.hex.text, "nl");
     }
 
     #[test]

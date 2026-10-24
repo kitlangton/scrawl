@@ -21,6 +21,7 @@ use super::rune_settings::{
     ROUNDED, Rgba, SpeechStatus, app_icon_px, families, fonts, icons, measure, permission_symbol, reduce_motion,
     style,
 };
+use super::rune_session::{Attached, Host, Link};
 use super::rune_symbols::{symbol, weight};
 
 type Events = Arc<dyn Fn(crate::onboarding::Event) + Send + Sync>;
@@ -1030,6 +1031,18 @@ pub(crate) struct OnboardingWin {
     buttons: HashMap<String, [f32; 4]>,
     follow: Option<Follow>,
     sized: bool,
+    /// The session driving the window (`rune_session`).
+    session: u64,
+}
+
+impl Attached for OnboardingWin {
+    fn session(&self) -> u64 {
+        self.session
+    }
+
+    fn set_session(&mut self, id: u64) {
+        self.session = id;
+    }
 }
 
 impl OnboardingWin {
@@ -1060,6 +1073,7 @@ impl OnboardingWin {
             buttons: HashMap::new(),
             follow: None,
             sized: false,
+            session: 0,
         }
     }
 
@@ -2016,97 +2030,119 @@ pub(crate) fn available() -> bool {
 /// Attaches a session: its messages drive the window, its buttons go to `events`.
 pub(crate) fn request_open(messages: flume::Receiver<Value>, shortcut: String, paste: String, events: Events) -> bool {
     let Some(handle) = HANDLE.get().cloned() else { return false };
-    handle.update(move |s, _tx| {
-        s.events = Some(events);
-        s.shortcut = shortcut;
-        s.paste = paste;
-        s.sized = false;
-        s.buttons.clear();
-    });
+    let link = attach(handle, shortcut, paste, events);
     std::thread::Builder::new()
         .name("rune-onboarding".into())
         .spawn(move || {
             let mut presented = false;
             while let Ok(message) = messages.recv() {
-                let kind = message["type"].as_str().unwrap_or_default().to_owned();
-                let permission = message["permission"].as_str().unwrap_or_default().to_owned();
-                match kind.as_str() {
-                    "state" => {
-                        let Ok(state) = serde_json::from_value::<State>(message) else {
-                            crate::capture::scrawl_log("onboarding (rune): bad state");
-                            continue;
-                        };
-                        // The page transition reads the direction, so it changes a commit before
-                        // the step.
-                        let step = state.step.clone();
-                        handle.update(move |s, _tx| {
-                            if s.state.step != step {
-                                s.forward = step_index(&step) >= step_index(&s.state.step);
-                            }
-                        });
-                        let first = !presented;
-                        handle.update(move |s, tx| {
-                            if first {
-                                s.state = state.clone();
-                                s.now = clock();
-                                if s.state.step == "how-it-works" {
-                                    s.restart_demo();
-                                }
-                                tx.instant();
-                                if !s.sized {
-                                    s.sized = true;
-                                    resize_window(s.state.height());
-                                }
-                                s.present(tx);
-                            } else {
-                                s.apply(state, tx);
-                            }
-                        });
-                        if first {
-                            presented = true;
-                            handle.open();
-                        }
-                    }
-                    // The user has moved on to another row: answering an earlier question
-                    // mustn't pull this window over the System Settings pane they're working in.
-                    "request" => handle.update(move |s, _| {
-                        s.follow = None;
-                        #[cfg(target_os = "macos")]
-                        super::rune_permissions::request(&permission);
-                    }),
-                    "open-settings" => handle.update(move |s, _| {
-                        s.follow = None;
-                        #[cfg(target_os = "macos")]
-                        super::rune_permissions::open_settings(&permission, s.screen_frame(&permission));
-                    }),
-                    "hide" => {
-                        handle.update(|s, _| {
-                            s.visible = false;
-                            #[cfg(target_os = "macos")]
-                            super::platform::hold_keys(super::platform::KeyHolder::Onboarding, false);
-                        });
-                        handle.hide();
-                    }
-                    "show" => {
-                        handle.update(|s, tx| s.present(tx));
-                        handle.open();
-                    }
-                    "close" => {
-                        handle.update(|s, _| {
-                            s.events = None;
-                            s.follow = None;
-                            s.visible = false;
-                            hand_back_keys();
-                        });
-                        handle.hide();
-                        break;
-                    }
-                    _ => {}
+                if !on_message(&link, message, &mut presented) {
+                    return;
                 }
             }
+            close(&link);
         })
         .is_ok()
 }
+
+fn attach<H: Host<OnboardingWin>>(host: H, shortcut: String, paste: String, events: Events) -> Link<OnboardingWin, H> {
+    Link::attach(host, move |s: &mut OnboardingWin, _tx| {
+        s.events = Some(events);
+        s.reduce = reduce_motion();
+        s.shortcut = shortcut;
+        s.paste = paste;
+        s.sized = false;
+        s.buttons.clear();
+    })
+}
+
+/// One message from the session. False once it has closed the window.
+fn on_message<H: Host<OnboardingWin>>(link: &Link<OnboardingWin, H>, message: Value, presented: &mut bool) -> bool {
+    let kind = message["type"].as_str().unwrap_or_default().to_owned();
+    let permission = message["permission"].as_str().unwrap_or_default().to_owned();
+    match kind.as_str() {
+        "state" => {
+            let Ok(state) = serde_json::from_value::<State>(message) else {
+                crate::capture::scrawl_log("onboarding (rune): bad state");
+                return true;
+            };
+            // The page transition reads the direction, so it changes a commit before the step.
+            let step = state.step.clone();
+            link.update(move |s, _tx| {
+                if s.state.step != step {
+                    s.forward = step_index(&step) >= step_index(&s.state.step);
+                }
+            });
+            let first = !*presented;
+            link.update(move |s, tx| {
+                if first {
+                    s.state = state.clone();
+                    s.now = clock();
+                    if s.state.step == "how-it-works" {
+                        s.restart_demo();
+                    }
+                    tx.instant();
+                    if !s.sized {
+                        s.sized = true;
+                        resize_window(s.state.height());
+                    }
+                    s.present(tx);
+                } else {
+                    s.apply(state, tx);
+                }
+            });
+            if first {
+                *presented = true;
+                link.open();
+            }
+        }
+        // The user has moved on to another row: answering an earlier question mustn't pull this
+        // window over the System Settings pane they're working in.
+        "request" => link.update(move |s, _| {
+            s.follow = None;
+            #[cfg(target_os = "macos")]
+            super::rune_permissions::request(&permission);
+        }),
+        "open-settings" => link.update(move |s, _| {
+            s.follow = None;
+            #[cfg(target_os = "macos")]
+            super::rune_permissions::open_settings(&permission, s.screen_frame(&permission));
+        }),
+        "hide" => {
+            link.update(|s, _| {
+                s.visible = false;
+                #[cfg(target_os = "macos")]
+                super::platform::hold_keys(super::platform::KeyHolder::Onboarding, false);
+            });
+            link.hide();
+        }
+        "show" => {
+            link.update(|s, tx| {
+                s.reduce = reduce_motion();
+                s.present(tx);
+            });
+            link.open();
+        }
+        "close" => {
+            close(link);
+            return false;
+        }
+        _ => {}
+    }
+    true
+}
+
+/// The session has ended: its window goes, unless a newer session has it by now.
+fn close<H: Host<OnboardingWin>>(link: &Link<OnboardingWin, H>) {
+    link.update(|s, _| {
+        s.events = None;
+        s.follow = None;
+        s.visible = false;
+        hand_back_keys();
+    });
+    link.hide();
+}
+
 
 #[cfg(target_os = "macos")]
 fn ns_window() -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
@@ -2359,6 +2395,57 @@ mod tests {
             if *name != "welcome" {
                 assert_ne!(sample_state(name).0, State::default(), "{name}");
             }
+        }
+    }
+
+    /// A replaced session's reader may still be handling its "close" after the new session
+    /// has attached, whether before or after the new one's first state.
+    #[test]
+    fn a_replaced_session_leaves_the_new_one_alone() {
+        use super::super::rune_session::test_host::Recorder;
+        let mut state = serde_json::to_value(crate::onboarding::View {
+            step: crate::onboarding::Step::Welcome,
+            index: 0,
+            count: 4,
+            rows: Vec::new(),
+            ready: false,
+            fix: false,
+            tutorial: None,
+            picker_note: false,
+        })
+        .unwrap();
+        state["type"] = "state".into();
+        let close = serde_json::json!({"type": "close"});
+        for close_first in [true, false] {
+            let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let events = |tag: &'static str| -> Events {
+                let seen = Arc::clone(&seen);
+                Arc::new(move |_| seen.lock().unwrap().push(tag))
+            };
+            let host = Recorder::default();
+            let (mut win, mut visible) = (OnboardingWin::new(), false);
+            let old = attach(host.clone(), "⌥⇧S".into(), "⌥⇧V".into(), events("old"));
+            assert!(on_message(&old, state.clone(), &mut false));
+            host.run(&mut win, &mut visible);
+            assert!(visible);
+
+            let new = attach(host.clone(), "⌥⇧S".into(), "⌥⇧V".into(), events("new"));
+            if close_first {
+                assert!(!on_message(&old, close.clone(), &mut true));
+                assert!(on_message(&new, state.clone(), &mut false));
+            } else {
+                assert!(on_message(&new, state.clone(), &mut false));
+                assert!(!on_message(&old, close.clone(), &mut true));
+            }
+            host.run(&mut win, &mut visible);
+            assert!(visible, "close_first: {close_first}");
+            assert!(win.visible);
+            (win.events.as_ref().expect("the new session's events"))(crate::onboarding::Event::Exited);
+            assert_eq!(*seen.lock().unwrap(), ["new"]);
+
+            assert!(!on_message(&new, close.clone(), &mut true));
+            host.run(&mut win, &mut visible);
+            assert!(!visible && win.events.is_none());
         }
     }
 
