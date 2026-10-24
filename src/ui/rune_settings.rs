@@ -159,47 +159,8 @@ pub(crate) fn families(fonts: &[&[u8]]) -> (&'static str, &'static str) {
 
 pub(crate) const ROUNDED: Family = Family::Named(".SF NS Rounded");
 
-/// SF at `size` with the letter spacing Core Text takes from the font's `trak` table (track 0),
-/// which Rune doesn't apply, less Rune's extra width at 2x.
 pub(crate) fn style(size: f32, weight: f32) -> TextStyle {
-    TextStyle::new(size, weight).tracking(tracking(size))
-}
-
-/// SFNS `trak` track 0, in 1/2048 em, by point size.
-const TRAK: [(f32, f32); 21] = [
-    (6.0, 82.0), (9.0, 38.0), (10.0, 24.0), (11.0, 12.0), (12.0, 0.0), (13.0, -12.0),
-    (14.0, -22.0), (15.0, -32.0), (16.0, -40.0), (17.0, -52.0), (20.0, -46.0), (22.0, -24.0),
-    (24.0, 6.0), (28.0, 28.0), (32.0, 26.0), (36.0, 21.0), (50.0, 14.0), (64.0, 7.0),
-    (80.0, 0.0), (100.0, 0.0), (138.0, 0.0),
-];
-
-/// How much wider Rune lays SF out at 2x than its true advances (points per glyph, sizes 8 to
-/// 30 by 0.5), measured against a 64x layout. Retina only; subtracted so lines match AppKit.
-const RUNE_2X_EXTRA: [f32; 45] = [
-    0.1516, 0.2113, 0.2186, 0.2204, 0.2224, 0.1770, 0.1262, 0.0492, -0.0385,
-    -0.0734, -0.1082, -0.1538, -0.1939, -0.2026, -0.2007, -0.2094, -0.2074, -0.2054,
-    -0.2036, -0.1891, -0.1855, -0.1921, -0.1863, -0.1908, -0.1890, -0.1905, -0.1870,
-    -0.1931, -0.1873, -0.1913, -0.1817, -0.1837, -0.1794, -0.1817, -0.1757, -0.1773,
-    -0.1681, -0.1707, -0.1610, -0.1656, -0.1520, -0.1582, -0.1434, -0.1442, -0.1347,
-];
-
-pub(crate) fn tracking(size: f32) -> f32 {
-    let at = ((size - 8.0) * 2.0).clamp(0.0, (RUNE_2X_EXTRA.len() - 1) as f32);
-    let (i, f) = (at.floor() as usize, at.fract());
-    let extra = RUNE_2X_EXTRA[i] + (RUNE_2X_EXTRA[(i + 1).min(RUNE_2X_EXTRA.len() - 1)] - RUNE_2X_EXTRA[i]) * f;
-    trak(size) + extra
-}
-
-fn trak(size: f32) -> f32 {
-    let units = match TRAK.iter().position(|&(s, _)| s >= size) {
-        Some(0) => TRAK[0].1,
-        Some(i) => {
-            let ((s0, t0), (s1, t1)) = (TRAK[i - 1], TRAK[i]);
-            t0 + (t1 - t0) * (size - s0) / (s1 - s0)
-        }
-        None => TRAK[TRAK.len() - 1].1,
-    };
-    units / 2048.0 * size
+    TextStyle::new(size, weight)
 }
 
 const MONO: TextStyle = TextStyle::new(12.0, 400.0).mono();
