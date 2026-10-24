@@ -2908,8 +2908,6 @@ impl RuneCoordinator {
         if !self.status_bar_installed {
             self.status_bar_installed = true;
             self.menu_rx = super::platform::install_status_bar();
-            #[cfg(target_os = "macos")]
-            guard_rune_overlay_source_style_mask();
             super::platform::set_status_inbox_count(self.inbox.len());
             if self.review_open {
                 super::platform::take_keys_now();
@@ -4119,8 +4117,6 @@ pub fn run_app(
             })
             .poll(pill_poll)
             .on_created(move |made| {
-                #[cfg(target_os = "macos")]
-                guard_rune_overlay_source_style_mask();
                 if let Some(id) = made.window_number {
                     pill_excluded
                         .lock()
@@ -4174,8 +4170,6 @@ pub fn run_app(
             .setup(picker_setup)
             .on_key(picker_on_key)
             .on_created(move |made| {
-                #[cfg(target_os = "macos")]
-                guard_rune_overlay_source_style_mask();
                 if let Some(id) = made.window_number {
                     picker_excluded
                         .lock()
@@ -4283,72 +4277,6 @@ pub fn run_app(
 
     app.run();
     stop_ticker.store(true, Ordering::Relaxed);
-}
-
-/// ReplayKit's `-[RPScreenRecorder setWindowRotationLocked:]` runs on the main queue when
-/// ScreenCaptureKit starts a stream and calls `-[NSWindow setStyleMask:]` on `NSApp.windows`.
-/// Because Rune's `RuneOverlaySource_*` bridges `-[NSWindow contentView]` on the hidden winit
-/// source window to the `WinitView` adopted by `RuneOverlayPanel`, AppKit's `setStyleMask:` on
-/// the source window would call `[view removeFromSuperview]` and detach the view from the panel.
-#[cfg(target_os = "macos")]
-fn guard_rune_overlay_source_style_mask() {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject, Sel};
-    use std::ffi::{CStr, c_char, c_void};
-    unsafe extern "C" {
-        fn object_getClass(obj: *const AnyObject) -> *const AnyClass;
-        fn class_getName(cls: *const AnyClass) -> *const c_char;
-        fn class_getInstanceMethod(cls: *const AnyClass, sel: Sel) -> *const c_void;
-        fn method_getTypeEncoding(m: *const c_void) -> *const c_char;
-        fn class_addMethod(
-            cls: *mut AnyClass,
-            sel: Sel,
-            imp: *const c_void,
-            types: *const c_char,
-        ) -> bool;
-    }
-    extern "C" fn noop_set_style_mask(_: &AnyObject, _: Sel, _: usize) {}
-    unsafe {
-        let Some(app_cls) = AnyClass::get(c"NSApplication") else {
-            return;
-        };
-        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
-        if app.is_null() {
-            return;
-        }
-        let wins: *mut AnyObject = msg_send![app, windows];
-        if wins.is_null() {
-            return;
-        }
-        let count: usize = msg_send![wins, count];
-        for i in 0..count {
-            let w: *mut AnyObject = msg_send![wins, objectAtIndex: i];
-            if w.is_null() {
-                continue;
-            }
-            let cls = object_getClass(w);
-            if cls.is_null() {
-                continue;
-            }
-            let name_ptr = class_getName(cls);
-            if name_ptr.is_null() {
-                continue;
-            }
-            let name = CStr::from_ptr(name_ptr).to_string_lossy();
-            if name.starts_with("RuneOverlaySource_") {
-                let sel = objc2::sel!(setStyleMask:);
-                let m = class_getInstanceMethod(cls, sel);
-                if !m.is_null() {
-                    let _ = class_addMethod(
-                        cls.cast_mut(),
-                        sel,
-                        noop_set_style_mask as *const c_void,
-                        method_getTypeEncoding(m),
-                    );
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
