@@ -178,18 +178,30 @@ pub(super) fn take_keys(cx: &mut App) {
     cx.activate(true);
 }
 
+#[allow( deprecated, reason = "activateIgnoringOtherApps makes an accessory app key reliably" )]
+pub(super) fn take_keys_now() {
+    remember_front_app();
+    if let Some(mtm) = MainThreadMarker::new() {
+        NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+    }
+}
+
 /// Run (deferred) after any window closes: once neither a picker nor a review window is left,
 /// the app that was in front before gets the keys back. `NSApp.deactivate()` isn't enough: a
 /// menu bar (accessory) app stays frontmost with no windows, and keys go nowhere. Deferred, a
 /// picker replacing another one is open again by the time this looks.
 pub(super) fn hand_back_keys(cx: &mut App) {
-    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
     if cx.windows().iter().any(|handle| {
         handle.downcast::<super::TargetPickerWindow>().is_some()
             || handle.downcast::<super::BundleReviewWindow>().is_some()
     }) {
         return;
     }
+    hand_back_keys_now();
+}
+
+pub(super) fn hand_back_keys_now() {
+    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
     let previous = PREVIOUS_FRONT_APP.swap(0, std::sync::atomic::Ordering::AcqRel);
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -212,6 +224,36 @@ pub(super) fn start_updates() {
 
 pub(super) fn check_for_updates() {
     crate::sparkle::check_for_updates();
+}
+
+/// The `.app` bundle path for `bundle_id`, for `ImageCache::app_icon`. Cached per bundle ID.
+pub(super) fn app_bundle_path(bundle_id: &str) -> Option<PathBuf> {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::NSURL;
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(bundle_id)
+    {
+        return cached.clone();
+    }
+    let id = NSString::from_str(bundle_id);
+    let url: Option<Retained<NSURL>> = unsafe {
+        msg_send![&NSWorkspace::sharedWorkspace(), URLForApplicationWithBundleIdentifier: &*id]
+    };
+    let resolved = url
+        .and_then(|u| u.path())
+        .map(|p| PathBuf::from(p.to_string()));
+    cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(bundle_id.to_owned(), resolved.clone());
+    resolved
 }
 
 pub(super) fn open_overlay(
