@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use rune::{
-    App, AppSpec, Color, Cursor, Cx, DisplayTarget, DragItem, DragOutcome, El, KeyPolicy, LoopSpec, OverlayHandle,
+    App, AppSpec, Color, Cursor, Cx, DisplayTarget, DragItem, DragOutcome, El, KeyPolicy, OverlayHandle,
     OverlayInput, OverlayOptions, OverlayPlacement, OverlaySpec, Pixels, Shadow, Span, Spring, SpringPair,
     SystemMaterial, Transition, Tx, el, rich, text,
 };
@@ -124,11 +124,6 @@ impl StepSpring {
 fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-/// AppKit's default ease-in-ease-out, for the window fades.
-fn ease_in_out(t: f64) -> f64 {
-    smoothstep(0.0, 1.0, t)
 }
 
 // MARK: Geometry
@@ -549,7 +544,10 @@ impl Panel {
                 let start = *self.leave.get_or_insert(now_clock);
                 tx.instant();
                 if now_clock - start >= FADE_OUT {
-                    self.end_now();
+                    // `fade_out` hides the window when its fade ends.
+                    self.session = None;
+                } else {
+                    tx.wake_after(Duration::ZERO);
                 }
                 true
             }
@@ -749,7 +747,7 @@ impl Panel {
         tx.wake_after(hold);
     }
 
-    /// Fades out (alpha, with the content shrinking and blurring) and ends.
+    /// Fades out (the window's alpha, with the content shrinking and blurring) and ends.
     fn leave(&mut self, tx: &mut Tx) {
         let Some(s) = self.session.as_mut() else { return };
         s.stage = Stage::Leaving { back: false };
@@ -758,6 +756,9 @@ impl Panel {
             return;
         }
         self.leave = None;
+        if let Some(dock) = DOCK.get() {
+            dock.fade_out(Duration::from_secs_f64(FADE_OUT));
+        }
         tx.wake_after(Duration::ZERO);
     }
 
@@ -793,20 +794,11 @@ impl Panel {
         }
     }
 
-    /// The docked content's exit: alpha, and with motion a 0.96 scale and 3 pt blur.
-    fn exit_fx(&self) -> (f64, Fx) {
-        let Some(start) = self.leave else { return (1.0, Fx::REST) };
-        let t = (self.now - start).max(0.0);
-        let alpha = 1.0 - ease_in_out(t / FADE_OUT);
-        if self.look.reduce {
-            return (alpha, Fx::REST);
-        }
-        let k = StepSpring { duration: FADE_OUT, bounce: 0.0 }.value(t);
-        (alpha, Fx { opacity: 1.0, scale: 1.0 - 0.04 * k, blur: 3.0 * k })
-    }
-
-    fn leaving(&self) -> bool {
-        self.session.as_ref().is_some_and(|s| s.stage == Stage::Leaving { back: false })
+    /// The docked content during the exit fade: with motion, a 0.96 scale and 3 pt blur.
+    fn exit_fx(&self) -> Fx {
+        let Some(start) = self.leave.filter(|_| !self.look.reduce) else { return Fx::REST };
+        let k = StepSpring { duration: FADE_OUT, bounce: 0.0 }.value((self.now - start).max(0.0));
+        Fx { opacity: 1.0, scale: 1.0 - 0.04 * k, blur: 3.0 * k }
     }
 }
 
@@ -839,9 +831,10 @@ fn fade_out() {
 fn fly(run: FlightRun, look: Look) {
     let Some(flight) = FLIGHT_OVERLAY.get() else { return };
     flight.set_placement(rect_placement(run.window));
-    flight.update(move |f, _| {
+    flight.update(move |f, tx| {
         f.look = look;
         f.flight = Some(run);
+        tx.wake_after(Duration::ZERO);
     });
     flight.show();
 }
@@ -1028,6 +1021,8 @@ fn flight_poll(s: &mut Panel, now: f64, tx: &mut Tx) -> bool {
         if let Some(flight) = flight {
             flight.hide();
         }
+    } else {
+        tx.wake_after(Duration::ZERO);
     }
     true
 }
@@ -1055,9 +1050,8 @@ fn view(s: &Panel, cx: &mut Cx<Panel>) -> El {
     let (w, h) = s.look.layout.size();
     match s.role {
         Role::Dock => {
-            let (alpha, fx) = s.exit_fx();
-            let card = card(&s.look, dark, [MARGIN, MARGIN, w, h], Layout::RADIUS, 0.0, alpha, fx, true);
-            root.child(card).children(s.leaving().then(frames))
+            let card = card(&s.look, dark, [MARGIN, MARGIN, w, h], Layout::RADIUS, 0.0, 1.0, s.exit_fx(), true);
+            root.child(card)
         }
         Role::Flight => {
             let Some(run) = s.flight else { return root };
@@ -1065,7 +1059,7 @@ fn view(s: &Panel, cx: &mut Cx<Panel>) -> El {
             let r = step.rect;
             let local = [r[0] - run.window[0], r[1] - run.window[1], r[2], r[3]];
             let card = card(&s.look, dark, local, step.radius, step.lift, step.alpha, Fx::resolve(step.resolve), false);
-            root.child(card).children((!run.ended).then(frames))
+            root.child(card)
         }
         Role::Preview => {
             let theme = Theme { dark };
@@ -1073,11 +1067,6 @@ fn view(s: &Panel, cx: &mut Cx<Panel>) -> El {
                 .child(card(&s.look, dark, [MARGIN, MARGIN, w, h], Layout::RADIUS, 0.0, 1.0, Fx::REST, false))
         }
     }
-}
-
-/// Keeps frames, and so the poll, coming while something moves on the frame clock.
-fn frames() -> El {
-    el().key("frames").absolute(0.0, 0.0).size(1.0, 1.0).looping(LoopSpec::rotation(1.0))
 }
 
 fn ink(dark: bool, a: f32) -> Rgba {
@@ -1252,6 +1241,7 @@ fn app_row(look: &Look, dark: bool, row_w: f32, interactive: bool) -> El {
     let app = look.app.clone();
     row.hit()
         .cursor(Cursor::Grab)
+        .drag_threshold(3.0)
         .drag_out(move |_: &Panel| Some(DragItem::new().file(app.clone()).opaque(backing)))
         .on_drag_start(|s: &mut Panel, _tx: &mut Tx| s.look.dragging = true)
         .on_drag_end(|s: &mut Panel, outcome, tx: &mut Tx| s.drag_ended(outcome, tx))

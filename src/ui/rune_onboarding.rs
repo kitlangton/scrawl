@@ -1027,7 +1027,7 @@ pub(crate) struct OnboardingWin {
     reported_watched: bool,
     /// The stage (or storyboard) in window points, for pointer positions.
     stage: [f32; 4],
-    /// Each row button's frame in window points, where the drag panel flies from.
+    /// Each row button's frame in global screen points, where the drag panel flies from.
     buttons: HashMap<String, [f32; 4]>,
     follow: Option<Follow>,
     sized: bool,
@@ -1199,9 +1199,7 @@ impl OnboardingWin {
 
     /// The row button's frame on screen, in global top-left points.
     fn screen_frame(&self, permission: &str) -> Option<[f32; 4]> {
-        let [x, y, w, h] = *self.buttons.get(permission)?;
-        let [wx, wy] = window_origin()?;
-        Some([wx + x, wy + y, w, h])
+        self.buttons.get(permission).copied()
     }
 
     // MARK: Trying a mark
@@ -1448,7 +1446,7 @@ fn row_button(title: &str, prominent: bool, permission: &str) -> El {
         .press(Rgba::WHITE.alpha(0.08).over(fill))
         .cursor(rune::Cursor::Pointer)
         .child(label(title, 12.0, 600.0, if prominent { Rgba::WHITE.over(fill) } else { TEXT.over(fill) }))
-        .on_layout(move |s: &mut OnboardingWin, r: [f32; 4]| {
+        .on_screen_layout(move |s: &mut OnboardingWin, r: [f32; 4]| {
             s.buttons.insert(layout.clone(), r);
         })
         .on_press(move |s: &mut OnboardingWin| s.send(&format!("grant:{p}")))
@@ -2136,28 +2134,6 @@ fn close<H: Host<OnboardingWin>>(link: &Link<OnboardingWin, H>) {
         hand_back_keys();
     });
     link.hide();
-}
-
-
-#[cfg(target_os = "macos")]
-fn ns_window() -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
-    let mtm = objc2_foundation::MainThreadMarker::new()?;
-    let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
-    app.windows().iter().find(|w| w.title().to_string() == TITLE)
-}
-
-/// The window's content top-left in global top-left points.
-fn window_origin() -> Option<[f32; 2]> {
-    #[cfg(target_os = "macos")]
-    {
-        let win = ns_window()?;
-        let mtm = objc2_foundation::MainThreadMarker::new()?;
-        let primary_h = objc2_app_kit::NSScreen::screens(mtm).firstObject()?.frame().size.height;
-        let f = win.frame();
-        Some([f.origin.x as f32, (primary_h - f.origin.y - f.size.height) as f32])
-    }
-    #[cfg(not(target_os = "macos"))]
-    None
 }
 
 // MARK: Renders
