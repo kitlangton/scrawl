@@ -3937,11 +3937,13 @@ fn run_headless(
         if let Ok(exe) = std::env::current_exe() {
             let settings = super::rune_settings::render_names();
             let onboarding = super::rune_onboarding::render_names();
+            let permission_panel = super::rune_permission_panel::render_names();
             for scene in ALL_SCENES
                 .iter()
                 .copied()
                 .chain(settings.iter().map(String::as_str))
                 .chain(onboarding.iter().map(String::as_str))
+                .chain(permission_panel.iter().map(String::as_str))
             {
                 let out = snap.join(format!("{scene}.png"));
                 let _ = std::process::Command::new(&exe)
@@ -3975,6 +3977,10 @@ fn run_headless(
     }
     if scene.starts_with("onboarding-") {
         super::rune_onboarding::run_headless(&scene, args);
+        return;
+    }
+    if scene.starts_with("permission-panel-") {
+        super::rune_permission_panel::run_headless(&scene, args);
         return;
     }
 
@@ -4275,6 +4281,7 @@ pub fn run_app(
 
     super::rune_settings::install(&mut app);
     super::rune_onboarding::install(&mut app);
+    super::rune_permission_panel::install(&mut app);
 
     let app = app.init(move || {
         let coord = RuneCoordinator::new(

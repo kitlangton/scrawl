@@ -1355,7 +1355,7 @@ fn macos_is_asking() -> bool {
 }
 
 /// What System Settings calls the Accessibility list. macOS 27 renamed it.
-fn accessibility_name() -> &'static str {
+pub(crate) fn accessibility_name() -> &'static str {
     static NAME: OnceLock<&'static str> = OnceLock::new();
     NAME.get_or_init(|| if macos_major() >= 27 { "Device Control and Data Access" } else { "Accessibility" })
 }

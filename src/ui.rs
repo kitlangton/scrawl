@@ -83,6 +83,8 @@ mod rune_keys;
 #[cfg(target_os = "macos")]
 pub(crate) mod rune_onboarding;
 #[cfg(target_os = "macos")]
+pub(crate) mod rune_permission_panel;
+#[cfg(target_os = "macos")]
 pub(crate) mod rune_permissions;
 #[cfg(target_os = "macos")]
 pub(crate) mod rune_pill;

@@ -1,6 +1,7 @@
 //! What the SwiftUI windows' `Permissions.request` / `openSettings` / `closeGuide` do, for the
 //! Rune windows that run in Scrawl's own process (`"ui": "rune"`). The drag panel for
-//! Screen Recording and Accessibility is still the SwiftUI `scrawl-helper permission-panel`.
+//! Screen Recording and Accessibility is the SwiftUI `scrawl-helper permission-panel` unless
+//! the `runePermissionPanel` experiment draws it with Rune (`rune_permission_panel`).
 
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -93,6 +94,9 @@ fn tell(child: &mut Child, command: &str) {
 /// Accessibility) the drag panel, flying from `from` (the button, global top-left points).
 pub(crate) fn open_settings(permission: &str, from: Option<[f32; 4]>) {
     if matches!(permission, "screen-recording" | "accessibility") {
+        if super::rune_permission_panel::open(permission, from) {
+            return;
+        }
         let Ok(helper) = crate::helper::path() else { return };
         let mut command = Command::new(helper);
         command.args(["permission-panel", "--permission", permission]);
@@ -125,6 +129,7 @@ pub(crate) fn open_settings(permission: &str, from: Option<[f32; 4]>) {
 
 /// Tells this permission's drag panel that the row turned on, so it says so and goes.
 pub(crate) fn close_guide(permission: &str) {
+    super::rune_permission_panel::granted(permission);
     let mut panels = panels().lock().unwrap_or_else(|e| e.into_inner());
     reap(&mut panels);
     if let Some(child) = panels.remove(permission) {
@@ -149,7 +154,7 @@ fn retire(mut child: Child, command: &str) {
         });
 }
 
-fn open_url(url: &str) {
+pub(crate) fn open_url(url: &str) {
     let (Some(workspace), Some(url_class)) = (AnyClass::get(c"NSWorkspace"), AnyClass::get(c"NSURL"))
     else {
         return;

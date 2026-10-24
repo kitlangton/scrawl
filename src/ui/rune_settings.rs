@@ -235,6 +235,13 @@ pub(crate) mod icons {
     icon_def!(CHECK, "checkmark", concat!(
         r#"<path d="M5.5 12.5 10 17l8.5-9.5" fill="none" stroke="black" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>"#,
     ));
+    icon_def!(ARROW_UP, "arrow.up", concat!(
+        r#"<path d="M12 20V4.5" fill="none" stroke="black" stroke-width="3.2" stroke-linecap="round"/>"#,
+        r#"<path d="m5.5 11 6.5-6.5 6.5 6.5" fill="none" stroke="black" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>"#,
+    ));
+    icon_def!(CHEVRON_LEFT, "chevron.left", concat!(
+        r#"<path d="M15 5 8 12l7 7" fill="none" stroke="black" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>"#,
+    ));
     icon_def!(CHECK_CIRCLE_FILL, "checkmark.circle.fill", concat!(
         r#"<circle cx="12" cy="12" r="10" fill="black"/>"#,
     ));
