@@ -1532,7 +1532,10 @@ fn build_ingested(
 }
 
 fn http_json(stream: &mut std::net::TcpStream, status: &str, body: &serde_json::Value) {
-    let body = body.to_string();
+    http_raw_json(stream, status, &body.to_string());
+}
+
+fn http_raw_json(stream: &mut std::net::TcpStream, status: &str, body: &str) {
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -1591,6 +1594,17 @@ fn handle_ingest_connection_with_token(
     }
 
     let first_line = header.lines().next().unwrap_or("");
+    if first_line.starts_with("GET /v1/profile/vitals ") {
+        match procwatch::snapshot() {
+            Some(snapshot) => http_raw_json(&mut stream, "200 OK", &snapshot.to_json()),
+            None => http_json(
+                &mut stream,
+                "503 Service Unavailable",
+                &serde_json::json!({ "code": "vitals-unavailable" }),
+            ),
+        }
+        return Ok(());
+    }
     if first_line.starts_with("GET ") {
         http_json(&mut stream, "200 OK", &serde_json::json!({ "ok": true }));
         return Ok(());
@@ -2141,6 +2155,25 @@ mod tests {
         );
         assert!(valid_health.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(valid_health.contains(r#"{"ok":true}"#));
+
+        // 5. Vitals: behind the same token, the process footprint (macOS only).
+        let vitals_request = |token: &str| {
+            send_raw_http_request(
+                format!("GET /v1/profile/vitals HTTP/1.1\r\nAuthorization: Bearer {token}\r\n\r\n")
+                    .as_bytes(),
+                secret,
+            )
+        };
+        assert!(vitals_request("wrongtoken").starts_with("HTTP/1.1 401 Unauthorized\r\n"));
+        let vitals = vitals_request(secret);
+        if cfg!(target_os = "macos") {
+            assert!(vitals.starts_with("HTTP/1.1 200 OK\r\n"), "{vitals}");
+            let body = vitals.split_once("\r\n\r\n").unwrap().1;
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert!(body["footprint"].as_u64().unwrap() > 0, "{vitals}");
+        } else {
+            assert!(vitals.starts_with("HTTP/1.1 503 "), "{vitals}");
+        }
     }
 
     const SECRET: &str = "feedface0123456789abcdef0123456789abcdef0123456789abcdef01234567";

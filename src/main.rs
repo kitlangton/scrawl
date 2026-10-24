@@ -57,6 +57,11 @@ mod win;
 mod windows;
 mod zoom;
 
+// Debug builds count the heap so `/v1/profile/vitals` can split the footprint.
+#[cfg(all(debug_assertions, target_os = "macos"))]
+#[global_allocator]
+static ALLOC: procwatch::alloc::Counting = procwatch::alloc::Counting::system();
+
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1576,6 +1581,11 @@ fn main() -> Result<()> {
     };
     match command {
         Command::App { record, iphone } => {
+            procwatch::watch(if cfg!(debug_assertions) {
+                procwatch::Config::dev("scrawl")
+            } else {
+                procwatch::Config::release("scrawl")
+            });
             #[cfg(target_os = "windows")]
             {
                 win::shell::release_own_console();
