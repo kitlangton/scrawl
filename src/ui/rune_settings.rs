@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use rune::{
     Align, App, AppHandle, AppSpec, Chrome, Color, Cx, El, Family, Icon, Phase, PhysicalInput,
-    PhysicalKeyCode, Pixels, Side, Spring, SpringPair, TextEdit, TextStyle, Transition, Tx,
+    PhysicalKeyCode, Pixels, PopupItem, PopupMenu, Side, Spring, SpringPair, TextEdit, TextStyle, Transition, Tx,
     WindowOptions, WindowSpec, col, el, row, spacer, text, text_input,
 };
 use serde::Deserialize;
@@ -838,6 +838,8 @@ pub(crate) struct SettingsWin {
     reduce: bool,
     hovering: Option<String>,
     menu: Option<Menu>,
+    /// The picker whose native menu is open, drawn pressed until it answers.
+    popup_open: Option<String>,
     copied_until: f64,
     /// The slider's value while it's dragged; sent when it's let go.
     playback: Option<f64>,
@@ -863,6 +865,7 @@ impl SettingsWin {
             reduce: reduce_motion(),
             hovering: None,
             menu: None,
+            popup_open: None,
             copied_until: -1.0,
             playback: None,
             hex: TextEdit::new("en"),
@@ -1457,7 +1460,7 @@ fn popup(
     selected: Option<String>,
 ) -> El {
     let bg = theme.group_bg();
-    let open = s.menu.as_ref().is_some_and(|m| m.anchor == anchor);
+    let open = s.menu.as_ref().is_some_and(|m| m.anchor == anchor) || s.popup_open.as_deref() == Some(anchor);
     let anchor_key = anchor.to_owned();
     row().key(anchor.to_owned())
         .gap(8.0)
@@ -1478,8 +1481,17 @@ fn popup(
                 .center()
                 .child(symbol(&icons::CHEVRONS, 9.0, weight::BOLD, theme.secondary().over(bg))),
         )
-        .on_press(move |s: &mut SettingsWin| {
-            if s.menu.as_ref().is_some_and(|m| m.anchor == anchor_key) {
+        .on_press_tx(move |s: &mut SettingsWin, tx: &mut Tx| {
+            if rune::popup_menu_supported() {
+                s.menu = None;
+                s.popup_open = Some(anchor_key.clone());
+                tx.popup_menu(native_menu(&options, selected.as_deref()), anchor_key.clone(), move |s: &mut SettingsWin, picked, _| {
+                    s.popup_open = None;
+                    if let Some(id) = picked {
+                        s.set(setting, Value::String(id.to_owned()));
+                    }
+                });
+            } else if s.menu.as_ref().is_some_and(|m| m.anchor == anchor_key) {
                 s.menu = None;
             } else {
                 s.menu = Some(Menu {
@@ -1492,7 +1504,28 @@ fn popup(
         })
 }
 
-/// The open pop-up's menu, under its control: a check beside the current choice.
+/// The native menu for a picker: the current choice checked and opening over the control, as
+/// SwiftUI's menu-style `Picker` does. `"-"` is a separator.
+fn native_menu(options: &[Choice], selected: Option<&str>) -> PopupMenu {
+    let mut menu = PopupMenu::new();
+    for option in options {
+        menu = if option.id == "-" {
+            menu.separator()
+        } else {
+            menu.item(
+                PopupItem::new(&option.id, &option.title)
+                    .enabled(option.enabled)
+                    .checked(selected == Some(option.id.as_str())),
+            )
+        };
+    }
+    match selected {
+        Some(id) => menu.selected(id),
+        None => menu,
+    }
+}
+
+/// The drawn menu where native pop-up menus aren't available: a check beside the current choice.
 fn menu_view(menu: &Menu, theme: Theme) -> El {
     let dark = theme.dark;
     let bg = if dark { Rgba::gray(0.2) } else { Rgba::gray(0.985) };
@@ -2856,6 +2889,18 @@ pub(crate) fn render_names() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_picker_menu_checks_the_current_choice_and_opens_over_it() {
+        let options = vec![choice("auto", "Automatic", true), choice("-", "", false), choice("en-US", "English", true), choice("fr-FR", "French", false)];
+        let expected = PopupMenu::new()
+            .item(PopupItem::new("auto", "Automatic"))
+            .separator()
+            .item(PopupItem::new("en-US", "English").checked(true))
+            .item(PopupItem::new("fr-FR", "French").enabled(false))
+            .selected("en-US");
+        assert_eq!(native_menu(&options, Some("en-US")), expected);
+    }
 
     #[test]
     fn every_sample_has_a_scene_and_decodes_as_swift_does() {
