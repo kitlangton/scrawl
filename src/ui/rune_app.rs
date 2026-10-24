@@ -3932,7 +3932,13 @@ fn run_headless(
         let _ = std::fs::create_dir_all(snap);
         if let Ok(exe) = std::env::current_exe() {
             let settings = super::rune_settings::render_names();
-            for scene in ALL_SCENES.iter().copied().chain(settings.iter().map(String::as_str)) {
+            let onboarding = super::rune_onboarding::render_names();
+            for scene in ALL_SCENES
+                .iter()
+                .copied()
+                .chain(settings.iter().map(String::as_str))
+                .chain(onboarding.iter().map(String::as_str))
+            {
                 let out = snap.join(format!("{scene}.png"));
                 let _ = std::process::Command::new(&exe)
                     .args(["app", "--scene", scene, "--snap"])
@@ -3961,6 +3967,10 @@ fn run_headless(
 
     if scene.starts_with("settings-") {
         super::rune_settings::run_headless(&scene, args);
+        return;
+    }
+    if scene.starts_with("onboarding-") {
+        super::rune_onboarding::run_headless(&scene, args);
         return;
     }
 
@@ -4260,6 +4270,7 @@ pub fn run_app(
         .expect("ticker thread");
 
     super::rune_settings::install(&mut app);
+    super::rune_onboarding::install(&mut app);
 
     let app = app.init(move || {
         let coord = RuneCoordinator::new(

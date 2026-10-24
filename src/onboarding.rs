@@ -846,6 +846,20 @@ impl Session {
                 std::sync::Arc::new(move |event| window_events(event)),
             );
             Transport::InProcess(Some(sender))
+        } else if Self::rune_window() {
+            let (sender, receiver) = flume::unbounded();
+            #[cfg(target_os = "macos")]
+            {
+                crate::ui::rune_onboarding::request_open(
+                    receiver,
+                    shortcut.to_owned(),
+                    crate::settings::paste_label(),
+                    std::sync::Arc::new(events.clone()),
+                );
+            }
+            #[cfg(not(target_os = "macos"))]
+            drop(receiver);
+            Transport::InProcess(Some(sender))
         } else {
             Self::spawn_helper(shortcut, events.clone())?
         };
@@ -878,6 +892,18 @@ impl Session {
         };
         session.sync();
         Ok(session)
+    }
+
+    /// Under `"ui": "rune"`, the Rune window in this process draws the welcome window.
+    fn rune_window() -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            crate::handoff::rune_ui() && crate::ui::rune_onboarding::available()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
     }
 
     fn spawn_helper(

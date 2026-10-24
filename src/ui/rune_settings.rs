@@ -280,6 +280,10 @@ pub(crate) mod icons {
         stroked!(r#"<rect x="9" y="2.5" width="6" height="11.5" rx="3""#),
         stroked!(r#"<path d="M5 10.5v.5a7 7 0 0 0 14 0v-.5""#, r#"<path d="M12 18v3.5""#),
     ));
+    icon_def!(CURSOR_CLICK, "cursorarrow.click", concat!(
+        r#"<path d="M9 8v12.5l3-2.8 2.1 4.6 2-.9-2.1-4.5 4-.2z" fill="black"/>"#,
+        stroked!(r#"<path d="M9 2v2.5""#, r#"<path d="M4.2 4.2 6 6""#, r#"<path d="M2 9h2.5""#, r#"<path d="M13.8 4.2 12 6""#),
+    ));
     icon_def!(MIC_FILL, "mic.fill", concat!(
         r#"<rect x="8.5" y="2" width="7" height="12.5" rx="3.5" fill="black"/>"#,
         stroked!(r#"<path d="M5 10.5v.5a7 7 0 0 0 14 0v-.5""#, r#"<path d="M12 18v3.5""#),
@@ -947,7 +951,7 @@ impl SettingsWin {
         match message["type"].as_str() {
             Some("state") => {
                 let Ok(view) = serde_json::from_value::<View>(message.clone()) else {
-                    crate::capture::scrawl_log("settings (rune): bad state".to_owned());
+                    crate::capture::scrawl_log("settings (rune): bad state");
                     return;
                 };
                 let t = self.now;
@@ -1055,7 +1059,7 @@ impl SettingsWin {
     }
 }
 
-fn reduce_motion() -> bool {
+pub(crate) fn reduce_motion() -> bool {
     #[cfg(target_os = "macos")]
     {
         super::platform::reduce_motion()
@@ -1133,9 +1137,14 @@ fn flag_labels(flags: u64) -> Vec<String> {
 }
 
 fn app_icon() -> Option<Pixels> {
+    app_icon_px(96)
+}
+
+/// Scrawl's icon, `size` pixels square.
+pub(crate) fn app_icon_px(size: u32) -> Option<Pixels> {
     static BYTES: &[u8] = include_bytes!("../../assets/app-icon.png");
-    static RGBA: OnceLock<Option<(u32, u32, Vec<u8>)>> = OnceLock::new();
-    let (w, h, rgba) = RGBA
+    static SOURCE: OnceLock<Option<(u32, u32, Vec<u8>)>> = OnceLock::new();
+    let (sw, sh, src) = SOURCE
         .get_or_init(|| {
             let decoder = png::Decoder::new(std::io::Cursor::new(BYTES));
             let mut reader = decoder.read_info().ok()?;
@@ -1144,9 +1153,11 @@ fn app_icon() -> Option<Pixels> {
             if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
                 return None;
             }
-            Some(downscale(&buf[..info.buffer_size()], info.width, info.height, 96))
+            buf.truncate(info.buffer_size());
+            Some((info.width, info.height, buf))
         })
-        .clone()?;
+        .as_ref()?;
+    let (w, h, rgba) = downscale(src, *sw, *sh, size);
     let pixels = Pixels::new();
     pixels.set(w, h, rgba);
     Some(pixels)
