@@ -1569,7 +1569,7 @@ fn menu_view(menu: &Menu, theme: Theme) -> El {
 fn level_meter(level: f32, theme: Theme) -> El {
     let bg = theme.group_bg();
     let lit = (level * 16.0).round() as usize;
-    row().gap(3.0).children((0..16).map(|i| {
+    row().gap(3.0).label(format!("Input level, {} percent", (level * 100.0) as i32)).children((0..16).map(|i| {
         el().size(5.0, 12.0)
             .radius(1.5)
             .fill(if i < lit { theme.text().alpha(0.7).over(bg) } else { theme.track().over(bg) })
@@ -1593,22 +1593,27 @@ fn recorder(s: &SettingsWin, shortcut: &Shortcut, theme: Theme) -> El {
         .child(spacer().min_w(8.0));
     if !shortcut.is_default && !shortcut.recording {
         let k = kind.clone();
-        line = line.child(circle_button(&icons::RESET, 9.0, theme, bg, format!("reset-{kind}"), move |s| {
-            s.act_kind("reset-shortcut", &k)
-        }));
+        let default = if kind == "paste" { "⌥⇧V" } else { "⌥⇧S" };
+        line = line.child(
+            circle_button(&icons::RESET, 9.0, theme, bg, format!("reset-{kind}"), move |s| s.act_kind("reset-shortcut", &k))
+                .label(format!("Reset to {default}")),
+        );
     }
     if shortcut.clearable && !shortcut.off() && !shortcut.recording {
         let k = kind.clone();
-        line = line.child(circle_button(&icons::X, 8.0, theme, bg, format!("clear-{kind}"), move |s| {
-            s.act_kind("clear-shortcut", &k)
-        }));
+        line = line.child(
+            circle_button(&icons::X, 8.0, theme, bg, format!("clear-{kind}"), move |s| s.act_kind("clear-shortcut", &k))
+                .label(format!("Turn off {} shortcut", shortcut.title)),
+        );
     }
     if let Some(keys) = s.keys.get(&kind) {
         line = line.child(rune_keys::field(&keys.motion, t, theme, hovering));
     }
     let (k_press, k_hover) = (kind.clone(), kind.clone());
     let recording = shortcut.recording;
+    let value = if recording { "Listening" } else if shortcut.off() { "Off" } else { shortcut.label.as_str() };
     line = line
+        .label(format!("{} shortcut, {value}", shortcut.title))
         .focusable(true)
         .focus_ring(0.0, 0.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 })
         .on_press(move |s: &mut SettingsWin| {
@@ -1712,6 +1717,7 @@ fn hex_language(s: &SettingsWin, theme: Theme) -> El {
         .color(theme.text().over(field_bg))
         .on_edit(|s: &mut SettingsWin| &mut s.hex)
         .on_submit(|s: &mut SettingsWin, _tx: &mut Tx| apply_hex(s))
+        .label("Hex language code")
         .key("hex-language")
         .w(120.0)
         .h(22.0)
