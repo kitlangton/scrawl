@@ -34,6 +34,8 @@ pub struct Senses {
     pub terminal: fn(&str) -> Option<(PathBuf, String)>,
     /// URL prefixes and the folders they serve (`routing.servers`).
     pub servers: fn() -> Vec<(String, PathBuf)>,
+    /// URL prefixes and the folder or session their captures go to (`routing.sites`).
+    pub sites: fn() -> Vec<(String, PathBuf)>,
     /// Tool calls in OpenCode's history that named a folder around the time a file in it changed.
     pub writes: fn(&str, u64, u64) -> Vec<served::Write>,
 }
@@ -45,6 +47,7 @@ impl Default for Senses {
             own_port,
             terminal: terminal_pane,
             servers: crate::handoff::routing_servers,
+            sites: crate::handoff::routing_sites,
             writes: served::opencode_writes,
         }
     }
@@ -258,6 +261,7 @@ fn read_for(
 /// name).
 pub fn url_clues(url: &str, senses: &Senses, own_host: bool) -> Vec<Clue> {
     let mut clues = Vec::new();
+    clues.extend(rule_clue(url, senses));
     if let Some(reg) = (senses.hooks.sdk)(url) {
         if let Some(id) = reg.session.clone() {
             clues.push(Clue::new(
@@ -303,6 +307,29 @@ pub fn url_clues(url: &str, senses: &Senses, own_host: bool) -> Vec<Clue> {
     clues
 }
 
+/// The clue a `routing.sites` rule covering `url` gives.
+fn rule_clue(url: &str, senses: &Senses) -> Option<Clue> {
+    let (prefix, target) = super::site_rule(url, &(senses.sites)())?;
+    let (pointer, to) = match target {
+        super::SiteTarget::Session(id) => {
+            let to = id.clone();
+            (Pointer::Session { id, directory: None }, to)
+        }
+        super::SiteTarget::Folder(dir) => (
+            Pointer::Folder(Folder {
+                tree: true,
+                ..folder_of(&dir)
+            }),
+            dir.display().to_string(),
+        ),
+    };
+    Some(Clue::new(
+        Source::Rule,
+        pointer,
+        format!("routing.sites sends {prefix} to {to}"),
+    ))
+}
+
 /// The rest of the evidence, from the finished bundle: its title, what was said, the session
 /// OpenCode Desktop showed, the checkout the captured app is built from, and the destination the
 /// recording carries.
@@ -329,7 +356,8 @@ pub fn replay(saved: Evidence, bundle: &ScrawlBundle, apps: &[(String, PathBuf)]
         .clues
         .into_iter()
         .filter(|clue| match clue.source {
-            Source::Page
+            Source::Rule
+            | Source::Page
             | Source::Port
             | Source::Publisher
             | Source::Terminal
@@ -716,6 +744,11 @@ pub fn evidence_for_bundle(
         // Captures saved before pages from file servers were looked at get that look now.
         evidence.url = evidence.url.take().or_else(recorded_url);
         let url = evidence.url.clone();
+        // Rules are read as they are today.
+        evidence.clues.retain(|c| c.source != Source::Rule);
+        if let Some(clue) = url.as_deref().and_then(|url| rule_clue(url, senses)) {
+            evidence.clues.insert(0, clue);
+        }
         look_at_page(
             url.as_deref(),
             &mut evidence.clues,
@@ -1471,6 +1504,7 @@ mod tests {
             own_port: tailnet,
             terminal: no_terminal,
             servers: page_servers,
+            sites: Vec::new,
             writes: page_writes,
         }
     }

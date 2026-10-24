@@ -508,6 +508,11 @@ pub struct RoutingConfig {
     /// (`{"https://studio.example.ts.net:8444/raw/": "~/code/home/artifacts"}`).
     #[serde(default)]
     pub servers: std::collections::BTreeMap<String, String>,
+    /// Where captures of a site always go, ahead of weighing: a URL prefix (`https://` optional;
+    /// any path and query below it) to a folder, whose newest open session gets them, or to a
+    /// session ID (`{"https://problems.example.com": "~/code/team-board"}`).
+    #[serde(default)]
+    pub sites: std::collections::BTreeMap<String, String>,
 }
 
 /// `true`/`false`, `"yes"`/`"on"`/`"1"` and their opposites, or a number (non-zero is on). Other
@@ -733,6 +738,12 @@ pub fn routing_apps() -> Vec<(String, PathBuf)> {
 /// `routing.servers` in config.json: URL prefixes and the folders they serve, `~` expanded.
 pub fn routing_servers() -> Vec<(String, PathBuf)> {
     routing_paths(|routing| routing.servers)
+}
+
+/// `routing.sites` in config.json: URL prefixes and the folder (`~` expanded) or session ID their
+/// captures go to.
+pub fn routing_sites() -> Vec<(String, PathBuf)> {
+    routing_paths(|routing| routing.sites)
 }
 
 fn routing_paths(

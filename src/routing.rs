@@ -7,6 +7,8 @@
 //!    that directory's git root, and the most recently active root session in it.
 //! 3. Otherwise nothing: the capture stays on the clipboard.
 //!
+//! A `routing.sites` rule covering the tab's URL comes first ([`site_rule`]).
+//!
 //! With `"experiments": {"smartRouting": true}`, [`smart`] decides instead, from clues
 //! [`look`] gathers (`docs/routing.md`).
 
@@ -112,6 +114,120 @@ pub fn is_loopback_host(host: &str) -> bool {
     }
     host.parse::<std::net::Ipv4Addr>()
         .is_ok_and(|ip| ip.is_loopback())
+}
+
+// MARK: Site rules
+
+/// Where a `routing.sites` rule sends a site's captures.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SiteTarget {
+    Session(String),
+    /// The newest open session anywhere in it (in its repository, when it's in one).
+    Folder(PathBuf),
+}
+
+/// The `routing.sites` rule covering `url`, the most specific first: its prefix and target.
+pub fn site_rule(url: &str, sites: &[(String, PathBuf)]) -> Option<(String, SiteTarget)> {
+    let parsed = parse_url(url)?;
+    let path = url_path(url);
+    sites
+        .iter()
+        .filter_map(|(prefix, to)| Some((covers(prefix, &parsed, path)?, prefix, to)))
+        .max_by_key(|(rank, ..)| *rank)
+        .map(|(_, prefix, to)| {
+            let text = to.to_string_lossy();
+            let target = if text.starts_with("ses_") && !text.contains('/') {
+                SiteTarget::Session(text.into_owned())
+            } else {
+                SiteTarget::Folder(to.clone())
+            };
+            (prefix.clone(), target)
+        })
+}
+
+/// The path of `url`, without its query or fragment (`""` for none).
+fn url_path(url: &str) -> &str {
+    let url = url.trim();
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    rest.find('/').map_or("", |at| &rest[at..])
+}
+
+/// How specifically `prefix` covers a URL, or `None` when it doesn't. A prefix without a scheme
+/// covers both, and without a port any port.
+fn covers(prefix: &str, url: &WebUrl, path: &str) -> Option<usize> {
+    let prefix = prefix.trim();
+    let schemed = prefix.contains("://");
+    let full = if schemed {
+        prefix.to_owned()
+    } else {
+        format!("https://{prefix}")
+    };
+    let rule = parse_url(&full)?;
+    if rule.host != url.host {
+        return None;
+    }
+    let authority = full.split_once("://").map_or("", |(_, rest)| {
+        rest.split(['/', '?', '#']).next().unwrap_or_default()
+    });
+    let ported = authority
+        .rsplit_once(':')
+        .is_some_and(|(_, port)| port.parse::<u16>().is_ok());
+    if (schemed && rule.scheme != url.scheme) || ((schemed || ported) && rule.port != url.port) {
+        return None;
+    }
+    let within = url_path(&full).trim_end_matches('/');
+    let inside = within.is_empty()
+        || path.trim_end_matches('/') == within
+        || path.starts_with(&format!("{within}/"));
+    inside.then_some(within.len() * 4 + usize::from(schemed) * 2 + usize::from(ported))
+}
+
+/// [`route`], with a `routing.sites` rule covering `url` obeyed first.
+pub fn route_with_sites(
+    url: &str,
+    sites: &[(String, PathBuf)],
+    hooks: &Hooks,
+) -> std::result::Result<Destination, String> {
+    let Some((prefix, target)) = site_rule(url, sites) else {
+        return route(url, hooks);
+    };
+    let mut api = within(hooks.api, SESSIONS_BUDGET);
+    let ruled = match target {
+        SiteTarget::Session(id) => {
+            let title = crate::handoff::get_session(&mut api, &id)
+                .map_or_else(|_| id.clone(), |s| s.label().to_owned());
+            Some(Destination {
+                session: id,
+                title,
+                via: "rule".into(),
+                url: Some(url.to_owned()),
+                directory: None,
+            })
+        }
+        SiteTarget::Folder(dir) => {
+            let (root, _) = project_root(&dir);
+            session_for_directory(&mut api, &root, true)
+                .ok()
+                .flatten()
+                .map(|s| Destination {
+                    session: s.id.clone(),
+                    title: s.label().to_owned(),
+                    via: "rule".into(),
+                    url: Some(url.to_owned()),
+                    directory: Some(root.display().to_string()),
+                })
+        }
+    };
+    match ruled {
+        Some(dest) => Ok(dest),
+        None => {
+            scrawl_log(format!(
+                "routing: {prefix} rule found no open session; routing as usual"
+            ));
+            route(url, hooks)
+        }
+    }
 }
 
 // MARK: The browser tab
@@ -434,7 +550,7 @@ pub fn route_capture(
         return None;
     }
     let url = capture_url(front_bundle_id, target_bundle_id)?;
-    match route(&url, &Hooks::default()) {
+    match route_with_sites(&url, &crate::handoff::routing_sites(), &Hooks::default()) {
         Ok(dest) => {
             scrawl_log(format!(
                 "routing: {url} → {} ({}) via {}",
@@ -529,7 +645,8 @@ pub fn explain_bundle(bundle: &Path, url: Option<&str>) -> Result<String> {
     );
     let tab = url
         .map(str::to_owned)
-        .or_else(|| loaded.destination.as_ref().and_then(|d| d.url.clone()));
+        .or_else(|| loaded.destination.as_ref().and_then(|d| d.url.clone()))
+        .or_else(|| evidence.url.clone());
     if replayed {
         let _ = writeln!(
             out,
@@ -551,10 +668,12 @@ pub fn explain_bundle(bundle: &Path, url: Option<&str>) -> Result<String> {
     }
     out.push_str(&smart::explain(&evidence, &judgement));
     let today = match tab.as_deref() {
-        Some(tab) => match route(tab, &Hooks::default()) {
-            Ok(dest) => format!("send to {} ({}) via {}", dest.title, dest.session, dest.via),
-            Err(reason) => format!("clipboard only: {reason}"),
-        },
+        Some(tab) => {
+            match route_with_sites(tab, &crate::handoff::routing_sites(), &Hooks::default()) {
+                Ok(dest) => format!("send to {} ({}) via {}", dest.title, dest.session, dest.via),
+                Err(reason) => format!("clipboard only: {reason}"),
+            }
+        }
         None => "clipboard only: not a browser tab".into(),
     };
     let _ = writeln!(out, "Flag off  {today}");
@@ -684,6 +803,51 @@ mod tests {
         // The temp folder isn't in a repository.
         assert_eq!(project_root(&loose), (loose.clone(), false));
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn site_rules_cover_their_host_and_paths_below() {
+        let sites = vec![
+            (
+                "https://problems.example.com".to_owned(),
+                PathBuf::from("/p/board"),
+            ),
+            (
+                "problems.example.com/docs/".to_owned(),
+                PathBuf::from("ses_docs"),
+            ),
+            (
+                "http://localhost:4000".to_owned(),
+                PathBuf::from("/p/local"),
+            ),
+        ];
+        let rule = |url: &str| site_rule(url, &sites).map(|(_, to)| to);
+        let board = Some(SiteTarget::Folder("/p/board".into()));
+        assert_eq!(
+            rule("https://problems.example.com/tasks/OCN-16?project=x"),
+            board
+        );
+        assert_eq!(rule("https://PROBLEMS.example.com"), board);
+        assert_eq!(rule("https://problems.example.com/docsy"), board);
+        // The longer prefix wins, scheme or not.
+        assert_eq!(
+            rule("http://problems.example.com/docs/a#b"),
+            Some(SiteTarget::Session("ses_docs".into()))
+        );
+        assert_eq!(
+            rule("https://problems.example.com/docs"),
+            Some(SiteTarget::Session("ses_docs".into()))
+        );
+        // A scheme given pins it and the port.
+        assert_eq!(rule("http://problems.example.com/"), None);
+        assert_eq!(rule("https://problems.example.com:8443/"), None);
+        assert_eq!(rule("https://other.example.com/"), None);
+        assert_eq!(rule("https://sub.problems.example.com/"), None);
+        assert_eq!(
+            rule("http://localhost:4000/x"),
+            Some(SiteTarget::Folder("/p/local".into()))
+        );
+        assert_eq!(rule("http://localhost:4001/x"), None);
     }
 
     #[test]
