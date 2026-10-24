@@ -1411,8 +1411,8 @@ fn primary_button(title: &str, enabled: bool, quiet: bool, action: String, reduc
         .radius(9.0)
         .fill(fill.color())
         .border(1.0, dim(edge).color())
-        // SwiftUI's ink 0.35, radius 10, refitted for Rune's 2σ blur and linear-light blending.
-        .shadow(3.0, 16.0, INK.alpha(if red { 0.105 } else { 0.0 }).color())
+        // SwiftUI's ink 0.35 at shadowRadius 10, which is CSS blur 20.
+        .shadow(3.0, 20.0, INK.alpha(if red { 0.35 } else { 0.0 }).color())
         .cursor(if enabled { rune::Cursor::Pointer } else { rune::Cursor::Default })
         .child(
             el().key(format!("primary-{title}"))
@@ -1483,12 +1483,10 @@ fn note(s: &str) -> El {
 fn welcome_art(s: &OnboardingWin) -> El {
     let t = s.phase(4.0);
     let bob = -3.0 * (t * std::f64::consts::TAU).sin() as f32;
-    // The glows are fitted to SwiftUI's (ink 0.22, blur 46; positive 0.16, blur 30): Rune blends
-    // in linear light, where a faint colour over a dark canvas reads far brighter.
     let mut art = el()
         .size(150.0, 150.0)
         .center()
-        .child(el().absolute(0.0, 0.0).size(150.0, 150.0).radius(75.0).fill(INK.alpha(0.05).color()).blur(46.5));
+        .child(el().absolute(0.0, 0.0).size(150.0, 150.0).radius(75.0).fill(INK.alpha(0.22).color()).blur(46.0));
     art = match &s.icon {
         Some(icon) => art.child(el().size(128.0, 128.0).pixels(icon)),
         None => art.child(el().size(112.0, 112.0).radius(28.0).fill(SURFACE.color())),
@@ -1519,7 +1517,7 @@ fn done_art(reduce: bool) -> El {
         .h(164.0)
         .center()
         .child(el().absolute(0.0, 0.0).w_full().h(164.0).center().child(
-            el().size(150.0, 150.0).radius(75.0).fill(POSITIVE.alpha(0.036).color()).blur(29.5),
+            el().size(150.0, 150.0).radius(75.0).fill(POSITIVE.alpha(0.16).color()).blur(30.0),
         ))
         .child(
             el().size(104.0, 104.0)
@@ -1532,23 +1530,10 @@ fn done_art(reduce: bool) -> El {
         .transition(t.springs(SpringPair::new(Spring::new(0.3, 0.0), Spring::new(0.3, 0.0))))
 }
 
-/// The radial glow from the top edge: ink at 10% fading out over 360 pt, as opaque rings so
-/// it composites in sRGB as SwiftUI's gradient does (Rune has no radial gradient).
+/// The radial glow from the top edge: ink at 10% fading out over 360 pt.
 fn top_glow() -> El {
-    const RINGS: usize = 40;
     const R: f32 = 360.0;
-    let cx = WIDTH / 2.0;
-    let mut shape = Shape::new();
-    for i in (1..=RINGS).rev() {
-        let r = R * i as f32 / RINGS as f32;
-        let p = (i as f32 - 0.5) / RINGS as f32;
-        let n = 72;
-        let mut pts: Vec<[f32; 2]> =
-            (0..=n).map(|j| j as f32 / n as f32 * std::f32::consts::PI).map(|a| [cx + r * a.cos(), r * a.sin()]).collect();
-        pts.push([cx - r, 0.0]);
-        shape = shape.fill(pts, INK.alpha(0.10 * (1.0 - p)).over(CANVAS));
-    }
-    canvas(shape).absolute(0.0, 0.0).size(WIDTH, R)
+    el().absolute(0.0, 0.0).size(WIDTH, R).radial_gradient([0.5, 0.0], R, [(0.0, INK.alpha(0.10).color()), (1.0, INK.alpha(0.0).color())])
 }
 
 // MARK: Steps
@@ -1766,12 +1751,12 @@ fn practice_layer(s: &OnboardingWin, w: f32, h: f32) -> El {
         .on_layout(|s: &mut OnboardingWin, r: [f32; 4]| s.stage = r)
 }
 
-fn stage_box(t: f64, show_cursor: bool, k: f32, radius: f32) -> El {
-    el().size(geo::SIZE[0] * k, geo::SIZE[1] * k)
+fn stage_box(t: f64, show_cursor: bool, radius: f32) -> El {
+    el().size(geo::SIZE[0], geo::SIZE[1])
         .radius(radius)
         .gradient(STAGE_TOP.color(), STAGE_BOTTOM.color())
         .clip_rounded(radius)
-        .children(Scene { t }.draw(show_cursor, k))
+        .children(Scene { t }.draw(show_cursor, 1.0))
 }
 
 fn demo(s: &OnboardingWin) -> El {
@@ -1789,8 +1774,15 @@ fn demo(s: &OnboardingWin) -> El {
             col().gap(5.0)
                 .items_center()
                 .child(
+                    // SwiftUI's `scaleEffect(0.44, anchor: .topLeading)`: the full-size stage,
+                    // scaled about its centre and moved so its top-left sits on the cell's.
                     el().size(cw, ch)
-                        .child(stage_box(*t, true, k, 7.0))
+                        .clip_rounded(7.0)
+                        .child(
+                            stage_box(*t, true, 0.0)
+                                .absolute(-(geo::SIZE[0] - cw) / 2.0, -(geo::SIZE[1] - ch) / 2.0)
+                                .scale(k),
+                        )
                         .child(el().absolute(0.0, 0.0).size(cw, ch).radius(7.0).border(1.0, LINE.over(STAGE_TOP))),
                 )
                 .child(label(caption, 11.0, 400.0, SOFT.over(CANVAS)))
@@ -1811,12 +1803,12 @@ fn demo(s: &OnboardingWin) -> El {
     let t = s.demo_t();
     let practicing = s.drawing || !s.strokes.is_empty();
     let show_cursor = !practicing;
-    let mut stage = el().size(geo::SIZE[0], geo::SIZE[1]).child(stage_box(t, show_cursor, 1.0, 12.0));
+    let mut stage = el().size(geo::SIZE[0], geo::SIZE[1]).child(stage_box(t, show_cursor, 12.0));
     if let Some((ghost_t, at)) = s.ghost {
         // Only the old moment fades, on top of the new one, so the page both share never dims.
         let p = ((s.now - at) / 0.22).clamp(0.0, 1.0);
         let o = (1.0 - (1.0 - (1.0 - p).powi(2))) as f32;
-        stage = stage.child(stage_box(ghost_t, false, 1.0, 12.0).absolute(0.0, 0.0).opacity(o).blur(3.0 * (1.0 - o)));
+        stage = stage.child(stage_box(ghost_t, false, 12.0).absolute(0.0, 0.0).opacity(o).blur(3.0 * (1.0 - o)));
     }
     stage = stage
         .child(el().absolute(0.0, 0.0).size(geo::SIZE[0], geo::SIZE[1]).radius(12.0).border(1.0, LINE.over(STAGE_TOP)))
@@ -2016,6 +2008,7 @@ pub(crate) fn install<S: 'static>(app: &mut App<S>) {
             ..Default::default()
         })
         .chrome(CHROME)
+        .srgb_blend(true)
         .on_focus(on_focus);
     spec.app = spec.app.on_close(on_close);
     let (handle, _window) = app.window(spec);
@@ -2084,7 +2077,9 @@ fn on_message<H: Host<OnboardingWin>>(link: &Link<OnboardingWin, H>, message: Va
                     tx.instant();
                     if !s.sized {
                         s.sized = true;
-                        resize_window(s.state.height());
+                        // Swift's first state sizes the window to its step and centres it.
+                        tx.resize_window_instant((WIDTH, s.state.height()));
+                        tx.center_window();
                     }
                     s.present(tx);
                 } else {
@@ -2149,18 +2144,6 @@ fn ns_window() -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
     let mtm = objc2_foundation::MainThreadMarker::new()?;
     let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
     app.windows().iter().find(|w| w.title().to_string() == TITLE)
-}
-
-/// Rune can't resize a window yet: sets the content height through AppKit and centres it, as
-/// Swift's first state does.
-fn resize_window(height: f32) {
-    #[cfg(target_os = "macos")]
-    if let Some(win) = ns_window() {
-        win.setContentSize(objc2_foundation::NSSize::new(f64::from(WIDTH), f64::from(height)));
-        win.center();
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = height;
 }
 
 /// The window's content top-left in global top-left points.
@@ -2347,7 +2330,7 @@ pub(crate) fn run_headless(scene: &str, mut args: Vec<String>) {
     }
     let height = sample_state(name).0.height();
     let fonts = fonts();
-    App::new(spec(fonts, height)).chrome(CHROME).args(args).run();
+    App::new(spec(fonts, height)).chrome(CHROME).srgb_blend(true).args(args).run();
 }
 
 /// Every sample in the order `scrawl-helper onboarding --render` numbers them.
