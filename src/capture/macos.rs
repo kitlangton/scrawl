@@ -170,6 +170,7 @@ unsafe extern "C" {
         output: *mut u16,
     ) -> i32;
     fn LMGetKbdType() -> u8;
+    fn CopySymbolicHotKeys(hotkeys: *mut *const c_void) -> i32;
 }
 
 #[repr(C)]
@@ -336,6 +337,85 @@ pub fn key_code_for_char(ch: char) -> Option<u16> {
     init_keyboard_layout_map()
         .get(&ch.to_ascii_lowercase())
         .copied()
+}
+
+/// What the key types on the current layout with no modifiers, as the SwiftUI recorder reads
+/// `characters(byApplyingModifiers: [])`.
+pub fn recorder_key(key_code: u16) -> String {
+    let source = unsafe { TISCopyCurrentKeyboardLayoutInputSource() };
+    if source.is_null() {
+        return String::new();
+    }
+    let data = unsafe { TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) };
+    let mut typed = String::new();
+    if !data.is_null() {
+        let layout = unsafe { CFDataGetBytePtr(data) };
+        let mut dead_key_state = 0_u32;
+        let mut output = [0_u16; 4];
+        let mut length = 0_isize;
+        let status = unsafe {
+            UCKeyTranslate(
+                layout,
+                key_code,
+                3, // kUCKeyActionDisplay
+                0,
+                u32::from(LMGetKbdType()),
+                0,
+                &raw mut dead_key_state,
+                output.len() as isize,
+                &raw mut length,
+                output.as_mut_ptr(),
+            )
+        };
+        if status == 0 && length > 0 {
+            typed = String::from_utf16_lossy(&output[..length as usize]);
+        }
+    }
+    unsafe { CFRelease(source) };
+    typed
+}
+
+/// Whether macOS has this combination as one of its enabled shortcuts (Keyboard Shortcuts),
+/// read from `CopySymbolicHotKeys` like the SwiftUI recorder.
+pub fn reserved_by_macos(key_code: u32, modifiers: u32) -> bool {
+    use core_foundation::array::CFArray;
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+
+    let mut array: *const c_void = std::ptr::null();
+    if unsafe { CopySymbolicHotKeys(&raw mut array) } != 0 || array.is_null() {
+        return false;
+    }
+    let hotkeys: CFArray<CFType> = unsafe { CFArray::wrap_under_create_rule(array.cast()) };
+    let mask = CARBON_CMD_KEY | CARBON_SHIFT_KEY | CARBON_OPTION_KEY | CARBON_CONTROL_KEY;
+    let [code_key, mods_key, enabled_key] = [
+        "kHISymbolicHotKeyCode",
+        "kHISymbolicHotKeyModifiers",
+        "kHISymbolicHotKeyEnabled",
+    ]
+    .map(CFString::new);
+    hotkeys.iter().any(|item| {
+        let Some(dict) = item.downcast::<CFDictionary>() else {
+            return false;
+        };
+        let dict: CFDictionary<CFString, CFType> =
+            unsafe { CFDictionary::wrap_under_get_rule(dict.as_concrete_TypeRef()) };
+        let number = |key: &CFString| {
+            dict.find(key)
+                .and_then(|v| v.downcast::<CFNumber>())
+                .and_then(|n| n.to_i64())
+        };
+        let enabled = dict
+            .find(&enabled_key)
+            .and_then(|v| v.downcast::<CFBoolean>())
+            .is_some_and(bool::from);
+        enabled
+            && number(&code_key) == Some(i64::from(key_code))
+            && number(&mods_key).is_some_and(|m| (m as u32) & mask == modifiers)
+    })
 }
 
 pub fn layout_s_keycode() -> u16 {
