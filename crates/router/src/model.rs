@@ -2,6 +2,53 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+impl MissingTranscript {
+    pub fn for_reason(why: &str, locale: &str, error: Option<&str>) -> Self {
+        let model = if cfg!(target_os = "windows") {
+            format!("The Parakeet speech model ({locale})")
+        } else {
+            format!("Apple's speech model ({locale})")
+        };
+        match why {
+            "downloading" => Self {
+                reason: format!(
+                    "{model} was still downloading. The audio is saved, and Scrawl adds the \
+                     transcript to this bundle when the download finishes."
+                ),
+                retry: true,
+            },
+            "permission" => Self {
+                reason: "Speech Recognition is off for Scrawl. The audio is saved, and Scrawl adds \
+                         the transcript to this bundle once it's on (Scrawl Settings › Permissions)."
+                    .to_owned(),
+                retry: true,
+            },
+            "dictation" => Self {
+                reason: "Dictation's on-device model isn't on this Mac. Turn on Dictation in System \
+                         Settings › Keyboard, and Scrawl adds the transcript to this bundle once it's \
+                         there."
+                    .to_owned(),
+                retry: true,
+            },
+            "unsupported" => Self {
+                reason: format!(
+                    "this Mac has no Apple speech model for {locale}. Hex can transcribe instead \
+                     (Scrawl Settings › Recording)."
+                ),
+                retry: false,
+            },
+            _ => Self {
+                reason: format!(
+                    "{model} couldn't be installed{}. The audio is saved, and Scrawl adds the \
+                     transcript to this bundle if a later try works.",
+                    error.map(|e| format!(" ({e})")).unwrap_or_default()
+                ),
+                retry: true,
+            },
+        }
+    }
+}
+
 /// Coordinates in `Stroke::pts` are scaled to `0..=10_000` (1/10000 of target width/height).
 pub const SCALE: i32 = 10_000;
 

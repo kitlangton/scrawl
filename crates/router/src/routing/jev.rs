@@ -352,11 +352,11 @@ impl Record {
 }
 
 /// An earlier item and where it went (`scrawl router decide`'s `history`).
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Past {
-    #[serde(default)]
+    #[serde(default, alias = "text_excerpt")]
     pub text: String,
-    #[serde(default)]
+    #[serde(default, alias = "routed_to")]
     pub to: Option<String>,
     /// Where Kit moved it instead.
     #[serde(default)]
@@ -1038,7 +1038,7 @@ pub fn trim_middle(text: &str, max: usize) -> String {
     format!("{start} … {end}")
 }
 
-fn trim_end(text: &str, max: usize) -> String {
+pub fn trim_end(text: &str, max: usize) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= max {
         return flat;

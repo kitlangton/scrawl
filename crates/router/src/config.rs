@@ -188,15 +188,29 @@ fn expand(map: &BTreeMap<String, String>) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-/// The router's settings in the text of Scrawl's `config.json`. Lenient like Scrawl: a key (or a
-/// `sites`/`apps` entry) that doesn't fit is dropped on its own; the rest stand. Unreadable
-/// text is the defaults.
-pub fn parse_scrawl_config(text: &str) -> RouterConfig {
+/// Both the capture engine's and the router's settings in the text of Scrawl's `config.json`.
+/// Lenient like Scrawl: a key (or a `sites`/`apps` entry) that doesn't fit is dropped on its
+/// own; the rest stand. Unreadable text returns the defaults.
+pub fn parse_scrawl_config(text: &str) -> (crate::handoff::EngineConfig, RouterConfig) {
     parse_scrawl_config_with_warnings(text).0
 }
 
-/// [`parse_scrawl_config`] and what it ignored, one line each.
-pub fn parse_scrawl_config_with_warnings(text: &str) -> (RouterConfig, Vec<String>) {
+/// [`parse_scrawl_config`] and what the router parser ignored, one line each.
+pub fn parse_scrawl_config_with_warnings(
+    text: &str,
+) -> ((crate::handoff::EngineConfig, RouterConfig), Vec<String>) {
+    let engine = crate::handoff::engine_config_from_scrawl(text);
+    let (router, warnings) = parse_scrawl_router_config_with_warnings(text);
+    ((engine, router), warnings)
+}
+
+/// Only the router's settings in the text of Scrawl's `config.json`.
+pub fn parse_scrawl_router_config(text: &str) -> RouterConfig {
+    parse_scrawl_router_config_with_warnings(text).0
+}
+
+/// [`parse_scrawl_router_config`] and what it ignored, one line each.
+pub fn parse_scrawl_router_config_with_warnings(text: &str) -> (RouterConfig, Vec<String>) {
     let mut warnings = Vec::new();
     let Ok(Value::Object(root)) = serde_json::from_str::<Value>(text) else {
         return (RouterConfig::default(), warnings);
@@ -204,7 +218,7 @@ pub fn parse_scrawl_config_with_warnings(text: &str) -> (RouterConfig, Vec<Strin
     (router_config_from_value(&root, &mut warnings), warnings)
 }
 
-/// [`parse_scrawl_config`] from the parsed file.
+/// [`parse_scrawl_router_config`] from the parsed file.
 pub fn router_config_from_scrawl(
     root: &serde_json::Map<String, Value>,
     warnings: &mut Vec<String>,
@@ -428,13 +442,14 @@ mod tests {
 
     #[test]
     fn a_bad_key_drops_only_itself() {
-        let (config, warnings) = parse_scrawl_config_with_warnings(
+        let ((engine, config), warnings) = parse_scrawl_config_with_warnings(
             r#"{"routing": {"autoSend": "never", "undoWindowSec": "15",
                 "sites": {"https://a.example": "~/a", "https://b.example": 3},
                 "apps": {"com.apple.Safari": "~/x", "com.example.tool": "ses_t"}},
-                "delivery": 3, "agentHost": "studio",
+                "delivery": 3, "agentHost": "studio", "transcriber": "hex",
                 "experiments": {"smartRouting": "on", "jevRouting": "maybe"}}"#,
         );
+        assert_eq!(engine.transcriber.as_deref(), Some("hex"));
         assert_eq!(config.auto_send, AutoSend::Never);
         assert_eq!(config.undo_window_sec, None);
         assert_eq!(
@@ -446,10 +461,17 @@ mod tests {
         assert_eq!(config.agent_host.as_deref(), Some("studio"));
         assert!(config.smart_routing && !config.jev_routing);
         assert_eq!(warnings.len(), 5, "{warnings:#?}");
-        let config = parse_scrawl_config(r#"{"routing": 3, "autoSend": false}"#);
+        let (engine, config) = parse_scrawl_config(r#"{"routing": 3, "autoSend": false}"#);
+        assert_eq!(engine.auto_send, Some(false));
         assert!(!config.send_captures);
         assert_eq!(config.auto_send, AutoSend::Rules);
-        assert_eq!(parse_scrawl_config("not json"), RouterConfig::default());
+        assert_eq!(
+            parse_scrawl_config("not json"),
+            (
+                crate::handoff::EngineConfig::default(),
+                RouterConfig::default()
+            )
+        );
     }
 
     #[test]

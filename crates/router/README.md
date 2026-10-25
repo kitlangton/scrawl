@@ -7,14 +7,20 @@ The host owns the settings and the folders. The library never reads Scrawl's `~/
 ## Using it
 
 ```rust
+use std::sync::Arc;
 use std::time::Duration;
-use scrawl_router::{Action, Router, RouterConfig, RouterDirs, parse_scrawl_config};
+use scrawl_router::{
+    Action, EngineConfig, Recents, Router, RouterConfig, RouterDirs, parse_scrawl_config,
+};
 
-let config: RouterConfig = parse_scrawl_config(&std::fs::read_to_string(config_path)?);
+let (_engine, config): (EngineConfig, RouterConfig) =
+    parse_scrawl_config(&std::fs::read_to_string(config_path)?);
 let dirs = RouterDirs::under(&router_dir, Some(log_path), Some(captures_dir));
-let router = Router::new(config, dirs).with_log(|line| eprintln!("{line}"));
+let config_source: Arc<dyn Fn() -> RouterConfig + Send + Sync> = Arc::new(move || config.clone());
+let router = Router::new(config_source, dirs).with_log(|line| eprintln!("{line}"));
+let recents = Recents::new(Some(router_dir.join("recents.json")));
 
-let decision = router.decide(&serde_json::json!({"item": {"kind": "dictation", "text": "…"}}), Duration::from_millis(2500))?;
+let decision = router.decide(&serde_json::json!({"item": {"kind": "dictation", "text": "…"}, "history": recents.snapshot()}), Duration::from_millis(2500))?;
 let sent = router.deliver(&decision.decision_id, "ses_…", Duration::from_secs(10))?;
 let undone = router.undo(&sent.sent.unwrap().delivery_id, Duration::from_secs(10))?;
 router.correct(&decision.decision_id, Action::Redirect, Some("ses_other"))?;
@@ -22,16 +28,18 @@ router.correct(&decision.decision_id, Action::Redirect, Some("ses_other"))?;
 
 Every call blocks the calling thread until it's done or its deadline passes. Serializing a result with `serde_json` gives exactly what the matching `scrawl router` command prints (`docs/routing.md`).
 
+`scrawl-router` also holds the shared pure-Rust core used by both `Router` and `scrawl-capture` (`EngineConfig`, `MicChoice`, `Recents`, `log`, `model`, `page`, `sketch`, `agent_context`, `web`, `delivery`), which `scrawl-capture` re-exports.
+
 ## The API
 
 ```rust
 impl Router {
-    pub fn new(config: RouterConfig, dirs: RouterDirs) -> Self;
+    pub fn new(config: impl IntoRouterConfig, dirs: RouterDirs) -> Self; // Arc<dyn Fn() -> RouterConfig + Send + Sync>, || ..., or RouterConfig
     pub fn with_log(self, log: impl Fn(&str) + Send + Sync + 'static) -> Self;
     pub fn with_summary(self, summary: env::Summary) -> Self;   // fn(&ScrawlBundle, &Path) -> String
     pub fn with_pages(self, pages: env::Pages) -> Self;         // fn(&str) -> Option<Registration>
     pub fn with_live(self, live: bool) -> Self;
-    pub fn config(&self) -> &RouterConfig;
+    pub fn config(&self) -> RouterConfig;
     pub fn dirs(&self) -> &RouterDirs;
 
     pub fn decide(&self, request: &serde_json::Value, deadline: Duration) -> Result<Decision>;
@@ -60,7 +68,7 @@ Rules are part of the config: `config.with_rule(RuleKind::Site | RuleKind::App, 
 
 ## The settings (`RouterConfig`)
 
-Serde camelCase, every field optional. `parse_scrawl_config(&str)` reads them from the text of Scrawl's `config.json`, where a key (or a `sites`/`apps` entry) that doesn't fit is dropped on its own; `parse_scrawl_config_with_warnings` also says what it dropped.
+Serde camelCase, every field optional. `parse_scrawl_config(&str) -> (EngineConfig, RouterConfig)` reads both the capture engine's and the router's settings from the text of Scrawl's `config.json` (`parse_scrawl_router_config(&str) -> RouterConfig` and `router_config_from_scrawl` read only the router settings), where a key (or a `sites`/`apps` entry) that doesn't fit is dropped on its own; `parse_scrawl_config_with_warnings` and `parse_scrawl_router_config_with_warnings` also return what was dropped.
 
 | Field | Scrawl's key | Meaning |
 |---|---|---|

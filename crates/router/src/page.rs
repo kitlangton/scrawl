@@ -245,7 +245,7 @@ static LOG: Mutex<Log> = Mutex::new(Log { tabs: Vec::new() });
 pub fn record(origin: &str, post: Post) {
     LOG.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .record(origin, post, crate::pipeline::now_epoch_ms());
+        .record(origin, post, crate::util::now_epoch_ms());
 }
 
 pub fn between(from: u64, to: u64) -> Vec<Event> {

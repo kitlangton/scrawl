@@ -3,14 +3,7 @@
 //! the CoreAudio device UID, which is also `AVCaptureDevice.uniqueID`; the name is kept only to
 //! say which device is missing. A chosen device that isn't connected falls back to the default.
 
-use serde::{Deserialize, Serialize};
-
-/// The `microphone` key: a device the user picked in Settings.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Choice {
-    pub id: String,
-    pub name: String,
-}
+pub use crate::handoff::MicChoice as Choice;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Input {

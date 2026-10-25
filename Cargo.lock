@@ -5643,6 +5643,7 @@ dependencies = [
  "raw-window-handle",
  "rune",
  "scrawl-capture",
+ "scrawl-router",
  "screencapturekit",
  "serde",
  "serde_json",
@@ -5673,10 +5674,22 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "png 0.18.1",
+ "scrawl-router",
  "screencapturekit",
  "serde",
  "serde_json",
  "windows 0.61.3",
+]
+
+[[package]]
+name = "scrawl-router"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 7.0.0",
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
