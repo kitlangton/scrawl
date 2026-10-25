@@ -286,6 +286,11 @@ fn decide_with(
         .collect();
     let (mut candidates, error) = look::read_with(&clues, None, &pinned, senses);
     look::look_at_page(url, &mut clues, &mut candidates, senses);
+    clues.extend(look::named_clue(
+        &item.text,
+        &candidates,
+        &(senses.aliases)(),
+    ));
     let evidence = Evidence {
         address: None,
         clues,
@@ -445,6 +450,7 @@ fn settled_why(judgement: &Judgement) -> Option<String> {
         match to.lead()?.basis {
             Basis::Chosen => "chosen",
             Basis::Recorded => "recorded destination",
+            Basis::Clue(Source::Named) => "named at the start",
             Basis::Clue(Source::Rule) => "routing.sites rule",
             Basis::Clue(Source::Page) => "signed page",
             Basis::Clue(Source::Port) => "localhost port",
@@ -742,6 +748,9 @@ fn deliver_with(
 /// The prompt for an item: a bracketed first line saying where it came from
 /// (`[voice via Hex · from Ghostty]`), then the text and any selection.
 fn prompt_text(item: &Item) -> String {
+    if item.text.trim_start().starts_with("[voice via Hex") {
+        return item.text.trim().to_owned();
+    }
     let mut head = match item.kind() {
         "capture" => "[scrawl capture".to_owned(),
         _ => "[voice via Hex".to_owned(),
@@ -1495,8 +1504,13 @@ mod tests {
             terminal: no_terminal,
             servers: nothing,
             sites: nothing,
+            aliases: no_aliases,
             writes: no_writes,
         }
+    }
+
+    fn no_aliases() -> Vec<(String, String)> {
+        Vec::new()
     }
 
     fn run(input: Value, ask: fn(&[u8], Duration) -> Result<Vec<u8>>) -> Value {
@@ -1529,6 +1543,24 @@ mod tests {
         let asked = ASKED.with(|a| a.borrow().clone()).unwrap();
         assert_eq!(asked["state"]["capture"]["app"], "Hex");
         assert_eq!(asked["state"]["capture"]["mode"], "Code");
+    }
+
+    #[test]
+    fn a_session_named_at_the_start_is_sent_to_without_jev() {
+        ASKED.with(|a| *a.borrow_mut() = None);
+        let out = run(
+            json!({"item": {"text": "For home: file the hex icon bug", "app": "Ghostty"}}),
+            sure,
+        );
+        assert_eq!(out["decision"], "send", "{out}");
+        assert_eq!(out["target"]["id"], "ses_home");
+        assert_eq!(out["why"], "named at the start");
+        assert!(out["model"].is_null());
+        assert!(ASKED.with(|a| a.borrow().is_none()), "Jev wasn't asked");
+        // A name later on is only a clue for Jev.
+        let out = run(json!({"item": {"text": "file the home bug"}}), sure);
+        assert_eq!(out["target"]["id"], "ses_hex");
+        assert_eq!(out["why"], "jev: confident");
     }
 
     #[test]
@@ -1686,6 +1718,16 @@ mod tests {
         };
         deliver_with(&decisions, request, &outbox, &ok).unwrap();
         assert_eq!(last_sent().1, "[voice via Hex]\nhello");
+
+        // Text that already carries the prefix isn't given a second one.
+        let request = DeliverRequest {
+            item_id: Some("zz-10".into()),
+            to: "ses_b".into(),
+            text: Some("[voice via Hex · from Zed]\nhello".into()),
+            ..DeliverRequest::default()
+        };
+        deliver_with(&decisions, request, &outbox, &ok).unwrap();
+        assert_eq!(last_sent().1, "[voice via Hex · from Zed]\nhello");
 
         // A failed send waits in the outbox for the app's retries.
         let down = DeliverHooks {

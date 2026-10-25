@@ -14,6 +14,7 @@
 
 pub mod jev;
 pub mod look;
+pub mod named;
 pub mod router;
 pub mod served;
 pub mod smart;

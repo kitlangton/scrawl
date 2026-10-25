@@ -249,7 +249,9 @@ pub fn settled(judgement: &Judgement) -> bool {
         Some(
             Basis::Chosen
                 | Basis::Recorded
-                | Basis::Clue(Source::Rule | Source::Page | Source::Port | Source::Publisher)
+                | Basis::Clue(
+                    Source::Named | Source::Rule | Source::Page | Source::Port | Source::Publisher
+                )
         )
     )
 }

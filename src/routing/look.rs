@@ -36,6 +36,8 @@ pub struct Senses {
     pub servers: fn() -> Vec<(String, PathBuf)>,
     /// URL prefixes and the folder or session their captures go to (`routing.sites`).
     pub sites: fn() -> Vec<(String, PathBuf)>,
+    /// Spoken names and the title or folder they mean (`routing.aliases`).
+    pub aliases: fn() -> Vec<(String, String)>,
     /// Tool calls in OpenCode's history that named a folder around the time a file in it changed.
     pub writes: fn(&str, u64, u64) -> Vec<served::Write>,
 }
@@ -48,6 +50,7 @@ impl Default for Senses {
             terminal: terminal_pane,
             servers: crate::handoff::routing_servers,
             sites: crate::handoff::routing_sites,
+            aliases: crate::handoff::routing_aliases,
             writes: served::opencode_writes,
         }
     }
@@ -341,6 +344,38 @@ fn rule_clue(url: &str, senses: &Senses) -> Option<Clue> {
     ))
 }
 
+/// The session `text` opens by addressing ("tell scrawl …"), as a [`Source::Named`] clue.
+pub fn named_clue(
+    text: &str,
+    candidates: &[Candidate],
+    aliases: &[(String, String)],
+) -> Option<Clue> {
+    let named = super::named::addressed(text, candidates, aliases)?;
+    Some(Clue::new(
+        Source::Named,
+        Pointer::Session {
+            id: named.id,
+            directory: None,
+        },
+        format!(
+            "opens by naming \u{201c}{}\u{201d} ({})",
+            named.spoken, named.how
+        ),
+    ))
+}
+
+/// A named-address clue for a capture's speech, with Jev routing on.
+fn spoken_address(bundle: &ScrawlBundle, candidates: &[Candidate]) -> Option<Clue> {
+    if !super::jev::enabled() {
+        return None;
+    }
+    named_clue(
+        &bundle.transcript.text,
+        candidates,
+        &crate::handoff::routing_aliases(),
+    )
+}
+
 /// The rest of the evidence, from the finished bundle: its title, what was said, the session
 /// OpenCode Desktop showed, the checkout the captured app is built from, and the destination the
 /// recording carries.
@@ -351,6 +386,7 @@ pub fn evidence_for(bundle: &ScrawlBundle, dir: &Path, live: Live) -> Evidence {
         &live.candidates,
         &crate::handoff::routing_apps(),
     ));
+    clues.extend(spoken_address(bundle, &live.candidates));
     Evidence {
         address: crate::handoff::recorded_destination(dir).map(Address::Recorded),
         clues,
@@ -374,10 +410,11 @@ pub fn replay(saved: Evidence, bundle: &ScrawlBundle, apps: &[(String, PathBuf)]
             | Source::Terminal
             | Source::Document => true,
             Source::Title => clue.note.starts_with(TERMINAL_TITLE),
-            Source::Viewed | Source::App | Source::Speech => false,
+            Source::Named | Source::Viewed | Source::App | Source::Speech => false,
         })
         .collect();
     clues.extend(bundle_clues(bundle, &saved.candidates, apps));
+    clues.extend(spoken_address(bundle, &saved.candidates));
     Evidence { clues, ..saved }
 }
 
@@ -1516,6 +1553,7 @@ mod tests {
             terminal: no_terminal,
             servers: page_servers,
             sites: Vec::new,
+            aliases: Vec::new,
             writes: page_writes,
         }
     }

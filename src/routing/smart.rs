@@ -105,6 +105,9 @@ impl Clue {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Source {
+    /// A session named at the start of what was said ("tell scrawl …"; `named`). Obeyed ahead
+    /// of everything but an address.
+    Named,
     /// A `routing.sites` rule covering the tab's URL. Obeyed ahead of weighing when it finds a
     /// session.
     Rule,
@@ -142,6 +145,7 @@ impl Source {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Named => "named",
             Self::Rule => "rule",
             Self::Page => "page",
             Self::Port => "port",
@@ -158,6 +162,7 @@ impl Source {
     /// Full points for a clue of this source that names a candidate.
     fn points(self) -> u32 {
         match self {
+            Self::Named => 100,
             Self::Rule | Self::Page | Self::Port | Self::Publisher => 95,
             Self::Terminal => 70,
             Self::Viewed => 60,
@@ -411,7 +416,10 @@ pub fn decide(evidence: &Evidence, policy: Policy) -> Judgement {
             ranking: vec![to],
         };
     }
-    if let Some(judgement) = ruled(evidence) {
+    if let Some(judgement) = ruled(evidence, Source::Named) {
+        return judgement;
+    }
+    if let Some(judgement) = ruled(evidence, Source::Rule) {
         return judgement;
     }
     match policy {
@@ -439,10 +447,11 @@ fn addressed(evidence: &Evidence, address: &Address) -> Scored {
     }
 }
 
-/// The session a `routing.sites` rule names, or the newest in its folder (any folder of the
-/// folder's repository counts), sent to without weighing. `None` when it names none open.
-fn ruled(evidence: &Evidence) -> Option<Judgement> {
-    let clue = evidence.clues.iter().find(|c| c.source == Source::Rule)?;
+/// The session a named address or a `routing.sites` rule (`source`) names, or the newest in its
+/// folder (any folder of the folder's repository counts), sent to without weighing. `None` when
+/// it names none open.
+fn ruled(evidence: &Evidence, source: Source) -> Option<Judgement> {
+    let clue = evidence.clues.iter().find(|c| c.source == source)?;
     let candidate = match &clue.pointer {
         Pointer::Session { id, .. } => find(&evidence.candidates, id).unwrap_or_else(|| bare(id)),
         // Sessions in the folder named come before the rest of its project.
@@ -468,7 +477,7 @@ fn ruled(evidence: &Evidence) -> Option<Judgement> {
         candidate,
         score: clue.full(),
         reasons: vec![Reason {
-            basis: Basis::Clue(Source::Rule),
+            basis: Basis::Clue(source),
             points: clue.full(),
             why: clue.note.clone(),
             directory: clue.directory(),

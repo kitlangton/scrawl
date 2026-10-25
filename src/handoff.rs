@@ -520,6 +520,10 @@ pub struct RoutingConfig {
     /// session ID (`{"https://problems.example.com": "~/code/team-board"}`).
     #[serde(default)]
     pub sites: std::collections::BTreeMap<String, String>,
+    /// Spoken names for sessions, to the title or folder name they mean
+    /// (`{"scroll": "SCRAWL"}`), for names speech recognition gets wrong.
+    #[serde(default)]
+    pub aliases: std::collections::BTreeMap<String, String>,
 }
 
 /// `true`/`false`, `"yes"`/`"on"`/`"1"` and their opposites, or a number (non-zero is on). Other
@@ -740,6 +744,17 @@ pub fn ensure_ingest_token() -> Result<String> {
 /// `routing.apps` from config.json, `~` expanded. Tests see none.
 pub fn routing_apps() -> Vec<(String, PathBuf)> {
     routing_paths(|routing| routing.apps)
+}
+
+/// `routing.aliases` in config.json: spoken names and the title or folder they mean.
+pub fn routing_aliases() -> Vec<(String, String)> {
+    if cfg!(test) {
+        return Vec::new();
+    }
+    config()
+        .routing
+        .map(|routing| routing.aliases.into_iter().collect())
+        .unwrap_or_default()
 }
 
 /// `routing.servers` in config.json: URL prefixes and the folders they serve, `~` expanded.
