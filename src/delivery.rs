@@ -18,6 +18,8 @@ use crate::capture::scrawl_log;
 pub const PENDING: &str = ".deliver.json";
 /// A bundle whose forward was given up on.
 pub const FAILED: &str = ".deliver-failed.json";
+/// A text prompt waiting in `scrawl router`'s outbox (a folder of its own, retried like a bundle).
+pub const PROMPT: &str = "prompt.json";
 
 const GIVE_UP_AFTER_MS: u64 = 24 * 60 * 60 * 1000;
 const SCAN_EVERY: Duration = Duration::from_secs(15);
@@ -185,7 +187,10 @@ pub fn retry_due(captures: &Path, now: u64, forward: Forward) -> Report {
     };
     let mut bundles: Vec<PathBuf> = entries
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|ext| ext == "scrawl") && p.join(PENDING).is_file())
+        .filter(|p| {
+            (p.extension().is_some_and(|ext| ext == "scrawl") || p.join(PROMPT).is_file())
+                && p.join(PENDING).is_file()
+        })
         .collect();
     bundles.sort();
     for dir in bundles {

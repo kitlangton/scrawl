@@ -484,6 +484,13 @@ pub struct Config {
     /// Smart routing's settings (`routing::look`).
     #[serde(default)]
     pub routing: Option<RoutingConfig>,
+    /// Jev routing's thresholds (`routing::jev::Thresholds::from_config`).
+    #[serde(default)]
+    pub jev_routing: Option<serde_json::Value>,
+    /// The OpenCode key Jev routing calls the gateway with; absent uses `$OPENCODE_API_KEY` or
+    /// OpenCode's own credential.
+    #[serde(default)]
+    pub jev_api_key: Option<String>,
     /// Where new captures go (`default_captures_dir`); absent keeps the built-in folder.
     #[serde(default)]
     pub captures_dir: Option<String>,
@@ -769,6 +776,22 @@ fn routing_paths(
 }
 
 /// Whether Mac captures of a dev site go straight to its session (`autoSend`, default on).
+/// `jevRouting` in config.json (never read in tests).
+pub fn jev_routing_config() -> Option<serde_json::Value> {
+    if cfg!(test) {
+        return None;
+    }
+    config().jev_routing
+}
+
+/// `jevApiKey` in config.json (never read in tests).
+pub fn jev_api_key() -> Option<String> {
+    if cfg!(test) {
+        return None;
+    }
+    config().jev_api_key
+}
+
 pub fn auto_send() -> bool {
     config().auto_send.unwrap_or(true)
 }
@@ -1530,6 +1553,23 @@ pub fn send_bundle_to_session(bundle_dir: &Path, session: &str) -> Result<()> {
             }],
             "delivery": "queue",
         })),
+    )?;
+    Ok(())
+}
+
+/// Queues `text` into an OpenCode session as a prompt (`scrawl router deliver`).
+pub fn send_text_to_session(session: &str, text: &str) -> Result<()> {
+    ensure!(
+        session.starts_with("ses")
+            && session
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
+        "Invalid OpenCode session ID"
+    );
+    opencode_api(
+        "post",
+        &format!("/api/session/{session}/prompt"),
+        Some(&serde_json::json!({ "text": text, "delivery": "queue" })),
     )?;
     Ok(())
 }

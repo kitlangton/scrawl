@@ -234,9 +234,19 @@ fn root_session(get: &mut ApiGet, id: &str) -> String {
 }
 
 /// Reads the sessions the clues and address could name.
-fn read_for(
+pub(crate) fn read_for(
     clues: &[Clue],
     address: Option<&Address>,
+    senses: &Senses,
+) -> (Vec<Candidate>, Option<String>) {
+    read_with(clues, address, &[], senses)
+}
+
+/// [`read_for`], also reading the sessions `also` names.
+pub(crate) fn read_with(
+    clues: &[Clue],
+    address: Option<&Address>,
+    also: &[String],
     senses: &Senses,
 ) -> (Vec<Candidate>, Option<String>) {
     let mut roots = Vec::new();
@@ -249,6 +259,7 @@ fn read_for(
         }
     }
     ids.extend(address.map(|a| a.session().to_owned()));
+    ids.extend(also.iter().cloned());
     let mut api = super::within(senses.hooks.api, super::SESSIONS_BUDGET);
     match read_candidates(&mut api, &roots, &ids, SESSION_PAGES) {
         Ok(candidates) => (candidates, None),

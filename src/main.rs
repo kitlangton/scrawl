@@ -196,6 +196,49 @@ enum LabCommand {
 }
 
 #[derive(Subcommand)]
+enum RouterCommand {
+    /// Decide where an item goes, without sending: reads `{"item": {"kind", "text", "app",
+    /// "title", "url", "selected_text", "mode"}, "pinned"?, "history"?}` on stdin and prints
+    /// `{"decision_id", "decision", "target", "candidates", "confidence", "any_fits", "model",
+    /// "ms", "why"}` within 3 s (docs/routing.md).
+    Decide,
+    /// Send a decision's text (dictation) or bundle (capture) to a session, retried like any
+    /// delivery; prints `{"ok", "state", "session"}`. Text on stdin replaces the decision's.
+    Deliver {
+        /// The decision, by `decide`'s `decision_id`...
+        #[arg(long, required_unless_present = "item_id")]
+        decision: Option<String>,
+        /// ...or by the caller's item ID.
+        #[arg(long)]
+        item_id: Option<String>,
+        #[arg(long, visible_alias = "session")]
+        to: String,
+    },
+    /// Log a correction to a decision: from its target to `--to`.
+    Correct {
+        #[arg(long)]
+        decision: String,
+        #[arg(long, value_enum)]
+        action: routing::jev::Action,
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// Log one correction line from stdin (`{"kind", "event": "correction", "item_id" or
+    /// "decision_id", "action", "from", "to"}`), joined to its decision.
+    Log,
+    /// Replay past captures whose real destination is known through Jev (one call each) and
+    /// print its accuracy by band and a threshold sweep.
+    Eval {
+        /// How far back to look, e.g. `7d`, `36h`.
+        #[arg(long, default_value = "7d")]
+        since: String,
+        /// At most this many captures.
+        #[arg(long, default_value_t = 40)]
+        limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
 enum TuneCommand {
     /// Every key with its live and default value, and the presets (default).
     List,
@@ -337,6 +380,13 @@ enum Command {
     Mic {
         #[command(subcommand)]
         command: MicCommand,
+    },
+    /// Jev routing (`"experiments": {"jevRouting": true}`): decide for an item, or measure it on
+    /// past captures.
+    #[command(hide = true)]
+    Router {
+        #[command(subcommand)]
+        command: RouterCommand,
     },
     /// Check the Hex transcriber: is it running, which models are ready, which one Scrawl uses.
     Hex {
@@ -556,6 +606,9 @@ enum Command {
         /// A `.scrawl` bundle (or `latest`) to explain.
         #[arg(long, value_name = "BUNDLE")]
         explain: Option<PathBuf>,
+        /// With `--explain`, ask Jev about the capture now (one call to the gateway).
+        #[arg(long, requires = "explain")]
+        jev: bool,
     },
     /// Open a `.scrawl` bundle in the native GPUI review window.
     Preview {
@@ -2347,6 +2400,14 @@ fn main() -> Result<()> {
                 println!("Copied {} to clipboard", dir.display());
             } else {
                 let target_session = handoff::send_to_opencode(&dir, session.as_deref(), reroute)?;
+                if reroute {
+                    routing::jev::correct_capture(
+                        &dir,
+                        routing::jev::Action::Redirect,
+                        "reroute",
+                        Some((target_session.as_str(), "")),
+                    );
+                }
                 println!(
                     "Sent {} to OpenCode session {target_session}",
                     dir.display()
@@ -2358,6 +2419,7 @@ fn main() -> Result<()> {
             url,
             browser,
             explain,
+            jev,
         } => {
             let url = match (url, browser) {
                 (Some(url), _) => Some(url),
@@ -2368,7 +2430,7 @@ fn main() -> Result<()> {
                 (None, None) => None,
             };
             if let Some(bundle) = explain {
-                print!("{}", routing::explain_bundle(&bundle, url.as_deref())?);
+                print!("{}", routing::explain_bundle(&bundle, url.as_deref(), jev)?);
                 return Ok(());
             }
             let url = url.context("Pass --url or --browser")?;
@@ -2378,6 +2440,62 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Command::Router { command } => match command {
+            RouterCommand::Decide => {
+                let mut input = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+                let output = routing::router::decide(&input)?;
+                println!("{}", serde_json::to_string_pretty(&output)?);
+                Ok(())
+            }
+            RouterCommand::Deliver {
+                decision,
+                item_id,
+                to,
+            } => {
+                let text = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                    None
+                } else {
+                    // With a decision the text is optional, so a caller that leaves stdin open
+                    // without writing doesn't hang us.
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let mut text = String::new();
+                        let read = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text);
+                        let _ = tx.send(read.map(|_| text));
+                    });
+                    if decision.is_some() {
+                        rx.recv_timeout(std::time::Duration::from_millis(500))
+                            .ok()
+                            .transpose()?
+                    } else {
+                        Some(rx.recv()??)
+                    }
+                };
+                let output = routing::router::deliver(routing::router::DeliverRequest {
+                    decision,
+                    item_id,
+                    to,
+                    text,
+                })?;
+                println!("{}", serde_json::to_string_pretty(&output)?);
+                Ok(())
+            }
+            RouterCommand::Correct {
+                decision,
+                action,
+                to,
+            } => routing::router::correct(&decision, action, to.as_deref()),
+            RouterCommand::Log => {
+                let mut input = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+                routing::router::log(&input)
+            }
+            RouterCommand::Eval { since, limit } => {
+                let since = routing::router::parse_since(&since)?;
+                routing::router::eval(since, limit)
+            }
+        },
         Command::Preview {
             bundle,
             capture_screenshot,

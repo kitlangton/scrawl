@@ -69,6 +69,70 @@ Candidates rank by their clue score; recency only breaks ties.
 
 A send and an offer both carry runners-up (`smart::alternatives`, at most two): a candidate within `LEAD` of the best, or one resting on a different source than the best with at least `ALT_AT` from clues, one per source. That's the session a misread clue would have meant: the viewed session when the app's checkout leads, or the reverse.
 
+## Jev
+
+With `"experiments": {"jevRouting": true}` as well, `routing::jev` asks Jev (`jev-1.13`, TypeSafe's System One model on OpenCode's gateway) instead of weighing words. Deterministic sources still win: when smart routing would send on an address, a choice, a recorded destination, a site rule, a page's `/sdk.js` session, a publisher or a localhost port (`jev::settled`), Jev isn't asked. Otherwise the title, speech, app, viewed-session and terminal clues go to Jev as sentences in `hints`, beside the capture (transcript trimmed to 2000 characters keeping both ends, mark and click notes, app, window title, URL, mode, duration) and up to 20 targets `t1…tN`, newest first: the sessions a clue names, smart routing's top three, HOME, then the most recent, each with its title, folder, when it was last active and its last user and assistant lines (read through `/api/session/{id}/message` in parallel within 1.5 s; replays read OpenCode's database as it was at capture time).
+
+Two questions: `target`, a choice between the targets, and `any_fits`, whether any of them fits at all. The decision (`jev::Band`, in the same words in `routing.json`'s `jev.decision`, the log and `scrawl router decide`), with thresholds overridden by `"jevRouting": {"send", "margin", "fits", "offer", "noFit", "low"}`:
+
+- **send** with the usual undo countdown when confidence ≥ 0.85, its margin over the runner-up's probability ≥ 0.3, and fits ≥ 0.4. A runner-up above 0.1 rides along as the "instead" chip. Jev's target choice is well calibrated (52/53 and 22/24 right on HOME's voice eval) but its yes/no answers aren't (real positives landed between 0.3 and 0.65), so the send leans on confidence and margin and `any_fits` is a weak gate.
+- **ask** otherwise when confidence ≥ 0.5 and fits ≥ 0.2: Jev's best, HOME, then the runners-up (two chips show).
+- **fallback** below that: sent to HOME with the countdown (`via: "jev-home"`) and Jev's guess one click away. `"low": "keep"` makes it **keep** (clipboard only) instead, as does having no HOME session.
+
+Any failure (no key, network, a bad answer, over 3 s) leaves smart routing's decision standing and says why in `routing.json`'s `jev` section and the log. The key comes from `"jevApiKey"`, then `$OPENCODE_API_KEY`, then OpenCode's own credential (read-only), and goes to curl on stdin, never in arguments or logs. `scrawl route --explain <bundle> --jev` asks again about one capture.
+
+### `scrawl router`
+
+Hex calls `scrawl router decide` for dictation. It reads, on stdin:
+
+```json
+{"item": {"item_id": "…", "kind": "capture" | "dictation", "text": "…", "app": "…" | {"id": "…", "name": "…"},
+          "title": "…", "url": "…", "selected_text": "…", "mode": "…"},
+ "pinned": ["ses_…"],
+ "history": [{"text": "…", "to": "ses_…", "corrected_to": "ses_…"}]}
+```
+
+Only `text` is required (`transcript` and `window_title` work as aliases; `kind` defaults to `dictation`; unknown fields are ignored; `selected_text` is cut to 2000 characters). `item_id`, the caller's own ID, is echoed in the reply and the log. An app given only as a bundle ID is named by its last part. `pinned` sessions are always put to Jev but don't win on their own. `history` (the latest 10) goes to Jev as state, each session named by its target when it's one, and the sessions it names join the targets. The URL, title and app go through the same rules and clues as a capture, so a `routing.sites` rule or a signed page still decides without Jev. It prints, within 3 s:
+
+```json
+{"decision_id": "19a1f…", "item_id": "…",
+ "decision": "send" | "ask" | "fallback" | "keep",
+ "target": {"id", "title", "directory"} | null,
+ "candidates": [{"id", "title", "directory", "score"}],
+ "confidence": 0.95, "any_fits": 0.9, "model": "jev-1.13", "ms": 640,
+ "why": "jev: confident"}
+```
+
+`candidates` are Jev's probabilities, best first: for `ask` the top 3 plus HOME, otherwise up to 5. When Jev wasn't asked (a rule, a signed page, a port, a publisher, or Jev failing), `confidence`, `any_fits`, `model` and `ms` are null (`ms` is set when Jev failed), `candidates` are what smart routing would show, unscored, and `why` names the source: `routing.sites rule`, `signed page`, `localhost port`, `publisher marker`, or smart routing's reason with Jev's error. Reading sessions and asking Jev share 2.3 s; past that, or past 2.5 s overall, the answer is `keep` with `why: "timeout"`. For dictation `keep` means nothing fits, so Hex shows its picker; for a capture it means the clipboard only. `decide` never sends: it logs the decision and saves the request and reply to `~/Library/Application Support/scrawl/router/decisions/<decision_id>.json` (`$SCRAWL_ROUTER_DIR`), kept for 7 days.
+
+`scrawl router deliver --decision <id> --to <ses_…>`, or `--item-id <id> --session <ses_…>`, sends a saved decision and prints `{"ok", "state": "sent" | "queued", "session"}`. Text on stdin replaces the decision's (and is enough on its own with `--item-id`). Dictation goes as a text prompt whose first line says where it came from, `[voice via Hex · from Ghostty]` (without `· from` when the app isn't known), with the decision's selection quoted after it unless stdin replaced the text; a capture whose request named its `bundle` sends the bundle the usual way. A failed send is `queued`: the prompt waits in `router/outbox/<id>/` with a `.deliver.json`, and the app (the port owner) retries it on the same schedule as a bundle.
+
+Corrections come two ways, through one writer that checks the schema below: `scrawl router correct --decision <id> --action cancel|redirect|paste|edit [--to <ses_…>]` (from the decision's target to `--to`, required for `redirect`), or `scrawl router log` with one line on stdin, `{"kind", "event": "correction", "item_id" or "decision_id", "action", "from"?, "to"?}`, where `from` and `to` may be bare session IDs. A logged line is joined to its decision by `decision_id` or `item_id`, which fills in the other ID, `from` (the decision's target), titles, `app` and `time`. The app logs its own captures' corrections through the same writer.
+
+`scrawl router eval [--since 7d] [--limit 40]` replays past captures whose real destination is known (a chip pick, or the session that received the bundle) and prints accuracy by decision and a threshold sweep. It then asks about each line of `router/eval/*.jsonl`, `{"item": {…}, "expect": {"to": "ses_…"} | {"decision": "fallback"}}`, and reports them as their own rows by file and line; those files are Kit's and stay out of the repo.
+
+### The decisions log
+
+`~/Library/Application Support/scrawl/routing-decisions.jsonl` (`$SCRAWL_ROUTING_LOG`), one JSON object per line, written only with Jev routing on (and by every `scrawl router decide`):
+
+| Field | |
+|---|---|
+| `time` | epoch milliseconds |
+| `kind` | `capture` or `dictation` |
+| `event` | `decision` or `correction` |
+| `bundle` / `decision_id`, `item_id` | the bundle folder's name (captures), or `scrawl router decide`'s decision ID and the caller's item ID |
+| `decision` | `send`, `ask`, `fallback` or `keep` (decisions) |
+| `by` | `jev`, `smart` when smart routing's own decision stood, or `timeout` |
+| `to` | `{"id", "title"}` or null: where it was sent or first offered; for a correction, where Kit put it (null when he kept it or cancelled) |
+| `from` | `{"id", "title"}` or null: what routing had suggested (corrections) |
+| `action` | `cancel`, `redirect`, `paste` or `edit` (corrections) |
+| `detail` | in the app: `escape`, `dismiss` (✕) or `paste` during the countdown, `chip`, or `reroute` (`scrawl send --reroute`) |
+| `confidence`, `any_fits` | Jev's numbers, or null |
+| `model`, `ms` | the Jev model and the call's time, or null |
+| `app` | the app the item came from |
+
+A redirect whose `from` and `to` match (picking the suggested chip) is a confirmation.
+
 ## Laws
 
 The tests in `smart.rs` and `look.rs` check each one. An address always wins, and a choice beats a recorded destination. A send needs `SEND_AT` from clues and a lead of `LEAD`. `decide` is pure, so the same evidence gives the same decision, in any order and with clues repeated. Recency never puts a session forward on its own and never reaches `SEND_AT`. Adding support for the leader never demotes it. The home folder and `/` are never projects. One medium clue (the viewed session, a terminal folder, the app's checkout or name) can't send without a second that agrees. `look::tests::the_ladder_policy_reproduces_route` checks that `Policy::Ladder` over the same hooks decides what `routing::route` does on a table of cases.
@@ -82,4 +146,5 @@ The Metal capsule (`src/native/pill`) draws the chips as `ElemId::Route0`/`Route
 ## Tools
 
 - `scrawl route --explain <bundle|latest> [--url URL]` prints the evidence, the sessions weighed with their points, the decision with why it wasn't sent and what's one click away, and what the ladder does. It replays `routing.json` when the bundle has one, keeping the sessions and what was seen live (the tab, the port, the publisher, the terminal) and reading the bundle's own clues again with today's rules; a page from a file server saved before publishers were looked for is looked at now. Otherwise it gathers what it can now (sessions as they are today, so recency and the viewed session are only approximate), and `--url` stands in for the tab.
+- With Jev routing, `--explain` also prints the `jev` section saved at capture time, and `--jev` asks Jev again (one call). `scrawl router decide|deliver|correct|eval` are described under [Jev](#jev).
 - Tests swap the outside steps through `look::Senses` (which holds `routing::Hooks`), and never post to a session.

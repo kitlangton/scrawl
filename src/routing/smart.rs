@@ -359,6 +359,10 @@ pub enum Basis {
     Recorded,
     Clue(Source),
     Recent,
+    /// Jev's pick (`jev`).
+    Jev,
+    /// HOME, where captures go when Jev can't tell.
+    JevHome,
 }
 
 impl Basis {
@@ -368,6 +372,8 @@ impl Basis {
             Self::Recorded => "recorded",
             Self::Clue(source) => source.label(),
             Self::Recent => "recent",
+            Self::Jev => "jev",
+            Self::JevHome => "jev-home",
         }
     }
 }
@@ -382,7 +388,7 @@ impl Scored {
     }
 
     /// The reason that gave the most points (the first on a tie), which names how it was found.
-    fn lead(&self) -> Option<&Reason> {
+    pub(crate) fn lead(&self) -> Option<&Reason> {
         self.reasons
             .iter()
             .filter(|r| r.basis != Basis::Recent)
@@ -980,6 +986,8 @@ pub fn destination_of(to: &Scored, url: Option<&str>) -> Destination {
         Some(Basis::Chosen) => "chosen",
         Some(Basis::Recorded) => "recorded",
         Some(Basis::Clue(source)) => source.via(),
+        Some(Basis::Jev) => "jev",
+        Some(Basis::JevHome) => "jev-home",
         Some(Basis::Recent) | None => "weighed",
     };
     Destination {

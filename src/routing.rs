@@ -10,9 +10,11 @@
 //! A `routing.sites` rule covering the tab's URL comes first ([`site_rule`]).
 //!
 //! With `"experiments": {"smartRouting": true}`, [`smart`] decides instead, from clues
-//! [`look`] gathers (`docs/routing.md`).
+//! [`look`] gathers (`docs/routing.md`); with `jevRouting` too, [`jev`] weighs them instead.
 
+pub mod jev;
 pub mod look;
+pub mod router;
 pub mod served;
 pub mod smart;
 
@@ -593,7 +595,36 @@ pub fn judge_capture(
     }
     let evidence = look::evidence_for(bundle, dir, live);
     let judgement = smart::decide(&evidence, smart::Policy::Weigh);
-    if let Err(err) = write_record(dir, &evidence, &judgement) {
+    let (judgement, jev) = if jev::enabled() {
+        let (judgement, record) = jev::judge(
+            &evidence,
+            judgement,
+            &jev::capture_state(bundle, url.as_deref()),
+            &jev::Asking::default(),
+            None,
+            &jev::Hooks::default(),
+            &jev::Thresholds::configured(),
+        );
+        scrawl_log(format!(
+            "routing (jev): {} · {}{}",
+            record.band.label(),
+            record.reason,
+            record
+                .ms
+                .map(|ms| format!(" · {ms} ms"))
+                .unwrap_or_default()
+        ));
+        jev::log_decision(
+            dir,
+            &judgement.decision,
+            &record,
+            bundle.target.app.as_deref(),
+        );
+        (judgement, Some(record))
+    } else {
+        (judgement, None)
+    };
+    if let Err(err) = write_record(dir, &evidence, &judgement, jev.as_ref()) {
         scrawl_log(format!("routing: couldn't save {RECORD}: {err:#}"));
     }
     let outcome = match &judgement.decision {
@@ -619,8 +650,9 @@ pub fn judge_capture(
 }
 
 /// `scrawl route --explain`: what smart routing sees for a bundle and what it decides, beside
-/// what the ladder (smart routing off) does. Read-only.
-pub fn explain_bundle(bundle: &Path, url: Option<&str>) -> Result<String> {
+/// what the ladder (smart routing off) does, and what Jev said at capture time. `ask_jev` asks
+/// Jev again now (one call). Read-only.
+pub fn explain_bundle(bundle: &Path, url: Option<&str>, ask_jev: bool) -> Result<String> {
     use std::fmt::Write as _;
     let dir = crate::handoff::resolve_bundle_dir(bundle)?;
     let (_, loaded) = crate::handoff::load_bundle(&dir)?;
@@ -667,6 +699,24 @@ pub fn explain_bundle(bundle: &Path, url: Option<&str>) -> Result<String> {
         let _ = writeln!(out, "Warning   {error}");
     }
     out.push_str(&smart::explain(&evidence, &judgement));
+    if let Some(saved) = jev::read_record(&dir) {
+        let _ = writeln!(out, "At capture (saved)");
+        out.push_str(&jev::explain(&saved));
+    }
+    if ask_jev {
+        // The sessions' last messages as they were when the capture finished.
+        let (_, record) = jev::judge(
+            &evidence,
+            judgement.clone(),
+            &jev::capture_state(&loaded, evidence.url.as_deref()),
+            &jev::Asking::default(),
+            Some(loaded.created_at_ms),
+            &jev::Hooks::default(),
+            &jev::Thresholds::configured(),
+        );
+        let _ = writeln!(out, "Asked now");
+        out.push_str(&jev::explain(&record));
+    }
     let today = match tab.as_deref() {
         Some(tab) => {
             match route_with_sites(tab, &crate::handoff::routing_sites(), &Hooks::default()) {
@@ -688,8 +738,12 @@ pub fn write_record(
     dir: &Path,
     evidence: &smart::Evidence,
     judgement: &smart::Judgement,
+    jev: Option<&jev::Record>,
 ) -> Result<()> {
-    let body = serde_json::json!({ "evidence": evidence, "decision": judgement.decision });
+    let mut body = serde_json::json!({ "evidence": evidence, "decision": judgement.decision });
+    if let Some(jev) = jev {
+        body["jev"] = serde_json::to_value(jev)?;
+    }
     std::fs::write(dir.join(RECORD), serde_json::to_vec_pretty(&body)?)?;
     Ok(())
 }

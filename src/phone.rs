@@ -1296,6 +1296,15 @@ fn serve_http(port: u16, config: IngestConfig) -> Result<()> {
     // Only the process that owns the port retries deliveries, so two never race over a bundle.
     if config.route_opencode {
         crate::delivery::spawn_retries(config.captures_dir(), config.hooks.forward, mark_sent);
+        if let Some(outbox) = crate::routing::router::outbox_dir() {
+            crate::delivery::spawn_retries(
+                outbox,
+                crate::routing::router::send_prompt,
+                |dir, _| {
+                    let _ = std::fs::remove_dir_all(dir);
+                },
+            );
+        }
     }
     let connections = crate::ingest_http::Connections::default();
     for stream in listener.incoming().flatten() {

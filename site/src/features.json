@@ -457,6 +457,20 @@
       "docs": ["docs/routing.md"]
     },
     {
+      "id": "jev-routing",
+      "group": "delivery",
+      "name": "Jev routing",
+      "says": "Asks Jev which session a capture is about when no address, rule, page or port settles it; unsure captures offer HOME too.",
+      "status": "experiment:jevRouting",
+      "platforms": ["mac"],
+      "added": "2026-10-24",
+      "config": [
+        { "key": "jevRouting", "value": "{\"send\": 0.85, \"fits\": 0.7, \"offer\": 0.5, \"noFit\": 0.3, \"low\": \"home\"}", "does": "Thresholds, and whether an unclear capture goes to HOME or stays on the clipboard" },
+        { "key": "jevApiKey", "value": "\"sk-…\"", "does": "The OpenCode key for the gateway (else $OPENCODE_API_KEY or OpenCode's own)" }
+      ],
+      "docs": ["docs/routing.md#jev"]
+    },
+    {
       "id": "delivery-retries",
       "group": "delivery",
       "name": "Retries",

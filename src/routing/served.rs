@@ -510,7 +510,7 @@ pub fn opencode_writes(needle: &str, from: u64, to: u64) -> Vec<Write> {
 }
 
 /// The database the local OpenCode server has open.
-fn opencode_db() -> Option<PathBuf> {
+pub(crate) fn opencode_db() -> Option<PathBuf> {
     let info = crate::handoff::api_get_within("/api/info", Duration::from_secs(1)).ok()?;
     let info: serde_json::Value = serde_json::from_slice(&info).ok()?;
     let pid = info.get("pid")?.as_u64().filter(|pid| *pid > 0)?;
