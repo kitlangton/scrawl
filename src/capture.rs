@@ -751,10 +751,24 @@ impl ScreenCaptureSession {
         video_output_path: Option<PathBuf>,
         excluded_window_ids: Arc<Mutex<Vec<u32>>>,
     ) -> Self {
+        Self::start_with_budget(
+            target,
+            video_output_path,
+            excluded_window_ids,
+            CANDIDATE_BUDGET_BYTES,
+        )
+    }
+
+    pub fn start_with_budget(
+        target: TargetInfo,
+        video_output_path: Option<PathBuf>,
+        excluded_window_ids: Arc<Mutex<Vec<u32>>>,
+        budget_bytes: usize,
+    ) -> Self {
         let started_at = Instant::now();
         let stopping = Arc::new(AtomicBool::new(false));
         let urgent_snapshot = Arc::new(AtomicBool::new(true));
-        let frames = Arc::new(Mutex::new(CandidateBuffer::new(CANDIDATE_BUDGET_BYTES)));
+        let frames = Arc::new(Mutex::new(CandidateBuffer::new(budget_bytes)));
         let video_offset_ms = Arc::new(AtomicU64::new(0));
 
         let thread_stopping = Arc::clone(&stopping);
@@ -2188,6 +2202,7 @@ impl Engine {
         req: Start,
         existing_preview: Option<crate::phone::PhoneSession>,
     ) -> Result<Capture> {
+        let engine_cfg = self.config.engine_config()?;
         let dir = match req.bundle_dir {
             Some(dir) => {
                 std::fs::create_dir_all(&dir)
@@ -2202,7 +2217,7 @@ impl Engine {
             None => {
                 let root = match std::env::var_os("SCRAWL_BENCH_START") {
                     Some(dir) => PathBuf::from(dir),
-                    None => self.config.engine_config()?.resolved_captures_dir(),
+                    None => engine_cfg.resolved_captures_dir(),
                 };
                 let id = crate::pipeline::make_bundle_id();
                 let dir = root.join(format!("{id}.scrawl"));
@@ -2297,10 +2312,11 @@ impl Engine {
                     AudioIn::External | AudioIn::None => None,
                 };
                 let stage = Instant::now();
-                let session = ScreenCaptureSession::start(
+                let session = ScreenCaptureSession::start_with_budget(
                     target.clone(),
                     Some(video_path),
                     Arc::clone(&self.telemetry.excluded_window_ids),
+                    engine_cfg.candidate_budget_bytes(),
                 );
                 self.host
                     .metric("sck_start_ms", stage.elapsed().as_secs_f64() * 1_000.0);

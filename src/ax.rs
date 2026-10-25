@@ -314,12 +314,15 @@ pub enum Target {
 
 type Job = (u64, Target, f64, f64);
 
+pub const MAX_PENDING_JOBS: usize = 64;
+
 /// Runs lookups for one capture at a time on a background thread and keeps their results until
 /// the capture finishes.
 pub struct Prober {
     jobs: flume::Sender<Job>,
     session: Arc<AtomicU64>,
     pending: Arc<AtomicUsize>,
+    dropped: Arc<AtomicUsize>,
     hits: Arc<Mutex<HashMap<Target, Hit>>>,
 }
 
@@ -330,9 +333,14 @@ impl Prober {
     }
 
     fn start(lookup: fn(f64, f64) -> Option<Hit>) -> Self {
-        let (jobs, queue) = flume::unbounded::<Job>();
+        Self::start_with_capacity(MAX_PENDING_JOBS, lookup)
+    }
+
+    fn start_with_capacity(capacity: usize, lookup: fn(f64, f64) -> Option<Hit>) -> Self {
+        let (jobs, queue) = flume::bounded::<Job>(capacity.max(1));
         let session = Arc::new(AtomicU64::new(0));
         let pending = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
         let hits = Arc::new(Mutex::new(HashMap::new()));
         let (worker_session, worker_pending, worker_hits) = (
             Arc::clone(&session),
@@ -358,6 +366,7 @@ impl Prober {
             jobs,
             session,
             pending,
+            dropped,
             hits,
         }
     }
@@ -365,21 +374,28 @@ impl Prober {
     /// Forgets the last capture's results; lookups still queued for it are skipped.
     pub fn begin(&self) {
         self.session.fetch_add(1, Ordering::AcqRel);
+        self.dropped.store(0, Ordering::Release);
         self.hits
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
     }
 
+    pub fn dropped(&self) -> usize {
+        self.dropped.load(Ordering::Acquire)
+    }
+
     /// Looks up the element at a global top-left point for `target`, in the background.
+    /// Drops the lookup without blocking if the queue is full.
     pub fn probe(&self, target: Target, x: f64, y: f64) {
         self.pending.fetch_add(1, Ordering::AcqRel);
         if self
             .jobs
-            .send((self.session.load(Ordering::Acquire), target, x, y))
+            .try_send((self.session.load(Ordering::Acquire), target, x, y))
             .is_err()
         {
             self.pending.fetch_sub(1, Ordering::AcqRel);
+            self.dropped.fetch_add(1, Ordering::AcqRel);
         }
     }
 
@@ -583,6 +599,31 @@ mod tests {
         assert_eq!(hits[&Target::Pointer(1)].label.as_deref(), Some("5"));
         prober.begin();
         assert!(prober.finish().is_empty());
+    }
+
+    #[test]
+    fn prober_queue_is_bounded_and_drops_without_blocking() {
+        static BLOCK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+        fn slow(x: f64, _y: f64) -> Option<Hit> {
+            while BLOCK.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Some(Hit {
+                role: "button".into(),
+                label: Some(format!("{x}")),
+                ..Hit::default()
+            })
+        }
+        BLOCK.store(true, Ordering::Release);
+        let prober = Prober::start_with_capacity(2, slow);
+        prober.begin();
+        for i in 0..10 {
+            prober.probe(Target::Pointer(i), i as f64, 0.0);
+        }
+        assert!(prober.dropped() >= 7, "dropped={}", prober.dropped());
+        BLOCK.store(false, Ordering::Release);
+        let hits = prober.finish();
+        assert!(!hits.is_empty());
     }
 
     #[test]

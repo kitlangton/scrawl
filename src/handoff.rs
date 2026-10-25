@@ -541,6 +541,10 @@ pub struct EngineConfig {
     /// Where new captures go (`default_captures_dir`); absent keeps the built-in folder.
     #[serde(default)]
     pub captures_dir: Option<String>,
+    /// Optional host override for the frame candidate buffer ceiling in bytes (defaults to
+    /// `capture::CANDIDATE_BUDGET_BYTES`, 384 MB).
+    #[serde(skip)]
+    candidate_budget_bytes: Option<usize>,
 }
 
 pub type Config = EngineConfig;
@@ -573,6 +577,21 @@ impl EngineConfig {
             .and_then(configured_captures_dir)
             .filter(|dir| usable_captures_dir(dir))
             .unwrap_or_else(builtin_captures_dir)
+    }
+
+    pub fn with_candidate_budget_bytes(mut self, bytes: usize) -> Self {
+        self.candidate_budget_bytes = Some(bytes);
+        self
+    }
+
+    pub fn set_candidate_budget_bytes(&mut self, bytes: Option<usize>) {
+        self.candidate_budget_bytes = bytes;
+    }
+
+    pub fn candidate_budget_bytes(&self) -> usize {
+        self.candidate_budget_bytes
+            .unwrap_or(crate::capture::CANDIDATE_BUDGET_BYTES)
+            .max(16 << 20)
     }
 
     pub fn routing_apps(&self) -> Vec<(String, PathBuf)> {
@@ -2558,5 +2577,18 @@ mod session_lookup {
             resolve_opencode_session_with(get, None, Some("Nothing"), None).unwrap()
         });
         assert_eq!(result.0, "ses_00000");
+    }
+
+    #[test]
+    fn engine_config_candidate_budget_defaults_to_384mb_and_clamps_minimum() {
+        let cfg = EngineConfig::default();
+        assert_eq!(
+            cfg.candidate_budget_bytes(),
+            crate::capture::CANDIDATE_BUDGET_BYTES
+        );
+        let custom = EngineConfig::default().with_candidate_budget_bytes(96 << 20);
+        assert_eq!(custom.candidate_budget_bytes(), 96 << 20);
+        let tiny = EngineConfig::default().with_candidate_budget_bytes(1024);
+        assert_eq!(tiny.candidate_budget_bytes(), 16 << 20);
     }
 }

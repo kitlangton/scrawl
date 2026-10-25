@@ -665,7 +665,14 @@ enum Job {
     Shrink(PathBuf),
 }
 
+pub const MAX_RETENTION_JOBS: usize = 64;
+
 static WORKER: std::sync::OnceLock<flume::Sender<Job>> = std::sync::OnceLock::new();
+static DROPPED_JOBS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn dropped_jobs() -> usize {
+    DROPPED_JOBS.load(Ordering::Acquire)
+}
 
 fn lower_priority() {
     // SAFETY: only changes the calling thread's scheduling class.
@@ -683,7 +690,7 @@ pub fn start() {
     if WORKER.get().is_some() {
         return;
     }
-    let (sender, receiver) = flume::unbounded();
+    let (sender, receiver) = flume::bounded(MAX_RETENTION_JOBS);
     if WORKER.set(sender).is_err() {
         return;
     }
@@ -692,17 +699,23 @@ pub fn start() {
         .spawn(move || worker(&receiver));
 }
 
+fn try_enqueue(sender: &flume::Sender<Job>, job: Job, dropped: &std::sync::atomic::AtomicUsize) {
+    if sender.try_send(job).is_err() {
+        dropped.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
 /// Runs a pass soon, after the policy changed.
 pub fn nudge() {
     if let Some(worker) = WORKER.get() {
-        let _ = worker.send(Job::Pass);
+        try_enqueue(worker, Job::Pass, &DROPPED_JOBS);
     }
 }
 
 /// Queues a just-finished iPhone capture for shrinking (only in the app).
 pub fn after_phone_capture(bundle: &Path) {
     if let Some(worker) = WORKER.get() {
-        let _ = worker.send(Job::Shrink(bundle.to_path_buf()));
+        try_enqueue(worker, Job::Shrink(bundle.to_path_buf()), &DROPPED_JOBS);
     }
 }
 
@@ -1106,5 +1119,15 @@ mod tests {
     fn sizes_read_plainly() {
         assert_eq!(format_bytes(72_247_194), "72 MB");
         assert_eq!(format_bytes(2_512_000_000), "2.5 GB");
+    }
+
+    #[test]
+    fn retention_queue_is_bounded_and_drops_when_full() {
+        let (tx, _rx) = flume::bounded(2);
+        let dropped = std::sync::atomic::AtomicUsize::new(0);
+        try_enqueue(&tx, Job::Pass, &dropped);
+        try_enqueue(&tx, Job::Shrink(PathBuf::from("/tmp/a")), &dropped);
+        try_enqueue(&tx, Job::Pass, &dropped);
+        assert_eq!(dropped.load(Ordering::Acquire), 1);
     }
 }
