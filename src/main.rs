@@ -238,6 +238,9 @@ enum RouterCommand {
         /// Leave the targets' recent lines out, to compare with a run that has them.
         #[arg(long)]
         no_lines: bool,
+        /// Leave `screen` (windows, focused text, the OpenCode tab) out, to compare.
+        #[arg(long)]
+        no_screen: bool,
     },
 }
 
@@ -2498,9 +2501,10 @@ fn main() -> Result<()> {
                 since,
                 limit,
                 no_lines,
+                no_screen,
             } => {
                 let since = routing::router::parse_since(&since)?;
-                routing::router::eval(since, limit, !no_lines)
+                routing::router::eval(since, limit, !no_lines, !no_screen)
             }
         },
         Command::Preview {

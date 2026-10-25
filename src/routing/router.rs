@@ -65,11 +65,44 @@ struct Item {
     /// A capture's bundle, which `deliver` sends the normal way.
     #[serde(default)]
     bundle: Option<PathBuf>,
+    /// What was on screen ([`jev::Screen`]), read leniently and capped.
+    #[serde(default)]
+    windows: Value,
+    #[serde(default)]
+    focused: Value,
+    #[serde(default)]
+    visible_text: Value,
+    #[serde(default)]
+    opencode_tab: Value,
+    #[serde(default)]
+    recent: Value,
 }
 
 impl Item {
     fn kind(&self) -> &str {
         present(&self.kind).unwrap_or("dictation")
+    }
+
+    fn screen(&self) -> jev::Screen {
+        jev::Screen::from_values(
+            &self.windows,
+            &self.focused,
+            &self.visible_text,
+            &self.opencode_tab,
+            &self.recent,
+        )
+    }
+
+    fn clear_screen(&mut self) {
+        for field in [
+            &mut self.windows,
+            &mut self.focused,
+            &mut self.visible_text,
+            &mut self.opencode_tab,
+            &mut self.recent,
+        ] {
+            *field = Value::Null;
+        }
     }
 
     fn app_name(&self) -> Option<String> {
@@ -322,6 +355,7 @@ fn decide_with(
     let asking = Asking {
         history: input.history.clone(),
         pinned,
+        screen: item.screen(),
     };
     let (judgement, record) = jev::judge(
         &evidence,
@@ -900,8 +934,9 @@ struct Outcome {
 /// About this many input tokens per question, for the estimate printed first.
 const TOKENS_PER_CASE: u64 = 5_000;
 
-/// `lines: false` leaves the targets' recent lines out of every question, to compare.
-pub fn eval(since: Duration, limit: usize, lines: bool) -> Result<()> {
+/// `lines: false` leaves the targets' recent lines out of every question, and `screen: false`
+/// the `screen`, to compare.
+pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<()> {
     let cutoff = jev::now_ms().saturating_sub(since.as_millis() as u64);
     let captures = crate::handoff::default_captures_dir();
     let mut dirs: Vec<(u64, PathBuf)> = std::fs::read_dir(&captures)
@@ -972,6 +1007,9 @@ pub fn eval(since: Duration, limit: usize, lines: bool) -> Result<()> {
         hooks.recent = |_, _, _| Vec::new();
         println!("Targets without their recent lines (--no-lines)");
     }
+    if !screen {
+        println!("Without `screen` (--no-screen)");
+    }
     let mut results: Vec<(&Case, Outcome)> = Vec::new();
     let (mut tokens, mut ms, mut failed) = (0_u64, Vec::new(), 0);
     let mut model = String::new();
@@ -981,7 +1019,11 @@ pub fn eval(since: Duration, limit: usize, lines: bool) -> Result<()> {
             &case.evidence,
             case.smart.clone(),
             &capture,
-            &Asking::default(),
+            &if screen {
+                jev::capture_asking(&case.bundle, &case.evidence.candidates)
+            } else {
+                Asking::default()
+            },
             Some(case.bundle.created_at_ms),
             &hooks,
             &thresholds,
@@ -1048,7 +1090,7 @@ pub fn eval(since: Duration, limit: usize, lines: bool) -> Result<()> {
         .collect();
     let captures = samples.len();
     if let Some(dir) = router_dir().map(|d| d.join("eval")) {
-        samples.extend(eval_items(&dir, limit, &hooks, &thresholds));
+        samples.extend(eval_items(&dir, limit, &hooks, &thresholds, screen));
     }
     println!();
     println!(
@@ -1248,6 +1290,7 @@ fn eval_items(
     limit: usize,
     hooks: &jev::Hooks,
     thresholds: &Thresholds,
+    screen: bool,
 ) -> Vec<Sample> {
     let cases = eval_cases(dir);
     let mut samples = Vec::new();
@@ -1259,13 +1302,16 @@ fn eval_items(
     let senses = look::Senses::default();
     let (mut right, mut asked, mut wrong_sends) = (0, 0, 0);
     for (name, case) in cases.into_iter().take(limit) {
-        let case = match case {
+        let mut case = match case {
             Ok(case) => case,
             Err(err) => {
                 println!("  {name:<16} unreadable: {err:#}");
                 continue;
             }
         };
+        if !screen {
+            case.input.item.clear_screen();
+        }
         let (output, _, record) =
             decide_with(&case.input, &senses, hooks, thresholds, jev::now_ms());
         asked += 1;
@@ -1543,6 +1589,36 @@ mod tests {
         let asked = ASKED.with(|a| a.borrow().clone()).unwrap();
         assert_eq!(asked["state"]["capture"]["app"], "Hex");
         assert_eq!(asked["state"]["capture"]["mode"], "Code");
+    }
+
+    #[test]
+    fn hexs_screen_fields_reach_jev_as_screen() {
+        let out = run(
+            json!({"item": {"text": "make it bigger", "app": "Editor",
+                            "windows": [{"app": "Editor", "title": "notes.txt"}, {"app": "Chat"}],
+                            "focused": {"role": "AXTextArea", "value_excerpt": "the margin is"},
+                            "visible_text": "v".repeat(5000),
+                            "opencode_tab": "HEX",
+                            "recent": [{"text_excerpt": "rename it", "routed_to": "ses_a"}],
+                            "future_field": {"x": 1}}}),
+            sure,
+        );
+        assert_eq!(out["decision"], "send", "{out}");
+        let asked = ASKED.with(|a| a.borrow().clone()).unwrap();
+        let screen = &asked["state"]["screen"];
+        assert_eq!(screen["windows"][1]["app"], "Chat");
+        assert_eq!(screen["focused"]["value_excerpt"], "the margin is");
+        assert!(screen["visible_text"].as_str().unwrap().chars().count() <= 1501);
+        assert_eq!(screen["opencode_tab"], "HEX");
+        // Targets newest first: t1 HEX, t2 A.
+        assert_eq!(screen["recent"][0]["routed_to"], "targets.t2");
+        assert!(screen.get("future_field").is_none());
+        let hints = asked["state"]["hints"].as_array().unwrap();
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.as_str().unwrap().contains("`targets.t1`"))
+        );
     }
 
     #[test]

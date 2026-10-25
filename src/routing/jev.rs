@@ -317,12 +317,272 @@ pub struct Past {
     pub corrected_to: Option<String>,
 }
 
-/// What a caller adds to the question: earlier items, and sessions to always put to Jev (pinned
-/// in Hex; they don't win on their own).
+/// What a caller adds to the question: earlier items, sessions to always put to Jev (pinned
+/// in Hex; they don't win on their own), and what was on screen.
 #[derive(Clone, Debug, Default)]
 pub struct Asking {
     pub history: Vec<Past>,
     pub pinned: Vec<String>,
+    pub screen: Screen,
+}
+
+// MARK: The screen
+
+/// What was on screen around an item, as text (never images): the state's `screen`. Hex sends
+/// it with dictation; a capture fills the windows and the recorded app's session. Private: it
+/// goes to Jev and the saved decision only, never to scrawl.log.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Screen {
+    /// Front to back.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<ScreenWindow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focused: Option<Focused>,
+    /// From the frontmost window's accessibility tree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_text: Option<String>,
+    /// The active OpenCode tab's title, when OpenCode is in front.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opencode_tab: Option<String>,
+    /// Earlier dictations, latest last.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub recent: Vec<Earlier>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ScreenWindow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Focused {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Text around the cursor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_excerpt: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Earlier {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_excerpt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    /// A session ID, or `targets.tN` once the targets are known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routed_to: Option<String>,
+}
+
+/// Caps on what a caller sends, applied again here whatever it capped.
+pub const SCREEN_WINDOWS: usize = 12;
+const WINDOW_CHARS: usize = 160;
+const LABEL_CHARS: usize = 200;
+const VALUE_CHARS: usize = 500;
+pub const VISIBLE_CHARS: usize = 1500;
+const EARLIER: usize = 3;
+const EARLIER_CHARS: usize = 200;
+/// The request's size in bytes, about 8k tokens. When it's over, `screen` shrinks (visible text,
+/// then windows, then the rest); the targets never do.
+pub const STATE_BYTES: usize = 30_000;
+
+impl Screen {
+    /// The fields as a caller sent them, each read leniently (a wrong shape is skipped, an app
+    /// may be a name or `{id, name}`) and capped.
+    pub fn from_values(
+        windows: &Value,
+        focused: &Value,
+        visible_text: &Value,
+        opencode_tab: &Value,
+        recent: &Value,
+    ) -> Self {
+        let windows = windows
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .map(|w| ScreenWindow {
+                        app: name_in(w.get("app"), WINDOW_CHARS),
+                        title: name_in(w.get("title"), WINDOW_CHARS),
+                    })
+                    .filter(|w| w.app.is_some() || w.title.is_some())
+                    .take(SCREEN_WINDOWS)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let focused = focused.is_object().then(|| Focused {
+            role: name_in(focused.get("role"), LABEL_CHARS),
+            title: name_in(focused.get("title"), LABEL_CHARS),
+            value_excerpt: focused
+                .get("value_excerpt")
+                .and_then(Value::as_str)
+                .map(|v| trim_around(v, VALUE_CHARS))
+                .filter(|v| !v.is_empty()),
+        });
+        let focused = focused.filter(|f| *f != Focused::default());
+        let recent = recent
+            .as_array()
+            .map(|list| {
+                let earlier: Vec<Earlier> = list
+                    .iter()
+                    .map(|e| Earlier {
+                        text_excerpt: e
+                            .get("text_excerpt")
+                            .or_else(|| e.get("text"))
+                            .and_then(Value::as_str)
+                            .map(|t| trim_end(t, EARLIER_CHARS))
+                            .filter(|t| !t.is_empty()),
+                        app: name_in(e.get("app"), LABEL_CHARS),
+                        routed_to: name_in(e.get("routed_to"), LABEL_CHARS),
+                    })
+                    .filter(|e| e.text_excerpt.is_some())
+                    .collect();
+                let skip = earlier.len().saturating_sub(EARLIER);
+                earlier.into_iter().skip(skip).collect()
+            })
+            .unwrap_or_default();
+        Self {
+            windows,
+            focused,
+            visible_text: visible_text
+                .as_str()
+                .map(|t| trim_end(t, VISIBLE_CHARS))
+                .filter(|t| !t.is_empty()),
+            opencode_tab: name_in(Some(opencode_tab), LABEL_CHARS),
+            recent,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The state's `screen` for `targets`: an earlier item's session named as its target.
+    fn state(&self, targets: &[Candidate]) -> Option<Value> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut screen = self.clone();
+        for earlier in &mut screen.recent {
+            if let Some(i) = earlier
+                .routed_to
+                .as_deref()
+                .and_then(|id| targets.iter().position(|c| c.id == id))
+            {
+                earlier.routed_to = Some(format!("targets.t{}", i + 1));
+            }
+        }
+        serde_json::to_value(screen).ok()
+    }
+
+    /// One step smaller, or `false` when nothing's left: the visible text halves until it's
+    /// short and then goes, then the backmost window, then the focused element, then the
+    /// earlier items, then the OpenCode tab.
+    fn shrink(&mut self) -> bool {
+        if let Some(text) = &self.visible_text {
+            let count = text.chars().count();
+            self.visible_text = (count > 200).then(|| trim_end(text, count / 2));
+            return true;
+        }
+        self.windows.pop().is_some()
+            || self.focused.take().is_some()
+            || self.recent.pop().is_some()
+            || self.opencode_tab.take().is_some()
+    }
+
+    /// The target an `opencode_tab` names exactly (letters and digits, any case), as a hint.
+    fn tab_hint(&self, targets: &[Candidate]) -> Option<String> {
+        let tab = self.opencode_tab.as_deref()?;
+        let squash = |t: &str| -> String {
+            t.chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect()
+        };
+        let key = squash(tab);
+        let i = targets
+            .iter()
+            .position(|c| !key.is_empty() && squash(&c.title) == key)?;
+        Some(format!(
+            "The OpenCode tab in front is titled \u{201c}{tab}\u{201d}, the title of `targets.t{}`.",
+            i + 1
+        ))
+    }
+}
+
+/// A string, or an object's `name` (an app as `{id, name}`), trimmed and capped.
+fn name_in(value: Option<&Value>, max: usize) -> Option<String> {
+    let value = value?;
+    let text = value
+        .as_str()
+        .or_else(|| value.get("name").and_then(Value::as_str))
+        .or_else(|| value.get("id").and_then(Value::as_str))?;
+    let text = trim_end(text, max);
+    (!text.is_empty()).then_some(text)
+}
+
+/// `text` cut to about `max` characters around its middle, where Hex puts the cursor.
+fn trim_around(text: &str, max: usize) -> String {
+    let text = text.trim();
+    let count = text.chars().count();
+    if count <= max {
+        return text.to_owned();
+    }
+    let start = (count - max) / 2;
+    let kept: String = text.chars().skip(start).take(max).collect();
+    format!("…{kept}…")
+}
+
+/// What a capture adds to the question: its [`capture_screen`].
+pub fn capture_asking(bundle: &ScrawlBundle, candidates: &[Candidate]) -> Asking {
+    Asking {
+        screen: capture_screen(bundle, candidates),
+        ..Asking::default()
+    }
+}
+
+/// A capture's `screen`: the windows on screen when it ended (front to back, regular apps'
+/// normal windows), and the session the recorded app showed (a ScrawlKit timeline's
+/// `context.session`), by title when it's open. No OCR.
+pub fn capture_screen(bundle: &ScrawlBundle, candidates: &[Candidate]) -> Screen {
+    let windows = bundle
+        .windows
+        .last()
+        .map(|snapshot| {
+            snapshot
+                .windows
+                .iter()
+                .filter(|w| w.regular && w.layer == 0)
+                .map(|w| ScreenWindow {
+                    app: Some(trim_end(&w.app, WINDOW_CHARS)).filter(|a| !a.is_empty()),
+                    title: Some(trim_end(&w.title, WINDOW_CHARS)).filter(|t| !t.is_empty()),
+                })
+                .filter(|w| w.app.is_some() || w.title.is_some())
+                .take(SCREEN_WINDOWS)
+                .collect()
+        })
+        .unwrap_or_default();
+    let opencode_tab = bundle
+        .context
+        .get("session")
+        .map(|id| id.trim())
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            candidates
+                .iter()
+                .find(|c| c.id == id && !c.title.is_empty())
+                .map_or_else(|| id.to_owned(), |c| c.title.clone())
+        })
+        .map(|t| trim_end(&t, LABEL_CHARS));
+    Screen {
+        windows,
+        opencode_tab,
+        ..Screen::default()
+    }
 }
 
 /// Jev's decision for `evidence` in place of smart routing's `smart`, unless that rests on a
@@ -357,14 +617,16 @@ pub fn judge(
     }
     let ids: Vec<String> = targets.iter().map(|c| c.id.clone()).collect();
     let recent = (hooks.recent)(&ids, before_ms, hooks.recent_budget());
-    let hints = hints(evidence, &targets);
+    let mut hints = hints(evidence, &targets);
+    hints.extend(asking.screen.tab_hint(&targets));
     let history = history_state(&asking.history, &targets, &evidence.candidates);
-    let body = request_body(
+    let body = fitted_body(
         capture,
         &hints,
         &history,
         &targets,
         &recent,
+        &asking.screen,
         evidence.now_ms,
     );
     let started = Instant::now();
@@ -833,11 +1095,43 @@ are facts Scrawl observed while recording. Which target is `capture` about?";
 const HISTORY_INSTRUCTIONS: &str = " `history` lists Kit's earlier items, latest last, and where they \
 went; `corrected_to` is where he moved one by hand.";
 
+const SCREEN_INSTRUCTIONS: &str = " Use `screen` (visible windows, focused text, the OpenCode tab) \
+and each target's recent lines to judge; an OpenCode tab is a strong hint, not proof.";
+
 const FITS_INSTRUCTIONS: &str = "Is `capture` clearly about the work in one of `targets`?";
 const FITS_TRUE: &str = "What Kit says or shows clearly matches one target's title, project folder or \
 recent exchange: the same app, feature, page, bug or conversation.";
 const FITS_FALSE: &str = "It is about something new or general, or none of the targets in particular, \
 or it fits several targets equally.";
+
+/// [`request_body`] with as much of `screen` as fits in [`STATE_BYTES`].
+#[allow(clippy::too_many_arguments)]
+fn fitted_body(
+    capture: &Value,
+    hints: &[String],
+    history: &[Value],
+    targets: &[Candidate],
+    recent: &[Recent],
+    screen: &Screen,
+    now_ms: u64,
+) -> Vec<u8> {
+    let mut screen = screen.clone();
+    loop {
+        let state = screen.state(targets);
+        let body = request_body(
+            capture,
+            hints,
+            history,
+            targets,
+            recent,
+            state.as_ref(),
+            now_ms,
+        );
+        if body.len() <= STATE_BYTES || !screen.shrink() {
+            return body;
+        }
+    }
+}
 
 /// The request for `targets`. They are listed most recently active first, in the state and as
 /// the choice's options; Jev's answer shouldn't depend on that order (the skill warns option order
@@ -848,6 +1142,7 @@ pub fn request_body(
     history: &[Value],
     targets: &[Candidate],
     recent: &[Recent],
+    screen: Option<&Value>,
     now_ms: u64,
 ) -> Vec<u8> {
     let entries: Vec<(String, Value)> = targets
@@ -890,6 +1185,8 @@ pub fn request_body(
         hints: &'a [String],
         #[serde(skip_serializing_if = "<[Value]>::is_empty")]
         history: &'a [Value],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        screen: Option<&'a Value>,
         targets: Ordered<'a>,
     }
     #[derive(Serialize)]
@@ -916,16 +1213,25 @@ pub fn request_body(
             capture,
             hints,
             history,
+            screen,
             targets: Ordered(&entries),
         },
         questions: Questions {
             target: Choice {
                 kind: "choice",
-                instructions: if history.is_empty() {
-                    TARGET_INSTRUCTIONS.to_owned()
-                } else {
-                    format!("{TARGET_INSTRUCTIONS}{HISTORY_INSTRUCTIONS}")
-                },
+                instructions: format!(
+                    "{TARGET_INSTRUCTIONS}{}{}",
+                    if history.is_empty() {
+                        ""
+                    } else {
+                        HISTORY_INSTRUCTIONS
+                    },
+                    if screen.is_some() {
+                        SCREEN_INSTRUCTIONS
+                    } else {
+                        ""
+                    }
+                ),
                 criteria: Ordered(&criteria),
             },
             any_fits: json!({
@@ -2004,6 +2310,199 @@ mod tests {
     }
 
     #[test]
+    fn screen_fields_are_read_leniently_and_capped() {
+        let windows: Vec<Value> = (0..15)
+            .map(|i| {
+                json!({"app": {"id": "com.example.app", "name": format!("App {i}")},
+                            "title": "x".repeat(400)})
+            })
+            .chain([json!(7), json!({"other": 1})])
+            .collect();
+        let middle = format!("{}CURSOR{}", "a".repeat(600), "b".repeat(600));
+        let screen = Screen::from_values(
+            &json!(windows),
+            &json!({"role": "AXTextArea", "value_excerpt": middle}),
+            &json!("v ".repeat(2000)),
+            &json!(42),
+            &json!([{"text_excerpt": "one"}, {"text_excerpt": "two"}, {"nope": 1},
+                    {"text_excerpt": "three", "routed_to": "ses_hex"},
+                    {"text_excerpt": "y".repeat(500), "app": "Zed"}]),
+        );
+        assert_eq!(screen.windows.len(), SCREEN_WINDOWS);
+        assert_eq!(screen.windows[0].app.as_deref(), Some("App 0"));
+        assert!(screen.windows[0].title.as_ref().unwrap().chars().count() <= WINDOW_CHARS + 1);
+        let value = screen
+            .focused
+            .as_ref()
+            .unwrap()
+            .value_excerpt
+            .clone()
+            .unwrap();
+        assert!(value.contains("CURSOR") && value.chars().count() <= VALUE_CHARS + 2);
+        assert!(screen.visible_text.as_ref().unwrap().chars().count() <= VISIBLE_CHARS + 1);
+        assert_eq!(screen.opencode_tab, None, "a number isn't a title");
+        let texts: Vec<_> = screen
+            .recent
+            .iter()
+            .map(|e| e.text_excerpt.clone().unwrap())
+            .collect();
+        assert_eq!(texts.len(), 3, "the latest three");
+        assert_eq!(texts[0], "two");
+        assert!(texts[2].chars().count() <= EARLIER_CHARS + 1);
+        let none = Screen::from_values(
+            &json!("x"),
+            &json!([]),
+            &json!(null),
+            &json!(""),
+            &json!({}),
+        );
+        assert!(none.is_empty());
+    }
+
+    fn run_with(evidence: &Evidence, asking: &Asking, capture: &Value) -> Value {
+        let smart = smart::decide(evidence, Policy::Weigh);
+        judge(
+            evidence,
+            smart,
+            capture,
+            asking,
+            None,
+            &HOOKS,
+            &Thresholds::default(),
+        );
+        SENT.with(|s| s.borrow().clone()).unwrap()
+    }
+
+    #[test]
+    fn the_screen_goes_beside_the_targets_and_an_exact_tab_title_is_a_hint() {
+        reply("t1", 0.9, 0.9, json!({"t1": 0.9}));
+        let asking = Asking {
+            screen: Screen {
+                windows: vec![ScreenWindow {
+                    app: Some("Editor".into()),
+                    title: Some("notes.txt".into()),
+                }],
+                opencode_tab: Some("Problems".into()),
+                recent: vec![Earlier {
+                    text_excerpt: Some("rename it".into()),
+                    app: None,
+                    routed_to: Some("ses_hex".into()),
+                }],
+                ..Screen::default()
+            },
+            ..Asking::default()
+        };
+        // Targets newest first: t1 HEX, t2 HOME, t3 PROBLEMS.
+        let sent = run_with(&evidence(vec![]), &asking, &json!({"kind": "dictation"}));
+        let screen = &sent["state"]["screen"];
+        assert_eq!(screen["windows"][0]["title"], "notes.txt");
+        assert_eq!(screen["recent"][0]["routed_to"], "targets.t1");
+        let hints = sent["state"]["hints"].as_array().unwrap();
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.as_str().unwrap().ends_with("the title of `targets.t3`.")),
+            "{hints:?}"
+        );
+        let instructions = sent["questions"]["target"]["instructions"]
+            .as_str()
+            .unwrap();
+        assert!(instructions.contains("Use `screen`"), "{instructions}");
+        // Without a screen, neither the field nor its sentence.
+        let sent = run_with(&evidence(vec![]), &Asking::default(), &json!({}));
+        assert!(sent["state"].get("screen").is_none());
+        let instructions = sent["questions"]["target"]["instructions"]
+            .as_str()
+            .unwrap();
+        assert!(!instructions.contains("`screen`"));
+    }
+
+    #[test]
+    fn a_full_state_shrinks_the_screen_and_never_the_targets() {
+        reply("t1", 0.9, 0.9, json!({"t1": 0.9}));
+        let screen = Screen {
+            windows: (0..12)
+                .map(|i| ScreenWindow {
+                    app: Some(format!("App {i}")),
+                    title: Some("w".repeat(WINDOW_CHARS)),
+                })
+                .collect(),
+            visible_text: Some("v".repeat(VISIBLE_CHARS)),
+            opencode_tab: Some("HEX".into()),
+            ..Screen::default()
+        };
+        let asking = Asking {
+            screen: screen.clone(),
+            ..Asking::default()
+        };
+        let size = |capture: &Value| {
+            let sent = run_with(&evidence(vec![]), &asking, capture);
+            let bytes = serde_json::to_vec(&sent).unwrap().len();
+            (sent, bytes)
+        };
+        let (roomy, _) = size(&json!({"text": "short"}));
+        assert_eq!(
+            roomy["state"]["screen"]["visible_text"]
+                .as_str()
+                .unwrap()
+                .len(),
+            VISIBLE_CHARS
+        );
+        // A capture that leaves room for about half the windows: the visible text goes first.
+        let base = serde_json::to_vec(&run_with(
+            &evidence(vec![]),
+            &Asking::default(),
+            &json!({"text": ""}),
+        ))
+        .unwrap()
+        .len();
+        let filler = "c".repeat(STATE_BYTES - base - 1_400);
+        let (tight, bytes) = size(&json!({"text": filler}));
+        assert!(bytes <= STATE_BYTES, "{bytes}");
+        let windows = tight["state"]["screen"]["windows"]
+            .as_array()
+            .map_or(0, Vec::len);
+        assert!(tight["state"]["screen"].get("visible_text").is_none());
+        assert!(windows > 0 && windows < 12, "{windows}");
+        assert_eq!(tight["state"]["targets"].as_object().unwrap().len(), 3);
+        // No room at all: the screen goes, the targets stay.
+        let (full, _) = size(&json!({"text": "c".repeat(STATE_BYTES)}));
+        assert!(full["state"].get("screen").is_none());
+        assert_eq!(full["state"]["targets"].as_object().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_capture_screen_lists_its_last_windows_and_the_apps_session() {
+        let bundle: ScrawlBundle = serde_json::from_value(json!({
+            "version": 1, "id": "t", "createdAtMs": 0, "durationMs": 1000,
+            "target": {"mode": "display", "displayId": 0,
+                "frame": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0, "scale": 1.0}},
+            "transcript": {"source": "test", "text": "", "segments": []},
+            "strokes": [], "marks": [], "events": [], "keyframes": [], "contactSheet": "c.png",
+            "context": {"session": "ses_board"},
+            "windows": [
+                {"t": 0, "windows": [{"id": 1, "app": "Old", "bounds": [0, 0, 1, 1], "layer": 0}]},
+                {"t": 500, "windows": [
+                    {"id": 2, "app": "Browser", "title": "Board", "bounds": [0, 0, 1, 1], "layer": 0},
+                    {"id": 3, "app": "Menu", "bounds": [0, 0, 1, 1], "layer": 24},
+                    {"id": 4, "app": "Overlay", "regular": false, "bounds": [0, 0, 1, 1], "layer": 0},
+                    {"id": 5, "app": "Editor", "bounds": [0, 0, 1, 1], "layer": 0}
+                ]}
+            ]
+        }))
+        .unwrap();
+        let screen = capture_screen(&bundle, &evidence(vec![]).candidates);
+        let apps: Vec<_> = screen
+            .windows
+            .iter()
+            .map(|w| w.app.clone().unwrap())
+            .collect();
+        assert_eq!(apps, ["Browser", "Editor"]);
+        assert_eq!(screen.windows[0].title.as_deref(), Some("Board"));
+        assert_eq!(screen.opencode_tab.as_deref(), Some("PROBLEMS"));
+    }
+
+    #[test]
     fn targets_keep_named_sessions_within_the_cap() {
         let mut ev = evidence(vec![]);
         for i in 0..30 {
@@ -2166,7 +2665,7 @@ mod tests {
                 to: Some("ses_hex".into()),
                 corrected_to: Some("ses_old".into()),
             }],
-            pinned: Vec::new(),
+            ..Asking::default()
         };
         let smart = smart::decide(&ev, Policy::Weigh);
         judge(
