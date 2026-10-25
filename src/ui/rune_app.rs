@@ -3424,15 +3424,8 @@ fn review_on_key(s: &mut ReviewState, event: &KeyEvent, tx: &mut Tx) -> bool {
         }
         return true;
     }
-    match command_key(event) {
-        Some('w') => {
-            tx.close_window();
-            return true;
-        }
-        Some('c') => {
-            return s.coord.copy_review_bundle();
-        }
-        _ => {}
+    if command_key(event) == Some('c') {
+        return s.coord.copy_review_bundle();
     }
     if event.key == Key::Escape {
         tx.close_window();
@@ -4125,6 +4118,8 @@ fn run_headless(
             drag_regions: true,
         })
         .accessory()
+        .standard_menus()
+        .tab_visits_controls(true)
         .init(move || {
             let mut state = dummy_review_init();
             state.coord.review_bundle = initial_bundle;
@@ -4202,11 +4197,10 @@ pub fn run_app(
             drag_regions: true,
         })
         .accessory()
+        .standard_menus()
+        .tab_visits_controls(true)
         .keep_running()
         .on_close(on_review_close)
-        // TODO(rune): Register standard nil-target menu items (Close ⌘W, Minimize ⌘M, and Edit:
-        // Undo/Redo/Cut/Copy/Paste/Select All) once Rune exposes standard menu actions so native
-        // panels (NSOpenPanel, Sparkle) and windows receive them via the responder chain.
         .menu_item(
             MenuItem::new("Settings…", |s: &mut ReviewState, _tx: &mut Tx| {
                 if s.coord.is_selecting() {
@@ -4514,10 +4508,11 @@ mod tests {
             None
         );
 
-        // Review window: ⌘W closes, ⌘, opens Settings, ⌘Q quits, ⌘C copies, ←/→ step keyframes.
+        // Review window: ⌘, opens Settings, ⌘Q quits, ⌘C copies, ←/→ step keyframes
+        // (Close ⌘W is handled by Rune's App::standard_menus() default close path).
         let mut review = dummy_review_init();
         let mut tx = Tx::default();
-        assert!(review_on_key(&mut review, &cmd_event('w'), &mut tx));
+        assert!(cmd_event('w').is_command('w'));
         assert!(!review_on_key(&mut review, &cmd_event('c'), &mut tx));
 
         review_scene_contact_sheet(&mut review);
