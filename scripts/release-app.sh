@@ -26,7 +26,8 @@ mkdir -p "${APP_BUNDLE}/Contents/MacOS" "${APP_BUNDLE}/Contents/Resources" "${AP
 
 cp -f "${REPO_DIR}/target/release/scrawl" "${APP_BUNDLE}/Contents/MacOS/scrawl"
 cp -f "${REPO_DIR}/target/release/scrawl-helper" "${APP_BUNDLE}/Contents/MacOS/scrawl-helper"
-chmod +x "${APP_BUNDLE}/Contents/MacOS/scrawl" "${APP_BUNDLE}/Contents/MacOS/scrawl-helper"
+cp -f "${REPO_DIR}/target/release/scrawl-ui-helper" "${APP_BUNDLE}/Contents/MacOS/scrawl-ui-helper"
+chmod +x "${APP_BUNDLE}/Contents/MacOS/scrawl" "${APP_BUNDLE}/Contents/MacOS/scrawl-helper" "${APP_BUNDLE}/Contents/MacOS/scrawl-ui-helper"
 
 if [[ -f "${REPO_DIR}/assets/Scrawl.icns" ]]; then
   cp -f "${REPO_DIR}/assets/Scrawl.icns" "${APP_BUNDLE}/Contents/Resources/Scrawl.icns"
@@ -109,6 +110,7 @@ SPARKLE_VER="${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework/Versions/B"
 "${SIGN[@]}" "${SPARKLE_VER}/Updater.app"
 "${SIGN[@]}" "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework"
 "${SIGN[@]}" --entitlements "${ENTITLEMENTS}" --identifier "dev.kitlangton.scrawl.helper" "${APP_BUNDLE}/Contents/MacOS/scrawl-helper"
+"${SIGN[@]}" --entitlements "${ENTITLEMENTS}" --identifier "dev.kitlangton.scrawl.ui-helper" "${APP_BUNDLE}/Contents/MacOS/scrawl-ui-helper"
 "${SIGN[@]}" --entitlements "${ENTITLEMENTS}" --identifier "dev.kitlangton.scrawl" "${APP_BUNDLE}"
 
 /usr/bin/ditto "${APP_BUNDLE}" "${DIST_DIR}/staging/Scrawl.app"

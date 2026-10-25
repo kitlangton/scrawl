@@ -21,10 +21,11 @@ taskpolicy -c utility cargo build -j 3
 
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${FRAMEWORKS_DIR}" "${HOME}/bin"
 
-rm -f "${MACOS_DIR}/scrawl" "${MACOS_DIR}/scrawl-helper"
+rm -f "${MACOS_DIR}/scrawl" "${MACOS_DIR}/scrawl-helper" "${MACOS_DIR}/scrawl-ui-helper"
 cp -f "${REPO_DIR}/target/debug/scrawl" "${MACOS_DIR}/scrawl"
 cp -f "${REPO_DIR}/target/debug/scrawl-helper" "${MACOS_DIR}/scrawl-helper"
-chmod +x "${MACOS_DIR}/scrawl" "${MACOS_DIR}/scrawl-helper"
+cp -f "${REPO_DIR}/target/debug/scrawl-ui-helper" "${MACOS_DIR}/scrawl-ui-helper"
+chmod +x "${MACOS_DIR}/scrawl" "${MACOS_DIR}/scrawl-helper" "${MACOS_DIR}/scrawl-ui-helper"
 
 if [[ -f "${REPO_DIR}/assets/Scrawl.icns" ]]; then
   cp -f "${REPO_DIR}/assets/Scrawl.icns" "${RESOURCES_DIR}/Scrawl.icns"
@@ -104,6 +105,7 @@ if [[ -d "${FRAMEWORKS_DIR}/Sparkle.framework/Versions/B" ]]; then
   codesign --force --sign "${IDENTITY}" "${FRAMEWORKS_DIR}/Sparkle.framework"
 fi
 codesign --force --sign "${IDENTITY}" --identifier "dev.kitlangton.scrawl.helper" "${MACOS_DIR}/scrawl-helper"
+codesign --force --sign "${IDENTITY}" --identifier "dev.kitlangton.scrawl.ui-helper" "${MACOS_DIR}/scrawl-ui-helper"
 codesign --force --sign "${IDENTITY}" --identifier "dev.kitlangton.scrawl" "${APP_DIR}"
 
 if [[ "${SCRAWL_NO_LAUNCH:-0}" == "1" ]]; then

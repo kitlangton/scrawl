@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.kitlangton.scrawl.ui-helper</string>
+  <key>CFBundleName</key>
+  <string>Scrawl UI Helper</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Scrawl mirrors and records a cabled iPhone's screen.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Scrawl records your voice to align transcripts with keyframes.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Scrawl transcribes your narration on this Mac.</string>
+</dict>
+</plist>

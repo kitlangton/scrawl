@@ -9,8 +9,8 @@ use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
-use objc2::runtime::{AnyClass, AnyObject, Bool};
 use objc2::msg_send;
+use objc2::runtime::{AnyClass, AnyObject, Bool};
 use objc2_foundation::NSString;
 
 unsafe extern "C" {
@@ -45,17 +45,22 @@ pub(crate) fn request(permission: &str) {
 /// `AVCaptureDevice.requestAccess(for:)`; the media types are AVMediaTypeAudio / Video's values.
 fn request_capture_device(media_type: &str) {
     load(c"/System/Library/Frameworks/AVFoundation.framework/AVFoundation");
-    let Some(class) = AnyClass::get(c"AVCaptureDevice") else { return };
+    let Some(class) = AnyClass::get(c"AVCaptureDevice") else {
+        return;
+    };
     let media_type = NSString::from_str(media_type);
     let block = block2::RcBlock::new(|_granted: Bool| {});
     unsafe {
-        let _: () = msg_send![class, requestAccessForMediaType: &*media_type, completionHandler: &*block];
+        let _: () =
+            msg_send![class, requestAccessForMediaType: &*media_type, completionHandler: &*block];
     }
 }
 
 fn request_speech() {
     load(c"/System/Library/Frameworks/Speech.framework/Speech");
-    let Some(class) = AnyClass::get(c"SFSpeechRecognizer") else { return };
+    let Some(class) = AnyClass::get(c"SFSpeechRecognizer") else {
+        return;
+    };
     let block = block2::RcBlock::new(|_status: isize| {});
     unsafe {
         let _: () = msg_send![class, requestAuthorization: &*block];
@@ -97,13 +102,21 @@ pub(crate) fn open_settings(permission: &str, from: Option<[f32; 4]>) {
         if super::rune_permission_panel::open(permission, from) {
             return;
         }
-        let Ok(helper) = crate::helper::path() else { return };
+        let Ok(helper) = crate::helper::ui_path() else {
+            return;
+        };
         let mut command = Command::new(helper);
         command.args(["permission-panel", "--permission", permission]);
         if let Some([x, y, w, h]) = from {
-            command.args(["--from", &format!("{},{},{},{}", x as i32, y as i32, w as i32, h as i32)]);
+            command.args([
+                "--from",
+                &format!("{},{},{},{}", x as i32, y as i32, w as i32, h as i32),
+            ]);
         }
-        command.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         let mut panels = panels().lock().unwrap_or_else(|e| e.into_inner());
         reap(&mut panels);
         if let Some(old) = panels.remove(permission) {
@@ -155,7 +168,8 @@ fn retire(mut child: Child, command: &str) {
 }
 
 pub(crate) fn open_url(url: &str) {
-    let (Some(workspace), Some(url_class)) = (AnyClass::get(c"NSWorkspace"), AnyClass::get(c"NSURL"))
+    let (Some(workspace), Some(url_class)) =
+        (AnyClass::get(c"NSWorkspace"), AnyClass::get(c"NSURL"))
     else {
         return;
     };

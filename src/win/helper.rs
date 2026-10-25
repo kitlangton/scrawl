@@ -15,6 +15,10 @@ pub fn path() -> Result<PathBuf> {
     bail!("scrawl-helper is macOS-only")
 }
 
+pub fn ui_path() -> Result<PathBuf> {
+    bail!("scrawl-ui-helper is macOS-only")
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct PhoneDevice {
     pub id: String,

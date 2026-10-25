@@ -24,7 +24,7 @@ work = tempfile.mkdtemp(prefix="rune-windows-")
 failed = []
 for kind in args.kinds:
     swift_dir = os.path.join(work, "swift", kind)
-    subprocess.run([os.path.join(args.bin, "scrawl-helper"), kind, "--render", swift_dir], check=True, capture_output=True)
+    subprocess.run([os.path.join(args.bin, "scrawl-ui-helper"), kind, "--render", swift_dir], check=True, capture_output=True)
     files = sorted(f for f in os.listdir(swift_dir) if f.endswith(".png"))
     rows = []
     for f in files:

@@ -29,6 +29,24 @@ pub fn path() -> Result<PathBuf> {
         .context("scrawl-helper is missing; rebuild Scrawl")
 }
 
+pub fn ui_path() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("SCRAWL_UI_HELPER") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(path) = std::env::var_os("SCRAWL_HELPER") {
+        return Ok(PathBuf::from(path));
+    }
+    let raw_exe = std::env::current_exe().context("Could not locate scrawl")?;
+    let exe = std::fs::canonicalize(&raw_exe).unwrap_or(raw_exe);
+    exe.ancestors()
+        .skip(1)
+        .take(2)
+        .map(|dir| dir.join("scrawl-ui-helper"))
+        .find(|path| path.is_file())
+        .or_else(|| path().ok())
+        .context("scrawl-ui-helper is missing; rebuild Scrawl")
+}
+
 /// Runs a helper command to completion and parses its JSON output.
 fn run<T: for<'de> Deserialize<'de>>(args: &[&std::ffi::OsStr], timeout: Duration) -> Result<T> {
     run_program(&path()?, args, timeout)

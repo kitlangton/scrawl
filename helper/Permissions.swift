@@ -21,7 +21,7 @@ enum Permissions {
       "camera": av(.video),
     ]
     // Only SFSpeechRecognizer, the macOS 15 transcriber, needs it; SpeechAnalyzer doesn't.
-    if !SpeechModel.analyzer {
+    if #unavailable(macOS 26) {
       switch SFSpeechRecognizer.authorizationStatus() {
       case .authorized: statuses["speech-recognition"] = "granted"
       case .denied, .restricted: statuses["speech-recognition"] = "denied"

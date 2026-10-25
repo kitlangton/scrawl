@@ -21,7 +21,7 @@ fn command(line: Option<&str>) -> anyhow::Result<()> {
     }
     if helper.is_none() {
         *helper = Some(
-            Command::new(crate::helper::path()?)
+            Command::new(crate::helper::ui_path()?)
                 .args(["playback-volume", "--server"])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())

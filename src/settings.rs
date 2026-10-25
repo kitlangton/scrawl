@@ -1597,7 +1597,7 @@ impl Session {
         use std::io::BufRead;
         use std::process::{Command, Stdio};
 
-        let mut command = Command::new(crate::helper::path()?);
+        let mut command = Command::new(crate::helper::ui_path()?);
         command.arg("settings");
         if let Some(serde_json::Value::String(pane)) = pane.map(serde_json::to_value).transpose()? {
             command.args(["--pane", &pane]);

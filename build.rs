@@ -12,6 +12,7 @@ fn main() {
     }
     compile_laser_shader();
     compile_helper();
+    compile_ui_helper();
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     if let Ok(output) = Command::new("xcode-select").arg("-p").output()
         && output.status.success()
@@ -129,13 +130,22 @@ fn compile_metal_shader(src_rel: &str, name: &str) {
     println!("cargo:rerun-if-changed={}", source.display());
 
     let metal = Command::new("xcrun")
-        .args(["--sdk", "macosx", "metal", "-c", "-mmacosx-version-min=15.0"])
+        .args([
+            "--sdk",
+            "macosx",
+            "metal",
+            "-c",
+            "-mmacosx-version-min=15.0",
+        ])
         .arg(&source)
         .arg("-o")
         .arg(&air)
         .status()
         .expect("xcrun metal is required to build Metal shaders");
-    assert!(metal.success(), "Metal shader compilation failed for {src_rel}");
+    assert!(
+        metal.success(),
+        "Metal shader compilation failed for {src_rel}"
+    );
 
     let metallib = Command::new("xcrun")
         .args(["--sdk", "macosx", "metallib"])
@@ -144,7 +154,10 @@ fn compile_metal_shader(src_rel: &str, name: &str) {
         .arg(&library)
         .status()
         .expect("xcrun metallib is required to build Metal shaders");
-    assert!(metallib.success(), "Metal library creation failed for {src_rel}");
+    assert!(
+        metallib.success(),
+        "Metal library creation failed for {src_rel}"
+    );
 }
 
 /// Builds `scrawl-helper` (Swift: SpeechAnalyzer, iPhone capture, movie decoding) beside the
@@ -153,6 +166,9 @@ fn compile_helper() {
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let helper_dir = manifest_dir.join("helper");
     println!("cargo:rerun-if-changed={}", helper_dir.display());
+    println!("cargo:rerun-if-env-changed=SCRAWL_HELPER_PLIST");
+    println!("cargo:rerun-if-env-changed=SCRAWL_HELPER_BUNDLE_ID");
+    println!("cargo:rerun-if-env-changed=SCRAWL_HELPER_NAME");
     let mut sources: Vec<PathBuf> = std::fs::read_dir(&helper_dir)
         .expect("helper/ is missing")
         .filter_map(|entry| entry.ok().map(|e| e.path()))
@@ -162,8 +178,56 @@ fn compile_helper() {
     for source in &sources {
         println!("cargo:rerun-if-changed={}", source.display());
     }
-    let plist = helper_dir.join("Info.plist");
+    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let default_plist = helper_dir.join("Info.plist");
+    println!("cargo:rerun-if-changed={}", default_plist.display());
+    let plist = if let Some(custom_plist) = std::env::var_os("SCRAWL_HELPER_PLIST") {
+        let p = PathBuf::from(custom_plist);
+        println!("cargo:rerun-if-changed={}", p.display());
+        p
+    } else if std::env::var_os("SCRAWL_HELPER_BUNDLE_ID").is_some()
+        || std::env::var_os("SCRAWL_HELPER_NAME").is_some()
+    {
+        let bundle_id = std::env::var("SCRAWL_HELPER_BUNDLE_ID")
+            .unwrap_or_else(|_| "dev.kitlangton.scrawl.helper".to_owned());
+        let name =
+            std::env::var("SCRAWL_HELPER_NAME").unwrap_or_else(|_| "Scrawl Helper".to_owned());
+        let template = std::fs::read_to_string(&default_plist).expect("read helper Info.plist");
+        let rendered = template
+            .replace("dev.kitlangton.scrawl.helper", &bundle_id)
+            .replace("Scrawl Helper", &name);
+        let generated = out_dir.join("scrawl-helper-Info.plist");
+        std::fs::write(&generated, rendered).expect("write generated helper Info.plist");
+        generated
+    } else {
+        default_plist
+    };
+    compile_swift_binary("scrawl-helper", &sources, &plist);
+}
+
+fn compile_ui_helper() {
+    let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let ui_dir = manifest_dir.join("helper-ui");
+    let helper_dir = manifest_dir.join("helper");
+    println!("cargo:rerun-if-changed={}", ui_dir.display());
+    let mut sources: Vec<PathBuf> = std::fs::read_dir(&ui_dir)
+        .expect("helper-ui/ is missing")
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "swift"))
+        .collect();
+    for shared in ["Permissions.swift", "Util.swift"] {
+        sources.push(helper_dir.join(shared));
+    }
+    sources.sort();
+    for source in &sources {
+        println!("cargo:rerun-if-changed={}", source.display());
+    }
+    let plist = ui_dir.join("Info.plist");
     println!("cargo:rerun-if-changed={}", plist.display());
+    compile_swift_binary("scrawl-ui-helper", &sources, &plist);
+}
+
+fn compile_swift_binary(bin_name: &str, sources: &[PathBuf], plist: &std::path::Path) {
     // OUT_DIR is target/<profile>/build/scrawl-<hash>/out.
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let profile_dir = out_dir
@@ -176,11 +240,11 @@ fn compile_helper() {
         Err(_) => "arm64",
     }
     .to_owned();
-    let built = out_dir.join("scrawl-helper");
+    let built = out_dir.join(bin_name);
     let status = Command::new("xcrun")
         .args(["swiftc", "-O", "-swift-version", "5", "-target"])
         .arg(format!("{arch}-apple-macos15.0"))
-        .args(&sources)
+        .args(sources)
         .arg("-o")
         .arg(&built)
         .args([
@@ -192,14 +256,14 @@ fn compile_helper() {
             "__info_plist",
             "-Xlinker",
         ])
-        .arg(&plist)
+        .arg(plist)
         .status()
-        .expect("xcrun swiftc is required to build scrawl-helper");
+        .unwrap_or_else(|_| panic!("xcrun swiftc is required to build {bin_name}"));
     assert!(
         status.success(),
-        "scrawl-helper failed to compile (needs the macOS 26 SDK; the result runs on macOS 15)"
+        "{bin_name} failed to compile (needs the macOS 26 SDK; the result runs on macOS 15)"
     );
-    let dest = profile_dir.join("scrawl-helper");
+    let dest = profile_dir.join(bin_name);
     let _ = std::fs::remove_file(&dest);
-    std::fs::copy(&built, dest).expect("Could not place scrawl-helper");
+    std::fs::copy(&built, dest).unwrap_or_else(|_| panic!("Could not place {bin_name}"));
 }

@@ -2,7 +2,7 @@
 # Where `scrawl-helper permission-panel` docks its card, for fixed window and screen rects
 # (AppKit coordinates: origin bottom-left). Run after `cargo build`.
 set -euo pipefail
-H=${HELPER:-${0:A:h}/../target/debug/scrawl-helper}
+H=${HELPER:-${0:A:h}/../target/debug/scrawl-ui-helper}
 failures=0
 check() {
   local name=$1 settings=$2 visible=$3 want=$4

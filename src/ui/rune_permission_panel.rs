@@ -17,20 +17,28 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use rune::{
-    App, AppSpec, Color, Cursor, Cx, DisplayTarget, DragItem, DragOutcome, El, KeyPolicy, OverlayHandle,
-    OverlayInput, OverlayOptions, OverlayPlacement, OverlaySpec, Pixels, Shadow, Span, Spring, SpringPair,
-    SystemMaterial, Transition, Tx, el, rich, text,
+    App, AppSpec, Color, Cursor, Cx, DisplayTarget, DragItem, DragOutcome, El, KeyPolicy,
+    OverlayHandle, OverlayInput, OverlayOptions, OverlayPlacement, OverlaySpec, Pixels, Shadow,
+    Span, Spring, SpringPair, SystemMaterial, Transition, Tx, el, rich, text,
 };
 
-use super::rune_settings::{Rgba, Theme, app_icon_px, families, fonts, icons, measure, reduce_motion, style};
+use super::rune_settings::{
+    Rgba, Theme, app_icon_px, families, fonts, icons, measure, reduce_motion, style,
+};
 use super::rune_symbols::{symbol, weight};
 use crate::screens::{self, Rect};
 
 // MARK: Tuning
 
 /// The flight from the Grant button to the dock, and back on Back.
-const FLIGHT: StepSpring = StepSpring { duration: 0.85, bounce: 0.0 };
-const RETURN: StepSpring = StepSpring { duration: 0.7, bounce: 0.0 };
+const FLIGHT: StepSpring = StepSpring {
+    duration: 0.85,
+    bounce: 0.0,
+};
+const RETURN: StepSpring = StepSpring {
+    duration: 0.7,
+    bounce: 0.0,
+};
 /// Width leads height (and the path) by running on a shorter spring.
 const WIDTH_LEAD: f64 = 0.78;
 /// Peak height of the arc above the higher end, and its cap as a share of the distance.
@@ -112,7 +120,8 @@ impl StepSpring {
             return 1.0 - (1.0 + omega * t) * (-omega * t).exp();
         }
         let damped = omega * (1.0 - zeta * zeta).sqrt();
-        1.0 - (-zeta * omega * t).exp() * ((damped * t).cos() + zeta * omega / damped * (damped * t).sin())
+        1.0 - (-zeta * omega * t).exp()
+            * ((damped * t).cos() + zeta * omega / damped * (damped * t).sin())
     }
 
     /// Long enough that what's left is under a hundredth of a point on a screen-wide move.
@@ -155,11 +164,16 @@ impl Layout {
 
     fn new(settings_width: f64) -> Layout {
         let column = settings_width - LIST_LEADING - LIST_TRAILING;
-        Layout { row_width: column.min(640.0).max(320.0) }
+        Layout {
+            row_width: column.min(640.0).max(320.0),
+        }
     }
 
     fn size(self) -> (f64, f64) {
-        (Self::GUTTER + self.row_width + Self::PADDING, Self::ROW_Y + Self::ROW + Self::PADDING)
+        (
+            Self::GUTTER + self.row_width + Self::PADDING,
+            Self::ROW_Y + Self::ROW + Self::PADDING,
+        )
     }
 }
 
@@ -196,12 +210,16 @@ fn dock(settings: Rect, visible: Rect, layout: Layout) -> (Rect, Dock) {
     let (min_x, max_x) = (|r: Rect| r[0], |r: Rect| r[0] + r[2]);
     let (min_y, max_y) = (|r: Rect| r[1], |r: Rect| r[1] + r[3]);
     let fits = |r: Rect| {
-        min_x(r) >= min_x(visible) && max_x(r) <= max_x(visible) && min_y(r) >= min_y(visible) && max_y(r) <= max_y(visible)
+        min_x(r) >= min_x(visible)
+            && max_x(r) <= max_x(visible)
+            && min_y(r) >= min_y(visible)
+            && max_y(r) <= max_y(visible)
     };
     let clamp_x = |x: f64| x.max(min_x(visible) + 8.0).min(max_x(visible) - w - 8.0);
     let clamp_y = |y: f64| y.max(min_y(visible) + 8.0).min(max_y(visible) - h - 8.0);
     // The list's column; nudged left if the card would pass the window's right edge.
-    let column = (settings[0] + LIST_LEADING - Layout::GUTTER).min(max_x(settings) - Layout::INSET - w);
+    let column =
+        (settings[0] + LIST_LEADING - Layout::GUTTER).min(max_x(settings) - Layout::INSET - w);
     let gap = Layout::DOCK_GAP;
 
     let below = [clamp_x(column), settings[1] - gap - h, w, h];
@@ -210,7 +228,8 @@ fn dock(settings: Rect, visible: Rect, layout: Layout) -> (Rect, Dock) {
     }
     let inside_y = (settings[1] + Layout::INSIDE_BOTTOM).max(min_y(visible) + 8.0);
     let inside = [column, inside_y, w, h];
-    if fits(inside) && inside[0] >= settings[0] && max_y(inside) <= settings[1] + settings[3] * 0.3 {
+    if fits(inside) && inside[0] >= settings[0] && max_y(inside) <= settings[1] + settings[3] * 0.3
+    {
         return (inside, Dock::Inside);
     }
     let right = [max_x(settings) + gap, clamp_y(settings[1]), w, h];
@@ -231,7 +250,8 @@ fn up(r: Rect) -> Rect {
 
 /// `dock` for a Settings window in global coordinates, on the screen holding it.
 fn dock_for(settings: Rect, layout: Layout, screens: &[screens::Screen]) -> (Rect, Dock) {
-    let visible = screens::index_for_rect(screens, settings).map_or(settings, |i| screens[i].visible);
+    let visible =
+        screens::index_for_rect(screens, settings).map_or(settings, |i| screens[i].visible);
     let (card, how) = dock(up(settings), up(visible), layout);
     (up(card), how)
 }
@@ -284,12 +304,24 @@ struct Step {
 
 impl FlightRun {
     /// `visible_top` is the top of the visible frame on the source's screen (global).
-    fn new(source: Rect, target: Rect, visible_top: f64, spring: StepSpring, reverse: bool) -> FlightRun {
+    fn new(
+        source: Rect,
+        target: Rect,
+        visible_top: f64,
+        spring: StepSpring,
+        reverse: bool,
+    ) -> FlightRun {
         let control = control(source, target, visible_top);
         let x0 = source[0].min(target[0]).min(control[0]) - FLIGHT_PAD;
         let y0 = source[1].min(target[1]).min(control[1]) - FLIGHT_PAD;
-        let x1 = (source[0] + source[2]).max(target[0] + target[2]).max(control[0] + 1.0) + FLIGHT_PAD;
-        let y1 = (source[1] + source[3]).max(target[1] + target[3]).max(control[1] + 1.0) + FLIGHT_PAD;
+        let x1 = (source[0] + source[2])
+            .max(target[0] + target[2])
+            .max(control[0] + 1.0)
+            + FLIGHT_PAD;
+        let y1 = (source[1] + source[3])
+            .max(target[1] + target[3])
+            .max(control[1] + 1.0)
+            + FLIGHT_PAD;
         FlightRun {
             source,
             target,
@@ -306,8 +338,15 @@ impl FlightRun {
         // The last frame lands exactly, so the docked window takes over pixel for pixel.
         let done = t >= self.spring.settle();
         let path = if done { 1.0 } else { self.spring.value(t) };
-        let width =
-            if done { 1.0 } else { StepSpring { duration: self.spring.duration * WIDTH_LEAD, ..self.spring }.value(t) };
+        let width = if done {
+            1.0
+        } else {
+            StepSpring {
+                duration: self.spring.duration * WIDTH_LEAD,
+                ..self.spring
+            }
+            .value(t)
+        };
         let p = if self.reverse { 1.0 - path } else { path };
         let w = if self.reverse { 1.0 - width } else { width };
         let h = p;
@@ -320,9 +359,18 @@ impl FlightRun {
         ];
         let start_radius = self.source[3] / 2.0;
         let k = w.min(h);
-        let (from, to) = if self.reverse { (0.5, 0.9) } else { (0.3, 0.85) };
+        let (from, to) = if self.reverse {
+            (0.5, 0.9)
+        } else {
+            (0.3, 0.85)
+        };
         Step {
-            rect: [bezier(0) - size[0] / 2.0, bezier(1) - size[1] / 2.0, size[0], size[1]],
+            rect: [
+                bezier(0) - size[0] / 2.0,
+                bezier(1) - size[1] / 2.0,
+                size[0],
+                size[1],
+            ],
             radius: start_radius + (Layout::RADIUS - start_radius) * k,
             lift: 4.0 * p * (1.0 - p),
             // Lift off the button over the first stretch; land on it fading on the way back.
@@ -369,7 +417,9 @@ struct Look {
 impl Look {
     fn new(kind: Kind) -> Look {
         let app = app_bundle();
-        let name = app.file_stem().map_or_else(|| "Scrawl".to_owned(), |s| s.to_string_lossy().into_owned());
+        let name = app
+            .file_stem()
+            .map_or_else(|| "Scrawl".to_owned(), |s| s.to_string_lossy().into_owned());
         Look {
             kind,
             layout: Layout::new(740.0),
@@ -390,13 +440,22 @@ enum Stage {
     /// Reading the grant before anything shows.
     Checking,
     /// Settings is opening: waiting for its window to stop moving.
-    Opening { deadline: Instant, first_seen: Option<Instant>, last: Option<Rect>, next: Instant },
+    Opening {
+        deadline: Instant,
+        first_seen: Option<Instant>,
+        last: Option<Rect>,
+        next: Instant,
+    },
     Flying,
     Docked,
     /// Showing the grant before fading.
-    Granted { until: Instant },
+    Granted {
+        until: Instant,
+    },
     /// Fading out, or flying back (`back`).
-    Leaving { back: bool },
+    Leaving {
+        back: bool,
+    },
 }
 
 struct Session {
@@ -447,7 +506,14 @@ pub(crate) struct Panel {
 
 impl Panel {
     fn new(role: Role) -> Panel {
-        Panel { role, look: Look::new(Kind::ScreenRecording), now: 0.0, flight: None, session: None, leave: None }
+        Panel {
+            role,
+            look: Look::new(Kind::ScreenRecording),
+            now: 0.0,
+            flight: None,
+            session: None,
+            leave: None,
+        }
     }
 
     // MARK: Flow
@@ -499,7 +565,9 @@ impl Panel {
     }
 
     fn checked(&mut self, id: u64, granted: bool, reshow: bool, tx: &mut Tx) {
-        let Some(s) = self.session.as_mut().filter(|s| s.id == id) else { return };
+        let Some(s) = self.session.as_mut().filter(|s| s.id == id) else {
+            return;
+        };
         s.checking = false;
         if s.stage == Stage::Checking {
             if granted {
@@ -509,7 +577,12 @@ impl Panel {
             }
             super::rune_permissions::open_url(&s.kind.settings_url());
             let now = Instant::now();
-            s.stage = Stage::Opening { deadline: now + Duration::from_secs(6), first_seen: None, last: None, next: now };
+            s.stage = Stage::Opening {
+                deadline: now + Duration::from_secs(6),
+                first_seen: None,
+                last: None,
+                next: now,
+            };
             tx.wake_after(Duration::ZERO);
             return;
         }
@@ -526,7 +599,9 @@ impl Panel {
 
     /// One controller step. True when the look changed.
     fn tick(&mut self, now_clock: f64, tx: &mut Tx) -> bool {
-        let Some(s) = self.session.as_mut() else { return false };
+        let Some(s) = self.session.as_mut() else {
+            return false;
+        };
         let now = Instant::now();
         match s.stage {
             Stage::Checking | Stage::Flying | Stage::Leaving { back: true } => false,
@@ -557,8 +632,18 @@ impl Panel {
     /// Waits for the Settings window to stop moving: two equal samples 100 ms apart, or 1.2 s
     /// after it first appeared (a cold launch, or the genie from the Dock).
     fn opening(&mut self, now: Instant, tx: &mut Tx) -> bool {
-        let Some(s) = self.session.as_mut() else { return false };
-        let Stage::Opening { deadline, first_seen, last, next } = &mut s.stage else { return false };
+        let Some(s) = self.session.as_mut() else {
+            return false;
+        };
+        let Stage::Opening {
+            deadline,
+            first_seen,
+            last,
+            next,
+        } = &mut s.stage
+        else {
+            return false;
+        };
         if now < *next {
             tx.wake_after(*next - now);
             return false;
@@ -585,7 +670,9 @@ impl Panel {
     }
 
     fn dock_at(&mut self, id: u32, frame: Rect, tx: &mut Tx) -> bool {
-        let Some(s) = self.session.as_mut() else { return false };
+        let Some(s) = self.session.as_mut() else {
+            return false;
+        };
         let screens = screens::current();
         s.settings_id = Some(id);
         s.settings_frame = Some(frame);
@@ -603,8 +690,12 @@ impl Panel {
         match s.from.filter(|_| !self.look.reduce) {
             Some(from) => {
                 s.stage = Stage::Flying;
-                let top = screens::index_at(&screens, mid(from)).map_or(f64::MIN, |i| screens[i].visible[1]);
-                fly(FlightRun::new(from, card, top, FLIGHT, false), self.look.clone());
+                let top = screens::index_at(&screens, mid(from))
+                    .map_or(f64::MIN, |i| screens[i].visible[1]);
+                fly(
+                    FlightRun::new(from, card, top, FLIGHT, false),
+                    self.look.clone(),
+                );
             }
             None => {
                 s.shown = true;
@@ -624,7 +715,9 @@ impl Panel {
     }
 
     fn docked(&mut self, tx: &mut Tx) {
-        let Some(s) = self.session.as_mut() else { return };
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
         s.stage = Stage::Docked;
         emit(s.kind, "docked", None);
         s.last_poll = None;
@@ -638,7 +731,9 @@ impl Panel {
     /// The panel follows Settings 1:1 (the user is moving it), steps aside while another app is
     /// in front, and reads the grant.
     fn track(&mut self, now: Instant, tx: &mut Tx) -> bool {
-        let Some(s) = self.session.as_mut() else { return false };
+        let Some(s) = self.session.as_mut() else {
+            return false;
+        };
         let mut frame = s.settings_id.and_then(window_frame);
         if frame.is_none()
             && let Some((id, f)) = settings_main()
@@ -709,7 +804,9 @@ impl Panel {
         if outcome == DragOutcome::Cancelled {
             return;
         }
-        let Some(s) = self.session.as_mut().filter(|s| s.stage == Stage::Docked) else { return };
+        let Some(s) = self.session.as_mut().filter(|s| s.stage == Stage::Docked) else {
+            return;
+        };
         emit(s.kind, "dropped", None);
         let now = Instant::now();
         s.race = Some((now + Duration::from_secs(10), settings_count()));
@@ -722,7 +819,9 @@ impl Panel {
     }
 
     fn finish(&mut self, tx: &mut Tx) {
-        let Some(s) = self.session.as_mut() else { return };
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
         match s.stage {
             Stage::Granted { .. } | Stage::Leaving { .. } => return,
             Stage::Flying => {
@@ -743,13 +842,17 @@ impl Panel {
             fade_in();
         }
         let hold = Duration::from_millis(900);
-        s.stage = Stage::Granted { until: Instant::now() + hold };
+        s.stage = Stage::Granted {
+            until: Instant::now() + hold,
+        };
         tx.wake_after(hold);
     }
 
     /// Fades out (the window's alpha, with the content shrinking and blurring) and ends.
     fn leave(&mut self, tx: &mut Tx) {
-        let Some(s) = self.session.as_mut() else { return };
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
         s.stage = Stage::Leaving { back: false };
         if !s.shown {
             self.end_now();
@@ -763,7 +866,9 @@ impl Panel {
     }
 
     fn cancel(&mut self, reason: &str, tx: &mut Tx) -> bool {
-        let Some(s) = self.session.as_mut() else { return false };
+        let Some(s) = self.session.as_mut() else {
+            return false;
+        };
         match s.stage {
             Stage::Granted { .. } | Stage::Leaving { .. } => return false,
             Stage::Checking | Stage::Opening { .. } | Stage::Flying => {
@@ -778,8 +883,12 @@ impl Panel {
             ("back", Some(from), Some(card)) if !self.look.reduce => {
                 s.stage = Stage::Leaving { back: true };
                 let screens = screens::current();
-                let top = screens::index_at(&screens, mid(from)).map_or(f64::MIN, |i| screens[i].visible[1]);
-                fly(FlightRun::new(from, card, top, RETURN, true), self.look.clone());
+                let top = screens::index_at(&screens, mid(from))
+                    .map_or(f64::MIN, |i| screens[i].visible[1]);
+                fly(
+                    FlightRun::new(from, card, top, RETURN, true),
+                    self.look.clone(),
+                );
             }
             _ => self.leave(tx),
         }
@@ -788,7 +897,11 @@ impl Panel {
 
     /// The Back flight reached the button.
     fn flown_back(&mut self) {
-        if self.session.as_ref().is_some_and(|s| s.stage == Stage::Leaving { back: true }) {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.stage == Stage::Leaving { back: true })
+        {
             self.session = None;
             self.leave = None;
         }
@@ -796,9 +909,19 @@ impl Panel {
 
     /// The docked content during the exit fade: with motion, a 0.96 scale and 3 pt blur.
     fn exit_fx(&self) -> Fx {
-        let Some(start) = self.leave.filter(|_| !self.look.reduce) else { return Fx::REST };
-        let k = StepSpring { duration: FADE_OUT, bounce: 0.0 }.value((self.now - start).max(0.0));
-        Fx { opacity: 1.0, scale: 1.0 - 0.04 * k, blur: 3.0 * k }
+        let Some(start) = self.leave.filter(|_| !self.look.reduce) else {
+            return Fx::REST;
+        };
+        let k = StepSpring {
+            duration: FADE_OUT,
+            bounce: 0.0,
+        }
+        .value((self.now - start).max(0.0));
+        Fx {
+            opacity: 1.0,
+            scale: 1.0 - 0.04 * k,
+            blur: 3.0 * k,
+        }
     }
 }
 
@@ -807,7 +930,12 @@ static DOCK: OnceLock<OverlayHandle<Panel>> = OnceLock::new();
 static FLIGHT_OVERLAY: OnceLock<OverlayHandle<Panel>> = OnceLock::new();
 
 fn rect_placement(r: Rect) -> Option<OverlayPlacement> {
-    Some(OverlayPlacement::Rect { x: r[0] as f32, y: r[1] as f32, width: r[2] as f32, height: r[3] as f32 })
+    Some(OverlayPlacement::Rect {
+        x: r[0] as f32,
+        y: r[1] as f32,
+        width: r[2] as f32,
+        height: r[3] as f32,
+    })
 }
 
 fn place_dock(card: Rect) {
@@ -829,7 +957,9 @@ fn fade_out() {
 }
 
 fn fly(run: FlightRun, look: Look) {
-    let Some(flight) = FLIGHT_OVERLAY.get() else { return };
+    let Some(flight) = FLIGHT_OVERLAY.get() else {
+        return;
+    };
     flight.set_placement(rect_placement(run.window));
     flight.update(move |f, tx| {
         f.look = look;
@@ -856,16 +986,20 @@ fn poll_grant(s: &mut Session, reshow: bool) {
 /// Reads the grant in a new `scrawl-helper` process, off the main thread
 /// (`CGPreflightScreenCaptureAccess` keeps its first answer per process).
 fn check_fresh(id: u64, kind: Kind, reshow: bool) {
-    let _ = std::thread::Builder::new().name("permission-check".into()).spawn(move || {
-        let granted = fresh_grant(kind);
-        if let Some(dock) = DOCK.get() {
-            dock.update(move |s, tx| s.checked(id, granted, reshow, tx));
-        }
-    });
+    let _ = std::thread::Builder::new()
+        .name("permission-check".into())
+        .spawn(move || {
+            let granted = fresh_grant(kind);
+            if let Some(dock) = DOCK.get() {
+                dock.update(move |s, tx| s.checked(id, granted, reshow, tx));
+            }
+        });
 }
 
 fn fresh_grant(kind: Kind) -> bool {
-    let Ok(helper) = crate::helper::path() else { return false };
+    let Ok(helper) = crate::helper::ui_path() else {
+        return false;
+    };
     let Ok(out) = Command::new(helper)
         .args(["permission-panel", "--check", kind.raw()])
         .stdin(Stdio::null())
@@ -885,12 +1019,17 @@ fn fresh_grant(kind: Kind) -> bool {
 fn app_bundle() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         let exe = exe.canonicalize().unwrap_or(exe);
-        if let Some(app) = exe.ancestors().find(|a| a.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"))) {
+        if let Some(app) = exe
+            .ancestors()
+            .find(|a| a.extension().is_some_and(|e| e.eq_ignore_ascii_case("app")))
+        {
             return app.to_path_buf();
         }
     }
     let installed = std::env::var_os("HOME").map(|h| Path::new(&h).join("Applications/Scrawl.app"));
-    installed.filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Applications/Scrawl.app"))
+    installed
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| PathBuf::from("/Applications/Scrawl.app"))
 }
 
 // MARK: Settings window
@@ -899,7 +1038,9 @@ fn app_bundle() -> PathBuf {
 fn settings_pids() -> Vec<i32> {
     use objc2_app_kit::NSRunningApplication;
     use objc2_foundation::NSString;
-    let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(SETTINGS_BUNDLE));
+    let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(
+        SETTINGS_BUNDLE,
+    ));
     apps.iter().map(|a| a.processIdentifier()).collect()
 }
 
@@ -908,7 +1049,10 @@ fn settings_windows() -> Vec<crate::windows::RawWindow> {
     if pids.is_empty() {
         return Vec::new();
     }
-    crate::windows::raw_windows().into_iter().filter(|w| pids.contains(&w.pid)).collect()
+    crate::windows::raw_windows()
+        .into_iter()
+        .filter(|w| pids.contains(&w.pid))
+        .collect()
 }
 
 /// The largest ordinary Settings window: its number and global bounds.
@@ -939,7 +1083,9 @@ fn window_frame(id: u32) -> Option<Rect> {
     // CGWindowIDs travel in the array as pointer-sized values, not CF objects.
     let ids = CFArray::<*const c_void>::from_copyable(&[id as usize as *const c_void]);
     // SAFETY: a valid CFArray of window numbers; the result follows the create rule.
-    let raw = unsafe { core_graphics::window::CGWindowListCreateDescriptionFromArray(ids.as_concrete_TypeRef()) };
+    let raw = unsafe {
+        core_graphics::window::CGWindowListCreateDescriptionFromArray(ids.as_concrete_TypeRef())
+    };
     if raw.is_null() {
         return None;
     }
@@ -950,7 +1096,8 @@ fn window_frame(id: u32) -> Option<Rect> {
         return None;
     }
     // SAFETY: each element is a CFDictionary the array keeps alive.
-    let info: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_get_rule(first as CFDictionaryRef) };
+    let info: CFDictionary<CFString, CFType> =
+        unsafe { CFDictionary::wrap_under_get_rule(first as CFDictionaryRef) };
     let onscreen = info
         .find(CFString::from_static_string("kCGWindowIsOnscreen"))
         .and_then(|v| v.downcast::<CFBoolean>())
@@ -958,17 +1105,26 @@ fn window_frame(id: u32) -> Option<Rect> {
     if !onscreen {
         return None;
     }
-    let bounds = info.find(CFString::from_static_string("kCGWindowBounds"))?.downcast::<CFDictionary>()?;
+    let bounds = info
+        .find(CFString::from_static_string("kCGWindowBounds"))?
+        .downcast::<CFDictionary>()?;
     // SAFETY: the bounds dictionary is kept alive by `info`.
-    let bounds: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_get_rule(bounds.as_concrete_TypeRef()) };
-    let n = |k: &'static str| bounds.find(CFString::from_static_string(k)).and_then(|v| v.downcast::<CFNumber>()?.to_f64());
+    let bounds: CFDictionary<CFString, CFType> =
+        unsafe { CFDictionary::wrap_under_get_rule(bounds.as_concrete_TypeRef()) };
+    let n = |k: &'static str| {
+        bounds
+            .find(CFString::from_static_string(k))
+            .and_then(|v| v.downcast::<CFNumber>()?.to_f64())
+    };
     Some([n("X")?, n("Y")?, n("Width")?, n("Height")?])
 }
 
 /// Whether Settings, Scrawl or one of Scrawl's helpers is in front. Cached per frontmost pid.
 fn frontmost_ours(cache: &mut Option<(i32, bool)>, app: &Path) -> bool {
     use objc2_app_kit::NSWorkspace;
-    let Some(front) = NSWorkspace::sharedWorkspace().frontmostApplication() else { return false };
+    let Some(front) = NSWorkspace::sharedWorkspace().frontmostApplication() else {
+        return false;
+    };
     let pid = front.processIdentifier();
     if let Some((cached, ours)) = *cache
         && cached == pid
@@ -976,7 +1132,9 @@ fn frontmost_ours(cache: &mut Option<(i32, bool)>, app: &Path) -> bool {
         return ours;
     }
     let ours = pid == std::process::id() as i32
-        || front.bundleIdentifier().is_some_and(|id| id.to_string() == SETTINGS_BUNDLE)
+        || front
+            .bundleIdentifier()
+            .is_some_and(|id| id.to_string() == SETTINGS_BUNDLE)
         || front
             .executableURL()
             .and_then(|u| u.path())
@@ -996,7 +1154,9 @@ fn dock_poll(s: &mut Panel, now: f64, tx: &mut Tx) -> bool {
 /// Steps the flight from the frame clock, then hands off: forward, the docked window shows and
 /// the flight window hides in one turn; back, the flight ends on the button.
 fn flight_poll(s: &mut Panel, now: f64, tx: &mut Tx) -> bool {
-    let Some(run) = s.flight.as_mut().filter(|r| !r.ended) else { return false };
+    let Some(run) = s.flight.as_mut().filter(|r| !r.ended) else {
+        return false;
+    };
     let started = *run.started.get_or_insert_with(|| {
         if run.reverse
             && let Some(dock) = DOCK.get()
@@ -1037,10 +1197,18 @@ struct Fx {
 }
 
 impl Fx {
-    const REST: Fx = Fx { opacity: 1.0, scale: 1.0, blur: 0.0 };
+    const REST: Fx = Fx {
+        opacity: 1.0,
+        scale: 1.0,
+        blur: 0.0,
+    };
 
     fn resolve(k: f64) -> Fx {
-        Fx { opacity: k, scale: 0.96 + 0.04 * k, blur: 3.0 * (1.0 - k) }
+        Fx {
+            opacity: k,
+            scale: 0.96 + 0.04 * k,
+            blur: 3.0 * (1.0 - k),
+        }
     }
 }
 
@@ -1050,7 +1218,16 @@ fn view(s: &Panel, cx: &mut Cx<Panel>) -> El {
     let (w, h) = s.look.layout.size();
     match s.role {
         Role::Dock => {
-            let card = card(&s.look, dark, [MARGIN, MARGIN, w, h], Layout::RADIUS, 0.0, 1.0, s.exit_fx(), true);
+            let card = card(
+                &s.look,
+                dark,
+                [MARGIN, MARGIN, w, h],
+                Layout::RADIUS,
+                0.0,
+                1.0,
+                s.exit_fx(),
+                true,
+            );
             root.child(card)
         }
         Role::Flight => {
@@ -1058,19 +1235,40 @@ fn view(s: &Panel, cx: &mut Cx<Panel>) -> El {
             let step = run.step(run.started.map_or(0.0, |t| s.now - t));
             let r = step.rect;
             let local = [r[0] - run.window[0], r[1] - run.window[1], r[2], r[3]];
-            let card = card(&s.look, dark, local, step.radius, step.lift, step.alpha, Fx::resolve(step.resolve), false);
+            let card = card(
+                &s.look,
+                dark,
+                local,
+                step.radius,
+                step.lift,
+                step.alpha,
+                Fx::resolve(step.resolve),
+                false,
+            );
             root.child(card)
         }
         Role::Preview => {
             let theme = Theme { dark };
-            root.fill(theme.sidebar().color())
-                .child(card(&s.look, dark, [MARGIN, MARGIN, w, h], Layout::RADIUS, 0.0, 1.0, Fx::REST, false))
+            root.fill(theme.sidebar().color()).child(card(
+                &s.look,
+                dark,
+                [MARGIN, MARGIN, w, h],
+                Layout::RADIUS,
+                0.0,
+                1.0,
+                Fx::REST,
+                false,
+            ))
         }
     }
 }
 
 fn ink(dark: bool, a: f32) -> Rgba {
-    if dark { Rgba::WHITE.alpha(a) } else { Rgba::BLACK.alpha(a) }
+    if dark {
+        Rgba::WHITE.alpha(a)
+    } else {
+        Rgba::BLACK.alpha(a)
+    }
 }
 
 fn primary(dark: bool) -> Rgba {
@@ -1082,7 +1280,11 @@ fn secondary(dark: bool) -> Rgba {
 }
 
 fn green(dark: bool) -> Rgba {
-    if dark { Rgba::hex(0x30D158) } else { Rgba::hex(0x34C759) }
+    if dark {
+        Rgba::hex(0x30D158)
+    } else {
+        Rgba::hex(0x34C759)
+    }
 }
 
 fn springs(duration: f32) -> SpringPair {
@@ -1093,7 +1295,16 @@ fn springs(duration: f32) -> SpringPair {
 /// with the window background, and the content (laid out at the card's full size, centred, as
 /// the flight resizes it) clipped to continuous corners.
 #[allow(clippy::too_many_arguments)]
-fn card(look: &Look, dark: bool, rect: Rect, radius: f64, lift: f64, alpha: f64, fx: Fx, interactive: bool) -> El {
+fn card(
+    look: &Look,
+    dark: bool,
+    rect: Rect,
+    radius: f64,
+    lift: f64,
+    alpha: f64,
+    fx: Fx,
+    interactive: bool,
+) -> El {
     let [x, y, w, h] = rect.map(|v| v as f32);
     let (cw, ch) = look.layout.size();
     let (cw, ch) = (cw as f32, ch as f32);
@@ -1122,8 +1333,18 @@ fn card(look: &Look, dark: bool, rect: Rect, radius: f64, lift: f64, alpha: f64,
         .size(w, h)
         .radius(radius)
         .continuous_corners()
-        .box_shadow(Shadow::core_animation(0.0, 0.5, 1.5, black.alpha(0.3 - 0.1 * lift).color()))
-        .box_shadow(Shadow::core_animation(0.0, 8.0 + 12.0 * lift, 18.0 + 14.0 * lift, black.alpha(0.32 + 0.14 * lift).color()))
+        .box_shadow(Shadow::core_animation(
+            0.0,
+            0.5,
+            1.5,
+            black.alpha(0.3 - 0.1 * lift).color(),
+        ))
+        .box_shadow(Shadow::core_animation(
+            0.0,
+            8.0 + 12.0 * lift,
+            18.0 + 14.0 * lift,
+            black.alpha(0.32 + 0.14 * lift).color(),
+        ))
         .system_material(SystemMaterial::Glass)
         .opacity(alpha as f32)
         .child(frosted);
@@ -1133,27 +1354,50 @@ fn card(look: &Look, dark: bool, rect: Rect, radius: f64, lift: f64, alpha: f64,
 fn content(look: &Look, dark: bool, interactive: bool) -> El {
     let row_w = look.layout.row_width as f32;
     let (gutter, row_y) = (Layout::GUTTER as f32, Layout::ROW_Y as f32);
-    el().child(instruction(look, dark, row_w)).child(app_row(look, dark, row_w, interactive)).child(
-        back_button(look, dark, interactive)
-            .absolute((gutter - 28.0) / 2.0 + 1.0, row_y + (Layout::ROW as f32 - 28.0) / 2.0),
-    )
+    el().child(instruction(look, dark, row_w))
+        .child(app_row(look, dark, row_w, interactive))
+        .child(back_button(look, dark, interactive).absolute(
+            (gutter - 28.0) / 2.0 + 1.0,
+            row_y + (Layout::ROW as f32 - 28.0) / 2.0,
+        ))
 }
 
 /// "Drag Scrawl to the list above to allow Screen Recording", swapping to "Scrawl is allowed".
 fn instruction(look: &Look, dark: bool, row_w: f32) -> El {
     let (x, y) = (Layout::GUTTER as f32, Layout::TOP as f32);
     let height = Layout::INSTRUCTION as f32;
-    let icon_swap = Transition::opacity().combined(Transition::scale(0.6)).springs(springs(0.3));
-    let text_swap = Transition::opacity().combined(Transition::blur(3.0)).springs(springs(0.3));
+    let icon_swap = Transition::opacity()
+        .combined(Transition::scale(0.6))
+        .springs(springs(0.3));
+    let text_swap = Transition::opacity()
+        .combined(Transition::blur(3.0))
+        .springs(springs(0.3));
     let icon = if look.granted {
-        let check = symbol(&icons::CHECK_CIRCLE_FILL, 17.0, weight::SEMIBOLD, green(dark).color());
+        let check = symbol(
+            &icons::CHECK_CIRCLE_FILL,
+            17.0,
+            weight::SEMIBOLD,
+            green(dark).color(),
+        );
         // The palette's white check: a disc under the cut-out glyph.
         el().key("check")
-            .child(el().absolute(7.5, 8.5).size(11.0, 11.0).radius(5.5).fill(Color::WHITE))
-            .child(el().absolute(0.0, 0.0).size(Layout::ICON as f32, height).center().child(check))
+            .child(
+                el().absolute(7.5, 8.5)
+                    .size(11.0, 11.0)
+                    .radius(5.5)
+                    .fill(Color::WHITE),
+            )
+            .child(
+                el().absolute(0.0, 0.0)
+                    .size(Layout::ICON as f32, height)
+                    .center()
+                    .child(check),
+            )
     } else {
         let accent = Theme { dark }.accent().color();
-        el().key("arrow").center().child(symbol(&icons::ARROW_UP, 18.0, weight::BOLD, accent))
+        el().key("arrow")
+            .center()
+            .child(symbol(&icons::ARROW_UP, 18.0, weight::BOLD, accent))
     };
     let icon = icon
         .absolute(x + Layout::ICON_LEADING as f32, y)
@@ -1187,8 +1431,15 @@ fn instruction(look: &Look, dark: bool, row_w: f32) -> El {
     let room = row_w - Layout::TEXT_LEADING as f32;
     // SwiftUI's `.minimumScaleFactor(0.85)`; medium runs are a little wider than regular.
     let wide = measure(&line, style(13.0, 400.0)) * 1.02;
-    let size = if wide > room { 13.0 * (room / wide).max(0.85) } else { 13.0 };
-    let words = rich(line, spans).font(style(size, 400.0)).color(soft).single_line();
+    let size = if wide > room {
+        13.0 * (room / wide).max(0.85)
+    } else {
+        13.0
+    };
+    let words = rich(line, spans)
+        .font(style(size, 400.0))
+        .color(soft)
+        .single_line();
     let words = el()
         .key(key)
         .absolute(x + Layout::TEXT_LEADING as f32, y)
@@ -1196,7 +1447,11 @@ fn instruction(look: &Look, dark: bool, row_w: f32) -> El {
         .items_center()
         .child(words)
         .transition(text_swap);
-    el().key("instruction").absolute(0.0, 0.0).size(0.0, 0.0).child(icon).child(words)
+    el().key("instruction")
+        .absolute(0.0, 0.0)
+        .size(0.0, 0.0)
+        .child(icon)
+        .child(words)
 }
 
 /// The app row the list will take: icon and name; dragged, it carries the app bundle.
@@ -1216,9 +1471,15 @@ fn app_row(look: &Look, dark: bool, row_w: f32, interactive: bool) -> El {
         .opacity_motion(Spring::new(0.25, 0.0))
         .child(image.absolute(Layout::ICON_LEADING as f32, (row_h - icon) / 2.0))
         .child(
-            el().absolute(Layout::TEXT_LEADING as f32, 0.0).h(row_h).items_center().child(
-                text(look.name.clone()).font(style(13.0, 400.0)).color(primary(dark).color()).single_line(),
-            ),
+            el().absolute(Layout::TEXT_LEADING as f32, 0.0)
+                .h(row_h)
+                .items_center()
+                .child(
+                    text(look.name.clone())
+                        .font(style(13.0, 400.0))
+                        .color(primary(dark).color())
+                        .single_line(),
+                ),
         );
     let radius = Layout::ROW_RADIUS as f32;
     let row = el()
@@ -1250,7 +1511,11 @@ fn app_row(look: &Look, dark: bool, row_w: f32, interactive: bool) -> El {
 
 fn back_button(look: &Look, dark: bool, interactive: bool) -> El {
     let hover = look.back_hover;
-    let tint = if hover { primary(dark) } else { secondary(dark) };
+    let tint = if hover {
+        primary(dark)
+    } else {
+        secondary(dark)
+    };
     let button = el()
         .key("back")
         .size(28.0, 28.0)
@@ -1258,7 +1523,12 @@ fn back_button(look: &Look, dark: bool, interactive: bool) -> El {
         .fill(ink(dark, if hover { 0.12 } else { 0.07 }).color())
         .motion(Spring::new(0.25, 0.0))
         .center()
-        .child(symbol(&icons::CHEVRON_LEFT, 12.0, weight::SEMIBOLD, tint.color()))
+        .child(symbol(
+            &icons::CHEVRON_LEFT,
+            12.0,
+            weight::SEMIBOLD,
+            tint.color(),
+        ))
         .opacity(if look.granted { 0.0 } else { 1.0 })
         .opacity_motion(Spring::new(0.3, 0.0))
         .help("Back");
@@ -1315,7 +1585,9 @@ pub(crate) fn install<S: 'static>(app: &mut App<S>) {
 /// (the button, global top-left points). False when the panel isn't installed or the
 /// permission isn't dragged into a list; the caller then launches the helper's panel.
 pub(crate) fn open(permission: &str, from: Option<[f32; 4]>) -> bool {
-    let (Some(kind), Some(dock)) = (Kind::parse(permission), DOCK.get()) else { return false };
+    let (Some(kind), Some(dock)) = (Kind::parse(permission), DOCK.get()) else {
+        return false;
+    };
     let from = from.map(|r| r.map(f64::from));
     dock.update(move |s, tx| s.start(kind, from, tx));
     true
@@ -1323,9 +1595,14 @@ pub(crate) fn open(permission: &str, from: Option<[f32; 4]>) -> bool {
 
 /// The row turned on: the panel says so and goes.
 pub(crate) fn granted(permission: &str) {
-    let (Some(kind), Some(dock)) = (Kind::parse(permission), DOCK.get()) else { return };
+    let (Some(kind), Some(dock)) = (Kind::parse(permission), DOCK.get()) else {
+        return;
+    };
     dock.update(move |s, tx| {
-        if s.session.as_ref().is_some_and(|session| session.kind == kind) {
+        if s.session
+            .as_ref()
+            .is_some_and(|session| session.kind == kind)
+        {
             s.finish(tx);
         }
     });
@@ -1371,21 +1648,35 @@ pub(crate) fn run_headless(scene: &str, mut args: Vec<String>) {
     if let Some(i) = args.iter().position(|a| a == "--scene") {
         args[i + 1] = name.to_owned();
     }
-    args.extend(["--theme".to_owned(), if light { "light" } else { "dark" }.to_owned()]);
+    args.extend([
+        "--theme".to_owned(),
+        if light { "light" } else { "dark" }.to_owned(),
+    ]);
     let (w, h) = Layout::new(740.0).size();
     let fonts = fonts();
     let spec = AppSpec {
         scenes: SCENES,
         fonts,
         families: families(fonts),
-        ..AppSpec::new("Scrawl permission panel", ((w + 2.0 * MARGIN) as f32, (h + 2.0 * MARGIN) as f32), preview_init, view)
+        ..AppSpec::new(
+            "Scrawl permission panel",
+            ((w + 2.0 * MARGIN) as f32, (h + 2.0 * MARGIN) as f32),
+            preview_init,
+            view,
+        )
     };
     App::new(spec).srgb_blend(true).args(args).run();
 }
 
 pub(crate) fn render_names() -> Vec<String> {
-    let mut out: Vec<String> = SCENE_NAMES.iter().map(|n| format!("permission-panel-{n}")).collect();
-    out.extend(["permission-panel-screen-recording@light".to_owned(), "permission-panel-granted@light".to_owned()]);
+    let mut out: Vec<String> = SCENE_NAMES
+        .iter()
+        .map(|n| format!("permission-panel-{n}"))
+        .collect();
+    out.extend([
+        "permission-panel-screen-recording@light".to_owned(),
+        "permission-panel-granted@light".to_owned(),
+    ]);
     out
 }
 
@@ -1402,20 +1693,79 @@ mod tests {
     fn docks_where_the_swift_panel_does() {
         let screen = [0.0, 25.0, 1512.0, 950.0];
         let cases: &[(Rect, Rect, Dock, Rect)] = &[
-            ([300.0, 500.0, 740.0, 600.0], screen, Dock::Below, [500.0, 395.0, 532.0, 95.0]),
-            ([300.0, 100.0, 740.0, 800.0], screen, Dock::Inside, [500.0, 120.0, 532.0, 95.0]),
-            ([300.0, 60.0, 740.0, 860.0], screen, Dock::Inside, [500.0, 80.0, 532.0, 95.0]),
-            ([700.0, 60.0, 740.0, 860.0], screen, Dock::Inside, [900.0, 80.0, 532.0, 95.0]),
-            ([0.0, 60.0, 1500.0, 860.0], screen, Dock::Inside, [200.0, 80.0, 704.0, 95.0]),
-            ([100.0, 400.0, 1000.0, 500.0], screen, Dock::Below, [300.0, 295.0, 704.0, 95.0]),
-            ([300.0, 30.0, 740.0, 300.0], screen, Dock::Clamped, [500.0, 33.0, 532.0, 95.0]),
-            ([900.0, 30.0, 500.0, 300.0], screen, Dock::Left, [506.0, 33.0, 384.0, 95.0]),
-            ([100.0, 30.0, 500.0, 300.0], screen, Dock::Right, [610.0, 33.0, 384.0, 95.0]),
-            ([-1600.0, 200.0, 740.0, 600.0], [-1920.0, 0.0, 1920.0, 1055.0], Dock::Below, [-1400.0, 95.0, 532.0, 95.0]),
-            ([1000.0, 700.0, 700.0, 280.0], screen, Dock::Below, [1012.0, 595.0, 492.0, 95.0]),
+            (
+                [300.0, 500.0, 740.0, 600.0],
+                screen,
+                Dock::Below,
+                [500.0, 395.0, 532.0, 95.0],
+            ),
+            (
+                [300.0, 100.0, 740.0, 800.0],
+                screen,
+                Dock::Inside,
+                [500.0, 120.0, 532.0, 95.0],
+            ),
+            (
+                [300.0, 60.0, 740.0, 860.0],
+                screen,
+                Dock::Inside,
+                [500.0, 80.0, 532.0, 95.0],
+            ),
+            (
+                [700.0, 60.0, 740.0, 860.0],
+                screen,
+                Dock::Inside,
+                [900.0, 80.0, 532.0, 95.0],
+            ),
+            (
+                [0.0, 60.0, 1500.0, 860.0],
+                screen,
+                Dock::Inside,
+                [200.0, 80.0, 704.0, 95.0],
+            ),
+            (
+                [100.0, 400.0, 1000.0, 500.0],
+                screen,
+                Dock::Below,
+                [300.0, 295.0, 704.0, 95.0],
+            ),
+            (
+                [300.0, 30.0, 740.0, 300.0],
+                screen,
+                Dock::Clamped,
+                [500.0, 33.0, 532.0, 95.0],
+            ),
+            (
+                [900.0, 30.0, 500.0, 300.0],
+                screen,
+                Dock::Left,
+                [506.0, 33.0, 384.0, 95.0],
+            ),
+            (
+                [100.0, 30.0, 500.0, 300.0],
+                screen,
+                Dock::Right,
+                [610.0, 33.0, 384.0, 95.0],
+            ),
+            (
+                [-1600.0, 200.0, 740.0, 600.0],
+                [-1920.0, 0.0, 1920.0, 1055.0],
+                Dock::Below,
+                [-1400.0, 95.0, 532.0, 95.0],
+            ),
+            (
+                [1000.0, 700.0, 700.0, 280.0],
+                screen,
+                Dock::Below,
+                [1012.0, 595.0, 492.0, 95.0],
+            ),
         ];
         for &(settings, visible, how, frame) in cases {
-            assert_eq!(plan(settings, visible), (frame, how), "settings {settings:?}");
+            assert_eq!(
+                plan(settings, visible),
+                (frame, how),
+                "settings {settings:?}"
+            );
         }
     }
 
@@ -1432,7 +1782,10 @@ mod tests {
         }];
         let settings = flip([300.0, 500.0, 740.0, 600.0]);
         let (card, how) = dock_for(settings, Layout::new(740.0), &screens);
-        assert_eq!((card, how), (flip([500.0, 395.0, 532.0, 95.0]), Dock::Below));
+        assert_eq!(
+            (card, how),
+            (flip([500.0, 395.0, 532.0, 95.0]), Dock::Below)
+        );
     }
 
     #[test]
@@ -1455,7 +1808,10 @@ mod tests {
             last = v;
         }
         assert!(1.0 - last < 2e-4);
-        let bouncy = StepSpring { duration: 0.5, bounce: 0.3 };
+        let bouncy = StepSpring {
+            duration: 0.5,
+            bounce: 0.3,
+        };
         assert!((0..200).any(|i| bouncy.value(f64::from(i) * 0.01) > 1.0));
     }
 
@@ -1467,15 +1823,26 @@ mod tests {
         // Midway across, 160 pt above the higher end.
         assert_eq!(run.control, [(160.0 + 766.0) / 2.0, 347.5 - 160.0]);
         let start = run.step(0.0);
-        assert_eq!((start.rect, start.radius, start.alpha, start.resolve), (source, 14.0, 0.0, 0.0));
+        assert_eq!(
+            (start.rect, start.radius, start.alpha, start.resolve),
+            (source, 14.0, 0.0, 0.0)
+        );
         let end = run.step(FLIGHT.settle());
-        assert!(end.rect.iter().zip(target).all(|(a, b)| (a - b).abs() < 0.01));
+        assert!(
+            end.rect
+                .iter()
+                .zip(target)
+                .all(|(a, b)| (a - b).abs() < 0.01)
+        );
         assert!((end.radius - 18.0).abs() < 0.01 && end.lift.abs() < 0.01);
         assert!((end.alpha - 1.0).abs() < 1e-9 && (end.resolve - 1.0).abs() < 1e-9);
         // The window holds the whole path, padded.
         let w = run.window;
         assert!(w[0] <= source[0] - FLIGHT_PAD && w[1] <= run.control[1] - FLIGHT_PAD);
-        assert!(w[0] + w[2] >= target[0] + target[2] + FLIGHT_PAD && w[1] + w[3] >= source[1] + source[3] + FLIGHT_PAD);
+        assert!(
+            w[0] + w[2] >= target[0] + target[2] + FLIGHT_PAD
+                && w[1] + w[3] >= source[1] + source[3] + FLIGHT_PAD
+        );
 
         let back = FlightRun::new(source, target, 25.0, RETURN, true);
         assert_eq!(back.step(0.0).rect, target);
@@ -1495,14 +1862,20 @@ mod tests {
     #[test]
     fn integral_matches_cgrect_integral() {
         assert_eq!(integral([10.4, 20.6, 100.2, 50.0]), [10, 20, 101, 51]);
-        assert_eq!(integral([10.0, 20.0, 100.0, 50.0]), integral([10.0, 20.0, 100.0, 50.0]));
+        assert_eq!(
+            integral([10.0, 20.0, 100.0, 50.0]),
+            integral([10.0, 20.0, 100.0, 50.0])
+        );
     }
 
     #[test]
     fn kinds_round_trip() {
         for kind in [Kind::ScreenRecording, Kind::Accessibility] {
             assert_eq!(Kind::parse(kind.raw()), Some(kind));
-            assert!(kind.settings_url().starts_with("x-apple.systempreferences:"));
+            assert!(
+                kind.settings_url()
+                    .starts_with("x-apple.systempreferences:")
+            );
         }
         assert_eq!(Kind::parse("microphone"), None);
     }

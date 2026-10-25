@@ -813,7 +813,7 @@ impl Session {
         use std::io::BufRead;
         use std::process::{Command, Stdio};
 
-        let mut command = Command::new(crate::helper::path()?);
+        let mut command = Command::new(crate::helper::ui_path()?);
         command
             .args(["onboarding", "--shortcut", shortcut, "--paste"])
             .arg(crate::settings::paste_label())
@@ -1256,9 +1256,10 @@ mod tests {
             include_str!("onboarding.rs"),
             include_str!("settings.rs"),
             include_str!("ui.rs"),
-            include_str!("../helper/Onboarding.swift"),
-            include_str!("../helper/Settings.swift"),
-            include_str!("../helper/PermissionPanel.swift"),
+            include_str!("../helper/Permissions.swift"),
+            include_str!("../helper-ui/Onboarding.swift"),
+            include_str!("../helper-ui/Settings.swift"),
+            include_str!("../helper-ui/PermissionPanel.swift"),
         ];
         let calls = [
             concat!("CGRequest", "ListenEventAccess"),

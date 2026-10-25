@@ -43,17 +43,22 @@ pub(super) fn raw_windows_now() -> Vec<crate::windows::RawWindow> {
     objc2::rc::autoreleasepool(|_| crate::windows::raw_windows())
 }
 
-/// Whether `pid` runs this Scrawl's `scrawl-helper` (the iPhone mirror, Settings, onboarding, the
-/// permission panel), going by its executable, so a helper started by another helper counts too.
+/// Whether `pid` runs this Scrawl's `scrawl-helper` or `scrawl-ui-helper` (the iPhone mirror,
+/// Settings, onboarding, the permission panel), going by its executable, so a helper started by
+/// another helper counts too.
 pub(super) fn is_helper_process(pid: i32) -> bool {
-    static HELPER: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
-    HELPER
-        .get_or_init(|| {
-            let path = crate::helper::path().ok()?;
-            Some(std::fs::canonicalize(&path).unwrap_or(path))
-        })
-        .as_ref()
-        .is_some_and(|helper| process_path(pid).as_ref() == Some(helper))
+    static HELPERS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    let helpers = HELPERS.get_or_init(|| {
+        [crate::helper::path(), crate::helper::ui_path()]
+            .into_iter()
+            .flatten()
+            .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+            .collect()
+    });
+    let Some(proc_path) = process_path(pid) else {
+        return false;
+    };
+    helpers.contains(&proc_path)
 }
 
 fn process_path(pid: i32) -> Option<PathBuf> {

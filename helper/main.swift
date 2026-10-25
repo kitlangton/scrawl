@@ -13,9 +13,7 @@
 //   scrawl-helper export PLAN.json                      shareable .mp4: crop/camera, burned-in ink, audio (Export.swift)
 //   scrawl-helper permissions                           what Scrawl has been granted, as JSON
 //   scrawl-helper sck-probe [--watch SECONDS]           can this process capture with ScreenCaptureKit (ScreenProbe.swift)
-//   scrawl-helper permission-panel --permission P [--from X,Y,W,H]   drag-to-allow card (PermissionPanel.swift)
-//   scrawl-helper onboarding [--shortcut L] [--render DIR]   the welcome window (Onboarding.swift)
-//   scrawl-helper settings [--pane P] [--render DIR]         the Settings window (Settings.swift)
+//   scrawl-helper qr TEXT                               half-block QR code for `scrawl link`
 //
 // Every timestamp in the output is integer milliseconds. Scrawl drives the long-running
 // `mirror` command over stdin (`stop`, `cancel`) and reads its events from stdout.
@@ -150,24 +148,16 @@ case "export":
 case "probe":
   guard arguments.count >= 2 else { fail("probe needs MOVIE") }
   runAsync { emit(try await Media.probe(URL(filePath: arguments[1]))) }
-case "permission-panel":
-  PermissionPanel.run(arguments: arguments)
 case "permissions":
   emit(Permissions.statuses())
 case "sck-probe":
   let watch = option("--watch", in: arguments).flatMap(Double.init)
   runAsync { await ScreenProbe.run(watch: watch) }
-case "onboarding":
-  Onboarding.run(arguments: arguments)
-case "playback-volume":
-  runPlaybackVolume(arguments: Array(arguments.dropFirst()))
-case "settings":
-  SettingsWindow.run(arguments: arguments)
 case "qr":
   guard arguments.count >= 2, let qr = renderQR(arguments[1]) else {
     fail("qr needs a text argument")
   }
   emit(["qr": qr])
 default:
-  fail("usage: scrawl-helper devices|mirror|transcribe|transcribe-stream|speech-model|frames|audio|probe|export|shrink|permission-panel|permissions|sck-probe|onboarding|settings|qr …")
+  fail("usage: scrawl-helper devices|mirror|transcribe|transcribe-stream|speech-model|frames|audio|probe|export|shrink|permissions|sck-probe|qr …")
 }
