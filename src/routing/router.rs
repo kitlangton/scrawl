@@ -891,7 +891,8 @@ struct Outcome {
 /// About this many input tokens per question, for the estimate printed first.
 const TOKENS_PER_CASE: u64 = 5_000;
 
-pub fn eval(since: Duration, limit: usize) -> Result<()> {
+/// `lines: false` leaves the targets' recent lines out of every question, to compare.
+pub fn eval(since: Duration, limit: usize, lines: bool) -> Result<()> {
     let cutoff = jev::now_ms().saturating_sub(since.as_millis() as u64);
     let captures = crate::handoff::default_captures_dir();
     let mut dirs: Vec<(u64, PathBuf)> = std::fs::read_dir(&captures)
@@ -957,7 +958,11 @@ pub fn eval(since: Duration, limit: usize) -> Result<()> {
          {unknown} with no known destination, {absent} whose destination wasn't among the sessions read"
     );
     let thresholds = Thresholds::configured();
-    let hooks = jev::Hooks::default();
+    let mut hooks = jev::Hooks::default();
+    if !lines {
+        hooks.recent = |_, _, _| Vec::new();
+        println!("Targets without their recent lines (--no-lines)");
+    }
     let mut results: Vec<(&Case, Outcome)> = Vec::new();
     let (mut tokens, mut ms, mut failed) = (0_u64, Vec::new(), 0);
     let mut model = String::new();
@@ -1025,6 +1030,7 @@ pub fn eval(since: Duration, limit: usize) -> Result<()> {
     let mut samples: Vec<Sample> = results
         .iter()
         .map(|(case, o)| Sample {
+            kind: "capture",
             confidence: o.confidence,
             margin: o.margin,
             fits: o.fits,
@@ -1041,6 +1047,7 @@ pub fn eval(since: Duration, limit: usize) -> Result<()> {
         samples.len() - captures
     );
     print!("{}", sweep(&samples, &thresholds));
+    print!("{}", demotions(&samples, &thresholds));
     Ok(())
 }
 
@@ -1059,44 +1066,33 @@ fn margin_of(record: &Record) -> f64 {
 /// One answer for the sweep: its numbers, and whether sending to Jev's choice would be right.
 #[derive(Clone, Copy, Debug)]
 struct Sample {
+    /// `capture` or `dictation`.
+    kind: &'static str,
     confidence: f64,
     margin: f64,
     fits: f64,
     right: bool,
 }
 
-/// For each gate (confidence, margin, any_fits), what each value sends, and how many right and
-/// wrong sends it blocks compared with no gate there, holding the other two at `thresholds`.
+/// For each send gate (confidence, margin), what each value sends, and how many right and
+/// wrong sends it blocks compared with no gate there, holding the other at `thresholds`.
 fn sweep(samples: &[Sample], thresholds: &Thresholds) -> String {
     use std::fmt::Write as _;
-    type Gate = (&'static str, fn(&Sample) -> f64, f64, &'static [f64]);
-    let gates: [Gate; 3] = [
+    let gates: [(&str, f64, &[f64]); 2] = [
         (
             "confidence",
-            |s| s.confidence,
             thresholds.send,
             &[0.6, 0.7, 0.8, 0.85, 0.9, 0.95],
         ),
-        (
-            "margin",
-            |s| s.margin,
-            thresholds.margin,
-            &[0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
-        ),
-        (
-            "any_fits",
-            |s| s.fits,
-            thresholds.fits,
-            &[0.0, 0.2, 0.3, 0.4, 0.5, 0.7],
-        ),
+        ("margin", thresholds.margin, &[0.0, 0.1, 0.2, 0.3, 0.4, 0.5]),
     ];
     let at = |s: &Sample, gate: usize, value: f64| {
-        let mut v = [thresholds.send, thresholds.margin, thresholds.fits];
+        let mut v = [thresholds.send, thresholds.margin];
         v[gate] = value;
-        s.confidence >= v[0] && s.margin >= v[1] && s.fits >= v[2]
+        s.confidence >= v[0] && s.margin >= v[1]
     };
     let mut out = String::new();
-    for (i, (name, _, setting, values)) in gates.iter().enumerate() {
+    for (i, (name, setting, values)) in gates.iter().enumerate() {
         let open: Vec<&Sample> = samples
             .iter()
             .filter(|s| at(s, i, f64::NEG_INFINITY))
@@ -1125,6 +1121,50 @@ fn sweep(samples: &[Sample], thresholds: &Thresholds) -> String {
                 }
             );
         }
+    }
+    out
+}
+
+/// How often `any_fits` alone would have demoted a send (it no longer gates one): of the sends
+/// confidence and margin allow, the right ones under each `any_fits` value, by kind, and the
+/// wrong ones it would have stopped.
+fn demotions(samples: &[Sample], thresholds: &Thresholds) -> String {
+    use std::fmt::Write as _;
+    let sends: Vec<&Sample> = samples
+        .iter()
+        .filter(|s| s.confidence >= thresholds.send && s.margin >= thresholds.margin)
+        .collect();
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "any_fits alone as a send gate: right sends it would demote (rate), by kind"
+    );
+    let _ = writeln!(
+        out,
+        "  any_fits  capture          dictation        wrong sends stopped"
+    );
+    for gate in [0.2, 0.3, jev::OLD_FITS_AT, 0.5, 0.7] {
+        let cell = |kind: &str| {
+            let right: Vec<_> = sends.iter().filter(|s| s.kind == kind && s.right).collect();
+            let demoted = right.iter().filter(|s| s.fits < gate).count();
+            if right.is_empty() {
+                "—".to_owned()
+            } else {
+                format!(
+                    "{demoted}/{} ({:.0}%)",
+                    right.len(),
+                    100.0 * demoted as f64 / right.len() as f64
+                )
+            }
+        };
+        let wrong = sends.iter().filter(|s| !s.right).count();
+        let stopped = sends.iter().filter(|s| !s.right && s.fits < gate).count();
+        let _ = writeln!(
+            out,
+            "  {gate:<8.2}  {:<15}  {:<15}  {stopped}/{wrong}",
+            cell("capture"),
+            cell("dictation")
+        );
     }
     out
 }
@@ -1223,6 +1263,11 @@ fn eval_items(
         if record.by == "jev" {
             let pick = record.target.as_ref().map(|t| t.session.as_str());
             samples.push(Sample {
+                kind: if case.input.item.kind() == "capture" {
+                    "capture"
+                } else {
+                    "dictation"
+                },
                 confidence: record.confidence.unwrap_or(0.0),
                 margin: margin_of(&record),
                 fits: record.fits.unwrap_or(0.0),
@@ -1308,8 +1353,8 @@ fn report(
         jev::cost(tokens)
     );
     println!(
-        "Thresholds: send ≥ {} with margin ≥ {} and fits ≥ {}, offer ≥ {}, low below that or fits < {}",
-        thresholds.send, thresholds.margin, thresholds.fits, thresholds.offer, thresholds.no_fit
+        "Thresholds: send ≥ {} with margin ≥ {}, offer ≥ {} (HOME instead when fits < {}), low below that",
+        thresholds.send, thresholds.margin, thresholds.offer, thresholds.no_fit
     );
     let right = |o: &Outcome, truth: &str| o.pick.as_deref() == Some(truth);
     let top = results.iter().filter(|(c, o)| right(o, &c.truth)).count();
@@ -1742,20 +1787,21 @@ mod tests {
 
     #[test]
     fn the_sweep_counts_what_each_gate_blocks() {
-        let sample = |confidence, margin, fits, right| Sample {
+        let sample = |kind, confidence, margin, fits, right| Sample {
+            kind,
             confidence,
             margin,
             fits,
             right,
         };
         let samples = [
-            sample(0.95, 0.9, 0.5, true),
-            sample(0.9, 0.2, 0.6, false),
-            sample(0.9, 0.5, 0.3, true),
+            sample("capture", 0.95, 0.9, 0.5, true),
+            sample("dictation", 0.9, 0.2, 0.6, false),
+            sample("dictation", 0.9, 0.5, 0.3, true),
         ];
         let out = sweep(&samples, &Thresholds::default());
-        // The margin gate at 0.3 blocks the wrong one only; any_fits at 0.4 blocks a right one.
-        let row = |gate: &str, value: &str| {
+        // The margin gate at 0.3 blocks the wrong one only.
+        let row = |out: &str, gate: &str, value: &str| {
             let section = &out[out.find(gate).unwrap()..];
             let line = section
                 .lines()
@@ -1767,8 +1813,17 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        assert_eq!(row("margin (set", "0.30"), "1 0 0 1");
-        assert_eq!(row("any_fits (set", "0.40"), "1 0 1 0");
+        assert_eq!(row(&out, "margin (set", "0.30"), "2 0 0 1");
+        // any_fits at 0.4 would have demoted the right dictation send, and stopped nothing.
+        let out = demotions(&samples, &Thresholds::default());
+        let line = out
+            .lines()
+            .find(|l| l.trim_start().starts_with("0.40"))
+            .unwrap();
+        assert_eq!(
+            line.split_whitespace().collect::<Vec<_>>(),
+            ["0.40", "0/1", "(0%)", "1/1", "(100%)", "0/0"]
+        );
     }
 
     #[test]

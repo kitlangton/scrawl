@@ -38,16 +38,18 @@ const TIMEOUT: Duration = Duration::from_secs(3);
 /// Not worth asking with less time than this left before a deadline.
 const MIN_ASK: Duration = Duration::from_millis(400);
 
-/// Send when the target's confidence, its lead over the runner-up and `any_fits` all clear
-/// these. Jev's target choice is well calibrated; its yes/no answers aren't (real fits land
-/// between 0.3 and 0.65), so `any_fits` is only a weak gate.
+/// Send when the target's confidence and its lead over the runner-up both clear these. Jev's
+/// target choice is well calibrated; its yes/no answers aren't (real positives land between
+/// 0.3 and 0.65), so `any_fits` never blocks a confident choice.
 pub const SEND_AT: f64 = 0.85;
 pub const MARGIN_AT: f64 = 0.3;
-pub const FITS_AT: f64 = 0.4;
-/// Below this confidence, or with `any_fits` under [`NO_FIT_AT`], Jev doesn't know: the capture
-/// goes to HOME (or stays on the clipboard). Between the two it's offered.
+/// Below this confidence Jev doesn't know: the item goes to HOME (or stays on the clipboard).
+/// Between it and a send it's offered, unless `any_fits` is under [`NO_FIT_AT`], which picks
+/// HOME over the weak choice.
 pub const OFFER_AT: f64 = 0.5;
 pub const NO_FIT_AT: f64 = 0.2;
+/// The `any_fits` gate on sends before 2026-10-24, for `scrawl router eval`'s demotion count.
+pub const OLD_FITS_AT: f64 = 0.4;
 /// A runner-up worth a chip beside "Sending to …".
 const RUNNER_UP_AT: f64 = 0.1;
 
@@ -83,7 +85,6 @@ pub enum Low {
 pub struct Thresholds {
     pub send: f64,
     pub margin: f64,
-    pub fits: f64,
     pub offer: f64,
     pub no_fit: f64,
     pub low: Low,
@@ -94,7 +95,6 @@ impl Default for Thresholds {
         Self {
             send: SEND_AT,
             margin: MARGIN_AT,
-            fits: FITS_AT,
             offer: OFFER_AT,
             no_fit: NO_FIT_AT,
             low: Low::Home,
@@ -103,9 +103,8 @@ impl Default for Thresholds {
 }
 
 impl Thresholds {
-    /// `"jevRouting": {"send": 0.85, "margin": 0.3, "fits": 0.4, "offer": 0.5, "noFit": 0.2,
-    /// "low": "home"}` in
-    /// `config.json`; anything missing or out of range keeps its default.
+    /// `"jevRouting": {"send": 0.85, "margin": 0.3, "offer": 0.5, "noFit": 0.2, "low": "home"}`
+    /// in `config.json`; anything missing or out of range keeps its default.
     pub fn from_config(value: Option<&Value>) -> Self {
         let mut t = Self::default();
         let Some(value) = value else {
@@ -119,7 +118,6 @@ impl Thresholds {
         };
         t.send = num("send").unwrap_or(t.send);
         t.margin = num("margin").unwrap_or(t.margin);
-        t.fits = num("fits").unwrap_or(t.fits);
         t.offer = num("offer").unwrap_or(t.offer);
         t.no_fit = num("noFit").unwrap_or(t.no_fit);
         if value.get("low").and_then(Value::as_str) == Some("keep") {
@@ -138,7 +136,7 @@ impl Thresholds {
 
     /// The band for a confidence, its margin over the runner-up and `any_fits`.
     pub fn band_of(&self, confidence: f64, margin: f64, fits: f64) -> Band {
-        if confidence >= self.send && margin >= self.margin && fits >= self.fits {
+        if confidence >= self.send && margin >= self.margin {
             Band::Send
         } else if confidence < self.offer || fits < self.no_fit {
             match self.low {
@@ -1047,11 +1045,57 @@ pub fn parse_answer(body: &[u8]) -> Result<Answer> {
 /// it's never in an argument list or a log.
 pub fn gateway(body: &[u8], timeout: Duration) -> Result<Vec<u8>> {
     let key = api_key()?;
-    let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     let body = std::str::from_utf8(body).context("request isn't UTF-8")?;
+    with_retry(timeout, |left| post(&key, body, left), std::thread::sleep)
+}
+
+/// One HTTP answer: its status, a `Retry-After` in seconds, and its body.
+#[derive(Debug)]
+struct Reply {
+    status: u16,
+    retry_after: Option<Duration>,
+    body: String,
+}
+
+/// The wait before the one retry after a 429: `Retry-After` when it's short, else this.
+const RETRY_WAIT: Duration = Duration::from_millis(400);
+const RETRY_AFTER_MAX: Duration = Duration::from_secs(1);
+
+/// Posts within `timeout`, retrying a 429 once after [`RETRY_WAIT`] (or a short `Retry-After`)
+/// when enough time is left for a second try.
+fn with_retry(
+    timeout: Duration,
+    mut post: impl FnMut(Duration) -> Result<Reply>,
+    mut sleep: impl FnMut(Duration),
+) -> Result<Vec<u8>> {
+    let started = Instant::now();
+    let mut reply = post(timeout)?;
+    if reply.status == 429 {
+        let wait = reply
+            .retry_after
+            .filter(|w| *w <= RETRY_AFTER_MAX)
+            .unwrap_or(RETRY_WAIT);
+        let left = timeout.saturating_sub(started.elapsed());
+        if left >= wait + MIN_ASK {
+            sleep(wait);
+            reply = post(left - wait)?;
+        }
+    }
+    if !(200..300).contains(&reply.status) {
+        bail!(
+            "HTTP {}: {}",
+            reply.status,
+            reply.body.chars().take(200).collect::<String>()
+        );
+    }
+    Ok(reply.body.into_bytes())
+}
+
+fn post(key: &str, body: &str, timeout: Duration) -> Result<Reply> {
+    let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     let config = format!(
         "header = \"Authorization: Bearer {}\"\ndata-binary = \"{}\"\n",
-        quote(&key),
+        quote(key),
         quote(body)
     );
     let mut child = Command::new("/usr/bin/curl")
@@ -1068,7 +1112,7 @@ pub fn gateway(body: &[u8], timeout: Duration) -> Result<Vec<u8>> {
             "-H",
             &format!("User-Agent: {USER_AGENT}"),
             "-w",
-            "\n%{http_code}",
+            "\n%{http_code} %header{retry-after}",
             ENDPOINT,
         ])
         .stdin(Stdio::piped())
@@ -1093,15 +1137,19 @@ pub fn gateway(body: &[u8], timeout: Duration) -> Result<Vec<u8>> {
         );
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    let (reply, status) = text.rsplit_once('\n').unwrap_or(("", &text));
-    let status: u16 = status.trim().parse().unwrap_or(0);
-    if !(200..300).contains(&status) {
-        bail!(
-            "HTTP {status}: {}",
-            reply.chars().take(200).collect::<String>()
-        );
-    }
-    Ok(reply.as_bytes().to_vec())
+    let (body, trailer) = text.rsplit_once('\n').unwrap_or(("", &text));
+    let mut trailer = trailer.split_whitespace();
+    let status = trailer.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let retry_after = trailer
+        .next()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|s| s.is_finite() && *s >= 0.0)
+        .map(Duration::from_secs_f64);
+    Ok(Reply {
+        status,
+        retry_after,
+        body: body.to_owned(),
+    })
 }
 
 /// The OpenCode key: `jevApiKey` in config.json, `$OPENCODE_API_KEY`, or the active `opencode`
@@ -1813,25 +1861,54 @@ mod tests {
     }
 
     #[test]
-    fn sure_of_a_target_that_nothing_fits_is_not_a_send() {
-        reply(
-            "t1",
-            0.95,
-            0.35,
-            json!({"t1": 0.97, "t2": 0.02, "t3": 0.01}),
+    fn a_429_is_retried_once_after_a_short_wait() {
+        let reply = |status, retry_after: Option<f64>| Reply {
+            status,
+            retry_after: retry_after.map(Duration::from_secs_f64),
+            body: "ok".into(),
+        };
+        let run = |replies: Vec<Reply>, timeout_ms| {
+            let mut replies = replies.into_iter();
+            let mut posts = 0;
+            let mut waits = Vec::new();
+            let result = with_retry(
+                Duration::from_millis(timeout_ms),
+                |_| {
+                    posts += 1;
+                    Ok(replies.next().unwrap())
+                },
+                |w| waits.push(w.as_millis()),
+            );
+            (result.is_ok(), posts, waits)
+        };
+        assert_eq!(
+            run(vec![reply(429, None), reply(200, None)], 2300),
+            (true, 2, vec![400])
         );
-        let (judgement, _) = run(&evidence(vec![]), &Thresholds::default());
-        assert!(matches!(judgement.decision, Decision::Offer { .. }));
-        // any_fits is weak: 0.45 is enough when the choice is clear.
-        reply(
-            "t1",
-            0.95,
-            0.45,
-            json!({"t1": 0.97, "t2": 0.02, "t3": 0.01}),
+        // A short Retry-After is honoured, a long one isn't, and there's only one retry.
+        assert_eq!(
+            run(vec![reply(429, Some(0.2)), reply(200, None)], 2300),
+            (true, 2, vec![200])
         );
+        assert_eq!(
+            run(vec![reply(429, Some(30.0)), reply(429, None)], 2300),
+            (false, 2, vec![400])
+        );
+        // Without time for a second try it fails open at once.
+        assert_eq!(run(vec![reply(429, None)], 600), (false, 1, vec![]));
+    }
+
+    #[test]
+    fn any_fits_only_sends_a_weak_choice_home() {
+        // any_fits never blocks a confident choice...
+        reply("t1", 0.95, 0.1, json!({"t1": 0.97, "t2": 0.02, "t3": 0.01}));
         let (_, record) = run(&evidence(vec![]), &Thresholds::default());
         assert_eq!(record.band, Band::Send);
-        reply("t1", 0.95, 0.1, json!({"t1": 0.97, "t2": 0.02, "t3": 0.01}));
+        // ...but picks HOME over a weak one.
+        reply("t1", 0.7, 0.35, json!({"t1": 0.7, "t2": 0.2, "t3": 0.1}));
+        let (judgement, _) = run(&evidence(vec![]), &Thresholds::default());
+        assert!(matches!(judgement.decision, Decision::Offer { .. }));
+        reply("t1", 0.7, 0.1, json!({"t1": 0.7, "t2": 0.2, "t3": 0.1}));
         let (judgement, record) = run(&evidence(vec![]), &Thresholds::default());
         assert_eq!(record.band, Band::Fallback);
         assert_eq!(sent_to(&judgement).unwrap().session, "ses_home");

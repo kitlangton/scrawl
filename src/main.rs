@@ -235,6 +235,9 @@ enum RouterCommand {
         /// At most this many captures.
         #[arg(long, default_value_t = 40)]
         limit: usize,
+        /// Leave the targets' recent lines out, to compare with a run that has them.
+        #[arg(long)]
+        no_lines: bool,
     },
 }
 
@@ -2491,9 +2494,13 @@ fn main() -> Result<()> {
                 std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
                 routing::router::log(&input)
             }
-            RouterCommand::Eval { since, limit } => {
+            RouterCommand::Eval {
+                since,
+                limit,
+                no_lines,
+            } => {
                 let since = routing::router::parse_since(&since)?;
-                routing::router::eval(since, limit)
+                routing::router::eval(since, limit, !no_lines)
             }
         },
         Command::Preview {
