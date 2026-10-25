@@ -8,7 +8,7 @@
   <!-- The cabled iPhone mirror is an AVFoundation capture device. -->
   <key>com.apple.security.device.camera</key>
   <true/>
-  <!-- Reading the captured browser tab's URL (src/routing.rs). -->
+  <!-- Reading the captured browser tab's URL (crates/router/src/routing.rs). -->
   <key>com.apple.security.automation.apple-events</key>
   <true/>
 </dict>

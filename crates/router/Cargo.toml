@@ -1,0 +1,13 @@
+[package]
+name = "scrawl-router"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Where a capture or dictation goes among OpenCode sessions, sending it there, and taking it back"
+
+[dependencies]
+anyhow = "1.0.104"
+dirs = "7.0.0"
+libc = "0.2.189"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"

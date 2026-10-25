@@ -14,7 +14,8 @@ use super::smart::{Basis, Candidate, Decision, Judgement, Scored, Source};
 // MARK: Auto-send
 
 /// What may send without asking (`"routing": {"autoSend": …}`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AutoSend {
     /// Only deterministic sources ([`obeyed`]); Jev's pick and smart weighing suggest.
     #[default]
@@ -43,11 +44,9 @@ impl AutoSend {
         }
     }
 
-    /// From config.json; anything else is `rules` (logged once).
+    /// The host's setting ([`RouterConfig::auto_send`](crate::RouterConfig)).
     pub fn configured() -> Self {
-        crate::handoff::routing_auto_send()
-            .and_then(|text| Self::parse(&text))
-            .unwrap_or_default()
+        crate::env::get().config.auto_send
     }
 
     /// Whether a send to `to` may go on its own.
@@ -257,7 +256,7 @@ pub fn executable_of(pid: i32) -> Option<PathBuf> {
     if pid <= 0 {
         return None;
     }
-    crate::capture::process_executable(pid)
+    crate::util::process_executable(pid)
 }
 
 // MARK: Rule offers
@@ -444,7 +443,7 @@ pub fn unlearn(file: &Path, counted: &Counted) -> Result<bool> {
 pub fn unlearn_pick(counted: &Counted) {
     let Some(file) = learned_file() else { return };
     if let Err(err) = unlearn(&file, counted) {
-        crate::capture::scrawl_log(format!("routing: couldn't take back a pick: {err:#}"));
+        crate::env::log(format!("routing: couldn't take back a pick: {err:#}"));
     }
 }
 
@@ -455,17 +454,17 @@ fn config_kind(kind: RuleKind) -> &'static str {
     }
 }
 
-/// `~/Library/Application Support/scrawl/router/learned.json` (under `$SCRAWL_ROUTER_DIR`);
-/// never in tests.
+/// The host's learned-picks file ([`RouterDirs::learned`](crate::RouterDirs)).
 pub fn learned_file() -> Option<PathBuf> {
-    super::router::router_dir().map(|d| d.join("learned.json"))
+    crate::env::get().dirs.learned.clone()
 }
 
 /// Whether config already has a rule for `key`.
 pub fn has_rule(kind: RuleKind, key: &str) -> bool {
+    let config = &crate::env::get().config;
     let rules = match kind {
-        RuleKind::Site => crate::handoff::routing_sites(),
-        RuleKind::App => crate::handoff::routing_apps(),
+        RuleKind::Site => config.site_rules(),
+        RuleKind::App => config.app_rules(),
     };
     rules
         .iter()
@@ -486,11 +485,11 @@ pub fn learn_pick(
     let Some(file) = learned_file() else {
         return (None, None);
     };
-    let refused = crate::handoff::routing_refused_rules();
+    let refused = crate::env::get().config.refused_rules.clone();
     match learn_counted(&file, kind, &key, folder, &refused, has_rule(kind, &key)) {
         Ok((counted, offer)) => {
             if let Some(offer) = &offer {
-                crate::capture::scrawl_log(format!(
+                crate::env::log(format!(
                     "routing: picks agree, offering a {} rule",
                     config_kind(offer.kind)
                 ));
@@ -498,7 +497,7 @@ pub fn learn_pick(
             (counted, offer)
         }
         Err(err) => {
-            crate::capture::scrawl_log(format!("routing: couldn't count a pick: {err:#}"));
+            crate::env::log(format!("routing: couldn't count a pick: {err:#}"));
             (None, None)
         }
     }
@@ -506,21 +505,10 @@ pub fn learn_pick(
 
 // MARK: Writing rules
 
-fn routing_object(config: &Path) -> serde_json::Map<String, Value> {
-    std::fs::read(config)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|v| v.get("routing").cloned())
-        .and_then(|v| match v {
-            Value::Object(map) => Some(map),
-            _ => None,
-        })
-        .unwrap_or_default()
-}
-
-/// `scrawl router rule add`: `routing.sites` or `routing.apps` gets `key` → `target` (a folder,
-/// `~` kept, or a `ses_` ID) in `config`, other keys kept. A refusal of `key` is lifted.
-pub fn add_rule(config: &Path, kind: RuleKind, key: &str, target: &str) -> Result<()> {
+/// A rule's key and target, checked: an app rule needs a bundle ID that isn't a
+/// general-purpose app's, and a folder (other than `~/…`) is made absolute against the working
+/// directory and must exist. A `ses_` ID stays as it is.
+pub fn rule_target(kind: RuleKind, key: &str, target: &str) -> Result<(String, String)> {
     let key = key.trim();
     let target = target.trim();
     ensure!(!key.is_empty(), "the rule needs a key");
@@ -548,26 +536,38 @@ pub fn add_rule(config: &Path, kind: RuleKind, key: &str, target: &str) -> Resul
             .display()
             .to_string()
     };
-    let mut routing = routing_object(config);
+    Ok((key.to_owned(), target))
+}
+
+/// `scrawl router rule add`: `routing.sites` or `routing.apps` in Scrawl's `routing` object
+/// gets `key` → `target` (see [`rule_target`]), other keys kept. A refusal of `key` is lifted.
+/// The host saves it.
+pub fn add_rule(
+    routing: &mut serde_json::Map<String, Value>,
+    kind: RuleKind,
+    key: &str,
+    target: &str,
+) -> Result<()> {
+    let (key, target) = rule_target(kind, key, target)?;
     let rules = routing
         .entry(kind.config_key())
         .or_insert_with(|| json!({}));
     if !rules.is_object() {
         *rules = json!({});
     }
-    rules[key] = json!(target);
-    unrefuse(&mut routing, key);
-    crate::handoff::set_config_value_in(config, "routing", Value::Object(routing))
+    rules[key.as_str()] = json!(target);
+    unrefuse(routing, &key);
+    Ok(())
 }
 
-/// `scrawl router rule refuse`: never offer a rule for `key` again (`routing.refusedRules`).
-pub fn refuse_rule(config: &Path, key: &str) -> Result<()> {
+/// `scrawl router rule refuse`: never offer a rule for `key` again (`routing.refusedRules` in
+/// Scrawl's `routing` object). The host saves it.
+pub fn refuse_rule(routing: &mut serde_json::Map<String, Value>, key: &str) -> Result<()> {
     let key = key.trim();
     ensure!(
         !key.is_empty(),
         "give the site or bundle ID to stop offering"
     );
-    let mut routing = routing_object(config);
     let list = routing.entry("refusedRules").or_insert_with(|| json!([]));
     if !list.is_array() {
         *list = json!([]);
@@ -576,7 +576,7 @@ pub fn refuse_rule(config: &Path, key: &str) -> Result<()> {
     if !list.iter().any(|v| v.as_str() == Some(key)) {
         list.push(json!(key));
     }
-    crate::handoff::set_config_value_in(config, "routing", Value::Object(routing))
+    Ok(())
 }
 
 fn unrefuse(routing: &mut serde_json::Map<String, Value>, key: &str) {
@@ -733,8 +733,10 @@ mod tests {
     }
 
     fn temp(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("scrawl-policy-{name}-{}", crate::make_bundle_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-policy-{name}-{}",
+            crate::util::make_bundle_id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -853,33 +855,25 @@ mod tests {
 
     #[test]
     fn rules_are_written_into_config_keeping_the_rest() {
-        let base = temp("config");
-        let config = base.join("config.json");
-        std::fs::write(
-            &config,
-            r#"{"ingestToken": "t", "routing": {"aliases": {"scroll": "SCRAWL"}, "refusedRules": ["https://x.example"]}}"#,
+        let mut routing =
+            json!({"aliases": {"scroll": "SCRAWL"}, "refusedRules": ["https://x.example"]})
+                .as_object()
+                .unwrap()
+                .clone();
+        add_rule(
+            &mut routing,
+            RuleKind::Site,
+            "https://x.example",
+            "~/code/x",
         )
         .unwrap();
-        add_rule(&config, RuleKind::Site, "https://x.example", "~/code/x").unwrap();
-        add_rule(&config, RuleKind::App, "com.example.tool", "ses_abc").unwrap();
-        assert!(add_rule(&config, RuleKind::App, "com.brave.Browser", "~/code/x").is_err());
-        refuse_rule(&config, "com.example.other").unwrap();
-        refuse_rule(&config, "com.example.other").unwrap();
-        let value: Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
-        assert_eq!(value["ingestToken"], "t");
-        assert_eq!(value["routing"]["aliases"]["scroll"], "SCRAWL");
-        assert_eq!(value["routing"]["sites"]["https://x.example"], "~/code/x");
-        assert_eq!(value["routing"]["apps"]["com.example.tool"], "ses_abc");
-        assert_eq!(
-            value["routing"]["refusedRules"],
-            json!(["com.example.other"])
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&config).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o600);
-        }
-        let _ = std::fs::remove_dir_all(&base);
+        add_rule(&mut routing, RuleKind::App, "com.example.tool", "ses_abc").unwrap();
+        assert!(add_rule(&mut routing, RuleKind::App, "com.brave.Browser", "~/code/x").is_err());
+        refuse_rule(&mut routing, "com.example.other").unwrap();
+        refuse_rule(&mut routing, "com.example.other").unwrap();
+        assert_eq!(routing["aliases"]["scroll"], "SCRAWL");
+        assert_eq!(routing["sites"]["https://x.example"], "~/code/x");
+        assert_eq!(routing["apps"]["com.example.tool"], "ses_abc");
+        assert_eq!(routing["refusedRules"], json!(["com.example.other"]));
     }
 }

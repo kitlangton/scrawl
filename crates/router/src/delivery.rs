@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::capture::scrawl_log;
+use crate::env::log as scrawl_log;
 
 /// A bundle whose forward to OpenCode is still being retried.
 pub const PENDING: &str = ".deliver.json";
@@ -173,7 +173,7 @@ pub fn deliver_by<T>(
             scrawl_log(format!(
                 "deliver: OpenCode send to {title} failed ({error}); retrying from the Mac"
             ));
-            let pending = Pending::new(session, title, key, &error, crate::now_epoch_ms());
+            let pending = Pending::new(session, title, key, &error, crate::util::now_epoch_ms());
             if let Err(err) = pending.write(dir) {
                 scrawl_log(format!("deliver: {err:#}"));
             }
@@ -272,16 +272,14 @@ pub fn retry_due(captures: &Path, now: u64, forward: Forward) -> Report {
 /// Retries pending deliveries in `captures` every 15 s for as long as the process runs;
 /// `on_sent` hears about each that went through.
 pub fn spawn_retries(captures: PathBuf, forward: Forward, on_sent: fn(&Path, &Pending)) {
-    let _ = std::thread::Builder::new()
-        .name("scrawl-deliver".into())
-        .spawn(move || {
-            loop {
-                std::thread::sleep(SCAN_EVERY);
-                for (dir, pending) in retry_due(&captures, crate::now_epoch_ms(), forward).sent {
-                    on_sent(&dir, &pending);
-                }
+    let _ = crate::env::spawn_named(Some("scrawl-deliver"), move || {
+        loop {
+            std::thread::sleep(SCAN_EVERY);
+            for (dir, pending) in retry_due(&captures, crate::util::now_epoch_ms(), forward).sent {
+                on_sent(&dir, &pending);
             }
-        });
+        }
+    });
 }
 
 #[cfg(test)]
@@ -290,7 +288,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     fn temp_captures() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("scrawl-deliver-{}", crate::make_bundle_id()));
+        let dir =
+            std::env::temp_dir().join(format!("scrawl-deliver-{}", crate::util::make_bundle_id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

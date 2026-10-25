@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::routing::{is_loopback_host, parse_url};
 
@@ -27,23 +27,7 @@ pub const TTL_MS: u64 = 120_000;
 const MAX_ENTRIES: usize = 64;
 const SDK_JS: &str = include_str!("sdk.js");
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Registration {
-    pub origin: String,
-    pub url: String,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub directory: Option<String>,
-    /// A random ID per page load, so two tabs on one origin come and go separately.
-    #[serde(default)]
-    pub tab: String,
-    #[serde(default)]
-    pub seen_ms: u64,
-}
+pub use scrawl_router::routing::Registration;
 
 #[derive(Debug, Default)]
 pub struct Registry {

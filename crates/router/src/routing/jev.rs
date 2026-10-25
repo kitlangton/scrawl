@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use super::smart::{
     self, Basis, Candidate, Decision, Evidence, Judgement, Pointer, Reason, Scored, Source,
 };
-use crate::capture::scrawl_log;
+use crate::env::log as scrawl_log;
 use crate::model::{InteractionEvent, ScrawlBundle};
 
 /// The experiment that asks Jev (only read when `smartRouting` is on too).
@@ -67,7 +67,7 @@ pub const RECENT_BUDGET: Duration = Duration::from_millis(1500);
 const HOME_TITLE: &str = "HOME";
 
 pub fn enabled() -> bool {
-    crate::handoff::experiment(super::SMART_ROUTING) && crate::handoff::experiment(JEV_ROUTING)
+    crate::env::get().config.jev_enabled()
 }
 
 // MARK: Thresholds
@@ -135,7 +135,7 @@ impl Thresholds {
     }
 
     pub fn configured() -> Self {
-        Self::from_config(crate::handoff::jev_routing_config().as_ref())
+        Self::from_config(crate::env::get().config.jev.as_ref())
     }
 
     pub fn band(&self, answer: &Answer) -> Band {
@@ -1527,10 +1527,15 @@ fn post(key: &str, body: &str, timeout: Duration) -> Result<Reply> {
     })
 }
 
-/// The OpenCode key: `jevApiKey` in config.json, `$OPENCODE_API_KEY`, or the active `opencode`
+/// The OpenCode key: the host's `jev_api_key`, `$OPENCODE_API_KEY`, or the active `opencode`
 /// credential in OpenCode's database (read-only). Never printed or logged.
 fn api_key() -> Result<String> {
-    if let Some(key) = crate::handoff::jev_api_key().filter(|k| !k.trim().is_empty()) {
+    if let Some(key) = crate::env::get()
+        .config
+        .jev_api_key
+        .clone()
+        .filter(|k| !k.trim().is_empty())
+    {
         return Ok(key.trim().to_owned());
     }
     if let Ok(key) = std::env::var("OPENCODE_API_KEY")
@@ -1612,12 +1617,12 @@ fn sqlite_json(db: &Path, sql: &str) -> Option<Vec<Value>> {
 /// Each session's last messages: through OpenCode's API (within [`RECENT_BUDGET`], a session
 /// that doesn't fit gets none), or from its history before `before_ms`.
 pub fn read_recent(ids: &[String], before_ms: Option<u64>, budget: Duration) -> Vec<Recent> {
-    if cfg!(test) {
+    if !crate::env::get().live {
         return vec![Recent::default(); ids.len()];
     }
     match before_ms {
         Some(before) => recent_from_history(ids, before),
-        None => recent_from_api(ids, crate::handoff::api_get_within, budget),
+        None => recent_from_api(ids, crate::opencode::api_get_within, budget),
     }
 }
 
@@ -1644,8 +1649,8 @@ pub fn recent_from_api(
         let handles: Vec<_> = ids
             .iter()
             .map(|id| {
-                let id = crate::handoff::query_escape(id);
-                scope.spawn(move || {
+                let id = crate::opencode::query_escape(id);
+                crate::env::scope_spawn(scope, move || {
                     let user = get(&format!(
                         "/api/session/{id}/message?limit=1&order=desc&type=user"
                     ))
@@ -1769,16 +1774,10 @@ pub fn delivered_to(bundle: &Path, created_ms: u64) -> Option<String> {
 
 // MARK: The decisions log
 
-/// One line per decision and per correction, across captures:
-/// `~/Library/Application Support/scrawl/routing-decisions.jsonl` (`$SCRAWL_ROUTING_LOG`).
+/// One line per decision and per correction, across captures: the host's log
+/// ([`RouterDirs::log`](crate::RouterDirs)).
 pub fn log_path() -> Option<PathBuf> {
-    if cfg!(test) {
-        return None;
-    }
-    if let Some(path) = std::env::var_os("SCRAWL_ROUTING_LOG") {
-        return Some(PathBuf::from(path));
-    }
-    Some(dirs::home_dir()?.join("Library/Application Support/scrawl/routing-decisions.jsonl"))
+    crate::env::get().dirs.log.clone()
 }
 
 fn append(line: &Value) {
@@ -1888,7 +1887,7 @@ pub fn log_line(line: &Value) {
 }
 
 /// How Kit corrected a route.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     /// Not sent after all (Esc or ✕ during the countdown; Hex's cancel).
     Cancel,
@@ -1901,6 +1900,13 @@ pub enum Action {
 }
 
 impl Action {
+    pub const ALL: [Self; 4] = [Self::Cancel, Self::Redirect, Self::Paste, Self::Edit];
+
+    /// `cancel`, `redirect`, `paste` or `edit`.
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.label() == text)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Cancel => "cancel",
@@ -1976,7 +1982,7 @@ pub fn check(line: &Value) -> Result<()> {
         bail!("event must be correction or undo");
     }
     let action = text("action").unwrap_or_default();
-    if <Action as clap::ValueEnum>::from_str(action, false).is_err() {
+    if Action::parse(action).is_none() {
         bail!("action must be cancel, redirect, paste or edit, not {action:?}");
     }
     if ["decision_id", "item_id", "bundle"]
@@ -2029,7 +2035,7 @@ pub fn correct_capture(dir: &Path, action: Action, detail: &str, to: Option<(&st
         return;
     }
     let from = suggested(dir);
-    let app = crate::handoff::load_bundle(dir)
+    let app = crate::bundle::load_bundle(dir)
         .ok()
         .and_then(|(_, bundle)| bundle.target.app);
     Correction {

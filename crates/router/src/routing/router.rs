@@ -19,13 +19,13 @@ use super::smart::{
 };
 use super::undo;
 use crate::delivery::{self, Delivery};
-use crate::handoff::Posted;
 use crate::model::ScrawlBundle;
+use crate::opencode::Posted;
 
-/// Hex's deadline is 3 s: `decide` answers within this whatever happens...
-const DEADLINE: Duration = Duration::from_millis(2500);
-/// ...and reading sessions and asking Jev must be done by this.
-const JEV_DEADLINE: Duration = Duration::from_millis(2300);
+/// Hex's deadline is 3 s: `scrawl router decide` answers within this whatever happens...
+pub const DEADLINE: Duration = Duration::from_millis(2500);
+/// ...and reading sessions and asking Jev must be done this long before it.
+const JEV_MARGIN: Duration = Duration::from_millis(200);
 /// Saved decisions are kept this long for `deliver` and `correct`.
 const KEEP_FOR: Duration = Duration::from_secs(7 * 24 * 3600);
 /// The longest selection passed to Jev.
@@ -247,19 +247,25 @@ pub struct Target {
 /// Where `input`'s item goes: site rules and signed pages first, then Jev, within [`DEADLINE`].
 /// Logs the decision and saves it for `deliver` and `correct`. Sends nothing.
 pub fn decide(input: &str) -> Result<Output> {
-    let started = Instant::now();
     let request: Value = serde_json::from_str(input).context("expected JSON on stdin")?;
+    decide_within(request, DEADLINE)
+}
+
+/// [`decide`] for a parsed request, answering within `deadline` whatever happens (a timeout is
+/// `keep`).
+pub fn decide_within(request: Value, deadline: Duration) -> Result<Output> {
+    let started = Instant::now();
     let parsed: Input = serde_json::from_value(request.clone())
         .context("expected {\"item\": {\"text\": …}, \"pinned\"?, \"history\"?}")?;
     let hooks = jev::Hooks {
-        deadline: Some(started + JEV_DEADLINE),
+        deadline: Some(started + deadline.saturating_sub(JEV_MARGIN)),
         ..jev::Hooks::default()
     };
     let thresholds = Thresholds::configured();
     let now = jev::now_ms();
     let (tx, rx) = mpsc::channel();
     let input = parsed.clone();
-    std::thread::spawn(move || {
+    crate::env::spawn(move || {
         let _ = tx.send(decide_with(
             &input,
             &look::Senses::default(),
@@ -272,7 +278,7 @@ pub fn decide(input: &str) -> Result<Output> {
     let id = new_id(now);
     let item = &parsed.item;
     let app = item.app_name();
-    let (mut output, mut line) = match rx.recv_timeout(DEADLINE.saturating_sub(started.elapsed())) {
+    let (mut output, mut line) = match rx.recv_timeout(deadline.saturating_sub(started.elapsed())) {
         Ok((output, judgement, record)) => {
             let line = jev::decision_line(
                 item.kind(),
@@ -310,7 +316,7 @@ pub fn decide(input: &str) -> Result<Output> {
     jev::log_line(&line);
     if let Some(dir) = decisions_dir() {
         if let Err(err) = save(&dir, &id, &request, &output, now) {
-            crate::capture::scrawl_log(format!("router: couldn't save decision {id}: {err:#}"));
+            crate::env::log(format!("router: couldn't save decision {id}: {err:#}"));
         }
         prune(&dir, KEEP_FOR);
         if let Some(outbox) = outbox_dir() {
@@ -571,25 +577,16 @@ fn settled_why(judgement: &Judgement) -> Option<String> {
 
 // MARK: Saved decisions
 
-/// `~/Library/Application Support/scrawl/router` (`$SCRAWL_ROUTER_DIR`); never in tests.
-pub(crate) fn router_dir() -> Option<PathBuf> {
-    if cfg!(test) {
-        return None;
-    }
-    if let Some(dir) = std::env::var_os("SCRAWL_ROUTER_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    Some(dirs::home_dir()?.join("Library/Application Support/scrawl/router"))
-}
-
-/// Each decision's request and reply, `<id>.json`, for `deliver` and `correct`.
+/// Each decision's request and reply, `<id>.json`, for `deliver` and `correct`
+/// ([`RouterDirs::decisions`](crate::RouterDirs)).
 pub fn decisions_dir() -> Option<PathBuf> {
-    router_dir().map(|d| d.join("decisions"))
+    crate::env::get().dirs.decisions.clone()
 }
 
-/// Text prompts `deliver` couldn't send yet, a folder each, retried by the app.
+/// Text prompts `deliver` couldn't send yet, a folder each, retried by the app
+/// ([`RouterDirs::outbox`](crate::RouterDirs)).
 pub fn outbox_dir() -> Option<PathBuf> {
-    router_dir().map(|d| d.join("outbox"))
+    crate::env::get().dirs.outbox.clone()
 }
 
 /// A short ID, unique enough: the time in ms and some of its nanoseconds, in hex.
@@ -765,7 +762,7 @@ impl Default for DeliverHooks {
     fn default() -> Self {
         Self {
             text: post_prompt,
-            bundle: crate::handoff::send_bundle,
+            bundle: crate::opencode::send_bundle,
         }
     }
 }
@@ -788,14 +785,14 @@ fn read_prompt(dir: &Path) -> Result<Prompt> {
 }
 
 fn post_prompt(dir: &Path, session: &str) -> Result<Posted> {
-    crate::handoff::send_text_to_session(session, &read_prompt(dir)?.text)
+    crate::opencode::send_text_to_session(session, &read_prompt(dir)?.text)
 }
 
 /// Sends the prompt saved in an outbox folder to `session` and remembers it for an undo (the
 /// app's retries).
 pub fn send_prompt(dir: &Path, session: &str) -> Result<()> {
     let prompt = read_prompt(dir)?;
-    let posted = crate::handoff::send_text_to_session(session, &prompt.text)?;
+    let posted = crate::opencode::send_text_to_session(session, &prompt.text)?;
     undo::remember(
         session,
         prompt.title.as_deref(),
@@ -1109,14 +1106,18 @@ const TOKENS_PER_CASE: u64 = 5_000;
 /// and `screen: false` leaves the `screen` out, to compare.
 pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<()> {
     let cutoff = jev::now_ms().saturating_sub(since.as_millis() as u64);
-    let captures = crate::handoff::default_captures_dir();
+    let captures = crate::env::get()
+        .dirs
+        .captures
+        .clone()
+        .context("no captures folder")?;
     let mut dirs: Vec<(u64, PathBuf)> = std::fs::read_dir(&captures)
         .with_context(|| format!("couldn't read {}", captures.display()))?
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == "scrawl") && p.join(super::RECORD).is_file())
         .filter_map(|p| {
-            let (_, bundle) = crate::handoff::load_bundle(&p).ok()?;
+            let (_, bundle) = crate::bundle::load_bundle(&p).ok()?;
             (bundle.created_at_ms >= cutoff).then_some((bundle.created_at_ms, p))
         })
         .collect();
@@ -1128,7 +1129,7 @@ pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<
         if cases.len() >= limit {
             break;
         }
-        let Ok((_, bundle)) = crate::handoff::load_bundle(&dir) else {
+        let Ok((_, bundle)) = crate::bundle::load_bundle(&dir) else {
             continue;
         };
         // Undone sends went to the wrong session, whatever the bundle says.
@@ -1270,7 +1271,7 @@ pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<
         })
         .collect();
     let captures = samples.len();
-    if let Some(dir) = router_dir().map(|d| d.join("eval")) {
+    if let Some(dir) = crate::env::get().dirs.eval.clone() {
         samples.extend(eval_items(
             &dir,
             limit,
@@ -1469,7 +1470,7 @@ fn meets(output: &Output, expect: &Expect) -> bool {
     decision && to
 }
 
-/// Kit's own items (private: their text stays in his Application Support folder), asked live
+/// Kit's own items (private: their text stays in the host's eval folder), asked live
 /// and reported as their own rows by file and line.
 fn eval_items(
     dir: &Path,
@@ -1712,14 +1713,14 @@ fn suggestions(results: &[(&Case, Outcome)], mode: policy::AutoSend) -> String {
 mod tests {
     use super::*;
 
-    fn no_sdk(_: &str) -> Option<crate::web::Registration> {
+    fn no_sdk(_: &str) -> Option<crate::routing::Registration> {
         None
     }
     fn no_dir(_: u16) -> Option<PathBuf> {
         None
     }
     fn sessions(path: &str, _: Duration) -> Result<Vec<u8>> {
-        use crate::handoff::fake_api;
+        use crate::opencode::fake_api;
         // Too old to be listed, but readable by ID.
         if path == "/api/session/ses_old" {
             let old = fake_api::session("ses_old", "OLD", "/tmp/old", 1_000);
@@ -2026,8 +2027,10 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("scrawl-router-{name}-{}", crate::make_bundle_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-router-{name}-{}",
+            crate::util::make_bundle_id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

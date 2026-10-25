@@ -561,22 +561,7 @@ impl Input {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CropKind {
-    /// One window (plus any ink outside it).
-    Window,
-    /// Two or more windows.
-    Windows,
-    /// Around the activity inside a window too big to crop to.
-    Focus,
-    /// Around the activity, with no window to snap to.
-    Activity,
-    /// No activity: the previous crop, the frontmost window or the screen.
-    Fallback,
-    /// Not worth cropping.
-    Full,
-}
+pub use scrawl_router::model::CropKind;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

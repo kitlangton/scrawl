@@ -67,7 +67,7 @@ pub fn file_path(url: &str) -> Option<Vec<String>> {
     let mut segments: Vec<String> = path
         .split('/')
         .filter(|s| !s.is_empty())
-        .map(crate::ax::percent_decode)
+        .map(crate::util::percent_decode)
         .collect();
     if segments
         .iter()
@@ -486,7 +486,7 @@ pub fn path_clue(page: &Page) -> Option<Clue> {
 /// database read-only (found through the process `/api/info` names), with a time limit; any
 /// failure is no answer.
 pub fn opencode_writes(needle: &str, from: u64, to: u64) -> Vec<Write> {
-    if cfg!(test) || crate::handoff::agent_host().is_some() {
+    if !crate::env::get().live || crate::opencode::agent_host().is_some() {
         return Vec::new();
     }
     let Some(db) = opencode_db() else {
@@ -511,7 +511,7 @@ pub fn opencode_writes(needle: &str, from: u64, to: u64) -> Vec<Write> {
 
 /// The database the local OpenCode server has open.
 pub(crate) fn opencode_db() -> Option<PathBuf> {
-    let info = crate::handoff::api_get_within("/api/info", Duration::from_secs(1)).ok()?;
+    let info = crate::opencode::api_get_within("/api/info", Duration::from_secs(1)).ok()?;
     let info: serde_json::Value = serde_json::from_slice(&info).ok()?;
     let pid = info.get("pid")?.as_u64().filter(|pid| *pid > 0)?;
     let open = super::lsof(&["-nP", "-a", "-p", &pid.to_string(), "-Fn"])?;
@@ -553,8 +553,10 @@ mod tests {
     use super::*;
 
     fn temp(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("scrawl-served-{name}-{}", crate::make_bundle_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-served-{name}-{}",
+            crate::util::make_bundle_id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

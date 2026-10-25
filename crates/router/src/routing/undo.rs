@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{jev, policy, router};
-use crate::capture::scrawl_log;
-use crate::handoff::{self, Posted};
+use crate::env::log as scrawl_log;
+use crate::opencode::{self, Posted};
 
 /// How long after a send it can be undone, unless `routing.undoWindowSec` says otherwise.
 pub const UNDO_WINDOW_SEC: u64 = 600;
@@ -138,9 +138,9 @@ impl Report {
     }
 }
 
-/// `router/deliveries`; never in tests.
+/// The host's deliveries folder ([`RouterDirs::deliveries`](crate::RouterDirs)).
 pub fn deliveries_dir() -> Option<PathBuf> {
-    router::router_dir().map(|d| d.join("deliveries"))
+    crate::env::get().dirs.deliveries.clone()
 }
 
 /// Remembers a send in [`deliveries_dir`] and says how to undo it. Failures are logged.
@@ -209,7 +209,7 @@ fn read(dir: &Path, id: &str) -> Option<Record> {
 }
 
 /// The requests an undo makes, swappable in tests. A 4xx or 5xx answer is a
-/// [`handoff::HttpStatus`] error; anything else means the server couldn't be reached.
+/// [`opencode::HttpStatus`] error; anything else means the server couldn't be reached.
 #[derive(Clone, Copy)]
 pub struct Api {
     pub get: fn(&str) -> Result<Vec<u8>>,
@@ -221,9 +221,9 @@ pub struct Api {
 impl Default for Api {
     fn default() -> Self {
         Self {
-            get: |path| handoff::api_within("GET", path, None, REQUEST),
-            post: |path, body| handoff::api_within("POST", path, Some(body), REQUEST),
-            delete: |path| handoff::api_within("DELETE", path, None, REQUEST),
+            get: |path| opencode::api_within("GET", path, None, REQUEST),
+            post: |path, body| opencode::api_within("POST", path, Some(body), REQUEST),
+            delete: |path| opencode::api_within("DELETE", path, None, REQUEST),
             pause: std::thread::sleep,
         }
     }
@@ -231,7 +231,12 @@ impl Default for Api {
 
 /// The undo window: `routing.undoWindowSec`, else ten minutes.
 pub fn window() -> Duration {
-    Duration::from_secs(handoff::routing_undo_window_sec().unwrap_or(UNDO_WINDOW_SEC))
+    Duration::from_secs(
+        crate::env::get()
+            .config
+            .undo_window_sec
+            .unwrap_or(UNDO_WINDOW_SEC),
+    )
 }
 
 /// `scrawl router undo <delivery_id>`.
@@ -267,7 +272,7 @@ pub fn undo_with(dir: &Path, id: &str, api: &Api, window: Duration, now: u64) ->
 fn found(result: Result<Vec<u8>>) -> Result<Option<Vec<u8>>> {
     match result {
         Ok(body) => Ok(Some(body)),
-        Err(err) if handoff::http_status(&err) == Some(404) => Ok(None),
+        Err(err) if opencode::http_status(&err) == Some(404) => Ok(None),
         Err(err) => Err(err),
     }
 }
@@ -276,7 +281,7 @@ fn found(result: Result<Vec<u8>>) -> Result<Option<Vec<u8>>> {
 const ROUNDS: usize = 3;
 
 fn take_back(record: &Record, api: &Api) -> Result<Undone> {
-    let session = handoff::query_escape(&record.session);
+    let session = opencode::query_escape(&record.session);
     let Some(message) = record.message_id.as_deref() else {
         // Sent, but OpenCode's answer had no ID to find it by.
         return disown(&session, api);
@@ -293,12 +298,12 @@ fn take_back(record: &Record, api: &Api) -> Result<Undone> {
             }
             let path = format!(
                 "/api/session/{session}/inbox/{}",
-                handoff::query_escape(message)
+                opencode::query_escape(message)
             );
             match found((api.delete)(&path)) {
                 Ok(Some(_)) => cancelled = true,
                 Ok(None) => return Ok(Undone::Gone),
-                Err(err) if handoff::http_status(&err).is_some() => {
+                Err(err) if opencode::http_status(&err).is_some() => {
                     scrawl_log(format!("undo: couldn't withdraw it ({err:#}); disowning"));
                     return disown(&session, api);
                 }
@@ -445,7 +450,7 @@ fn timeline(session: &str, message: &str, api: &Api) -> Result<Option<Timeline>>
         }
         path = format!(
             "/api/session/{session}/message?cursor={}&limit={PAGE}",
-            handoff::query_escape(next)
+            opencode::query_escape(next)
         );
     }
     // Ran out of pages: it's long past, or not here.
@@ -479,9 +484,9 @@ fn revert(session: &str, message: &str, api: &Api) -> Result<Undone> {
         match (api.post)(&stage, &body) {
             Ok(_) => return Ok(Undone::Reverted),
             // Busy while the interrupted turn winds down.
-            Err(err) if handoff::http_status(&err) == Some(409) => (api.pause)(STAGE_WAIT),
-            Err(err) if handoff::http_status(&err) == Some(404) => return Ok(Undone::Gone),
-            Err(err) if handoff::http_status(&err).is_some() => {
+            Err(err) if opencode::http_status(&err) == Some(409) => (api.pause)(STAGE_WAIT),
+            Err(err) if opencode::http_status(&err) == Some(404) => return Ok(Undone::Gone),
+            Err(err) if opencode::http_status(&err).is_some() => {
                 scrawl_log(format!(
                     "undo: couldn't stage the revert ({err:#}); disowning"
                 ));
@@ -635,7 +640,7 @@ mod tests {
     }
 
     fn status(code: u16) -> anyhow::Error {
-        handoff::HttpStatus(code).into()
+        opencode::HttpStatus(code).into()
     }
 
     fn get(path: &str) -> Result<Vec<u8>> {
@@ -735,8 +740,10 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("scrawl-undo-{name}-{}", crate::make_bundle_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-undo-{name}-{}",
+            crate::util::make_bundle_id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1051,7 +1058,7 @@ mod tests {
             });
             if path.ends_with("/revert/stage") && first {
                 FAKE.with(|f| f.borrow_mut().calls.push(format!("POST {path} {body}")));
-                return Err(anyhow::Error::new(handoff::HttpStatus(409))
+                return Err(anyhow::Error::new(opencode::HttpStatus(409))
                     .context("OpenCode API failed: HTTP 409 Conflict"));
             }
             post(path, body)
