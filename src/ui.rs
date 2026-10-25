@@ -2582,7 +2582,7 @@ impl ScrawlCoordinator {
         start_metric("metal_open_ms", stage);
         let engine =
             crate::capture::Engine::default_engine().with_telemetry(Arc::clone(&self.telemetry));
-        let capture = match engine.start(crate::capture::Start::screen(target.clone())) {
+        let capture = match engine.start(crate::capture::Start::screen_with_mic(target.clone())) {
             Ok(capture) => capture,
             Err(error) => {
                 scrawl_log(format!("Screen capture could not start: {error:#}"));

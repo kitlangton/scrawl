@@ -1059,6 +1059,7 @@ pub struct IngestConfig {
     pub clipboard: Option<Arc<dyn crate::handoff::Clipboard>>,
     pub route_opencode: bool,
     pub delivery_retries: bool,
+    pub token_file: Option<PathBuf>,
     pub on_bundle: Option<IngestCallback>,
     /// Where bundles are built and pending deliveries retried; the default captures folder if
     /// unset.
@@ -1071,6 +1072,13 @@ impl IngestConfig {
         self.captures
             .clone()
             .unwrap_or_else(crate::handoff::default_captures_dir)
+    }
+
+    fn expected_token(&self) -> Result<String> {
+        match &self.token_file {
+            Some(path) => crate::handoff::import_ingest_token_from_scrawl(path),
+            None => crate::handoff::ensure_ingest_token(),
+        }
     }
 }
 
@@ -1253,6 +1261,7 @@ pub fn start_ingest_server_with_clipboard(
         ui_sender,
         clipboard,
         None,
+        None,
     );
 }
 
@@ -1261,6 +1270,7 @@ pub fn start_ingest_server_for_resources(
     ui_sender: flume::Sender<Event>,
     clipboard: Option<Arc<dyn crate::handoff::Clipboard>>,
     captures: Option<PathBuf>,
+    token_file: Option<PathBuf>,
 ) {
     if !resources.ingest_server && !resources.delivery_retries {
         return;
@@ -1270,6 +1280,7 @@ pub fn start_ingest_server_for_resources(
         clipboard,
         route_opencode,
         delivery_retries: resources.delivery_retries && route_opencode,
+        token_file,
         captures,
         on_bundle: Some(Arc::new(move |dir, bundle, status| {
             let _ = ui_sender.send(Event::IngestedBundle {
@@ -1286,7 +1297,7 @@ pub fn start_ingest_server_for_resources(
         }
         return;
     }
-    if let Err(err) = crate::handoff::ensure_ingest_token() {
+    if let Err(err) = config.expected_token() {
         scrawl_log(format!("ingest token setup failed: {err:#}"));
     }
     let http_cfg = config.clone();
@@ -1594,7 +1605,7 @@ fn http_unauthorized(stream: &mut std::net::TcpStream) {
 }
 
 fn handle_ingest_connection(stream: std::net::TcpStream, config: &IngestConfig) -> Result<()> {
-    let expected_token = crate::handoff::ensure_ingest_token()?;
+    let expected_token = config.expected_token()?;
     handle_ingest_connection_with_token(stream, &expected_token, config)
 }
 

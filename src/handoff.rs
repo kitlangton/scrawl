@@ -545,6 +545,11 @@ pub struct EngineConfig {
     /// `capture::CANDIDATE_BUDGET_BYTES`, 384 MB).
     #[serde(skip)]
     candidate_budget_bytes: Option<usize>,
+    /// Optional host override for an owner-only (`0600`) ingest token file. When set, the first
+    /// read imports an existing `ingestToken` from `~/.config/scrawl/config.json` so paired
+    /// ScrawlKit phones keep working without re-pairing.
+    #[serde(skip)]
+    ingest_token_path: Option<PathBuf>,
 }
 
 pub type Config = EngineConfig;
@@ -592,6 +597,15 @@ impl EngineConfig {
         self.candidate_budget_bytes
             .unwrap_or(crate::capture::CANDIDATE_BUDGET_BYTES)
             .max(16 << 20)
+    }
+
+    pub fn with_ingest_token_path(mut self, path: PathBuf) -> Self {
+        self.ingest_token_path = Some(path);
+        self
+    }
+
+    pub fn ingest_token_path(&self) -> Option<&Path> {
+        self.ingest_token_path.as_deref()
     }
 
     pub fn routing_apps(&self) -> Vec<(String, PathBuf)> {
@@ -852,6 +866,88 @@ pub fn ensure_ingest_token_in(path: &Path) -> Result<String> {
 
 pub fn ensure_ingest_token() -> Result<String> {
     ensure_ingest_token_in(&default_config_path())
+}
+
+/// Reads an ingest token from a host's owner-only (`0600`) token file `token_file`. If the file
+/// is missing or empty, imports an existing `ingestToken` from `legacy_scrawl_config` (when
+/// present) or generates a fresh 32-byte hex token, writing `token_file` with mode `0600` (and its
+/// parent directory with `0700`) so paired ScrawlKit phones keep working without re-pairing.
+pub fn import_or_ensure_ingest_token_file(
+    token_file: &Path,
+    legacy_scrawl_config: Option<&Path>,
+) -> Result<String> {
+    if let Ok(raw) = fs::read_to_string(token_file) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(token_file, fs::Permissions::from_mode(0o600));
+            }
+            return Ok(trimmed.to_owned());
+        }
+    }
+
+    let imported = legacy_scrawl_config.and_then(|cfg_path| {
+        let bytes = fs::read(cfg_path).ok()?;
+        let val = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
+        val.get("ingestToken")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    });
+    let token = match imported {
+        Some(token) => token,
+        None => random_hex_token_32()?,
+    };
+
+    if let Some(parent) = token_file.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(parent)
+                .with_context(|| format!("Could not create {}", parent.display()))?;
+            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+        }
+        #[cfg(not(unix))]
+        {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Could not create {}", parent.display()))?;
+        }
+    }
+
+    let body = format!("{token}\n");
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(token_file)
+            .with_context(|| format!("Could not write {}", token_file.display()))?;
+        file.write_all(body.as_bytes())?;
+        file.sync_all()?;
+        fs::set_permissions(token_file, fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(token_file, body.as_bytes())
+            .with_context(|| format!("Could not write {}", token_file.display()))?;
+    }
+    Ok(token)
+}
+
+pub fn import_ingest_token_from_scrawl(token_file: &Path) -> Result<String> {
+    import_or_ensure_ingest_token_file(token_file, Some(&default_config_path()))
 }
 
 /// `routing.apps` from config.json, `~` expanded. Tests see none.
@@ -2590,5 +2686,43 @@ mod session_lookup {
         assert_eq!(custom.candidate_budget_bytes(), 96 << 20);
         let tiny = EngineConfig::default().with_candidate_budget_bytes(1024);
         assert_eq!(tiny.candidate_budget_bytes(), 16 << 20);
+    }
+
+    #[test]
+    fn import_or_ensure_ingest_token_file_imports_scrawl_token_with_0600() {
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-token-import-{}",
+            crate::pipeline::make_bundle_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let scrawl_cfg = dir.join("config.json");
+        std::fs::write(&scrawl_cfg, r#"{"ingestToken": "paired-phone-token-123"}"#).unwrap();
+        let hex_token_file = dir.join("hex/ingest_token");
+
+        let imported =
+            import_or_ensure_ingest_token_file(&hex_token_file, Some(&scrawl_cfg)).unwrap();
+        assert_eq!(imported, "paired-phone-token-123");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&hex_token_file)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
+        // Subsequent reads keep the imported token even if Scrawl's config changes or disappears.
+        std::fs::remove_file(&scrawl_cfg).unwrap();
+        let again = import_or_ensure_ingest_token_file(&hex_token_file, Some(&scrawl_cfg)).unwrap();
+        assert_eq!(again, "paired-phone-token-123");
+
+        // Fresh install with no legacy config generates a 64-char hex token.
+        let fresh_file = dir.join("fresh/ingest_token");
+        let fresh = import_or_ensure_ingest_token_file(&fresh_file, Some(&scrawl_cfg)).unwrap();
+        assert_eq!(fresh.len(), 64);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

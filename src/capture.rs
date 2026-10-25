@@ -288,10 +288,19 @@ impl Start {
             t0_boot_ns: boot_time_ns(),
             target: Target::Screen(target),
             bundle_dir: None,
-            audio: AudioIn::Microphone,
+            audio: AudioIn::External,
             window_log,
             note: None,
         }
+    }
+
+    pub fn screen_with_mic(target: TargetInfo) -> Self {
+        Self::screen(target).with_audio(AudioIn::Microphone)
+    }
+
+    pub const fn with_audio(mut self, audio: AudioIn) -> Self {
+        self.audio = audio;
+        self
     }
 
     pub fn phone(device: Option<String>, name: Option<String>) -> Self {
@@ -2214,6 +2223,22 @@ impl SharedResources {
     }
 }
 
+fn start_audio_for<T>(
+    audio: AudioIn,
+    host: &dyn Host,
+    start_mic: impl FnOnce() -> Result<T>,
+) -> Option<T> {
+    match audio {
+        AudioIn::Microphone => {
+            let stage = Instant::now();
+            let recorder = start_mic().ok();
+            host.metric("audio_start_ms", stage.elapsed().as_secs_f64() * 1_000.0);
+            recorder
+        }
+        AudioIn::External | AudioIn::None => None,
+    }
+}
+
 enum InnerSource {
     Screen {
         session: ScreenCaptureSession,
@@ -2286,16 +2311,17 @@ impl Engine {
     /// `false`.
     pub fn install_shared_resources(&self) {
         if self.resources.ingest_server || self.resources.delivery_retries {
-            let captures = self
-                .config
-                .engine_config()
-                .ok()
-                .map(|cfg| cfg.resolved_captures_dir());
+            let cfg = self.config.engine_config().ok();
+            let captures = cfg.as_ref().map(|c| c.resolved_captures_dir());
+            let token_file = cfg
+                .as_ref()
+                .and_then(|c| c.ingest_token_path().map(Path::to_path_buf));
             crate::phone::start_ingest_server_for_resources(
                 self.resources,
                 self.telemetry.ui_sender.clone(),
                 self.clipboard.clone(),
                 captures,
+                token_file,
             );
         }
         if self.resources.global_shortcuts {
@@ -2427,16 +2453,11 @@ impl Engine {
                 self.telemetry
                     .reset_for_session_at(target.frame, Some(req.t0_boot_ns));
                 self.restore_own_windows(&saved_excluded, &own);
-                let audio = match req.audio {
-                    AudioIn::Microphone => {
-                        let stage = Instant::now();
-                        let recorder = crate::audio::AudioRecorder::start().ok();
-                        self.host
-                            .metric("audio_start_ms", stage.elapsed().as_secs_f64() * 1_000.0);
-                        recorder
-                    }
-                    AudioIn::External | AudioIn::None => None,
-                };
+                let audio = start_audio_for(
+                    req.audio,
+                    self.host.as_ref(),
+                    crate::audio::AudioRecorder::start,
+                );
                 let stage = Instant::now();
                 let session = ScreenCaptureSession::start_with_budget(
                     target.clone(),
@@ -3553,5 +3574,53 @@ mod tests {
         assert_eq!(engine.resources(), custom);
         // `install_shared_resources` on `SharedResources::none()` is a no-op.
         Engine::default_engine().install_shared_resources();
+    }
+
+    #[test]
+    fn start_defaults_to_external_audio_and_never_opens_microphone() {
+        let target = TargetInfo {
+            mode: CaptureMode::Display,
+            app: None,
+            bundle_id: None,
+            window_title: None,
+            window_id: None,
+            display_id: 1,
+            frame: TargetFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+                scale: 1.0,
+            },
+        };
+        assert_eq!(Start::default().audio, AudioIn::External);
+        assert_eq!(Start::screen(target.clone()).audio, AudioIn::External);
+        assert_eq!(Start::screen_with_mic(target).audio, AudioIn::Microphone);
+
+        let (tx, _rx) = flume::unbounded();
+        let host = ChannelHost::new(tx);
+        let mic_opened = AtomicBool::new(false);
+        assert!(
+            start_audio_for(AudioIn::External, &host, || -> Result<()> {
+                mic_opened.store(true, Ordering::Release);
+                Ok(())
+            })
+            .is_none()
+        );
+        assert!(
+            start_audio_for(AudioIn::None, &host, || -> Result<()> {
+                mic_opened.store(true, Ordering::Release);
+                Ok(())
+            })
+            .is_none()
+        );
+        assert!(!mic_opened.load(Ordering::Acquire));
+        assert!(
+            start_audio_for(AudioIn::Microphone, &host, || -> Result<u32> {
+                mic_opened.store(true, Ordering::Release);
+                Ok(42)
+            }) == Some(42)
+        );
+        assert!(mic_opened.load(Ordering::Acquire));
     }
 }
