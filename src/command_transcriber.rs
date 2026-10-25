@@ -45,8 +45,8 @@ const MAX_TIMEOUT_SECONDS: f64 = 7.0 * 24.0 * 3_600.0;
 const LEFTOVER_GRACE: Duration = Duration::from_secs(1);
 const POLL: Duration = Duration::from_millis(10);
 
-/// The configured program: `transcribeCommand`, `transcribeTimeoutSeconds` and the optional
-/// `transcribeCommandDisplayName`.
+/// A configured program: `transcribeCommand`, `transcribeTimeoutSeconds` and the optional
+/// `transcribeCommandDisplayName`, or one `transcribeCommands` entry.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Program {
     argv: Vec<String>,
@@ -262,7 +262,8 @@ pub struct Commands {
 }
 
 impl Commands {
-    /// Reads only the command keys of the config file at `path`, like `Program::load_from`.
+    /// Reads only the command keys of the config file at `path`, so a malformed one never
+    /// affects the rest of the config (and the rest never affects these).
     pub fn load_from(path: &Path) -> Self {
         Self::from_config(&read_config(path))
     }
@@ -340,12 +341,6 @@ impl Program {
             timeout,
             display_name: None,
         })
-    }
-
-    /// Reads only the command keys of the config file at `path`, so a malformed one never
-    /// affects the rest of the config (and the rest never affects these).
-    pub fn load_from(path: &Path) -> Result<Self, Unusable> {
-        Self::legacy(&read_config(path))
     }
 
     /// The single command of `transcribeCommand`, `transcribeTimeoutSeconds` and
@@ -908,14 +903,14 @@ mod tests {
     fn config(dir: &Dir, json: &str) -> Result<Program, Unusable> {
         let path = dir.0.join("config.json");
         std::fs::write(&path, json).unwrap();
-        Program::load_from(&path)
+        Commands::load_from(&path).selected("command")
     }
 
     #[test]
     fn the_command_needs_an_absolute_program_and_its_keys_stand_alone() {
         let dir = Dir::new();
         assert_eq!(
-            Program::load_from(&dir.0.join("none.json")),
+            Commands::load_from(&dir.0.join("none.json")).selected("command"),
             Err(Unusable::Missing)
         );
         assert_eq!(config(&dir, "not json"), Err(Unusable::Missing));
@@ -1885,7 +1880,9 @@ exit 0"#,
                 }
             }
         }
-        let unusable = Program::load_from(&dir.0.join("none")).unwrap_err();
+        let unusable = Commands::load_from(&dir.0.join("none"))
+            .selected("command")
+            .unwrap_err();
         said.push(unusable.to_string());
         let secret_entries = commands(
             r#"{"transcribeCommands":[

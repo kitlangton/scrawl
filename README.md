@@ -767,7 +767,7 @@ stays in the file):
 - `transcribeTimeoutSeconds` is optional, a positive number of seconds: by default the limit is
   `max(300, 60 + 10 × audio seconds)`, wall clock from the start, model loading included.
 - Several models: list them in `transcribeCommands`, and Settings › Recording › **Transcription**
-  offers each one by its `displayName`, after **Command** if `transcribeCommand` is set too:
+  offers each one by its `displayName`, after the `transcribeCommand` entry if that is set too:
 
   ```json
   {
