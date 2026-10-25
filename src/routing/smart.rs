@@ -105,6 +105,9 @@ impl Clue {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Source {
+    /// A `routing.sites` rule covering the tab's URL. Obeyed ahead of weighing when it finds a
+    /// session.
+    Rule,
     /// The tab registered through `/sdk.js`.
     Page,
     /// The process serving the tab's port on this Mac.
@@ -139,6 +142,7 @@ impl Source {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Rule => "rule",
             Self::Page => "page",
             Self::Port => "port",
             Self::Publisher => "publisher",
@@ -154,7 +158,7 @@ impl Source {
     /// Full points for a clue of this source that names a candidate.
     fn points(self) -> u32 {
         match self {
-            Self::Page | Self::Port | Self::Publisher => 95,
+            Self::Rule | Self::Page | Self::Port | Self::Publisher => 95,
             Self::Terminal => 70,
             Self::Viewed => 60,
             Self::App => 50,
@@ -401,6 +405,9 @@ pub fn decide(evidence: &Evidence, policy: Policy) -> Judgement {
             ranking: vec![to],
         };
     }
+    if let Some(judgement) = ruled(evidence) {
+        return judgement;
+    }
     match policy {
         Policy::Ladder => ladder(evidence),
         Policy::Weigh => weigh(evidence),
@@ -424,6 +431,50 @@ fn addressed(evidence: &Evidence, address: &Address) -> Scored {
             directory: None,
         }],
     }
+}
+
+/// The session a `routing.sites` rule names, or the newest in its folder (any folder of the
+/// folder's repository counts), sent to without weighing. `None` when it names none open.
+fn ruled(evidence: &Evidence) -> Option<Judgement> {
+    let clue = evidence.clues.iter().find(|c| c.source == Source::Rule)?;
+    let candidate = match &clue.pointer {
+        Pointer::Session { id, .. } => find(&evidence.candidates, id).unwrap_or_else(|| bare(id)),
+        // Sessions in the folder named come before the rest of its project.
+        Pointer::Folder(folder) => evidence
+            .candidates
+            .iter()
+            .filter(|c| in_project(c, folder) || same_repo(c, folder))
+            .max_by(|a, b| {
+                let named = |c: &Candidate| {
+                    c.directory
+                        .as_deref()
+                        .is_some_and(|d| d.starts_with(&folder.path))
+                };
+                named(a)
+                    .cmp(&named(b))
+                    .then(a.updated_ms.cmp(&b.updated_ms))
+                    .then(b.id.cmp(&a.id))
+            })
+            .cloned()?,
+        Pointer::Words { .. } => return None,
+    };
+    let to = Scored {
+        candidate,
+        score: clue.full(),
+        reasons: vec![Reason {
+            basis: Basis::Clue(Source::Rule),
+            points: clue.full(),
+            why: clue.note.clone(),
+            directory: clue.directory(),
+        }],
+    };
+    Some(Judgement {
+        decision: Decision::Send {
+            to: to.clone(),
+            instead: Vec::new(),
+        },
+        ranking: vec![to],
+    })
 }
 
 fn find(candidates: &[Candidate], id: &str) -> Option<Candidate> {
@@ -1179,6 +1230,62 @@ mod tests {
             }
             _ => Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_site_rule_sends_ahead_of_weighing() {
+        // The tab's title names CONSOLE; the rule names the folder SCRAWL works in.
+        let mut e = ev(vec![
+            folder(Source::Rule, "/p/scrawl"),
+            said(Source::Title, "OpenCode Console · Problems"),
+            said(Source::Speech, "console vortex"),
+        ]);
+        for policy in [Policy::Ladder, Policy::Weigh] {
+            let j = decide(&e, policy);
+            assert_eq!(sent_to(&j), Some("ses_scrawl"));
+            let Decision::Send { to, .. } = &j.decision else {
+                unreachable!()
+            };
+            let dest = destination_of(to, Some("https://problems.example.com/tasks/1"));
+            assert_eq!(dest.via, "rule");
+            assert_eq!(dest.directory.as_deref(), Some("/p/scrawl"));
+        }
+        // A session ID is obeyed even when it wasn't read.
+        e.clues[0] = named(Source::Rule, "ses_pinned");
+        assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_pinned"));
+        // A folder no open session works in leaves it to weighing.
+        e.clues[0] = folder(Source::Rule, "/p/nobody");
+        let j = decide(&e, Policy::Weigh);
+        assert_ne!(sent_to(&j), Some("ses_scrawl"));
+        // The user's own choice still beats a rule.
+        e.clues[0] = folder(Source::Rule, "/p/scrawl");
+        e.address = Some(Address::Chosen("ses_ios".into()));
+        assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_ios"));
+    }
+
+    #[test]
+    fn a_site_rule_folder_reaches_its_repositorys_worktrees() {
+        let mut worktree = cand("ses_wt", "SEER", "/elsewhere/team-board-task", 1);
+        worktree.repo = Some("/p/team-board".into());
+        let mut e = ev(vec![Clue {
+            source: Source::Rule,
+            pointer: Pointer::Folder(Folder {
+                path: "/p/team-board".into(),
+                root: "/p/team-board".into(),
+                tree: true,
+                repo: Some("/p/team-board".into()),
+            }),
+            note: "rule".into(),
+            points: None,
+        }]);
+        e.candidates.push(worktree);
+        assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_wt"));
+        // A session in the very folder named beats a newer one elsewhere in its project.
+        e.candidates.push(cand("ses_here", "HERE", "/p/team-board/docs", 90));
+        if let Pointer::Folder(folder) = &mut e.clues[0].pointer {
+            folder.path = "/p/team-board/docs".into();
+        }
+        assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_here"));
     }
 
     #[test]

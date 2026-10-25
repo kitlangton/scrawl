@@ -266,13 +266,7 @@ where
 
 /// Reads a 16 kHz mono WAV (as written by `scrawl-helper audio`) back into a recording.
 pub fn recorded_audio_from_wav(wav_bytes: Vec<u8>) -> Result<RecordedAudio> {
-    let reader = hound::WavReader::new(Cursor::new(&wav_bytes))?;
-    let spec = reader.spec();
-    ensure!(
-        spec.sample_rate == SAMPLE_RATE && spec.channels == 1 && spec.bits_per_sample == 16,
-        "Expected 16 kHz mono 16-bit audio"
-    );
-    let sample_count = reader.duration() as usize;
+    let sample_count = wav_16k_reader(&wav_bytes)?.duration() as usize;
     Ok(RecordedAudio {
         sample_count,
         duration_ms: sample_count as u64 * 1_000 / u64::from(SAMPLE_RATE),
@@ -283,6 +277,20 @@ pub fn recorded_audio_from_wav(wav_bytes: Vec<u8>) -> Result<RecordedAudio> {
 
 /// Decodes a 16 kHz mono 16-bit WAV (this module's own format) into samples.
 pub fn decode_wav_16k(wav_bytes: &[u8]) -> Result<Vec<f32>> {
+    wav_16k_reader(wav_bytes)?
+        .into_samples::<i16>()
+        .map(|sample| Ok(f32::from(sample?) / 32_768.0))
+        .collect()
+}
+
+/// Decodes a 16 kHz mono 16-bit WAV into its raw samples.
+pub fn decode_wav_pcm16(wav_bytes: &[u8]) -> Result<Vec<i16>> {
+    Ok(wav_16k_reader(wav_bytes)?
+        .into_samples::<i16>()
+        .collect::<Result<_, _>>()?)
+}
+
+fn wav_16k_reader(wav_bytes: &[u8]) -> Result<hound::WavReader<Cursor<&[u8]>>> {
     let reader = hound::WavReader::new(Cursor::new(wav_bytes))?;
     let spec = reader.spec();
     ensure!(
@@ -292,10 +300,7 @@ pub fn decode_wav_16k(wav_bytes: &[u8]) -> Result<Vec<f32>> {
             && spec.sample_format == hound::SampleFormat::Int,
         "Expected 16 kHz mono 16-bit audio"
     );
-    reader
-        .into_samples::<i16>()
-        .map(|sample| Ok(f32::from(sample?) / 32_768.0))
-        .collect()
+    Ok(reader)
 }
 
 const ISLAND_WINDOW_MS: u64 = 50;

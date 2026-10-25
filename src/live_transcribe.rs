@@ -124,7 +124,7 @@ impl Live {
     fn finish_within(&mut self, wav_bytes: &[u8], timeout: Duration) -> Result<Finished> {
         let finishing = Instant::now();
         let mut feeding = self.join_feeder()?;
-        let samples = pcm16_of_wav(wav_bytes)?;
+        let samples = crate::audio::decode_wav_pcm16(wav_bytes)?;
         ensure!(
             feeding.fed <= samples.len(),
             "streamed {} samples but the recording has {}",
@@ -284,19 +284,6 @@ fn feed(mut command: Command, samples: &Mutex<Vec<f32>>, stop: &AtomicBool) -> R
     Ok(feeding)
 }
 
-fn pcm16_of_wav(wav_bytes: &[u8]) -> Result<Vec<i16>> {
-    let reader = hound::WavReader::new(std::io::Cursor::new(wav_bytes))?;
-    let spec = reader.spec();
-    ensure!(
-        spec.sample_rate == 16_000
-            && spec.channels == 1
-            && spec.bits_per_sample == 16
-            && spec.sample_format == hound::SampleFormat::Int,
-        "Expected 16 kHz mono 16-bit audio"
-    );
-    Ok(reader.into_samples::<i16>().collect::<Result<_, _>>()?)
-}
-
 fn le_bytes(samples: &[i16]) -> Vec<u8> {
     samples.iter().flat_map(|s| s.to_le_bytes()).collect()
 }
@@ -415,7 +402,7 @@ mod tests {
             .unwrap();
         let written = std::fs::read(&out).unwrap();
         let _ = std::fs::remove_file(&out);
-        let expected = pcm16_of_wav(&wav(&recording)).unwrap();
+        let expected = crate::audio::decode_wav_pcm16(&wav(&recording)).unwrap();
         assert_eq!(written, le_bytes(&expected));
     }
 
