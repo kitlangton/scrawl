@@ -2,11 +2,12 @@
 //! were said.
 //!
 //! `Plan` cuts the whole recording into chunks of at most 30 s, each cut at its quietest 50 ms
-//! window, so every word is heard however quietly or briefly it was said. Only a chunk that is
-//! silent or steady noise is left out, as a recognizer may invent words there.
-//! Loudness never decides what is heard, only when: `transcribe` spreads a text-only answer
-//! (Hex) over the voiced spans of its own chunk by length (`spread`, also used by the command
-//! transcriber and Windows' Parakeet when they lack word times). Those times are estimates
+//! window. Short or quiet speech is heard once it reaches the voiced level; below it, only when
+//! the recording has no audible speech elsewhere (as before). Otherwise only silent or
+//! steady-noise chunks are left out, as a recognizer may invent words there.
+//! Beyond that, loudness only decides when words were said: `transcribe` spreads a text-only
+//! answer (Hex) over the voiced spans of its own chunk by length (`spread`, also used by the
+//! command transcriber and Windows' Parakeet when they lack word times). Those times are estimates
 //! (`TranscriptData::estimated`), so spoken cues never cut keyframes from them.
 
 use anyhow::Result;
