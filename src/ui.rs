@@ -2063,6 +2063,7 @@ impl ScrawlCoordinator {
             "chip",
             Some((chip.dest.session.as_str(), chip.dest.title.as_str())),
         );
+        learn_route(&dir, &chip.dest.session);
         self.send_completed(dir, chip.dest, cx);
         cx.notify();
     }
@@ -2087,6 +2088,7 @@ impl ScrawlCoordinator {
                 }
                 coord.pending_send = None;
                 coord.route_chips.clear();
+                learn_route(&dir, &dest.session);
                 coord.send_completed(dir, dest, cx);
                 cx.notify();
             });
@@ -2831,14 +2833,25 @@ impl ScrawlCoordinator {
         let smart = crate::handoff::experiment(crate::routing::SMART_ROUTING);
         let screen = matches!(source, CaptureSource::Screen { .. });
         // A window capture is of that window's app, whatever is in front at the end.
-        let front = screen
+        let front_app = screen
             .then(|| {
                 (target.mode != CaptureMode::Window)
                     .then(crate::capture::frontmost_app_info)
                     .flatten()
-                    .and_then(|(_, _, id)| id)
             })
             .flatten();
+        // The captured app's process, whose executable may be a dev build (Jev routing).
+        let app_pid = match (&front_app, target.window_id) {
+            (Some((pid, ..)), _) => Some(*pid),
+            (None, Some(window)) if smart && crate::routing::jev::enabled() => {
+                crate::windows::raw_windows()
+                    .into_iter()
+                    .find(|w| w.id == window)
+                    .map(|w| w.pid)
+            }
+            _ => None,
+        };
+        let front = front_app.and_then(|(_, _, id)| id);
         let captured = target.bundle_id.clone();
         let finish_started = Instant::now();
         let route = (screen && !smart).then(|| {
@@ -2849,7 +2862,7 @@ impl ScrawlCoordinator {
         });
         let look = (screen && smart).then(|| {
             std::thread::spawn(move || {
-                crate::routing::look_capture(front.as_deref(), captured.as_deref())
+                crate::routing::look_capture(front.as_deref(), captured.as_deref(), app_pid)
             })
         });
 
@@ -3002,6 +3015,16 @@ impl ScrawlCoordinator {
         }
         cx.notify();
     }
+}
+
+/// Counts a pick or a send left to stand toward a rule offer (Jev routing), off the main
+/// thread. The offer lands in the capture's `routing.json` as `offerRule`.
+fn learn_route(dir: &std::path::Path, session: &str) {
+    if !crate::routing::jev::enabled() {
+        return;
+    }
+    let (dir, session) = (dir.to_path_buf(), session.to_owned());
+    std::thread::spawn(move || crate::routing::learn_capture(&dir, &session));
 }
 
 /// A session offered one click away on the Completed island.

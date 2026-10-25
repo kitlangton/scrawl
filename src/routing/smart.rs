@@ -111,6 +111,11 @@ pub enum Source {
     /// A `routing.sites` rule covering the tab's URL. Obeyed ahead of weighing when it finds a
     /// session.
     Rule,
+    /// A `routing.apps` rule covering the captured app (Jev routing). Obeyed like a site rule.
+    AppRule,
+    /// The git working tree the captured app's executable runs from (Jev routing): a dev build
+    /// names its project like a localhost port does.
+    DevBuild,
     /// The tab registered through `/sdk.js`.
     Page,
     /// The process serving the tab's port on this Mac.
@@ -147,6 +152,8 @@ impl Source {
         match self {
             Self::Named => "named",
             Self::Rule => "rule",
+            Self::AppRule => "app-rule",
+            Self::DevBuild => "dev-build",
             Self::Page => "page",
             Self::Port => "port",
             Self::Publisher => "publisher",
@@ -163,7 +170,12 @@ impl Source {
     fn points(self) -> u32 {
         match self {
             Self::Named => 100,
-            Self::Rule | Self::Page | Self::Port | Self::Publisher => 95,
+            Self::Rule
+            | Self::AppRule
+            | Self::DevBuild
+            | Self::Page
+            | Self::Port
+            | Self::Publisher => 95,
             Self::Terminal => 70,
             Self::Viewed => 60,
             Self::App => 50,
@@ -323,7 +335,7 @@ pub struct Judgement {
     pub ranking: Vec<Scored>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Decision {
     /// `instead`: runners-up the undo window offers one click away.
@@ -337,7 +349,7 @@ pub enum Decision {
     Keep { reason: String },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scored {
     pub candidate: Candidate,
@@ -345,7 +357,7 @@ pub struct Scored {
     pub reasons: Vec<Reason>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Reason {
     pub basis: Basis,
@@ -357,7 +369,7 @@ pub struct Reason {
 }
 
 /// What a reason rests on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "source")]
 pub enum Basis {
     Chosen,
@@ -419,8 +431,10 @@ pub fn decide(evidence: &Evidence, policy: Policy) -> Judgement {
     if let Some(judgement) = ruled(evidence, Source::Named) {
         return judgement;
     }
-    if let Some(judgement) = ruled(evidence, Source::Rule) {
-        return judgement;
+    for source in [Source::Rule, Source::AppRule, Source::DevBuild] {
+        if let Some(judgement) = ruled(evidence, source) {
+            return judgement;
+        }
     }
     match policy {
         Policy::Ladder => ladder(evidence),
@@ -447,7 +461,8 @@ fn addressed(evidence: &Evidence, address: &Address) -> Scored {
     }
 }
 
-/// The session a named address or a `routing.sites` rule (`source`) names, or the newest in its
+/// The session a named address, a `routing.sites` or `routing.apps` rule, or a dev build
+/// (`source`) names, or the newest in its
 /// folder (any folder of the folder's repository counts), sent to without weighing. `None` when
 /// it names none open.
 fn ruled(evidence: &Evidence, source: Source) -> Option<Judgement> {
@@ -1278,6 +1293,32 @@ mod tests {
         e.clues[0] = folder(Source::Rule, "/p/scrawl");
         e.address = Some(Address::Chosen("ses_ios".into()));
         assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_ios"));
+    }
+
+    #[test]
+    fn app_rules_and_dev_builds_send_ahead_of_weighing() {
+        for (source, via) in [
+            (Source::AppRule, "app-rule"),
+            (Source::DevBuild, "dev-build"),
+        ] {
+            let mut e = ev(vec![
+                folder(source, "/p/scrawl"),
+                said(Source::Title, "OpenCode Console · Problems"),
+            ]);
+            let j = decide(&e, Policy::Weigh);
+            assert_eq!(sent_to(&j), Some("ses_scrawl"), "{source:?}");
+            let Decision::Send { to, .. } = &j.decision else {
+                unreachable!()
+            };
+            assert_eq!(destination_of(to, None).via, via);
+            assert!(crate::routing::policy::obeyed(to));
+            // A site rule comes first.
+            e.clues.push(named(Source::Rule, "ses_pinned"));
+            assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_pinned"));
+        }
+        // An app rule's session ID is obeyed as is.
+        let e = ev(vec![named(Source::AppRule, "ses_pinned")]);
+        assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_pinned"));
     }
 
     #[test]

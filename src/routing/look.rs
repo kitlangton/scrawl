@@ -36,10 +36,14 @@ pub struct Senses {
     pub servers: fn() -> Vec<(String, PathBuf)>,
     /// URL prefixes and the folder or session their captures go to (`routing.sites`).
     pub sites: fn() -> Vec<(String, PathBuf)>,
+    /// Bundle IDs and the folder or session their captures go to (`routing.apps`).
+    pub apps: fn() -> Vec<(String, PathBuf)>,
     /// Spoken names and the title or folder they mean (`routing.aliases`).
     pub aliases: fn() -> Vec<(String, String)>,
     /// Tool calls in OpenCode's history that named a folder around the time a file in it changed.
     pub writes: fn(&str, u64, u64) -> Vec<served::Write>,
+    /// The executable a process runs, for a dev build's checkout.
+    pub executable: fn(i32) -> Option<PathBuf>,
 }
 
 impl Default for Senses {
@@ -50,8 +54,10 @@ impl Default for Senses {
             terminal: terminal_pane,
             servers: crate::handoff::routing_servers,
             sites: crate::handoff::routing_sites,
+            apps: crate::handoff::routing_apps,
             aliases: crate::handoff::routing_aliases,
             writes: served::opencode_writes,
+            executable: super::policy::executable_of,
         }
     }
 }
@@ -67,13 +73,24 @@ pub struct Live {
 }
 
 /// Looks at the browser tab or terminal in front (`front`) or captured (`target`), and reads
-/// the open sessions. Runs while the bundle is built.
-pub fn look_live(front: Option<&str>, target: Option<&str>, senses: &Senses) -> Live {
+/// the open sessions. Runs while the bundle is built. `pid` is the captured app's process, whose
+/// executable may be a dev build (Jev routing).
+pub fn look_live(
+    front: Option<&str>,
+    target: Option<&str>,
+    pid: Option<i32>,
+    senses: &Senses,
+) -> Live {
     let url = super::capture_url(front, target);
     let mut clues = url
         .as_deref()
         .map(|url| url_clues(url, senses, true))
         .unwrap_or_default();
+    if super::jev::enabled()
+        && let Some(exe) = pid.and_then(senses.executable)
+    {
+        clues.extend(dev_build_clue(target.or(front), &exe));
+    }
     if let Some((cwd, title)) = [front, target]
         .into_iter()
         .flatten()
@@ -344,6 +361,48 @@ fn rule_clue(url: &str, senses: &Senses) -> Option<Clue> {
     ))
 }
 
+/// The clue a dev build gives: the git working tree `executable` runs from, when the app isn't a
+/// general-purpose one (a browser or terminal built from source is still about anything).
+pub fn dev_build_clue(bundle_id: Option<&str>, executable: &Path) -> Option<Clue> {
+    if bundle_id.is_some_and(super::policy::is_general_app) {
+        return None;
+    }
+    let root = super::policy::dev_build_root(executable)?;
+    let name = executable
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    Some(Clue::new(
+        Source::DevBuild,
+        Pointer::Folder(Folder {
+            tree: true,
+            ..folder_of(&root)
+        }),
+        format!("the app {name} runs from {}", root.display()),
+    ))
+}
+
+/// The clue a `routing.apps` rule covering `bundle_id` gives (Jev routing).
+pub fn app_rule_clue(bundle_id: &str, apps: &[(String, PathBuf)]) -> Option<Clue> {
+    let (key, to) = super::policy::app_rule(bundle_id, apps)?;
+    let text = to.to_string_lossy();
+    let pointer = if text.starts_with("ses_") && !text.contains('/') {
+        Pointer::Session {
+            id: text.into_owned(),
+            directory: None,
+        }
+    } else {
+        Pointer::Folder(Folder {
+            tree: true,
+            ..folder_of(&to)
+        })
+    };
+    Some(Clue::new(
+        Source::AppRule,
+        pointer,
+        format!("routing.apps sends {key} to {}", to.display()),
+    ))
+}
+
 /// The session `text` opens by addressing ("tell scrawl …"), as a [`Source::Named`] clue.
 pub fn named_clue(
     text: &str,
@@ -404,13 +463,16 @@ pub fn replay(saved: Evidence, bundle: &ScrawlBundle, apps: &[(String, PathBuf)]
         .into_iter()
         .filter(|clue| match clue.source {
             Source::Rule
+            | Source::DevBuild
             | Source::Page
             | Source::Port
             | Source::Publisher
             | Source::Terminal
             | Source::Document => true,
             Source::Title => clue.note.starts_with(TERMINAL_TITLE),
-            Source::Named | Source::Viewed | Source::App | Source::Speech => false,
+            Source::Named | Source::AppRule | Source::Viewed | Source::App | Source::Speech => {
+                false
+            }
         })
         .collect();
     clues.extend(bundle_clues(bundle, &saved.candidates, apps));
@@ -471,7 +533,12 @@ pub fn bundle_clues(
     }
     let opencode = is_opencode(bundle_id);
     let about = opencode.then(|| about(bundle));
-    if let Some((folder, configured)) = app_checkout(target, candidates, apps) {
+    let app_rule = super::jev::enabled()
+        .then(|| app_rule_clue(bundle_id, apps))
+        .flatten();
+    let ruled = app_rule.is_some();
+    clues.extend(app_rule);
+    if !ruled && let Some((folder, configured)) = app_checkout(target, candidates, apps) {
         let (points, why) = match &about {
             Some(about) => (opencode_points(about).0, about.why()),
             None => (APP_REPO, String::new()),
@@ -1478,7 +1545,7 @@ mod tests {
             ..Senses::default()
         };
         let started = std::time::Instant::now();
-        let live = look_live(None, None, &senses);
+        let live = look_live(None, None, None, &senses);
         assert!(live.candidates.is_empty());
         assert!(live.error.unwrap().contains("couldn't list sessions"));
         assert!(started.elapsed() < Duration::from_millis(100));
@@ -1553,8 +1620,10 @@ mod tests {
             terminal: no_terminal,
             servers: page_servers,
             sites: Vec::new,
+            apps: Vec::new,
             aliases: Vec::new,
             writes: page_writes,
+            executable: |_| None,
         }
     }
 

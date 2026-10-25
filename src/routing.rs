@@ -15,6 +15,7 @@
 pub mod jev;
 pub mod look;
 pub mod named;
+pub mod policy;
 pub mod router;
 pub mod served;
 pub mod smart;
@@ -573,11 +574,13 @@ pub fn route_capture(
 pub fn look_capture(
     front_bundle_id: Option<&str>,
     target_bundle_id: Option<&str>,
+    app_pid: Option<i32>,
 ) -> Option<look::Live> {
     routing_enabled().then(|| {
         look::look_live(
             front_bundle_id,
             target_bundle_id,
+            app_pid,
             &look::Senses::default(),
         )
     })
@@ -605,6 +608,13 @@ pub fn judge_capture(
             None,
             &jev::Hooks::default(),
             &jev::Thresholds::configured(),
+        );
+        let mut record = record;
+        let judgement = policy::suggest(
+            policy::AutoSend::configured(),
+            judgement,
+            &mut record,
+            &evidence.candidates,
         );
         scrawl_log(format!(
             "routing (jev): {} · {}{}",
@@ -706,7 +716,7 @@ pub fn explain_bundle(bundle: &Path, url: Option<&str>, ask_jev: bool) -> Result
     }
     if ask_jev {
         // The sessions' last messages as they were when the capture finished.
-        let (_, record) = jev::judge(
+        let (now, mut record) = jev::judge(
             &evidence,
             judgement.clone(),
             &jev::capture_state(&loaded, evidence.url.as_deref()),
@@ -714,6 +724,12 @@ pub fn explain_bundle(bundle: &Path, url: Option<&str>, ask_jev: bool) -> Result
             Some(loaded.created_at_ms),
             &jev::Hooks::default(),
             &jev::Thresholds::configured(),
+        );
+        policy::suggest(
+            policy::AutoSend::configured(),
+            now,
+            &mut record,
+            &evidence.candidates,
         );
         let _ = writeln!(out, "Asked now");
         out.push_str(&jev::explain(&record));
@@ -747,6 +763,38 @@ pub fn write_record(
     }
     std::fs::write(dir.join(RECORD), serde_json::to_vec_pretty(&body)?)?;
     Ok(())
+}
+
+/// Counts Kit's pick of `session` for the capture in `dir` (a chip, or a send left to stand)
+/// toward a `routing.sites` or `routing.apps` rule, with Jev routing on. Once two agree, the
+/// rule to offer is saved in its `routing.json` as `offerRule` and returned.
+pub fn learn_capture(dir: &Path, session: &str) -> Option<policy::OfferRule> {
+    if !jev::enabled() {
+        return None;
+    }
+    let path = dir.join(RECORD);
+    let mut body: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+    let evidence: smart::Evidence = serde_json::from_value(body.get("evidence")?.clone()).ok()?;
+    // A rule, port or dev build that sent it already says where it goes.
+    if let Some(smart::Decision::Send { to, .. }) = body
+        .get("decision")
+        .and_then(|d| serde_json::from_value(d.clone()).ok())
+        && to.candidate.id == session
+        && policy::obeyed(&to)
+    {
+        return None;
+    }
+    let candidate = evidence.candidates.iter().find(|c| c.id == session)?;
+    let folder = policy::rule_folder(candidate)?;
+    let bundle_id = crate::handoff::load_bundle(dir)
+        .ok()
+        .and_then(|(_, bundle)| bundle.target.bundle_id);
+    let offer = policy::learn_pick(evidence.url.as_deref(), bundle_id.as_deref(), &folder)?;
+    body["offerRule"] = serde_json::to_value(&offer).ok()?;
+    if let Ok(bytes) = serde_json::to_vec_pretty(&body) {
+        let _ = std::fs::write(&path, bytes);
+    }
+    Some(offer)
 }
 
 pub fn read_record(dir: &Path) -> Option<smart::Evidence> {

@@ -242,6 +242,29 @@ enum RouterCommand {
         #[arg(long)]
         no_screen: bool,
     },
+    /// Add a `routing.sites` or `routing.apps` rule, or stop a rule from being offered.
+    #[command(subcommand)]
+    Rule(RuleCommand),
+}
+
+#[derive(Subcommand)]
+enum RuleCommand {
+    /// Send a site's or an app's captures to the newest open session under `--folder` (or to a
+    /// `ses_` ID) without asking: written to config.json's `routing.sites` or `routing.apps`.
+    Add {
+        /// A URL prefix (`https://board.example.com`).
+        #[arg(long, conflicts_with = "app", required_unless_present = "app")]
+        site: Option<String>,
+        /// A bundle ID (`com.example.tool`); browsers, terminals and other general-purpose apps
+        /// are refused.
+        #[arg(long)]
+        app: Option<String>,
+        /// The folder (or `ses_` session ID) its captures go to.
+        #[arg(long, visible_alias = "session")]
+        folder: String,
+    },
+    /// Never offer a rule for this site or bundle ID again (`routing.refusedRules`).
+    Refuse { key: String },
 }
 
 #[derive(Subcommand)]
@@ -2505,6 +2528,23 @@ fn main() -> Result<()> {
             } => {
                 let since = routing::router::parse_since(&since)?;
                 routing::router::eval(since, limit, lines, !no_screen)
+            }
+            RouterCommand::Rule(RuleCommand::Add { site, app, folder }) => {
+                use routing::policy::RuleKind;
+                let (kind, key) = match (site, app) {
+                    (Some(site), _) => (RuleKind::Site, site),
+                    (None, Some(app)) => (RuleKind::App, app),
+                    (None, None) => anyhow::bail!("give --site or --app"),
+                };
+                let config = handoff::default_config_path();
+                routing::policy::add_rule(&config, kind, &key, &folder)?;
+                println!("Added: {key} → {folder}");
+                Ok(())
+            }
+            RouterCommand::Rule(RuleCommand::Refuse { key }) => {
+                routing::policy::refuse_rule(&handoff::default_config_path(), &key)?;
+                println!("Won't offer a rule for {key} again");
+                Ok(())
             }
         },
         Command::Preview {

@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use super::jev::{self, Action, Asking, Band, Past, Record, Subject, Thresholds};
 use super::look;
+use super::policy;
 use super::smart::{
     self, Basis, Candidate, Clue, Decision, Evidence, Judgement, Pointer, Policy, Source,
 };
@@ -76,6 +77,12 @@ struct Item {
     opencode_tab: Value,
     #[serde(default)]
     recent: Value,
+    /// The app's process, whose executable may be a dev build.
+    #[serde(default)]
+    pid: Option<i32>,
+    /// The app's executable, when the caller knows it (wins over `pid`).
+    #[serde(default, alias = "app_path")]
+    executable: Option<PathBuf>,
 }
 
 impl Item {
@@ -108,6 +115,18 @@ impl Item {
     fn app_name(&self) -> Option<String> {
         self.app.as_ref().and_then(App::name)
     }
+
+    fn app_id(&self) -> Option<&str> {
+        self.app.as_ref().and_then(App::id)
+    }
+
+    /// The app's executable: as given, else from its process.
+    fn executable(&self, senses: &look::Senses) -> Option<PathBuf> {
+        self.executable
+            .clone()
+            .filter(|p| p.is_absolute())
+            .or_else(|| self.pid.and_then(senses.executable))
+    }
 }
 
 /// A bundle ID or name, or both.
@@ -124,6 +143,15 @@ enum App {
 }
 
 impl App {
+    /// The bundle ID, when one was given.
+    fn id(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) if text.contains('.') && !text.contains(' ') => Some(text.trim()),
+            Self::Both { id, .. } => id.as_deref().map(str::trim).filter(|id| !id.is_empty()),
+            Self::Text(_) => None,
+        }
+    }
+
     /// The name, else the bundle ID's last part (`com.mitchellh.ghostty` → `ghostty`).
     fn name(&self) -> Option<String> {
         let (id, name) = match self {
@@ -169,6 +197,15 @@ pub struct Output {
     pub model: Option<String>,
     pub ms: Option<u64>,
     pub why: String,
+    /// A send `routing.autoSend` turned into an ask, with `target` first and pre-selected.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub suggested: bool,
+    /// What it would have been (`send` or `fallback`), when suggested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub would: Option<&'static str>,
+    /// A rule to offer, once picks for this site or app agree ([`policy::OfferRule`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offer_rule: Option<policy::OfferRule>,
 }
 
 impl Output {
@@ -184,6 +221,9 @@ impl Output {
             model: None,
             ms: None,
             why: jev::TIMED_OUT.into(),
+            suggested: false,
+            would: None,
+            offer_rule: None,
         }
     }
 }
@@ -223,6 +263,7 @@ pub fn decide(input: &str) -> Result<Output> {
             &look::Senses::default(),
             &hooks,
             &thresholds,
+            policy::AutoSend::configured(),
             now,
         ));
     });
@@ -292,6 +333,7 @@ fn decide_with(
     senses: &look::Senses,
     hooks: &jev::Hooks,
     thresholds: &Thresholds,
+    auto_send: policy::AutoSend,
     now_ms: u64,
 ) -> (Output, Judgement, Record) {
     let item = &input.item;
@@ -313,6 +355,15 @@ fn decide_with(
             };
             clues.push(Clue::new(source, Pointer::Words { words }, note));
         }
+    }
+    if let Some(clue) = item
+        .app_id()
+        .and_then(|id| look::app_rule_clue(id, &(senses.apps)()))
+    {
+        clues.push(clue);
+    }
+    if let Some(exe) = item.executable(senses) {
+        clues.extend(look::dev_build_clue(item.app_id(), &exe));
     }
     let pinned: Vec<String> = input
         .pinned
@@ -369,6 +420,8 @@ fn decide_with(
         hooks,
         thresholds,
     );
+    let mut record = record;
+    let judgement = policy::suggest(auto_send, judgement, &mut record, &evidence.candidates);
     let output = output_for(&evidence, &judgement, &record, error.as_deref());
     (output, judgement, record)
 }
@@ -443,6 +496,13 @@ fn output_for(
         .is_some_and(|e| e.starts_with(jev::TIMED_OUT));
     let why = if timed_out {
         jev::TIMED_OUT.to_owned()
+    } else if let (true, Some(would)) = (record.suggested, record.would) {
+        let how = if asked { "jev" } else { "smart" };
+        let mode = policy::AutoSend::configured().label();
+        format!(
+            "{how}: would {}; suggested (autoSend {mode})",
+            would.label()
+        )
     } else if asked {
         match band {
             Band::Send => "jev: confident".to_owned(),
@@ -472,6 +532,9 @@ fn output_for(
         model: record.model.clone(),
         ms: record.ms,
         why,
+        suggested: record.suggested,
+        would: record.would.map(Band::label),
+        offer_rule: None,
     };
     if timed_out {
         line_timeout(&mut output);
@@ -493,6 +556,8 @@ fn settled_why(judgement: &Judgement) -> Option<String> {
             Basis::Recorded => "recorded destination",
             Basis::Clue(Source::Named) => "named at the start",
             Basis::Clue(Source::Rule) => "routing.sites rule",
+            Basis::Clue(Source::AppRule) => "routing.apps rule",
+            Basis::Clue(Source::DevBuild) => "dev build's checkout",
             Basis::Clue(Source::Page) => "signed page",
             Basis::Clue(Source::Port) => "localhost port",
             Basis::Clue(Source::Publisher) => "publisher marker",
@@ -505,7 +570,7 @@ fn settled_why(judgement: &Judgement) -> Option<String> {
 // MARK: Saved decisions
 
 /// `~/Library/Application Support/scrawl/router` (`$SCRAWL_ROUTER_DIR`); never in tests.
-fn router_dir() -> Option<PathBuf> {
+pub(crate) fn router_dir() -> Option<PathBuf> {
     if cfg!(test) {
         return None;
     }
@@ -559,6 +624,29 @@ impl Saved {
                 .unwrap_or("")
                 .to_owned(),
         ))
+    }
+
+    /// A session's folder as the reply listed it.
+    fn directory_of(&self, id: &str) -> Option<PathBuf> {
+        self.listed(id)?
+            .get("directory")?
+            .as_str()
+            .map(PathBuf::from)
+    }
+
+    fn listed(&self, id: &str) -> Option<&Value> {
+        let reply = &self.reply;
+        reply
+            .get("target")
+            .into_iter()
+            .chain(
+                reply
+                    .get("candidates")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten(),
+            )
+            .find(|t| t.get("id").and_then(Value::as_str) == Some(id))
     }
 
     /// A session's title as the reply listed it.
@@ -651,6 +739,9 @@ pub struct Delivered {
     /// `sent`, or `queued` (the app retries it).
     pub state: &'static str,
     pub session: String,
+    /// A rule to offer, now that two picks for this site or app agree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offer_rule: Option<policy::OfferRule>,
 }
 
 /// The sends, swappable in tests.
@@ -779,10 +870,16 @@ fn deliver_with(
         Delivery::Sent { .. } => "sent",
         _ => "queued",
     };
+    let offer_rule = found
+        .as_ref()
+        .and_then(|(_, saved)| saved.directory_of(to))
+        .and_then(|dir| policy::rule_folder_of(&dir))
+        .and_then(|folder| policy::learn_pick(present(&item.url), item.app_id(), &folder));
     Ok(Delivered {
         ok: true,
         state,
         session: to.to_owned(),
+        offer_rule,
     })
 }
 
@@ -936,6 +1033,8 @@ struct Outcome {
     landed: Option<String>,
     /// Whether the truth was on one of the two chips an offer shows.
     on_chips: bool,
+    /// Whether `routing.autoSend` turns this send into a suggestion.
+    suggested: bool,
 }
 
 /// About this many input tokens per question, for the estimate printed first.
@@ -1010,6 +1109,7 @@ pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<
     );
     let mut thresholds = Thresholds::configured();
     thresholds.lines |= lines;
+    let auto_send = policy::AutoSend::configured();
     let hooks = jev::Hooks::default();
     if thresholds.lines {
         println!("Targets with their recent lines (--lines or \"lines\": true)");
@@ -1050,7 +1150,10 @@ pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<
             model.clone_from(m);
         }
         let (landed, on_chips) = landed(&judgement.decision, &case.truth, jev::CHIPS);
+        let home = jev::home_session(&case.evidence.candidates);
+        let suggested = policy::apply(auto_send, judgement.clone(), home.as_ref()).1;
         let outcome = Outcome {
+            suggested,
             band: record.band,
             pick: record.target.as_ref().map(|t| t.session.clone()),
             confidence: record.confidence.unwrap_or(0.0),
@@ -1085,6 +1188,7 @@ pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<
         results.push((case, outcome));
     }
     report(&results, &thresholds, tokens, &mut ms, failed, &model);
+    print!("{}", suggestions(&results, auto_send));
     let mut samples: Vec<Sample> = results
         .iter()
         .map(|(case, o)| Sample {
@@ -1097,7 +1201,14 @@ pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<
         .collect();
     let captures = samples.len();
     if let Some(dir) = router_dir().map(|d| d.join("eval")) {
-        samples.extend(eval_items(&dir, limit, &hooks, &thresholds, screen));
+        samples.extend(eval_items(
+            &dir,
+            limit,
+            &hooks,
+            &thresholds,
+            screen,
+            auto_send,
+        ));
     }
     println!();
     println!(
@@ -1279,12 +1390,10 @@ fn eval_cases(dir: &Path) -> Vec<(String, Result<EvalItem>)> {
 /// Whether `output` meets `expect`: the decision word when one is given, and the session it
 /// lands on (sent to, or the first choice offered) when one is.
 fn meets(output: &Output, expect: &Expect) -> bool {
-    let decision = expect
-        .decision
-        .as_deref()
-        .is_none_or(|d| d == output.decision);
+    let made = output.would.unwrap_or(output.decision);
+    let decision = expect.decision.as_deref().is_none_or(|d| d == made);
     let to = expect.to.as_deref().is_none_or(|to| {
-        matches!(output.decision, "send" | "fallback" | "ask")
+        matches!(made, "send" | "fallback" | "ask")
             && output.target.as_ref().is_some_and(|t| t.id == to)
     });
     decision && to
@@ -1298,6 +1407,7 @@ fn eval_items(
     hooks: &jev::Hooks,
     thresholds: &Thresholds,
     screen: bool,
+    auto_send: policy::AutoSend,
 ) -> Vec<Sample> {
     let cases = eval_cases(dir);
     let mut samples = Vec::new();
@@ -1308,6 +1418,8 @@ fn eval_items(
     println!("Items in {} ({} lines):", dir.display(), cases.len());
     let senses = look::Senses::default();
     let (mut right, mut asked, mut wrong_sends) = (0, 0, 0);
+    // Sends `routing.autoSend` turned into suggestions, and those whose pick was right.
+    let (mut suggested, mut suggested_right) = (0, 0);
     for (name, case) in cases.into_iter().take(limit) {
         let mut case = match case {
             Ok(case) => case,
@@ -1319,8 +1431,14 @@ fn eval_items(
         if !screen {
             case.input.item.clear_screen();
         }
-        let (output, _, record) =
-            decide_with(&case.input, &senses, hooks, thresholds, jev::now_ms());
+        let (output, _, record) = decide_with(
+            &case.input,
+            &senses,
+            hooks,
+            thresholds,
+            auto_send,
+            jev::now_ms(),
+        );
         asked += 1;
         if record.by == "jev" {
             let pick = record.target.as_ref().map(|t| t.session.as_str());
@@ -1350,6 +1468,10 @@ fn eval_items(
         if !ok && output.decision == "send" {
             wrong_sends += 1;
         }
+        if output.suggested {
+            suggested += 1;
+            suggested_right += usize::from(ok);
+        }
         println!(
             "  {name:<16} {:<8} {} {to} · conf {} margin {:.2} fits {} · expected {expected} · {}",
             output.decision,
@@ -1360,7 +1482,11 @@ fn eval_items(
             output.why,
         );
     }
-    println!("Items right: {right}/{asked}, wrong automatic sends: {wrong_sends}");
+    println!(
+        "Items right: {right}/{asked}, wrong automatic sends: {wrong_sends} · autoSend {}: \
+         suggested {suggested} that would have been sent ({suggested_right} right)",
+        auto_send.label()
+    );
     samples
 }
 
@@ -1483,6 +1609,35 @@ fn report(
     );
 }
 
+/// What `routing.autoSend` does with the bands' automatic sends (`send` and `fallback`): how
+/// many would go, and how many become suggestions with the pick pre-selected instead.
+fn suggestions(results: &[(&Case, Outcome)], mode: policy::AutoSend) -> String {
+    // (cases, landed right) over the automatic sends, all and split by suggested.
+    let (mut would, mut would_right) = (0, 0);
+    let (mut suggested, mut suggested_right) = (0, 0);
+    for (case, o) in results {
+        if !matches!(o.band, Band::Send | Band::Fallback) {
+            continue;
+        }
+        let right = usize::from(o.landed.as_deref() == Some(case.truth.as_str()));
+        would += 1;
+        would_right += right;
+        if o.suggested {
+            suggested += 1;
+            suggested_right += right;
+        }
+    }
+    let sent = would - suggested;
+    let sent_wrong = (would - would_right) - (suggested - suggested_right);
+    format!(
+        "autoSend {}: would send {would} ({would_right} right, {} wrong) · suggested {suggested} \
+         with the pick pre-selected ({suggested_right} right first) · sent on their own {sent} \
+         ({sent_wrong} wrong)\n",
+        mode.label(),
+        would - would_right,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1549,6 +1704,10 @@ mod tests {
         static SENT: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
+    fn no_executable(_: i32) -> Option<PathBuf> {
+        None
+    }
+
     fn senses() -> look::Senses {
         look::Senses {
             hooks: crate::routing::Hooks {
@@ -1560,8 +1719,10 @@ mod tests {
             terminal: no_terminal,
             servers: nothing,
             sites: nothing,
+            apps: nothing,
             aliases: no_aliases,
             writes: no_writes,
+            executable: no_executable,
         }
     }
 
@@ -1569,14 +1730,39 @@ mod tests {
         Vec::new()
     }
 
+    /// Today's send band, as `"autoSend": "confident"` keeps it.
     fn run(input: Value, ask: fn(&[u8], Duration) -> Result<Vec<u8>>) -> Value {
+        run_as(policy::AutoSend::Confident, input, ask)
+    }
+
+    fn run_as(
+        mode: policy::AutoSend,
+        input: Value,
+        ask: fn(&[u8], Duration) -> Result<Vec<u8>>,
+    ) -> Value {
+        run_with(&senses(), mode, input, ask)
+    }
+
+    fn run_with(
+        senses: &look::Senses,
+        mode: policy::AutoSend,
+        input: Value,
+        ask: fn(&[u8], Duration) -> Result<Vec<u8>>,
+    ) -> Value {
         let input: Input = serde_json::from_value(input).unwrap();
         let hooks = jev::Hooks {
             ask,
             recent,
             deadline: None,
         };
-        let (out, _, _) = decide_with(&input, &senses(), &hooks, &Thresholds::default(), 100_000);
+        let (out, _, _) = decide_with(
+            &input,
+            senses,
+            &hooks,
+            &Thresholds::default(),
+            mode,
+            100_000,
+        );
         serde_json::to_value(out).unwrap()
     }
 
@@ -1647,6 +1833,69 @@ mod tests {
         let out = run(json!({"item": {"text": "file the home bug"}}), sure);
         assert_eq!(out["target"]["id"], "ses_hex");
         assert_eq!(out["why"], "jev: confident");
+    }
+
+    #[test]
+    fn under_rules_jevs_confident_pick_is_suggested_first() {
+        let item = json!({"item": {"text": "the hex icon is wrong", "app": "Ghostty"}});
+        let out = run_as(policy::AutoSend::Rules, item.clone(), sure);
+        assert_eq!(out["decision"], "ask", "{out}");
+        assert_eq!(out["suggested"], true);
+        assert_eq!(out["would"], "send");
+        assert_eq!(out["target"]["id"], "ses_hex");
+        assert_eq!(out["candidates"][0]["id"], "ses_hex");
+        assert_eq!(out["candidates"][0]["from"], "jev");
+        assert_eq!(out["confidence"], 0.95);
+        assert!(out["candidates"].as_array().unwrap().len() <= jev::CHIPS);
+        assert!(out["why"].as_str().unwrap().contains("suggested"));
+        // Named at the start still sends under rules; under never it only goes first.
+        let named = json!({"item": {"text": "For home: file the hex icon bug"}});
+        let out = run_as(policy::AutoSend::Rules, named.clone(), sure);
+        assert_eq!(
+            (out["decision"].as_str(), out["target"]["id"].as_str()),
+            (Some("send"), Some("ses_home"))
+        );
+        assert!(out.get("suggested").is_none());
+        let out = run_as(policy::AutoSend::Never, named, sure);
+        assert_eq!(out["decision"], "ask", "{out}");
+        assert_eq!(out["target"]["id"], "ses_home");
+        assert_eq!(out["would"], "send");
+    }
+
+    fn tool_apps() -> Vec<(String, PathBuf)> {
+        vec![
+            ("com.example.tool".into(), PathBuf::from("ses_a")),
+            ("com.brave.Browser".into(), PathBuf::from("ses_b")),
+        ]
+    }
+
+    #[test]
+    fn an_app_rule_sends_under_rules_without_jev() {
+        let senses = look::Senses {
+            apps: tool_apps,
+            ..senses()
+        };
+        ASKED.with(|a| *a.borrow_mut() = None);
+        let out = run_with(
+            &senses,
+            policy::AutoSend::Rules,
+            json!({"item": {"text": "the button is wrong",
+                            "app": {"id": "com.example.tool.beta", "name": "Tool"}}}),
+            sure,
+        );
+        assert_eq!(out["decision"], "send", "{out}");
+        assert_eq!(out["target"]["id"], "ses_a");
+        assert_eq!(out["why"], "routing.apps rule");
+        assert!(ASKED.with(|a| a.borrow().is_none()), "Jev wasn't asked");
+        // A browser is about anything: its rule is ignored and Jev is asked.
+        let out = run_with(
+            &senses,
+            policy::AutoSend::Rules,
+            json!({"item": {"text": "the button is wrong", "app": {"id": "com.brave.Browser"}}}),
+            sure,
+        );
+        assert_ne!(out["target"]["id"], "ses_b", "{out}");
+        assert!(ASKED.with(|a| a.borrow().is_some()));
     }
 
     #[test]
@@ -1722,8 +1971,14 @@ mod tests {
             recent,
             deadline: None,
         };
-        let (mut out, _, _) =
-            decide_with(&input, &senses(), &hooks, &Thresholds::default(), 100_000);
+        let (mut out, _, _) = decide_with(
+            &input,
+            &senses(),
+            &hooks,
+            &Thresholds::default(),
+            policy::AutoSend::Confident,
+            100_000,
+        );
         out.decision_id = "abc123".into();
         save(dir, "abc123", &request, &out, 1).unwrap();
         load(dir, "abc123").unwrap()
@@ -1771,7 +2026,8 @@ mod tests {
             Delivered {
                 ok: true,
                 state: "sent",
-                session: "ses_hex".into()
+                session: "ses_hex".into(),
+                offer_rule: None,
             }
         );
         let (session, text) = last_sent();
@@ -1914,7 +2170,16 @@ mod tests {
             recent,
             deadline: None,
         };
-        let (out, _, _) = decide_with(input, &senses(), &hooks, &Thresholds::default(), 100_000);
+        let (out, _, _) = decide_with(
+            input,
+            &senses(),
+            &hooks,
+            &Thresholds::default(),
+            policy::AutoSend::Rules,
+            100_000,
+        );
+        assert!(out.suggested);
+        // Judged on what Jev would have done; suggestions are counted on their own.
         assert!(meets(&out, &first.expect));
         assert!(!meets(&out, &cases[2].1.as_ref().unwrap().expect));
         let _ = std::fs::remove_dir_all(dir);

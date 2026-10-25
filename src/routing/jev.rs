@@ -249,19 +249,10 @@ pub const TIMED_OUT: &str = "timeout";
 
 /// Whether smart routing's decision rests on a source that's obeyed rather than weighed.
 pub fn settled(judgement: &Judgement) -> bool {
-    let Decision::Send { to, .. } = &judgement.decision else {
-        return false;
-    };
-    matches!(
-        to.lead().map(|r| r.basis),
-        Some(
-            Basis::Chosen
-                | Basis::Recorded
-                | Basis::Clue(
-                    Source::Named | Source::Rule | Source::Page | Source::Port | Source::Publisher
-                )
-        )
-    )
+    match &judgement.decision {
+        Decision::Send { to, .. } => super::policy::obeyed(to),
+        _ => false,
+    }
 }
 
 /// What Jev was asked and said, saved in `routing.json` as `jev`.
@@ -293,6 +284,12 @@ pub struct Record {
     /// The sessions offered one click away, in order, and where each came from.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chips: Vec<Chip>,
+    /// A send `routing.autoSend` turned into an ask, its pick first (`routing::policy`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub suggested: bool,
+    /// The band it would have had (`send` or `fallback`), when suggested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub would: Option<Band>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -317,7 +314,7 @@ pub fn chip_source(scored: &Scored) -> &'static str {
 }
 
 /// The chips a decision shows: an offer's choices, or what a send may switch to.
-fn chips_of(decision: &Decision) -> Vec<Chip> {
+pub(crate) fn chips_of(decision: &Decision) -> Vec<Chip> {
     let shown: &[Scored] = match decision {
         Decision::Send { instead, .. } => instead,
         Decision::Offer { choices } => choices,
@@ -731,6 +728,8 @@ pub fn judge(
         input_tokens: answer.input_tokens,
         error: None,
         chips: chips_of(&decision),
+        suggested: false,
+        would: None,
     };
     (
         Judgement {
@@ -1860,6 +1859,10 @@ pub fn decision_line(
         "ms": record.ms,
         "app": app,
     });
+    if record.suggested {
+        line["suggested"] = json!(true);
+        line["would"] = json!(record.would.map(Band::label));
+    }
     subject.stamp(&mut line);
     line
 }

@@ -524,6 +524,13 @@ pub struct RoutingConfig {
     /// (`{"scroll": "SCRAWL"}`), for names speech recognition gets wrong.
     #[serde(default)]
     pub aliases: std::collections::BTreeMap<String, String>,
+    /// What may send without asking, with Jev routing on: `"rules"` (default), `"confident"`
+    /// or `"never"` (`routing::policy::AutoSend`).
+    #[serde(default)]
+    pub auto_send: Option<serde_json::Value>,
+    /// Sites and bundle IDs Scrawl never offers a rule for again.
+    #[serde(default)]
+    pub refused_rules: Option<serde_json::Value>,
 }
 
 /// `true`/`false`, `"yes"`/`"on"`/`"1"` and their opposites, or a number (non-zero is on). Other
@@ -743,7 +750,54 @@ pub fn ensure_ingest_token() -> Result<String> {
 
 /// `routing.apps` from config.json, `~` expanded. Tests see none.
 pub fn routing_apps() -> Vec<(String, PathBuf)> {
-    routing_paths(|routing| routing.apps)
+    let mut apps = routing_paths(|routing| routing.apps);
+    apps.retain(|(id, _)| {
+        let general = crate::routing::policy::is_general_app(id);
+        if general {
+            log_config_once(format!(
+                "config.json: ignoring routing.apps \"{id}\": a general-purpose app's captures are about anything"
+            ));
+        }
+        !general
+    });
+    apps
+}
+
+/// `routing.autoSend` in config.json, when it's text; anything else is logged once.
+pub fn routing_auto_send() -> Option<String> {
+    if cfg!(test) {
+        return None;
+    }
+    match config().routing?.auto_send? {
+        serde_json::Value::String(text) => {
+            if crate::routing::policy::AutoSend::parse(&text).is_none() {
+                log_config_once(format!(
+                    "config.json: ignoring routing.autoSend {text:?} (expected \"rules\", \"confident\" or \"never\")"
+                ));
+            }
+            Some(text)
+        }
+        other => {
+            log_config_once(format!(
+                "config.json: ignoring routing.autoSend {other} (expected \"rules\", \"confident\" or \"never\")"
+            ));
+            None
+        }
+    }
+}
+
+/// `routing.refusedRules` in config.json: sites and bundle IDs never offered a rule again.
+pub fn routing_refused_rules() -> Vec<String> {
+    if cfg!(test) {
+        return Vec::new();
+    }
+    match config().routing.and_then(|r| r.refused_rules) {
+        Some(serde_json::Value::Array(list)) => list
+            .into_iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// `routing.aliases` in config.json: spoken names and the title or folder they mean.
