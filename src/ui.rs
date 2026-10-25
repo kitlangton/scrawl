@@ -24,9 +24,8 @@ pub(crate) use platform::{gpui_display_for, hwnd_of, set_app_icon};
 
 use crate::capture::{
     Event as CaptureEvent, SharedCaptureTelemetry, current_mouse_screen, discover_target,
-    install_global_hotkeys, list_selectable_windows, record_external_frontmost_app, region_target,
-    selectable_window_at, shortcut_from_key_and_mods, start_global_input_tap,
-    update_global_shortcut,
+    list_selectable_windows, record_external_frontmost_app, region_target, selectable_window_at,
+    shortcut_from_key_and_mods, start_global_input_tap, update_global_shortcut,
 };
 use crate::helper::PhoneDevice;
 #[cfg(target_os = "macos")]
@@ -5287,11 +5286,13 @@ pub fn run_app(
         cx.on_window_closed(|cx| cx.defer(platform::hand_back_keys))
             .detach();
         let (ui_sender, ui_receiver) = flume::unbounded();
-        crate::phone::start_ingest_server(ui_sender.clone());
         let shortcuts = crate::settings::Shortcuts::load();
         crate::settings::note_paste_label(&shortcuts.paste.label);
         let telemetry = SharedCaptureTelemetry::new(ui_sender, (shortcuts.record, shortcuts.paste));
-        install_global_hotkeys(&telemetry);
+        crate::capture::Engine::default_engine()
+            .with_telemetry(Arc::clone(&telemetry))
+            .with_resources(crate::capture::SharedResources::all())
+            .install_shared_resources();
         start_global_input_tap(Arc::clone(&telemetry));
         platform::start_updates();
         crate::retention::start();

@@ -2129,6 +2129,91 @@ pub fn write_bundle_artifacts(
     Ok(())
 }
 
+pub const SCRAWL_BUNDLE_ID: &str = "dev.kitlangton.scrawl";
+
+/// Returns `true` when another process with bundle identifier `dev.kitlangton.scrawl` is running.
+pub fn is_scrawl_app_running() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSRunningApplication;
+        use objc2_foundation::NSString;
+        let current_pid = std::process::id() as i32;
+        let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(
+            &NSString::from_str(SCRAWL_BUNDLE_ID),
+        );
+        apps.iter()
+            .any(|app| app.processIdentifier() != current_pid && !app.isTerminated())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// Explicit ownership switches for machine-wide shared resources so an embedded host (such as
+/// Hex) can yield while Scrawl (`dev.kitlangton.scrawl`) runs instead of colliding on port 47777,
+/// racing `.deliver.json` retries, or registering conflicting global shortcuts.
+///
+/// Defaults to `false` for all resources so [`Engine::new`] never claims machine-wide resources
+/// unless the host explicitly opts in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SharedResources {
+    /// Bind the ScrawlKit HTTP ingest server (`DEFAULT_INGEST_PORT`, 47777) and USB poller.
+    pub ingest_server: bool,
+    /// Run background `.deliver.json` OpenCode delivery retries.
+    pub delivery_retries: bool,
+    /// Register the global capture and paste shortcuts (`⌥⇧S`, `⌥⇧V`).
+    pub global_shortcuts: bool,
+}
+
+impl SharedResources {
+    pub const fn none() -> Self {
+        Self {
+            ingest_server: false,
+            delivery_retries: false,
+            global_shortcuts: false,
+        }
+    }
+
+    pub const fn all() -> Self {
+        Self {
+            ingest_server: true,
+            delivery_retries: true,
+            global_shortcuts: true,
+        }
+    }
+
+    /// Claims the shared resources only when `peer_running` is `false`.
+    pub const fn when_peer_absent(peer_running: bool) -> Self {
+        if peer_running {
+            Self::none()
+        } else {
+            Self::all()
+        }
+    }
+
+    /// Claims the shared resources only when no standalone Scrawl app (`dev.kitlangton.scrawl`)
+    /// is running.
+    pub fn when_scrawl_absent() -> Self {
+        Self::when_peer_absent(is_scrawl_app_running())
+    }
+
+    pub const fn with_ingest_server(mut self, own: bool) -> Self {
+        self.ingest_server = own;
+        self
+    }
+
+    pub const fn with_delivery_retries(mut self, own: bool) -> Self {
+        self.delivery_retries = own;
+        self
+    }
+
+    pub const fn with_global_shortcuts(mut self, own: bool) -> Self {
+        self.global_shortcuts = own;
+        self
+    }
+}
+
 enum InnerSource {
     Screen {
         session: ScreenCaptureSession,
@@ -2142,7 +2227,9 @@ pub struct Engine {
     host: Arc<dyn Host>,
     config: Arc<dyn ConfigSource>,
     transcriber: Option<Arc<dyn crate::transcribe::Transcriber>>,
+    clipboard: Option<Arc<dyn crate::handoff::Clipboard>>,
     telemetry: Arc<SharedCaptureTelemetry>,
+    resources: SharedResources,
 }
 
 impl Engine {
@@ -2152,7 +2239,9 @@ impl Engine {
             host,
             config,
             transcriber: None,
+            clipboard: None,
             telemetry: SharedCaptureTelemetry::new(tx, ShortcutConfig::defaults()),
+            resources: SharedResources::none(),
         }
     }
 
@@ -2162,6 +2251,7 @@ impl Engine {
             Arc::new(ChannelHost::new(tx)),
             Arc::new(DefaultConfigSource),
         )
+        .with_clipboard(Arc::new(crate::handoff::SystemClipboard))
     }
 
     pub fn with_telemetry(mut self, telemetry: Arc<SharedCaptureTelemetry>) -> Self {
@@ -2175,6 +2265,42 @@ impl Engine {
     ) -> Self {
         self.transcriber = Some(transcriber);
         self
+    }
+
+    pub fn with_clipboard(mut self, clipboard: Arc<dyn crate::handoff::Clipboard>) -> Self {
+        self.clipboard = Some(clipboard);
+        self
+    }
+
+    pub fn with_resources(mut self, resources: SharedResources) -> Self {
+        self.resources = resources;
+        self
+    }
+
+    pub fn resources(&self) -> SharedResources {
+        self.resources
+    }
+
+    /// Starts whichever machine-wide shared resources (`ingest_server`, `delivery_retries`,
+    /// `global_shortcuts`) are enabled in [`Self::resources`]. Does nothing when all switches are
+    /// `false`.
+    pub fn install_shared_resources(&self) {
+        if self.resources.ingest_server || self.resources.delivery_retries {
+            let captures = self
+                .config
+                .engine_config()
+                .ok()
+                .map(|cfg| cfg.resolved_captures_dir());
+            crate::phone::start_ingest_server_for_resources(
+                self.resources,
+                self.telemetry.ui_sender.clone(),
+                self.clipboard.clone(),
+                captures,
+            );
+        }
+        if self.resources.global_shortcuts {
+            install_global_hotkeys(&self.telemetry);
+        }
     }
 
     pub fn telemetry(&self) -> &Arc<SharedCaptureTelemetry> {
@@ -3405,5 +3531,27 @@ mod tests {
         );
         assert!(selectable_window_at(&windows, -101.0, 50.0).is_none());
         assert!(selectable_window_at(&[], 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn shared_resources_default_to_none_and_yield_when_peer_runs() {
+        let engine = Engine::default_engine();
+        assert_eq!(engine.resources(), SharedResources::none());
+        assert_eq!(
+            SharedResources::when_peer_absent(true),
+            SharedResources::none()
+        );
+        assert_eq!(
+            SharedResources::when_peer_absent(false),
+            SharedResources::all()
+        );
+        let custom = SharedResources::none()
+            .with_ingest_server(true)
+            .with_delivery_retries(false)
+            .with_global_shortcuts(false);
+        let engine = engine.with_resources(custom);
+        assert_eq!(engine.resources(), custom);
+        // `install_shared_resources` on `SharedResources::none()` is a no-op.
+        Engine::default_engine().install_shared_resources();
     }
 }

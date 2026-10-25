@@ -1058,6 +1058,7 @@ pub type IngestCallback = Arc<dyn Fn(PathBuf, ScrawlBundle, Option<String>) + Se
 pub struct IngestConfig {
     pub clipboard: Option<Arc<dyn crate::handoff::Clipboard>>,
     pub route_opencode: bool,
+    pub delivery_retries: bool,
     pub on_bundle: Option<IngestCallback>,
     /// Where bundles are built and pending deliveries retried; the default captures folder if
     /// unset.
@@ -1247,13 +1248,29 @@ pub fn start_ingest_server_with_clipboard(
     ui_sender: flume::Sender<Event>,
     clipboard: Option<Arc<dyn crate::handoff::Clipboard>>,
 ) {
-    if let Err(err) = crate::handoff::ensure_ingest_token() {
-        scrawl_log(format!("ingest token setup failed: {err:#}"));
+    start_ingest_server_for_resources(
+        crate::capture::SharedResources::all(),
+        ui_sender,
+        clipboard,
+        None,
+    );
+}
+
+pub fn start_ingest_server_for_resources(
+    resources: crate::capture::SharedResources,
+    ui_sender: flume::Sender<Event>,
+    clipboard: Option<Arc<dyn crate::handoff::Clipboard>>,
+    captures: Option<PathBuf>,
+) {
+    if !resources.ingest_server && !resources.delivery_retries {
+        return;
     }
     let route_opencode = std::env::var_os("SCRAWL_NO_OPENCODE").is_none();
     let config = IngestConfig {
         clipboard,
         route_opencode,
+        delivery_retries: resources.delivery_retries && route_opencode,
+        captures,
         on_bundle: Some(Arc::new(move |dir, bundle, status| {
             let _ = ui_sender.send(Event::IngestedBundle {
                 dir,
@@ -1263,6 +1280,15 @@ pub fn start_ingest_server_with_clipboard(
         })),
         ..IngestConfig::default()
     };
+    if !resources.ingest_server {
+        if config.delivery_retries {
+            crate::delivery::spawn_retries(config.captures_dir(), config.hooks.forward, mark_sent);
+        }
+        return;
+    }
+    if let Err(err) = crate::handoff::ensure_ingest_token() {
+        scrawl_log(format!("ingest token setup failed: {err:#}"));
+    }
     let http_cfg = config.clone();
     let _ = std::thread::Builder::new()
         .name("scrawl-ingest-http".into())
@@ -1282,6 +1308,7 @@ pub fn run_ingest_server(port: u16, usb: bool, no_opencode: bool) -> Result<()> 
     let config = IngestConfig {
         clipboard: None,
         route_opencode,
+        delivery_retries: route_opencode,
         on_bundle: None,
         ..IngestConfig::default()
     };
@@ -1298,7 +1325,7 @@ fn serve_http(port: u16, config: IngestConfig) -> Result<()> {
     scrawl_log(format!("ingest server listening on {addr}"));
     crate::web::set_serving();
     // Only the process that owns the port retries deliveries, so two never race over a bundle.
-    if config.route_opencode {
+    if config.delivery_retries {
         crate::delivery::spawn_retries(config.captures_dir(), config.hooks.forward, mark_sent);
     }
     let connections = crate::ingest_http::Connections::default();

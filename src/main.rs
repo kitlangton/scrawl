@@ -10,7 +10,7 @@ use scrawl::pipeline::{
 use scrawl::*;
 
 use crate::capture::discover_target;
-use crate::model::{CaptureMode, InteractionEvent, Shape, parse_clock_ms};
+use crate::model::{InteractionEvent, Shape, parse_clock_ms};
 use crate::sketch::summary_markdown;
 
 #[derive(Parser)]
