@@ -2,9 +2,9 @@
 //! capsule drawn by the real view (`capsule`) at real size over a dark, light or busy backdrop,
 //! with the post-record designs Kit is weighing (`proto`) beside today's.
 //!
-//! Each cell holds its state at rest or loops its entry or transition (click its title). One lab
-//! clock drives every cell, so the speed, pause and step apply to all of them and to Rune's
-//! springs together. Springs follow `scrawl tune` (tune.json) and spacing, type and colours
+//! Every cell starts held at rest; clicking its title loops its entry, transition or flow. One
+//! lab clock drives every cell's script, so the speed and pause apply to all of them; Rune's
+//! springs follow the speed. Springs follow `scrawl tune` (tune.json) and spacing, type and colours
 //! follow `pill-lab.json` (`style`), both re-read within a quarter second.
 
 use std::path::{Path, PathBuf};
@@ -33,10 +33,11 @@ const HEADER_H: f32 = 40.0;
 /// Columns in a `--snap` still.
 const SNAP_COLS: usize = 3;
 
-/// A looping cell: hidden for `LEAD_S`, then its steps, then hidden again for `TAIL_S`.
-const LEAD_S: f64 = 0.35;
+/// A looping cell: hidden for `LEAD_S`, then its steps, then hidden again for `TAIL_S` (its
+/// exit included), so it's gone for well under half a second a loop.
+const LEAD_S: f64 = 0.15;
 const HOLD_S: f64 = 2.2;
-const TAIL_S: f64 = 0.9;
+const TAIL_S: f64 = 0.3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Section {
@@ -60,7 +61,7 @@ impl Section {
 
     fn caption(self) -> &'static str {
         match self {
-            Self::PostRecord => "b–e are lab-only drawings (proto.rs): no routing behind them.",
+            Self::PostRecord => "f–h and b–e are lab-only drawings (proto.rs): no routing behind them.",
             Self::States => "",
             Self::Delivery => {
                 "No “failed” state: a send that fails is queued and retried, which shows “couldn't reach”."
@@ -73,6 +74,8 @@ impl Section {
 #[derive(Clone, Debug)]
 enum Act {
     Show(Pres),
+    /// A design shows this frame.
+    Frame(usize),
     Finish,
     Click(ElemId),
     Hide,
@@ -96,6 +99,7 @@ struct Def {
     script: Vec<(f64, Act)>,
     period: f64,
     loops: bool,
+    panel_h: f32,
 }
 
 impl Def {
@@ -110,19 +114,28 @@ impl Def {
             script: vec![(LEAD_S, Act::Show(pres)), (LEAD_S + HOLD_S, Act::Hide)],
             period: LEAD_S + HOLD_S + TAIL_S,
             loops: false,
+            panel_h: PANEL_H,
         }
     }
 
+    /// A design playing its frames from hidden and leaving after the last.
     fn proto(proto: Proto) -> Self {
+        let script: Vec<(f64, Act)> = proto
+            .steps(HOLD_S)
+            .into_iter()
+            .map(|(at, frame)| (LEAD_S + at, frame.map_or(Act::Hide, Act::Frame)))
+            .collect();
+        let end = script.last().map_or(LEAD_S, |(at, _)| *at);
         Self {
             section: Section::PostRecord,
             title: proto.title().into(),
             look: Look::Proto(proto),
             clock: "0:07",
             routes: Vec::new(),
-            script: vec![(LEAD_S, Act::Show(Pres::Hidden)), (LEAD_S + HOLD_S, Act::Hide)],
-            period: LEAD_S + HOLD_S + TAIL_S,
+            script,
+            period: end + TAIL_S,
             loops: false,
+            panel_h: proto.panel_h(),
         }
     }
 
@@ -144,7 +157,8 @@ impl Def {
             routes: Vec::new(),
             script,
             period: end + TAIL_S,
-            loops: true,
+            loops: false,
+            panel_h: PANEL_H,
         }
     }
 
@@ -171,12 +185,9 @@ fn defs() -> Vec<Def> {
     let long_title = "OpenCode Desktop · Problems board rewrite";
     let long_chip = "Scrawl · Rune pill lab follow-ups";
 
-    let mut defs = vec![Def::state(
-        PostRecord,
-        "a · Today: Copied + Send to chips",
-        done("Copied", &["Send to CONCLAVE", "HEX"]),
-    )];
-    defs.extend(Proto::ALL.map(Def::proto));
+    let mut defs: Vec<Def> = Proto::NEW.map(Def::proto).into();
+    defs.push(Def::state(PostRecord, "a · Today: Copied + Send to chips", done("Copied", &["Send to CONCLAVE", "HEX"])));
+    defs.extend(Proto::OLD.map(Def::proto));
     defs.extend([
         Def::state(States, "Picker · Screen", picker(Screen, true)),
         Def::state(States, "Picker · Area (Record)", picker(Area, true)),
@@ -274,8 +285,9 @@ struct Cell {
     looping: bool,
     surface: Surface,
     live: Capsule,
-    /// A design's capsule is up (designs have no `Surface`).
+    /// A design's capsule is up (designs have no `Surface`), at this frame.
     shown: bool,
+    frame: usize,
     /// Bumped to remount the cell's capsule: a held state lands at rest, and an entry lands its
     /// origin pose without animating from the last run (the app's `Tx::instant`, per cell).
     epoch: u32,
@@ -290,7 +302,8 @@ impl Cell {
         let surface = fresh(&def, t);
         let live = if animate { Capsule::new(&surface) } else { Capsule::with_meter(&surface, Meter::new()) };
         let looping = def.loops;
-        let mut cell = Self { def, looping, surface, live, shown: false, epoch: 0, start: t, next: 0, overflows: false };
+        let mut cell =
+            Self { def, looping, surface, live, shown: false, frame: 0, epoch: 0, start: t, next: 0, overflows: false };
         cell.reset(t);
         cell
     }
@@ -302,6 +315,9 @@ impl Cell {
         self.start = t;
         self.next = 0;
         self.shown = !self.looping;
+        if let Look::Proto(proto) = self.def.look {
+            self.frame = if self.looping { 0 } else { proto.held() };
+        }
         if let Look::Real(pres) = &self.def.look {
             let [x, _, w, _] = fresh(&self.def, t).settled(pres.clone()).shell;
             self.overflows = x < 0.0 || x + w > PANEL_W;
@@ -322,6 +338,10 @@ impl Cell {
                 if let Look::Real(_) = self.def.look {
                     self.surface.set(pres, t);
                 }
+            }
+            Act::Frame(frame) => {
+                self.shown = true;
+                self.frame = frame;
             }
             Act::Hide => {
                 self.shown = false;
@@ -447,15 +467,16 @@ pub struct Grid {
     cells: Vec<Cell>,
     /// A headless still: everything rests, nothing plays.
     still: bool,
-    /// Lab seconds: real seconds × `scale`, stopped while paused. Every cell and Rune's springs
-    /// run on it.
+    /// Lab seconds: real seconds × `scale`, stopped while paused. Every cell's script runs on
+    /// it; Rune's springs run at `scale`.
     t: f64,
     last: Option<f64>,
+    /// Rune's clock for the whole window, toolbar and scrolling included, so it never goes to
+    /// 0: a stopped scene clock freezes every exit and colour change, and removed backdrops and
+    /// button states stay on screen. Pause stops the scripts instead.
     scale: f32,
     paused: bool,
-    /// Real clock time a step runs until.
-    step_until: Option<f64>,
-    /// What the clock runs at this frame (0 paused).
+    /// What the lab clock runs at this frame (0 paused).
     rate: f32,
     backdrop: Backdrop,
     screenshot: Option<Pixels>,
@@ -493,7 +514,6 @@ impl Grid {
             last: None,
             scale: tune.time_scale.clamp(0.05, 4.0),
             paused: false,
-            step_until: None,
             rate: if still { 0.0 } else { tune.time_scale },
             backdrop: Backdrop::from_env(),
             screenshot,
@@ -502,16 +522,18 @@ impl Grid {
         }
     }
 
-    fn set_looping(&mut self, all: Option<bool>) {
-        let looping = all.unwrap_or_else(|| !self.cells.iter().all(|c| c.looping));
+    /// Every looping cell back to resting on its state; held ones stay as they are.
+    fn hold_all(&mut self) {
+        dbg_log("hold all");
         let t = self.t;
-        for cell in &mut self.cells {
-            cell.looping = looping;
+        for cell in self.cells.iter_mut().filter(|c| c.looping) {
+            cell.looping = false;
             cell.reset(t);
         }
     }
 
     fn toggle(&mut self, i: usize) {
+        dbg_log(&format!("toggle {i}"));
         let t = self.t;
         if let Some(cell) = self.cells.get_mut(i) {
             cell.looping = !cell.looping;
@@ -530,15 +552,15 @@ impl Grid {
         self.scale = if self.scale > 0.5 { 0.25 } else { 1.0 };
     }
 
-    fn pause(&mut self) {
-        self.paused = !self.paused;
-        self.step_until = None;
+    /// Rune's clock for the window: never 0 while it's live (see `scale`).
+    fn scene_scale(&self) -> f32 {
+        if self.still { 0.0 } else { self.scale }
     }
 
-    /// Paused: plays one 60 Hz frame at the current speed.
-    fn step(&mut self) {
-        self.paused = true;
-        self.step_until = Some(self.last.unwrap_or(0.0) + 1.0 / 60.0);
+    /// Stops every loop where it is (springs already moving settle), or starts them again.
+    fn pause(&mut self) {
+        dbg_log("pause");
+        self.paused = !self.paused;
     }
 
     fn press(&mut self, i: usize, id: ElemId) {
@@ -573,11 +595,7 @@ fn poll(g: &mut Grid, now: f64, tx: &mut Tx) -> bool {
     }
     let dt = g.last.map_or(0.0, |last| (now - last).max(0.0));
     g.last = Some(now);
-    let stepping = g.step_until.is_some_and(|until| now < until);
-    if g.step_until.is_some() && !stepping {
-        g.step_until = None;
-    }
-    let rate = if g.paused && !stepping { 0.0 } else { g.scale };
+    let rate = if g.paused { 0.0 } else { g.scale };
     if rate != g.rate {
         g.rate = rate;
         changed = true;
@@ -587,9 +605,7 @@ fn poll(g: &mut Grid, now: f64, tx: &mut Tx) -> bool {
     for cell in &mut g.cells {
         changed |= cell.advance(t, rate);
     }
-    if let Some(until) = g.step_until {
-        tx.wake_after(Duration::from_secs_f64((until - now).max(0.0)));
-    } else if rate > 0.0
+    if rate > 0.0
         && let Some(due) = g.cells.iter().filter_map(Cell::next_due).min_by(f64::total_cmp)
     {
         tx.wake_after(Duration::from_secs_f64(((due - t) / f64::from(rate)).max(0.0)));
@@ -600,18 +616,11 @@ fn poll(g: &mut Grid, now: f64, tx: &mut Tx) -> bool {
 }
 
 fn on_key(g: &mut Grid, key: &KeyEvent, _tx: &mut Tx) -> bool {
-    let Key::Text(text) = &key.key else {
-        if key.key == Key::Right {
-            g.step();
-            return true;
-        }
-        return false;
-    };
+    let Key::Text(text) = &key.key else { return false };
     match text.to_ascii_lowercase().as_str() {
         " " => g.pause(),
-        "." => g.step(),
         "s" => g.speed(),
-        "l" => g.set_looping(None),
+        "h" => g.hold_all(),
         "b" => g.backdrop = g.backdrop.next(),
         "r" => g.restart(),
         _ => return false,
@@ -629,39 +638,74 @@ fn font(size: f32, weight: f32) -> TextStyle {
     TextStyle::new(size, weight)
 }
 
+fn accent() -> Color {
+    srgb(0.231, 0.361, 0.965, 1.0)
+}
+
+/// A toolbar button: one action per press. `on` fills it with the accent.
 fn button(label: &str, on: bool, light: bool, press: impl Fn(&mut Grid) + 'static) -> El {
-    let fill = if on { ink(light, 0.16) } else { ink(light, 0.06) };
-    row().center().h(26.0).px(10.0).radius(7.0).fill(fill).hover(ink(light, 0.12))
-        .child(text(label).font(font(12.0, 500.0)).color(ink(light, if on { 0.95 } else { 0.7 })))
+    let (fill, hover, fg) = if on {
+        (accent(), accent(), Color::WHITE)
+    } else {
+        (ink(light, 0.07), ink(light, 0.13), ink(light, 0.8))
+    };
+    row().key(format!("tb-{label}")).center().h(26.0).px(10.0).radius(7.0).fill(fill).hover(hover)
+        .child(text(label).font(font(12.0, if on { 600.0 } else { 500.0 })).color(fg))
         .on_press(press)
+}
+
+/// Buttons side by side, one of them on.
+fn segmented(buttons: impl IntoIterator<Item = El>, light: bool) -> El {
+    let mut seg = row().center_y().gap(2.0).padding(2.0).radius(9.0).fill(ink(light, 0.05));
+    for b in buttons {
+        seg = seg.child(b);
+    }
+    seg
 }
 
 fn toolbar(g: &Grid) -> El {
     let light = g.backdrop.light();
     let looping = g.cells.iter().filter(|c| c.looping).count();
-    let bar = row().center_y().gap(8.0).h(TOOLBAR_H).px(PAD).w_full()
+    let fast = g.scale > 0.5;
+    let play = if g.paused { "▶ Play" } else { "❚❚ Pause" };
+    let hold = if looping == 0 { "Hold all".to_owned() } else { format!("Hold all ({looping} looping)") };
+    let mut bar = row().center_y().gap(8.0).h(TOOLBAR_H).px(PAD).w_full()
         .fill(if light { srgb(0.95, 0.95, 0.96, 0.92) } else { srgb(0.07, 0.07, 0.08, 0.92) })
         .child(text("Pill lab").font(font(14.0, 650.0)).color(ink(light, 0.95)))
         .child(el().w(8.0))
-        .child(button(if g.paused { "▶ Play" } else { "❚❚ Pause" }, g.paused, light, Grid::pause))
-        .child(button("Step", false, light, Grid::step))
-        .child(button("1×", g.scale > 0.5, light, |g: &mut Grid| g.scale = 1.0))
-        .child(button("0.25×", g.scale <= 0.5, light, |g: &mut Grid| g.scale = 0.25))
-        .child(el().w(8.0))
-        .child(button("Loop all", looping == g.cells.len(), light, |g: &mut Grid| g.set_looping(Some(true))))
-        .child(button("Hold all", looping == 0, light, |g: &mut Grid| g.set_looping(Some(false))))
-        .child(button("Restart", false, light, Grid::restart))
+        .child(button(play, g.paused, light, Grid::pause))
+        .child(segmented(
+            [
+                button("1×", fast, light, |g: &mut Grid| g.scale = 1.0),
+                button("0.25×", !fast, light, |g: &mut Grid| g.scale = 0.25),
+            ],
+            light,
+        ))
         .child(el().w(8.0));
-    let mut bar = bar;
-    for b in [Backdrop::Dark, Backdrop::Light, Backdrop::Busy] {
-        bar = bar.child(button(b.name(), g.backdrop == b, light, move |g: &mut Grid| g.backdrop = b));
+    if looping > 0 {
+        bar = bar.child(button(&hold, false, light, Grid::hold_all));
     }
+    bar = bar.child(button("Restart", false, light, Grid::restart)).child(el().w(8.0)).child(segmented(
+        [Backdrop::Dark, Backdrop::Light, Backdrop::Busy].map(|b| {
+            button(b.name(), g.backdrop == b, light, move |g: &mut Grid| {
+                dbg_log(&format!("backdrop {b:?}"));
+                g.backdrop = b;
+            })
+        }),
+        light,
+    ));
     let file = lab_path().map(|p| p.display().to_string().replace(&home(), "~")).unwrap_or_default();
     bar.child(el().grow(1.0)).child(
-        text(format!("space pause · . step · s speed · l loop · b backdrop · click a title to loop it · knobs: {file} · springs: scrawl tune"))
+        text(format!("click a title to loop it · space pause · s speed · h hold all · b backdrop · knobs: {file} · springs: scrawl tune"))
             .font(font(11.0, 450.0))
             .color(ink(light, 0.5)),
     )
+}
+
+fn dbg_log(what: &str) {
+    if std::env::var_os("SCRAWL_PILL_GRID_LOG").is_some() {
+        eprintln!("pill lab: {what}");
+    }
 }
 
 fn home() -> String {
@@ -691,15 +735,17 @@ fn cell_view(g: &Grid, i: usize, cell: &Cell, cx: &mut Cx<Grid>) -> El {
         .children(cell.overflows.then(|| {
             text("wider than the panel: clipped in the app").font(font(11.5, 600.0)).color(srgb(0.96, 0.42, 0.36, 1.0))
         }))
+        .hover(ink(light && !busy, 0.06))
+        .key(format!("title-{i}"))
         .on_press(move |g: &mut Grid| g.toggle(i));
     let panel = match cell.def.look {
         Look::Real(_) => capsule(&cell.surface, &cell.live, cx, move |g: &mut Grid, id| g.press(i, id)),
-        Look::Proto(p) => proto::capsule(p, &cell.live.meter, cell.shown, presence(&cell.surface)),
+        Look::Proto(p) => proto::capsule(p, cell.frame, &cell.live.meter, cell.shown, presence(&cell.surface)),
     };
     col().key(format!("cell-{i}")).gap(4.0)
         .child(row().child(title))
         .child(
-            el().key(format!("panel-{}", cell.epoch)).size(PANEL_W, PANEL_H).radius(10.0)
+            el().key(format!("panel-{}", cell.epoch)).size(PANEL_W, cell.def.panel_h).radius(10.0)
                 .border(1.0, ink(light, if busy { 0.0 } else { 0.07 }))
                 // The capsule's window is the panel: what doesn't fit there is cut off.
                 .clip_rounded(10.0)
@@ -742,8 +788,8 @@ fn view(g: &Grid, cx: &mut Cx<Grid>) -> El {
         (Backdrop::Busy, None) => el().absolute(0.0, 0.0).w_full().h_full().fill(srgb(0.45, 0.47, 0.52, 1.0)),
         (Backdrop::Dark, _) => el().absolute(0.0, 0.0).w_full().h_full().fill(srgb(0.059, 0.067, 0.090, 1.0)),
     };
-    // The lab clock drives Rune's springs too (the capsules set it to their surfaces' 1×).
-    cx.time_scale(g.rate);
+    // The lab's speed drives Rune's springs too (the capsules set it to their surfaces' 1×).
+    cx.time_scale(g.scene_scale());
     el().w_full().h_full().child(backdrop).child(col().w_full().h_full().child(toolbar(g)).child(body))
 }
 
@@ -804,13 +850,12 @@ fn grid_width(cols: usize) -> f32 {
 /// The whole grid's height at `cols` columns, for a still that shows every cell.
 fn grid_height(cols: usize) -> f32 {
     let defs = defs();
-    let cell_h = TITLE_H + 4.0 + PANEL_H;
     let sections: f32 = Section::ALL
         .iter()
         .map(|s| {
-            let n = defs.iter().filter(|d| d.section == *s).count();
-            let rows = n.div_ceil(cols) as f32;
-            HEADER_H + rows * cell_h + (rows - 1.0).max(0.0) * ROW_GAP
+            let heights: Vec<f32> = defs.iter().filter(|d| d.section == *s).map(|d| TITLE_H + 4.0 + d.panel_h).collect();
+            let rows: Vec<f32> = heights.chunks(cols.max(1)).map(|row| row.iter().copied().fold(0.0, f32::max)).collect();
+            HEADER_H + rows.iter().sum::<f32>() + rows.len().saturating_sub(1) as f32 * ROW_GAP
         })
         .sum();
     TOOLBAR_H + 2.0 * PAD + sections + SECTION_GAP * (Section::ALL.len() - 1) as f32
@@ -866,6 +911,16 @@ pub fn run(snap: Option<PathBuf>) -> anyhow::Result<()> {
         return snap_all(dir);
     }
     let fonts = fonts();
+    // Headless with Rune's own flags (`--script`, `--snap`, `--tree`…), as the live window
+    // starts: for reproducing what a click does.
+    if let Ok(args) = std::env::var("SCRAWL_PILL_GRID_RUNE_ARGS") {
+        let args: Vec<String> = args.split_whitespace().map(str::to_owned).collect();
+        let size = (grid_width(SNAP_COLS), 900.0);
+        rune::run_windows_with_args(RunOptions { accessory: true }, args, move |_| {
+            vec![WindowSpec::from_app("grid", App::new(spec(size, fonts))).state(Grid::new(false))]
+        });
+        return Ok(());
+    }
     if let Some(out) = snap.as_ref().filter(|p| p.extension().is_some_and(|e| e == "mp4"))
     {
         // Headless, on Rune's virtual clock: every cell looping, at 1× scale.
@@ -914,9 +969,47 @@ mod tests {
         for def in defs() {
             let last = def.script.last().expect("steps");
             assert!(matches!(last.1, Act::Hide), "{}", def.title);
-            assert!(last.0 + 0.5 <= def.period, "{}", def.title);
+            assert!(last.0 + TAIL_S <= def.period, "{}", def.title);
             assert!(def.script.windows(2).all(|w| w[0].0 <= w[1].0), "{}", def.title);
         }
+    }
+
+    #[test]
+    fn a_looping_state_is_gone_for_under_half_a_second() {
+        for def in defs().into_iter().filter(|d| d.section != Section::Motion) {
+            let shown: f64 = def.script.first().map_or(0.0, |(at, _)| *at);
+            let hidden_mid: f64 = def
+                .script
+                .windows(2)
+                .filter(|w| matches!(w[0].1, Act::Hide))
+                .map(|w| w[1].0 - w[0].0)
+                .sum();
+            let last = def.script.last().map_or(0.0, |(at, _)| *at);
+            let gap = shown + (def.period - last);
+            assert!(gap <= 0.5 && hidden_mid <= 0.5, "{}: hidden {gap:.2} s", def.title);
+        }
+    }
+
+    #[test]
+    fn it_starts_held_and_play_pause_and_titles_touch_only_their_own_cells() {
+        fonts();
+        let mut g = Grid::new(false);
+        assert!(g.cells.iter().all(|c| !c.looping && c.shown), "everything held, at rest");
+        let epochs = |g: &Grid| g.cells.iter().map(|c| c.epoch).collect::<Vec<_>>();
+        let before = epochs(&g);
+        g.pause();
+        assert!(g.scene_scale() > 0.0, "paused, the toolbar, backdrop and scrolling still move");
+        g.pause();
+        assert_eq!(epochs(&g), before, "pause and play leave every cell where it is");
+        g.toggle(3);
+        assert_eq!(g.cells.iter().filter(|c| c.looping).count(), 1);
+        assert!(g.cells[3].looping);
+        g.toggle(3);
+        assert!(g.cells.iter().all(|c| !c.looping), "a second click holds it again");
+        g.toggle(1);
+        g.toggle(5);
+        g.hold_all();
+        assert!(g.cells.iter().all(|c| !c.looping));
     }
 
     #[test]

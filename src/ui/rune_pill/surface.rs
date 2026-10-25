@@ -25,8 +25,8 @@ pub const PANEL_H: f32 = 112.0;
 pub const LEAD_TEXT_X: f32 = 28.0;
 pub const PROCESSING_TEXT_X: f32 = 31.5;
 const PROCESSING_TRAIL: f32 = 8.5;
-/// The check circle spans 5…27; its label starts 8 pt after.
-pub const DONE_TEXT_X: f32 = 35.0;
+/// The check's ink spans 12…20, as the recording dot's does; its label starts where the timer does.
+pub const DONE_TEXT_X: f32 = LEAD_TEXT_X;
 /// The capsule unfolds from this fraction of its height, anchored on its top edge.
 const TOP_FROM: f32 = 0.7;
 const SHELL_WAIT_S: f32 = 0.06;

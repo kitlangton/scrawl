@@ -650,7 +650,6 @@ fn placed(e: El, shown: &Shown) -> El {
 
 fn shell(surface: &Surface, meter: &Meter) -> El {
     let [x, y, w, h] = surface.shell;
-    let completed = matches!(surface.pres, Pres::Completed { .. });
     let inset = |y: f32, blur: f32, spread: f32, color: Color| rune::Shadow { x: 0.0, y, blur, spread, color, inset: true };
     shell_body(el().key("shell").absolute(x, y).size(w, h), h)
         // The glow inside the edge while the shape morphs, stronger at the top.
@@ -660,7 +659,7 @@ fn shell(surface: &Surface, meter: &Meter) -> El {
                 .live_opacity(&meter.glow)
                 .motion(surface.shell_motion),
         )
-        .child(rim(w, h, completed).motion(surface.shell_motion))
+        .child(rim(w, h).motion(surface.shell_motion))
         .opacity(if surface.shell_on { 1.0 } else { 0.0 })
         .motion(surface.shell_motion)
         .opacity_motion(surface.shell_fade)
@@ -680,16 +679,10 @@ fn shell_body(e: El, h: f32) -> El {
 }
 
 /// SwiftUI's rim, a `strokeBorder` over the fill: a 0.5 pt hairline lit from above (white 0.15
-/// at the top, 0.04 at the bottom), or the done state's 0.75 pt green. A Rune border replaces
-/// its own fill under the ring, so the ring goes on an unfilled child to sit over it.
-fn rim(w: f32, h: f32, completed: bool) -> El {
-    let bw = if completed { 0.75 } else { 0.5 };
-    let rim = el().key("rim").absolute(0.0, 0.0).size(w, h).radius(h * 0.5);
-    if completed {
-        rim.border(bw, over_shell(green(), 0.5))
-    } else {
-        rim.border_gradient(bw, veil(0.15), veil(0.04))
-    }
+/// at the top, 0.04 at the bottom), the same in every state. A Rune border replaces its own fill
+/// under the ring, so the ring goes on an unfilled child to sit over it.
+fn rim(w: f32, h: f32) -> El {
+    el().key("rim").absolute(0.0, 0.0).size(w, h).radius(h * 0.5).border_gradient(0.5, veil(0.15), veil(0.04))
 }
 
 fn label(content: &str, style: TextStyle, color: Color) -> El {
@@ -752,10 +745,7 @@ fn item<S: 'static>(surface: &Surface, live: &Capsule, shown: &Shown, on_press: 
                 _ => String::new(),
             };
             placed(el(), shown)
-                .child(el().absolute(5.0, 5.0).size(22.0, 22.0).radius(11.0).fill(over_shell(green(), 0.22)))
-                .child(
-                    canvas(icon(id, 13.0 * 2.6 / 24.0, green())).absolute(9.5, 9.5).size(13.0, 13.0),
-                )
+                .child(check())
                 .child(
                     row().center_y().absolute(DONE_TEXT_X, 0.0).h(CHIP_H)
                         .child(label(&done, semibold(), text_color())),
@@ -764,6 +754,13 @@ fn item<S: 'static>(surface: &Surface, live: &Capsule, shown: &Shown, on_press: 
         ElemId::DividerLead | ElemId::DividerClose => placed(el(), shown),
     }
 }
+
+/// The done lead's plain check: its ink spans 12…20, where the recording dot's does.
+fn check() -> El {
+    canvas(icon(ElemId::DoneLead, CHECK * 2.7 / 24.0, green())).absolute(8.0, (CHIP_H - CHECK) * 0.5).size(CHECK, CHECK)
+}
+
+const CHECK: f32 = 16.0;
 
 /// The timer in tabular digits, bound to its `LiveText` in a box as wide as the clock.
 fn timer(surface: &Surface, live: &Capsule) -> El {

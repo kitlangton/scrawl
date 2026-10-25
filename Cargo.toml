@@ -5,6 +5,10 @@ edition = "2024"
 default-run = "scrawl"
 license = "MIT"
 
+[features]
+# Live editing of the pill lab with Rune's `scripts/rune-dev` (it turns this on).
+hot = ["rune/hot"]
+
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
@@ -34,7 +38,7 @@ metal = "0.29.0"
 screencapturekit = { version = "=11.0.0", features = ["macos_15_0"] }
 # Rune (anomalyco/rune), pinned to a `dev` rev and bumped deliberately. Only `scrawl lab pill --rune`
 # uses it for now; the app's normal run path stays on GPUI.
-rune = { git = "https://github.com/anomalyco/rune", rev = "d91f5bae837c21bfce23431ddf4f6be7625bb784", features = ["macos-background-cursor"] }
+rune = { git = "https://github.com/anomalyco/rune", rev = "6dfe542c346b6240a33e1da21085179a190321d3", features = ["macos-background-cursor"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 ab_glyph = "0.2.32"
