@@ -17,6 +17,7 @@ use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::cursor;
 use super::smart::{
     self, Basis, Candidate, Decision, Evidence, Judgement, Pointer, Reason, Scored, Source,
 };
@@ -306,6 +307,9 @@ pub const CHIPS: usize = 4;
 
 /// Where a chip came from, by the basis `decision_for` gave it.
 pub fn chip_source(scored: &Scored) -> &'static str {
+    if cursor::is_cursor(&scored.candidate.id) {
+        return "cursor";
+    }
     match scored.lead().map(|r| r.basis) {
         Some(Basis::Jev) => "jev",
         Some(Basis::JevHome) => "home",
@@ -412,6 +416,9 @@ pub struct Focused {
     /// Text around the cursor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value_excerpt: Option<String>,
+    /// Whether it takes typing; read only when the caller offers "Write at cursor".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editable: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -468,6 +475,7 @@ impl Screen {
                 .and_then(Value::as_str)
                 .map(|v| trim_around(v, VALUE_CHARS))
                 .filter(|v| !v.is_empty()),
+            editable: None,
         });
         let focused = focused.filter(|f| *f != Focused::default());
         let recent = recent
@@ -661,9 +669,20 @@ pub fn judge(
             Record::smart(&smart, "no open sessions to ask Jev about"),
         );
     }
-    let ids: Vec<String> = targets.iter().map(|c| c.id.clone()).collect();
+    let ids: Vec<String> = targets
+        .iter()
+        .filter(|c| !cursor::is_cursor(&c.id))
+        .map(|c| c.id.clone())
+        .collect();
     let recent = if thresholds.lines {
-        (hooks.recent)(&ids, before_ms, hooks.recent_budget())
+        let mut read = (hooks.recent)(&ids, before_ms, hooks.recent_budget()).into_iter();
+        targets
+            .iter()
+            .map(|c| match cursor::is_cursor(&c.id) {
+                true => Recent::default(),
+                false => read.next().unwrap_or_default(),
+            })
+            .collect()
     } else {
         Vec::new()
     };
@@ -747,7 +766,14 @@ fn round3(v: f64) -> f64 {
 /// The sessions put to Jev: those pinned, named by a clue, ranked by smart routing or that
 /// earlier items went to, HOME, then the newest, up to [`MAX_TARGETS`], newest first.
 pub fn pick_targets(evidence: &Evidence, smart: &Judgement, asking: &Asking) -> Vec<Candidate> {
-    let mut named: Vec<&str> = asking.pinned.iter().map(String::as_str).collect();
+    // "Write at cursor", when the caller offers it, is always put (and listed last).
+    let mut named: Vec<&str> = evidence
+        .candidates
+        .iter()
+        .filter(|c| cursor::is_cursor(&c.id))
+        .map(|c| c.id.as_str())
+        .collect();
+    named.extend(asking.pinned.iter().map(String::as_str));
     named.extend(
         evidence
             .clues
@@ -1164,6 +1190,11 @@ const SCREEN_INSTRUCTIONS: &str = " Use `screen` (visible windows, focused text,
 to judge; an OpenCode tab is a strong hint, not proof.";
 const SCREEN_LINES: &str = " and each target's recent lines";
 
+const CURSOR_INSTRUCTIONS: &str = " `targets.{t}` (Write at cursor) isn't a session: it types the \
+dictation into the text field in front. Choose it when the words are meant for that field (an edit \
+of the selected text, a message being written), not about work in a session.";
+const CURSOR_FITS: &str = " Words meant for the text field in front fit `targets.{t}`.";
+
 const FITS_INSTRUCTIONS: &str = "Is `capture` clearly about the work in one of `targets`?";
 const FITS_TRUE: &str = "What Kit says or shows clearly matches one target's title, project folder or \
 recent exchange (when it has one): the same app, feature, page, bug or conversation.";
@@ -1217,6 +1248,10 @@ pub fn request_body(
         .map(|(i, c)| {
             let mut t = serde_json::Map::new();
             t.insert("title".into(), json!(c.label()));
+            if cursor::is_cursor(&c.id) {
+                t.insert("about".into(), json!(cursor::CURSOR_ABOUT));
+                return (format!("t{}", i + 1), Value::Object(t));
+            }
             if let Some(dir) = &c.directory {
                 t.insert("directory".into(), json!(tilde(&dir.display().to_string())));
             }
@@ -1240,6 +1275,11 @@ pub fn request_body(
         })
         .collect();
     let has_lines = entries.iter().any(|(_, t)| t.get("recent").is_some());
+    let cursor_t = entries
+        .iter()
+        .zip(targets)
+        .find(|(_, c)| cursor::is_cursor(&c.id))
+        .map(|((t, _), _)| t.as_str());
     let criteria: Vec<(String, Value)> = entries
         .iter()
         .zip(targets)
@@ -1297,6 +1337,9 @@ pub fn request_body(
                     if screen.is_some() {
                         text.push_str(&lines(SCREEN_INSTRUCTIONS, SCREEN_LINES));
                     }
+                    if let Some(t) = cursor_t {
+                        text.push_str(&CURSOR_INSTRUCTIONS.replace("{t}", t));
+                    }
                     text
                 },
                 criteria: Ordered(&criteria),
@@ -1304,7 +1347,13 @@ pub fn request_body(
             any_fits: json!({
                 "type": "noul",
                 "instructions": FITS_INSTRUCTIONS,
-                "criteria": {"true": FITS_TRUE, "false": FITS_FALSE},
+                "criteria": {
+                    "true": match cursor_t {
+                        Some(t) => format!("{FITS_TRUE}{}", CURSOR_FITS.replace("{t}", t)),
+                        None => FITS_TRUE.to_owned(),
+                    },
+                    "false": FITS_FALSE,
+                },
             }),
         },
     };

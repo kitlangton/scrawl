@@ -470,9 +470,12 @@ pub fn replay(saved: Evidence, bundle: &ScrawlBundle, apps: &[(String, PathBuf)]
             | Source::Terminal
             | Source::Document => true,
             Source::Title => clue.note.starts_with(TERMINAL_TITLE),
-            Source::Named | Source::AppRule | Source::Viewed | Source::App | Source::Speech => {
-                false
-            }
+            Source::Named
+            | Source::AppRule
+            | Source::Viewed
+            | Source::App
+            | Source::Speech
+            | Source::CursorEdit => false,
         })
         .collect();
     clues.extend(bundle_clues(bundle, &saved.candidates, apps));

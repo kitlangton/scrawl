@@ -11,6 +11,7 @@ use anyhow::{Context as _, Result, bail, ensure};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
+use super::cursor;
 use super::jev::{self, Action, Asking, Band, Past, Record, Subject, Thresholds};
 use super::look;
 use super::policy;
@@ -83,6 +84,13 @@ struct Item {
     /// The app's executable, when the caller knows it (wins over `pid`).
     #[serde(default, alias = "app_path")]
     executable: Option<PathBuf>,
+    /// Where it may go: `session`, and `cursor` for "Write at cursor" ([`cursor`]). Without it,
+    /// only sessions.
+    #[serde(default)]
+    destinations: Vec<String>,
+    /// The selected text in the field in front (`""` when none); read with `destinations`.
+    #[serde(default)]
+    selection: Option<String>,
 }
 
 impl Item {
@@ -91,13 +99,34 @@ impl Item {
     }
 
     fn screen(&self) -> jev::Screen {
-        jev::Screen::from_values(
+        let mut screen = jev::Screen::from_values(
             &self.windows,
             &self.focused,
             &self.visible_text,
             &self.opencode_tab,
             &self.recent,
-        )
+        );
+        if let Some(editable) = self.editable().filter(|_| self.offers_cursor()) {
+            screen.focused.get_or_insert_default().editable = Some(editable);
+        }
+        screen
+    }
+
+    /// Whether the caller can write it at the cursor.
+    fn offers_cursor(&self) -> bool {
+        self.destinations
+            .iter()
+            .any(|d| d.trim().eq_ignore_ascii_case("cursor"))
+    }
+
+    /// `focused.editable`.
+    fn editable(&self) -> Option<bool> {
+        self.focused.get("editable").and_then(Value::as_bool)
+    }
+
+    /// The selection, capped.
+    fn selection(&self) -> Option<String> {
+        present(&self.selection).map(|s| jev::trim_middle(s, cursor::SELECTION_CHARS))
     }
 
     fn clear_screen(&mut self) {
@@ -110,6 +139,7 @@ impl Item {
         ] {
             *field = Value::Null;
         }
+        self.selection = None;
     }
 
     fn app_name(&self) -> Option<String> {
@@ -378,14 +408,26 @@ fn decide_with(
         &candidates,
         &(senses.aliases)(),
     ));
-    let evidence = Evidence {
+    let mut evidence = Evidence {
         address: None,
         clues,
         candidates,
         now_ms,
         url: url.map(str::to_owned),
     };
-    let smart = smart::decide(&evidence, Policy::Weigh);
+    let mut smart = smart::decide(&evidence, Policy::Weigh);
+    // Smart routing weighs sessions only; Jev weighs the cursor beside them.
+    let offers_cursor = item.offers_cursor();
+    let editable = offers_cursor && item.editable() == Some(true);
+    let selection = item.selection().filter(|_| offers_cursor);
+    if offers_cursor {
+        let field = cursor::Field {
+            editable,
+            selection: selection.as_deref(),
+        };
+        smart = cursor::edit(&item.text, field, smart);
+        evidence.candidates.push(cursor::candidate());
+    }
     let mut capture = serde_json::Map::new();
     capture.insert("kind".into(), json!(item.kind()));
     capture.insert("text".into(), json!(jev::trim_middle(&item.text, 2000)));
@@ -394,6 +436,8 @@ fn decide_with(
             "selected_text".into(),
             json!(jev::trim_middle(selected, SELECTION_CHARS)),
         );
+    } else if let Some(selection) = &selection {
+        capture.insert("selected_text".into(), json!(selection));
     }
     if let Some(app) = &app {
         capture.insert("app".into(), json!(app));
@@ -420,7 +464,17 @@ fn decide_with(
         hooks,
         thresholds,
     );
-    let mut record = record;
+    let (judgement, mut record) = if offers_cursor {
+        cursor::when_nothing_fits(
+            judgement,
+            record,
+            &evidence.candidates,
+            editable,
+            thresholds,
+        )
+    } else {
+        (judgement, record)
+    };
     let judgement = policy::suggest(auto_send, judgement, &mut record, &evidence.candidates);
     let output = output_for(&evidence, &judgement, &record, error.as_deref());
     (output, judgement, record)
@@ -506,6 +560,9 @@ fn output_for(
     } else if asked {
         match band {
             Band::Send => "jev: confident".to_owned(),
+            Band::Ask if record.reason.ends_with(cursor::NOTHING_FITS) => {
+                format!("jev: {}", cursor::NOTHING_FITS)
+            }
             Band::Ask => "jev: unsure".to_owned(),
             Band::Fallback => "jev: can't tell, so HOME".to_owned(),
             Band::Keep if jev::home_session(&evidence.candidates).is_none() => {
@@ -558,6 +615,7 @@ fn settled_why(judgement: &Judgement) -> Option<String> {
             Basis::Clue(Source::Rule) => "routing.sites rule",
             Basis::Clue(Source::AppRule) => "routing.apps rule",
             Basis::Clue(Source::DevBuild) => "dev build's checkout",
+            Basis::Clue(Source::CursorEdit) => "edit instruction for the selection",
             Basis::Clue(Source::Page) => "signed page",
             Basis::Clue(Source::Port) => "localhost port",
             Basis::Clue(Source::Publisher) => "publisher marker",
@@ -664,6 +722,7 @@ impl Saved {
             )
             .find(|t| t.get("id").and_then(Value::as_str) == Some(id))
             .and_then(|t| t.get("title")?.as_str().map(str::to_owned))
+            .or_else(|| cursor::is_cursor(id).then(|| cursor::CURSOR_TITLE.to_owned()))
     }
 }
 
@@ -796,6 +855,10 @@ fn deliver_with(
     hooks: &DeliverHooks,
 ) -> Result<Delivered> {
     let to = request.to.trim();
+    ensure!(
+        !cursor::is_cursor(to),
+        "{to} is written by the caller at the cursor, not delivered to a session"
+    );
     ensure!(
         to.starts_with("ses")
             && to
@@ -1896,6 +1959,224 @@ mod tests {
         );
         assert_ne!(out["target"]["id"], "ses_b", "{out}");
         assert!(ASKED.with(|a| a.borrow().is_some()));
+    }
+
+    /// Records the request, then answers like `sure`, `unsure` or Jev at a loss.
+    fn heard_sure(body: &[u8], d: Duration) -> Result<Vec<u8>> {
+        sure(body, d)
+    }
+    fn heard_unsure(body: &[u8], d: Duration) -> Result<Vec<u8>> {
+        ASKED.with(|a| *a.borrow_mut() = serde_json::from_slice(body).ok());
+        unsure(body, d)
+    }
+    fn heard_lost(body: &[u8], _: Duration) -> Result<Vec<u8>> {
+        ASKED.with(|a| *a.borrow_mut() = serde_json::from_slice(body).ok());
+        Ok(
+            br#"{"model":"jev-1.13","answers":{"target":{"choice":"t2","confidence":0.7,
+            "probabilities":{"t1":0.2,"t2":0.7,"t3":0.1}},"any_fits":{"noul":0.1}}}"#
+                .to_vec(),
+        )
+    }
+
+    /// FNV-1a, stable across toolchains (unlike `DefaultHasher`).
+    fn fnv(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+            (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+
+    #[test]
+    fn without_destinations_a_dictation_is_decided_byte_for_byte_as_before() {
+        // The cursor's fields without `destinations` change nothing: neither Jev's request nor
+        // the answer. The hashes were taken before `destinations` existed.
+        let item = json!({"item": {"text": "make this shorter", "app": "Notes",
+                                   "selected_text": "a long paragraph",
+                                   "selection": "a long paragraph",
+                                   "focused": {"role": "AXTextArea", "editable": true,
+                                               "value_excerpt": "a long paragraph"}},
+                          "history": [{"text": "the menu", "to": "ses_hex"}]});
+        let mut seen = Vec::new();
+        for mode in [policy::AutoSend::Rules, policy::AutoSend::Confident] {
+            for ask in [heard_sure, heard_unsure, heard_lost] {
+                ASKED.with(|a| *a.borrow_mut() = None);
+                let out = run_as(mode, item.clone(), ask);
+                let asked = ASKED.with(|a| a.borrow().clone()).unwrap();
+                assert!(!out.to_string().contains("@cursor"), "{out}");
+                assert!(!asked.to_string().contains("@cursor"));
+                seen.push(fnv(format!("{out}\n{asked}").as_bytes()));
+            }
+        }
+        assert_eq!(seen, BEFORE_DESTINATIONS);
+    }
+
+    const BEFORE_DESTINATIONS: [u64; 6] = [
+        10_010_635_204_954_828_154,
+        16_594_448_802_261_434_020,
+        11_862_245_896_518_506_707,
+        862_263_729_903_667_816,
+        16_594_448_802_261_434_020,
+        15_040_006_855_128_364_863,
+    ];
+
+    /// Jev sure of "Write at cursor", wherever it was listed.
+    fn to_cursor(body: &[u8], _: Duration) -> Result<Vec<u8>> {
+        let asked: Value = serde_json::from_slice(body)?;
+        ASKED.with(|a| *a.borrow_mut() = Some(asked.clone()));
+        let t = asked["state"]["targets"]
+            .as_object()
+            .and_then(|ts| ts.iter().find(|(_, t)| t["title"] == cursor::CURSOR_TITLE))
+            .map(|(t, _)| t.clone())
+            .context("no cursor target")?;
+        Ok(json!({"model": "jev-1.13", "answers": {
+            "target": {"choice": t, "confidence": 0.95, "probabilities": {t.as_str(): 0.97}},
+            "any_fits": {"noul": 0.9}}})
+        .to_string()
+        .into_bytes())
+    }
+
+    fn at_cursor(text: &str, editable: bool, selection: &str) -> Value {
+        json!({"item": {"text": text, "app": "Mail", "destinations": ["cursor", "session"],
+                        "selection": selection,
+                        "focused": {"role": "AXTextArea", "editable": editable}}})
+    }
+
+    #[test]
+    fn jev_may_pick_write_at_cursor_and_rules_suggest_it() {
+        let item = at_cursor("tell them friday works for me", true, "");
+        let out = run_as(policy::AutoSend::Rules, item.clone(), to_cursor);
+        assert_eq!(out["decision"], "ask", "{out}");
+        assert_eq!(out["suggested"], true);
+        assert_eq!(out["would"], "send");
+        assert_eq!(out["target"]["id"], "@cursor");
+        assert_eq!(out["target"]["title"], "Write at cursor");
+        assert!(out["target"]["directory"].is_null());
+        assert_eq!(out["candidates"][0]["id"], "@cursor");
+        assert_eq!(out["candidates"][0]["from"], "cursor");
+        let asked = ASKED.with(|a| a.borrow().clone()).unwrap();
+        let targets = asked["state"]["targets"].as_object().unwrap();
+        let (t, cursor) = targets.iter().last().unwrap();
+        assert_eq!(cursor["title"], "Write at cursor", "listed last");
+        assert!(
+            cursor["about"]
+                .as_str()
+                .unwrap()
+                .contains("text field in front")
+        );
+        assert!(cursor.get("directory").is_none() && cursor.get("last_active").is_none());
+        let instructions = asked["questions"]["target"]["instructions"].to_string();
+        assert!(
+            instructions.contains(&format!("targets.{t}")),
+            "{instructions}"
+        );
+        assert_eq!(asked["state"]["screen"]["focused"]["editable"], true);
+        // `"autoSend": "confident"` sends it.
+        let out = run(item, to_cursor);
+        assert_eq!(out["decision"], "send", "{out}");
+        assert_eq!(out["target"]["id"], "@cursor");
+    }
+
+    #[test]
+    fn an_edit_instruction_over_a_selection_goes_to_the_cursor_without_jev() {
+        let ask = |item: Value| {
+            ASKED.with(|a| *a.borrow_mut() = None);
+            let out = run_as(policy::AutoSend::Rules, item, sure);
+            (out, ASKED.with(|a| a.borrow().clone()))
+        };
+        let (out, asked) = ask(at_cursor(
+            "Okay, um, make this shorter",
+            true,
+            "a long reply",
+        ));
+        assert_eq!(out["decision"], "send", "{out}");
+        assert_eq!(out["target"]["id"], "@cursor");
+        assert_eq!(out["why"], "edit instruction for the selection");
+        assert!(out.get("suggested").is_none());
+        assert!(asked.is_none(), "settled without Jev");
+        // Not without a selection, an editable field, or `destinations`.
+        for item in [
+            at_cursor("make this shorter", true, ""),
+            at_cursor("make this shorter", false, "a long reply"),
+            json!({"item": {"text": "make this shorter", "selection": "a long reply",
+                            "focused": {"editable": true}}}),
+        ] {
+            let (out, asked) = ask(item.clone());
+            assert_ne!(out["why"], "edit instruction for the selection", "{item}");
+            assert!(asked.is_some(), "{item}");
+        }
+        let (_, asked) = ask(at_cursor("rewrite it", true, "a long reply"));
+        assert!(asked.is_none());
+        // The selection reaches Jev when it's asked.
+        let (_, asked) = ask(at_cursor("what about this", true, "a long reply"));
+        assert_eq!(
+            asked.unwrap()["state"]["capture"]["selected_text"],
+            "a long reply"
+        );
+        // A session named at the start still wins.
+        let (out, _) = ask(at_cursor(
+            "For home: make this shorter",
+            true,
+            "a long reply",
+        ));
+        assert_eq!(
+            (out["decision"].as_str(), out["target"]["id"].as_str()),
+            (Some("send"), Some("ses_home")),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn when_nothing_fits_it_asks_with_the_cursor_or_home_first() {
+        let ids = |out: &Value| -> Vec<String> {
+            out["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| c["id"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        for mode in [policy::AutoSend::Rules, policy::AutoSend::Confident] {
+            let out = run_as(mode, at_cursor("hmm what was that", true, ""), heard_lost);
+            assert_eq!(out["decision"], "ask", "{out}");
+            assert_eq!(out["target"]["id"], "@cursor");
+            assert_eq!(ids(&out), ["@cursor", "ses_home", "ses_a"]);
+            assert_eq!(out["why"], "jev: nothing fits, so ask");
+            assert!(out.get("suggested").is_none());
+            let out = run_as(mode, at_cursor("hmm what was that", false, ""), heard_lost);
+            assert_eq!(out["decision"], "ask", "{out}");
+            assert_eq!(ids(&out), ["ses_home", "@cursor", "ses_a"]);
+        }
+        // Without `destinations`, HOME as before.
+        let out = run(json!({"item": {"text": "hmm what was that"}}), heard_lost);
+        assert_eq!(out["decision"], "fallback", "{out}");
+    }
+
+    #[test]
+    fn write_at_cursor_is_never_delivered_but_can_be_corrected_to() {
+        let dir = temp_dir("cursor");
+        let saved = saved_dictation(&dir);
+        let request = DeliverRequest {
+            decision: Some("abc123".into()),
+            to: "@cursor".into(),
+            ..DeliverRequest::default()
+        };
+        let hooks = DeliverHooks {
+            text: sends,
+            bundle: no_bundle,
+        };
+        let err = deliver_with(&dir, request, &dir.join("outbox"), &hooks).unwrap_err();
+        assert!(err.to_string().contains("at the cursor"), "{err}");
+        let line = correction(&saved, "abc123", Action::Redirect, Some("@cursor"), 7).unwrap();
+        assert_eq!(
+            line["to"],
+            json!({"id": "@cursor", "title": "Write at cursor"})
+        );
+        jev::check(&line).unwrap();
+        let line = json!({"kind": "dictation", "event": "correction", "item_id": "A1B2-C3",
+                          "action": "edit", "to": "@cursor"});
+        let line = complete(line, Some(&dir), 9).unwrap();
+        assert_eq!(line["to"]["title"], "Write at cursor");
+        jev::check(&line).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
