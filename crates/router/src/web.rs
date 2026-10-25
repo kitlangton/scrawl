@@ -112,7 +112,7 @@ pub fn set_serving() {
 /// The live registration for `url`, from this process when it runs the ingest server, else
 /// from the one that does.
 pub fn lookup(url: &str) -> Option<Registration> {
-    let now = crate::pipeline::now_epoch_ms();
+    let now = crate::now_epoch_ms();
     if SERVING.load(Ordering::Acquire) {
         return registry().lookup(url, now);
     }
@@ -120,7 +120,7 @@ pub fn lookup(url: &str) -> Option<Registration> {
     let port = std::env::var("SCRAWL_INGEST_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(crate::phone::DEFAULT_INGEST_PORT);
+        .unwrap_or(crate::DEFAULT_INGEST_PORT);
     let mut remote = Registry::default();
     for reg in fetch_registrations(port).ok()? {
         remote.entries.push(reg);
@@ -310,7 +310,7 @@ pub fn handle(stream: &mut TcpStream, header: &str, expected_token: &str) -> Res
             v.strip_prefix("Bearer ")
                 .or_else(|| v.strip_prefix("bearer "))
         })
-        .is_some_and(|t| crate::phone::constant_time_eq(t.trim(), expected_token));
+        .is_some_and(|t| crate::constant_time_eq(t.trim(), expected_token));
     let peer_loopback = stream.peer_addr().is_ok_and(|a| a.ip().is_loopback());
 
     match (method, path) {
@@ -326,7 +326,7 @@ pub fn handle(stream: &mut TcpStream, header: &str, expected_token: &str) -> Res
         ("OPTIONS", _) => respond(stream, "204 No Content", "text/plain", b"", origin),
         ("GET", "/web/registrations") => {
             if token_ok {
-                let live = registry().live(crate::pipeline::now_epoch_ms());
+                let live = registry().live(crate::now_epoch_ms());
                 respond_json(
                     stream,
                     "200 OK",
@@ -407,7 +407,7 @@ pub fn handle(stream: &mut TcpStream, header: &str, expected_token: &str) -> Res
                     // `context`: the page may send what it sees (`crate::page`); loopback only.
                     let context = origin.is_some_and(is_loopback_origin)
                         && crate::handoff::experiment(crate::handoff::AGENT_CONTEXT);
-                    registry().register(reg, crate::pipeline::now_epoch_ms());
+                    registry().register(reg, crate::now_epoch_ms());
                     respond_json(
                         stream,
                         "200 OK",
@@ -586,7 +586,7 @@ mod tests {
         assert!(ok.contains("Access-Control-Allow-Origin: http://localhost:6123"));
         assert_eq!(
             registry()
-                .lookup("http://localhost:6123/", crate::pipeline::now_epoch_ms())
+                .lookup("http://localhost:6123/", crate::now_epoch_ms())
                 .and_then(|r| r.session)
                 .as_deref(),
             Some("ses_webtest")
@@ -649,7 +649,7 @@ mod tests {
         );
         assert!(
             registry()
-                .lookup("http://localhost:6123/", crate::pipeline::now_epoch_ms())
+                .lookup("http://localhost:6123/", crate::now_epoch_ms())
                 .is_none()
         );
     }

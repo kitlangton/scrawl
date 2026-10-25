@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{jev, policy, router};
-use crate::capture::scrawl_log;
 use crate::handoff::{self, Posted};
+use crate::log::scrawl_log;
 
 /// How long after a send it can be undone, unless `routing.undoWindowSec` says otherwise.
 pub const UNDO_WINDOW_SEC: u64 = 600;
@@ -145,6 +145,17 @@ pub fn deliveries_dir() -> Option<PathBuf> {
 
 /// Remembers a send in [`deliveries_dir`] and says how to undo it. Failures are logged.
 pub fn remember(session: &str, title: Option<&str>, posted: &Posted, origin: Origin) -> Sent {
+    remember_in(deliveries_dir().as_deref(), session, title, posted, origin)
+}
+
+/// Remembers a send in `dir` and says how to undo it. Failures are logged.
+pub fn remember_in(
+    dir: Option<&Path>,
+    session: &str,
+    title: Option<&str>,
+    posted: &Posted,
+    origin: Origin,
+) -> Sent {
     let now = jev::now_ms();
     let record = Record {
         delivery_id: router::new_id(now),
@@ -157,11 +168,11 @@ pub fn remember(session: &str, title: Option<&str>, posted: &Posted, origin: Ori
         origin,
         undone: None,
     };
-    if let Some(dir) = deliveries_dir() {
-        if let Err(err) = write(&dir, &record) {
+    if let Some(dir) = dir {
+        if let Err(err) = write(dir, &record) {
             scrawl_log(format!("undo: couldn't remember a send: {err:#}"));
         }
-        router::prune(&dir, KEEP_FOR);
+        router::prune(dir, KEEP_FOR);
     }
     Sent {
         delivery_id: record.delivery_id,
@@ -218,6 +229,13 @@ pub struct Api {
     pub pause: fn(Duration),
 }
 
+struct ApiFns<'a> {
+    get: &'a dyn Fn(&str) -> Result<Vec<u8>>,
+    post: &'a dyn Fn(&str, &Value) -> Result<Vec<u8>>,
+    delete: &'a dyn Fn(&str) -> Result<Vec<u8>>,
+    pause: &'a dyn Fn(Duration),
+}
+
 impl Default for Api {
     fn default() -> Self {
         Self {
@@ -243,6 +261,75 @@ pub fn undo(id: &str) -> Result<Report> {
 /// Undoes the send `id` remembered in `dir`. Errors only for a malformed ID or a server that
 /// can't be reached; an undo already made answers the same again.
 pub fn undo_with(dir: &Path, id: &str, api: &Api, window: Duration, now: u64) -> Result<Report> {
+    let fns = ApiFns {
+        get: &api.get,
+        post: &api.post,
+        delete: &api.delete,
+        pause: &api.pause,
+    };
+    undo_in(
+        dir,
+        policy::learned_file().as_deref(),
+        jev::log_path().as_deref(),
+        id,
+        &fns,
+        window,
+        now,
+    )
+}
+
+pub fn undo_with_config(
+    dirs: &crate::RouterDirs,
+    config: &crate::RouterConfig,
+    id: &str,
+    deadline: Duration,
+) -> Result<Report> {
+    let started = std::time::Instant::now();
+    let req_timeout = || {
+        let left = deadline.saturating_sub(started.elapsed());
+        REQUEST.min(left).max(Duration::from_millis(100))
+    };
+    let get = |path: &str| {
+        handoff::api_within_with_config("GET", path, None, req_timeout(), Some(config))
+    };
+    let post = |path: &str, body: &Value| {
+        handoff::api_within_with_config("POST", path, Some(body), req_timeout(), Some(config))
+    };
+    let delete = |path: &str| {
+        handoff::api_within_with_config("DELETE", path, None, req_timeout(), Some(config))
+    };
+    let pause = |dur: Duration| {
+        let left = deadline.saturating_sub(started.elapsed());
+        if !left.is_zero() {
+            std::thread::sleep(dur.min(left));
+        }
+    };
+    let fns = ApiFns {
+        get: &get,
+        post: &post,
+        delete: &delete,
+        pause: &pause,
+    };
+    undo_in(
+        &dirs.deliveries_dir(),
+        Some(&dirs.learned_file()),
+        Some(&dirs.decisions_log_path()),
+        id,
+        &fns,
+        Duration::from_secs(config.undo_window_sec),
+        jev::now_ms(),
+    )
+}
+
+fn undo_in(
+    dir: &Path,
+    learned_file: Option<&Path>,
+    log_file: Option<&Path>,
+    id: &str,
+    api: &ApiFns<'_>,
+    window: Duration,
+    now: u64,
+) -> Result<Report> {
     let id = id.trim();
     ensure!(router::valid_id(id), "{id:?} isn't a delivery ID");
     let Some(mut record) = read(dir, id) else {
@@ -259,7 +346,7 @@ pub fn undo_with(dir: &Path, id: &str, api: &Api, window: Duration, now: u64) ->
     if let Err(err) = write(dir, &record) {
         scrawl_log(format!("undo: couldn't save the undo: {err:#}"));
     }
-    after(&record, undone, now);
+    after(&record, undone, now, learned_file, log_file);
     Ok(Report::of(undone, Some(&record)))
 }
 
@@ -275,7 +362,7 @@ fn found(result: Result<Vec<u8>>) -> Result<Option<Vec<u8>>> {
 /// Times the inbox and messages are read before giving up on a send that keeps moving.
 const ROUNDS: usize = 3;
 
-fn take_back(record: &Record, api: &Api) -> Result<Undone> {
+fn take_back(record: &Record, api: &ApiFns<'_>) -> Result<Undone> {
     let session = handoff::query_escape(&record.session);
     let Some(message) = record.message_id.as_deref() else {
         // Sent, but OpenCode's answer had no ID to find it by.
@@ -326,7 +413,7 @@ fn take_back(record: &Record, api: &Api) -> Result<Undone> {
 }
 
 /// The session's waiting inbox items, by ID; `None` when the session is gone.
-fn inbox(session: &str, api: &Api) -> Result<Option<Vec<String>>> {
+fn inbox(session: &str, api: &ApiFns<'_>) -> Result<Option<Vec<String>>> {
     let Some(body) = found((api.get)(&format!("/api/session/{session}/inbox")))? else {
         return Ok(None);
     };
@@ -367,7 +454,7 @@ impl Standing {
 
 /// Reads the inbox, then (unless the send still waits) the messages. `None` when the session
 /// is gone.
-fn standing(session: &str, message: &str, api: &Api) -> Result<Option<Standing>> {
+fn standing(session: &str, message: &str, api: &ApiFns<'_>) -> Result<Option<Standing>> {
     let Some(waiting) = inbox(session, api)? else {
         return Ok(None);
     };
@@ -406,7 +493,7 @@ const QUIET: &[&str] = &[
 const SAID: &[&str] = &["user", "synthetic", "shell", "skill"];
 
 /// Reads the session's messages newest first until the sent one and the one before it.
-fn timeline(session: &str, message: &str, api: &Api) -> Result<Option<Timeline>> {
+fn timeline(session: &str, message: &str, api: &ApiFns<'_>) -> Result<Option<Timeline>> {
     let mut path = format!("/api/session/{session}/message?order=desc&limit={PAGE}");
     let mut timeline = Timeline::default();
     for _ in 0..PAGES {
@@ -457,7 +544,7 @@ fn timeline(session: &str, message: &str, api: &Api) -> Result<Option<Timeline>>
 
 /// Stops the turn it started and stages a revert to before it, files too. Once the turn is
 /// stopped, anything but a staged revert disowns it, which also wakes the session.
-fn revert(session: &str, message: &str, api: &Api) -> Result<Undone> {
+fn revert(session: &str, message: &str, api: &ApiFns<'_>) -> Result<Undone> {
     let interrupt = format!("/api/session/{session}/interrupt?resume=false");
     if found((api.post)(&interrupt, &json!({})))?.is_none() {
         return Ok(Undone::Gone);
@@ -496,12 +583,12 @@ fn revert(session: &str, message: &str, api: &Api) -> Result<Undone> {
 
 /// After an interrupt, a failed request still owes the session a message: disown, or give
 /// back `err` when even that fails.
-fn disown_or(session: &str, api: &Api, err: anyhow::Error) -> Result<Undone> {
+fn disown_or(session: &str, api: &ApiFns<'_>, err: anyhow::Error) -> Result<Undone> {
     scrawl_log(format!("undo: {err:#} after the interrupt; disowning"));
     disown(session, api).map_err(|_| err)
 }
 
-fn disown(session: &str, api: &Api) -> Result<Undone> {
+fn disown(session: &str, api: &ApiFns<'_>) -> Result<Undone> {
     let path = format!("/api/session/{session}/prompt");
     let body = json!({"text": DISOWN, "delivery": "steer"});
     Ok(match found((api.post)(&path, &body))? {
@@ -511,17 +598,23 @@ fn disown(session: &str, api: &Api) -> Result<Undone> {
 }
 
 /// Logs the undo as a correction, takes back the pick the send counted, and marks a capture.
-fn after(record: &Record, undone: Undone, now: u64) {
+fn after(
+    record: &Record,
+    undone: Undone,
+    now: u64,
+    learned_file: Option<&Path>,
+    log_file: Option<&Path>,
+) {
     if let Some(line) = correction(record, undone, now)
-        && let Err(err) = jev::write_correction(&line)
+        && let Err(err) = jev::write_correction_to(log_file, &line)
     {
         scrawl_log(format!("undo: correction not logged: {err:#}"));
     }
     if let Some(counted) = &record.origin.learned {
-        policy::unlearn_pick(counted);
+        policy::unlearn_pick_in(learned_file, counted);
     }
     if let Some(bundle) = &record.origin.bundle {
-        mark_capture(bundle, record, undone, now);
+        mark_capture(bundle, record, undone, now, learned_file);
     }
 }
 
@@ -561,7 +654,13 @@ pub fn correction(record: &Record, undone: Undone, now: u64) -> Option<Value> {
 
 /// A capture's `routing.json` gets `undone`, so evals don't take the session it went to as
 /// right, and loses the pick `learn_capture` counted.
-fn mark_capture(bundle: &Path, record: &Record, undone: Undone, now: u64) {
+fn mark_capture(
+    bundle: &Path,
+    record: &Record,
+    undone: Undone,
+    now: u64,
+    learned_file: Option<&Path>,
+) {
     let path = bundle.join(super::RECORD);
     let Some(mut body) = std::fs::read(&path)
         .ok()
@@ -574,7 +673,7 @@ fn mark_capture(bundle: &Path, record: &Record, undone: Undone, now: u64) {
         .and_then(|c| serde_json::from_value::<policy::Counted>(c.clone()).ok())
         && record.origin.learned.is_none()
     {
-        policy::unlearn_pick(&counted);
+        policy::unlearn_pick_in(learned_file, &counted);
     }
     if let Some(map) = body.as_object_mut() {
         map.remove("learned");
@@ -1223,7 +1322,7 @@ mod tests {
         assert_eq!(line["bundle"], "b.scrawl");
         assert_eq!(line["kind"], "capture");
         assert!(!capture_undone(&bundle));
-        mark_capture(&bundle, &record, Undone::Disowned, 9);
+        mark_capture(&bundle, &record, Undone::Disowned, 9, None);
         assert!(capture_undone(&bundle));
         let body: Value =
             serde_json::from_slice(&std::fs::read(bundle.join(super::super::RECORD)).unwrap())

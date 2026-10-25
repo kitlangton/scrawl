@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/capture"]
-default-members = [".", "crates/capture"]
+members = [".", "crates/capture", "crates/router"]
+default-members = [".", "crates/capture", "crates/router"]
 
 [package]
 name = "scrawl"
@@ -29,6 +29,7 @@ hound = "3.5.1"
 libc = "0.2.189"
 png = "0.18.1"
 scrawl-capture = { path = "crates/capture", default-features = false, features = ["screen", "helper", "input", "mic", "phone"] }
+scrawl-router = { path = "crates/router" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 

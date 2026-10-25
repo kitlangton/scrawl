@@ -14,7 +14,8 @@ use super::smart::{Basis, Candidate, Decision, Judgement, Scored, Source};
 // MARK: Auto-send
 
 /// What may send without asking (`"routing": {"autoSend": …}`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AutoSend {
     /// Only deterministic sources ([`obeyed`]); Jev's pick and smart weighing suggest.
     #[default]
@@ -257,7 +258,7 @@ pub fn executable_of(pid: i32) -> Option<PathBuf> {
     if pid <= 0 {
         return None;
     }
-    crate::capture::process_executable(pid)
+    crate::process_executable(pid)
 }
 
 // MARK: Rule offers
@@ -440,12 +441,17 @@ pub fn unlearn(file: &Path, counted: &Counted) -> Result<bool> {
     Ok(true)
 }
 
+/// [`unlearn`] in `file`; errors are logged.
+pub fn unlearn_pick_in(file: Option<&Path>, counted: &Counted) {
+    let Some(file) = file else { return };
+    if let Err(err) = unlearn(file, counted) {
+        crate::log::scrawl_log(format!("routing: couldn't take back a pick: {err:#}"));
+    }
+}
+
 /// [`unlearn`] in the learned file; errors are logged.
 pub fn unlearn_pick(counted: &Counted) {
-    let Some(file) = learned_file() else { return };
-    if let Err(err) = unlearn(&file, counted) {
-        crate::capture::scrawl_log(format!("routing: couldn't take back a pick: {err:#}"));
-    }
+    unlearn_pick_in(learned_file().as_deref(), counted);
 }
 
 fn config_kind(kind: RuleKind) -> &'static str {
@@ -472,6 +478,47 @@ pub fn has_rule(kind: RuleKind, key: &str) -> bool {
         .any(|(k, _)| k.trim().eq_ignore_ascii_case(key.trim()))
 }
 
+/// Counts a pick of `folder` (a [`rule_folder`]) for `url` or `bundle_id` in `file`,
+/// with `refused` and `already_has_rule`: what it counted, and the rule to offer, when there is one.
+/// Errors are logged.
+pub fn learn_pick_in(
+    file: Option<&Path>,
+    refused: &[String],
+    already_has_rule: impl FnOnce(RuleKind, &str) -> bool,
+    url: Option<&str>,
+    bundle_id: Option<&str>,
+    folder: &Path,
+) -> (Option<Counted>, Option<OfferRule>) {
+    let Some((kind, key)) = rule_key(url, bundle_id) else {
+        return (None, None);
+    };
+    let Some(file) = file else {
+        return (None, None);
+    };
+    match learn_counted(
+        file,
+        kind,
+        &key,
+        folder,
+        refused,
+        already_has_rule(kind, &key),
+    ) {
+        Ok((counted, offer)) => {
+            if let Some(offer) = &offer {
+                crate::log::scrawl_log(format!(
+                    "routing: picks agree, offering a {} rule",
+                    config_kind(offer.kind)
+                ));
+            }
+            (counted, offer)
+        }
+        Err(err) => {
+            crate::log::scrawl_log(format!("routing: couldn't count a pick: {err:#}"));
+            (None, None)
+        }
+    }
+}
+
 /// Counts a pick of `folder` (a [`rule_folder`]) for `url` or `bundle_id` in the learned file,
 /// with config's refusals and rules: what it counted, and the rule to offer, when there is one.
 /// Errors are logged.
@@ -480,28 +527,15 @@ pub fn learn_pick(
     bundle_id: Option<&str>,
     folder: &Path,
 ) -> (Option<Counted>, Option<OfferRule>) {
-    let Some((kind, key)) = rule_key(url, bundle_id) else {
-        return (None, None);
-    };
-    let Some(file) = learned_file() else {
-        return (None, None);
-    };
     let refused = crate::handoff::routing_refused_rules();
-    match learn_counted(&file, kind, &key, folder, &refused, has_rule(kind, &key)) {
-        Ok((counted, offer)) => {
-            if let Some(offer) = &offer {
-                crate::capture::scrawl_log(format!(
-                    "routing: picks agree, offering a {} rule",
-                    config_kind(offer.kind)
-                ));
-            }
-            (counted, offer)
-        }
-        Err(err) => {
-            crate::capture::scrawl_log(format!("routing: couldn't count a pick: {err:#}"));
-            (None, None)
-        }
-    }
+    learn_pick_in(
+        learned_file().as_deref(),
+        &refused,
+        has_rule,
+        url,
+        bundle_id,
+        folder,
+    )
 }
 
 // MARK: Writing rules

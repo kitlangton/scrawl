@@ -330,6 +330,11 @@ pub struct Finished {
     pub words: usize,
     pub duration_ms: u64,
     pub route_hint: RouteContext,
+    /// Number of audio gap spans where microphone samples were missing or dropped (`RecordedAudio::gaps`).
+    pub gaps: usize,
+    /// Structured reason when no transcript was produced (`"no_audio"` when no audio was
+    /// captured, or `bundle.transcript.missing.reason` when transcription failed or is pending).
+    pub missing_transcript: Option<String>,
 }
 
 // Carbon HIToolbox modifier bits. The shortcut is stored with them on every platform.
@@ -2164,8 +2169,8 @@ pub fn write_bundle_artifacts(
     })?;
 
     let manifest_bytes = serde_json::to_vec_pretty(bundle)?;
-    std::fs::write(out_dir.join("scrawl.json"), manifest_bytes)?;
-    std::fs::write(out_dir.join("summary.md"), summary_md.as_bytes())?;
+    crate::routing::undo::write_private(&out_dir.join("scrawl.json"), &manifest_bytes)?;
+    crate::routing::undo::write_private(&out_dir.join("summary.md"), summary_md.as_bytes())?;
 
     Ok(())
 }
@@ -2299,8 +2304,21 @@ pub struct Engine {
     resources: SharedResources,
 }
 
+struct HostLogSink(Arc<dyn Host>);
+
+impl crate::log::Sink for HostLogSink {
+    fn log(&self, line: &str) {
+        self.0.log(line);
+    }
+
+    fn metric(&self, name: &str, ms: f64) {
+        self.0.metric(name, ms);
+    }
+}
+
 impl Engine {
     pub fn new(host: Arc<dyn Host>, config: Arc<dyn ConfigSource>) -> Self {
+        crate::log::set_sink_if_unset(Arc::new(HostLogSink(Arc::clone(&host))));
         let (tx, _rx) = flume::unbounded();
         Self {
             host,
@@ -2405,10 +2423,15 @@ impl Engine {
         crate::helper::devices()
     }
 
+    /// Blocking: performs synchronous target discovery (when `req.target` is
+    /// [`Target::ActiveDisplay`]), spawns the recording helper, and waits for stream readiness
+    /// (up to ~1.2 s). Call this on a background worker thread rather than the UI main thread,
+    /// or call [`Self::discover_target`] first and pass [`Start::screen`] to a worker thread.
     pub fn start(&self, req: Start) -> Result<Capture> {
         self.start_with_preview(req, None)
     }
 
+    /// Blocking: see [`Self::start`].
     pub fn start_with_preview(
         &self,
         req: Start,
@@ -2926,6 +2949,15 @@ impl SealedCapture {
                 finalized.map(|(dir, bundle, summary)| {
                     let words = bundle.transcript.words.len();
                     let duration_ms = bundle.duration_ms;
+                    let missing_transcript = bundle
+                        .transcript
+                        .missing
+                        .as_ref()
+                        .map(|m| m.reason.clone())
+                        .or_else(|| {
+                            (bundle.transcript.text.trim().is_empty() && bundle.audio.is_none())
+                                .then(|| "no_audio".to_owned())
+                        });
                     Finished {
                         dir,
                         bundle,
@@ -2933,6 +2965,8 @@ impl SealedCapture {
                         words,
                         duration_ms,
                         route_hint,
+                        gaps: 0,
+                        missing_transcript,
                     }
                 })
             }
@@ -2942,6 +2976,10 @@ impl SealedCapture {
                 activity,
             } => {
                 let recorded_audio = external_audio.or(recorded_audio);
+                let gaps = recorded_audio.as_ref().map_or(0, |a| a.gaps.len());
+                let had_audio_samples = recorded_audio
+                    .as_ref()
+                    .is_some_and(|a| a.sample_count() > 0 || !a.wav_bytes.is_empty());
                 let duration_ms = recording.duration_ms;
                 self.host.emit(Event::Progress {
                     bundle: bundle_dir.clone(),
@@ -2962,6 +3000,17 @@ impl SealedCapture {
                 )
                 .map(|(dir, bundle, summary)| {
                     let words = bundle.transcript.words.len();
+                    let missing_transcript = bundle
+                        .transcript
+                        .missing
+                        .as_ref()
+                        .map(|m| m.reason.clone())
+                        .or_else(|| {
+                            (bundle.transcript.text.trim().is_empty()
+                                && bundle.audio.is_none()
+                                && !had_audio_samples)
+                                .then(|| "no_audio".to_owned())
+                        });
                     Finished {
                         dir,
                         bundle,
@@ -2969,6 +3018,8 @@ impl SealedCapture {
                         words,
                         duration_ms,
                         route_hint,
+                        gaps,
+                        missing_transcript,
                     }
                 })
             }
@@ -3728,10 +3779,12 @@ mod tests {
         let finished1 = sealed1.finish(None).unwrap();
         assert_eq!(finished1.bundle.events.len(), 1);
         assert!(
-            finished1.summary.contains("clicked (x 0.05, y 0.10)"),
+            finished1.summary.contains("· 0:00 clicked"),
             "summary: {}",
             finished1.summary
         );
+        assert_eq!(finished1.gaps, 0);
+        assert_eq!(finished1.missing_transcript.as_deref(), Some("no_audio"));
         let _ = std::fs::remove_dir_all(&dir1);
         let _ = std::fs::remove_dir_all(&dir2);
     }

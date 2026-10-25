@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use super::smart::{
     self, Basis, Candidate, Decision, Evidence, Judgement, Pointer, Reason, Scored, Source,
 };
-use crate::capture::scrawl_log;
+use crate::log::scrawl_log;
 use crate::model::{InteractionEvent, ScrawlBundle};
 
 /// The experiment that asks Jev (only read when `smartRouting` is on too).
@@ -1038,7 +1038,7 @@ pub fn trim_middle(text: &str, max: usize) -> String {
     format!("{start} … {end}")
 }
 
-fn trim_end(text: &str, max: usize) -> String {
+pub(crate) fn trim_end(text: &str, max: usize) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= max {
         return flat;
@@ -1419,7 +1419,15 @@ pub fn parse_answer(body: &[u8]) -> Result<Answer> {
 /// POSTs `body` to Jev with `/usr/bin/curl`. The key reaches curl through a config on stdin, so
 /// it's never in an argument list or a log.
 pub fn gateway(body: &[u8], timeout: Duration) -> Result<Vec<u8>> {
-    let key = api_key()?;
+    gateway_with_key(crate::handoff::jev_api_key().as_deref(), body, timeout)
+}
+
+pub fn gateway_with_key(
+    configured_key: Option<&str>,
+    body: &[u8],
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let key = api_key_with(configured_key)?;
     let body = std::str::from_utf8(body).context("request isn't UTF-8")?;
     with_retry(timeout, |left| post(&key, body, left), std::thread::sleep)
 }
@@ -1527,11 +1535,11 @@ fn post(key: &str, body: &str, timeout: Duration) -> Result<Reply> {
     })
 }
 
-/// The OpenCode key: `jevApiKey` in config.json, `$OPENCODE_API_KEY`, or the active `opencode`
-/// credential in OpenCode's database (read-only). Never printed or logged.
-fn api_key() -> Result<String> {
-    if let Some(key) = crate::handoff::jev_api_key().filter(|k| !k.trim().is_empty()) {
-        return Ok(key.trim().to_owned());
+/// The OpenCode key: `configured_key` (or `jevApiKey` in config.json), `$OPENCODE_API_KEY`, or
+/// the active `opencode` credential in OpenCode's database (read-only). Never printed or logged.
+fn api_key_with(configured_key: Option<&str>) -> Result<String> {
+    if let Some(key) = configured_key.map(str::trim).filter(|k| !k.is_empty()) {
+        return Ok(key.to_owned());
     }
     if let Ok(key) = std::env::var("OPENCODE_API_KEY")
         && !key.trim().is_empty()
@@ -1778,24 +1786,31 @@ pub fn log_path() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("SCRAWL_ROUTING_LOG") {
         return Some(PathBuf::from(path));
     }
+    if !crate::handoff::scrawl_host_defaults_enabled() {
+        return None;
+    }
     Some(dirs::home_dir()?.join("Library/Application Support/scrawl/routing-decisions.jsonl"))
 }
 
 fn append(line: &Value) {
-    if let Err(err) = try_append(line) {
+    append_to(log_path().as_deref(), line);
+}
+
+pub fn append_to(path: Option<&Path>, line: &Value) {
+    let Some(path) = path else {
+        return;
+    };
+    if let Err(err) = try_append_to(path, line) {
         scrawl_log(format!("routing (jev): couldn't log a decision: {err:#}"));
     }
 }
 
-fn try_append(line: &Value) -> Result<()> {
-    let Some(path) = log_path() else {
-        return Ok(());
-    };
+fn try_append_to(path: &Path, line: &Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let mut file = super::undo::private(std::fs::OpenOptions::new().create(true).append(true))
-        .open(&path)
+        .open(path)
         .with_context(|| format!("couldn't open {}", path.display()))?;
     #[cfg(unix)]
     {
@@ -1887,6 +1902,10 @@ pub fn log_line(line: &Value) {
     append(line);
 }
 
+pub fn log_line_to(path: Option<&Path>, line: &Value) {
+    append_to(path, line);
+}
+
 /// How Kit corrected a route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1926,9 +1945,7 @@ impl std::str::FromStr for Action {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Self::parse(s).ok_or_else(|| {
-            format!("expected cancel, redirect, paste or edit, got {s:?}")
-        })
+        Self::parse(s).ok_or_else(|| format!("expected cancel, redirect, paste or edit, got {s:?}"))
     }
 }
 
@@ -1978,8 +1995,12 @@ impl Correction<'_> {
 /// Checks a correction line against the schema in `docs/routing.md` and appends it. Every
 /// correction comes through here: the app's, `scrawl router correct` and `scrawl router log`.
 pub fn write_correction(line: &Value) -> Result<()> {
+    write_correction_to(log_path().as_deref(), line)
+}
+
+pub fn write_correction_to(path: Option<&Path>, line: &Value) -> Result<()> {
     check(line)?;
-    append(line);
+    append_to(path, line);
     Ok(())
 }
 

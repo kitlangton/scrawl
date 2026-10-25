@@ -12,8 +12,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
-
 use crate::model::TargetFrame;
 
 /// How often the worker wakes to sample the cursor and check its triggers.
@@ -25,41 +23,7 @@ const IDLE_INTERVAL: Duration = Duration::from_millis(2_000);
 /// Cursor samples closer than this to the previous one (in capture points) are dropped.
 const CURSOR_MIN_MOVE_PT: f64 = 2.0;
 
-/// The on-screen windows at one moment, front to back.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowSnapshot {
-    pub t: u64,
-    pub windows: Vec<WindowEntry>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowEntry {
-    pub id: u32,
-    pub app: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bundle_id: Option<String>,
-    /// `false` for agent apps (menu-bar utilities, overlays such as Cua Driver's full-screen
-    /// window) whose windows are rarely what a capture is about.
-    #[serde(default = "yes", skip_serializing_if = "Clone::clone")]
-    pub regular: bool,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub title: String,
-    /// `[x, y, width, height]` in points from the capture's top-left corner. Windows that hang
-    /// off the captured display keep their full size, so `x`/`y` can be negative.
-    pub bounds: [i32; 4],
-    /// `0` for normal windows, `20` for the Dock, `24` for the menu bar, up to `101` for a
-    /// regular app's floating panels and pop-up menus.
-    pub layer: i32,
-    /// The frontmost app's frontmost normal window.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub frontmost: bool,
-}
-
-/// `[t_ms, x, y]` with `x, y` normalized to the capture (`0.0..=1.0`), like clicks.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CursorSample(pub u64, pub f32, pub f32);
+pub use crate::model::{CursorSample, WindowEntry, WindowSnapshot};
 
 /// What the worker collected over one capture.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -107,10 +71,6 @@ impl ActivityLog {
         self.cursor.push(CursorSample(t, nx, ny));
         true
     }
-}
-
-fn yes() -> bool {
-    true
 }
 
 fn round4(v: f64) -> f32 {

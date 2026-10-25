@@ -247,32 +247,73 @@ pub struct Target {
 /// Where `input`'s item goes: site rules and signed pages first, then Jev, within [`DEADLINE`].
 /// Logs the decision and saves it for `deliver` and `correct`. Sends nothing.
 pub fn decide(input: &str) -> Result<Output> {
-    let started = Instant::now();
     let request: Value = serde_json::from_str(input).context("expected JSON on stdin")?;
+    decide_in(
+        decisions_dir().as_deref(),
+        outbox_dir().as_deref(),
+        jev::log_path().as_deref(),
+        None,
+        request,
+        DEADLINE,
+    )
+}
+
+pub fn decide_in(
+    decisions_dir: Option<&Path>,
+    outbox_dir: Option<&Path>,
+    log_path: Option<&Path>,
+    config: Option<&crate::RouterConfig>,
+    request: Value,
+    deadline: Duration,
+) -> Result<Output> {
+    let started = Instant::now();
     let parsed: Input = serde_json::from_value(request.clone())
         .context("expected {\"item\": {\"text\": …}, \"pinned\"?, \"history\"?}")?;
+    let jev_budget = if deadline == DEADLINE {
+        JEV_DEADLINE
+    } else {
+        deadline
+            .saturating_sub(Duration::from_millis(200))
+            .max(Duration::from_millis(100))
+            .min(deadline)
+    };
     let hooks = jev::Hooks {
-        deadline: Some(started + JEV_DEADLINE),
+        deadline: Some(started + jev_budget),
         ..jev::Hooks::default()
     };
-    let thresholds = Thresholds::configured();
+    let thresholds = match config {
+        Some(cfg) => cfg.thresholds(),
+        None => Thresholds::configured(),
+    };
+    let auto_send = match config {
+        Some(cfg) => cfg.auto_send,
+        None => policy::AutoSend::configured(),
+    };
     let now = jev::now_ms();
     let (tx, rx) = mpsc::channel();
     let input = parsed.clone();
+    let owned_config = config.cloned();
     std::thread::spawn(move || {
-        let _ = tx.send(decide_with(
-            &input,
-            &look::Senses::default(),
-            &hooks,
-            &thresholds,
-            policy::AutoSend::configured(),
-            now,
-        ));
+        let run = || {
+            decide_with(
+                &input,
+                &look::Senses::default(),
+                &hooks,
+                &thresholds,
+                auto_send,
+                now,
+            )
+        };
+        let result = match &owned_config {
+            Some(cfg) => crate::handoff::with_router_config(cfg, run),
+            None => run(),
+        };
+        let _ = tx.send(result);
     });
     let id = new_id(now);
     let item = &parsed.item;
     let app = item.app_name();
-    let (mut output, mut line) = match rx.recv_timeout(DEADLINE.saturating_sub(started.elapsed())) {
+    let (mut output, mut line) = match rx.recv_timeout(deadline.saturating_sub(started.elapsed())) {
         Ok((output, judgement, record)) => {
             let line = jev::decision_line(
                 item.kind(),
@@ -307,14 +348,14 @@ pub fn decide(input: &str) -> Result<Output> {
     if let Some(item_id) = &output.item_id {
         line["item_id"] = json!(item_id);
     }
-    jev::log_line(&line);
-    if let Some(dir) = decisions_dir() {
-        if let Err(err) = save(&dir, &id, &request, &output, now) {
-            crate::capture::scrawl_log(format!("router: couldn't save decision {id}: {err:#}"));
+    jev::log_line_to(log_path, &line);
+    if let Some(dir) = decisions_dir {
+        if let Err(err) = save(dir, &id, &request, &output, now) {
+            crate::log::scrawl_log(format!("router: couldn't save decision {id}: {err:#}"));
         }
-        prune(&dir, KEEP_FOR);
-        if let Some(outbox) = outbox_dir() {
-            prune(&outbox, KEEP_FOR);
+        prune(dir, KEEP_FOR);
+        if let Some(outbox) = outbox_dir {
+            prune(outbox, KEEP_FOR);
         }
     }
     Ok(output)
@@ -579,6 +620,9 @@ pub(crate) fn router_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("SCRAWL_ROUTER_DIR") {
         return Some(PathBuf::from(dir));
     }
+    if !crate::handoff::scrawl_host_defaults_enabled() {
+        return None;
+    }
     Some(dirs::home_dir()?.join("Library/Application Support/scrawl/router"))
 }
 
@@ -822,10 +866,46 @@ pub fn deliver(request: DeliverRequest) -> Result<Delivered> {
     deliver_with(&dir, request, &outbox, &DeliverHooks::default())
 }
 
+pub fn deliver_in(
+    dirs: &crate::RouterDirs,
+    config: &crate::RouterConfig,
+    request: DeliverRequest,
+    hooks: &DeliverHooks,
+) -> Result<Delivered> {
+    crate::handoff::with_router_config(config, || {
+        deliver_in_dirs(
+            &dirs.decisions_dir(),
+            request,
+            &dirs.outbox_dir(),
+            Some(&dirs.deliveries_dir()),
+            Some(&dirs.learned_file()),
+            hooks,
+        )
+    })
+}
+
 fn deliver_with(
     decisions: &Path,
     request: DeliverRequest,
     outbox: &Path,
+    hooks: &DeliverHooks,
+) -> Result<Delivered> {
+    deliver_in_dirs(
+        decisions,
+        request,
+        outbox,
+        undo::deliveries_dir().as_deref(),
+        policy::learned_file().as_deref(),
+        hooks,
+    )
+}
+
+fn deliver_in_dirs(
+    decisions: &Path,
+    request: DeliverRequest,
+    outbox: &Path,
+    deliveries: Option<&Path>,
+    learned_file: Option<&Path>,
     hooks: &DeliverHooks,
 ) -> Result<Delivered> {
     let to = request.to.trim();
@@ -922,11 +1002,27 @@ fn deliver_with(
         .as_ref()
         .and_then(|(_, saved)| saved.directory_of(to))
         .and_then(|dir| policy::rule_folder_of(&dir))
-        .map(|folder| policy::learn_pick(present(&item.url), item.app_id(), &folder))
+        .map(|folder| {
+            let refused = crate::handoff::routing_refused_rules();
+            policy::learn_pick_in(
+                learned_file,
+                &refused,
+                policy::has_rule,
+                present(&item.url),
+                item.app_id(),
+                &folder,
+            )
+        })
         .unwrap_or_default();
     origin.learned = counted;
     let sent = match posted {
-        Some(posted) => Some(undo::remember(to, Some(&title), &posted, origin)),
+        Some(posted) => Some(undo::remember_in(
+            deliveries,
+            to,
+            Some(&title),
+            &posted,
+            origin,
+        )),
         None => {
             // Queued: the retry remembers it, taking back this pick if it's undone.
             if bundle.is_none() && origin.learned.is_some() {
@@ -976,8 +1072,21 @@ fn prompt_text(item: &Item) -> String {
 /// decision's target to `to`.
 pub fn correct(id: &str, action: Action, to: Option<&str>) -> Result<()> {
     let dir = decisions_dir().context("no decisions folder")?;
-    let saved = load(&dir, id)?;
-    jev::write_correction(&correction(&saved, id, action, to, jev::now_ms())?)
+    correct_in(&dir, jev::log_path().as_deref(), id, action, to)
+}
+
+pub fn correct_in(
+    decisions_dir: &Path,
+    log_path: Option<&Path>,
+    id: &str,
+    action: Action,
+    to: Option<&str>,
+) -> Result<()> {
+    let saved = load(decisions_dir, id)?;
+    jev::write_correction_to(
+        log_path,
+        &correction(&saved, id, action, to, jev::now_ms())?,
+    )
 }
 
 fn correction(
@@ -1015,8 +1124,12 @@ fn correction(
 pub fn log(input: &str) -> Result<()> {
     let line: Value =
         serde_json::from_str(input.trim()).context("expected one JSON object on stdin")?;
-    let line = complete(line, decisions_dir().as_deref(), jev::now_ms())?;
-    jev::write_correction(&line)
+    log_in(decisions_dir().as_deref(), jev::log_path().as_deref(), line)
+}
+
+pub fn log_in(decisions_dir: Option<&Path>, log_path: Option<&Path>, line: Value) -> Result<()> {
+    let line = complete(line, decisions_dir, jev::now_ms())?;
+    jev::write_correction_to(log_path, &line)
 }
 
 /// Fills in what the decision knows: `time`, `decision_id` from `item_id` (or the reverse),

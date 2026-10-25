@@ -19,7 +19,6 @@ fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
-#[cfg(test)]
 pub fn shape_of(stroke: &Stroke) -> Shape {
     ink_of(stroke).shape
 }
@@ -2121,7 +2120,7 @@ mod tests {
         let mut silent = bundle.clone();
         silent.transcript = TranscriptData {
             source: "offline".into(),
-            missing: Some(crate::speech_model::missing("downloading", "en_US", None)),
+            missing: Some(MissingTranscript::for_reason("downloading", "en_US", None)),
             ..Default::default()
         };
         let summary = summary_markdown(&silent, std::path::Path::new("/recordings/test"));

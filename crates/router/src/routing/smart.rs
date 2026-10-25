@@ -345,8 +345,12 @@ pub enum Decision {
         instead: Vec<Scored>,
     },
     /// The suggestion first, then its runners-up. Nothing is sent until one is picked.
-    Offer { choices: Vec<Scored> },
-    Keep { reason: String },
+    Offer {
+        choices: Vec<Scored>,
+    },
+    Keep {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1339,7 +1343,8 @@ mod tests {
         e.candidates.push(worktree);
         assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_wt"));
         // A session in the very folder named beats a newer one elsewhere in its project.
-        e.candidates.push(cand("ses_here", "HERE", "/p/team-board/docs", 90));
+        e.candidates
+            .push(cand("ses_here", "HERE", "/p/team-board/docs", 90));
         if let Pointer::Folder(folder) = &mut e.clues[0].pointer {
             folder.path = "/p/team-board/docs".into();
         }

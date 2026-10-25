@@ -302,7 +302,10 @@ pub fn browser_tab_url(bundle_id: &str) -> Option<String> {
     (!url.is_empty()).then_some(url)
 }
 
-fn run_with_timeout(command: &mut Command, timeout: Duration) -> Option<std::process::Output> {
+pub(crate) fn run_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> Option<std::process::Output> {
     use std::io::Read as _;
     let mut child = command
         .stdin(Stdio::null())
@@ -650,7 +653,14 @@ pub fn judge_capture(
         );
         (judgement, Some(record))
     } else {
-        (gate_smart(policy::AutoSend::configured(), judgement, &evidence.candidates), None)
+        (
+            gate_smart(
+                policy::AutoSend::configured(),
+                judgement,
+                &evidence.candidates,
+            ),
+            None,
+        )
     };
     if let Err(err) = write_record(dir, &evidence, &judgement, jev.as_ref()) {
         scrawl_log(format!("routing: couldn't save {RECORD}: {err:#}"));
@@ -898,7 +908,10 @@ mod tests {
             let smart::Decision::Offer { choices } = &gated.decision else {
                 unreachable!()
             };
-            assert_eq!(choices[0].candidate.id, "ses_viewed", "the pick comes first");
+            assert_eq!(
+                choices[0].candidate.id, "ses_viewed",
+                "the pick comes first"
+            );
         }
         assert!(!offered(&gate_smart(
             policy::AutoSend::Confident,
@@ -995,8 +1008,7 @@ mod tests {
 
     #[test]
     fn project_root_walks_up_to_git() {
-        let base =
-            std::env::temp_dir().join(format!("scrawl-root-{}", crate::pipeline::make_bundle_id()));
+        let base = std::env::temp_dir().join(format!("scrawl-root-{}", crate::make_bundle_id()));
         let site = base.join("repo/site/src");
         std::fs::create_dir_all(&site).unwrap();
         std::fs::create_dir_all(base.join("repo/.git")).unwrap();
@@ -1233,10 +1245,8 @@ mod tests {
 
     #[test]
     fn destination_is_recorded_and_preferred_by_send() {
-        let dir = std::env::temp_dir().join(format!(
-            "scrawl-route-{}.scrawl",
-            crate::pipeline::make_bundle_id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("scrawl-route-{}.scrawl", crate::make_bundle_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut bundle: ScrawlBundle = serde_json::from_value(serde_json::json!({
             "version": 1, "id": "t", "createdAtMs": 0, "durationMs": 1_000,

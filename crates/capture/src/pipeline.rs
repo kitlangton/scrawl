@@ -382,7 +382,7 @@ pub fn finalize_capture_bundle_for_config(
             if !wav_bytes.is_empty() {
                 let wav_path = bundle_dir.join("audio.wav");
                 let _ = std::fs::create_dir_all(bundle_dir);
-                let _ = std::fs::write(&wav_path, &*wav_bytes);
+                let _ = crate::routing::undo::write_private(&wav_path, &wav_bytes);
             }
         }
     }
@@ -830,24 +830,30 @@ pub fn build_bundle_from_parts(
                 let _ =
                     std::fs::set_permissions(bundle_dir, std::fs::Permissions::from_mode(0o700));
             }
-            std::fs::write(
-                bundle_dir.join(&bundle.contact_sheet),
+            crate::routing::undo::write_private(
+                &bundle_dir.join(&bundle.contact_sheet),
                 &prep.contact_sheet_png,
             )?;
             for (rel, bytes) in &prep.frame_pngs {
-                std::fs::write(bundle_dir.join(rel), bytes)?;
+                crate::routing::undo::write_private(&bundle_dir.join(rel), bytes)?;
             }
             if let (Some(info), Some(full_sheet_png)) = (&bundle.autocrop, &prep.full_sheet_png) {
                 let full_dir = bundle_dir.join(&info.full_frames);
                 std::fs::create_dir_all(&full_dir)?;
-                std::fs::write(bundle_dir.join(&info.full_contact_sheet), full_sheet_png)?;
+                crate::routing::undo::write_private(
+                    &bundle_dir.join(&info.full_contact_sheet),
+                    full_sheet_png,
+                )?;
                 for (name, bytes) in &prep.full_frame_pngs {
-                    std::fs::write(full_dir.join(name), bytes)?;
+                    crate::routing::undo::write_private(&full_dir.join(name), bytes)?;
                 }
             }
             let manifest_bytes = serde_json::to_vec_pretty(&bundle)?;
-            std::fs::write(bundle_dir.join("scrawl.json"), manifest_bytes)?;
-            std::fs::write(bundle_dir.join("summary.md"), summary.as_bytes())?;
+            crate::routing::undo::write_private(&bundle_dir.join("scrawl.json"), &manifest_bytes)?;
+            crate::routing::undo::write_private(
+                &bundle_dir.join("summary.md"),
+                summary.as_bytes(),
+            )?;
         }
         BundleOutput::Rendered {
             annotated,
@@ -1128,6 +1134,18 @@ mod tests {
         write_bundle_artifacts(&empty_frames, &bundle, &[], &frame, "summary").unwrap();
         assert!(empty_frames.join("scrawl.json").exists());
         assert!(empty_frames.join("contact-sheet.png").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for name in ["scrawl.json", "summary.md", "contact-sheet.png"] {
+                let mode = std::fs::metadata(empty_frames.join(name))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(mode, 0o600, "{name} should be created 0600");
+            }
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

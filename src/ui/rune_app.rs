@@ -2887,6 +2887,7 @@ impl RuneCoordinator {
         };
         let front = route_ctx.front_bundle_id;
         let captured = route_ctx.captured_bundle_id;
+        let app_pid = route_ctx.app_pid;
         let finish_started = Instant::now();
         let route = (screen && !smart).then(|| {
             let (front, captured) = (front.clone(), captured.clone());
@@ -2896,7 +2897,7 @@ impl RuneCoordinator {
         });
         let look = (screen && smart).then(|| {
             std::thread::spawn(move || {
-                crate::routing::look_capture(front.as_deref(), captured.as_deref())
+                crate::routing::look_capture(front.as_deref(), captured.as_deref(), app_pid)
             })
         });
 

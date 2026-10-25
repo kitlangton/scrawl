@@ -1,4 +1,11 @@
-pub mod agent_context;
+pub use scrawl_router::{
+    CandidateTarget, Decision, DeliverHooks, DeliverRequest, Delivered, DeliveryMode,
+    DeliveryOrigin, EngineConfig, MicChoice, OfferRule, Past, Recents, Router, RouterConfig,
+    RouterDirs, RuleKind, Screen, Sent, Sink, Thresholds, UndoReport, Undone, agent_context,
+    delivery, enable_file_log, enable_scrawl_host_defaults, log, model, page, parse_scrawl_config,
+    routing, scrawl_log, set_sink, set_sink_if_unset, sketch, start_metric, web,
+};
+
 pub mod audio;
 pub mod autocrop;
 pub mod autocrop_lab;
@@ -10,7 +17,6 @@ pub mod autocrop_lab;
 pub mod ax;
 pub mod capture;
 pub mod command_transcriber;
-pub mod delivery;
 pub mod export;
 pub mod handoff;
 #[cfg_attr(target_os = "windows", path = "win/helper.rs")]
@@ -20,22 +26,16 @@ pub mod hex;
 pub mod ingest_http;
 pub mod keyframes;
 pub mod live_transcribe;
-pub mod log;
 pub mod mic;
-pub mod model;
-pub mod page;
 pub mod permissions;
 pub mod phone;
 pub mod pipeline;
 pub mod recover;
 pub mod render;
 pub mod retention;
-pub mod routing;
 pub mod screens;
-pub mod sketch;
 pub mod speech_model;
 pub mod transcribe;
-pub mod web;
 #[cfg(target_os = "windows")]
 pub mod win;
 pub mod window_log;

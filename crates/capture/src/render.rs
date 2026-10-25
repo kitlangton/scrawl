@@ -36,7 +36,7 @@ pub fn encode_png(frame: &RgbaFrame) -> anyhow::Result<Vec<u8>> {
 }
 
 pub fn save_png(frame: &RgbaFrame, path: &Path) -> anyhow::Result<()> {
-    std::fs::write(path, encode_png(frame)?)?;
+    crate::routing::undo::write_private(path, &encode_png(frame)?)?;
     Ok(())
 }
 

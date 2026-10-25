@@ -28,7 +28,11 @@ fn sources() -> Vec<(PathBuf, String)> {
         }
     }
     let mut files = Vec::new();
-    for dir in [repo().join("src"), repo().join("crates/capture/src")] {
+    for dir in [
+        repo().join("src"),
+        repo().join("crates/capture/src"),
+        repo().join("crates/router/src"),
+    ] {
         if dir.is_dir() {
             walk(&dir, &mut files);
         }
@@ -89,8 +93,9 @@ fn config_keys(sources: &[(PathBuf, String)]) -> BTreeSet<String> {
             ("handoff.rs", "pub struct EngineConfig {"),
             ("app_config.rs", "pub struct AppConfig {"),
         ] {
-            if path.ends_with(file) {
-                let start = text.find(header).expect(header);
+            if path.ends_with(file)
+                && let Some(start) = text.find(header)
+            {
                 let body = &text[start..];
                 let body = &body[..body.find("\n}").unwrap()];
                 for line in body.lines().skip(1) {
