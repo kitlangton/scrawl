@@ -38,7 +38,7 @@ impl PillStyle {
         if let Some(style) = motion::tune().pill_style_override() {
             return style;
         }
-        crate::handoff::pill_style()
+        crate::app_config::pill_style()
     }
 }
 

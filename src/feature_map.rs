@@ -40,7 +40,9 @@ fn sources() -> Vec<(PathBuf, String)> {
             while let Some(line) = lines.next() {
                 let trimmed = line.trim_start();
                 if trimmed.starts_with("#[cfg(test)]")
-                    && lines.peek().is_some_and(|next| next.trim_start().starts_with("mod "))
+                    && lines
+                        .peek()
+                        .is_some_and(|next| next.trim_start().starts_with("mod "))
                 {
                     break;
                 }
@@ -79,15 +81,20 @@ fn camel_case(snake: &str) -> String {
 fn config_keys(sources: &[(PathBuf, String)]) -> BTreeSet<String> {
     let mut keys = BTreeSet::new();
     for (path, text) in sources {
-        if path.ends_with("handoff.rs") {
-            let start = text.find("pub struct Config {").expect("handoff::Config");
-            let body = &text[start..];
-            let body = &body[..body.find("\n}").unwrap()];
-            for line in body.lines().skip(1) {
-                if let Some(field) = line.trim().strip_prefix("pub ")
-                    && let Some((name, _)) = field.split_once(':')
-                {
-                    keys.insert(camel_case(name.trim()));
+        for (file, header) in [
+            ("handoff.rs", "pub struct EngineConfig {"),
+            ("app_config.rs", "pub struct AppConfig {"),
+        ] {
+            if path.ends_with(file) {
+                let start = text.find(header).expect(header);
+                let body = &text[start..];
+                let body = &body[..body.find("\n}").unwrap()];
+                for line in body.lines().skip(1) {
+                    if let Some(field) = line.trim().strip_prefix("pub ")
+                        && let Some((name, _)) = field.split_once(':')
+                    {
+                        keys.insert(camel_case(name.trim()));
+                    }
                 }
             }
         }
@@ -128,7 +135,9 @@ fn experiments(sources: &[(PathBuf, String)]) -> Result<BTreeSet<String>, String
         for (at, _) in text.match_indices("experiment(") {
             // `enable_experiment(` and `fn experiment(` aren't questions.
             let prefix = &text[..at];
-            if prefix.ends_with(|c: char| c.is_alphanumeric() || c == '_') || prefix.ends_with("fn ") {
+            if prefix.ends_with(|c: char| c.is_alphanumeric() || c == '_')
+                || prefix.ends_with("fn ")
+            {
                 continue;
             }
             let arg = &text[at + "experiment(".len()..];
@@ -142,7 +151,12 @@ fn experiments(sources: &[(PathBuf, String)]) -> Result<BTreeSet<String>, String
                 Some(value) => {
                     flags.insert(value.clone());
                 }
-                None => return Err(format!("{}: can't resolve experiment({path_arg})", path.display())),
+                None => {
+                    return Err(format!(
+                        "{}: can't resolve experiment({path_arg})",
+                        path.display()
+                    ));
+                }
             }
         }
     }
@@ -159,11 +173,16 @@ fn feature_map() -> Map {
     let path = repo().join("site/src/features.json");
     let json: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap())
         .expect("site/src/features.json is valid JSON");
-    let mut map = Map { keys: BTreeSet::new(), flags: BTreeSet::new(), docs: Vec::new() };
+    let mut map = Map {
+        keys: BTreeSet::new(),
+        flags: BTreeSet::new(),
+        docs: Vec::new(),
+    };
     for feature in json["features"].as_array().expect("features") {
         let id = feature["id"].as_str().unwrap_or("?").to_owned();
         let status = feature["status"].as_str().unwrap_or("");
-        let on_main = status == "main" || status.starts_with("stable@") || status.starts_with("experiment:");
+        let on_main =
+            status == "main" || status.starts_with("stable@") || status.starts_with("experiment:");
         if !on_main {
             continue;
         }
@@ -172,11 +191,13 @@ fn feature_map() -> Map {
         }
         for config in feature["config"].as_array().into_iter().flatten() {
             let key = config["key"].as_str().unwrap_or("");
-            map.keys.insert(key.split('.').next().unwrap_or(key).to_owned());
+            map.keys
+                .insert(key.split('.').next().unwrap_or(key).to_owned());
         }
         for doc in feature["docs"].as_array().into_iter().flatten() {
             let doc = doc.as_str().unwrap_or("");
-            map.docs.push((id.clone(), doc.split('#').next().unwrap_or(doc).to_owned()));
+            map.docs
+                .push((id.clone(), doc.split('#').next().unwrap_or(doc).to_owned()));
         }
     }
     map
@@ -186,12 +207,30 @@ fn feature_map() -> Map {
 fn the_scanner_sees_known_keys_and_flags() {
     let sources = sources();
     let keys = config_keys(&sources);
-    for key in ["autoSend", "shortcuts", "retention", "transcribeCommand", "onboarding", "usbApps"] {
-        assert!(keys.contains(key), "scanner missed config key {key}: {keys:?}");
+    for key in [
+        "autoSend",
+        "shortcuts",
+        "retention",
+        "transcribeCommand",
+        "onboarding",
+        "usbApps",
+    ] {
+        assert!(
+            keys.contains(key),
+            "scanner missed config key {key}: {keys:?}"
+        );
     }
     let flags = experiments(&sources).unwrap();
-    for flag in ["agentContext", "liveTranscribe", "smartRouting", "clipboardImage"] {
-        assert!(flags.contains(flag), "scanner missed experiment {flag}: {flags:?}");
+    for flag in [
+        "agentContext",
+        "liveTranscribe",
+        "smartRouting",
+        "clipboardImage",
+    ] {
+        assert!(
+            flags.contains(flag),
+            "scanner missed experiment {flag}: {flags:?}"
+        );
     }
 }
 
@@ -203,19 +242,27 @@ fn the_feature_map_covers_every_config_key_and_experiment() {
     let map = feature_map();
     let mut problems = Vec::new();
     for key in keys.difference(&map.keys) {
-        problems.push(format!("config key \"{key}\" is read by the app but no feature lists it"));
+        problems.push(format!(
+            "config key \"{key}\" is read by the app but no feature lists it"
+        ));
     }
     for key in map.keys.difference(&keys) {
         if !flags.contains(key) {
-            problems.push(format!("a feature lists config key \"{key}\", which the app no longer reads"));
+            problems.push(format!(
+                "a feature lists config key \"{key}\", which the app no longer reads"
+            ));
         }
     }
     for flag in flags.difference(&map.flags) {
-        problems.push(format!("experiment \"{flag}\" has no feature with status experiment:{flag}"));
+        problems.push(format!(
+            "experiment \"{flag}\" has no feature with status experiment:{flag}"
+        ));
     }
     for flag in &map.flags {
         if !flags.contains(flag) && !keys.contains(flag) {
-            problems.push(format!("status experiment:{flag} names a flag the app no longer reads"));
+            problems.push(format!(
+                "status experiment:{flag} names a flag the app no longer reads"
+            ));
         }
     }
     for (id, doc) in &map.docs {

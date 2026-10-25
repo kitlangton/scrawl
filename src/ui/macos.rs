@@ -83,7 +83,9 @@ pub(super) fn move_picker_window(frame: [f64; 4], _cx: &mut App) {
 }
 
 /// GPUI places windows relative to their display on macOS.
-pub(super) fn window_origin(_display: Option<&dyn gpui::PlatformDisplay>) -> gpui::Point<gpui::Pixels> {
+pub(super) fn window_origin(
+    _display: Option<&dyn gpui::PlatformDisplay>,
+) -> gpui::Point<gpui::Pixels> {
     gpui::Point::default()
 }
 
@@ -178,7 +180,10 @@ pub(super) fn take_keys(cx: &mut App) {
     cx.activate(true);
 }
 
-#[allow( deprecated, reason = "activateIgnoringOtherApps makes an accessory app key reliably" )]
+#[allow(
+    deprecated,
+    reason = "activateIgnoringOtherApps makes an accessory app key reliably"
+)]
 pub(super) fn take_keys_now() {
     remember_front_app();
     if let Some(mtm) = MainThreadMarker::new() {
@@ -523,7 +528,7 @@ objc2::define_class!(
                 set_record_menu_shortcut(&item);
             }
             if let Some(item) = menu.itemWithTag(EXPORT_VIDEO_MENU_TAG) {
-                item.setHidden(!crate::handoff::video_export());
+                item.setHidden(!crate::app_config::video_export());
             }
         }
     }
@@ -539,9 +544,7 @@ const RECORD_MENU_TAG: isize = 0x5c4d;
 pub(super) fn menu_shortcut_equivalent(
     shortcut: &crate::capture::ShortcutConfig,
 ) -> (String, objc2_app_kit::NSEventModifierFlags) {
-    use crate::capture::{
-        CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY, CARBON_SHIFT_KEY,
-    };
+    use crate::capture::{CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY, CARBON_SHIFT_KEY};
     use objc2_app_kit::NSEventModifierFlags;
 
     let mut mask = NSEventModifierFlags::empty();
@@ -573,7 +576,9 @@ pub(super) fn menu_shortcut_equivalent(
             && let Ok(n) = k[1..].parse::<u32>()
             && (1..=24).contains(&n) =>
         {
-            char::from_u32(0xf704 + n - 1).unwrap_or_default().to_string()
+            char::from_u32(0xf704 + n - 1)
+                .unwrap_or_default()
+                .to_string()
         }
         other => other.to_lowercase(),
     };
@@ -738,7 +743,7 @@ pub(super) fn install_status_bar() -> Option<flume::Receiver<MenuAction>> {
     add("Export Last Capture as Video…", sel!(exportVideo:));
     if let Some(item) = menu.itemAtIndex(menu.numberOfItems() - 1) {
         item.setTag(EXPORT_VIDEO_MENU_TAG);
-        item.setHidden(!crate::handoff::video_export());
+        item.setHidden(!crate::app_config::video_export());
     }
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     add("Settings…", sel!(openSettings:));
@@ -1132,7 +1137,6 @@ fn trace_capsule(
         clip: shell,
     }
 }
-
 
 pub(super) fn capture_own_window_screenshot(
     window_num: Option<isize>,

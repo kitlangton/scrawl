@@ -723,7 +723,15 @@ fn context_value(raw: &str) -> String {
 pub const LOOK_AT_IMAGES: &str = "Open contact-sheet.png and frames/ in that folder before changing anything: the marks and words only make sense on the images, which can show more than the text does.";
 
 pub fn summary_markdown(bundle: &ScrawlBundle, bundle_dir: &std::path::Path) -> String {
-    let agent_context = crate::handoff::experiment(crate::handoff::AGENT_CONTEXT);
+    summary_markdown_for_config(bundle, bundle_dir, &crate::handoff::engine_config())
+}
+
+pub fn summary_markdown_for_config(
+    bundle: &ScrawlBundle,
+    bundle_dir: &std::path::Path,
+    config: &crate::handoff::EngineConfig,
+) -> String {
+    let agent_context = config.experiment(crate::handoff::AGENT_CONTEXT);
     summary_markdown_with(bundle, bundle_dir, agent_context)
 }
 

@@ -1,4 +1,5 @@
 pub mod agent_context;
+pub mod app_config;
 pub mod audio;
 pub mod autocrop;
 // Windows looks elements up through UI Automation (`win/uia.rs`); other systems have no lookup.

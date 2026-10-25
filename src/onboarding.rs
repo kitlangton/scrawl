@@ -798,7 +798,7 @@ impl Session {
     fn rune_window() -> bool {
         #[cfg(target_os = "macos")]
         {
-            crate::handoff::rune_ui() && crate::ui::rune_onboarding::available()
+            crate::app_config::rune_ui() && crate::ui::rune_onboarding::available()
         }
         #[cfg(not(target_os = "macos"))]
         {

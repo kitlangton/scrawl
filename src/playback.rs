@@ -5,7 +5,7 @@ use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
-use crate::handoff::{default_config_path, load_config_from};
+use crate::app_config;
 
 /// Restores the volume when dropped.
 pub struct Guard;
@@ -41,7 +41,7 @@ fn command(line: Option<&str>) -> anyhow::Result<()> {
 
 /// Starts the helper ahead of the first recording, when the setting is on.
 pub fn warm_up() {
-    if load_config_from(&default_config_path()).lower_playback == Some(true)
+    if app_config::load().lower_playback == Some(true)
         && let Err(error) = command(None)
     {
         crate::log::scrawl_log(format!("Playback helper: {error:#}"));
@@ -51,7 +51,7 @@ pub fn warm_up() {
 impl Guard {
     /// Lowers the volume if the setting is on.
     pub fn start() -> Option<Self> {
-        let config = load_config_from(&default_config_path());
+        let config = app_config::load();
         if config.lower_playback != Some(true) {
             return None;
         }

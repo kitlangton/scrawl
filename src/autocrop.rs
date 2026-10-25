@@ -231,9 +231,12 @@ impl Settings {
         }
     }
 
-    pub fn configured() -> Option<Self> {
-        let config = crate::handoff::load_config_from(&crate::handoff::default_config_path());
+    pub fn from_engine_config(config: &crate::handoff::EngineConfig) -> Option<Self> {
         Self::from_config(config.autocrop.as_ref())
+    }
+
+    pub fn configured() -> Option<Self> {
+        Self::from_engine_config(&crate::handoff::engine_config())
     }
 }
 

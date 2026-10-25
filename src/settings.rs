@@ -1294,6 +1294,7 @@ impl Panel {
 
     pub fn view(&self, host: &dyn Host) -> View {
         let config = crate::handoff::load_config_from(&host.config_path());
+        let app_config = crate::app_config::load_from(&host.config_path());
         let shortcuts = host.shortcuts();
         let hex = crate::hex::cached_status();
         let engine = config
@@ -1348,8 +1349,8 @@ impl Panel {
                 self.inputs.as_ref(),
                 self.status(Permission::Microphone) == Status::Granted,
             ),
-            lower_playback: config.lower_playback.unwrap_or(false),
-            playback_level: config.recording_volume(),
+            lower_playback: app_config.lower_playback.unwrap_or(false),
+            playback_level: app_config.recording_volume(),
             transcriber: TranscriberView {
                 engine: match engine {
                     crate::transcribe::Engine::Command if command.is_some() => "command",
@@ -1368,7 +1369,7 @@ impl Panel {
                     .collect(),
                 command,
             },
-            video_export: config.video_export.unwrap_or(false),
+            video_export: app_config.video_export.unwrap_or(false),
             retention: RetentionView {
                 preset: policy.preset().map(preset_id),
                 options: crate::retention::Preset::ALL
@@ -1566,7 +1567,7 @@ impl Session {
     fn rune_window() -> bool {
         #[cfg(target_os = "macos")]
         {
-            crate::handoff::rune_ui() && crate::ui::rune_settings::available()
+            crate::app_config::rune_ui() && crate::ui::rune_settings::available()
         }
         #[cfg(not(target_os = "macos"))]
         {

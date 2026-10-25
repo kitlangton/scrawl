@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::log::scrawl_log;
 use crate::handoff::{ApiGet, OpenCodeSession};
+use crate::log::scrawl_log;
 use crate::model::{Destination, ScrawlBundle};
 use crate::web::Registration;
 
@@ -538,7 +538,11 @@ pub fn route(url: &str, hooks: &Hooks) -> std::result::Result<Destination, Strin
 }
 
 fn routing_enabled() -> bool {
-    crate::handoff::auto_send() && std::env::var_os("SCRAWL_NO_OPENCODE").is_none()
+    routing_enabled_in(&crate::handoff::engine_config())
+}
+
+fn routing_enabled_in(config: &crate::handoff::EngineConfig) -> bool {
+    config.auto_send() && std::env::var_os("SCRAWL_NO_OPENCODE").is_none()
 }
 
 /// Decides where a capture that just finished goes; `None` (logged) keeps it on the clipboard.
@@ -546,11 +550,23 @@ pub fn route_capture(
     front_bundle_id: Option<&str>,
     target_bundle_id: Option<&str>,
 ) -> Option<Destination> {
-    if !routing_enabled() {
+    route_capture_with_config(
+        front_bundle_id,
+        target_bundle_id,
+        &crate::handoff::engine_config(),
+    )
+}
+
+pub fn route_capture_with_config(
+    front_bundle_id: Option<&str>,
+    target_bundle_id: Option<&str>,
+    config: &crate::handoff::EngineConfig,
+) -> Option<Destination> {
+    if !routing_enabled_in(config) {
         return None;
     }
     let url = capture_url(front_bundle_id, target_bundle_id)?;
-    match route_with_sites(&url, &crate::handoff::routing_sites(), &Hooks::default()) {
+    match route_with_sites(&url, &config.routing_sites(), &Hooks::default()) {
         Ok(dest) => {
             scrawl_log(format!(
                 "routing: {url} → {} ({}) via {}",
@@ -571,13 +587,8 @@ pub fn look_capture(
     front_bundle_id: Option<&str>,
     target_bundle_id: Option<&str>,
 ) -> Option<look::Live> {
-    routing_enabled().then(|| {
-        look::look_live(
-            front_bundle_id,
-            target_bundle_id,
-            &look::Senses::default(),
-        )
-    })
+    routing_enabled()
+        .then(|| look::look_live(front_bundle_id, target_bundle_id, &look::Senses::default()))
 }
 
 /// Smart routing's second half, once the bundle is built: decides, saves the evidence beside
@@ -793,7 +804,8 @@ mod tests {
 
     #[test]
     fn project_root_walks_up_to_git() {
-        let base = std::env::temp_dir().join(format!("scrawl-root-{}", crate::pipeline::make_bundle_id()));
+        let base =
+            std::env::temp_dir().join(format!("scrawl-root-{}", crate::pipeline::make_bundle_id()));
         let site = base.join("repo/site/src");
         std::fs::create_dir_all(&site).unwrap();
         std::fs::create_dir_all(base.join("repo/.git")).unwrap();
@@ -880,7 +892,10 @@ mod tests {
             (found, requests)
         };
         // Exact folder: one filtered request.
-        assert_eq!(pick(&sessions, "/p/app", false), (Some("ses_app".into()), 1));
+        assert_eq!(
+            pick(&sessions, "/p/app", false),
+            (Some("ses_app".into()), 1)
+        );
         // A subfolder needs a newest-first scan, which is capped: past it the exact match stands.
         let (found, requests) = pick(&sessions, "/p/app", true);
         assert_eq!(found.as_deref(), Some("ses_app"));
@@ -1027,8 +1042,10 @@ mod tests {
 
     #[test]
     fn destination_is_recorded_and_preferred_by_send() {
-        let dir =
-            std::env::temp_dir().join(format!("scrawl-route-{}.scrawl", crate::pipeline::make_bundle_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-route-{}.scrawl",
+            crate::pipeline::make_bundle_id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let mut bundle: ScrawlBundle = serde_json::from_value(serde_json::json!({
             "version": 1, "id": "t", "createdAtMs": 0, "durationMs": 1_000,

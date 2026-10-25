@@ -427,9 +427,9 @@ fn opencode_binary() -> Result<PathBuf> {
     bail!("Could not find opencode2; set OPENCODE_BIN or add it to PATH")
 }
 
-#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct Config {
+pub struct EngineConfig {
     #[serde(default)]
     pub agent_host: Option<String>,
     #[serde(default)]
@@ -445,19 +445,11 @@ pub struct Config {
     /// site's OpenCode session (`routing`).
     #[serde(default)]
     pub auto_send: Option<bool>,
-    /// Feature flag: shows **Export Last Capture as Video…** in the menu (default off).
-    #[serde(default)]
-    pub video_export: Option<bool>,
     /// `"apple"` (default), `"hex"` or `"command"`: which engine transcribes recordings
     /// (`transcribe`). The command's own keys are read by `transcribe_command`, not here, so a
     /// malformed one can't reset this struct.
     #[serde(default)]
     pub transcriber: Option<String>,
-    /// Lower the output volume while recording (`playback`) to `playbackLevel` percent of it.
-    #[serde(default)]
-    pub lower_playback: Option<bool>,
-    #[serde(default)]
-    pub playback_level: Option<u8>,
     /// The Hex model to use when `transcriber` is `"hex"` (default: the first ready one of
     /// `hex::PREFERRED_MODELS`).
     #[serde(default)]
@@ -468,16 +460,6 @@ pub struct Config {
     /// Apple Speech locale (BCP-47, e.g. "zh-TW"); missing means the Mac's own language.
     #[serde(default)]
     pub apple_locale: Option<String>,
-    /// Whether to use the native Metal recording pill instead of GPUI's `HudPillWindow` (default `true`).
-    #[serde(default)]
-    pub native_pill: Option<bool>,
-    /// Visual style of the native recording pill: `"black"` (default) or `"glass"` (`NSGlassEffectView`).
-    #[serde(default)]
-    pub pill_style: Option<String>,
-    /// `"gpui"` (default) or `"rune"`: which UI runtime draws the capsule, picker and review
-    /// window (`SCRAWL_UI=rune` overrides it at launch).
-    #[serde(default)]
-    pub ui: Option<String>,
     /// Behaviour Kit tries locally before it ships (`{"agentContext": true}`); see `experiment`.
     /// Read leniently (`lenient_experiments`), so a stray value never fails the file.
     #[serde(default, deserialize_with = "lenient_experiments")]
@@ -493,10 +475,37 @@ pub struct Config {
     pub captures_dir: Option<String>,
 }
 
-impl Config {
-    /// The output volume while recording when `lowerPlayback` is on, in percent of what it was.
-    pub fn recording_volume(&self) -> u8 {
-        self.playback_level.unwrap_or(20).min(100)
+pub type Config = EngineConfig;
+
+impl EngineConfig {
+    /// Whether an experiment is on in this config (with process-level overrides winning, and
+    /// tests seeing only overrides).
+    pub fn experiment(&self, name: &str) -> bool {
+        let overridden = EXPERIMENT_OVERRIDES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|n| n == name);
+        if overridden || cfg!(test) {
+            return overridden;
+        }
+        self.experiments.get(name).copied().unwrap_or(false)
+    }
+
+    pub fn auto_send(&self) -> bool {
+        self.auto_send.unwrap_or(true)
+    }
+
+    pub fn routing_apps(&self) -> Vec<(String, PathBuf)> {
+        routing_paths_in(self, |routing| &routing.apps)
+    }
+
+    pub fn routing_servers(&self) -> Vec<(String, PathBuf)> {
+        routing_paths_in(self, |routing| &routing.servers)
+    }
+
+    pub fn routing_sites(&self) -> Vec<(String, PathBuf)> {
+        routing_paths_in(self, |routing| &routing.sites)
     }
 }
 
@@ -532,7 +541,9 @@ where
     let mut out = std::collections::BTreeMap::new();
     let Value::Object(map) = value else {
         if !value.is_null() {
-            log_config_once(format!("config.json: ignoring \"experiments\": {value} (expected an object)"));
+            log_config_once(format!(
+                "config.json: ignoring \"experiments\": {value} (expected an object)"
+            ));
         }
         return Ok(out);
     };
@@ -562,7 +573,9 @@ where
 /// Config problems are logged once per process, not on every read.
 fn log_config_once(message: String) {
     static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-    let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut seen = SEEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !seen.contains(&message) {
         crate::log::scrawl_log(&message);
         seen.push(message);
@@ -611,19 +624,27 @@ pub fn default_config_path() -> PathBuf {
         })
 }
 
-pub fn load_config_from(path: &Path) -> Config {
+pub fn parse_config_from<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
     fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .map(config_from_value)
+        .map(parse_config_value)
         .unwrap_or_default()
+}
+
+pub fn load_config_from(path: &Path) -> EngineConfig {
+    parse_config_from(path)
+}
+
+pub fn engine_config() -> EngineConfig {
+    load_config_from(&default_config_path())
 }
 
 /// The config in `value`. A key whose value doesn't fit (`"autoSend": "maybe"`) is dropped and
 /// logged on its own, so one bad setting never resets the others to their defaults.
-fn config_from_value(value: serde_json::Value) -> Config {
+fn parse_config_value<T: for<'de> Deserialize<'de> + Default>(value: serde_json::Value) -> T {
     let serde_json::Value::Object(map) = value else {
-        return Config::default();
+        return T::default();
     };
     if let Ok(config) = serde_json::from_value(serde_json::Value::Object(map.clone())) {
         return config;
@@ -632,8 +653,7 @@ fn config_from_value(value: serde_json::Value) -> Config {
     let mut kept = serde_json::Map::new();
     for (key, value) in map {
         kept.insert(key.clone(), value.clone());
-        if let Err(error) = serde_json::from_value::<Config>(serde_json::Value::Object(kept.clone()))
-        {
+        if let Err(error) = serde_json::from_value::<T>(serde_json::Value::Object(kept.clone())) {
             kept.remove(&key);
             log_config_once(format!("config.json: ignoring \"{key}\": {error}"));
         }
@@ -641,25 +661,11 @@ fn config_from_value(value: serde_json::Value) -> Config {
     serde_json::from_value(serde_json::Value::Object(kept)).unwrap_or_default()
 }
 
-fn config() -> Config {
-    load_config_from(&default_config_path())
+fn config() -> EngineConfig {
+    engine_config()
 }
 
-/// Whether the app runs its UI on Rune (`"ui": "rune"` in `config.json`, or `SCRAWL_UI=rune`).
-/// Defaults to GPUI (`false`).
-pub fn rune_ui() -> bool {
-    rune_ui_from(std::env::var("SCRAWL_UI").ok().as_deref(), &config())
-}
-
-pub fn rune_ui_from(env_ui: Option<&str>, config: &Config) -> bool {
-    if let Some(env_ui) = env_ui.map(str::trim).filter(|s| !s.is_empty()) {
-        return env_ui.eq_ignore_ascii_case("rune");
-    }
-    config
-        .ui
-        .as_deref()
-        .is_some_and(|u| u.trim().eq_ignore_ascii_case("rune"))
-}
+pub use crate::app_config::{native_pill, pill_style, rune_ui, rune_ui_from, video_export};
 
 fn random_bytes_32() -> Result<[u8; 32]> {
     let mut bytes = [0_u8; 32];
@@ -752,51 +758,47 @@ pub fn ensure_ingest_token() -> Result<String> {
 
 /// `routing.apps` from config.json, `~` expanded. Tests see none.
 pub fn routing_apps() -> Vec<(String, PathBuf)> {
-    routing_paths(|routing| routing.apps)
+    config().routing_apps()
 }
 
 /// `routing.servers` in config.json: URL prefixes and the folders they serve, `~` expanded.
 pub fn routing_servers() -> Vec<(String, PathBuf)> {
-    routing_paths(|routing| routing.servers)
+    config().routing_servers()
 }
 
 /// `routing.sites` in config.json: URL prefixes and the folder (`~` expanded) or session ID their
 /// captures go to.
 pub fn routing_sites() -> Vec<(String, PathBuf)> {
-    routing_paths(|routing| routing.sites)
+    config().routing_sites()
 }
 
-fn routing_paths(
-    pick: fn(RoutingConfig) -> std::collections::BTreeMap<String, String>,
+fn routing_paths_in(
+    config: &EngineConfig,
+    pick: fn(&RoutingConfig) -> &std::collections::BTreeMap<String, String>,
 ) -> Vec<(String, PathBuf)> {
     if cfg!(test) {
         return Vec::new();
     }
     let home = dirs::home_dir().unwrap_or_default();
-    config()
+    config
         .routing
+        .as_ref()
         .map(pick)
-        .unwrap_or_default()
         .into_iter()
+        .flatten()
         .map(|(id, path)| {
             let path = match path.strip_prefix("~/") {
                 Some(rest) => home.join(rest),
                 None => PathBuf::from(path),
             };
-            (id, path)
+            (id.clone(), path)
         })
         .collect()
 }
 
 /// Whether Mac captures of a dev site go straight to its session (`autoSend`, default on).
 pub fn auto_send() -> bool {
-    config().auto_send.unwrap_or(true)
-}
-
-/// Whether the menu offers video export (`videoExport`, default off). `scrawl export` works
-/// either way.
-pub fn video_export() -> bool {
-    config().video_export.unwrap_or(false)
+    config().auto_send()
 }
 
 /// The configured transcriber name (`transcriber`) as written, unvalidated.
@@ -817,7 +819,7 @@ pub fn hex_language() -> String {
     hex_language_from(&config())
 }
 
-pub fn hex_language_from(config: &Config) -> String {
+pub fn hex_language_from(config: &EngineConfig) -> String {
     config
         .hex_language
         .as_deref()
@@ -830,7 +832,7 @@ pub fn apple_locale() -> Option<String> {
     apple_locale_from(&config())
 }
 
-pub fn apple_locale_from(config: &Config) -> Option<String> {
+pub fn apple_locale_from(config: &EngineConfig) -> Option<String> {
     config
         .apple_locale
         .as_deref()
@@ -842,33 +844,6 @@ pub fn apple_locale_from(config: &Config) -> Option<String> {
 pub fn transcribe_command()
 -> Result<crate::command_transcriber::Program, crate::command_transcriber::Unusable> {
     crate::command_transcriber::Program::load_from(&default_config_path())
-}
-
-/// Whether the native AppKit + Metal recording pill is enabled (`SCRAWL_NATIVE_PILL` or
-/// `nativePill` in `config.json`, default `true`). macOS only: elsewhere the GPUI capsule draws.
-pub fn native_pill() -> bool {
-    if cfg!(not(target_os = "macos")) {
-        return false;
-    }
-    if let Ok(val) = std::env::var("SCRAWL_NATIVE_PILL") {
-        let s = val.trim().to_ascii_lowercase();
-        if matches!(s.as_str(), "0" | "false" | "gpui" | "off" | "no") {
-            return false;
-        }
-        if matches!(s.as_str(), "1" | "true" | "native" | "metal" | "on" | "yes") {
-            return true;
-        }
-    }
-    config().native_pill.unwrap_or(true)
-}
-
-/// Configured capsule style (`pillStyle` in `config.json`, default `"black"`).
-pub fn pill_style() -> crate::native::pill::PillStyle {
-    config()
-        .pill_style
-        .as_deref()
-        .and_then(crate::native::pill::PillStyle::from_str_opt)
-        .unwrap_or(crate::native::pill::PillStyle::Black)
 }
 
 /// Sets one top-level key in `path` (`null` removes it), keeping the rest (and its `0600` mode,
@@ -1011,7 +986,9 @@ pub fn sync_bundle_to(host: &str, bundle_dir: &Path) -> Result<()> {
         format!(" && touch {bundle_q}/{MEDIA_PENDING}")
     };
     let output = ssh(host)
-        .arg(format!("mkdir -p {parent_q} && tar -C {parent_q} -xf -{mark_pending}"))
+        .arg(format!(
+            "mkdir -p {parent_q} && tar -C {parent_q} -xf -{mark_pending}"
+        ))
         .stdin(tar.stdout.take().context("No tar output")?)
         .output()
         .context("Could not start ssh")?;
@@ -1167,7 +1144,10 @@ impl ServiceFile {
 }
 
 fn non_empty(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned)
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
 }
 
 /// The socket address in `http://127.0.0.1:4096…` when its host is an IP or `localhost` (no
@@ -1213,10 +1193,12 @@ fn local_server() -> (std::net::SocketAddr, Option<String>) {
     let home = dirs::home_dir();
     let files: Vec<ServiceFile> = [
         env_dir("XDG_STATE_HOME").map(|d| d.join("opencode/service.json")),
-        home.as_ref().map(|h| h.join(".local/state/opencode/service.json")),
+        home.as_ref()
+            .map(|h| h.join(".local/state/opencode/service.json")),
         env_dir("OPENCODE_CONFIG_DIR").map(|d| d.join("service.json")),
         env_dir("XDG_CONFIG_HOME").map(|d| d.join("opencode/service.json")),
-        home.as_ref().map(|h| h.join(".config/opencode/service.json")),
+        home.as_ref()
+            .map(|h| h.join(".config/opencode/service.json")),
     ]
     .into_iter()
     .flatten()
@@ -1252,7 +1234,9 @@ fn http_get(
     timeout: std::time::Duration,
 ) -> Result<Vec<u8>> {
     use std::io::{Read, Write};
-    let connect = SERVER_CONNECT_TIMEOUT.min(timeout).max(std::time::Duration::from_millis(1));
+    let connect = SERVER_CONNECT_TIMEOUT
+        .min(timeout)
+        .max(std::time::Duration::from_millis(1));
     let timeout = timeout.max(std::time::Duration::from_millis(1));
     let mut stream = std::net::TcpStream::connect_timeout(&address, connect)
         .with_context(|| format!("Could not reach server at http://{address}"))?;
@@ -1265,9 +1249,8 @@ fn http_get(
         ),
         _ => String::new(),
     };
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {address}\r\n{auth}Connection: close\r\n\r\n"
-    );
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: {address}\r\n{auth}Connection: close\r\n\r\n");
     stream
         .write_all(request.as_bytes())
         .with_context(|| format!("Could not write to server at http://{address}"))?;
@@ -1504,7 +1487,9 @@ pub fn resolve_opencode_session_with(
     let matched = matched
         .or_else(|| {
             let id = env_session.filter(|id| !id.trim().is_empty())?;
-            get_session(get, id).ok().filter(OpenCodeSession::is_open_root)
+            get_session(get, id)
+                .ok()
+                .filter(OpenCodeSession::is_open_root)
         })
         .or(newest)
         .context("No root OpenCode session found; pass a session ID")?;
@@ -1844,7 +1829,8 @@ mod tests {
 
     #[test]
     fn recordings_go_to_their_addressed_session_not_the_viewed_one() {
-        let dir = std::env::temp_dir().join(format!("scrawl-dest-{}", crate::pipeline::make_bundle_id()));
+        let dir =
+            std::env::temp_dir().join(format!("scrawl-dest-{}", crate::pipeline::make_bundle_id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join("timeline.json"),
@@ -1854,14 +1840,23 @@ mod tests {
         let addressed = recorded_destination(&dir);
         assert_eq!(addressed.as_deref(), Some("ses_ios"));
         let addressed = addressed.as_deref();
-        assert_eq!(choose_destination(None, addressed, false).unwrap(), Some("ses_ios"));
+        assert_eq!(
+            choose_destination(None, addressed, false).unwrap(),
+            Some("ses_ios")
+        );
         assert!(choose_destination(Some("ses_motion"), addressed, false).is_err());
         assert_eq!(
             choose_destination(Some("ses_motion"), addressed, true).unwrap(),
             Some("ses_motion")
         );
-        assert_eq!(choose_destination(Some("ses_ios"), addressed, false).unwrap(), Some("ses_ios"));
-        assert_eq!(choose_destination(Some("ses_x"), None, false).unwrap(), Some("ses_x"));
+        assert_eq!(
+            choose_destination(Some("ses_ios"), addressed, false).unwrap(),
+            Some("ses_ios")
+        );
+        assert_eq!(
+            choose_destination(Some("ses_x"), None, false).unwrap(),
+            Some("ses_x")
+        );
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(recorded_destination(&dir), None);
     }
@@ -1979,7 +1974,11 @@ mod tests {
     fn auto_send_defaults_on_and_the_toggle_keeps_other_keys() {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
-        fs::write(&path, br#"{"ingestToken":"abc","retention":{"mediaDays":7}}"#).unwrap();
+        fs::write(
+            &path,
+            br#"{"ingestToken":"abc","retention":{"mediaDays":7}}"#,
+        )
+        .unwrap();
         assert_eq!(load_config_from(&path).auto_send, None);
         set_config_value_in(&path, "autoSend", serde_json::Value::Bool(false)).unwrap();
         let config = load_config_from(&path);
@@ -1990,7 +1989,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
     }
 
@@ -1999,9 +2001,9 @@ mod tests {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
         fs::write(&path, br#"{"autoSend":false}"#).unwrap();
-        assert_eq!(load_config_from(&path).video_export, None);
+        assert_eq!(crate::app_config::load_from(&path).video_export, None);
         fs::write(&path, br#"{"videoExport":true}"#).unwrap();
-        assert_eq!(load_config_from(&path).video_export, Some(true));
+        assert_eq!(crate::app_config::load_from(&path).video_export, Some(true));
     }
 
     #[test]
@@ -2013,7 +2015,8 @@ mod tests {
         assert_eq!(v2.directory(), Some("/p/a"));
         assert!(v2.is_open_root());
         let v1: OpenCodeSession =
-            serde_json::from_str(r#"{"id":"ses_b","parentID":"ses_a","directory":"/p/b"}"#).unwrap();
+            serde_json::from_str(r#"{"id":"ses_b","parentID":"ses_a","directory":"/p/b"}"#)
+                .unwrap();
         assert_eq!(v1.directory(), Some("/p/b"));
         assert!(!v1.is_open_root());
         assert_eq!(v1.label(), "ses_b");
@@ -2073,14 +2076,19 @@ mod tests {
         )
         .unwrap();
         let cfg = load_config_from(&path);
+        let app_cfg = crate::app_config::load_from(&path);
         assert_eq!(cfg.agent_host.as_deref(), Some("studio"));
-        assert_eq!(cfg.video_export, Some(true));
-        assert_eq!(cfg.pill_style.as_deref(), Some("glass"));
+        assert_eq!(app_cfg.video_export, Some(true));
+        assert_eq!(app_cfg.pill_style.as_deref(), Some("glass"));
         assert_eq!(cfg.auto_send, None);
-        assert_eq!(cfg.native_pill, None);
+        assert_eq!(app_cfg.native_pill, None);
         assert!(cfg.usb_apps.is_empty());
         // Both spellings of one field: one is kept rather than neither.
-        fs::write(&path, r#"{"usbApps": ["a"], "tetherApps": ["b"], "agentHost": "pro"}"#).unwrap();
+        fs::write(
+            &path,
+            r#"{"usbApps": ["a"], "tetherApps": ["b"], "agentHost": "pro"}"#,
+        )
+        .unwrap();
         let cfg = load_config_from(&path);
         assert_eq!(cfg.agent_host.as_deref(), Some("pro"));
         assert_eq!(cfg.usb_apps.len(), 1);
@@ -2223,17 +2231,32 @@ mod tests {
             }
         });
 
-        let body = http_get(address, Some("secret"), "/api/session", Duration::from_secs(1)).unwrap();
+        let body = http_get(
+            address,
+            Some("secret"),
+            "/api/session",
+            Duration::from_secs(1),
+        )
+        .unwrap();
         assert_eq!(body, br#"{"data":[]}"#);
 
-        let err =
-            http_get(address, Some("secret"), "/api/session/missing", Duration::from_secs(1))
-                .unwrap_err();
+        let err = http_get(
+            address,
+            Some("secret"),
+            "/api/session/missing",
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
         assert!(format!("{err:#}").contains("HTTP 404"), "{err:#}");
 
         let started = Instant::now();
-        let err = http_get(address, Some("secret"), "/api/session", Duration::from_millis(100))
-            .unwrap_err();
+        let err = http_get(
+            address,
+            Some("secret"),
+            "/api/session",
+            Duration::from_millis(100),
+        )
+        .unwrap_err();
         assert!(format!("{err:#}").contains("didn't answer"), "{err:#}");
         assert!(started.elapsed() < Duration::from_secs(1));
         let _ = server.join();
@@ -2243,14 +2266,14 @@ mod tests {
     fn rune_ui_selector_defaults_to_gpui_and_respects_config_or_env() {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
-        let default_cfg = load_config_from(&path);
+        let default_cfg = crate::app_config::load_from(&path);
         assert!(!rune_ui_from(None, &default_cfg));
         assert!(rune_ui_from(Some("rune"), &default_cfg));
         assert!(rune_ui_from(Some(" RUNE "), &default_cfg));
         assert!(!rune_ui_from(Some("gpui"), &default_cfg));
 
         fs::write(&path, br#"{"ui":"rune","autoSend":false}"#).unwrap();
-        let rune_cfg = load_config_from(&path);
+        let rune_cfg = crate::app_config::load_from(&path);
         assert_eq!(rune_cfg.ui.as_deref(), Some("rune"));
         assert!(rune_ui_from(None, &rune_cfg));
         assert!(rune_ui_from(Some(""), &rune_cfg));
@@ -2265,7 +2288,8 @@ mod sync_live_check {
     #[test]
     #[ignore]
     fn sync_to_pro() {
-        let base = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("Library/Caches/scrawl-sync-live");
+        let base = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+            .join("Library/Caches/scrawl-sync-live");
         let _ = std::fs::remove_dir_all(&base);
         let bundle = base.join("scrawl-synctest.scrawl");
         std::fs::create_dir_all(bundle.join("frames-full")).unwrap();
@@ -2284,8 +2308,18 @@ mod sync_live_check {
                 break;
             }
         }
-        let _ = super::ssh("pro").arg(format!("rm -rf {}", super::shell_quote(&base.to_string_lossy()))).status();
-        assert!(out.contains("8000000") && out.contains("frame-01.png") && !out.contains(super::MEDIA_PENDING), "{out}");
+        let _ = super::ssh("pro")
+            .arg(format!(
+                "rm -rf {}",
+                super::shell_quote(&base.to_string_lossy())
+            ))
+            .status();
+        assert!(
+            out.contains("8000000")
+                && out.contains("frame-01.png")
+                && !out.contains(super::MEDIA_PENDING),
+            "{out}"
+        );
     }
 }
 
@@ -2372,7 +2406,14 @@ mod session_lookup {
 
     fn many(count: usize) -> Vec<OpenCodeSession> {
         (0..count)
-            .map(|i| session(&format!("ses_{i:05}"), &format!("Chat {i}"), "/p/x", 100_000 - i as u64))
+            .map(|i| {
+                session(
+                    &format!("ses_{i:05}"),
+                    &format!("Chat {i}"),
+                    "/p/x",
+                    100_000 - i as u64,
+                )
+            })
             .collect()
     }
 

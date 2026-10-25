@@ -1756,7 +1756,7 @@ impl ScrawlCoordinator {
                     phase,
                     IslandPhase::Selecting { .. } | IslandPhase::Recording
                 ));
-        if crate::handoff::native_pill() {
+        if crate::app_config::native_pill() {
             if !matches!(phase, IslandPhase::Hidden) {
                 self.ensure_native_pill();
             }
@@ -1877,7 +1877,7 @@ impl ScrawlCoordinator {
     }
 
     pub(crate) fn ensure_native_pill(&mut self) {
-        if !crate::handoff::native_pill() || self.native_pill.is_some() {
+        if !crate::app_config::native_pill() || self.native_pill.is_some() {
             return;
         }
         match crate::native::pill::NativePill::open() {
@@ -5154,7 +5154,7 @@ fn restack_soon(cx: &mut App) {
 }
 
 fn ensure_hud_pill_open(coord_entity: &Entity<ScrawlCoordinator>, cx: &mut App) {
-    if crate::handoff::native_pill() {
+    if crate::app_config::native_pill() {
         let _ = coord_entity.update(cx, |coord, _| {
             coord.ensure_native_pill();
             coord.sync_native_pill();
@@ -5376,7 +5376,7 @@ pub fn run_app(
     screenshot_out: Option<PathBuf>,
 ) {
     #[cfg(target_os = "macos")]
-    if crate::handoff::rune_ui() {
+    if crate::app_config::rune_ui() {
         rune_app::run_app(
             initial_bundle,
             start_recording_immediately,

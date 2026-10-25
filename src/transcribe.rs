@@ -38,12 +38,19 @@ impl Engine {
         }
     }
 
-    /// The configured engine: `"transcriber"` in the config file, Apple when missing or unknown.
-    pub fn configured() -> Self {
-        crate::handoff::transcriber()
+    /// The configured engine in `config`: `"transcriber"` in the config file, Apple when missing
+    /// or unknown.
+    pub fn configured_in(config: &crate::handoff::EngineConfig) -> Self {
+        config
+            .transcriber
             .as_deref()
             .and_then(Self::parse)
             .unwrap_or_default()
+    }
+
+    /// The configured engine: `"transcriber"` in the config file, Apple when missing or unknown.
+    pub fn configured() -> Self {
+        Self::configured_in(&crate::handoff::engine_config())
     }
 
     /// What recordings use now: a command-line `--transcriber`, else the configured engine.

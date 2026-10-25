@@ -13,9 +13,7 @@ use gpui::{
     Window, WindowControlArea, div, px, rgb, rgba,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use tray_icon::menu::{
-    IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem,
-};
+use tray_icon::menu::{IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -116,7 +114,8 @@ pub(super) fn window_origin(display: Option<&dyn gpui::PlatformDisplay>) -> Poin
 /// and the window would keep its old layout size and scale.
 pub(super) fn move_picker_window(frame: [f64; 4], cx: &mut App) {
     if let Some(id) = own_window(&PICKER_HWND) {
-        cx.spawn(async move |_| win::overlay::place(id, frame)).detach();
+        cx.spawn(async move |_| win::overlay::place(id, frame))
+            .detach();
     }
 }
 
@@ -376,9 +375,13 @@ fn pill_rect_at(point: [f64; 2]) -> Option<[f64; 4]> {
 
 /// Where the pill window opens on `display` (GPUI's global DIPs): below the work area's top.
 pub(super) fn hud_pill_origin(display: gpui::Bounds<Pixels>) -> Point<Pixels> {
-    let origin = [f64::from(f32::from(display.origin.x)), f64::from(f32::from(display.origin.y))];
+    let origin = [
+        f64::from(f32::from(display.origin.x)),
+        f64::from(f32::from(display.origin.y)),
+    ];
     let screen = crate::screens::displays().into_iter().find(|s| {
-        (origin[0] * s.scale - s.frame[0]).abs() < 2.0 && (origin[1] * s.scale - s.frame[1]).abs() < 2.0
+        (origin[0] * s.scale - s.frame[0]).abs() < 2.0
+            && (origin[1] * s.scale - s.frame[1]).abs() < 2.0
     });
     match screen {
         Some(s) => {
@@ -440,7 +443,8 @@ impl PillChrome {
                 f64::from(f32::from(centre.y)) * scale,
             ];
             if let Some(rect) = pill_rect_at(at) {
-                cx.spawn(async move |_| win::overlay::place(id, rect)).detach();
+                cx.spawn(async move |_| win::overlay::place(id, rect))
+                    .detach();
             }
         }
         Self { hwnd }
@@ -642,7 +646,7 @@ pub(super) fn install_status_bar() -> Option<flume::Receiver<MenuAction>> {
         true,
         None,
     ));
-    let export_shown = crate::handoff::video_export();
+    let export_shown = crate::app_config::video_export();
     if export_shown {
         let _ = menu.append(&export);
     }
@@ -718,7 +722,7 @@ fn refresh(tray: &mut Tray) {
     for item in tray.dynamic.drain(..) {
         let _ = tray.menu.remove(item.as_ref());
     }
-    let export = crate::handoff::video_export();
+    let export = crate::app_config::video_export();
     if export != tray.export_shown {
         if export {
             // After Open Latest Capture: the record rows, a separator, then Open Latest.

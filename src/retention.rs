@@ -118,6 +118,11 @@ impl Policy {
         Self::load_from(&crate::handoff::default_config_path())
     }
 
+    pub fn load_in(config: &crate::handoff::EngineConfig, path: &Path) -> Self {
+        let _ = config;
+        Self::load_from(path)
+    }
+
     pub fn load_from(path: &Path) -> Self {
         std::fs::read(path)
             .ok()
