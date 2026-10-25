@@ -12,7 +12,6 @@
 //! With `"experiments": {"smartRouting": true}`, [`smart`] decides instead, from clues
 //! [`look`] gathers (`docs/routing.md`); with `jevRouting` too, [`jev`] weighs them instead.
 
-pub mod cursor;
 pub mod jev;
 pub mod look;
 pub mod named;
@@ -770,7 +769,7 @@ pub fn write_record(
 /// toward a `routing.sites` or `routing.apps` rule, with Jev routing on. Once two agree, the
 /// rule to offer is saved in its `routing.json` as `offerRule` and returned.
 pub fn learn_capture(dir: &Path, session: &str) -> Option<policy::OfferRule> {
-    if !jev::enabled() || cursor::is_cursor(session) {
+    if !jev::enabled() {
         return None;
     }
     let path = dir.join(RECORD);

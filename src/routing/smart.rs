@@ -136,9 +136,6 @@ pub enum Source {
     Title,
     /// Words that were said.
     Speech,
-    /// An edit instruction about the selection in an editable field (`scrawl router decide`
-    /// with `destinations`): the text goes to the cursor ([`super::cursor`]).
-    CursorEdit,
 }
 
 impl Source {
@@ -166,7 +163,6 @@ impl Source {
             Self::App => "app",
             Self::Title => "title",
             Self::Speech => "speech",
-            Self::CursorEdit => "cursor-edit",
         }
     }
 
@@ -179,8 +175,7 @@ impl Source {
             | Self::DevBuild
             | Self::Page
             | Self::Port
-            | Self::Publisher
-            | Self::CursorEdit => 95,
+            | Self::Publisher => 95,
             Self::Terminal => 70,
             Self::Viewed => 60,
             Self::App => 50,

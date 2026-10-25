@@ -77,7 +77,6 @@ pub fn obeyed(to: &Scored) -> bool {
                         | Source::Port
                         | Source::Publisher
                         | Source::DevBuild
-                        | Source::CursorEdit
                 )
         )
     )
