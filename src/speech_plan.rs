@@ -23,10 +23,11 @@ const MIN_CHUNK_MS: u64 = 15_000;
 const VOICED_OVER_FLOOR: f64 = 2.0;
 const VOICED_MIN_RMS: f64 = 0.001;
 const VOICED_MAX_RMS: f64 = 0.01;
-/// A chunk with no voiced window is still sent when it lasts this long (the old planner's
-/// whole-recording fallback) and its level moves: its loudest window is above `SILENT_RMS`
-/// and `STEADY_OVER_FLOOR` times its own noise floor. Speech too quiet for the voiced
-/// threshold still rises and falls; silence and steady noise stay flat.
+/// A recording with no voiced window at all (speech too quiet for the voiced threshold) still
+/// sends each chunk whose level moves, as the old planner sent such a recording whole, once it
+/// lasts this long: the chunk's loudest window is above `SILENT_RMS` and `STEADY_OVER_FLOOR`
+/// times its own noise floor. Silence and white noise stay flat; band-limited noise may not,
+/// which is why this applies only when nothing in the recording is voiced.
 const UNSURE_MIN_MS: u64 = 480;
 const SILENT_RMS: f64 = 0.000_1;
 const STEADY_OVER_FLOOR: f64 = 1.25;
@@ -48,7 +49,8 @@ impl Plan {
         let chunks = cuts(&rms, duration)
             .into_iter()
             .filter(|&(start, end)| {
-                voiced.iter().any(|&(a, b)| a < end && b > start) || moves(&rms, start, end)
+                voiced.iter().any(|&(a, b)| a < end && b > start)
+                    || (voiced.is_empty() && duration >= UNSURE_MIN_MS && moves(&rms, start, end))
             })
             .collect();
         Plan { chunks, voiced }
@@ -82,7 +84,7 @@ impl Plan {
     }
 }
 
-/// Whether the level of `start..end` moves enough to be quiet speech (`UNSURE_MIN_MS`).
+/// Whether the level of `start..end` moves enough to be quiet speech (see `UNSURE_MIN_MS`).
 fn moves(rms: &[f64], start: u64, end: u64) -> bool {
     let first = (start / WINDOW_MS) as usize;
     let last = (end.div_ceil(WINDOW_MS) as usize).min(rms.len());
@@ -90,9 +92,7 @@ fn moves(rms: &[f64], start: u64, end: u64) -> bool {
         return false;
     };
     let loudest = windows.iter().copied().fold(0.0, f64::max);
-    end - start >= UNSURE_MIN_MS
-        && loudest > SILENT_RMS
-        && loudest > audio::noise_floor(windows) * STEADY_OVER_FLOOR
+    loudest > SILENT_RMS && loudest > audio::noise_floor(windows) * STEADY_OVER_FLOOR
 }
 
 /// `0..duration` cut into chunks of at most `MAX_CHUNK_MS`, each cut in the middle of the
@@ -564,5 +564,52 @@ mod tests {
         }
         // Too short to be worth a request, as before.
         assert!(Plan::new(&recording(&syllables[..2])).chunks().is_empty());
+    }
+
+    /// `ms` of Gaussian noise at RMS `level`, low-passed at `cutoff_hz` (0 for white), from a
+    /// fixed seed.
+    fn noise(level: f64, ms: u64, cutoff_hz: f64) -> Vec<f32> {
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut uniform = || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            ((seed >> 11) as f64 + 1.0) / (1u64 << 53) as f64
+        };
+        let white: Vec<f64> = (0..ms * SAMPLES_PER_MS)
+            .map(|_| (-2.0 * uniform().ln()).sqrt() * (std::f64::consts::TAU * uniform()).cos())
+            .collect();
+        let shaped = if cutoff_hz > 0.0 {
+            let a = (-std::f64::consts::TAU * cutoff_hz / 16_000.0).exp();
+            let mut y = 0.0;
+            white
+                .iter()
+                .map(|&x| {
+                    y = a * y + (1.0 - a) * x;
+                    y
+                })
+                .collect()
+        } else {
+            white
+        };
+        let rms = (shaped.iter().map(|x| x * x).sum::<f64>() / shaped.len() as f64).sqrt();
+        shaped.iter().map(|x| (x / rms * level) as f32).collect()
+    }
+
+    #[test]
+    fn white_noise_and_a_rumbling_tail_after_speech_send_nothing_extra() {
+        assert!(Plan::new(&noise(0.004, 30_000, 0.0)).chunks().is_empty());
+        let mut samples = tone(0.05, 10_000);
+        samples.extend(noise(0.004, 40_000, 100.0));
+        let chunks = Plan::new(&samples).chunks().to_vec();
+        assert_eq!(chunks.len(), 1, "{chunks:?}");
+        assert_eq!(chunks[0].0, 0);
+    }
+
+    #[test]
+    fn a_quiet_word_after_a_long_silence_is_heard() {
+        // The cut leaves a last chunk of a few hundred ms holding the only (quiet) word.
+        let samples = recording(&[(0.0, 30_000), (0.0008, 200), (0.0, 100)]);
+        let plan = Plan::new(&samples);
+        assert!(plan.voiced().is_empty());
+        assert!(covers(&heard(&samples, &plan), 30_000, 30_200));
     }
 }
