@@ -150,10 +150,24 @@ pub fn deliver(
     key: Option<&str>,
     forward: Forward,
 ) -> Delivery {
+    deliver_by(dir, session, title, key, forward).0
+}
+
+/// [`deliver`] through any send, keeping what a successful one returned.
+pub fn deliver_by<T>(
+    dir: &Path,
+    session: &str,
+    title: &str,
+    key: Option<&str>,
+    forward: impl FnOnce(&Path, &str) -> Result<T>,
+) -> (Delivery, Option<T>) {
     match forward(dir, session) {
-        Ok(()) => Delivery::Sent {
-            title: title.to_owned(),
-        },
+        Ok(sent) => (
+            Delivery::Sent {
+                title: title.to_owned(),
+            },
+            Some(sent),
+        ),
         Err(err) => {
             let error = format!("{err:#}");
             scrawl_log(format!(
@@ -163,10 +177,13 @@ pub fn deliver(
             if let Err(err) = pending.write(dir) {
                 scrawl_log(format!("deliver: {err:#}"));
             }
-            Delivery::Queued {
-                title: title.to_owned(),
-                error,
-            }
+            (
+                Delivery::Queued {
+                    title: title.to_owned(),
+                    error,
+                },
+                None,
+            )
         }
     }
 }

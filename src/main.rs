@@ -203,7 +203,8 @@ enum RouterCommand {
     /// "ms", "why"}` within 3 s (docs/routing.md).
     Decide,
     /// Send a decision's text (dictation) or bundle (capture) to a session, retried like any
-    /// delivery; prints `{"ok", "state", "session"}`. Text on stdin replaces the decision's.
+    /// delivery; prints `{"ok", "state", "session"}`, plus `{"delivery_id", "message_id",
+    /// "delivery", "was_idle"}` once sent. Text on stdin replaces the decision's.
     Deliver {
         /// The decision, by `decide`'s `decision_id`...
         #[arg(long, required_unless_present = "item_id")]
@@ -213,6 +214,16 @@ enum RouterCommand {
         item_id: Option<String>,
         #[arg(long, visible_alias = "session")]
         to: String,
+    },
+    /// Take a send back within `routing.undoWindowSec` (10 min): withdraw it from the inbox,
+    /// revert the turn it started, or tell the session to ignore it. Prints `{"undone":
+    /// "withdrawn"|"reverted"|"disowned"|"gone"|"too-old", "session", "message_id"}`.
+    Undo {
+        /// `deliver`'s `delivery_id`.
+        delivery_id: String,
+        /// Print JSON rather than a sentence.
+        #[arg(long)]
+        json: bool,
     },
     /// Log a correction to a decision: from its target to `--to`.
     Correct {
@@ -2508,6 +2519,15 @@ fn main() -> Result<()> {
                     text,
                 })?;
                 println!("{}", serde_json::to_string_pretty(&output)?);
+                Ok(())
+            }
+            RouterCommand::Undo { delivery_id, json } => {
+                let report = routing::undo::undo(&delivery_id)?;
+                if json {
+                    println!("{}", serde_json::to_string(&report)?);
+                } else {
+                    println!("{}", report.text());
+                }
                 Ok(())
             }
             RouterCommand::Correct {

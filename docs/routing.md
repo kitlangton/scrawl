@@ -127,11 +127,31 @@ Only `text` is required (`transcript` and `window_title` work as aliases; `kind`
 
 `candidates` are Jev's probabilities, best first: for `ask` the chips, otherwise up to 5. A suggestion (`"routing": {"autoSend": "rules"}`, the default) adds `"suggested": true` and `"would": "send"` or `"fallback"`, and `why` reads `jev: would send; suggested (autoSend rules)`. When Jev wasn't asked (a rule, a signed page, a port, a publisher, a dev build, or Jev failing), `confidence`, `any_fits`, `model` and `ms` are null (`ms` is set when Jev failed), `candidates` are what smart routing would show, unscored, and `why` names the source: `named at the start`, `routing.sites rule`, `routing.apps rule`, `dev build's checkout`, `signed page`, `localhost port`, `publisher marker`, or smart routing's reason with Jev's error. `item.pid` or `item.executable` (an absolute path) lets a dev build decide. Reading sessions and asking Jev share 2.3 s; past that, or past 2.5 s overall, the answer is `keep` with `why: "timeout"`. For dictation `keep` means nothing fits, so Hex shows its picker; for a capture it means the clipboard only. `decide` never sends: it logs the decision and saves the request and reply to `~/Library/Application Support/scrawl/router/decisions/<decision_id>.json` (`$SCRAWL_ROUTER_DIR`), kept for 7 days.
 
-`scrawl router deliver --decision <id> --to <ses_…>`, or `--item-id <id> --session <ses_…>`, sends a saved decision and prints `{"ok", "state": "sent" | "queued", "session", "offer_rule"?}`. Text on stdin replaces the decision's (and is enough on its own with `--item-id`). Dictation goes as a plain prompt (`{"text", "delivery": "queue"}`, nothing else marking who wrote it) whose first line says where it came from, `[voice via Hex · from Ghostty]` (without `· from` when the app isn't known, and not added twice when the text already starts with it), with the decision's selection quoted after it unless stdin replaced the text; a capture whose request named its `bundle` sends the bundle the usual way. A failed send is `queued`: the prompt waits in `router/outbox/<id>/` with a `.deliver.json`, and the app (the port owner) retries it on the same schedule as a bundle.
+`scrawl router deliver --decision <id> --to <ses_…>`, or `--item-id <id> --session <ses_…>`, sends a saved decision and prints `{"ok", "state": "sent" | "queued", "session", "offer_rule"?}`, plus `"delivery_id", "message_id", "delivery", "was_idle"` once sent (see Undo). Text on stdin replaces the decision's (and is enough on its own with `--item-id`). Dictation goes as a plain prompt (`{"text", "delivery": "steer"}`, nothing else marking who wrote it) whose first line says where it came from, `[voice via Hex · from Ghostty]` (without `· from` when the app isn't known, and not added twice when the text already starts with it), with the decision's selection quoted after it unless stdin replaced the text; a capture whose request named its `bundle` sends the bundle the usual way. A failed send is `queued`: the prompt waits in `router/outbox/<id>/` with a `.deliver.json`, and the app (the port owner) retries it on the same schedule as a bundle.
 
 Corrections come two ways, through one writer that checks the schema below: `scrawl router correct --decision <id> --action cancel|redirect|paste|edit [--to <ses_…>]` (from the decision's target to `--to`, required for `redirect`), or `scrawl router log` with one line on stdin, `{"kind", "event": "correction", "item_id" or "decision_id", "action", "from"?, "to"?}`, where `from` and `to` may be bare session IDs. A logged line is joined to its decision by `decision_id` or `item_id`, which fills in the other ID, `from` (the decision's target), titles, `app` and `time`. The app logs its own captures' corrections through the same writer.
 
 `scrawl router eval [--since 7d] [--limit 40] [--lines] [--no-screen]` replays past captures whose real destination is known (a chip pick, or the session that received the bundle) and prints accuracy by decision. It then asks about each line of `router/eval/*.jsonl`, `{"item": {…}, "expect": {"to": "ses_…"} | {"decision": "fallback"}}`, and reports them as their own rows by file and line; those files are Kit's and stay out of the repo. Last come two tables over both: for the confidence and margin gates, what each value sends and how many right and wrong sends it blocks; and how many right sends `any_fits` alone would have demoted at each value, with the rate, by kind. An `autoSend` line follows the bands: how many sends and fallbacks Jev would make (right and wrong), how many the setting turns into suggestions with the pick pre-selected (right first), and how many still go on their own. Items are judged on what Jev would have done, with their suggestions counted beside. "Truth on a chip" counts the chips a decision shows: Jev's ask up to four, a send its one switch, smart routing's own offer two. `--lines` puts the targets' recent lines in whatever the config says and `--no-screen` leaves the `screen` out, to compare runs.
+
+#### Undo
+
+Every send to a session is remembered for 7 days in `router/deliveries/<delivery_id>.json` (mode 0600): `router deliver`'s, the app's capture sends and both kinds of retry. A sent `router deliver` adds:
+
+```json
+{"delivery_id": "19a1f…", "message_id": "msg_…" | null, "delivery": "steer" | "queue", "was_idle": true | false | null}
+```
+
+`message_id` is the inbox item's ID, which the message keeps once delivered; `was_idle` is whether the session had no turn running just before (`GET /api/session/active`; null when that check failed). A queued send has none of these until a retry sends it, so it can't be undone from Hex.
+
+`scrawl router undo <delivery_id> [--json]` does the least that takes the send back:
+
+- `withdrawn`: still in the session's inbox, so it's cancelled there.
+- `reverted`: it started a turn (the session was idle and it's the first thing said since) and nothing was said after it, so the turn is interrupted (`resume=false`) and a revert to it is staged with its file changes, not committed, so `/redo` brings it back.
+- `disowned`: it joined running work, more came after it, or the revert couldn't be staged, so it steers "Ignore my previous message: it was sent to this session by mistake." Nothing is aborted or reverted.
+- `gone`: no record, or the session or message no longer exists.
+- `too-old`: sent more than `routing.undoWindowSec` (default 600) ago; nothing is done.
+
+It prints `{"undone": "withdrawn" | "reverted" | "disowned" | "gone" | "too-old", "session": "ses_…" | null, "message_id": "msg_…" | null}` and exits 0, or nonzero for a malformed ID or a server it can't reach. Asking again answers the same without touching the session. An item delivered between the inbox read and the cancel (which then does nothing) is found among the messages and reverted or disowned. The undo is logged as a correction, `{"event": "undo", "action": "cancel", "undone", "delivery_id", "from": the session, "to": null}`, joined by `decision_id` and `item_id` (or `bundle`), and takes back the pick the send counted toward a rule offer; an undone capture's `routing.json` gets `undone` and `eval` leaves it out.
 
 ### The decisions log
 
@@ -141,7 +161,7 @@ Corrections come two ways, through one writer that checks the schema below: `scr
 |---|---|
 | `time` | epoch milliseconds |
 | `kind` | `capture` or `dictation` |
-| `event` | `decision` or `correction` |
+| `event` | `decision`, `correction` or `undo` (`scrawl router undo`) |
 | `bundle` / `decision_id`, `item_id` | the bundle folder's name (captures), or `scrawl router decide`'s decision ID and the caller's item ID |
 | `decision` | `send`, `ask`, `fallback` or `keep` (decisions) |
 | `by` | `jev`, `smart` when smart routing's own decision stood, or `timeout` |

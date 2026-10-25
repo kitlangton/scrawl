@@ -536,6 +536,9 @@ pub struct RoutingConfig {
     /// Sites and bundle IDs Scrawl never offers a rule for again.
     #[serde(default)]
     pub refused_rules: Option<serde_json::Value>,
+    /// How long after a send `scrawl router undo` still takes it back, in seconds.
+    #[serde(default)]
+    pub undo_window_sec: Option<u64>,
 }
 
 /// `true`/`false`, `"yes"`/`"on"`/`"1"` and their opposites, or a number (non-zero is on). Other
@@ -792,6 +795,14 @@ pub fn routing_auto_send() -> Option<String> {
 }
 
 /// `routing.refusedRules` in config.json: sites and bundle IDs never offered a rule again.
+/// `routing.undoWindowSec` (never read in tests).
+pub fn routing_undo_window_sec() -> Option<u64> {
+    if cfg!(test) {
+        return None;
+    }
+    config().routing.and_then(|r| r.undo_window_sec)
+}
+
 pub fn routing_refused_rules() -> Vec<String> {
     if cfg!(test) {
         return Vec::new();
@@ -1352,6 +1363,35 @@ fn http_get(
     path: &str,
     timeout: std::time::Duration,
 ) -> Result<Vec<u8>> {
+    http_request(address, password, "GET", path, None, timeout)
+}
+
+/// A non-2xx answer from OpenCode, so callers can tell a missing session (404) from a server
+/// that can't be reached.
+#[derive(Debug)]
+pub struct HttpStatus(pub u16);
+
+impl std::fmt::Display for HttpStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "OpenCode API failed: HTTP {}", self.0)
+    }
+}
+
+impl std::error::Error for HttpStatus {}
+
+/// The status of a failed request, when the server answered.
+pub fn http_status(err: &anyhow::Error) -> Option<u16> {
+    err.downcast_ref::<HttpStatus>().map(|s| s.0)
+}
+
+fn http_request(
+    address: std::net::SocketAddr,
+    password: Option<&str>,
+    method: &str,
+    path: &str,
+    body: Option<&[u8]>,
+    timeout: std::time::Duration,
+) -> Result<Vec<u8>> {
     use std::io::{Read, Write};
     let connect = SERVER_CONNECT_TIMEOUT.min(timeout).max(std::time::Duration::from_millis(1));
     let timeout = timeout.max(std::time::Duration::from_millis(1));
@@ -1366,11 +1406,21 @@ fn http_get(
         ),
         _ => String::new(),
     };
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {address}\r\n{auth}Connection: close\r\n\r\n"
-    );
+    let content = match body {
+        Some(body) => format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        ),
+        None if method != "GET" => "Content-Length: 0\r\n".to_owned(),
+        None => String::new(),
+    };
+    let mut request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {address}\r\n{auth}{content}Connection: close\r\n\r\n"
+    )
+    .into_bytes();
+    request.extend_from_slice(body.unwrap_or_default());
     stream
-        .write_all(request.as_bytes())
+        .write_all(&request)
         .with_context(|| format!("Could not write to server at http://{address}"))?;
     let mut bytes = Vec::new();
     stream
@@ -1402,11 +1452,34 @@ fn http_get(
     {
         ensure!(body.len() == length, "Incomplete OpenCode HTTP response");
     }
-    ensure!(
-        (200..300).contains(&status),
-        "OpenCode API failed: HTTP {status}"
-    );
+    if !(200..300).contains(&status) {
+        return Err(HttpStatus(status).into());
+    }
     Ok(body)
+}
+
+/// One request to the local OpenCode server (`method` is `GET`, `POST`, `DELETE`…) within
+/// `timeout`, through `opencode2 api` when the agents run on another Mac. A 4xx or 5xx answer is
+/// an [`HttpStatus`] error.
+pub fn api_within(
+    method: &str,
+    path: &str,
+    data: Option<&serde_json::Value>,
+    timeout: std::time::Duration,
+) -> Result<Vec<u8>> {
+    if agent_host().is_some() {
+        return opencode_api(&method.to_ascii_lowercase(), path, data);
+    }
+    let body = data.map(serde_json::to_vec).transpose()?;
+    let (address, password) = local_server();
+    http_request(
+        address,
+        password.as_deref(),
+        method,
+        path,
+        body.as_deref(),
+        timeout,
+    )
 }
 
 /// [`api_get`] for routing: talks HTTP directly to the local OpenCode server with a
@@ -1613,8 +1686,74 @@ pub fn resolve_opencode_session_with(
     Ok((matched.id, title))
 }
 
-/// Queues a bundle's summary and pointers into an OpenCode session.
+/// Queues a bundle's summary and pointers into an OpenCode session, and remembers the send so
+/// it can be undone (`scrawl router undo`).
 pub fn send_bundle_to_session(bundle_dir: &Path, session: &str) -> Result<()> {
+    let posted = send_bundle(bundle_dir, session)?;
+    let app = load_bundle(bundle_dir)
+        .ok()
+        .and_then(|(_, bundle)| bundle.target.app);
+    crate::routing::undo::remember(
+        session,
+        None,
+        &posted,
+        crate::routing::undo::Origin {
+            kind: "capture".into(),
+            bundle: resolve_bundle_dir(bundle_dir).ok(),
+            app,
+            ..Default::default()
+        },
+    );
+    Ok(())
+}
+
+/// What OpenCode said about a prompt it took.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Posted {
+    /// The inbox item's ID, which the message keeps once delivered (`msg_…`).
+    pub message_id: Option<String>,
+    /// `steer` or `queue`.
+    pub delivery: String,
+    /// Whether the session was idle just before (unknown when the check failed).
+    pub was_idle: Option<bool>,
+}
+
+/// How long the idle check before a send may take.
+const IDLE_CHECK: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// Whether `session` has no foreground drain running (`GET /api/session/active`).
+fn session_idle(session: &str) -> Option<bool> {
+    let body = api_get_within("/api/session/active", IDLE_CHECK).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&body).ok()?;
+    let active = value.get("data").unwrap_or(&value).as_object()?;
+    Some(!active.contains_key(session))
+}
+
+/// The inbox item's ID in `POST /api/session/:id/prompt`'s answer (`{"data": {"id"}}`).
+pub fn posted_id(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let id = value.get("data").unwrap_or(&value).get("id")?.as_str()?;
+    id.starts_with("msg_").then(|| id.to_owned())
+}
+
+fn post_prompt(session: &str, mut body: serde_json::Value) -> Result<Posted> {
+    let delivery = delivery_mode();
+    body["delivery"] = serde_json::json!(delivery);
+    let was_idle = session_idle(session);
+    let answer = opencode_api(
+        "post",
+        &format!("/api/session/{session}/prompt"),
+        Some(&body),
+    )?;
+    Ok(Posted {
+        message_id: posted_id(&answer),
+        delivery: delivery.to_owned(),
+        was_idle,
+    })
+}
+
+/// [`send_bundle_to_session`] without remembering it.
+pub fn send_bundle(bundle_dir: &Path, session: &str) -> Result<Posted> {
     let (directory, bundle) = load_bundle(bundle_dir)?;
     let summary = crate::sketch::summary_markdown(&bundle, &directory);
     ensure!(
@@ -1639,25 +1778,22 @@ pub fn send_bundle_to_session(bundle_dir: &Path, session: &str) -> Result<()> {
     );
     // The server reads `file://` attachments from its own disk; the bundle is at the same path
     // there (copied above when the agents run on another Mac).
-    opencode_api(
-        "post",
-        &format!("/api/session/{session}/prompt"),
-        Some(&serde_json::json!({
+    post_prompt(
+        session,
+        serde_json::json!({
             "text": text,
             "files": [{
                 "uri": file_uri(&contact_sheet),
                 "name": "contact-sheet.png",
                 "description": "Scrawl contact sheet: the capture's keyframes in order",
             }],
-            "delivery": delivery_mode(),
-        })),
-    )?;
-    Ok(())
+        }),
+    )
 }
 
 /// Sends `text` into an OpenCode session as a prompt (`scrawl router deliver`), steering or
 /// queueing per `delivery_mode`.
-pub fn send_text_to_session(session: &str, text: &str) -> Result<()> {
+pub fn send_text_to_session(session: &str, text: &str) -> Result<Posted> {
     ensure!(
         session.starts_with("ses")
             && session
@@ -1665,12 +1801,7 @@ pub fn send_text_to_session(session: &str, text: &str) -> Result<()> {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
         "Invalid OpenCode session ID"
     );
-    opencode_api(
-        "post",
-        &format!("/api/session/{session}/prompt"),
-        Some(&serde_json::json!({ "text": text, "delivery": delivery_mode() })),
-    )?;
-    Ok(())
+    post_prompt(session, serde_json::json!({ "text": text }))
 }
 
 /// A `file://` URL for an absolute path, percent-encoding everything but unreserved

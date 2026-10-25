@@ -19,6 +19,7 @@ pub mod policy;
 pub mod router;
 pub mod served;
 pub mod smart;
+pub mod undo;
 
 /// The experiment that routes Mac captures with [`smart`] (`handoff::experiment`).
 pub const SMART_ROUTING: &str = "smartRouting";
@@ -774,6 +775,9 @@ pub fn learn_capture(dir: &Path, session: &str) -> Option<policy::OfferRule> {
     }
     let path = dir.join(RECORD);
     let mut body: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+    if body.get("undone").is_some_and(|u| !u.is_null()) {
+        return None;
+    }
     let evidence: smart::Evidence = serde_json::from_value(body.get("evidence")?.clone()).ok()?;
     // A rule, port or dev build that sent it already says where it goes.
     if let Some(smart::Decision::Send { to, .. }) = body
@@ -789,12 +793,18 @@ pub fn learn_capture(dir: &Path, session: &str) -> Option<policy::OfferRule> {
     let bundle_id = crate::handoff::load_bundle(dir)
         .ok()
         .and_then(|(_, bundle)| bundle.target.bundle_id);
-    let offer = policy::learn_pick(evidence.url.as_deref(), bundle_id.as_deref(), &folder)?;
-    body["offerRule"] = serde_json::to_value(&offer).ok()?;
+    let (counted, offer) =
+        policy::learn_pick(evidence.url.as_deref(), bundle_id.as_deref(), &folder);
+    let counted = counted?;
+    // Kept so an undo of the send can take the pick back (`undo`).
+    body["learned"] = serde_json::to_value(&counted).ok()?;
+    if let Some(offer) = &offer {
+        body["offerRule"] = serde_json::to_value(offer).ok()?;
+    }
     if let Ok(bytes) = serde_json::to_vec_pretty(&body) {
         let _ = std::fs::write(&path, bytes);
     }
-    Some(offer)
+    offer
 }
 
 pub fn read_record(dir: &Path) -> Option<smart::Evidence> {

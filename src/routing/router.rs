@@ -17,7 +17,9 @@ use super::policy;
 use super::smart::{
     self, Basis, Candidate, Clue, Decision, Evidence, Judgement, Pointer, Policy, Source,
 };
-use crate::delivery::{self, Delivery, Forward};
+use super::undo;
+use crate::delivery::{self, Delivery};
+use crate::handoff::Posted;
 use crate::model::ScrawlBundle;
 
 /// Hex's deadline is 3 s: `decide` answers within this whatever happens...
@@ -591,7 +593,7 @@ pub fn outbox_dir() -> Option<PathBuf> {
 }
 
 /// A short ID, unique enough: the time in ms and some of its nanoseconds, in hex.
-fn new_id(now_ms: u64) -> String {
+pub(crate) fn new_id(now_ms: u64) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.subsec_nanos());
@@ -599,7 +601,7 @@ fn new_id(now_ms: u64) -> String {
     format!("{now_ms:x}{salt:04x}")
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
@@ -708,7 +710,7 @@ fn find_by_item(dir: &Path, item_id: &str) -> Option<(String, Saved)> {
 }
 
 /// Removes entries of `dir` not modified within `keep`.
-fn prune(dir: &Path, keep: Duration) {
+pub(crate) fn prune(dir: &Path, keep: Duration) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -742,34 +744,65 @@ pub struct Delivered {
     /// A rule to offer, now that two picks for this site or app agree.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offer_rule: Option<policy::OfferRule>,
+    /// How to undo it (`delivery_id`), when it was sent rather than queued.
+    #[serde(flatten)]
+    pub sent: Option<undo::Sent>,
 }
+
+/// A send that says what OpenCode took.
+pub type Send = fn(&Path, &str) -> Result<Posted>;
 
 /// The sends, swappable in tests.
 #[derive(Clone, Copy)]
 pub struct DeliverHooks {
     /// Sends the prompt in an outbox folder.
-    pub text: Forward,
+    pub text: Send,
     /// Sends a capture's bundle.
-    pub bundle: Forward,
+    pub bundle: Send,
 }
 
 impl Default for DeliverHooks {
     fn default() -> Self {
         Self {
-            text: send_prompt,
-            bundle: crate::handoff::send_bundle_to_session,
+            text: post_prompt,
+            bundle: crate::handoff::send_bundle,
         }
     }
 }
 
-/// Sends the prompt saved in an outbox folder to `session` (the app's retries call this too).
-pub fn send_prompt(dir: &Path, session: &str) -> Result<()> {
-    let prompt: Value = serde_json::from_slice(&std::fs::read(dir.join(delivery::PROMPT))?)?;
-    let text = prompt
-        .get("text")
-        .and_then(Value::as_str)
+/// An outbox folder's prompt: the text, and where it came from for an undo.
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct Prompt {
+    text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<undo::Origin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+}
+
+fn read_prompt(dir: &Path) -> Result<Prompt> {
+    let prompt: Prompt = serde_json::from_slice(&std::fs::read(dir.join(delivery::PROMPT))?)
         .context("the prompt has no text")?;
-    crate::handoff::send_text_to_session(session, text)
+    ensure!(!prompt.text.is_empty(), "the prompt has no text");
+    Ok(prompt)
+}
+
+fn post_prompt(dir: &Path, session: &str) -> Result<Posted> {
+    crate::handoff::send_text_to_session(session, &read_prompt(dir)?.text)
+}
+
+/// Sends the prompt saved in an outbox folder to `session` and remembers it for an undo (the
+/// app's retries).
+pub fn send_prompt(dir: &Path, session: &str) -> Result<()> {
+    let prompt = read_prompt(dir)?;
+    let posted = crate::handoff::send_text_to_session(session, &prompt.text)?;
+    undo::remember(
+        session,
+        prompt.title.as_deref(),
+        &posted,
+        prompt.origin.unwrap_or_default(),
+    );
+    Ok(())
 }
 
 /// What `scrawl router deliver` is told: a decision by its ID or the caller's item ID, the
@@ -849,37 +882,63 @@ fn deliver_with(
         .bundle
         .as_ref()
         .filter(|b| item.kind() == "capture" && text.is_none() && b.is_dir());
-    let delivery = match bundle {
-        Some(bundle) => delivery::deliver(bundle, to, &title, None, hooks.bundle),
+    let mut origin = undo::Origin {
+        kind: item.kind().to_owned(),
+        decision_id: found.as_ref().map(|(id, _)| id.clone()),
+        item_id: present(&item.item_id)
+            .map(str::to_owned)
+            .or(item_id.map(str::to_owned)),
+        bundle: bundle.cloned(),
+        app: item.app_name(),
+        learned: None,
+    };
+    let mut prompt = Prompt {
+        text: prompt_text(&item),
+        origin: Some(origin.clone()),
+        title: Some(title.clone()),
+    };
+    let folder = outbox.join(&key);
+    let (delivery, posted) = match bundle {
+        Some(bundle) => delivery::deliver_by(bundle, to, &title, None, hooks.bundle),
         None => {
-            let folder = outbox.join(&key);
             std::fs::create_dir_all(&folder)?;
             let _ = std::fs::remove_file(folder.join(delivery::PENDING));
-            std::fs::write(
-                folder.join(delivery::PROMPT),
-                serde_json::to_vec(&json!({"text": prompt_text(&item)}))?,
-            )?;
-            let delivery = delivery::deliver(&folder, to, &title, None, hooks.text);
-            if matches!(delivery, Delivery::Sent { .. }) {
+            std::fs::write(folder.join(delivery::PROMPT), serde_json::to_vec(&prompt)?)?;
+            let sent = delivery::deliver_by(&folder, to, &title, None, hooks.text);
+            if matches!(sent.0, Delivery::Sent { .. }) {
                 let _ = std::fs::remove_dir_all(&folder);
             }
-            delivery
+            sent
         }
     };
     let state = match delivery {
         Delivery::Sent { .. } => "sent",
         _ => "queued",
     };
-    let offer_rule = found
+    let (counted, offer_rule) = found
         .as_ref()
         .and_then(|(_, saved)| saved.directory_of(to))
         .and_then(|dir| policy::rule_folder_of(&dir))
-        .and_then(|folder| policy::learn_pick(present(&item.url), item.app_id(), &folder));
+        .map(|folder| policy::learn_pick(present(&item.url), item.app_id(), &folder))
+        .unwrap_or_default();
+    origin.learned = counted;
+    let sent = match posted {
+        Some(posted) => Some(undo::remember(to, Some(&title), &posted, origin)),
+        None => {
+            // Queued: the retry remembers it, taking back this pick if it's undone.
+            if bundle.is_none() && origin.learned.is_some() {
+                prompt.origin = Some(origin);
+                let _ = std::fs::write(folder.join(delivery::PROMPT), serde_json::to_vec(&prompt)?);
+            }
+            None
+        }
+    };
     Ok(Delivered {
         ok: true,
         state,
         session: to.to_owned(),
         offer_rule,
+        sent,
     })
 }
 
@@ -1066,6 +1125,11 @@ pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<
         let Ok((_, bundle)) = crate::handoff::load_bundle(&dir) else {
             continue;
         };
+        // Undone sends went to the wrong session, whatever the bundle says.
+        if undo::capture_undone(&dir) {
+            unknown += 1;
+            continue;
+        }
         let destination = bundle.destination.clone();
         let truth = match &destination {
             Some(d) if d.via == "chosen" => Some((d.session.clone(), "chosen")),
@@ -1984,7 +2048,15 @@ mod tests {
         load(dir, "abc123").unwrap()
     }
 
-    fn sends(dir: &Path, session: &str) -> Result<()> {
+    fn sends(dir: &Path, session: &str) -> Result<Posted> {
+        sends_retry(dir, session)?;
+        Ok(Posted {
+            message_id: Some("msg_sent".into()),
+            delivery: "steer".into(),
+            was_idle: Some(true),
+        })
+    }
+    fn sends_retry(dir: &Path, session: &str) -> Result<()> {
         let prompt: Value = serde_json::from_slice(&std::fs::read(dir.join(delivery::PROMPT))?)?;
         SENT.with(|s| {
             s.borrow_mut()
@@ -1992,10 +2064,10 @@ mod tests {
         });
         Ok(())
     }
-    fn fails(_: &Path, _: &str) -> Result<()> {
+    fn fails(_: &Path, _: &str) -> Result<Posted> {
         bail!("OpenCode is down")
     }
-    fn no_bundle(_: &Path, _: &str) -> Result<()> {
+    fn no_bundle(_: &Path, _: &str) -> Result<Posted> {
         panic!("not a capture")
     }
     fn last_sent() -> (String, String) {
@@ -2021,6 +2093,11 @@ mod tests {
             deliver_with(&decisions, request, &outbox, hooks)
         };
         let out = by_decision("ses_hex", &ok).unwrap();
+        let sent = out
+            .sent
+            .clone()
+            .expect("a sent delivery says how to undo it");
+        assert!(valid_id(&sent.delivery_id));
         assert_eq!(
             out,
             Delivered {
@@ -2028,8 +2105,19 @@ mod tests {
                 state: "sent",
                 session: "ses_hex".into(),
                 offer_rule: None,
+                sent: Some(undo::Sent {
+                    delivery_id: sent.delivery_id.clone(),
+                    message_id: Some("msg_sent".into()),
+                    delivery: "steer".into(),
+                    was_idle: Some(true),
+                }),
             }
         );
+        let printed = serde_json::to_value(&out).unwrap();
+        assert_eq!(printed["delivery_id"], json!(sent.delivery_id));
+        assert_eq!(printed["message_id"], "msg_sent");
+        assert_eq!(printed["delivery"], "steer");
+        assert_eq!(printed["was_idle"], true);
         let (session, text) = last_sent();
         assert_eq!(session, "ses_hex");
         assert!(
@@ -2083,12 +2171,27 @@ mod tests {
             text: fails,
             bundle: no_bundle,
         };
-        assert_eq!(by_decision("ses_b", &down).unwrap().state, "queued");
+        let queued = by_decision("ses_b", &down).unwrap();
+        assert_eq!(queued.state, "queued");
+        assert!(queued.sent.is_none(), "nothing to undo until it's sent");
+        assert!(
+            serde_json::to_value(&queued)
+                .unwrap()
+                .get("delivery_id")
+                .is_none()
+        );
         let pending = outbox.join("abc123");
         assert!(
             pending.join(delivery::PENDING).is_file() && pending.join(delivery::PROMPT).is_file()
         );
-        let report = delivery::retry_due(&outbox, u64::MAX / 2, sends);
+        let saved: Value =
+            serde_json::from_slice(&std::fs::read(pending.join(delivery::PROMPT)).unwrap())
+                .unwrap();
+        assert_eq!(
+            saved["origin"]["decision_id"], "abc123",
+            "the retry can remember it"
+        );
+        let report = delivery::retry_due(&outbox, u64::MAX / 2, sends_retry);
         assert_eq!(report.sent.len(), 1, "the retry loop picks prompts up");
         assert!(by_decision("not a session", &down).is_err());
         let nothing = DeliverRequest {

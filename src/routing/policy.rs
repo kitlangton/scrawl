@@ -331,9 +331,17 @@ struct Picks {
 /// Picks that must agree before a rule is offered.
 const AGREEING: u32 = 2;
 
+/// A pick [`learn`] counted (`learned.json`'s key and folder), so an undo can take it back.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Counted {
+    pub key: String,
+    pub folder: String,
+}
+
 /// Counts a pick of `folder` for `key` in `file` and returns the rule to offer once
 /// [`AGREEING`] picks in a row agree. Nothing is offered for a key that already has a rule
 /// (`ruled`) or that Kit refused (`refused`).
+#[cfg(test)]
 pub fn learn(
     file: &Path,
     kind: RuleKind,
@@ -342,20 +350,36 @@ pub fn learn(
     refused: &[String],
     ruled: bool,
 ) -> Result<Option<OfferRule>> {
+    Ok(learn_counted(file, kind, key, folder, refused, ruled)?.1)
+}
+
+/// [`learn`], also saying what it counted.
+pub fn learn_counted(
+    file: &Path,
+    kind: RuleKind,
+    key: &str,
+    folder: &Path,
+    refused: &[String],
+    ruled: bool,
+) -> Result<(Option<Counted>, Option<OfferRule>)> {
     if ruled || refused.iter().any(|r| r.trim() == key) {
-        return Ok(None);
+        return Ok((None, None));
     }
     if kind == RuleKind::App && is_general_app(key) {
-        return Ok(None);
+        return Ok((None, None));
     }
     let mut learned: Learned = std::fs::read(file)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
     let folder = folder.display().to_string();
+    let counted = Counted {
+        key: format!("{}:{key}", config_kind(kind)),
+        folder: folder.clone(),
+    };
     let entry = learned
         .picks
-        .entry(format!("{}:{key}", config_kind(kind)))
+        .entry(counted.key.clone())
         .or_insert_with(|| Picks {
             folder: folder.clone(),
             count: 0,
@@ -369,22 +393,59 @@ pub fn learn(
         };
     }
     let count = entry.count;
+    write_learned(file, &learned)?;
+    let offer = (count >= AGREEING).then(|| OfferRule {
+        kind,
+        key: key.to_owned(),
+        folder,
+    });
+    Ok((Some(counted), offer))
+}
+
+fn write_learned(file: &Path, learned: &Learned) -> Result<()> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let tmp = file.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&learned)?)?;
+    std::fs::write(&tmp, serde_json::to_vec_pretty(learned)?)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
     }
     std::fs::rename(&tmp, file)?;
-    Ok((count >= AGREEING).then(|| OfferRule {
-        kind,
-        key: key.to_owned(),
-        folder,
-    }))
+    Ok(())
+}
+
+/// Takes back a pick an undone send counted: one fewer for its key, while the key still
+/// points at the same folder. Whether it changed anything.
+pub fn unlearn(file: &Path, counted: &Counted) -> Result<bool> {
+    let Some(mut learned) = std::fs::read(file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Learned>(&bytes).ok())
+    else {
+        return Ok(false);
+    };
+    let Some(entry) = learned.picks.get_mut(&counted.key) else {
+        return Ok(false);
+    };
+    if entry.folder != counted.folder || entry.count == 0 {
+        return Ok(false);
+    }
+    entry.count -= 1;
+    if entry.count == 0 {
+        learned.picks.remove(&counted.key);
+    }
+    write_learned(file, &learned)?;
+    Ok(true)
+}
+
+/// [`unlearn`] in the learned file; errors are logged.
+pub fn unlearn_pick(counted: &Counted) {
+    let Some(file) = learned_file() else { return };
+    if let Err(err) = unlearn(&file, counted) {
+        crate::capture::scrawl_log(format!("routing: couldn't take back a pick: {err:#}"));
+    }
 }
 
 fn config_kind(kind: RuleKind) -> &'static str {
@@ -412,24 +473,33 @@ pub fn has_rule(kind: RuleKind, key: &str) -> bool {
 }
 
 /// Counts a pick of `folder` (a [`rule_folder`]) for `url` or `bundle_id` in the learned file,
-/// with config's refusals and rules; the rule to offer, when there is one. Errors are logged.
-pub fn learn_pick(url: Option<&str>, bundle_id: Option<&str>, folder: &Path) -> Option<OfferRule> {
-    let (kind, key) = rule_key(url, bundle_id)?;
-    let file = learned_file()?;
+/// with config's refusals and rules: what it counted, and the rule to offer, when there is one.
+/// Errors are logged.
+pub fn learn_pick(
+    url: Option<&str>,
+    bundle_id: Option<&str>,
+    folder: &Path,
+) -> (Option<Counted>, Option<OfferRule>) {
+    let Some((kind, key)) = rule_key(url, bundle_id) else {
+        return (None, None);
+    };
+    let Some(file) = learned_file() else {
+        return (None, None);
+    };
     let refused = crate::handoff::routing_refused_rules();
-    match learn(&file, kind, &key, folder, &refused, has_rule(kind, &key)) {
-        Ok(offer) => {
+    match learn_counted(&file, kind, &key, folder, &refused, has_rule(kind, &key)) {
+        Ok((counted, offer)) => {
             if let Some(offer) = &offer {
                 crate::capture::scrawl_log(format!(
                     "routing: picks agree, offering a {} rule",
                     config_kind(offer.kind)
                 ));
             }
-            offer
+            (counted, offer)
         }
         Err(err) => {
             crate::capture::scrawl_log(format!("routing: couldn't count a pick: {err:#}"));
-            None
+            (None, None)
         }
     }
 }
@@ -722,6 +792,41 @@ mod tests {
             super::learn(&file, RuleKind::App, "com.apple.finder", folder, &[], false).unwrap(),
             None
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn an_undone_send_takes_its_pick_back() {
+        let base = temp("unlearn");
+        let file = base.join("learned.json");
+        let folder = Path::new("/code/board");
+        let site = "https://board.example.com";
+        let (counted, offer) =
+            learn_counted(&file, RuleKind::Site, site, folder, &[], false).unwrap();
+        assert_eq!(offer, None);
+        let counted = counted.unwrap();
+        assert_eq!(counted.key, format!("site:{site}"));
+        assert!(unlearn(&file, &counted).unwrap());
+        assert!(
+            !unlearn(&file, &counted).unwrap(),
+            "nothing left to take back"
+        );
+        // So the next pick is the first again, not the second.
+        assert_eq!(
+            learn(&file, RuleKind::Site, site, folder, &[], false).unwrap(),
+            None
+        );
+        // A key since pointed elsewhere is left alone.
+        learn(
+            &file,
+            RuleKind::Site,
+            site,
+            Path::new("/code/other"),
+            &[],
+            false,
+        )
+        .unwrap();
+        assert!(!unlearn(&file, &counted).unwrap());
         let _ = std::fs::remove_dir_all(&base);
     }
 

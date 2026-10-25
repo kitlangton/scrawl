@@ -1968,8 +1968,9 @@ pub fn check(line: &Value) -> Result<()> {
     if !matches!(text("kind"), Some("capture" | "dictation")) {
         bail!("kind must be capture or dictation");
     }
-    if text("event") != Some("correction") {
-        bail!("event must be correction");
+    // An undo (`scrawl router undo`) is a correction made after the send.
+    if !matches!(text("event"), Some("correction" | "undo")) {
+        bail!("event must be correction or undo");
     }
     let action = text("action").unwrap_or_default();
     if <Action as clap::ValueEnum>::from_str(action, false).is_err() {
