@@ -1059,6 +1059,8 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
+ "serde",
+ "termcolor",
  "unicode-width",
 ]
 
@@ -1119,6 +1121,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
+]
+
+[[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2291,7 +2303,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.21",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -4414,7 +4426,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -5312,16 +5324,18 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?rev=3f78d42649ced2b21d9edf464d3ece5abd45f4c4#3f78d42649ced2b21d9edf464d3ece5abd45f4c4"
+source = "git+https://github.com/anomalyco/rune?rev=d0849e0506b34fe54e49f4d587b131a7ae886384#d0849e0506b34fe54e49f4d587b131a7ae886384"
 dependencies = [
  "arboard",
  "blake3",
  "block2 0.5.1",
  "block2 0.6.2",
  "bytemuck",
+ "console_error_panic_hook",
  "futures-util",
  "half",
  "image",
+ "js-sys",
  "libc",
  "libloading",
  "objc2 0.5.3",
@@ -5351,10 +5365,14 @@ dependencies = [
  "taffy 0.15.0",
  "tokio",
  "unicode-segmentation",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+ "web-sys",
+ "web-time",
  "wgpu",
  "windows-sys 0.59.0",
  "winit",
@@ -5367,7 +5385,7 @@ dependencies = [
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+https://github.com/anomalyco/rune?rev=3f78d42649ced2b21d9edf464d3ece5abd45f4c4#3f78d42649ced2b21d9edf464d3ece5abd45f4c4"
+source = "git+https://github.com/anomalyco/rune?rev=d0849e0506b34fe54e49f4d587b131a7ae886384#d0849e0506b34fe54e49f4d587b131a7ae886384"
 
 [[package]]
 name = "rust-embed"
@@ -7308,6 +7326,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "js-sys",
  "log",
+ "naga 30.0.1",
  "parking_lot",
  "portable-atomic",
  "profiling",
@@ -7480,7 +7499,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
