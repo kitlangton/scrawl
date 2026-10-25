@@ -896,7 +896,7 @@ impl ScrawlCoordinator {
             return;
         }
         let dir = self.take_paste_target();
-        self.keep_pending_send(&dir);
+        self.keep_pending_send(&dir, "paste");
         if matches!(self.island_phase, IslandPhase::Completed { .. }) {
             self.dismiss_island(cx);
         }
@@ -1941,7 +1941,7 @@ impl ScrawlCoordinator {
 
     pub fn dismiss_completed_bundle(&mut self, cx: &mut Context<Self>) {
         if let Some(dir) = self.completed_dir.clone() {
-            self.keep_pending_send(&dir);
+            self.keep_pending_send(&dir, "dismiss");
             self.mark_handled(&dir);
         }
         self.dismiss_island(cx);
@@ -1970,7 +1970,7 @@ impl ScrawlCoordinator {
             .completed_dir
             .clone()
             .unwrap_or_else(|| PathBuf::from("latest"));
-        self.keep_pending_send(&dir);
+        self.keep_pending_send(&dir, "paste");
         self.dismiss_island(cx);
         if !crate::capture::accessibility_granted() {
             scrawl_log("Paste chip without Accessibility; asking for it");
@@ -2057,6 +2057,12 @@ impl ScrawlCoordinator {
             chip.dest.session,
             dir.display()
         ));
+        crate::routing::jev::correct_capture(
+            &dir,
+            crate::routing::jev::Action::Redirect,
+            "chip",
+            Some((chip.dest.session.as_str(), chip.dest.title.as_str())),
+        );
         self.send_completed(dir, chip.dest, cx);
         cx.notify();
     }
@@ -2088,8 +2094,22 @@ impl ScrawlCoordinator {
         .detach();
     }
 
-    /// Cancels an automatic send of `dir` (while its route is worked out or during its undo window).
-    fn keep_pending_send(&mut self, dir: &std::path::Path) {
+    /// Esc while a capture waits out its undo window on the Completed island: keep it on the
+    /// clipboard, like ✕.
+    fn escape_pending_send(&mut self, cx: &mut Context<Self>) {
+        let Some(dir) = self.pending_send.clone() else {
+            return;
+        };
+        if self.completed_dir.as_deref() != Some(dir.as_path()) || !self.is_island_visible() {
+            return;
+        }
+        self.keep_pending_send(&dir, "escape");
+        cx.notify();
+    }
+
+    /// Cancels an automatic send of `dir` (while its route is worked out or during its undo
+    /// window); `how` (`escape`, `dismiss`, `paste`) is logged as a correction.
+    fn keep_pending_send(&mut self, dir: &std::path::Path, how: &str) {
         if self.completed_dir.as_deref() == Some(dir) {
             self.route_chips.clear();
         }
@@ -2104,9 +2124,14 @@ impl ScrawlCoordinator {
             self.pending_send = None;
             self.completed_note = None;
             scrawl_log(format!(
-                "routing (smart): kept {} on the clipboard",
+                "routing (smart): kept {} on the clipboard ({how})",
                 dir.display()
             ));
+            let action = match how {
+                "paste" => crate::routing::jev::Action::Paste,
+                _ => crate::routing::jev::Action::Cancel,
+            };
+            crate::routing::jev::correct_capture(dir, action, how, None);
         }
     }
 
@@ -5525,12 +5550,14 @@ pub fn run_app(
                     motion::poll_tune();
                     if loop_coord.read(cx).shortcut.is_pending() {
                         loop_coord.update(cx, |coord, cx| coord.tick_shortcut(cx));
-                    } else if loop_coord.read(cx).telemetry.take_escape()
-                        && loop_coord.read(cx).is_selecting()
-                    {
+                    } else if loop_coord.read(cx).telemetry.take_escape() {
                         // The picker may not have the keys (another app is active), but the
                         // key tap sees Esc anyway.
-                        loop_coord.update(cx, |coord, cx| coord.cancel_recording(cx));
+                        if loop_coord.read(cx).is_selecting() {
+                            loop_coord.update(cx, |coord, cx| coord.cancel_recording(cx));
+                        } else {
+                            loop_coord.update(cx, |coord, cx| coord.escape_pending_send(cx));
+                        }
                     }
                     if loop_coord.read(cx).gate.is_pending() {
                         loop_coord.update(cx, |coord, _| coord.tick_gate());
