@@ -1056,7 +1056,7 @@ pub type IngestCallback = Arc<dyn Fn(PathBuf, ScrawlBundle, Option<String>) + Se
 
 #[derive(Clone, Default)]
 pub struct IngestConfig {
-    pub copy_clipboard: bool,
+    pub clipboard: Option<Arc<dyn crate::handoff::Clipboard>>,
     pub route_opencode: bool,
     pub on_bundle: Option<IngestCallback>,
     /// Where bundles are built and pending deliveries retried; the default captures folder if
@@ -1240,12 +1240,19 @@ pub fn format_setup_link(
 /// network can't reach the Mac. Each recording becomes a `.scrawl` bundle, lands on the clipboard
 /// and is queued into the OpenCode session matching the app.
 pub fn start_ingest_server(ui_sender: flume::Sender<Event>) {
+    start_ingest_server_with_clipboard(ui_sender, Some(Arc::new(crate::handoff::SystemClipboard)));
+}
+
+pub fn start_ingest_server_with_clipboard(
+    ui_sender: flume::Sender<Event>,
+    clipboard: Option<Arc<dyn crate::handoff::Clipboard>>,
+) {
     if let Err(err) = crate::handoff::ensure_ingest_token() {
         scrawl_log(format!("ingest token setup failed: {err:#}"));
     }
     let route_opencode = std::env::var_os("SCRAWL_NO_OPENCODE").is_none();
     let config = IngestConfig {
-        copy_clipboard: true,
+        clipboard,
         route_opencode,
         on_bundle: Some(Arc::new(move |dir, bundle, status| {
             let _ = ui_sender.send(Event::IngestedBundle {
@@ -1273,7 +1280,7 @@ pub fn run_ingest_server(port: u16, usb: bool, no_opencode: bool) -> Result<()> 
     let _ = crate::handoff::ensure_ingest_token()?;
     let route_opencode = !no_opencode && std::env::var_os("SCRAWL_NO_OPENCODE").is_none();
     let config = IngestConfig {
-        copy_clipboard: false,
+        clipboard: None,
         route_opencode,
         on_bundle: None,
         ..IngestConfig::default()
@@ -1507,8 +1514,12 @@ fn build_ingested(
         .captures_dir()
         .join(format!("{}.scrawl", crate::pipeline::make_bundle_id()));
     let (dir, bundle) = (config.hooks.build)(movie, timeline_path, &bundle_dir)?;
-    if config.copy_clipboard {
-        let _ = crate::handoff::copy_bundle_to_clipboard(&dir);
+    if let Some(clipboard) = &config.clipboard {
+        if let Some(bundle) = &bundle {
+            let _ = clipboard.copy_bundle(&dir, bundle);
+        } else if let Ok((loaded_dir, loaded)) = crate::handoff::load_bundle(&dir) {
+            let _ = clipboard.copy_bundle(&loaded_dir, &loaded);
+        }
     }
     let delivery = match session {
         Some(session) if config.route_opencode => {
@@ -1516,7 +1527,7 @@ fn build_ingested(
         }
         _ => Delivery::Saved,
     };
-    let status = delivery.status(if config.copy_clipboard {
+    let status = delivery.status(if config.clipboard.is_some() {
         "Copied to clipboard"
     } else {
         "Saved bundle"

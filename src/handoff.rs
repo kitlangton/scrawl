@@ -197,6 +197,41 @@ pub fn load_bundle(bundle_dir: &Path) -> Result<(PathBuf, ScrawlBundle)> {
     Ok((directory, bundle))
 }
 
+/// Host clipboard and paste operations. Scrawl's app uses `SystemClipboard`; an embedding host
+/// such as Hex can supply its own implementation.
+pub trait Clipboard: Send + Sync {
+    fn copy_bundle(&self, bundle_dir: &Path, bundle: &crate::model::ScrawlBundle) -> Result<()>;
+    fn copy_text(&self, text: &str) -> Result<()>;
+    fn paste_bundle(
+        &self,
+        bundle_dir: &Path,
+        bundle: &crate::model::ScrawlBundle,
+        terminal: bool,
+    ) -> Result<()>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemClipboard;
+
+impl Clipboard for SystemClipboard {
+    fn copy_bundle(&self, bundle_dir: &Path, bundle: &crate::model::ScrawlBundle) -> Result<()> {
+        copy_loaded_bundle_to_clipboard(bundle_dir, bundle)
+    }
+
+    fn copy_text(&self, text: &str) -> Result<()> {
+        copy_string_to_clipboard(text)
+    }
+
+    fn paste_bundle(
+        &self,
+        bundle_dir: &Path,
+        bundle: &crate::model::ScrawlBundle,
+        terminal: bool,
+    ) -> Result<()> {
+        paste_loaded_bundle_image_and_text(bundle_dir, bundle, terminal)
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub fn copy_string_to_clipboard(content: &str) -> Result<()> {
     use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
@@ -248,7 +283,15 @@ pub fn copy_png_to_clipboard(png_bytes: &[u8]) -> Result<()> {
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn copy_bundle_to_clipboard(bundle_dir: &Path) -> Result<()> {
     let (directory, bundle) = load_bundle(bundle_dir)?;
-    let summary = crate::sketch::summary_markdown(&bundle, &directory);
+    SystemClipboard.copy_bundle(&directory, &bundle)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn copy_loaded_bundle_to_clipboard(
+    directory: &Path,
+    bundle: &crate::model::ScrawlBundle,
+) -> Result<()> {
+    let summary = crate::sketch::summary_markdown(bundle, directory);
     #[cfg(target_os = "windows")]
     if experiment("clipboardImage")
         && let Ok(image) = fs::read(directory.join(&bundle.contact_sheet))
@@ -277,13 +320,22 @@ pub fn paste_bundle_at_target(bundle_dir: &Path, click_target: Option<[f32; 2]>)
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn paste_bundle_image_and_text(bundle_dir: &Path) -> Result<()> {
     let (directory, bundle) = load_bundle(bundle_dir)?;
+    SystemClipboard.paste_bundle(&directory, &bundle, crate::capture::is_frontmost_terminal())
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn paste_loaded_bundle_image_and_text(
+    directory: &Path,
+    bundle: &crate::model::ScrawlBundle,
+    terminal: bool,
+) -> Result<()> {
     let sheet_path = directory.join(&bundle.contact_sheet);
     let image = fs::read(&sheet_path).context("Could not read contact sheet")?;
-    let summary = crate::sketch::summary_markdown(&bundle, &directory);
+    let summary = crate::sketch::summary_markdown(bundle, directory);
 
     crate::capture::wait_for_modifiers_released(350);
 
-    if crate::capture::is_frontmost_terminal() {
+    if terminal {
         // In terminals (Ghostty / OpenCode TUI / Claude Code), pasting the image path first
         // resolves and attaches `[Image 1]`, and the second paste inserts the text summary.
         copy_string_to_clipboard(&sheet_path.display().to_string())?;
@@ -302,8 +354,30 @@ pub fn paste_bundle_image_and_text(bundle_dir: &Path) -> Result<()> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn copy_string_to_clipboard(_content: &str) -> Result<()> {
+    bail!("Image and text clipboard handoff requires macOS or Windows")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn copy_loaded_bundle_to_clipboard(
+    _directory: &Path,
+    _bundle: &crate::model::ScrawlBundle,
+) -> Result<()> {
+    bail!("Image and text clipboard handoff requires macOS or Windows")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn copy_bundle_to_clipboard(_bundle_dir: &Path) -> Result<()> {
     bail!("Image and text clipboard handoff requires macOS or Windows")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn paste_loaded_bundle_image_and_text(
+    _directory: &Path,
+    _bundle: &crate::model::ScrawlBundle,
+    _terminal: bool,
+) -> Result<()> {
+    bail!("Image and text paste handoff requires macOS or Windows")
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
