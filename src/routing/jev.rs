@@ -1794,11 +1794,14 @@ fn try_append(line: &Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut file = super::undo::private(std::fs::OpenOptions::new().create(true).append(true))
         .open(&path)
         .with_context(|| format!("couldn't open {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     writeln!(file, "{line}")?;
     Ok(())
 }

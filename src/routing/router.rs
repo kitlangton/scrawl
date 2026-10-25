@@ -677,7 +677,7 @@ fn save(dir: &Path, id: &str, request: &Value, output: &Output, now: u64) -> Res
         reply: serde_json::to_value(output)?,
     };
     let tmp = dir.join(format!(".{id}.tmp"));
-    std::fs::write(&tmp, serde_json::to_vec(&saved)?)?;
+    undo::write_private(&tmp, &serde_json::to_vec(&saved)?)?;
     std::fs::rename(&tmp, dir.join(format!("{id}.json")))?;
     Ok(())
 }
@@ -903,7 +903,10 @@ fn deliver_with(
         None => {
             std::fs::create_dir_all(&folder)?;
             let _ = std::fs::remove_file(folder.join(delivery::PENDING));
-            std::fs::write(folder.join(delivery::PROMPT), serde_json::to_vec(&prompt)?)?;
+            undo::write_private(
+                &folder.join(delivery::PROMPT),
+                &serde_json::to_vec(&prompt)?,
+            )?;
             let sent = delivery::deliver_by(&folder, to, &title, None, hooks.text);
             if matches!(sent.0, Delivery::Sent { .. }) {
                 let _ = std::fs::remove_dir_all(&folder);
@@ -928,7 +931,10 @@ fn deliver_with(
             // Queued: the retry remembers it, taking back this pick if it's undone.
             if bundle.is_none() && origin.learned.is_some() {
                 prompt.origin = Some(origin);
-                let _ = std::fs::write(folder.join(delivery::PROMPT), serde_json::to_vec(&prompt)?);
+                let _ = undo::write_private(
+                    &folder.join(delivery::PROMPT),
+                    &serde_json::to_vec(&prompt)?,
+                );
             }
             None
         }

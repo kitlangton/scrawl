@@ -89,6 +89,8 @@ Jev's pick, however confident, is a guess. `"routing": {"autoSend": …}` (`poli
 - **`"confident"`**: the bands above as they are, Jev's send and fallback after the countdown.
 - **`"never"`**: everything asks but an address or a choice; rules only put their session first.
 
+It holds with Jev routing off too: smart routing's own sends go through `policy::apply` (`routing::gate_smart`) the same way. A bad key inside `"routing"` (`"undoWindowSec": "15"`, a number in `sites`) is dropped and logged on its own, leaving `autoSend` and the rest as set.
+
 `scrawl router decide` follows the same setting: a suggestion answers `"decision": "ask"` with `"suggested": true`, `"would"` and the pick as `target` and first candidate.
 
 **App rules** (`Source::AppRule`, `via: "app-rule"`): with Jev routing on, a `routing.apps` entry covering the captured app (or Hex's `app.id`) is obeyed like a site rule, after it: a `ses_` ID as is, a folder's newest open session, else its repository's. `policy::app_rule` refuses general-purpose apps whatever config says.
@@ -146,8 +148,8 @@ Every send to a session is remembered for 7 days in `router/deliveries/<delivery
 `scrawl router undo <delivery_id> [--json]` does the least that takes the send back:
 
 - `withdrawn`: still in the session's inbox, so it's cancelled there.
-- `reverted`: it started a turn (the session was idle and it's the first thing said since) and nothing was said after it, so the turn is interrupted (`resume=false`) and a revert to it is staged with its file changes, not committed, so `/redo` brings it back.
-- `disowned`: it joined running work, more came after it, or the revert couldn't be staged, so it steers "Ignore my previous message: it was sent to this session by mistake." Nothing is aborted or reverted.
+- `reverted`: it started a turn (the session was idle and it's the first thing said since) and nothing was said after it or waits in the inbox, so the turn is interrupted (`resume=false`) and a revert to it is staged with its file changes, not committed, so `/redo` brings it back.
+- `disowned`: it joined running work, more came after it or waits behind it (checked again after the interrupt, before staging), a cancel was refused, or the revert couldn't be staged (any failure after the interrupt included), so it steers "Ignore my previous message: it was sent to this session by mistake." Nothing is aborted or reverted.
 - `gone`: no record, or the session or message no longer exists.
 - `too-old`: sent more than `routing.undoWindowSec` (default 600) ago; nothing is done.
 

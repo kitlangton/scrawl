@@ -174,14 +174,34 @@ pub fn remember(session: &str, title: Option<&str>, posted: &Posted, origin: Ori
 pub fn write(dir: &Path, record: &Record) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let tmp = dir.join(format!(".{}.tmp", record.delivery_id));
-    std::fs::write(&tmp, serde_json::to_vec_pretty(record)?)?;
+    write_private(&tmp, &serde_json::to_vec_pretty(record)?)?;
+    std::fs::rename(&tmp, dir.join(format!("{}.json", record.delivery_id)))?;
+    Ok(())
+}
+
+/// Writes `bytes` to `path`, readable by Kit alone (0600) even if it was there before.
+pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = private(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true),
+    )
+    .open(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
-    std::fs::rename(&tmp, dir.join(format!("{}.json", record.delivery_id)))?;
-    Ok(())
+    file.write_all(bytes)
+}
+
+/// `options` creating files as 0600.
+pub fn private(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(options, 0o600);
+    options
 }
 
 fn read(dir: &Path, id: &str) -> Option<Record> {
@@ -252,51 +272,61 @@ fn found(result: Result<Vec<u8>>) -> Result<Option<Vec<u8>>> {
     }
 }
 
+/// Times the inbox and messages are read before giving up on a send that keeps moving.
+const ROUNDS: usize = 3;
+
 fn take_back(record: &Record, api: &Api) -> Result<Undone> {
     let session = handoff::query_escape(&record.session);
     let Some(message) = record.message_id.as_deref() else {
         // Sent, but OpenCode's answer had no ID to find it by.
         return disown(&session, api);
     };
-    let Some(waiting) = in_inbox(&session, message, api)? else {
-        return Ok(Undone::Gone);
-    };
-    let cancelled = if waiting {
-        let path = format!(
-            "/api/session/{session}/inbox/{}",
-            handoff::query_escape(message)
-        );
-        if found((api.delete)(&path))?.is_none() {
+    let mut cancelled = false;
+    for round in 0..ROUNDS {
+        let Some(now) = standing(&session, message, api)? else {
+            return Ok(Undone::Gone);
+        };
+        if now.waiting {
+            if cancelled {
+                // Still waiting after a cancel: say so rather than leave it to be read.
+                return disown(&session, api);
+            }
+            let path = format!(
+                "/api/session/{session}/inbox/{}",
+                handoff::query_escape(message)
+            );
+            match found((api.delete)(&path)) {
+                Ok(Some(_)) => cancelled = true,
+                Ok(None) => return Ok(Undone::Gone),
+                Err(err) if handoff::http_status(&err).is_some() => {
+                    scrawl_log(format!("undo: couldn't withdraw it ({err:#}); disowning"));
+                    return disown(&session, api);
+                }
+                Err(err) => return Err(err),
+            }
+            // A cancel of an item delivered in the meantime does nothing, so look again.
+            continue;
+        }
+        if !now.timeline.found {
+            if cancelled {
+                return Ok(Undone::Withdrawn);
+            }
+            // In neither place: read the inbox once more, in case it was on its way.
+            if round == 0 {
+                continue;
+            }
             return Ok(Undone::Gone);
         }
-        true
-    } else {
-        false
-    };
-    // A cancel of an item delivered in the meantime does nothing, so look where it is now.
-    let Some(timeline) = timeline(&session, message, api)? else {
-        return Ok(Undone::Gone);
-    };
-    if !timeline.found {
-        return Ok(match (cancelled, in_inbox(&session, message, api)?) {
-            (_, None) => Undone::Gone,
-            (true, Some(false)) => Undone::Withdrawn,
-            // Still waiting after a cancel: say so rather than leave it to be read.
-            (true, Some(true)) => disown(&session, api)?,
-            (false, Some(true)) => Undone::Gone,
-            (false, Some(false)) => Undone::Gone,
-        });
-    }
-    if timeline.started && !timeline.later {
-        if let Some(undone) = revert(&session, message, api)? {
-            return Ok(undone);
+        if now.may_revert() {
+            return revert(&session, message, api);
         }
+        return disown(&session, api);
     }
     disown(&session, api)
 }
 
-/// Whether `message` waits in the session's inbox; `None` when the session is gone.
-fn in_inbox(session: &str, message: &str, api: &Api) -> Result<Option<bool>> {
+/// The session's waiting inbox items, by ID; `None` when the session is gone.
+fn inbox(session: &str, api: &Api) -> Result<Option<Vec<String>>> {
     let Some(body) = found((api.get)(&format!("/api/session/{session}/inbox")))? else {
         return Ok(None);
     };
@@ -306,7 +336,53 @@ fn in_inbox(session: &str, message: &str, api: &Api) -> Result<Option<bool>> {
         .unwrap_or(&value)
         .as_array()
         .context("Invalid OpenCode inbox")?;
-    Ok(Some(items.iter().any(|item| item["id"] == message)))
+    Ok(Some(
+        items
+            .iter()
+            .map(|item| item["id"].as_str().unwrap_or_default().to_owned())
+            .collect(),
+    ))
+}
+
+/// Where a send stands: waiting, or among the messages, and whether anything else waits.
+#[derive(Debug, Default)]
+struct Standing {
+    waiting: bool,
+    /// Other input waits (a follow-up typed during the turn, a compaction): a revert would
+    /// leave it to land on the reverted session.
+    others_waiting: bool,
+    timeline: Timeline,
+}
+
+impl Standing {
+    /// It started the turn, and nothing was said or is waiting after it.
+    fn may_revert(&self) -> bool {
+        !self.waiting
+            && self.timeline.found
+            && self.timeline.started
+            && !self.timeline.later
+            && !self.others_waiting
+    }
+}
+
+/// Reads the inbox, then (unless the send still waits) the messages. `None` when the session
+/// is gone.
+fn standing(session: &str, message: &str, api: &Api) -> Result<Option<Standing>> {
+    let Some(waiting) = inbox(session, api)? else {
+        return Ok(None);
+    };
+    let mut now = Standing {
+        waiting: waiting.iter().any(|id| id == message),
+        others_waiting: waiting.iter().any(|id| id != message),
+        timeline: Timeline::default(),
+    };
+    if !now.waiting {
+        let Some(timeline) = timeline(session, message, api)? else {
+            return Ok(None);
+        };
+        now.timeline = timeline;
+    }
+    Ok(Some(now))
 }
 
 /// Where the sent message sits among the session's messages.
@@ -379,32 +455,50 @@ fn timeline(session: &str, message: &str, api: &Api) -> Result<Option<Timeline>>
     }))
 }
 
-/// Stops the turn it started and stages a revert to before it, files too. `None` when the
-/// revert couldn't be staged.
-fn revert(session: &str, message: &str, api: &Api) -> Result<Option<Undone>> {
+/// Stops the turn it started and stages a revert to before it, files too. Once the turn is
+/// stopped, anything but a staged revert disowns it, which also wakes the session.
+fn revert(session: &str, message: &str, api: &Api) -> Result<Undone> {
     let interrupt = format!("/api/session/{session}/interrupt?resume=false");
     if found((api.post)(&interrupt, &json!({})))?.is_none() {
-        return Ok(Some(Undone::Gone));
+        return Ok(Undone::Gone);
     }
     let stage = format!("/api/session/{session}/revert/stage");
     let body = json!({"messageID": message, "files": true});
     for _ in 0..STAGE_TRIES {
+        // Something may have come in before the interrupt landed.
+        match standing(session, message, api) {
+            Ok(None) => return Ok(Undone::Gone),
+            Ok(Some(now)) if !now.waiting && !now.timeline.found => return Ok(Undone::Gone),
+            Ok(Some(now)) if !now.may_revert() => {
+                scrawl_log("undo: more came in after it; disowning".to_owned());
+                return disown(session, api);
+            }
+            Ok(Some(_)) => {}
+            Err(err) => return disown_or(session, api, err),
+        }
         match (api.post)(&stage, &body) {
-            Ok(_) => return Ok(Some(Undone::Reverted)),
+            Ok(_) => return Ok(Undone::Reverted),
             // Busy while the interrupted turn winds down.
             Err(err) if handoff::http_status(&err) == Some(409) => (api.pause)(STAGE_WAIT),
-            Err(err) if handoff::http_status(&err) == Some(404) => return Ok(Some(Undone::Gone)),
+            Err(err) if handoff::http_status(&err) == Some(404) => return Ok(Undone::Gone),
             Err(err) if handoff::http_status(&err).is_some() => {
                 scrawl_log(format!(
                     "undo: couldn't stage the revert ({err:#}); disowning"
                 ));
-                return Ok(None);
+                return disown(session, api);
             }
-            Err(err) => return Err(err),
+            Err(err) => return disown_or(session, api, err),
         }
     }
     scrawl_log("undo: the session stayed busy; disowning".to_owned());
-    Ok(None)
+    disown(session, api)
+}
+
+/// After an interrupt, a failed request still owes the session a message: disown, or give
+/// back `err` when even that fails.
+fn disown_or(session: &str, api: &Api, err: anyhow::Error) -> Result<Undone> {
+    scrawl_log(format!("undo: {err:#} after the interrupt; disowning"));
+    disown(session, api).map_err(|_| err)
 }
 
 fn disown(session: &str, api: &Api) -> Result<Undone> {
@@ -519,7 +613,21 @@ mod tests {
         delivered_on_cancel: bool,
         /// Stage answers 409 this many times first.
         busy: usize,
+        /// Turns up in the inbox on the second read.
+        late: Option<String>,
+        inbox_reads: usize,
+        /// The cancel answers 500.
+        refuses_cancel: bool,
+        /// Arrives as the interrupt lands: a waiting item, or a message.
+        on_interrupt: Option<Arrival>,
+        /// The server stops answering stage requests.
+        stage_unreachable: bool,
         calls: Vec<String>,
+    }
+
+    enum Arrival {
+        Waiting(&'static str),
+        Said(&'static str),
     }
 
     thread_local! {
@@ -541,6 +649,12 @@ mod tests {
                 return Err(status(404));
             }
             let body = if path.ends_with("/inbox") {
+                f.inbox_reads += 1;
+                if f.inbox_reads == 2
+                    && let Some(late) = f.late.take()
+                {
+                    f.inbox.push(late);
+                }
                 let items: Vec<Value> = f.inbox.iter().map(|id| json!({"id": id})).collect();
                 json!({ "data": items })
             } else {
@@ -562,9 +676,19 @@ mod tests {
             if f.gone {
                 return Err(status(404));
             }
+            if path.ends_with("/revert/stage") && f.stage_unreachable {
+                return Err(anyhow!("Could not connect"));
+            }
             if path.ends_with("/revert/stage") && f.busy > 0 {
                 f.busy -= 1;
                 return Err(status(409));
+            }
+            if path.contains("/interrupt") {
+                match f.on_interrupt.take() {
+                    Some(Arrival::Waiting(id)) => f.inbox.push(id.into()),
+                    Some(Arrival::Said(id)) => f.messages.push(json!({"id": id, "type": "user"})),
+                    None => {}
+                }
             }
             if path.ends_with("/prompt") {
                 let id = format!("msg_{}", f.messages.len());
@@ -580,6 +704,9 @@ mod tests {
             f.calls.push(format!("DELETE {path}"));
             if f.gone {
                 return Err(status(404));
+            }
+            if f.refuses_cancel {
+                return Err(status(500));
             }
             let id = path.rsplit('/').next().unwrap().to_owned();
             if f.delivered_on_cancel {
@@ -819,6 +946,123 @@ mod tests {
             ..Fake::default()
         });
         assert_eq!(undo_now(&dir, &id).unwrap().undone, Undone::Disowned);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn other_waiting_input_is_never_reverted_over() {
+        // Kit typed a follow-up while the sent turn ran: reverting would leave it to land on
+        // the reverted session.
+        let dir = temp_dir("others");
+        let id = sent(&dir, true);
+        set(Fake {
+            inbox: vec!["msg_followup".into()],
+            messages: vec![idle(), mine(), reply()],
+            ..Fake::default()
+        });
+        assert_eq!(undo_now(&dir, &id).unwrap().undone, Undone::Disowned);
+        assert!(posted("/interrupt?resume=false").is_empty());
+        assert!(posted("/revert/stage").is_empty());
+        FAKE.with(|f| assert_eq!(f.borrow().inbox, vec!["msg_followup".to_owned()]));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn input_arriving_with_the_interrupt_turns_the_revert_into_a_disown() {
+        for (name, arrival) in [
+            ("waiting", Arrival::Waiting("msg_k")),
+            ("said", Arrival::Said("msg_k")),
+        ] {
+            let dir = temp_dir(name);
+            let id = sent(&dir, true);
+            set(Fake {
+                messages: vec![idle(), mine(), reply()],
+                on_interrupt: Some(arrival),
+                ..Fake::default()
+            });
+            assert_eq!(
+                undo_now(&dir, &id).unwrap().undone,
+                Undone::Disowned,
+                "{name}"
+            );
+            assert_eq!(posted("/interrupt?resume=false").len(), 1, "{name}");
+            assert!(posted("/revert/stage").is_empty(), "{name}: no revert");
+            assert_eq!(
+                posted("/prompt").len(),
+                1,
+                "{name}: the interrupted session gets a message"
+            );
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn a_send_seen_waiting_on_a_second_look_is_still_withdrawn() {
+        let dir = temp_dir("late");
+        let id = sent(&dir, false);
+        set(Fake {
+            late: Some("msg_mine".into()),
+            ..Fake::default()
+        });
+        assert_eq!(undo_now(&dir, &id).unwrap().undone, Undone::Withdrawn);
+        assert!(calls().contains(&"DELETE /api/session/ses_hex/inbox/msg_mine".to_owned()));
+        FAKE.with(|f| assert!(f.borrow().inbox.is_empty()));
+        let _ = std::fs::remove_dir_all(dir);
+
+        // A cancel the server refuses: disowned rather than left to be read.
+        let dir = temp_dir("late-refused");
+        let id = sent(&dir, false);
+        set(Fake {
+            late: Some("msg_mine".into()),
+            refuses_cancel: true,
+            ..Fake::default()
+        });
+        assert_eq!(undo_now(&dir, &id).unwrap().undone, Undone::Disowned);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failure_after_the_interrupt_still_leaves_a_message() {
+        let dir = temp_dir("after-interrupt");
+        let id = sent(&dir, true);
+        set(Fake {
+            messages: vec![idle(), mine(), reply()],
+            stage_unreachable: true,
+            ..Fake::default()
+        });
+        assert_eq!(undo_now(&dir, &id).unwrap().undone, Undone::Disowned);
+        assert_eq!(posted("/interrupt?resume=false").len(), 1);
+        assert_eq!(posted("/prompt").len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+
+        // `opencode api`'s status (agentHost) reads like a direct request's: 409 retries.
+        let dir = temp_dir("cli-status");
+        let id = sent(&dir, true);
+        set(Fake {
+            messages: vec![idle(), mine(), reply()],
+            ..Fake::default()
+        });
+        fn busy_once_via_cli(path: &str, body: &Value) -> Result<Vec<u8>> {
+            let first = FAKE.with(|f| {
+                f.borrow()
+                    .calls
+                    .iter()
+                    .all(|c| !c.contains("/revert/stage"))
+            });
+            if path.ends_with("/revert/stage") && first {
+                FAKE.with(|f| f.borrow_mut().calls.push(format!("POST {path} {body}")));
+                return Err(anyhow::Error::new(handoff::HttpStatus(409))
+                    .context("OpenCode API failed: HTTP 409 Conflict"));
+            }
+            post(path, body)
+        }
+        let api = Api {
+            post: busy_once_via_cli,
+            ..API
+        };
+        let report = undo_with(&dir, &id, &api, Duration::from_secs(600), SENT_AT + 5_000);
+        assert_eq!(report.unwrap().undone, Undone::Reverted);
+        assert_eq!(posted("/revert/stage").len(), 2);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -486,8 +486,9 @@ pub struct Config {
     /// The microphone Mac captures record from (`mic`); absent follows the macOS default.
     #[serde(default)]
     pub microphone: Option<crate::mic::Choice>,
-    /// Smart routing's settings (`routing::look`).
-    #[serde(default)]
+    /// Smart routing's settings (`routing::look`). Read key by key (`lenient_routing`), so a
+    /// bad `undoWindowSec` doesn't take `autoSend` with it.
+    #[serde(default, deserialize_with = "lenient_routing")]
     pub routing: Option<RoutingConfig>,
     /// Jev routing's thresholds (`routing::jev::Thresholds::from_config`).
     #[serde(default)]
@@ -529,7 +530,7 @@ pub struct RoutingConfig {
     /// (`{"scroll": "SCRAWL"}`), for names speech recognition gets wrong.
     #[serde(default)]
     pub aliases: std::collections::BTreeMap<String, String>,
-    /// What may send without asking, with Jev routing on: `"rules"` (default), `"confident"`
+    /// What may send without asking: `"rules"` (default), `"confident"`
     /// or `"never"` (`routing::policy::AutoSend`).
     #[serde(default)]
     pub auto_send: Option<serde_json::Value>,
@@ -579,6 +580,49 @@ where
         }
     }
     Ok(out)
+}
+
+/// `"routing"` without the keys or map entries that don't fit, each dropped and logged on its own.
+fn lenient_routing<'de, D>(deserializer: D) -> std::result::Result<Option<RoutingConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde_json::Value;
+    let map = match Value::deserialize(deserializer)? {
+        Value::Null => return Ok(None),
+        Value::Object(map) => map,
+        other => {
+            log_config_once(format!("config.json: ignoring \"routing\": {other} (expected an object)"));
+            return Ok(None);
+        }
+    };
+    let fits = |map: &serde_json::Map<String, Value>| {
+        serde_json::from_value::<RoutingConfig>(Value::Object(map.clone()))
+    };
+    let mut kept = serde_json::Map::new();
+    for (key, value) in map {
+        kept.insert(key.clone(), value.clone());
+        let Err(error) = fits(&kept) else { continue };
+        kept.remove(&key);
+        let Value::Object(entries) = value else {
+            log_config_once(format!("config.json: ignoring \"routing.{key}\": {error}"));
+            continue;
+        };
+        // A map (`sites`, `apps`): keep the entries that fit.
+        let mut good = serde_json::Map::new();
+        for (name, entry) in entries {
+            good.insert(name.clone(), entry.clone());
+            kept.insert(key.clone(), Value::Object(good.clone()));
+            if fits(&kept).is_err() {
+                good.remove(&name);
+                log_config_once(format!(
+                    "config.json: ignoring \"routing.{key}\" entry \"{name}\": {entry}"
+                ));
+            }
+        }
+        kept.insert(key, Value::Object(good));
+    }
+    Ok(Some(fits(&kept).unwrap_or_default()))
 }
 
 /// Config problems are logged once per process, not on every read.
@@ -1215,12 +1259,24 @@ fn opencode_api(method: &str, path: &str, data: Option<&serde_json::Value>) -> R
         command
     };
     let output = command.output().context("Could not launch opencode2")?;
-    ensure!(
-        output.status.success(),
-        "OpenCode API failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = format!("OpenCode API failed: {}", stderr.trim());
+        // `opencode api` prints `HTTP <status> <text>` when the server answered.
+        return Err(match cli_status(&stderr) {
+            Some(status) => anyhow::Error::new(HttpStatus(status)).context(message),
+            None => anyhow::anyhow!(message),
+        });
+    }
     Ok(output.stdout)
+}
+
+/// The status in `opencode api`'s `HTTP 409 Conflict` line.
+fn cli_status(stderr: &str) -> Option<u16> {
+    stderr.lines().find_map(|line| {
+        let code = line.trim().strip_prefix("HTTP ")?.get(..3)?;
+        code.parse().ok().filter(|c| (100..600).contains(c))
+    })
 }
 
 pub(crate) fn query_escape(value: &str) -> String {
@@ -1972,6 +2028,16 @@ fn existing_keyframes(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn opencode_api_statuses_survive_the_cli() {
+        assert_eq!(super::cli_status("HTTP 409 Conflict\n"), Some(409));
+        assert_eq!(super::cli_status("warn: x\nHTTP 404 Not Found"), Some(404));
+        assert_eq!(super::cli_status("error: connect ECONNREFUSED"), None);
+        let err = anyhow::Error::new(super::HttpStatus(404)).context("OpenCode API failed");
+        assert_eq!(super::http_status(&err), Some(404));
+        assert_eq!(super::http_status(&anyhow::anyhow!("down")), None);
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -2235,6 +2301,24 @@ mod tests {
         assert_eq!(delivery_mode_of(Some(&json!(true))), "steer");
         let config: Config = serde_json::from_str(r#"{"delivery": 3, "autoSend": false}"#).unwrap();
         assert_eq!(config.auto_send, Some(false), "a bad delivery keeps the other keys");
+    }
+
+    #[test]
+    fn a_bad_routing_key_drops_only_itself() {
+        let config: Config = serde_json::from_str(
+            r#"{"routing": {"autoSend": "never", "undoWindowSec": "15",
+                "sites": {"https://a.example": "~/a", "https://b.example": 3}}}"#,
+        )
+        .unwrap();
+        let routing = config.routing.unwrap();
+        assert_eq!(routing.auto_send, Some(serde_json::json!("never")));
+        assert_eq!(routing.undo_window_sec, None);
+        assert_eq!(
+            routing.sites.into_iter().collect::<Vec<_>>(),
+            vec![("https://a.example".to_owned(), "~/a".to_owned())]
+        );
+        let config: Config = serde_json::from_str(r#"{"routing": 3, "autoSend": false}"#).unwrap();
+        assert_eq!((config.routing, config.auto_send), (None, Some(false)));
     }
 
     #[test]

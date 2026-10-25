@@ -634,7 +634,7 @@ pub fn judge_capture(
         );
         (judgement, Some(record))
     } else {
-        (judgement, None)
+        (gate_smart(policy::AutoSend::configured(), judgement, &evidence.candidates), None)
     };
     if let Err(err) = write_record(dir, &evidence, &judgement, jev.as_ref()) {
         scrawl_log(format!("routing: couldn't save {RECORD}: {err:#}"));
@@ -659,6 +659,24 @@ pub fn judge_capture(
         evidence.candidates.len()
     ));
     (judgement, url)
+}
+
+/// `routing.autoSend` over smart routing's own decision (Jev routing off): a weighed send that
+/// may not go on its own becomes an offer with it first.
+fn gate_smart(
+    mode: policy::AutoSend,
+    judgement: smart::Judgement,
+    candidates: &[smart::Candidate],
+) -> smart::Judgement {
+    let home = jev::home_session(candidates);
+    let (judgement, suggested) = policy::apply(mode, judgement, home.as_ref());
+    if suggested {
+        scrawl_log(format!(
+            "routing (smart): suggested, autoSend is {}",
+            mode.label()
+        ));
+    }
+    judgement
 }
 
 /// `scrawl route --explain`: what smart routing sees for a bundle and what it decides, beside
@@ -827,6 +845,61 @@ pub fn record_destination(dir: &Path, bundle: &mut ScrawlBundle, dest: Destinati
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autosend_gates_smart_routings_weighed_sends_with_jev_off() {
+        let scored = |id: &str, basis: smart::Basis| smart::Scored {
+            candidate: smart::Candidate {
+                id: id.into(),
+                title: id.to_uppercase(),
+                directory: Some(PathBuf::from(format!("/tmp/{id}"))),
+                repo: None,
+                updated_ms: 0,
+                viewed_ms: None,
+            },
+            score: 60,
+            reasons: vec![smart::Reason {
+                basis,
+                points: 60,
+                why: String::new(),
+                directory: None,
+            }],
+        };
+        let send = |to: smart::Scored| smart::Judgement {
+            decision: smart::Decision::Send {
+                to: to.clone(),
+                instead: vec![],
+            },
+            ranking: vec![to],
+        };
+        let weighed = scored("ses_viewed", smart::Basis::Clue(smart::Source::Viewed));
+        let ruled = scored("ses_rule", smart::Basis::Clue(smart::Source::Rule));
+        let candidates = [weighed.candidate.clone(), ruled.candidate.clone()];
+        let offered = |j: &smart::Judgement| matches!(j.decision, smart::Decision::Offer { .. });
+        for mode in [policy::AutoSend::Rules, policy::AutoSend::Never] {
+            let gated = gate_smart(mode, send(weighed.clone()), &candidates);
+            assert!(offered(&gated), "{mode:?}: a weighed send asks");
+            let smart::Decision::Offer { choices } = &gated.decision else {
+                unreachable!()
+            };
+            assert_eq!(choices[0].candidate.id, "ses_viewed", "the pick comes first");
+        }
+        assert!(!offered(&gate_smart(
+            policy::AutoSend::Confident,
+            send(weighed),
+            &candidates
+        )));
+        assert!(!offered(&gate_smart(
+            policy::AutoSend::Rules,
+            send(ruled.clone()),
+            &candidates
+        )));
+        assert!(offered(&gate_smart(
+            policy::AutoSend::Never,
+            send(ruled),
+            &candidates
+        )));
+    }
 
     fn session(id: &str, dir: &str, updated: u64) -> OpenCodeSession {
         crate::handoff::fake_api::session(id, &id.to_uppercase(), dir, updated)
