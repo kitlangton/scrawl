@@ -275,7 +275,7 @@ pub fn zoom(
                     Some(r) => crate::autocrop::crop_frame(&frame, *r),
                     None => frame,
                 };
-                out.push(crate::autocrop_lab::downscale(&frame, 1280));
+                out.push(crate::render::downscale(&frame, 1280));
             }
         }
         out

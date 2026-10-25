@@ -23,33 +23,7 @@ fn decode(path: &Path) -> Result<RgbaFrame> {
     crate::render::decode_png(BufReader::new(file))
 }
 
-/// Box-filtered copy at most `max_w` wide.
-pub fn downscale(frame: &RgbaFrame, max_w: u32) -> RgbaFrame {
-    let f = frame.width.div_ceil(max_w.max(1)).max(1);
-    if f == 1 {
-        return frame.clone();
-    }
-    let (w, h) = (frame.width / f, frame.height / f);
-    let mut rgba = vec![0_u8; (w * h * 4) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            let mut acc = [0_u32; 4];
-            for dy in 0..f {
-                let row = ((y * f + dy) * frame.width + x * f) as usize * 4;
-                for px in frame.rgba[row..row + f as usize * 4].as_chunks::<4>().0 {
-                    for (a, v) in acc.iter_mut().zip(px) {
-                        *a += u32::from(*v);
-                    }
-                }
-            }
-            let i = ((y * w + x) * 4) as usize;
-            for c in 0..4 {
-                rgba[i + c] = (acc[c] / (f * f)) as u8;
-            }
-        }
-    }
-    RgbaFrame::new(frame.t_ms, w, h, rgba)
-}
+pub use crate::render::downscale;
 
 /// Area-averaged copy at exactly `w`×`h` (what ScreenCaptureKit hands the sampler).
 pub fn resize(frame: &RgbaFrame, w: u32, h: u32) -> RgbaFrame {

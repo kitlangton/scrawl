@@ -77,6 +77,34 @@ pub fn decode_png<R: std::io::BufRead + std::io::Seek>(source: R) -> anyhow::Res
     Ok(RgbaFrame::new(0, info.width, info.height, rgba))
 }
 
+/// Box-filtered copy at most `max_w` wide.
+pub fn downscale(frame: &RgbaFrame, max_w: u32) -> RgbaFrame {
+    let f = frame.width.div_ceil(max_w.max(1)).max(1);
+    if f == 1 {
+        return frame.clone();
+    }
+    let (w, h) = (frame.width / f, frame.height / f);
+    let mut rgba = vec![0_u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0_u32; 4];
+            for dy in 0..f {
+                let row = ((y * f + dy) * frame.width + x * f) as usize * 4;
+                for px in frame.rgba[row..row + f as usize * 4].as_chunks::<4>().0 {
+                    for (a, v) in acc.iter_mut().zip(px) {
+                        *a += u32::from(*v);
+                    }
+                }
+            }
+            let i = ((y * w + x) * 4) as usize;
+            for c in 0..4 {
+                rgba[i + c] = (acc[c] / (f * f)) as u8;
+            }
+        }
+    }
+    RgbaFrame::new(frame.t_ms, w, h, rgba)
+}
+
 fn solid(width: u32, height: u32, color: Color) -> RgbaFrame {
     let mut rgba = vec![0; width as usize * height as usize * 4];
     for p in rgba.chunks_exact_mut(4) {
