@@ -26,8 +26,8 @@ const VOICED_MAX_RMS: f64 = 0.01;
 /// A chunk with no voiced window is still sent when the old planner would have sent the whole
 /// recording (no 120 ms island above `audio::island_threshold`, and it lasts this long) and the
 /// chunk's level moves: its loudest window is above `SILENT_RMS` and `STEADY_OVER_FLOOR` times
-/// its own noise floor. So nothing the old planner heard is left out unless it is flat
-/// (silence, white noise), and noise after audible speech is not sent, as before.
+/// its own noise floor. So whenever the old planner sent the whole recording, only flat chunks
+/// (silence, white noise) are left out, and noise after audible speech is not sent, as before.
 const UNSURE_MIN_MS: u64 = 480;
 const OLD_MIN_ISLAND_MS: u64 = 120;
 const SILENT_RMS: f64 = 0.000_1;
@@ -640,6 +640,7 @@ mod tests {
         };
         louder(0..10_000, 0.003, &mut samples);
         louder(45_000..46_000, 0.0008, &mut samples);
+        assert!(crate::audio::speech_islands(&samples).is_empty());
         let plan = Plan::new(&samples);
         assert!(!plan.voiced().is_empty());
         assert!(
@@ -647,7 +648,24 @@ mod tests {
             "{:?}",
             plan.chunks()
         );
-        // A recording of rumble alone is still sent, as the old planner sent it whole.
+    }
+
+    #[test]
+    fn a_blip_shorter_than_an_old_island_keeps_the_old_fallback() {
+        // The old planner dropped islands under 120 ms, so a 100 ms click left it with no clips
+        // and it sent everything, the later quiet word included.
+        let samples = recording(&[(0.0, 1_000), (0.05, 100), (0.0, 30_000), (0.0008, 200)]);
+        let islands = crate::audio::speech_islands(&samples);
+        assert!(!islands.is_empty() && islands.iter().all(|&(a, b)| b - a < 120));
+        assert!(covers(
+            &heard(&samples, &Plan::new(&samples)),
+            31_100,
+            31_300
+        ));
+    }
+
+    #[test]
+    fn rumble_alone_is_sent_whole_as_the_old_planner_sent_it() {
         let rumble = noise(0.004, 30_000, 100.0);
         assert_eq!(Plan::new(&rumble).chunks(), [(0, 30_000)]);
     }
