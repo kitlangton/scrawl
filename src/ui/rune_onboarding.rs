@@ -1393,9 +1393,9 @@ fn permission_info(permission: &str, paste: &str) -> (&'static rune::Icon, Strin
 // MARK: Building blocks
 
 /// Reachable with Tab (with Full Keyboard Access on, as AppKit does) and pressed with Space,
-/// with macOS's keyboard-only accent ring.
+/// with macOS's keyboard-only focus ring.
 fn focus(e: El, enabled: bool) -> El {
-    e.focusable(enabled).focus_ring(3.0, 0.0, Rgba::hex(0x0A84FF).alpha(0.5).color())
+    e.focusable(enabled)
 }
 
 fn primary_button(title: &str, enabled: bool, quiet: bool, action: String, reduce: bool) -> El {
@@ -1412,7 +1412,7 @@ fn primary_button(title: &str, enabled: bool, quiet: bool, action: String, reduc
     // Disabled: 0.55, then the plain button style's own half, composited in sRGB like SwiftUI.
     let dim = |c: Rgba| if enabled { c } else { c.alpha(0.55 * 0.5).over_rgba(CANVAS) };
     let fill = dim(base);
-    focus(el(), enabled)
+    let button = focus(el(), enabled)
         .key("primary")
         .h(34.0)
         .min_w(180.0)
@@ -1433,7 +1433,9 @@ fn primary_button(title: &str, enabled: bool, quiet: bool, action: String, reduc
             if enabled {
                 s.send(&action);
             }
-        })
+        });
+    // Return presses it.
+    if enabled { button.default_button() } else { button }
 }
 
 fn quiet_button(title: &str, action: &'static str) -> El {
@@ -1452,7 +1454,7 @@ fn row_button(title: &str, prominent: bool, permission: &str) -> El {
     let fill = if prominent { INK } else { Rgba::WHITE.alpha(0.10).over_rgba(SURFACE) };
     let p = permission.to_owned();
     let layout = permission.to_owned();
-    focus(el(), true)
+    let button = focus(el(), true)
         .role("button")
         .h(26.0)
         .px(12.0)
@@ -1466,7 +1468,10 @@ fn row_button(title: &str, prominent: bool, permission: &str) -> El {
         .on_screen_layout(move |s: &mut OnboardingWin, r: [f32; 4]| {
             s.buttons.insert(layout.clone(), r);
         })
-        .on_press(move |s: &mut OnboardingWin| s.send(&format!("grant:{p}")))
+        .on_press(move |s: &mut OnboardingWin| s.send(&format!("grant:{p}")));
+    // The next row's button takes Return while Continue is off; an enabled Continue, drawn
+    // after it, takes it over.
+    if prominent { button.default_button() } else { button }
 }
 
 fn spinner(phase: f64, bg: Rgba) -> El {
@@ -1994,19 +1999,6 @@ fn on_key(s: &mut OnboardingWin, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
         }
         _ => {}
     }
-    if matches!(key.key, rune::Key::Enter) && !key.mods.cmd {
-        let st = &s.state;
-        let action = match st.step.as_str() {
-            "welcome" | "done" => Some("continue"),
-            "how-it-works" => Some(if st.tutorial_seen() { "continue" } else { "skip" }),
-            "permissions" if st.ready => Some("continue"),
-            _ => None,
-        };
-        if let Some(action) = action {
-            s.send(action);
-            return true;
-        }
-    }
     false
 }
 
@@ -2510,5 +2502,24 @@ mod tests {
         assert!(focused.focus_visible);
         press(&mut rt, rune::Key::Text(" ".into()), Default::default());
         assert_eq!(sent.lock().unwrap().len(), 1, "{:?}", sent.lock().unwrap());
+    }
+
+    #[test]
+    fn return_presses_the_default_button_wherever_focus_is() {
+        let (mut rt, sent) = keyboard("welcome");
+        press(&mut rt, rune::Key::Enter, Default::default());
+        assert_eq!(*sent.lock().unwrap(), ["continue"]);
+
+        let (mut rt, sent) = keyboard("permissions-none");
+        press(&mut rt, rune::Key::Enter, Default::default());
+        assert_eq!(*sent.lock().unwrap(), ["grant:screen-recording"], "Continue is off until all three are on");
+
+        let (mut rt, sent) = keyboard("done");
+        press(&mut rt, rune::Key::Tab, Default::default());
+        press(&mut rt, rune::Key::Tab, Default::default());
+        let focused = rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key);
+        assert_ne!(focused.as_deref(), Some("primary"), "Tab reaches Open Settings");
+        press(&mut rt, rune::Key::Enter, Default::default());
+        assert_eq!(*sent.lock().unwrap(), ["continue"], "Return isn't Space");
     }
 }
