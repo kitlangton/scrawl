@@ -4531,7 +4531,12 @@ impl Render for BundleReviewWindow {
                             mods.alt,
                             mods.shift,
                         ) {
-                            update_global_shortcut(&coord.telemetry, cfg);
+                            if let Some(accepted) = update_global_shortcut(&coord.telemetry, cfg) {
+                                crate::settings::save_shortcut(
+                                    crate::capture::ShortcutKind::Record,
+                                    &accepted,
+                                );
+                            }
                             coord.recording_shortcut_key = false;
                             cx.notify();
                             return true;
@@ -5313,7 +5318,7 @@ pub fn run_start_benchmark() {
     app.run(|cx: &mut App| {
         let quick_stop = std::env::var("SCRAWL_BENCH_QUICK_STOP").as_deref() == Ok("1");
         let (sender, _receiver) = flume::unbounded();
-        let telemetry = SharedCaptureTelemetry::new(sender);
+        let telemetry = SharedCaptureTelemetry::new(sender, crate::capture::ShortcutConfig::defaults());
         let coordinator = cx.new(|_| ScrawlCoordinator::new(telemetry, None));
         cx.spawn(async move |cx| {
             for run in 0..8 {
@@ -5390,7 +5395,9 @@ pub fn run_app(
             .detach();
         let (ui_sender, ui_receiver) = flume::unbounded();
         crate::phone::start_ingest_server(ui_sender.clone());
-        let telemetry = SharedCaptureTelemetry::new(ui_sender);
+        let shortcuts = crate::settings::Shortcuts::load();
+        crate::settings::note_paste_label(&shortcuts.paste.label);
+        let telemetry = SharedCaptureTelemetry::new(ui_sender, (shortcuts.record, shortcuts.paste));
         install_global_hotkeys(&telemetry);
         start_global_input_tap(Arc::clone(&telemetry));
         platform::start_updates();

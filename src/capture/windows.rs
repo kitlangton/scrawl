@@ -654,12 +654,13 @@ pub fn install_global_hotkeys(telemetry: &Arc<SharedCaptureTelemetry>) {
 }
 
 /// Sets both shortcuts and registers them. If Windows refuses either, the old ones are put back
-/// and the refused one is returned. Nothing is saved here (`crate::settings` does that).
+/// and the refused one is returned. Returns the accepted `(record, paste)` config so the app can
+/// save it (`crate::settings` does that).
 pub fn set_shortcuts(
     telemetry: &SharedCaptureTelemetry,
     record: ShortcutConfig,
     paste: ShortcutConfig,
-) -> Result<(), ShortcutKind> {
+) -> Result<(ShortcutConfig, ShortcutConfig), ShortcutKind> {
     let (old_record, old_paste) = telemetry.shortcuts();
     if !telemetry.shortcuts_paused.load(Ordering::Acquire)
         && let Some(Err(kind)) =
@@ -671,12 +672,12 @@ pub fn set_shortcuts(
     *telemetry
         .shortcut
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = record;
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = record.clone();
     *telemetry
         .paste_shortcut
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = paste;
-    Ok(())
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = paste.clone();
+    Ok((record, paste))
 }
 
 /// While Settings records a new shortcut, Scrawl's own stop answering, so pressing the current
@@ -693,12 +694,18 @@ pub fn pause_shortcuts(telemetry: &SharedCaptureTelemetry, paused: bool) {
     }
 }
 
-/// The review window's own recorder: sets and saves the record shortcut.
-pub fn update_global_shortcut(telemetry: &SharedCaptureTelemetry, config: ShortcutConfig) {
+/// The review window's own recorder: sets the record shortcut and returns the accepted config.
+pub fn update_global_shortcut(
+    telemetry: &SharedCaptureTelemetry,
+    config: ShortcutConfig,
+) -> Option<ShortcutConfig> {
     let (_, paste) = telemetry.shortcuts();
-    match set_shortcuts(telemetry, config.clone(), paste) {
-        Ok(()) => crate::settings::save_shortcut(ShortcutKind::Record, &config),
-        Err(kind) => scrawl_log(format!("update_global_shortcut: {kind:?} refused")),
+    match set_shortcuts(telemetry, config, paste) {
+        Ok((accepted, _)) => Some(accepted),
+        Err(kind) => {
+            scrawl_log(format!("update_global_shortcut: {kind:?} refused"));
+            None
+        }
     }
 }
 

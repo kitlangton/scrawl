@@ -1436,12 +1436,12 @@ impl Host for AppHost<'_> {
     }
 
     fn set_shortcuts(&mut self, shortcuts: &Shortcuts) -> Result<(), ShortcutKind> {
-        crate::capture::set_shortcuts(
+        let (_, accepted_paste) = crate::capture::set_shortcuts(
             self.telemetry,
             shortcuts.record.clone(),
             shortcuts.paste.clone(),
         )?;
-        note_paste_label(&shortcuts.paste.label);
+        note_paste_label(&accepted_paste.label);
         Ok(())
     }
 

@@ -600,12 +600,13 @@ fn register_shortcuts(
 }
 
 /// Sets both shortcuts and registers them. If macOS refuses either, the old ones are put back
-/// and the refused one is returned. Nothing is saved here (`crate::settings` does that).
+/// and the refused one is returned. Returns the accepted `(record, paste)` config so the app can
+/// save it (`crate::settings` does that).
 pub fn set_shortcuts(
     telemetry: &SharedCaptureTelemetry,
     record: ShortcutConfig,
     paste: ShortcutConfig,
-) -> Result<(), ShortcutKind> {
+) -> Result<(ShortcutConfig, ShortcutConfig), ShortcutKind> {
     let (old_record, old_paste) = telemetry.shortcuts();
     if let Some(state) = CARBON_HOTKEYS.get()
         && !telemetry.shortcuts_paused.load(Ordering::Acquire)
@@ -617,12 +618,12 @@ pub fn set_shortcuts(
     *telemetry
         .shortcut
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = record;
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = record.clone();
     *telemetry
         .paste_shortcut
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = paste;
-    Ok(())
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = paste.clone();
+    Ok((record, paste))
 }
 
 /// While Settings records a new shortcut, Scrawl's own stop answering, so pressing the current
@@ -646,12 +647,18 @@ pub fn pause_shortcuts(telemetry: &SharedCaptureTelemetry, paused: bool) {
     }
 }
 
-/// The review window's own recorder: sets and saves the record shortcut.
-pub fn update_global_shortcut(telemetry: &SharedCaptureTelemetry, config: ShortcutConfig) {
+/// The review window's own recorder: sets the record shortcut and returns the accepted config.
+pub fn update_global_shortcut(
+    telemetry: &SharedCaptureTelemetry,
+    config: ShortcutConfig,
+) -> Option<ShortcutConfig> {
     let (_, paste) = telemetry.shortcuts();
-    match set_shortcuts(telemetry, config.clone(), paste) {
-        Ok(()) => crate::settings::save_shortcut(ShortcutKind::Record, &config),
-        Err(kind) => scrawl_log(format!("update_global_shortcut: {kind:?} refused")),
+    match set_shortcuts(telemetry, config, paste) {
+        Ok((accepted, _)) => Some(accepted),
+        Err(kind) => {
+            scrawl_log(format!("update_global_shortcut: {kind:?} refused"));
+            None
+        }
     }
 }
 
@@ -2000,7 +2007,7 @@ mod tests {
         );
 
         let (sender, _receiver) = flume::unbounded();
-        let telemetry = SharedCaptureTelemetry::new(sender);
+        let telemetry = SharedCaptureTelemetry::new(sender, ShortcutConfig::defaults());
         telemetry.reset_for_session(TargetFrame {
             x: 0.0,
             y: 0.0,
@@ -2043,7 +2050,7 @@ mod tests {
 
     fn session(width: f64, height: f64) -> Arc<SharedCaptureTelemetry> {
         let (sender, _receiver) = flume::unbounded();
-        let telemetry = SharedCaptureTelemetry::new(sender);
+        let telemetry = SharedCaptureTelemetry::new(sender, ShortcutConfig::defaults());
         telemetry.reset_for_session(TargetFrame {
             x: 0.0,
             y: 0.0,
@@ -2169,6 +2176,9 @@ mod tests {
     #[test]
     fn the_mouse_monitor_installs_without_a_permission() {
         let (sender, _receiver) = flume::unbounded();
-        assert!(install_mouse_monitor(SharedCaptureTelemetry::new(sender)));
+        assert!(install_mouse_monitor(SharedCaptureTelemetry::new(
+            sender,
+            ShortcutConfig::defaults()
+        )));
     }
 }

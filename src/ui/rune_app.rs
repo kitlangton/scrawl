@@ -3411,7 +3411,9 @@ fn review_on_key(s: &mut ReviewState, event: &KeyEvent, tx: &mut Tx) -> bool {
         if let Some(ch) = event_key_str(&event.key, &mut key_buf)
             && let Some(cfg) = shortcut_from_key_and_mods(ch, m.cmd, m.ctrl, m.alt, m.shift)
         {
-            update_global_shortcut(&s.coord.telemetry, cfg);
+            if let Some(accepted) = update_global_shortcut(&s.coord.telemetry, cfg) {
+                crate::settings::save_shortcut(crate::capture::ShortcutKind::Record, &accepted);
+            }
             s.coord.recording_shortcut_key = false;
             return true;
         }
@@ -4023,7 +4025,8 @@ fn dummy_review_init() -> ReviewState {
     let (capture_tx, _capture_rx) = flume::unbounded();
     let (ui_tx, _ui_rx) = flume::unbounded();
     let (ev_tx, ev_rx) = flume::unbounded();
-    let telemetry = SharedCaptureTelemetry::new(capture_tx);
+    let telemetry =
+        SharedCaptureTelemetry::new(capture_tx, crate::capture::ShortcutConfig::defaults());
     let coord = RuneCoordinator::new(
         telemetry,
         ui_tx,
@@ -4196,7 +4199,10 @@ pub fn run_app(
     let (capture_sender, capture_receiver) = flume::unbounded();
     let (ui_sender, ui_receiver) = flume::unbounded();
     crate::phone::start_ingest_server(capture_sender.clone());
-    let telemetry = SharedCaptureTelemetry::new(capture_sender);
+    let shortcuts = crate::settings::Shortcuts::load();
+    crate::settings::note_paste_label(&shortcuts.paste.label);
+    let telemetry =
+        SharedCaptureTelemetry::new(capture_sender, (shortcuts.record, shortcuts.paste));
     let capture_to_ui = ui_sender.clone();
     std::thread::Builder::new()
         .name("rune-scrawl-capture-events".into())

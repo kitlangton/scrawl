@@ -221,6 +221,10 @@ impl ShortcutConfig {
         }
     }
 
+    pub fn defaults() -> (Self, Self) {
+        (Self::default_record(), Self::default_paste())
+    }
+
     /// No shortcut: nothing is registered and no key press matches. Only the paste shortcut can
     /// be turned off.
     pub fn unset() -> Self {
@@ -718,16 +722,18 @@ pub struct SharedCaptureTelemetry {
 }
 
 impl SharedCaptureTelemetry {
-    pub fn new(ui_sender: flume::Sender<Event>) -> Arc<Self> {
-        let shortcuts = crate::settings::Shortcuts::load();
-        crate::settings::note_paste_label(&shortcuts.paste.label);
+    pub fn new(
+        ui_sender: flume::Sender<Event>,
+        shortcuts: (ShortcutConfig, ShortcutConfig),
+    ) -> Arc<Self> {
+        let (record, paste) = shortcuts;
         Arc::new(Self {
             active: AtomicBool::new(false),
             selecting: AtomicBool::new(false),
             shift_held: AtomicBool::new(false),
             capture_mode: AtomicU64::new(0),
-            shortcut: Mutex::new(shortcuts.record),
-            paste_shortcut: Mutex::new(shortcuts.paste),
+            shortcut: Mutex::new(record),
+            paste_shortcut: Mutex::new(paste),
             shortcuts_paused: AtomicBool::new(false),
             started_at: Mutex::new(Instant::now()),
             picker_started_at: Mutex::new(Instant::now()),
@@ -1525,7 +1531,7 @@ mod tests {
     #[test]
     fn helper_windows_are_scrawl_s_except_the_capture_source() {
         let (sender, _receiver) = flume::unbounded();
-        let telemetry = SharedCaptureTelemetry::new(sender);
+        let telemetry = SharedCaptureTelemetry::new(sender, ShortcutConfig::defaults());
         let window = |id, pid, bounds| crate::windows::RawWindow {
             id,
             pid,
@@ -1560,7 +1566,7 @@ mod tests {
     #[test]
     fn clicks_are_recorded_from_polled_buttons_while_the_mouse_monitor_is_missing() {
         let (sender, _receiver) = flume::unbounded();
-        let telemetry = SharedCaptureTelemetry::new(sender);
+        let telemetry = SharedCaptureTelemetry::new(sender, ShortcutConfig::defaults());
         telemetry.reset_for_session(TargetFrame {
             x: 0.0,
             y: 0.0,
@@ -1776,7 +1782,7 @@ mod tests {
     #[test]
     fn input_on_an_external_display_normalizes_into_it() {
         let (sender, _receiver) = flume::unbounded();
-        let telemetry = SharedCaptureTelemetry::new(sender);
+        let telemetry = SharedCaptureTelemetry::new(sender, ShortcutConfig::defaults());
         let left = [-1920.0, 37.0, 1920.0, 1080.0];
         let right = [1728.0, 0.0, 1920.0, 1080.0];
         let above = [0.0, -1440.0, 2560.0, 1440.0];
@@ -1838,7 +1844,7 @@ mod tests {
 
     fn session(width: f64, height: f64) -> Arc<SharedCaptureTelemetry> {
         let (sender, _receiver) = flume::unbounded();
-        let telemetry = SharedCaptureTelemetry::new(sender);
+        let telemetry = SharedCaptureTelemetry::new(sender, ShortcutConfig::defaults());
         telemetry.reset_for_session(TargetFrame {
             x: 0.0,
             y: 0.0,
