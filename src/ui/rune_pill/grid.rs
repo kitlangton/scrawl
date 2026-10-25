@@ -610,9 +610,14 @@ impl Grid {
         self.scale = if self.scale > 0.5 { 0.25 } else { 1.0 };
     }
 
-    /// Rune's clock for the window: never 0 while it's live (see `scale`).
-    fn scene_scale(&self) -> f32 {
-        if self.still { 0.0 } else { self.scale }
+    /// Rune's clock for the window: never 0 while it's live, or the chrome and scrolling stop.
+    fn window_scale(&self) -> f32 {
+        if self.still { 0.0 } else { 1.0 }
+    }
+
+    /// The scene's own clock (`El::time_scale`): paused freezes its springs where they are.
+    fn scene_rate(&self) -> f32 {
+        if self.play == Play::Paused { 0.0 } else { self.scale }
     }
 
     fn press(&mut self, id: ElemId) {
@@ -715,7 +720,7 @@ fn poll(g: &mut Grid, now: f64, tx: &mut Tx) -> bool {
     }
     let dt = g.last.map_or(0.0, |last| (now - last).max(0.0));
     g.last = Some(now);
-    let rate = if g.play == Play::Paused { 0.0 } else { g.scale };
+    let rate = g.scene_rate();
     g.t += dt * f64::from(rate);
     let t = g.t;
     changed |= g.cell().advance(t, rate);
@@ -1047,7 +1052,8 @@ fn stage(g: &Grid, cx: &mut Cx<Grid>) -> El {
         // The capsule's window is the panel: what doesn't fit there is cut off.
         .clip_rounded(10.0)
         .child(panel)
-        .scale(zoom);
+        .scale(zoom)
+        .time_scale(g.scene_rate());
     let backdrop = el().absolute(0.0, 0.0).w_full().h_full();
     let backdrop = match (g.backdrop, &g.screenshot) {
         (Backdrop::Busy, Some(pixels)) => backdrop.pixels_fit(pixels, SurfaceFit::Fill),
@@ -1069,8 +1075,8 @@ fn stage(g: &Grid, cx: &mut Cx<Grid>) -> El {
 
 fn view(g: &Grid, cx: &mut Cx<Grid>) -> El {
     let stage = stage(g, cx);
-    // The lab's speed drives Rune's springs too (the capsule sets it to its surface's 1×).
-    cx.time_scale(g.scene_scale());
+    // After the capsule, which sets the window's clock to its surface's 1×.
+    cx.time_scale(g.window_scale());
     let line = || el().w(1.0).h_full().fill(srgb(1.0, 1.0, 1.0, 0.06));
     row().w_full().h_full().fill(chrome()).child(sidebar(g)).child(line()).child(stage).child(line()).child(inspector(g))
 }
@@ -1296,7 +1302,8 @@ mod tests {
         assert!(g.cells[3].looping, "a scene picked while playing plays");
         g.toggle_play();
         assert_eq!(g.play, Play::Paused);
-        assert!(g.scene_scale() > 0.0, "paused, the chrome and scrolling still move");
+        assert!(g.window_scale() > 0.0, "paused, the chrome and scrolling still move");
+        assert_eq!(g.scene_rate(), 0.0, "and the scene's springs stop where they are");
         g.select(4);
         assert_eq!(g.play, Play::Held);
         assert!(!g.cells[4].looping && g.cells[4].shown, "picked while paused, it rests");
