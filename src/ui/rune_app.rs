@@ -4219,6 +4219,7 @@ pub fn run_app(
     super::platform::start_updates();
     crate::retention::start();
     crate::recover::start();
+    #[cfg(feature = "hex-client")]
     crate::hex::watch();
     crate::speech_model::ensure();
 

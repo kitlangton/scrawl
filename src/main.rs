@@ -52,30 +52,38 @@ fn hex_status() {
         "Hex model setting: {}",
         configured.as_deref().unwrap_or("(automatic)")
     );
-    println!("Discovery file: {}", hex::discovery_path().display());
-    let status = match hex::status() {
-        Ok(status) => status,
-        Err(error) => {
-            println!("Hex: not connected ({error:#})");
-            println!("Next recording uses: {}", next(None));
-            return;
-        }
-    };
-    println!("Hex: connected, version {}", status.version);
-    for model in &status.models {
-        let state = match (model.installed, model.verified) {
-            (true, true) => "ready",
-            (true, false) => "installed, not verified",
-            _ => "not installed",
+    #[cfg(feature = "hex-client")]
+    {
+        println!("Discovery file: {}", hex::discovery_path().display());
+        let status = match hex::status() {
+            Ok(status) => status,
+            Err(error) => {
+                println!("Hex: not connected ({error:#})");
+                println!("Next recording uses: {}", next(None));
+                return;
+            }
         };
-        println!("  {}\t{state}", model.id);
+        println!("Hex: connected, version {}", status.version);
+        for model in &status.models {
+            let state = match (model.installed, model.verified) {
+                (true, true) => "ready",
+                (true, false) => "installed, not verified",
+                _ => "not installed",
+            };
+            println!("  {}\t{state}", model.id);
+        }
+        let chosen = hex::pick_model(&status.models, configured.as_deref());
+        println!(
+            "Hex model in use: {}",
+            chosen.as_deref().unwrap_or("none ready")
+        );
+        println!("Next recording uses: {}", next(chosen.as_deref()));
     }
-    let chosen = hex::pick_model(&status.models, configured.as_deref());
-    println!(
-        "Hex model in use: {}",
-        chosen.as_deref().unwrap_or("none ready")
-    );
-    println!("Next recording uses: {}", next(chosen.as_deref()));
+    #[cfg(not(feature = "hex-client"))]
+    {
+        println!("Hex: disabled in this build (hex-client feature off)");
+        println!("Next recording uses: {}", next(None));
+    }
 }
 
 #[derive(Subcommand)]

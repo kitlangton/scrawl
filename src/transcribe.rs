@@ -153,12 +153,9 @@ pub fn segments_from_words(words: &[WordTiming]) -> Vec<TranscriptSegment> {
     segments
 }
 
-/// Shifts word and segment timestamps by `start_offset_ms` onto the capture clock and populates
-/// `segments` from `words` when `segments` is empty.
-pub fn normalize_transcript(
-    mut transcript: TranscriptData,
-    start_offset_ms: u64,
-) -> TranscriptData {
+/// Shifts word and segment timestamps by `start_offset_ms` onto the capture clock without
+/// altering `segments`.
+pub fn shift_transcript(mut transcript: TranscriptData, start_offset_ms: u64) -> TranscriptData {
     if start_offset_ms > 0 {
         for word in &mut transcript.words {
             word.t0 = word.t0.saturating_add(start_offset_ms);
@@ -169,6 +166,14 @@ pub fn normalize_transcript(
             segment.t1 = segment.t1.saturating_add(start_offset_ms);
         }
     }
+    transcript
+}
+
+/// Shifts word and segment timestamps by `start_offset_ms` onto the capture clock and populates
+/// `segments` from `words` when `segments` is empty (for host [`Transcriber`] implementations
+/// that return word timings only).
+pub fn normalize_transcript(transcript: TranscriptData, start_offset_ms: u64) -> TranscriptData {
+    let mut transcript = shift_transcript(transcript, start_offset_ms);
     if transcript.segments.is_empty() && !transcript.words.is_empty() {
         transcript.segments = segments_from_words(&transcript.words);
     }
@@ -246,9 +251,7 @@ impl Transcriber for CommandTranscriber {
         ) {
             Ok(transcript) => Ok(Some(transcript)),
             Err(error) => {
-                crate::log::scrawl_log(format!(
-                    "Command transcription failed, using {LOCAL_ENGINE_TITLE}: {error:#}"
-                ));
+                crate::log::scrawl_log(format!("Command transcription failed: {error:#}"));
                 Err(error.into())
             }
         }
@@ -381,7 +384,7 @@ pub fn set_override(engine: Engine) {
 }
 
 fn has_audio_samples(audio: &RecordedAudio) -> bool {
-    !audio.samples.is_empty()
+    audio.sample_count() > 0
 }
 
 /// Missing microphones and a failed transcriber never prevent saving a bundle.
@@ -406,7 +409,7 @@ pub fn transcribe(wav: Option<&Path>, audio: Option<&RecordedAudio>) -> Transcri
                 .unwrap_or_else(|| apple(wav))
         },
     );
-    normalize_transcript(transcript, audio.start_offset_ms)
+    shift_transcript(transcript, audio.start_offset_ms)
 }
 
 /// Transcribes `audio` (or `wav` when only a WAV file on disk is available) using an explicit
@@ -511,9 +514,8 @@ fn try_command(wav: &Path, audio: &RecordedAudio) -> Result<Option<TranscriptDat
             return Ok(None);
         }
     };
-    let sample_count = audio.samples_16k()?.len();
     let transcript =
-        crate::command_transcriber::transcribe(&program, wav, sample_count, &mut |line| {
+        crate::command_transcriber::transcribe(&program, wav, audio.sample_count(), &mut |line| {
             crate::log::scrawl_log(line)
         })?;
     Ok(Some(transcript))

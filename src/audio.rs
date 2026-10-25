@@ -16,12 +16,16 @@ pub struct GapSpan {
 /// Mono audio on the capture's clock. `samples[0]` is `start_offset_ms` after the capture
 /// started; spans in `gaps` (also from the capture's start) are silence where audio was
 /// missing or dropped.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct RecordedAudio {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
     pub start_offset_ms: u64,
     pub gaps: Vec<GapSpan>,
+    pub(crate) sample_count: usize,
+    pub(crate) duration_ms: u64,
+    pub(crate) wav_bytes: Vec<u8>,
+    pub(crate) live: crate::live_transcribe::Slot,
 }
 
 impl RecordedAudio {
@@ -36,25 +40,43 @@ impl RecordedAudio {
         } else {
             sample_rate
         };
+        let sample_count = samples.len();
+        let duration_ms = start_offset_ms + (sample_count as u64 * 1_000) / u64::from(rate);
         Self {
             samples,
             sample_rate: rate,
             start_offset_ms,
             gaps,
+            sample_count,
+            duration_ms,
+            wav_bytes: Vec::new(),
+            live: Default::default(),
         }
     }
 
     pub fn sample_count(&self) -> usize {
-        self.samples.len()
+        if !self.samples.is_empty() {
+            self.samples.len()
+        } else {
+            self.sample_count
+        }
     }
 
     pub fn duration_ms(&self) -> u64 {
-        let rate = if self.sample_rate == 0 {
-            SAMPLE_RATE
+        if self.duration_ms > 0 {
+            self.duration_ms
+        } else if !self.samples.is_empty() {
+            let rate = if self.sample_rate == 0 {
+                SAMPLE_RATE
+            } else {
+                self.sample_rate
+            };
+            self.start_offset_ms + (self.samples.len() as u64 * 1_000) / u64::from(rate)
+        } else if self.sample_count > 0 {
+            self.start_offset_ms + (self.sample_count as u64 * 1_000) / u64::from(SAMPLE_RATE)
         } else {
-            self.sample_rate
-        };
-        self.start_offset_ms + (self.samples.len() as u64 * 1_000) / u64::from(rate)
+            self.start_offset_ms
+        }
     }
 
     pub fn total_duration_ms(&self) -> u64 {
@@ -62,26 +84,43 @@ impl RecordedAudio {
     }
 
     pub fn samples_16k(&self) -> Result<std::borrow::Cow<'_, [f32]>> {
-        if self.sample_rate == 0 || self.sample_rate == SAMPLE_RATE {
-            return Ok(std::borrow::Cow::Borrowed(&self.samples));
+        if !self.samples.is_empty() {
+            if self.sample_rate == 0 || self.sample_rate == SAMPLE_RATE {
+                return Ok(std::borrow::Cow::Borrowed(&self.samples));
+            }
+            return Ok(std::borrow::Cow::Owned(resample_to_16k(
+                &self.samples,
+                self.sample_rate,
+            )));
         }
-        Ok(std::borrow::Cow::Owned(resample_to_16k(
-            &self.samples,
-            self.sample_rate,
-        )))
+        if !self.wav_bytes.is_empty() {
+            return Ok(std::borrow::Cow::Owned(decode_wav_16k(&self.wav_bytes)?));
+        }
+        Ok(std::borrow::Cow::Borrowed(&[]))
     }
 
+    /// Encodes 16 kHz mono PCM16 WAV bytes. When `start_offset_ms > 0`, leading silence is
+    /// prepended so `audio.wav` on disk starts at `0 ms` of the capture clock.
     pub fn wav_bytes_16k(&self) -> Result<std::borrow::Cow<'_, [u8]>> {
+        if !self.wav_bytes.is_empty() && self.start_offset_ms == 0 {
+            return Ok(std::borrow::Cow::Borrowed(&self.wav_bytes));
+        }
         let samples = self.samples_16k()?;
-        Ok(std::borrow::Cow::Owned(encode_wav_16k(&samples)?))
+        let pad = (self.start_offset_ms * u64::from(SAMPLE_RATE) / 1_000) as usize;
+        if pad == 0 {
+            return Ok(std::borrow::Cow::Owned(encode_wav_16k(&samples)?));
+        }
+        let mut padded = vec![0.0_f32; pad + samples.len()];
+        padded[pad..].copy_from_slice(&samples);
+        Ok(std::borrow::Cow::Owned(encode_wav_16k(&padded)?))
     }
 
     pub fn set_live(&self, live: Option<crate::live_transcribe::Live>) {
-        crate::live_transcribe::stash(live);
+        self.live.set(live);
     }
 
     pub fn take_live(&self) -> Option<crate::live_transcribe::Live> {
-        crate::live_transcribe::take_stashed()
+        self.live.take()
     }
 }
 
@@ -287,10 +326,19 @@ impl AudioRecorder {
             }
             crate::log::scrawl_log(format!("Microphone: {error}; keeping what it heard"));
         }
-        let _ = encode_wav_16k(&samples_16k)?;
-        let audio = RecordedAudio::new(samples_16k, SAMPLE_RATE, 0, Vec::new());
-        audio.set_live(self.live.take());
-        Ok(audio)
+        let sample_count = samples_16k.len();
+        let duration_ms = sample_count as u64 * 1_000 / SAMPLE_RATE as u64;
+        let wav_bytes = encode_wav_16k(&samples_16k)?;
+        Ok(RecordedAudio {
+            samples: Vec::new(),
+            sample_rate: SAMPLE_RATE,
+            start_offset_ms: 0,
+            gaps: Vec::new(),
+            sample_count,
+            duration_ms,
+            wav_bytes,
+            live: crate::live_transcribe::Slot::new(self.live.take()),
+        })
     }
 }
 
@@ -362,8 +410,17 @@ where
 
 /// Reads a 16 kHz mono WAV (as written by `scrawl-helper audio`) back into a recording.
 pub fn recorded_audio_from_wav(wav_bytes: Vec<u8>) -> Result<RecordedAudio> {
-    let samples = decode_wav_16k(&wav_bytes)?;
-    Ok(RecordedAudio::new(samples, SAMPLE_RATE, 0, Vec::new()))
+    let sample_count = wav_16k_reader(&wav_bytes)?.duration() as usize;
+    Ok(RecordedAudio {
+        samples: Vec::new(),
+        sample_rate: SAMPLE_RATE,
+        start_offset_ms: 0,
+        gaps: Vec::new(),
+        sample_count,
+        duration_ms: sample_count as u64 * 1_000 / u64::from(SAMPLE_RATE),
+        wav_bytes,
+        live: Default::default(),
+    })
 }
 
 /// Decodes a 16 kHz mono 16-bit WAV (this module's own format) into samples.
@@ -591,5 +648,16 @@ mod tests {
                 .unwrap(),
             vec![-32_768, -16_384, 0, 16_384, 32_767, 0]
         );
+    }
+
+    #[test]
+    fn wav_bytes_16k_pads_leading_silence_for_start_offset() {
+        let audio = RecordedAudio::new(vec![0.5; 160], 16_000, 100, Vec::new());
+        let wav = audio.wav_bytes_16k().unwrap();
+        let decoded = decode_wav_16k(&wav).unwrap();
+        // 100 ms of leading silence (1_600 samples) + 160 samples = 1_760 samples.
+        assert_eq!(decoded.len(), 1_760);
+        assert!(decoded[..1_600].iter().all(|&s| s == 0.0));
+        assert!(decoded[1_600..].iter().all(|&s| (s - 0.5).abs() < 0.01));
     }
 }

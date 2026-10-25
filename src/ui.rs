@@ -5404,6 +5404,7 @@ pub fn run_app(
         platform::start_updates();
         crate::retention::start();
         crate::recover::start();
+        #[cfg(feature = "hex-client")]
         crate::hex::watch();
         crate::speech_model::ensure();
         let menu_rx = install_status_bar();

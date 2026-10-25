@@ -1218,7 +1218,7 @@ impl Panel {
                 write("transcriber", "hex".into());
             }
             ("hexLanguage", serde_json::Value::String(language)) => {
-                if let Some(language) = crate::hex::language_code(language) {
+                if let Some(language) = crate::transcribe::language_code(language) {
                     write("hexLanguage", language.into());
                 }
             }
@@ -1296,13 +1296,26 @@ impl Panel {
         let config = crate::handoff::load_config_from(&host.config_path());
         let app_config = crate::app_config::load_from(&host.config_path());
         let shortcuts = host.shortcuts();
-        let hex = crate::hex::cached_status();
         let engine = config
             .transcriber
             .as_deref()
             .and_then(crate::transcribe::Engine::parse)
             .unwrap_or_default();
-        let menu = crate::transcribe::menu_state(engine, hex.as_ref(), config.hex_model.as_deref());
+        #[cfg(feature = "hex-client")]
+        let menu = {
+            let hex = crate::hex::cached_status();
+            crate::transcribe::menu_state(engine, hex.as_ref(), config.hex_model.as_deref())
+        };
+        #[cfg(not(feature = "hex-client"))]
+        let menu = {
+            let _ = engine;
+            crate::transcribe::MenuState {
+                hex_title: "Hex (not running)",
+                hex_enabled: false,
+                hex_checked: false,
+                models: Vec::new(),
+            }
+        };
         let command = crate::command_transcriber::Program::load_from(&host.config_path())
             .ok()
             .map(|program| program.name());
@@ -1528,6 +1541,7 @@ impl Session {
                 // Hex and the size on open (`hex::watch` keeps Hex fresh) and every 30 s; the
                 // grants and the login item every second.
                 if n % 30 == 0 {
+                    #[cfg(feature = "hex-client")]
                     crate::hex::refresh_in_background();
                     let size =
                         crate::retention::captures_size(&crate::handoff::default_captures_dir());

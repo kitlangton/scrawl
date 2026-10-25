@@ -24,6 +24,7 @@ jobs:
       - name: Install the Metal toolchain
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - run: cargo build --locked
+      - run: cargo check --no-default-features --locked
       - name: No compromised eMudhra CA roots
         run: scripts/check-ca-roots.sh target/debug/scrawl
       - run: cargo test --locked

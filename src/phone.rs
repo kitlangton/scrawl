@@ -1516,7 +1516,8 @@ fn build_ingested(
     let (dir, bundle) = (config.hooks.build)(movie, timeline_path, &bundle_dir)?;
     if let Some(clipboard) = &config.clipboard {
         if let Some(bundle) = &bundle {
-            let _ = clipboard.copy_bundle(&dir, bundle);
+            let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+            let _ = clipboard.copy_bundle(&canonical_dir, bundle);
         } else if let Ok((loaded_dir, loaded)) = crate::handoff::load_bundle(&dir) {
             let _ = clipboard.copy_bundle(&loaded_dir, &loaded);
         }
