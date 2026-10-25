@@ -2483,11 +2483,8 @@ fn on_key(s: &mut SettingsWin, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
     if s.view.recording().is_some() {
         return true;
     }
+    // ⌘W is Rune's standard Window › Close, which runs `on_close` as the close button does.
     match key.key {
-        rune::Key::Command('w') => {
-            tx.close_window();
-            return true;
-        }
         rune::Key::Command('q') => {
             tx.quit();
             return true;
@@ -2555,6 +2552,7 @@ pub(crate) fn install<S: 'static>(app: &mut App<S>) {
             ..Default::default()
         })
         .chrome(CHROME)
+        .tab_visits_controls(true)
         .on_focus(on_focus);
     let mut spec = spec;
     spec.app = spec.app.on_close(on_close);
@@ -3122,7 +3120,8 @@ mod tests {
         sample(&mut win, name);
         let mut rt = rune::Runtime::new(win, view, (WIDTH, HEIGHT), rune::Env::new(true, 2.0));
         rt.on_key = Some(on_key);
-        rt.set_full_keyboard_access(true);
+        rt.set_full_keyboard_access(false);
+        rt.set_tab_visits_controls(true);
         rt.frame(0.0);
         rt
     }

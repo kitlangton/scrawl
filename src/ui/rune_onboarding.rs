@@ -1967,6 +1967,7 @@ fn hand_back_keys() {
 fn on_key(s: &mut OnboardingWin, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
     let plain = !key.mods.cmd && !key.mods.alt && !key.mods.ctrl && !key.mods.shift;
     match key.key {
+        // No close button, so Rune's standard Close doesn't reach this window.
         rune::Key::Command('w') => {
             tx.close_window();
             return true;
@@ -2048,6 +2049,7 @@ pub(crate) fn install<S: 'static>(app: &mut App<S>) {
         })
         .chrome(CHROME)
         .srgb_blend(true)
+        .tab_visits_controls(true)
         .on_focus(on_focus);
     spec.app = spec.app.on_close(on_close);
     let (handle, _window) = app.window(spec);
@@ -2469,7 +2471,8 @@ mod tests {
         }));
         let mut rt = rune::Runtime::new(win, view, (WIDTH, HEIGHT), rune::Env::new(true, 2.0));
         rt.on_key = Some(on_key);
-        rt.set_full_keyboard_access(true);
+        rt.set_full_keyboard_access(false);
+        rt.set_tab_visits_controls(true);
         rt.frame(0.0);
         (rt, sent)
     }
