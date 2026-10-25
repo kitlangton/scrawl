@@ -36,15 +36,7 @@ struct SpeechChoice {
 /// A fresh Mac has none, so Scrawl installs it in the background at launch
 /// (`scrawl-helper speech-model --install`) rather than in the middle of a capture. On macOS 15
 /// the same command checks for the Speech Recognition permission and the Dictation model instead.
-enum SpeechModel {
-  /// SpeechAnalyzer (macOS 26, built with its SDK); otherwise `Recognizer`.
-  static var analyzer: Bool {
-    #if compiler(>=6.2)
-    if #available(macOS 26, *) { return true }
-    #endif
-    return false
-  }
-
+extension SpeechModel {
   static func choose(preferred: String? = nil) async -> SpeechChoice? {
     #if compiler(>=6.2)
     if #available(macOS 26, *) { return await analyzerChoice(preferred: preferred) }

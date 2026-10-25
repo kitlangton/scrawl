@@ -685,7 +685,7 @@ fn main() -> Result<()> {
             let target = discover_target(window.as_deref());
             let playback = playback::Guard::start();
             let engine = capture::Engine::default_engine();
-            let mut req = capture::Start::screen(target);
+            let mut req = capture::Start::screen_with_mic(target);
             req.bundle_dir = out;
             req.note = note;
             let active = engine.start(req)?;

@@ -1,6 +1,6 @@
 # Scrawl: Agent Instructions
 
-Scrawl is the human-to-agent half of a feedback loop: the agent builds, the human looks, points, talks and draws, and the agent understands what was meant and acts. A capture (`⌥⇧S` on macOS, a cabled iPhone (mirror plus native video), or ScrawlKit's three-finger long press inside an iOS app) records the screen, voice, cursor, clicks and `⇧` ink, and Scrawl compiles it into a compact `.scrawl` bundle (`contact-sheet.png`, `frames/frame-XX.png`, `summary.md`, `scrawl.json`, `recording.mp4` or `recording.mov`, and `audio.wav`) in `~/Library/Application Support/scrawl/captures/`. The Mac app is Rust + GPUI with a Swift helper (`scrawl-helper`); ScrawlKit recordings are imported with `scrawl import` (`Sources/ScrawlKit`). See README for the iPhone, ScrawlKit and testing.
+Scrawl is the human-to-agent half of a feedback loop: the agent builds, the human looks, points, talks and draws, and the agent understands what was meant and acts. A capture (`⌥⇧S` on macOS, a cabled iPhone (mirror plus native video), or ScrawlKit's three-finger long press inside an iOS app) records the screen, voice, cursor, clicks and `⇧` ink, and Scrawl compiles it into a compact `.scrawl` bundle (`contact-sheet.png`, `frames/frame-XX.png`, `summary.md`, `scrawl.json`, `recording.mp4` or `recording.mov`, and `audio.wav`) in `~/Library/Application Support/scrawl/captures/`. The Mac app is Rust + GPUI with Swift helpers (`scrawl-helper` and `scrawl-ui-helper`); ScrawlKit recordings are imported with `scrawl import` (`Sources/ScrawlKit`). See README for the iPhone, ScrawlKit and testing.
 
 ## Principles
 
@@ -12,7 +12,7 @@ Scrawl is the human-to-agent half of a feedback loop: the agent builds, the huma
 
 ## Build, test and install
 
-- Keep `Cargo.toml` and `Cargo.lock` stable and build/test with `taskpolicy -c utility cargo build -j 3 --offline` and `taskpolicy -c utility cargo test -j 3 --offline -- --test-threads=2`.
+- Keep `Cargo.toml` and `Cargo.lock` stable and build/test with `taskpolicy -c utility cargo build -j 3 --offline` and `taskpolicy -c utility cargo test --workspace -j 3 --offline -- --test-threads=2`.
 - After changing Rust code, rebuild with `cargo build` before running `target/debug/scrawl`: `cargo test` does not rebuild the binary.
 - Keep everything local on `main` unless asked otherwise.
 - **Experiments:** a change to what users get (the paste, `summary.md`, the images, routing) ships behind an experiment, off by default, until Kit turns it on for everyone. Kit enables one locally with `"experiments": {"<name>": true}` in `~/.config/scrawl/config.json`; code asks `handoff::experiment("<name>")` (a value other than true/false, `"yes"`/`"off"` or a number is skipped and logged, and a bad value for any config key drops only that key) (tests see only `handoff::enable_experiment`, never the config file), and `scrawl reprocess` / `scrawl inspect` take `--experiment <name>` to try one on a bundle. Bug fixes ship normally. Current experiments are listed in `docs/keyframes-and-text.md`.
@@ -37,10 +37,10 @@ Read the matching `docs/` file before changing a subsystem. Each one holds that 
 
 | Subsystem | Code | Read first |
 |---|---|---|
-| Shortcuts (a press records the screen; the menu opens the picker), Mac recording, more than one display | `src/shortcut.rs`, `src/capture.rs`, `src/screens.rs`, `src/ui.rs` | `docs/capture.md` |
-| Keyframe selection, transcription (SpeechAnalyzer, Hex, command), `summary.md`, frames and contact sheet | `src/keyframes.rs`, `src/transcribe.rs`, `src/hex.rs`, `src/command_transcriber.rs`, `src/speech_model.rs`, `src/sketch.rs`, `src/render.rs` | `docs/keyframes-and-text.md` |
-| Onboarding, permissions, Settings, command-line tool and agent skill | `src/onboarding.rs`, `src/settings.rs`, `src/command_line.rs`, `helper/Onboarding.swift`, `helper/PermissionPanel.swift`, `helper/Settings.swift`, `src/ui/rune_settings.rs`, `src/ui/rune_onboarding.rs` | `docs/onboarding-and-settings.md` |
-| iPhone capture, ScrawlKit ingest and delivery, dev-site routing and `sdk.js` | `src/phone.rs`, `src/delivery.rs`, `src/routing.rs`, `src/web.rs`, `src/sdk.js`, `Sources/ScrawlKit/`, `helper/` | `docs/iphone-and-routing.md` |
+| Shortcuts (a press records the screen; the menu opens the picker), Mac recording, more than one display | `src/shortcut.rs`, `crates/capture/src/capture.rs`, `crates/capture/src/screens.rs`, `src/ui.rs` | `docs/capture.md` |
+| Keyframe selection, transcription (SpeechAnalyzer, Hex, command), `summary.md`, frames and contact sheet | `crates/capture/src/keyframes.rs`, `crates/capture/src/transcribe.rs`, `crates/capture/src/hex.rs`, `crates/capture/src/command_transcriber.rs`, `crates/capture/src/speech_model.rs`, `crates/capture/src/sketch.rs`, `crates/capture/src/render.rs` | `docs/keyframes-and-text.md` |
+| Onboarding, permissions, Settings, command-line tool and agent skill | `src/onboarding.rs`, `src/settings.rs`, `src/command_line.rs`, `helper-ui/Onboarding.swift`, `helper-ui/PermissionPanel.swift`, `helper-ui/Settings.swift`, `src/ui/rune_settings.rs`, `src/ui/rune_onboarding.rs` | `docs/onboarding-and-settings.md` |
+| iPhone capture, ScrawlKit ingest and delivery, dev-site routing and `sdk.js` | `crates/capture/src/phone.rs`, `crates/capture/src/delivery.rs`, `crates/capture/src/routing.rs`, `crates/capture/src/web.rs`, `crates/capture/src/sdk.js`, `Sources/ScrawlKit/`, `crates/capture/helper/` | `docs/iphone-and-routing.md` |
 | Capsule motion, the pill lab, tuning | `src/ui/lab.rs`, `src/ui/motion.rs`, `perf/pill/` | `docs/motion.md` |
-| Video export, retention and shrinking | `src/export/`, `src/retention.rs`, `helper/Export.swift`, `helper/Media.swift` | `docs/export-and-retention.md` |
-| Windows: the OS shell behind `platform::`, overlay, hotkeys, Media Foundation, Parakeet, GPUI Settings and tour | `src/capture/windows.rs`, `src/ui/windows.rs`, `src/win/`, `src/settings_window.rs`, `src/onboarding_window.rs`, `src/ax_other.rs` | `docs/windows.md` |
+| Video export, retention and shrinking | `crates/capture/src/export/`, `crates/capture/src/retention.rs`, `crates/capture/helper/Export.swift`, `crates/capture/helper/Media.swift` | `docs/export-and-retention.md` |
+| Windows: the OS shell behind `platform::`, overlay, hotkeys, Media Foundation, Parakeet, GPUI Settings and tour | `crates/capture/src/capture/windows.rs`, `src/ui/windows.rs`, `crates/capture/src/win/`, `src/win/`, `src/settings_window.rs`, `src/onboarding_window.rs`, `crates/capture/src/ax_other.rs` | `docs/windows.md` |

@@ -395,7 +395,9 @@ impl Prober {
             .is_err()
         {
             self.pending.fetch_sub(1, Ordering::AcqRel);
-            self.dropped.fetch_add(1, Ordering::AcqRel);
+            if self.dropped.fetch_add(1, Ordering::AcqRel) == 0 {
+                crate::log::scrawl_log("ax: lookup queue full, dropping probe");
+            }
         }
     }
 

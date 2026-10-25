@@ -5,6 +5,16 @@ import Speech
 
 // `scrawl-helper permissions`: what macOS has granted Scrawl.
 
+enum SpeechModel {
+  /// SpeechAnalyzer (macOS 26, built with its SDK); otherwise `Recognizer`.
+  static var analyzer: Bool {
+    #if compiler(>=6.2)
+    if #available(macOS 26, *) { return true }
+    #endif
+    return false
+  }
+}
+
 enum Permissions {
   static func statuses() -> [String: String] {
     func av(_ type: AVMediaType) -> String {
@@ -21,7 +31,7 @@ enum Permissions {
       "camera": av(.video),
     ]
     // Only SFSpeechRecognizer, the macOS 15 transcriber, needs it; SpeechAnalyzer doesn't.
-    if #unavailable(macOS 26) {
+    if !SpeechModel.analyzer {
       switch SFSpeechRecognizer.authorizationStatus() {
       case .authorized: statuses["speech-recognition"] = "granted"
       case .denied, .restricted: statuses["speech-recognition"] = "denied"

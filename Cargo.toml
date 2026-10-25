@@ -1,5 +1,6 @@
 [workspace]
 members = [".", "crates/capture"]
+default-members = [".", "crates/capture"]
 
 [package]
 name = "scrawl"

@@ -159,7 +159,7 @@ jq 'del(.onboarding)' ~/.config/scrawl/config.json > /tmp/c.json && mv /tmp/c.js
 ```
 
 Preview every screen without the app, including the permissions screen with none, some and all
-granted and each on-demand sheet: `target/debug/scrawl-helper onboarding --render /tmp/onboarding
+granted and each on-demand sheet: `target/debug/scrawl-ui-helper onboarding --render /tmp/onboarding
 --icon assets/app-icon.png`.
 
 ## Settings
@@ -196,7 +196,7 @@ one recordings will use, `scrawl mic set <id|default>` chooses, and `scrawl mic 
 list again on every change.
 
 Preview every pane, dark and light, with the recorder listening and a combination turned down:
-`target/debug/scrawl-helper settings --render /tmp/settings --icon assets/app-icon.png`.
+`target/debug/scrawl-ui-helper settings --render /tmp/settings --icon assets/app-icon.png`.
 
 ## Capture Controls
 
@@ -811,11 +811,12 @@ usual; the log says which (`Live transcription: …`). Hex and iPhone recordings
 
 ## Helper
 
-`scrawl-helper` is a small Swift executable built by `build.rs` from `helper/` and shipped inside
-`Scrawl.app` next to `scrawl`. It owns the Swift-only or unbound Apple frameworks: SpeechAnalyzer,
-CoreMediaIO/AVFoundation iPhone capture with the mirror window, AVFoundation movie decoding, and the
-SwiftUI welcome window (`onboarding`).
-Scrawl runs it as a subprocess (JSON on stdout; `stop`/`cancel` on stdin for the mirror). Run it
+`scrawl-helper` and `scrawl-ui-helper` are small Swift executables built by `build.rs` from
+`crates/capture/helper/` and `helper-ui/` and shipped inside `Scrawl.app` next to `scrawl`. They
+own the Swift-only or unbound Apple frameworks: SpeechAnalyzer, CoreMediaIO/AVFoundation iPhone
+capture with the mirror window, AVFoundation movie decoding, and the SwiftUI welcome and Settings
+windows (`onboarding`, `settings`, `permission-panel`).
+Scrawl runs them as subprocesses (JSON on stdout; `stop`/`cancel` on stdin for the mirror). Run them
 directly to test a piece in isolation:
 
 ```sh
@@ -824,8 +825,8 @@ target/debug/scrawl-helper permissions
 target/debug/scrawl-helper transcribe audio.wav
 target/debug/scrawl-helper frames recording.mov --out-dir /tmp/f --at 1000,2000 --max-edge 1600
 target/debug/scrawl-helper shrink recording.mov --out /tmp/small.mov --max-edge 1600
-target/debug/scrawl-helper export plan.json   # the plan `scrawl export` writes (src/export)
-target/debug/scrawl-helper permission-panel --permission screen-recording --preview   # the drag card, no grant polling
+target/debug/scrawl-helper export plan.json   # the plan `scrawl export` writes (crates/capture/src/export)
+target/debug/scrawl-ui-helper permission-panel --permission screen-recording --preview   # the drag card, no grant polling
 ```
 
 `permission-panel --permission screen-recording|accessibility [--from X,Y,W,H]`

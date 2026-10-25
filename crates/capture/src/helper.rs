@@ -33,8 +33,13 @@ pub fn ui_path() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("SCRAWL_UI_HELPER") {
         return Ok(PathBuf::from(path));
     }
-    if let Some(path) = std::env::var_os("SCRAWL_HELPER") {
-        return Ok(PathBuf::from(path));
+    if let Some(helper) = std::env::var_os("SCRAWL_HELPER")
+        && let Some(parent) = Path::new(&helper).parent()
+    {
+        let sibling = parent.join("scrawl-ui-helper");
+        if sibling.is_file() {
+            return Ok(sibling);
+        }
     }
     let raw_exe = std::env::current_exe().context("Could not locate scrawl")?;
     let exe = std::fs::canonicalize(&raw_exe).unwrap_or(raw_exe);
@@ -43,7 +48,6 @@ pub fn ui_path() -> Result<PathBuf> {
         .take(2)
         .map(|dir| dir.join("scrawl-ui-helper"))
         .find(|path| path.is_file())
-        .or_else(|| path().ok())
         .context("scrawl-ui-helper is missing; rebuild Scrawl")
 }
 

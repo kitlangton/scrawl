@@ -25,9 +25,10 @@ jobs:
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - run: cargo build --locked
       - run: cargo check --no-default-features --locked
+      - run: cargo check -p scrawl-capture --no-default-features --locked
       - name: No compromised eMudhra CA roots
         run: scripts/check-ca-roots.sh target/debug/scrawl
-      - run: cargo test --locked
+      - run: cargo test --workspace --locked
 
   windows:
     name: Windows
@@ -42,7 +43,7 @@ jobs:
       - run: cargo build --locked
       - name: No AVX-512 outside the CPU backends that need it
         run: scripts\check-windows-cpu-tiers.ps1 target\debug
-      - run: cargo test --locked
+      - run: cargo test --workspace --locked
       - uses: actions/upload-artifact@v5
         with:
           name: scrawl-windows-x86_64
