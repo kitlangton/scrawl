@@ -474,6 +474,10 @@ pub struct Config {
     /// Visual style of the native recording pill: `"black"` (default) or `"glass"` (`NSGlassEffectView`).
     #[serde(default)]
     pub pill_style: Option<String>,
+    /// `"gpui"` (default) or `"rune"`: which UI runtime draws the capsule, picker and review
+    /// window (`SCRAWL_UI=rune` overrides it at launch).
+    #[serde(default)]
+    pub ui: Option<String>,
     /// Behaviour Kit tries locally before it ships (`{"agentContext": true}`); see `experiment`.
     /// Read leniently (`lenient_experiments`), so a stray value never fails the file.
     #[serde(default, deserialize_with = "lenient_experiments")]
@@ -634,6 +638,22 @@ fn config_from_value(value: serde_json::Value) -> Config {
 
 fn config() -> Config {
     load_config_from(&default_config_path())
+}
+
+/// Whether the app runs its UI on Rune (`"ui": "rune"` in `config.json`, or `SCRAWL_UI=rune`).
+/// Defaults to GPUI (`false`).
+pub fn rune_ui() -> bool {
+    rune_ui_from(std::env::var("SCRAWL_UI").ok().as_deref(), &config())
+}
+
+pub fn rune_ui_from(env_ui: Option<&str>, config: &Config) -> bool {
+    if let Some(env_ui) = env_ui.map(str::trim).filter(|s| !s.is_empty()) {
+        return env_ui.eq_ignore_ascii_case("rune");
+    }
+    config
+        .ui
+        .as_deref()
+        .is_some_and(|u| u.trim().eq_ignore_ascii_case("rune"))
 }
 
 fn random_bytes_32() -> Result<[u8; 32]> {
@@ -2206,6 +2226,24 @@ mod tests {
         assert!(format!("{err:#}").contains("didn't answer"), "{err:#}");
         assert!(started.elapsed() < Duration::from_secs(1));
         let _ = server.join();
+    }
+
+    #[test]
+    fn rune_ui_selector_defaults_to_gpui_and_respects_config_or_env() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("config.json");
+        let default_cfg = load_config_from(&path);
+        assert!(!rune_ui_from(None, &default_cfg));
+        assert!(rune_ui_from(Some("rune"), &default_cfg));
+        assert!(rune_ui_from(Some(" RUNE "), &default_cfg));
+        assert!(!rune_ui_from(Some("gpui"), &default_cfg));
+
+        fs::write(&path, br#"{"ui":"rune","autoSend":false}"#).unwrap();
+        let rune_cfg = load_config_from(&path);
+        assert_eq!(rune_cfg.ui.as_deref(), Some("rune"));
+        assert!(rune_ui_from(None, &rune_cfg));
+        assert!(rune_ui_from(Some(""), &rune_cfg));
+        assert!(!rune_ui_from(Some("gpui"), &rune_cfg));
     }
 }
 

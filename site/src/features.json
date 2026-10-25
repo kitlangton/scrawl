@@ -156,7 +156,8 @@
       "note": "Windows and Linux draw the GPUI capsule; glass needs macOS 26.",
       "config": [
         { "key": "nativePill", "value": "false", "does": "Draw the GPUI capsule instead of the Metal one (Mac)" },
-        { "key": "pillStyle", "value": "\"black\" | \"glass\"", "does": "The Metal capsule's look" }
+        { "key": "pillStyle", "value": "\"black\" | \"glass\"", "does": "The Metal capsule's look" },
+        { "key": "ui", "value": "\"gpui\" | \"rune\"", "does": "Run the capsule, picker and review window on Rune instead of GPUI (or SCRAWL_UI=rune)" }
       ],
       "docs": ["docs/motion.md"]
     },

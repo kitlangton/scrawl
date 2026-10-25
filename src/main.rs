@@ -192,6 +192,20 @@ enum LabCommand {
         /// Leave out the plain backdrop behind the capsule.
         #[arg(long)]
         no_backdrop: bool,
+        /// Draw the capsule with Rune (its own event loop) instead of the Metal panel.
+        #[arg(long)]
+        rune: bool,
+        /// With --rune: render resting states headless, a `.png` (`--state`) or every state
+        /// into a directory.
+        #[arg(long, requires = "rune")]
+        snap: Option<PathBuf>,
+        /// With --snap: the state to render (picker, recording-chips, completed, …).
+        #[arg(long, requires = "snap")]
+        state: Option<String>,
+        /// With --rune: make a real Screen capture of the capsule's display while the scene
+        /// plays, with the capsule left out as the app leaves out its own panels, into this bundle.
+        #[arg(long, requires = "rune", conflicts_with = "snap")]
+        capture: Option<PathBuf>,
     },
 }
 
@@ -211,7 +225,7 @@ enum TuneCommand {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Launch the GPUI menu-bar and review application (the default when macOS opens Scrawl.app).
+    /// Launch the menu-bar and review application (the default when macOS opens Scrawl.app).
     App {
         /// Start a capture session immediately on launch.
         #[arg(long)]
@@ -219,6 +233,15 @@ enum Command {
         /// Start capturing the cabled iPhone immediately on launch.
         #[arg(long, conflicts_with = "record")]
         iphone: bool,
+        /// Render a Rune app surface headless to this `.png` or directory.
+        #[arg(long, hide = true)]
+        snap: Option<PathBuf>,
+        /// With --snap: the scene to render (picker-area, picker-window, picker-screen, review-empty, review-contact-sheet, review-keyframes).
+        #[arg(long, hide = true)]
+        scene: Option<String>,
+        /// With --snap: synthetic input script JSON to replay before the snapshot.
+        #[arg(long, hide = true)]
+        script: Option<PathBuf>,
     },
     /// Generate a realistic annotated demo bundle (contact sheet + keyframes + transcript).
     Demo {
@@ -1572,15 +1595,41 @@ fn main() -> Result<()> {
         None => Command::App {
             record: false,
             iphone: false,
+            snap: None,
+            scene: None,
+            script: None,
         },
     };
     match command {
-        Command::App { record, iphone } => {
+        Command::App {
+            record,
+            iphone,
+            snap,
+            scene,
+            script,
+        } => {
             #[cfg(target_os = "windows")]
             {
                 win::shell::release_own_console();
                 win::shell::wait_for_relauncher();
             }
+            #[cfg(target_os = "macos")]
+            if snap.is_some() || scene.is_some() || script.is_some() {
+                ui::rune_app::run_app(
+                    None,
+                    record,
+                    iphone,
+                    None,
+                    ui::RuneAppOptions {
+                        snap,
+                        scene,
+                        script,
+                    },
+                );
+                return Ok(());
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (&snap, &scene, &script);
             ui::run_app(None, record, iphone, None);
             Ok(())
         }
@@ -1964,6 +2013,10 @@ fn main() -> Result<()> {
                     repeat,
                     time_scale,
                     no_backdrop,
+                    rune,
+                    snap,
+                    state,
+                    capture,
                 },
         } => {
             // Set before the app starts any thread; the lab reads them once.
@@ -1974,6 +2027,19 @@ fn main() -> Result<()> {
                 if let Some(scale) = time_scale {
                     std::env::set_var("SCRAWL_TIME_SCALE", scale.to_string());
                 }
+            }
+            if rune {
+                #[cfg(target_os = "macos")]
+                return ui::run_rune_lab(ui::RuneLabOptions {
+                    scene,
+                    repeat,
+                    backdrop: !no_backdrop,
+                    snap,
+                    state,
+                    capture,
+                });
+                #[cfg(not(target_os = "macos"))]
+                anyhow::bail!("--rune is macOS-only for now ({snap:?} {state:?} {capture:?})");
             }
             ui::run_lab(ui::LabOptions {
                 scene,
