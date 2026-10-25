@@ -27,6 +27,7 @@ pub mod keyframes;
 #[cfg(target_os = "macos")]
 pub mod laser_overlay;
 pub mod live_transcribe;
+pub mod log;
 pub mod mic;
 pub mod model;
 pub mod native;

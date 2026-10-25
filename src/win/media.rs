@@ -63,9 +63,9 @@ use windows::core::{GUID, HSTRING, Interface};
 
 use crate::capture::{
     CANDIDATE_EDGE, CANDIDATE_EDGE_NO_VIDEO, FRAME_SAMPLE_INTERVAL, Sampler, capture_size,
-    scrawl_log,
 };
 use crate::helper::{FrameTimes, Probe};
+use crate::log::scrawl_log;
 use crate::model::{CaptureMode, RgbaFrame, TargetInfo};
 
 /// Recordings keep at most this many frames a second (screens only send frames on change).
@@ -670,7 +670,7 @@ pub fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
             r.out.0, r.out.1, target.mode
         ));
     }
-    crate::ui::start_metric("sck_ready_ms", started_at);
+    crate::log::start_metric("sck_ready_ms", started_at);
     let mut last_sample = Instant::now()
         .checked_sub(FRAME_SAMPLE_INTERVAL)
         .unwrap_or_else(Instant::now);

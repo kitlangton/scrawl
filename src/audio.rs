@@ -36,9 +36,9 @@ impl AudioRecorder {
             .spawn(move || {
                 let stream =
                     Self::open_stream(worker_samples, worker_error).inspect_err(|error| {
-                        crate::capture::scrawl_log(format!("Microphone startup failed: {error:#}"));
+                        crate::log::scrawl_log(format!("Microphone startup failed: {error:#}"));
                     })?;
-                crate::ui::start_metric("audio_ready_ms", started);
+                crate::log::start_metric("audio_ready_ms", started);
                 // Stream never crosses threads. Disconnect also stops abandoned recorders.
                 let _ = stop_receiver.recv();
                 drop(stream);
@@ -49,7 +49,7 @@ impl AudioRecorder {
             .then(|| crate::live_transcribe::Live::start(Arc::clone(&samples)))
             .and_then(|live| {
                 live.inspect_err(|error| {
-                    crate::capture::scrawl_log(format!("Live transcription: {error:#}"));
+                    crate::log::scrawl_log(format!("Live transcription: {error:#}"));
                 })
                 .ok()
             });
@@ -78,10 +78,10 @@ impl AudioRecorder {
                 crate::mic::note_pick(&crate::mic::Pick::Chosen(&input));
                 match Self::open_device(&device, samples.clone(), error.clone()) {
                     Ok(stream) => {
-                        crate::capture::scrawl_log(format!("Microphone: {}", input.name));
+                        crate::log::scrawl_log(format!("Microphone: {}", input.name));
                         return Ok(stream);
                     }
-                    Err(e) => crate::capture::scrawl_log(format!(
+                    Err(e) => crate::log::scrawl_log(format!(
                         "Microphone: could not open {} ({e:#}); using the default",
                         input.name
                     )),
@@ -106,7 +106,7 @@ impl AudioRecorder {
             .default_input_device()
             .context("No microphone is available")?;
         let stream = Self::open_device(&device, samples, error)?;
-        crate::capture::scrawl_log(format!(
+        crate::log::scrawl_log(format!(
             "Microphone: {} (default)",
             device_name(&device).unwrap_or_default()
         ));
@@ -120,7 +120,7 @@ impl AudioRecorder {
     ) -> Result<cpal::Stream> {
         let supported = device.default_input_config()?;
         let config = supported.config();
-        crate::capture::scrawl_log(format!(
+        crate::log::scrawl_log(format!(
             "Microphone: {} Hz, {} ch, {:?}",
             config.sample_rate,
             config.channels,
@@ -184,7 +184,7 @@ impl AudioRecorder {
             if samples_16k.is_empty() {
                 bail!("Microphone capture failed: {error}");
             }
-            crate::capture::scrawl_log(format!("Microphone: {error}; keeping what it heard"));
+            crate::log::scrawl_log(format!("Microphone: {error}; keeping what it heard"));
         }
         let sample_count = samples_16k.len();
         let duration_ms = sample_count as u64 * 1_000 / SAMPLE_RATE as u64;

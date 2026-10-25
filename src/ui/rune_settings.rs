@@ -878,7 +878,7 @@ impl SettingsWin {
         let Some(events) = &self.events else { return };
         match serde_json::from_value::<crate::settings::Action>(message.clone()) {
             Ok(action) => events(crate::settings::Event::Action(action)),
-            Err(error) => crate::capture::scrawl_log(format!("settings (rune): {error}: {message}")),
+            Err(error) => crate::log::scrawl_log(format!("settings (rune): {error}: {message}")),
         }
     }
 
@@ -945,7 +945,7 @@ impl SettingsWin {
         match message["type"].as_str() {
             Some("state") => {
                 let Ok(view) = serde_json::from_value::<View>(message.clone()) else {
-                    crate::capture::scrawl_log("settings (rune): bad state");
+                    crate::log::scrawl_log("settings (rune): bad state");
                     return;
                 };
                 let t = self.now;

@@ -160,7 +160,7 @@ fn finish_live(
 ) -> Option<TranscriptData> {
     match live.finish(&audio.wav_bytes) {
         Ok(done) => {
-            crate::capture::scrawl_log(format!(
+            crate::log::scrawl_log(format!(
                 "Live transcription: {} words, {} of {} ms streamed, tail {} ms",
                 done.transcript.words.len(),
                 done.streamed_samples as u64 * 1_000 / 16_000,
@@ -170,7 +170,7 @@ fn finish_live(
             Some(done.transcript)
         }
         Err(error) => {
-            crate::capture::scrawl_log(format!(
+            crate::log::scrawl_log(format!(
                 "Live transcription failed, transcribing the recording: {error:#}"
             ));
             None
@@ -194,7 +194,7 @@ fn run(
     match other() {
         Ok(Some(transcript)) => return transcript,
         Ok(None) => {}
-        Err(error) => crate::capture::scrawl_log(format!(
+        Err(error) => crate::log::scrawl_log(format!(
             "{name} transcription failed, using {LOCAL_ENGINE_TITLE}: {error:#}"
         )),
     }
@@ -208,7 +208,7 @@ fn try_command(wav: &Path, audio: &RecordedAudio) -> Result<Option<TranscriptDat
         Ok(program) => program,
         Err(unusable) => {
             LOGGED_NO_COMMAND.call_once(|| {
-                crate::capture::scrawl_log(format!(
+                crate::log::scrawl_log(format!(
                     "Command transcriber preferred but {unusable}; using {LOCAL_ENGINE_TITLE}"
                 ));
             });
@@ -217,7 +217,7 @@ fn try_command(wav: &Path, audio: &RecordedAudio) -> Result<Option<TranscriptDat
     };
     let transcript =
         crate::command_transcriber::transcribe(&program, wav, audio.sample_count, &mut |line| {
-            crate::capture::scrawl_log(line)
+            crate::log::scrawl_log(line)
         })?;
     Ok(Some(transcript))
 }
@@ -225,7 +225,7 @@ fn try_command(wav: &Path, audio: &RecordedAudio) -> Result<Option<TranscriptDat
 fn try_hex(audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
     let not_connected = |reason: String| {
         LOGGED_NOT_CONNECTED.call_once(|| {
-            crate::capture::scrawl_log(format!(
+            crate::log::scrawl_log(format!(
                 "Hex preferred but unavailable ({reason}); using {LOCAL_ENGINE_TITLE}"
             ));
         });
@@ -245,7 +245,7 @@ fn try_hex(audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
 
 fn apple(wav: &Path) -> TranscriptData {
     let transcript = crate::helper::transcribe(wav).unwrap_or_else(|error| {
-        crate::capture::scrawl_log(format!("{LOCAL_ENGINE_TITLE} failed: {error:#}"));
+        crate::log::scrawl_log(format!("{LOCAL_ENGINE_TITLE} failed: {error:#}"));
         TranscriptData {
             source: "offline".into(),
             missing: Some(crate::model::MissingTranscript {
@@ -256,7 +256,7 @@ fn apple(wav: &Path) -> TranscriptData {
         }
     });
     if let Some(missing) = &transcript.missing {
-        crate::capture::scrawl_log(format!("No transcript: {}", missing.reason));
+        crate::log::scrawl_log(format!("No transcript: {}", missing.reason));
         if missing.retry {
             crate::speech_model::ensure();
         }

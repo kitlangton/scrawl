@@ -33,9 +33,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use super::{
     CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY, CARBON_SHIFT_KEY, LiveOverlayEvent,
     Sampler, SharedCaptureTelemetry, ShortcutConfig, ShortcutKind, clean_label, hotkey_combos,
-    layout_default_keycode, pick_display, poll_clicks, scrawl_log, shortcut_label, shortcut_matches,
+    layout_default_keycode, pick_display, poll_clicks, shortcut_label, shortcut_matches,
     track_shift_ink,
 };
+use crate::log::scrawl_log;
 use crate::model::{CaptureMode, InteractionEvent, TargetFrame, TargetInfo};
 use crate::win;
 
@@ -55,11 +56,6 @@ const KEY_Z: u16 = 0x5A;
 /// An unassigned virtual key, sent around Alt or Win coming up after a shortcut so the app in
 /// front doesn't open its menu bar (or the Start menu) on the lone modifier release.
 const VK_MASK: u16 = 0xE8;
-
-/// `%LOCALAPPDATA%\Scrawl\Logs`.
-pub fn log_dir() -> Option<PathBuf> {
-    Some(win::local_dir().join("Logs"))
-}
 
 /// The primary display's index in `win::monitors()`.
 pub fn main_display_id() -> u32 {

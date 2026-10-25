@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use crate::capture::scrawl_log;
+use crate::log::scrawl_log;
 
 /// Marks a bundle to keep forever.
 pub const PINNED: &str = ".pinned";

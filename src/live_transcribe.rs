@@ -240,7 +240,7 @@ fn feed(mut command: Command, samples: &Mutex<Vec<f32>>, stop: &AtomicBool) -> R
                     Ok(event) => {
                         let _ = sender.send(Line::Event(event));
                     }
-                    Err(error) => crate::capture::scrawl_log(format!(
+                    Err(error) => crate::log::scrawl_log(format!(
                         "Live transcription: unreadable line ({error})"
                     )),
                 }

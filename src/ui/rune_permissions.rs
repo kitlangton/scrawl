@@ -113,7 +113,7 @@ pub(crate) fn open_settings(permission: &str, from: Option<[f32; 4]>) {
             Ok(child) => {
                 panels.insert(permission.to_owned(), child);
             }
-            Err(error) => crate::capture::scrawl_log(format!("permission-panel: {error}")),
+            Err(error) => crate::log::scrawl_log(format!("permission-panel: {error}")),
         }
         return;
     }

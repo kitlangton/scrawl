@@ -591,14 +591,14 @@ pub fn build_bundle_from_parts(
                         let total = selected.len();
                         let (merged, matched) = merge_full_keyframes(selected, full);
                         if matched < total {
-                            capture::scrawl_log(format!(
+                            crate::log::scrawl_log(format!(
                                 "Full-quality keyframes: decoded {matched} of {total}"
                             ));
                         }
                         merged
                     }
                     Err(error) => {
-                        capture::scrawl_log(format!("Full-quality keyframes failed: {error:#}"));
+                        crate::log::scrawl_log(format!("Full-quality keyframes failed: {error:#}"));
                         selected
                     }
                 }
@@ -780,7 +780,7 @@ pub fn build_bundle_from_parts(
         format!("write {write_ms}ms"),
         format!("total {total_ms}ms"),
     ]);
-    capture::scrawl_log(format!("finish timings: {}", parts.join(" · ")));
+    crate::log::scrawl_log(format!("finish timings: {}", parts.join(" · ")));
     if bench && !matches_prepared {
         for (name, elapsed) in [
             ("selection_ms", selected_at - started),

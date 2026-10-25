@@ -13,9 +13,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
-use crate::capture::{LiveOverlayEvent, SharedCaptureTelemetry, scrawl_log};
+use crate::capture::{LiveOverlayEvent, SharedCaptureTelemetry};
 use crate::delivery::{Delivery, Outcome};
 use crate::helper::{self, FrameTimes, PhoneDevice};
+use crate::log::scrawl_log;
 use crate::model::{
     CaptureMode, ContextChange, DeviceInfo, InteractionEvent, RgbaFrame, ScrawlBundle, ScreenSpan,
     Stroke, TargetFrame, TargetInfo,

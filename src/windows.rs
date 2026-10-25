@@ -560,7 +560,7 @@ impl WindowLogger {
             })
             .unwrap_or_default();
         if log.snapshot_calls > 0 {
-            crate::capture::scrawl_log(format!(
+            crate::log::scrawl_log(format!(
                 "Window log: {} snapshots taken, {} stored, {:.2} ms each; {} cursor samples",
                 log.snapshot_calls,
                 log.windows.len(),

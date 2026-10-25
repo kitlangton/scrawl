@@ -226,7 +226,7 @@ fn open(request: Request, cx: &mut App) {
         },
     );
     if opened.is_err() {
-        crate::capture::scrawl_log("onboarding: the welcome window failed to open");
+        crate::log::scrawl_log("onboarding: the welcome window failed to open");
     }
 }
 
@@ -245,7 +245,7 @@ impl OnboardingWindow {
         match message["type"].as_str().unwrap_or_default() {
             "state" => {
                 let Ok(next) = serde_json::from_value::<ViewState>(message).inspect_err(|error| {
-                    crate::capture::scrawl_log(format!(
+                    crate::log::scrawl_log(format!(
                         "onboarding: could not decode state: {error}"
                     ));
                 }) else {

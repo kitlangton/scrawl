@@ -153,7 +153,7 @@ pub fn note_pick(pick: &Pick) {
     match (pick, pick.note()) {
         (Pick::Missing { wanted, .. }, Some(note)) => {
             if warned.as_deref() != Some(wanted.id.as_str()) {
-                crate::capture::scrawl_log(format!("Microphone: {note}"));
+                crate::log::scrawl_log(format!("Microphone: {note}"));
                 *warned = Some(wanted.id.clone());
             }
         }
@@ -268,7 +268,7 @@ mod watch {
                 drop(unsafe { Box::from_raw(data as *mut Sender<Message>) });
             });
         if let Err(error) = spawned {
-            crate::capture::scrawl_log(format!("Microphone watch failed: {error}"));
+            crate::log::scrawl_log(format!("Microphone watch failed: {error}"));
         }
         sender
     }

@@ -564,7 +564,7 @@ fn log_config_once(message: String) {
     static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !seen.contains(&message) {
-        crate::capture::scrawl_log(&message);
+        crate::log::scrawl_log(&message);
         seen.push(message);
     }
 }

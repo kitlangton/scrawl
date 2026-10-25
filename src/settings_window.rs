@@ -410,7 +410,7 @@ fn open(request: Request, cx: &mut App) {
         },
     );
     if opened.is_err() {
-        crate::capture::scrawl_log("settings: the window failed to open");
+        crate::log::scrawl_log("settings: the window failed to open");
     }
 }
 

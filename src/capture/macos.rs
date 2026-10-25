@@ -20,8 +20,9 @@ use super::{
     CANDIDATE_EDGE, CANDIDATE_EDGE_NO_VIDEO, CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY,
     CARBON_SHIFT_KEY, FRAME_SAMPLE_INTERVAL, LiveOverlayEvent, Sampler, SharedCaptureTelemetry,
     ShortcutConfig, ShortcutKind, capture_size, clean_label, hotkey_combos, pick_display,
-    poll_clicks, scrawl_log, track_shift_ink,
+    poll_clicks, track_shift_ink,
 };
+use crate::log::scrawl_log;
 use crate::model::{CaptureMode, InteractionEvent, RgbaFrame, TargetInfo};
 
 /// Recordings may hold up to twice a frame's size in points (Retina pixels).
@@ -31,11 +32,6 @@ pub const MAX_CAPTURE_SCALE: f64 = 2.0;
 pub(super) const MOUSE_SOURCE: &str = "the mouse monitor";
 pub(super) const KEY_SOURCE: &str = "the key tap";
 pub(super) const NO_KEY_SOURCE: &str = "nowhere (Accessibility off; the record shortcut still works)";
-
-/// `~/Library/Logs/Scrawl`.
-pub fn log_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join("Library/Logs/Scrawl"))
-}
 
 pub fn main_display_id() -> u32 {
     unsafe { CGMainDisplayID() }
@@ -1117,7 +1113,7 @@ pub(super) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
         started_at,
         &thread_offset,
     );
-    crate::ui::start_metric("sck_ready_ms", started_at);
+    crate::log::start_metric("sck_ready_ms", started_at);
     let shot_edge = if video_path.is_some() {
         CANDIDATE_EDGE
     } else {

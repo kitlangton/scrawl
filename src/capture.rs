@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use crate::log::scrawl_log;
 use crate::model::{
     CaptureMode, InteractionEvent, RgbaFrame, SCALE, Stroke, TargetFrame, TargetInfo,
 };
@@ -328,31 +329,6 @@ pub fn shortcut_keys(label: &str) -> Vec<String> {
         keys
     } else {
         label.chars().map(String::from).collect()
-    }
-}
-
-pub fn scrawl_log(msg: impl AsRef<str>) {
-    use std::io::Write;
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let line = format!("[{ts}] {}\n", msg.as_ref());
-    eprint!("{line}");
-    // Tests log fixture failures on purpose; keep them out of the user's real log.
-    if cfg!(test) {
-        return;
-    }
-    let Some(dir) = log_dir() else {
-        return;
-    };
-    let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("scrawl.log"))
-    {
-        let _ = f.write_all(line.as_bytes());
     }
 }
 

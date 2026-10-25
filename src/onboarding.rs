@@ -797,7 +797,7 @@ pub enum Event {
 /// ScreenCaptureKit capture (`capture::screen_capture_usable`), so no prompt can come of it.
 pub fn read_grants() -> Option<Grants> {
     let statuses = crate::helper::permissions()
-        .inspect_err(|error| crate::capture::scrawl_log(format!("permissions: {error:#}")))
+        .inspect_err(|error| crate::log::scrawl_log(format!("permissions: {error:#}")))
         .ok()?;
     let screen = statuses.get(&Permission::ScreenRecording) == Some(&Status::Granted);
     let grants = Grants {
@@ -962,7 +962,7 @@ impl Session {
     /// app: `Close` or `Relaunch`.
     pub fn input(&mut self, input: Input) -> Effect {
         let effect = self.flow.on(input);
-        crate::capture::scrawl_log(format!("onboarding: {:?} -> {effect:?}", self.flow.step()));
+        crate::log::scrawl_log(format!("onboarding: {:?} -> {effect:?}", self.flow.step()));
         let result = match effect {
             // Attributed to whichever process asks, so Scrawl itself asks.
             Effect::Request(Permission::ScreenRecording) => {
@@ -1002,7 +1002,7 @@ impl Session {
                     }
                     std::thread::sleep(std::time::Duration::from_millis(1_200));
                     let result = crate::capture::screen_capture_probe();
-                    crate::capture::scrawl_log(format!(
+                    crate::log::scrawl_log(format!(
                         "onboarding: listed the screen once for macOS's window picker question: {result:?}"
                     ));
                 });

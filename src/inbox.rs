@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::capture::scrawl_log;
+use crate::log::scrawl_log;
 use crate::model::{ScrawlBundle, format_clock};
 
 const CAPACITY: usize = 8;

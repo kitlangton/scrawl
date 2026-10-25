@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::capture::scrawl_log;
+use crate::log::scrawl_log;
 use crate::handoff::{ApiGet, OpenCodeSession};
 use crate::model::{Destination, ScrawlBundle};
 use crate::web::Registration;

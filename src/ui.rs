@@ -26,12 +26,13 @@ use crate::audio::AudioRecorder;
 use crate::capture::{
     LiveOverlayEvent, ScreenCaptureSession, SharedCaptureTelemetry, current_mouse_screen,
     discover_target, install_global_hotkeys, list_selectable_windows,
-    record_external_frontmost_app, region_target, scrawl_log, selectable_window_at,
+    record_external_frontmost_app, region_target, selectable_window_at,
     shortcut_from_key_and_mods, start_global_input_tap, update_global_shortcut,
 };
 use crate::helper::PhoneDevice;
 #[cfg(target_os = "macos")]
 use crate::laser_overlay::MetalLaserOverlay as LaserOverlay;
+use crate::log::{scrawl_log, start_metric};
 use crate::model::{CaptureMode, ScrawlBundle, TargetFrame, TargetInfo, format_clock};
 use crate::phone::PhoneSession;
 use crate::sketch::timeline;
@@ -5285,15 +5286,6 @@ fn open_review_window(coord_entity: &Entity<ScrawlCoordinator>, cx: &mut App) {
         },
     );
     platform::take_keys(cx);
-}
-
-pub(crate) fn start_metric(name: &str, started: Instant) {
-    if std::env::var_os("SCRAWL_BENCH_START").is_some() {
-        eprintln!(
-            "START_METRIC {name}={:.6}",
-            started.elapsed().as_secs_f64() * 1_000.0
-        );
-    }
 }
 
 /// Real startup paths, without registering hotkeys or publishing personal captures.

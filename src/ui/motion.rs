@@ -343,7 +343,7 @@ pub(crate) fn poll_tune() {
             tune.time_scale = scale.clamp(0.02, 4.0);
         }
         if tune != state.tune {
-            crate::capture::scrawl_log(format!(
+            crate::log::scrawl_log(format!(
                 "tune: {} ({})",
                 if stamp.is_some() {
                     "loaded"
@@ -586,7 +586,7 @@ pub(crate) fn trace_open(launch: &str, display: [f32; 2]) {
             let _ = std::fs::create_dir_all(parent);
         }
         let Ok(file) = std::fs::File::create(path) else {
-            crate::capture::scrawl_log(format!("motion trace: can't write {}", path.display()));
+            crate::log::scrawl_log(format!("motion trace: can't write {}", path.display()));
             return;
         };
         let mut out = std::io::BufWriter::new(file);

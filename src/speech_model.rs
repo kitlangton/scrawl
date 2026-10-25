@@ -233,7 +233,7 @@ fn work(generation: u64) {
             }
             worker.status.clone()
         };
-        crate::capture::scrawl_log(format!(
+        crate::log::scrawl_log(format!(
             "speech model: {:?} {} {}{}",
             status.state,
             status.engine.as_deref().unwrap_or("?"),
@@ -349,13 +349,13 @@ pub fn transcribe_pending(captures: &Path) {
 
 fn transcribe_one(dir: &Path) {
     match transcribe_again(dir) {
-        Ok(done) => crate::capture::scrawl_log(format!(
+        Ok(done) => crate::log::scrawl_log(format!(
             "transcribed again {}: {}",
             dir.display(),
             if done { "done" } else { "still no model" }
         )),
         Err(error) => {
-            crate::capture::scrawl_log(format!(
+            crate::log::scrawl_log(format!(
                 "transcribing {} again failed: {error:#}",
                 dir.display()
             ));

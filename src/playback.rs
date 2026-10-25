@@ -44,7 +44,7 @@ pub fn warm_up() {
     if load_config_from(&default_config_path()).lower_playback == Some(true)
         && let Err(error) = command(None)
     {
-        crate::capture::scrawl_log(format!("Playback helper: {error:#}"));
+        crate::log::scrawl_log(format!("Playback helper: {error:#}"));
     }
 }
 
@@ -58,7 +58,7 @@ impl Guard {
         match command(Some(&format!("start {}", config.recording_volume()))) {
             Ok(()) => Some(Self),
             Err(error) => {
-                crate::capture::scrawl_log(format!("Playback volume: {error:#}"));
+                crate::log::scrawl_log(format!("Playback volume: {error:#}"));
                 None
             }
         }
@@ -68,7 +68,7 @@ impl Guard {
 impl Drop for Guard {
     fn drop(&mut self) {
         if let Err(error) = command(Some("stop")) {
-            crate::capture::scrawl_log(format!("Restoring playback volume: {error:#}"));
+            crate::log::scrawl_log(format!("Restoring playback volume: {error:#}"));
         }
     }
 }

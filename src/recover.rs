@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::capture::scrawl_log;
+use crate::log::scrawl_log;
 use crate::model::{
     CaptureMode, InteractionEvent, RgbaFrame, Stroke, TargetFrame, TargetInfo, TranscriptData,
 };

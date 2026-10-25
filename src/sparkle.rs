@@ -13,7 +13,7 @@ use objc2::{AnyThread, DefinedClass, MainThreadMarker, msg_send};
 use objc2_app_kit::NSApplication;
 use objc2_foundation::{NSError, NSInteger, NSObject};
 
-use crate::capture::scrawl_log;
+use crate::log::scrawl_log;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]

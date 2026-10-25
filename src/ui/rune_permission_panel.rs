@@ -593,7 +593,7 @@ impl Panel {
         let (card, how) = dock_for(frame, self.look.layout, &screens);
         s.card = Some(card);
         place_dock(card);
-        crate::capture::scrawl_log(format!(
+        crate::log::scrawl_log(format!(
             "permission-panel: docking {} {} card {:?} settings {:?}",
             s.kind.raw(),
             how.name(),
@@ -841,7 +841,7 @@ fn fly(run: FlightRun, look: Look) {
 
 fn emit(kind: Kind, event: &str, reason: Option<&str>) {
     let reason = reason.map(|r| format!(" ({r})")).unwrap_or_default();
-    crate::capture::scrawl_log(format!("permission-panel: {event} {}{reason}", kind.raw()));
+    crate::log::scrawl_log(format!("permission-panel: {event} {}{reason}", kind.raw()));
 }
 
 fn poll_grant(s: &mut Session, reshow: bool) {

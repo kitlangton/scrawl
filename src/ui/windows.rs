@@ -679,7 +679,7 @@ pub(super) fn install_status_bar() -> Option<flume::Receiver<MenuAction>> {
         .with_menu_on_left_click(false)
         .with_menu_on_right_click(false)
         .build()
-        .map_err(|error| crate::capture::scrawl_log(format!("Tray icon failed: {error}")))
+        .map_err(|error| crate::log::scrawl_log(format!("Tray icon failed: {error}")))
         .ok()?;
 
     TRAY.with(|slot| {

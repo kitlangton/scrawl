@@ -165,7 +165,7 @@ fn read_json(path: &Path) -> serde_json::Value {
 /// Saves one shortcut; a default is removed rather than written, and one turned off is `null`.
 pub fn save_shortcut(kind: ShortcutKind, cfg: &ShortcutConfig) {
     if let Err(error) = save_shortcut_in(&crate::handoff::default_config_path(), kind, cfg) {
-        crate::capture::scrawl_log(format!("Saving the {kind:?} shortcut failed: {error:#}"));
+        crate::log::scrawl_log(format!("Saving the {kind:?} shortcut failed: {error:#}"));
     }
 }
 
@@ -1143,7 +1143,7 @@ impl Panel {
 
     fn note_cli(&mut self, verb: &str, result: anyhow::Result<()>) {
         self.cli_error = result.err().map(|error| {
-            crate::capture::scrawl_log(format!("Command-line tool: {verb}: {error:#}"));
+            crate::log::scrawl_log(format!("Command-line tool: {verb}: {error:#}"));
             format!("Couldn't {verb} it: {error}.")
         });
     }
@@ -1170,7 +1170,7 @@ impl Panel {
             Ok(()) => {
                 self.error = None;
                 if let Err(error) = save_shortcut_in(&host.config_path(), kind, &cfg) {
-                    crate::capture::scrawl_log(format!("Saving the shortcut failed: {error:#}"));
+                    crate::log::scrawl_log(format!("Saving the shortcut failed: {error:#}"));
                 }
             }
             Err(refused) => self.error = Some((refused, Rejection::Refused.message())),
@@ -1181,13 +1181,13 @@ impl Panel {
         let path = host.config_path();
         let write = |key: &str, value: serde_json::Value| {
             if let Err(error) = crate::handoff::set_config_value_in(&path, key, value) {
-                crate::capture::scrawl_log(format!("Saving {key} failed: {error:#}"));
+                crate::log::scrawl_log(format!("Saving {key} failed: {error:#}"));
             }
         };
         match (key, value) {
             ("launchAtLogin", serde_json::Value::Bool(on)) => {
                 if let Err(error) = host.set_login_item(*on) {
-                    crate::capture::scrawl_log(format!("Launch at login: {error:#}"));
+                    crate::log::scrawl_log(format!("Launch at login: {error:#}"));
                 }
                 if *on && login_item() == LoginItem::NeedsApproval {
                     return Effect::OpenLoginItems;
@@ -1204,7 +1204,7 @@ impl Panel {
             ("microphone", serde_json::Value::String(id)) => {
                 let inputs = self.inputs.clone().unwrap_or_default();
                 if let Err(error) = crate::mic::save_in(&path, id, &inputs) {
-                    crate::capture::scrawl_log(format!("Saving microphone failed: {error:#}"));
+                    crate::log::scrawl_log(format!("Saving microphone failed: {error:#}"));
                 }
             }
             ("transcriber", serde_json::Value::String(name)) => {
@@ -1248,7 +1248,7 @@ impl Panel {
                     write(key, dir.trim().into());
                     return Effect::Measure;
                 }
-                crate::capture::scrawl_log(format!("Settings: ignoring capturesDir={dir}"));
+                crate::log::scrawl_log(format!("Settings: ignoring capturesDir={dir}"));
             }
             ("retention", serde_json::Value::String(id)) => {
                 if let Some(preset) = crate::retention::Preset::ALL
@@ -1256,12 +1256,12 @@ impl Panel {
                     .find(|p| preset_id(*p) == id)
                 {
                     if let Err(error) = preset.policy().save_to(&path) {
-                        crate::capture::scrawl_log(format!("Saving retention failed: {error:#}"));
+                        crate::log::scrawl_log(format!("Saving retention failed: {error:#}"));
                     }
                     return Effect::Measure;
                 }
             }
-            _ => crate::capture::scrawl_log(format!("Settings: ignoring {key}={value}")),
+            _ => crate::log::scrawl_log(format!("Settings: ignoring {key}={value}")),
         }
         Effect::None
     }
@@ -1608,7 +1608,7 @@ impl Session {
                     match serde_json::from_str::<Action>(&line) {
                         Ok(action) => events(Event::Action(action)),
                         Err(error) => {
-                            crate::capture::scrawl_log(format!("settings: {error}: {line}"))
+                            crate::log::scrawl_log(format!("settings: {error}: {line}"))
                         }
                     }
                 }
@@ -1623,7 +1623,7 @@ impl Session {
     pub fn event(&mut self, event: Event, host: &mut dyn Host) -> Effect {
         let effect = match event {
             Event::Action(action) => {
-                crate::capture::scrawl_log(format!("settings: {action:?}"));
+                crate::log::scrawl_log(format!("settings: {action:?}"));
                 self.panel.on(action, host)
             }
             Event::Grants(grants) => {

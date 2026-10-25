@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::capture::scrawl_log;
+use crate::log::scrawl_log;
 
 /// A bundle whose forward to OpenCode is still being retried.
 pub const PENDING: &str = ".deliver.json";

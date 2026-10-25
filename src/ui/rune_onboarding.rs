@@ -2097,7 +2097,7 @@ fn on_message<H: Host<OnboardingWin>>(link: &Link<OnboardingWin, H>, message: Va
     match kind.as_str() {
         "state" => {
             let Ok(state) = serde_json::from_value::<State>(message) else {
-                crate::capture::scrawl_log("onboarding (rune): bad state");
+                crate::log::scrawl_log("onboarding (rune): bad state");
                 return true;
             };
             // The page transition reads the direction, so it changes a commit before the step.

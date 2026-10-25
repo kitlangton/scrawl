@@ -559,7 +559,7 @@ pub fn transcribe_clips(
         let text = match send(&wav) {
             Ok(text) => text,
             Err(Failure::Rejected { status, code }) => {
-                crate::capture::scrawl_log(format!(
+                crate::log::scrawl_log(format!(
                     "Hex rejected a clip ({status} {code}); skipping it"
                 ));
                 rejected += 1;

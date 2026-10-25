@@ -24,16 +24,17 @@ use super::{
     MUTED_COLOR, MenuAction, ReviewTab, RouteChip, RouteOutcome, SIDEBAR_BG, SMART_SEND_UNDO,
     SURFACE_BG, SURFACE_HOVER, SURFACE_SELECTED, SelectionMode, TEXT_COLOR, TEXT_SOFT, area_rect,
     clamp_point, clip_rect, clock_template, completed_delivery_note, completed_label, island_title,
-    motion, place_badge, reveal_clock_ms, split_timeline_line, start_metric, start_video_export,
+    motion, place_badge, reveal_clock_ms, split_timeline_line, start_video_export,
 };
 use crate::audio::AudioRecorder;
 use crate::capture::{
     LiveOverlayEvent, ScreenCaptureSession, SharedCaptureTelemetry, current_mouse_screen,
     discover_target, install_global_hotkeys, list_selectable_windows,
-    record_external_frontmost_app, region_target, scrawl_log, selectable_window_at,
+    record_external_frontmost_app, region_target, selectable_window_at,
     shortcut_from_key_and_mods, start_global_input_tap, update_global_shortcut,
 };
 use crate::helper::PhoneDevice;
+use crate::log::{scrawl_log, start_metric};
 use crate::model::{CaptureMode, ScrawlBundle, TargetFrame, TargetInfo, format_clock};
 use crate::native::pill::model::{ElemId, Pres};
 use crate::native::pill::{PillAction, PillSnapshot, PillStyle};

@@ -398,7 +398,7 @@ pub fn handle(stream: &mut TcpStream, header: &str, expected_token: &str) -> Res
                     respond_json(stream, "200 OK", &serde_json::json!({"ok": true}), origin);
                 }
                 Ok(reg) => {
-                    crate::capture::scrawl_log(format!(
+                    crate::log::scrawl_log(format!(
                         "web: {} registered (session {}, directory {})",
                         reg.url,
                         reg.session.as_deref().unwrap_or("-"),
