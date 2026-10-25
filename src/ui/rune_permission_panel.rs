@@ -1045,12 +1045,12 @@ impl Fx {
 }
 
 fn view(s: &Panel, cx: &mut Cx<Panel>) -> El {
-    let dark = cx.system_dark();
+    let theme = Theme::of(cx);
     let root = el().key("root").w_full().h_full();
     let (w, h) = s.look.layout.size();
     match s.role {
         Role::Dock => {
-            let card = card(&s.look, dark, [MARGIN, MARGIN, w, h], Layout::RADIUS, 0.0, 1.0, s.exit_fx(), true);
+            let card = card(&s.look, theme, [MARGIN, MARGIN, w, h], Layout::RADIUS, 0.0, 1.0, s.exit_fx(), true);
             root.child(card)
         }
         Role::Flight => {
@@ -1058,13 +1058,12 @@ fn view(s: &Panel, cx: &mut Cx<Panel>) -> El {
             let step = run.step(run.started.map_or(0.0, |t| s.now - t));
             let r = step.rect;
             let local = [r[0] - run.window[0], r[1] - run.window[1], r[2], r[3]];
-            let card = card(&s.look, dark, local, step.radius, step.lift, step.alpha, Fx::resolve(step.resolve), false);
+            let card = card(&s.look, theme, local, step.radius, step.lift, step.alpha, Fx::resolve(step.resolve), false);
             root.child(card)
         }
         Role::Preview => {
-            let theme = Theme { dark };
             root.fill(theme.sidebar().color())
-                .child(card(&s.look, dark, [MARGIN, MARGIN, w, h], Layout::RADIUS, 0.0, 1.0, Fx::REST, false))
+                .child(card(&s.look, theme, [MARGIN, MARGIN, w, h], Layout::RADIUS, 0.0, 1.0, Fx::REST, false))
         }
     }
 }
@@ -1093,13 +1092,13 @@ fn springs(duration: f32) -> SpringPair {
 /// with the window background, and the content (laid out at the card's full size, centred, as
 /// the flight resizes it) clipped to continuous corners.
 #[allow(clippy::too_many_arguments)]
-fn card(look: &Look, dark: bool, rect: Rect, radius: f64, lift: f64, alpha: f64, fx: Fx, interactive: bool) -> El {
+fn card(look: &Look, theme: Theme, rect: Rect, radius: f64, lift: f64, alpha: f64, fx: Fx, interactive: bool) -> El {
     let [x, y, w, h] = rect.map(|v| v as f32);
     let (cw, ch) = look.layout.size();
     let (cw, ch) = (cw as f32, ch as f32);
     let (radius, lift) = (radius as f32, lift as f32);
-    let frost = Theme { dark }.window().alpha(0.62).color();
-    let content = content(look, dark, interactive)
+    let frost = theme.window().alpha(0.62).color();
+    let content = content(look, theme, interactive)
         .key("content")
         .absolute((w - cw) / 2.0, (h - ch) / 2.0)
         .size(cw, ch)
@@ -1130,17 +1129,19 @@ fn card(look: &Look, dark: bool, rect: Rect, radius: f64, lift: f64, alpha: f64,
     if interactive { card.hit() } else { card }
 }
 
-fn content(look: &Look, dark: bool, interactive: bool) -> El {
+fn content(look: &Look, theme: Theme, interactive: bool) -> El {
+    let dark = theme.dark;
     let row_w = look.layout.row_width as f32;
     let (gutter, row_y) = (Layout::GUTTER as f32, Layout::ROW_Y as f32);
-    el().child(instruction(look, dark, row_w)).child(app_row(look, dark, row_w, interactive)).child(
+    el().child(instruction(look, theme, row_w)).child(app_row(look, dark, row_w, interactive)).child(
         back_button(look, dark, interactive)
             .absolute((gutter - 28.0) / 2.0 + 1.0, row_y + (Layout::ROW as f32 - 28.0) / 2.0),
     )
 }
 
 /// "Drag Scrawl to the list above to allow Screen Recording", swapping to "Scrawl is allowed".
-fn instruction(look: &Look, dark: bool, row_w: f32) -> El {
+fn instruction(look: &Look, theme: Theme, row_w: f32) -> El {
+    let dark = theme.dark;
     let (x, y) = (Layout::GUTTER as f32, Layout::TOP as f32);
     let height = Layout::INSTRUCTION as f32;
     let icon_swap = Transition::opacity().combined(Transition::scale(0.6)).springs(springs(0.3));
@@ -1152,7 +1153,7 @@ fn instruction(look: &Look, dark: bool, row_w: f32) -> El {
             .child(el().absolute(7.5, 8.5).size(11.0, 11.0).radius(5.5).fill(Color::WHITE))
             .child(el().absolute(0.0, 0.0).size(Layout::ICON as f32, height).center().child(check))
     } else {
-        let accent = Theme { dark }.accent().color();
+        let accent = theme.accent().color();
         el().key("arrow").center().child(symbol(&icons::ARROW_UP, 18.0, weight::BOLD, accent))
     };
     let icon = icon
@@ -1237,7 +1238,7 @@ fn app_row(look: &Look, dark: bool, row_w: f32, interactive: bool) -> El {
         return row;
     }
     // The picture under the pointer, opaque so it reads over any window it crosses.
-    let backing = ink(dark, 0.06).over(Theme { dark }.window());
+    let backing = ink(dark, 0.06).over(Theme::new(dark).window());
     let app = look.app.clone();
     row.hit()
         .cursor(Cursor::Grab)
