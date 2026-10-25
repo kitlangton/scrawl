@@ -49,6 +49,7 @@ mod sketch;
 #[cfg(target_os = "macos")]
 mod sparkle;
 mod speech_model;
+mod speech_plan;
 mod transcribe;
 mod ui;
 mod web;

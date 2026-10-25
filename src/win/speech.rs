@@ -2,9 +2,9 @@
 //! `transcribe.cpp`, the engine Hex uses. It loads a model Hex has already installed
 //! (`%APPDATA%\voice-control\models`), else Scrawl's own copy of Hex's Parakeet Unified English
 //! (`%LOCALAPPDATA%\Scrawl\models`), which `install` downloads once in the background and checks
-//! against its SHA-256. Like the Hex client, it transcribes each speech island on its own; unlike
-//! it, every word keeps the time the model heard it (`estimated: false`), so spoken cues ("look
-//! here") can cut keyframes.
+//! against its SHA-256. Like the Hex client, it hears the whole recording in chunks of up to 30 s
+//! (`speech_plan::Plan`); unlike it, every word keeps the time the model heard it
+//! (`estimated: false`), so spoken cues ("look here") can cut keyframes.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -14,10 +14,7 @@ use transcribe_cpp::{Model, RunOptions, TimestampKind};
 
 use crate::helper::SpeechModelLine;
 use crate::model::{TranscriptData, TranscriptSegment, WordTiming};
-
-const KHZ: u64 = 16;
-/// Silence kept around each clip, so first and last words aren't clipped.
-const CLIP_PAD_MS: u64 = 200;
+use crate::speech_plan::{self, Heard, Plan};
 
 /// The model Scrawl downloads when Hex hasn't installed one: the same file, revision and
 /// checksum as Hex's `PARAKEET_UNIFIED_ENGLISH_ARTIFACT`.
@@ -124,20 +121,15 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
     let wav =
         std::fs::read(audio).with_context(|| format!("Could not read {}", audio.display()))?;
     let samples = crate::audio::decode_wav_16k(&wav)?;
-    let duration_ms = samples.len() as u64 / KHZ;
-    let mut clips = crate::hex::plan_clips(&crate::audio::speech_islands(&samples), duration_ms);
-    if clips.is_empty() && duration_ms >= 480 {
-        clips.push((0, duration_ms));
-    }
+    let plan = Plan::new(&samples);
     let name = model_name(&path);
-    let mut transcript = TranscriptData {
-        source: format!("parakeet:{name}"),
-        model: Some(name),
-        estimated: false,
-        ..Default::default()
-    };
-    if clips.is_empty() {
-        return Ok(transcript);
+    let source = format!("parakeet:{name}");
+    if plan.chunks().is_empty() {
+        return Ok(TranscriptData {
+            source,
+            model: Some(name),
+            ..Default::default()
+        });
     }
 
     init_backends()?;
@@ -148,62 +140,33 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
         language: Some("en".into()),
         ..Default::default()
     };
-    let mut texts = Vec::new();
-    for (start, end) in clips {
-        let from_ms = start.saturating_sub(CLIP_PAD_MS);
-        let from = (from_ms * KHZ) as usize;
-        let to = (((end + CLIP_PAD_MS) * KHZ) as usize).min(samples.len());
-        if from >= to {
-            continue;
-        }
-        let result = session.run(&samples[from..to], &options)?;
-        let text = result.text.split_whitespace().collect::<Vec<_>>().join(" ");
-        if text.is_empty() {
-            continue;
-        }
-        let at = |ms: i64| from_ms + ms.max(0) as u64;
-        let words: Vec<WordTiming> = result
-            .words
-            .iter()
-            .filter(|word| !word.text.trim().is_empty())
-            .map(|word| WordTiming {
-                t0: at(word.t0_ms),
-                t1: at(word.t1_ms.max(word.t0_ms)),
-                text: word.text.trim().to_owned(),
-            })
-            .collect();
-        if words.is_empty() {
-            // No word times from this model: spread the text over the clip, and say so.
-            let (segments, words) = crate::hex::spread_words(&text, start, end);
-            transcript.estimated = true;
-            transcript.segments.extend(segments);
-            transcript.words.extend(words);
-        } else {
-            let segments: Vec<TranscriptSegment> = result
+    speech_plan::transcribe(&samples, &plan, source, Some(name), |chunk| {
+        let result = session.run(chunk, &options)?;
+        let ms = |ms: i64| ms.max(0) as u64;
+        Ok(Heard::Timed {
+            words: result
+                .words
+                .iter()
+                .filter(|word| !word.text.trim().is_empty())
+                .map(|word| WordTiming {
+                    t0: ms(word.t0_ms),
+                    t1: ms(word.t1_ms.max(word.t0_ms)),
+                    text: word.text.trim().to_owned(),
+                })
+                .collect(),
+            segments: result
                 .segments
                 .iter()
                 .filter(|s| !s.text.trim().is_empty())
                 .map(|s| TranscriptSegment {
-                    t0: at(s.t0_ms),
-                    t1: at(s.t1_ms.max(s.t0_ms)),
+                    t0: ms(s.t0_ms),
+                    t1: ms(s.t1_ms.max(s.t0_ms)),
                     text: s.text.trim().to_owned(),
                 })
-                .collect();
-            transcript.segments.extend(if segments.is_empty() {
-                vec![TranscriptSegment {
-                    t0: words[0].t0,
-                    t1: words[words.len() - 1].t1,
-                    text: text.clone(),
-                }]
-            } else {
-                segments
-            });
-            transcript.words.extend(words);
-        }
-        texts.push(text);
-    }
-    transcript.text = texts.join(" ");
-    Ok(transcript)
+                .collect(),
+            text: result.text,
+        })
+    })
 }
 
 /// Loads ggml's CPU backend DLL for this CPU (beside `transcribe.dll`), once per process: the
