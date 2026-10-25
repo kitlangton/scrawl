@@ -741,6 +741,15 @@ enum Pane {
 }
 
 impl Pane {
+    /// Sidebar order, which ⌘1… and the arrow keys follow.
+    const ALL: [Pane; 6] = [Self::General, Self::Recording, Self::Storage, Self::Permissions, Self::Agents, Self::About];
+
+    /// The pane `by` places away in the sidebar, stopping at its ends.
+    fn step(self, by: isize) -> Self {
+        let i = Self::ALL.iter().position(|&p| p == self).unwrap_or(0) as isize;
+        Self::ALL[(i + by).clamp(0, Self::ALL.len() as isize - 1) as usize]
+    }
+
     fn parse(s: &str) -> Option<Self> {
         Some(match s {
             "general" => Self::General,
@@ -1331,9 +1340,17 @@ fn label(s: &str, size: f32, weight: f32, color: Color) -> El {
     text(s).font(style(size, weight)).color(color).single_line()
 }
 
+/// Reachable with Tab (with Full Keyboard Access on, as AppKit does) and pressed with Space,
+/// with macOS's keyboard-only accent ring `offset` outside the control.
+fn focus(e: El, enabled: bool, theme: Theme, offset: f32) -> El {
+    e.focusable(enabled).focus_ring(3.0, offset, theme.accent().alpha(0.5).color())
+}
+
 fn switch(on: bool, enabled: bool, theme: Theme, bg: Rgba, key: &str, f: impl Fn(&mut SettingsWin) + 'static) -> El {
     let fill = if on { theme.accent() } else { theme.track() };
-    el().key(key.to_owned())
+    focus(el(), enabled, theme, 0.0)
+        .role("switch")
+        .key(key.to_owned())
         .size(38.0, 22.0)
         .radius(11.0)
         .fill(fill.over(bg))
@@ -1357,7 +1374,8 @@ fn switch(on: bool, enabled: bool, theme: Theme, bg: Rgba, key: &str, f: impl Fn
 
 fn button(title: &str, enabled: bool, theme: Theme, bg: Rgba, f: impl Fn(&mut SettingsWin, &mut Tx) + 'static) -> El {
     let fill = theme.control().over_rgba(bg);
-    let e = el().h(24.0)
+    let e = focus(el(), enabled, theme, 0.0)
+        .h(24.0)
         .px(11.0)
         .center()
         .radius(12.0)
@@ -1376,7 +1394,9 @@ fn button(title: &str, enabled: bool, theme: Theme, bg: Rgba, f: impl Fn(&mut Se
 
 fn circle_button(sym: &'static Icon, glyph: f32, theme: Theme, bg: Rgba, key: String, f: impl Fn(&mut SettingsWin) + 'static) -> El {
     let fill = theme.control().over_rgba(bg);
-    el().key(key)
+    focus(el(), true, theme, 0.0)
+        .role("button")
+        .key(key)
         .size(20.0, 20.0)
         .radius(10.0)
         .fill(fill.color())
@@ -1460,7 +1480,10 @@ fn popup(
     let bg = theme.group_bg();
     let open = s.menu.as_ref().is_some_and(|m| m.anchor == anchor) || s.popup_open.as_deref() == Some(anchor);
     let anchor_key = anchor.to_owned();
-    row().key(anchor.to_owned())
+    focus(row(), true, theme, 3.0)
+        .role("combobox")
+        .key(anchor.to_owned())
+        .radius(6.0)
         .gap(8.0)
         .center_y()
         .child(
@@ -1746,7 +1769,7 @@ fn system_button(title: &str, enabled: bool, theme: Theme, bg: Rgba, f: fn(&mut 
     let dark = theme.dark;
     let fill = if enabled { theme.control().over_rgba(bg) } else { theme.ink(if dark { 0.05 } else { 0.04 }).over_rgba(bg) };
     let ink = if enabled { theme.text().over(fill) } else { theme.ink(if dark { 0.25 } else { 0.3 }).over(fill) };
-    let e = el().h(24.0).px(11.0).center().radius(7.0).fill(fill.color()).child(label(title, 13.0, 400.0, ink));
+    let e = focus(el(), enabled, theme, 0.0).h(24.0).px(11.0).center().radius(7.0).fill(fill.color()).child(label(title, 13.0, 400.0, ink));
     if enabled {
         e.border(1.0, theme.control_line().over(fill))
             .hover(theme.ink(if dark { 0.13 } else { 0.1 }).over(bg))
@@ -2217,6 +2240,10 @@ fn link(title: &str, shown: &str, url: &'static str, theme: Theme) -> El {
         ],
     )
     .cursor(rune::Cursor::Pointer)
+    .role("link")
+    .focusable(true)
+    // Inside the row: the group clips anything outside it.
+    .focus_ring(3.0, -3.0, theme.accent().alpha(0.5).color())
     .on_press(move |_: &mut SettingsWin| open_url(url))
 }
 
@@ -2268,9 +2295,21 @@ fn sidebar_item(s: &SettingsWin, pane: Pane, theme: Theme) -> El {
         .fill(if selected { theme.selection().over(bg) } else { bg.color() })
         .child(tile(pane.symbol(), pane.tint(), 24.0))
         .child(label(pane.title(), 14.0, 400.0, theme.text().over(if selected { theme.selection().over_rgba(bg) } else { bg })))
+        .key(format!("sidebar-{}", pane.title()))
+        .label(pane.title())
+        .focusable(true)
+        .focus_selected(selected)
+        .focus_ring(3.0, 0.0, theme.accent().alpha(0.5).color())
         // Selects on mouse-down, as a sidebar does.
         .on_drag(move |s: &mut SettingsWin, d: &mut rune::Drag, tx: &mut Tx| {
             if d.phase == Phase::Down {
+                tx.instant();
+                s.select(pane);
+            }
+        })
+        // The arrow keys and type-select in the sidebar's focus group, and Space.
+        .on_press_tx(move |s: &mut SettingsWin, tx: &mut Tx| {
+            if s.pane != pane {
                 tx.instant();
                 s.select(pane);
             }
@@ -2300,6 +2339,9 @@ fn view(s: &SettingsWin, cx: &mut Cx<SettingsWin>) -> El {
         .px(10.0)
         .fill(theme.sidebar().color())
         .window_drag()
+        .role("list")
+        .focus_group()
+        .focus_follows()
         .child(if s.render_time.is_some() { traffic_lights() } else { el().h(TITLEBAR) })
         .child(sidebar_item(s, Pane::General, theme))
         .child(section("Settings", theme))
@@ -2441,13 +2483,36 @@ fn on_key(s: &mut SettingsWin, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
     if s.view.recording().is_some() {
         return true;
     }
-    if matches!(key.key, rune::Key::Command('w')) || (key.mods.cmd && matches!(key.key, rune::Key::Text(ref c) if c == "w")) {
-        tx.close_window();
-        return true;
-    }
-    if matches!(key.key, rune::Key::Escape) && s.menu.is_some() {
-        s.menu = None;
-        return true;
+    match key.key {
+        rune::Key::Command('w') => {
+            tx.close_window();
+            return true;
+        }
+        rune::Key::Command('q') => {
+            tx.quit();
+            return true;
+        }
+        rune::Key::Command(c @ '1'..='9') => {
+            if let Some(&pane) = Pane::ALL.get(c as usize - '1' as usize) {
+                tx.instant();
+                s.select(pane);
+            }
+            return true;
+        }
+        rune::Key::Escape if s.menu.is_some() => {
+            s.menu = None;
+            return true;
+        }
+        // Only reached when no control took the arrow (the sidebar's group, a popup or a field).
+        rune::Key::Up | rune::Key::Down if s.menu.is_none() && !key.mods.cmd && !key.mods.alt && !key.mods.ctrl => {
+            let pane = s.pane.step(if key.key == rune::Key::Up { -1 } else { 1 });
+            if pane != s.pane {
+                tx.instant();
+                s.select(pane);
+            }
+            return true;
+        }
+        _ => {}
     }
     false
 }
@@ -3050,5 +3115,56 @@ mod tests {
         assert_eq!(kvk(PhysicalKeyCode::Backspace), Some(51));
         assert_eq!(kvk(PhysicalKeyCode::F1), Some(122));
         assert_eq!(carbon(rune::Mods { alt: true, shift: true, ..Default::default() }), (1 << 11) | (1 << 9));
+    }
+
+    fn keyboard(name: &str) -> rune::Runtime<SettingsWin> {
+        let mut win = SettingsWin::new();
+        sample(&mut win, name);
+        let mut rt = rune::Runtime::new(win, view, (WIDTH, HEIGHT), rune::Env::new(true, 2.0));
+        rt.on_key = Some(on_key);
+        rt.set_full_keyboard_access(true);
+        rt.frame(0.0);
+        rt
+    }
+
+    fn press(rt: &mut rune::Runtime<SettingsWin>, key: rune::Key, mods: rune::Mods) {
+        rt.key(rune::KeyEvent { key, mods });
+        rt.frame(0.0);
+    }
+
+    fn focused(rt: &rune::Runtime<SettingsWin>) -> Option<(String, bool)> {
+        rt.elements().into_iter().find(|e| e.focused).map(|e| (e.key.unwrap_or(e.path), e.focus_visible))
+    }
+
+    #[test]
+    fn command_digits_and_arrows_change_the_pane() {
+        let cmd = rune::Mods { cmd: true, ..Default::default() };
+        let mut rt = keyboard("general");
+        press(&mut rt, rune::Key::Command('3'), cmd);
+        assert_eq!(rt.state.pane, Pane::Storage);
+        press(&mut rt, rune::Key::Command('6'), cmd);
+        assert_eq!(rt.state.pane, Pane::About);
+        press(&mut rt, rune::Key::Down, Default::default());
+        assert_eq!(rt.state.pane, Pane::About, "the sidebar stops at its end");
+        press(&mut rt, rune::Key::Up, Default::default());
+        assert_eq!(rt.state.pane, Pane::Agents);
+        press(&mut rt, rune::Key::Command('9'), cmd);
+        assert_eq!(rt.state.pane, Pane::Agents);
+    }
+
+    #[test]
+    fn tab_reaches_the_sidebar_and_then_the_controls_with_a_ring() {
+        let mut rt = keyboard("general");
+        press(&mut rt, rune::Key::Tab, Default::default());
+        assert_eq!(focused(&rt), Some(("sidebar-General".into(), true)));
+        press(&mut rt, rune::Key::Down, Default::default());
+        assert_eq!(rt.state.pane, Pane::Recording, "selection follows focus in the sidebar");
+        assert_eq!(focused(&rt).unwrap().0, "sidebar-Recording");
+        press(&mut rt, rune::Key::Command('1'), rune::Mods { cmd: true, ..Default::default() });
+        assert_eq!(focused(&rt).unwrap().0, "sidebar-General", "focus follows a ⌘1 selection");
+        press(&mut rt, rune::Key::Tab, Default::default());
+        assert_eq!(focused(&rt), Some(("login".into(), true)));
+        press(&mut rt, rune::Key::Tab, rune::Mods { shift: true, ..Default::default() });
+        assert_eq!(focused(&rt).unwrap().0, "sidebar-General");
     }
 }
