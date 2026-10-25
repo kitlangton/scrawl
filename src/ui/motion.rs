@@ -361,7 +361,7 @@ pub(crate) fn poll_tune() {
 
 /// `scrawl tune …`: edits `tune.json`, which debug builds (the lab, the installed app) re-read
 /// within a quarter second.
-pub(crate) enum TuneAction {
+pub enum TuneAction {
     List,
     Set(String, f32),
     Preset(usize),
@@ -369,7 +369,7 @@ pub(crate) enum TuneAction {
     Rust,
 }
 
-pub(crate) fn tune_command(action: TuneAction) -> anyhow::Result<()> {
+pub fn tune_command(action: TuneAction) -> anyhow::Result<()> {
     let path = tune_path().ok_or_else(|| anyhow::anyhow!("no home directory"))?;
     let read = || -> serde_json::Map<String, serde_json::Value> {
         std::fs::read_to_string(&path)
