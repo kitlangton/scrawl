@@ -513,6 +513,11 @@ pub struct EngineConfig {
     /// site's OpenCode session (`routing`).
     #[serde(default)]
     pub auto_send: Option<bool>,
+    /// `"steer"` (default) or `"queue"`: whether a capture sent to a busy session joins its
+    /// current turn or waits until the turn ends (`delivery_mode`). Read as a value so a bad
+    /// one can't reset this struct.
+    #[serde(default)]
+    pub delivery: Option<serde_json::Value>,
     /// `"apple"` (default), `"hex"` or `"command"`: which engine transcribes recordings
     /// (`transcribe`). The command's own keys are read by `transcribe_command`, not here, so a
     /// malformed one can't reset this struct.
@@ -535,9 +540,17 @@ pub struct EngineConfig {
     /// The microphone Mac captures record from (`mic`); absent follows the macOS default.
     #[serde(default)]
     pub microphone: Option<crate::mic::Choice>,
-    /// Smart routing's settings (`routing::look`).
-    #[serde(default)]
+    /// Smart routing's settings (`routing::look`). Read key by key (`lenient_routing`), so a
+    /// bad `undoWindowSec` doesn't take `autoSend` with it.
+    #[serde(default, deserialize_with = "lenient_routing")]
     pub routing: Option<RoutingConfig>,
+    /// Jev routing's thresholds (`routing::jev::Thresholds::from_config`).
+    #[serde(default)]
+    pub jev_routing: Option<serde_json::Value>,
+    /// The OpenCode key Jev routing calls the gateway with; absent uses `$OPENCODE_API_KEY` or
+    /// OpenCode's own credential.
+    #[serde(default)]
+    pub jev_api_key: Option<String>,
     /// Where new captures go (`default_captures_dir`); absent keeps the built-in folder.
     #[serde(default)]
     pub captures_dir: Option<String>,
@@ -609,7 +622,17 @@ impl EngineConfig {
     }
 
     pub fn routing_apps(&self) -> Vec<(String, PathBuf)> {
-        routing_paths_in(self, |routing| &routing.apps)
+        let mut apps = routing_paths_in(self, |routing| &routing.apps);
+        apps.retain(|(id, _)| {
+            let general = crate::routing::policy::is_general_app(id);
+            if general {
+                log_config_once(format!(
+                    "config.json: ignoring routing.apps \"{id}\": a general-purpose app's captures are about anything"
+                ));
+            }
+            !general
+        });
+        apps
     }
 
     pub fn routing_servers(&self) -> Vec<(String, PathBuf)> {
@@ -638,6 +661,20 @@ pub struct RoutingConfig {
     /// session ID (`{"https://problems.example.com": "~/code/team-board"}`).
     #[serde(default)]
     pub sites: std::collections::BTreeMap<String, String>,
+    /// Spoken names for sessions, to the title or folder name they mean
+    /// (`{"scroll": "SCRAWL"}`), for names speech recognition gets wrong.
+    #[serde(default)]
+    pub aliases: std::collections::BTreeMap<String, String>,
+    /// What may send without asking: `"rules"` (default), `"confident"`
+    /// or `"never"` (`routing::policy::AutoSend`).
+    #[serde(default)]
+    pub auto_send: Option<serde_json::Value>,
+    /// Sites and bundle IDs Scrawl never offers a rule for again.
+    #[serde(default)]
+    pub refused_rules: Option<serde_json::Value>,
+    /// How long after a send `scrawl router undo` still takes it back, in seconds.
+    #[serde(default)]
+    pub undo_window_sec: Option<u64>,
 }
 
 /// `true`/`false`, `"yes"`/`"on"`/`"1"` and their opposites, or a number (non-zero is on). Other
@@ -680,6 +717,49 @@ where
         }
     }
     Ok(out)
+}
+
+/// `"routing"` without the keys or map entries that don't fit, each dropped and logged on its own.
+fn lenient_routing<'de, D>(deserializer: D) -> std::result::Result<Option<RoutingConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde_json::Value;
+    let map = match Value::deserialize(deserializer)? {
+        Value::Null => return Ok(None),
+        Value::Object(map) => map,
+        other => {
+            log_config_once(format!("config.json: ignoring \"routing\": {other} (expected an object)"));
+            return Ok(None);
+        }
+    };
+    let fits = |map: &serde_json::Map<String, Value>| {
+        serde_json::from_value::<RoutingConfig>(Value::Object(map.clone()))
+    };
+    let mut kept = serde_json::Map::new();
+    for (key, value) in map {
+        kept.insert(key.clone(), value.clone());
+        let Err(error) = fits(&kept) else { continue };
+        kept.remove(&key);
+        let Value::Object(entries) = value else {
+            log_config_once(format!("config.json: ignoring \"routing.{key}\": {error}"));
+            continue;
+        };
+        // A map (`sites`, `apps`): keep the entries that fit.
+        let mut good = serde_json::Map::new();
+        for (name, entry) in entries {
+            good.insert(name.clone(), entry.clone());
+            kept.insert(key.clone(), Value::Object(good.clone()));
+            if fits(&kept).is_err() {
+                good.remove(&name);
+                log_config_once(format!(
+                    "config.json: ignoring \"routing.{key}\" entry \"{name}\": {entry}"
+                ));
+            }
+        }
+        kept.insert(key, Value::Object(good));
+    }
+    Ok(Some(fits(&kept).unwrap_or_default()))
 }
 
 /// Config problems are logged once per process, not on every read.
@@ -953,6 +1033,62 @@ pub fn routing_apps() -> Vec<(String, PathBuf)> {
     config().routing_apps()
 }
 
+/// `routing.autoSend` in config.json, when it's text; anything else is logged once.
+pub fn routing_auto_send() -> Option<String> {
+    if cfg!(test) {
+        return None;
+    }
+    match config().routing?.auto_send? {
+        serde_json::Value::String(text) => {
+            if crate::routing::policy::AutoSend::parse(&text).is_none() {
+                log_config_once(format!(
+                    "config.json: ignoring routing.autoSend {text:?} (expected \"rules\", \"confident\" or \"never\")"
+                ));
+            }
+            Some(text)
+        }
+        other => {
+            log_config_once(format!(
+                "config.json: ignoring routing.autoSend {other} (expected \"rules\", \"confident\" or \"never\")"
+            ));
+            None
+        }
+    }
+}
+
+/// `routing.refusedRules` in config.json: sites and bundle IDs never offered a rule again.
+/// `routing.undoWindowSec` (never read in tests).
+pub fn routing_undo_window_sec() -> Option<u64> {
+    if cfg!(test) {
+        return None;
+    }
+    config().routing.and_then(|r| r.undo_window_sec)
+}
+
+pub fn routing_refused_rules() -> Vec<String> {
+    if cfg!(test) {
+        return Vec::new();
+    }
+    match config().routing.and_then(|r| r.refused_rules) {
+        Some(serde_json::Value::Array(list)) => list
+            .into_iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `routing.aliases` in config.json: spoken names and the title or folder they mean.
+pub fn routing_aliases() -> Vec<(String, String)> {
+    if cfg!(test) {
+        return Vec::new();
+    }
+    config()
+        .routing
+        .map(|routing| routing.aliases.into_iter().collect())
+        .unwrap_or_default()
+}
+
 /// `routing.servers` in config.json: URL prefixes and the folders they serve, `~` expanded.
 pub fn routing_servers() -> Vec<(String, PathBuf)> {
     config().routing_servers()
@@ -989,8 +1125,48 @@ fn routing_paths_in(
 }
 
 /// Whether Mac captures of a dev site go straight to its session (`autoSend`, default on).
+/// `jevRouting` in config.json (never read in tests).
+pub fn jev_routing_config() -> Option<serde_json::Value> {
+    if cfg!(test) {
+        return None;
+    }
+    config().jev_routing
+}
+
+/// `jevApiKey` in config.json (never read in tests).
+pub fn jev_api_key() -> Option<String> {
+    if cfg!(test) {
+        return None;
+    }
+    config().jev_api_key
+}
+
 pub fn auto_send() -> bool {
     config().auto_send()
+}
+
+/// How a capture enters a busy OpenCode session (`"delivery"`): `"steer"` joins its current
+/// turn, `"queue"` waits until the turn ends. Anything else is logged once and steers.
+pub fn delivery_mode() -> &'static str {
+    if cfg!(test) {
+        return "steer";
+    }
+    delivery_mode_of(config().delivery.as_ref())
+}
+
+fn delivery_mode_of(value: Option<&serde_json::Value>) -> &'static str {
+    match value.and_then(serde_json::Value::as_str) {
+        None if value.is_none() => "steer",
+        Some("steer") => "steer",
+        Some("queue") => "queue",
+        _ => {
+            log_config_once(format!(
+                "config.json: delivery {} isn't \"steer\" or \"queue\"; steering",
+                value.map(ToString::to_string).unwrap_or_default()
+            ));
+            "steer"
+        }
+    }
 }
 
 /// The configured transcriber name (`transcriber`) as written, unvalidated.
@@ -1272,12 +1448,24 @@ fn opencode_api(method: &str, path: &str, data: Option<&serde_json::Value>) -> R
         command
     };
     let output = command.output().context("Could not launch opencode2")?;
-    ensure!(
-        output.status.success(),
-        "OpenCode API failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = format!("OpenCode API failed: {}", stderr.trim());
+        // `opencode api` prints `HTTP <status> <text>` when the server answered.
+        return Err(match cli_status(&stderr) {
+            Some(status) => anyhow::Error::new(HttpStatus(status)).context(message),
+            None => anyhow::anyhow!(message),
+        });
+    }
     Ok(output.stdout)
+}
+
+/// The status in `opencode api`'s `HTTP 409 Conflict` line.
+fn cli_status(stderr: &str) -> Option<u16> {
+    stderr.lines().find_map(|line| {
+        let code = line.trim().strip_prefix("HTTP ")?.get(..3)?;
+        code.parse().ok().filter(|c| (100..600).contains(c))
+    })
 }
 
 pub(crate) fn query_escape(value: &str) -> String {
@@ -1425,6 +1613,35 @@ fn http_get(
     path: &str,
     timeout: std::time::Duration,
 ) -> Result<Vec<u8>> {
+    http_request(address, password, "GET", path, None, timeout)
+}
+
+/// A non-2xx answer from OpenCode, so callers can tell a missing session (404) from a server
+/// that can't be reached.
+#[derive(Debug)]
+pub struct HttpStatus(pub u16);
+
+impl std::fmt::Display for HttpStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "OpenCode API failed: HTTP {}", self.0)
+    }
+}
+
+impl std::error::Error for HttpStatus {}
+
+/// The status of a failed request, when the server answered.
+pub fn http_status(err: &anyhow::Error) -> Option<u16> {
+    err.downcast_ref::<HttpStatus>().map(|s| s.0)
+}
+
+fn http_request(
+    address: std::net::SocketAddr,
+    password: Option<&str>,
+    method: &str,
+    path: &str,
+    body: Option<&[u8]>,
+    timeout: std::time::Duration,
+) -> Result<Vec<u8>> {
     use std::io::{Read, Write};
     let connect = SERVER_CONNECT_TIMEOUT
         .min(timeout)
@@ -1441,10 +1658,21 @@ fn http_get(
         ),
         _ => String::new(),
     };
-    let request =
-        format!("GET {path} HTTP/1.1\r\nHost: {address}\r\n{auth}Connection: close\r\n\r\n");
+    let content = match body {
+        Some(body) => format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        ),
+        None if method != "GET" => "Content-Length: 0\r\n".to_owned(),
+        None => String::new(),
+    };
+    let mut request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {address}\r\n{auth}{content}Connection: close\r\n\r\n"
+    )
+    .into_bytes();
+    request.extend_from_slice(body.unwrap_or_default());
     stream
-        .write_all(request.as_bytes())
+        .write_all(&request)
         .with_context(|| format!("Could not write to server at http://{address}"))?;
     let mut bytes = Vec::new();
     stream
@@ -1476,11 +1704,34 @@ fn http_get(
     {
         ensure!(body.len() == length, "Incomplete OpenCode HTTP response");
     }
-    ensure!(
-        (200..300).contains(&status),
-        "OpenCode API failed: HTTP {status}"
-    );
+    if !(200..300).contains(&status) {
+        return Err(HttpStatus(status).into());
+    }
     Ok(body)
+}
+
+/// One request to the local OpenCode server (`method` is `GET`, `POST`, `DELETE`…) within
+/// `timeout`, through `opencode2 api` when the agents run on another Mac. A 4xx or 5xx answer is
+/// an [`HttpStatus`] error.
+pub fn api_within(
+    method: &str,
+    path: &str,
+    data: Option<&serde_json::Value>,
+    timeout: std::time::Duration,
+) -> Result<Vec<u8>> {
+    if agent_host().is_some() {
+        return opencode_api(&method.to_ascii_lowercase(), path, data);
+    }
+    let body = data.map(serde_json::to_vec).transpose()?;
+    let (address, password) = local_server();
+    http_request(
+        address,
+        password.as_deref(),
+        method,
+        path,
+        body.as_deref(),
+        timeout,
+    )
 }
 
 /// [`api_get`] for routing: talks HTTP directly to the local OpenCode server with a
@@ -1689,8 +1940,74 @@ pub fn resolve_opencode_session_with(
     Ok((matched.id, title))
 }
 
-/// Queues a bundle's summary and pointers into an OpenCode session.
+/// Queues a bundle's summary and pointers into an OpenCode session, and remembers the send so
+/// it can be undone (`scrawl router undo`).
 pub fn send_bundle_to_session(bundle_dir: &Path, session: &str) -> Result<()> {
+    let posted = send_bundle(bundle_dir, session)?;
+    let app = load_bundle(bundle_dir)
+        .ok()
+        .and_then(|(_, bundle)| bundle.target.app);
+    crate::routing::undo::remember(
+        session,
+        None,
+        &posted,
+        crate::routing::undo::Origin {
+            kind: "capture".into(),
+            bundle: resolve_bundle_dir(bundle_dir).ok(),
+            app,
+            ..Default::default()
+        },
+    );
+    Ok(())
+}
+
+/// What OpenCode said about a prompt it took.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Posted {
+    /// The inbox item's ID, which the message keeps once delivered (`msg_…`).
+    pub message_id: Option<String>,
+    /// `steer` or `queue`.
+    pub delivery: String,
+    /// Whether the session was idle just before (unknown when the check failed).
+    pub was_idle: Option<bool>,
+}
+
+/// How long the idle check before a send may take.
+const IDLE_CHECK: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// Whether `session` has no foreground drain running (`GET /api/session/active`).
+fn session_idle(session: &str) -> Option<bool> {
+    let body = api_get_within("/api/session/active", IDLE_CHECK).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&body).ok()?;
+    let active = value.get("data").unwrap_or(&value).as_object()?;
+    Some(!active.contains_key(session))
+}
+
+/// The inbox item's ID in `POST /api/session/:id/prompt`'s answer (`{"data": {"id"}}`).
+pub fn posted_id(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let id = value.get("data").unwrap_or(&value).get("id")?.as_str()?;
+    id.starts_with("msg_").then(|| id.to_owned())
+}
+
+fn post_prompt(session: &str, mut body: serde_json::Value) -> Result<Posted> {
+    let delivery = delivery_mode();
+    body["delivery"] = serde_json::json!(delivery);
+    let was_idle = session_idle(session);
+    let answer = opencode_api(
+        "post",
+        &format!("/api/session/{session}/prompt"),
+        Some(&body),
+    )?;
+    Ok(Posted {
+        message_id: posted_id(&answer),
+        delivery: delivery.to_owned(),
+        was_idle,
+    })
+}
+
+/// [`send_bundle_to_session`] without remembering it.
+pub fn send_bundle(bundle_dir: &Path, session: &str) -> Result<Posted> {
     let (directory, bundle) = load_bundle(bundle_dir)?;
     let summary = crate::sketch::summary_markdown(&bundle, &directory);
     ensure!(
@@ -1715,20 +2032,30 @@ pub fn send_bundle_to_session(bundle_dir: &Path, session: &str) -> Result<()> {
     );
     // The server reads `file://` attachments from its own disk; the bundle is at the same path
     // there (copied above when the agents run on another Mac).
-    opencode_api(
-        "post",
-        &format!("/api/session/{session}/prompt"),
-        Some(&serde_json::json!({
+    post_prompt(
+        session,
+        serde_json::json!({
             "text": text,
             "files": [{
                 "uri": file_uri(&contact_sheet),
                 "name": "contact-sheet.png",
                 "description": "Scrawl contact sheet: the capture's keyframes in order",
             }],
-            "delivery": "queue",
-        })),
-    )?;
-    Ok(())
+        }),
+    )
+}
+
+/// Sends `text` into an OpenCode session as a prompt (`scrawl router deliver`), steering or
+/// queueing per `delivery_mode`.
+pub fn send_text_to_session(session: &str, text: &str) -> Result<Posted> {
+    ensure!(
+        session.starts_with("ses")
+            && session
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
+        "Invalid OpenCode session ID"
+    );
+    post_prompt(session, serde_json::json!({ "text": text }))
 }
 
 /// A `file://` URL for an absolute path, percent-encoding everything but unreserved
@@ -1899,6 +2226,16 @@ fn existing_keyframes(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn opencode_api_statuses_survive_the_cli() {
+        assert_eq!(super::cli_status("HTTP 409 Conflict\n"), Some(409));
+        assert_eq!(super::cli_status("warn: x\nHTTP 404 Not Found"), Some(404));
+        assert_eq!(super::cli_status("error: connect ECONNREFUSED"), None);
+        let err = anyhow::Error::new(super::HttpStatus(404)).context("OpenCode API failed");
+        assert_eq!(super::http_status(&err), Some(404));
+        assert_eq!(super::http_status(&anyhow::anyhow!("down")), None);
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -2160,6 +2497,36 @@ mod tests {
         let config = load_config_from(&path);
         assert_eq!(config.transcriber.as_deref(), Some("command"));
         assert_eq!(config.auto_send, Some(false));
+    }
+
+    #[test]
+    fn captures_steer_unless_delivery_says_queue() {
+        use serde_json::json;
+        assert_eq!(delivery_mode_of(None), "steer");
+        assert_eq!(delivery_mode_of(Some(&json!("steer"))), "steer");
+        assert_eq!(delivery_mode_of(Some(&json!("queue"))), "queue");
+        assert_eq!(delivery_mode_of(Some(&json!("later"))), "steer");
+        assert_eq!(delivery_mode_of(Some(&json!(true))), "steer");
+        let config: Config = serde_json::from_str(r#"{"delivery": 3, "autoSend": false}"#).unwrap();
+        assert_eq!(config.auto_send, Some(false), "a bad delivery keeps the other keys");
+    }
+
+    #[test]
+    fn a_bad_routing_key_drops_only_itself() {
+        let config: Config = serde_json::from_str(
+            r#"{"routing": {"autoSend": "never", "undoWindowSec": "15",
+                "sites": {"https://a.example": "~/a", "https://b.example": 3}}}"#,
+        )
+        .unwrap();
+        let routing = config.routing.unwrap();
+        assert_eq!(routing.auto_send, Some(serde_json::json!("never")));
+        assert_eq!(routing.undo_window_sec, None);
+        assert_eq!(
+            routing.sites.into_iter().collect::<Vec<_>>(),
+            vec![("https://a.example".to_owned(), "~/a".to_owned())]
+        );
+        let config: Config = serde_json::from_str(r#"{"routing": 3, "autoSend": false}"#).unwrap();
+        assert_eq!((config.routing, config.auto_send), (None, Some(false)));
     }
 
     #[test]

@@ -105,9 +105,17 @@ impl Clue {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Source {
+    /// A session named at the start of what was said ("tell scrawl …"; `named`). Obeyed ahead
+    /// of everything but an address.
+    Named,
     /// A `routing.sites` rule covering the tab's URL. Obeyed ahead of weighing when it finds a
     /// session.
     Rule,
+    /// A `routing.apps` rule covering the captured app (Jev routing). Obeyed like a site rule.
+    AppRule,
+    /// The git working tree the captured app's executable runs from (Jev routing): a dev build
+    /// names its project like a localhost port does.
+    DevBuild,
     /// The tab registered through `/sdk.js`.
     Page,
     /// The process serving the tab's port on this Mac.
@@ -142,7 +150,10 @@ impl Source {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Named => "named",
             Self::Rule => "rule",
+            Self::AppRule => "app-rule",
+            Self::DevBuild => "dev-build",
             Self::Page => "page",
             Self::Port => "port",
             Self::Publisher => "publisher",
@@ -158,7 +169,13 @@ impl Source {
     /// Full points for a clue of this source that names a candidate.
     fn points(self) -> u32 {
         match self {
-            Self::Rule | Self::Page | Self::Port | Self::Publisher => 95,
+            Self::Named => 100,
+            Self::Rule
+            | Self::AppRule
+            | Self::DevBuild
+            | Self::Page
+            | Self::Port
+            | Self::Publisher => 95,
             Self::Terminal => 70,
             Self::Viewed => 60,
             Self::App => 50,
@@ -318,7 +335,7 @@ pub struct Judgement {
     pub ranking: Vec<Scored>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Decision {
     /// `instead`: runners-up the undo window offers one click away.
@@ -332,7 +349,7 @@ pub enum Decision {
     Keep { reason: String },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scored {
     pub candidate: Candidate,
@@ -340,7 +357,7 @@ pub struct Scored {
     pub reasons: Vec<Reason>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Reason {
     pub basis: Basis,
@@ -352,13 +369,17 @@ pub struct Reason {
 }
 
 /// What a reason rests on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "source")]
 pub enum Basis {
     Chosen,
     Recorded,
     Clue(Source),
     Recent,
+    /// Jev's pick (`jev`).
+    Jev,
+    /// HOME, where captures go when Jev can't tell.
+    JevHome,
 }
 
 impl Basis {
@@ -368,6 +389,8 @@ impl Basis {
             Self::Recorded => "recorded",
             Self::Clue(source) => source.label(),
             Self::Recent => "recent",
+            Self::Jev => "jev",
+            Self::JevHome => "jev-home",
         }
     }
 }
@@ -382,7 +405,7 @@ impl Scored {
     }
 
     /// The reason that gave the most points (the first on a tie), which names how it was found.
-    fn lead(&self) -> Option<&Reason> {
+    pub(crate) fn lead(&self) -> Option<&Reason> {
         self.reasons
             .iter()
             .filter(|r| r.basis != Basis::Recent)
@@ -405,8 +428,13 @@ pub fn decide(evidence: &Evidence, policy: Policy) -> Judgement {
             ranking: vec![to],
         };
     }
-    if let Some(judgement) = ruled(evidence) {
+    if let Some(judgement) = ruled(evidence, Source::Named) {
         return judgement;
+    }
+    for source in [Source::Rule, Source::AppRule, Source::DevBuild] {
+        if let Some(judgement) = ruled(evidence, source) {
+            return judgement;
+        }
     }
     match policy {
         Policy::Ladder => ladder(evidence),
@@ -433,10 +461,12 @@ fn addressed(evidence: &Evidence, address: &Address) -> Scored {
     }
 }
 
-/// The session a `routing.sites` rule names, or the newest in its folder (any folder of the
-/// folder's repository counts), sent to without weighing. `None` when it names none open.
-fn ruled(evidence: &Evidence) -> Option<Judgement> {
-    let clue = evidence.clues.iter().find(|c| c.source == Source::Rule)?;
+/// The session a named address, a `routing.sites` or `routing.apps` rule, or a dev build
+/// (`source`) names, or the newest in its
+/// folder (any folder of the folder's repository counts), sent to without weighing. `None` when
+/// it names none open.
+fn ruled(evidence: &Evidence, source: Source) -> Option<Judgement> {
+    let clue = evidence.clues.iter().find(|c| c.source == source)?;
     let candidate = match &clue.pointer {
         Pointer::Session { id, .. } => find(&evidence.candidates, id).unwrap_or_else(|| bare(id)),
         // Sessions in the folder named come before the rest of its project.
@@ -462,7 +492,7 @@ fn ruled(evidence: &Evidence) -> Option<Judgement> {
         candidate,
         score: clue.full(),
         reasons: vec![Reason {
-            basis: Basis::Clue(Source::Rule),
+            basis: Basis::Clue(source),
             points: clue.full(),
             why: clue.note.clone(),
             directory: clue.directory(),
@@ -980,6 +1010,8 @@ pub fn destination_of(to: &Scored, url: Option<&str>) -> Destination {
         Some(Basis::Chosen) => "chosen",
         Some(Basis::Recorded) => "recorded",
         Some(Basis::Clue(source)) => source.via(),
+        Some(Basis::Jev) => "jev",
+        Some(Basis::JevHome) => "jev-home",
         Some(Basis::Recent) | None => "weighed",
     };
     Destination {
@@ -1261,6 +1293,32 @@ mod tests {
         e.clues[0] = folder(Source::Rule, "/p/scrawl");
         e.address = Some(Address::Chosen("ses_ios".into()));
         assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_ios"));
+    }
+
+    #[test]
+    fn app_rules_and_dev_builds_send_ahead_of_weighing() {
+        for (source, via) in [
+            (Source::AppRule, "app-rule"),
+            (Source::DevBuild, "dev-build"),
+        ] {
+            let mut e = ev(vec![
+                folder(source, "/p/scrawl"),
+                said(Source::Title, "OpenCode Console · Problems"),
+            ]);
+            let j = decide(&e, Policy::Weigh);
+            assert_eq!(sent_to(&j), Some("ses_scrawl"), "{source:?}");
+            let Decision::Send { to, .. } = &j.decision else {
+                unreachable!()
+            };
+            assert_eq!(destination_of(to, None).via, via);
+            assert!(crate::routing::policy::obeyed(to));
+            // A site rule comes first.
+            e.clues.push(named(Source::Rule, "ses_pinned"));
+            assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_pinned"));
+        }
+        // An app rule's session ID is obeyed as is.
+        let e = ev(vec![named(Source::AppRule, "ses_pinned")]);
+        assert_eq!(sent_to(&decide(&e, Policy::Weigh)), Some("ses_pinned"));
     }
 
     #[test]

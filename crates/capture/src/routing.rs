@@ -10,11 +10,16 @@
 //! A `routing.sites` rule covering the tab's URL comes first ([`site_rule`]).
 //!
 //! With `"experiments": {"smartRouting": true}`, [`smart`] decides instead, from clues
-//! [`look`] gathers (`docs/routing.md`).
+//! [`look`] gathers (`docs/routing.md`); with `jevRouting` too, [`jev`] weighs them instead.
 
+pub mod jev;
 pub mod look;
+pub mod named;
+pub mod policy;
+pub mod router;
 pub mod served;
 pub mod smart;
+pub mod undo;
 
 /// The experiment that routes Mac captures with [`smart`] (`handoff::experiment`).
 pub const SMART_ROUTING: &str = "smartRouting";
@@ -586,9 +591,16 @@ pub fn route_capture_with_config(
 pub fn look_capture(
     front_bundle_id: Option<&str>,
     target_bundle_id: Option<&str>,
+    app_pid: Option<i32>,
 ) -> Option<look::Live> {
-    routing_enabled()
-        .then(|| look::look_live(front_bundle_id, target_bundle_id, &look::Senses::default()))
+    routing_enabled().then(|| {
+        look::look_live(
+            front_bundle_id,
+            target_bundle_id,
+            app_pid,
+            &look::Senses::default(),
+        )
+    })
 }
 
 /// Smart routing's second half, once the bundle is built: decides, saves the evidence beside
@@ -604,7 +616,43 @@ pub fn judge_capture(
     }
     let evidence = look::evidence_for(bundle, dir, live);
     let judgement = smart::decide(&evidence, smart::Policy::Weigh);
-    if let Err(err) = write_record(dir, &evidence, &judgement) {
+    let (judgement, jev) = if jev::enabled() {
+        let (judgement, record) = jev::judge(
+            &evidence,
+            judgement,
+            &jev::capture_state(bundle, url.as_deref()),
+            &jev::capture_asking(bundle, &evidence.candidates),
+            None,
+            &jev::Hooks::default(),
+            &jev::Thresholds::configured(),
+        );
+        let mut record = record;
+        let judgement = policy::suggest(
+            policy::AutoSend::configured(),
+            judgement,
+            &mut record,
+            &evidence.candidates,
+        );
+        scrawl_log(format!(
+            "routing (jev): {} · {}{}",
+            record.band.label(),
+            record.reason,
+            record
+                .ms
+                .map(|ms| format!(" · {ms} ms"))
+                .unwrap_or_default()
+        ));
+        jev::log_decision(
+            dir,
+            &judgement.decision,
+            &record,
+            bundle.target.app.as_deref(),
+        );
+        (judgement, Some(record))
+    } else {
+        (gate_smart(policy::AutoSend::configured(), judgement, &evidence.candidates), None)
+    };
+    if let Err(err) = write_record(dir, &evidence, &judgement, jev.as_ref()) {
         scrawl_log(format!("routing: couldn't save {RECORD}: {err:#}"));
     }
     let outcome = match &judgement.decision {
@@ -629,9 +677,28 @@ pub fn judge_capture(
     (judgement, url)
 }
 
+/// `routing.autoSend` over smart routing's own decision (Jev routing off): a weighed send that
+/// may not go on its own becomes an offer with it first.
+fn gate_smart(
+    mode: policy::AutoSend,
+    judgement: smart::Judgement,
+    candidates: &[smart::Candidate],
+) -> smart::Judgement {
+    let home = jev::home_session(candidates);
+    let (judgement, suggested) = policy::apply(mode, judgement, home.as_ref());
+    if suggested {
+        scrawl_log(format!(
+            "routing (smart): suggested, autoSend is {}",
+            mode.label()
+        ));
+    }
+    judgement
+}
+
 /// `scrawl route --explain`: what smart routing sees for a bundle and what it decides, beside
-/// what the ladder (smart routing off) does. Read-only.
-pub fn explain_bundle(bundle: &Path, url: Option<&str>) -> Result<String> {
+/// what the ladder (smart routing off) does, and what Jev said at capture time. `ask_jev` asks
+/// Jev again now (one call). Read-only.
+pub fn explain_bundle(bundle: &Path, url: Option<&str>, ask_jev: bool) -> Result<String> {
     use std::fmt::Write as _;
     let dir = crate::handoff::resolve_bundle_dir(bundle)?;
     let (_, loaded) = crate::handoff::load_bundle(&dir)?;
@@ -678,6 +745,30 @@ pub fn explain_bundle(bundle: &Path, url: Option<&str>) -> Result<String> {
         let _ = writeln!(out, "Warning   {error}");
     }
     out.push_str(&smart::explain(&evidence, &judgement));
+    if let Some(saved) = jev::read_record(&dir) {
+        let _ = writeln!(out, "At capture (saved)");
+        out.push_str(&jev::explain(&saved));
+    }
+    if ask_jev {
+        // The sessions' last messages as they were when the capture finished.
+        let (now, mut record) = jev::judge(
+            &evidence,
+            judgement.clone(),
+            &jev::capture_state(&loaded, evidence.url.as_deref()),
+            &jev::capture_asking(&loaded, &evidence.candidates),
+            Some(loaded.created_at_ms),
+            &jev::Hooks::default(),
+            &jev::Thresholds::configured(),
+        );
+        policy::suggest(
+            policy::AutoSend::configured(),
+            now,
+            &mut record,
+            &evidence.candidates,
+        );
+        let _ = writeln!(out, "Asked now");
+        out.push_str(&jev::explain(&record));
+    }
     let today = match tab.as_deref() {
         Some(tab) => {
             match route_with_sites(tab, &crate::handoff::routing_sites(), &Hooks::default()) {
@@ -699,10 +790,55 @@ pub fn write_record(
     dir: &Path,
     evidence: &smart::Evidence,
     judgement: &smart::Judgement,
+    jev: Option<&jev::Record>,
 ) -> Result<()> {
-    let body = serde_json::json!({ "evidence": evidence, "decision": judgement.decision });
+    let mut body = serde_json::json!({ "evidence": evidence, "decision": judgement.decision });
+    if let Some(jev) = jev {
+        body["jev"] = serde_json::to_value(jev)?;
+    }
     std::fs::write(dir.join(RECORD), serde_json::to_vec_pretty(&body)?)?;
     Ok(())
+}
+
+/// Counts Kit's pick of `session` for the capture in `dir` (a chip, or a send left to stand)
+/// toward a `routing.sites` or `routing.apps` rule, with Jev routing on. Once two agree, the
+/// rule to offer is saved in its `routing.json` as `offerRule` and returned.
+pub fn learn_capture(dir: &Path, session: &str) -> Option<policy::OfferRule> {
+    if !jev::enabled() {
+        return None;
+    }
+    let path = dir.join(RECORD);
+    let mut body: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+    if body.get("undone").is_some_and(|u| !u.is_null()) {
+        return None;
+    }
+    let evidence: smart::Evidence = serde_json::from_value(body.get("evidence")?.clone()).ok()?;
+    // A rule, port or dev build that sent it already says where it goes.
+    if let Some(smart::Decision::Send { to, .. }) = body
+        .get("decision")
+        .and_then(|d| serde_json::from_value(d.clone()).ok())
+        && to.candidate.id == session
+        && policy::obeyed(&to)
+    {
+        return None;
+    }
+    let candidate = evidence.candidates.iter().find(|c| c.id == session)?;
+    let folder = policy::rule_folder(candidate)?;
+    let bundle_id = crate::handoff::load_bundle(dir)
+        .ok()
+        .and_then(|(_, bundle)| bundle.target.bundle_id);
+    let (counted, offer) =
+        policy::learn_pick(evidence.url.as_deref(), bundle_id.as_deref(), &folder);
+    let counted = counted?;
+    // Kept so an undo of the send can take the pick back (`undo`).
+    body["learned"] = serde_json::to_value(&counted).ok()?;
+    if let Some(offer) = &offer {
+        body["offerRule"] = serde_json::to_value(offer).ok()?;
+    }
+    if let Ok(bytes) = serde_json::to_vec_pretty(&body) {
+        let _ = std::fs::write(&path, bytes);
+    }
+    offer
 }
 
 pub fn read_record(dir: &Path) -> Option<smart::Evidence> {
@@ -725,6 +861,61 @@ pub fn record_destination(dir: &Path, bundle: &mut ScrawlBundle, dest: Destinati
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autosend_gates_smart_routings_weighed_sends_with_jev_off() {
+        let scored = |id: &str, basis: smart::Basis| smart::Scored {
+            candidate: smart::Candidate {
+                id: id.into(),
+                title: id.to_uppercase(),
+                directory: Some(PathBuf::from(format!("/tmp/{id}"))),
+                repo: None,
+                updated_ms: 0,
+                viewed_ms: None,
+            },
+            score: 60,
+            reasons: vec![smart::Reason {
+                basis,
+                points: 60,
+                why: String::new(),
+                directory: None,
+            }],
+        };
+        let send = |to: smart::Scored| smart::Judgement {
+            decision: smart::Decision::Send {
+                to: to.clone(),
+                instead: vec![],
+            },
+            ranking: vec![to],
+        };
+        let weighed = scored("ses_viewed", smart::Basis::Clue(smart::Source::Viewed));
+        let ruled = scored("ses_rule", smart::Basis::Clue(smart::Source::Rule));
+        let candidates = [weighed.candidate.clone(), ruled.candidate.clone()];
+        let offered = |j: &smart::Judgement| matches!(j.decision, smart::Decision::Offer { .. });
+        for mode in [policy::AutoSend::Rules, policy::AutoSend::Never] {
+            let gated = gate_smart(mode, send(weighed.clone()), &candidates);
+            assert!(offered(&gated), "{mode:?}: a weighed send asks");
+            let smart::Decision::Offer { choices } = &gated.decision else {
+                unreachable!()
+            };
+            assert_eq!(choices[0].candidate.id, "ses_viewed", "the pick comes first");
+        }
+        assert!(!offered(&gate_smart(
+            policy::AutoSend::Confident,
+            send(weighed),
+            &candidates
+        )));
+        assert!(!offered(&gate_smart(
+            policy::AutoSend::Rules,
+            send(ruled.clone()),
+            &candidates
+        )));
+        assert!(offered(&gate_smart(
+            policy::AutoSend::Never,
+            send(ruled),
+            &candidates
+        )));
+    }
 
     fn session(id: &str, dir: &str, updated: u64) -> OpenCodeSession {
         crate::handoff::fake_api::session(id, &id.to_uppercase(), dir, updated)

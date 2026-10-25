@@ -18,6 +18,8 @@ use crate::log::scrawl_log;
 pub const PENDING: &str = ".deliver.json";
 /// A bundle whose forward was given up on.
 pub const FAILED: &str = ".deliver-failed.json";
+/// A text prompt waiting in `scrawl router`'s outbox (a folder of its own, retried like a bundle).
+pub const PROMPT: &str = "prompt.json";
 
 const GIVE_UP_AFTER_MS: u64 = 24 * 60 * 60 * 1000;
 const SCAN_EVERY: Duration = Duration::from_secs(15);
@@ -148,10 +150,24 @@ pub fn deliver(
     key: Option<&str>,
     forward: Forward,
 ) -> Delivery {
+    deliver_by(dir, session, title, key, forward).0
+}
+
+/// [`deliver`] through any send, keeping what a successful one returned.
+pub fn deliver_by<T>(
+    dir: &Path,
+    session: &str,
+    title: &str,
+    key: Option<&str>,
+    forward: impl FnOnce(&Path, &str) -> Result<T>,
+) -> (Delivery, Option<T>) {
     match forward(dir, session) {
-        Ok(()) => Delivery::Sent {
-            title: title.to_owned(),
-        },
+        Ok(sent) => (
+            Delivery::Sent {
+                title: title.to_owned(),
+            },
+            Some(sent),
+        ),
         Err(err) => {
             let error = format!("{err:#}");
             scrawl_log(format!(
@@ -161,10 +177,13 @@ pub fn deliver(
             if let Err(err) = pending.write(dir) {
                 scrawl_log(format!("deliver: {err:#}"));
             }
-            Delivery::Queued {
-                title: title.to_owned(),
-                error,
-            }
+            (
+                Delivery::Queued {
+                    title: title.to_owned(),
+                    error,
+                },
+                None,
+            )
         }
     }
 }
@@ -185,7 +204,10 @@ pub fn retry_due(captures: &Path, now: u64, forward: Forward) -> Report {
     };
     let mut bundles: Vec<PathBuf> = entries
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|ext| ext == "scrawl") && p.join(PENDING).is_file())
+        .filter(|p| {
+            (p.extension().is_some_and(|ext| ext == "scrawl") || p.join(PROMPT).is_file())
+                && p.join(PENDING).is_file()
+        })
         .collect();
     bundles.sort();
     for dir in bundles {

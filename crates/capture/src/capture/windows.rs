@@ -272,6 +272,11 @@ pub fn frontmost_external_pid() -> Option<i32> {
     external_front_window().map(|w| w.pid as i32)
 }
 
+/// The executable a running process was started from; not read on Windows yet.
+pub fn process_executable(_pid: i32) -> Option<std::path::PathBuf> {
+    None
+}
+
 /// The frontmost app (pid, name, executable as its identifier), or the last one before Scrawl.
 pub fn frontmost_app_info() -> Option<(i32, String, Option<String>)> {
     let front = external_front_window()?;

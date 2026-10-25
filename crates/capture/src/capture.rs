@@ -319,6 +319,7 @@ impl Start {
 pub struct RouteContext {
     pub front_bundle_id: Option<String>,
     pub captured_bundle_id: Option<String>,
+    pub app_pid: Option<i32>,
 }
 
 #[derive(Clone, Debug)]
@@ -2714,13 +2715,21 @@ impl Capture {
         if !self.is_screen() {
             return RouteContext::default();
         }
-        let front_bundle_id = (self.target.mode != CaptureMode::Window)
+        let front_app = (self.target.mode != CaptureMode::Window)
             .then(frontmost_app_info)
-            .flatten()
-            .and_then(|(_, _, id)| id);
+            .flatten();
+        let app_pid = match (&front_app, self.target.window_id) {
+            (Some((pid, ..)), _) => Some(*pid),
+            (None, Some(window)) if crate::routing::jev::enabled() => crate::windows::raw_windows()
+                .into_iter()
+                .find(|w| w.id == window)
+                .map(|w| w.pid),
+            _ => None,
+        };
         RouteContext {
-            front_bundle_id,
+            front_bundle_id: front_app.and_then(|(_, _, id)| id),
             captured_bundle_id: self.target.bundle_id.clone(),
+            app_pid,
         }
     }
 
