@@ -56,18 +56,34 @@ pub struct SpeechModelLine {
     pub error: Option<String>,
 }
 
+type InstallSpeechFn = fn(&mut dyn FnMut(SpeechModelLine)) -> Result<()>;
+type TranscribeSpeechFn = fn(&Path) -> Result<TranscriptData>;
+
+static SPEECH_HOOKS: std::sync::OnceLock<(InstallSpeechFn, TranscribeSpeechFn)> =
+    std::sync::OnceLock::new();
+
+pub fn register_speech_hooks(install: InstallSpeechFn, transcribe: TranscribeSpeechFn) {
+    let _ = SPEECH_HOOKS.set((install, transcribe));
+}
+
 /// Windows transcribes with Parakeet (`win::speech`): Hex's installed model, else Scrawl's own
 /// copy, downloaded and checked here.
 pub fn install_speech_model(
     _stop: &dyn Fn() -> bool,
-    line: impl FnMut(SpeechModelLine),
+    mut line: impl FnMut(SpeechModelLine),
 ) -> Result<()> {
-    crate::win::speech::install(line)
+    let Some((install, _)) = SPEECH_HOOKS.get() else {
+        bail!("Windows Parakeet speech model installer is not registered");
+    };
+    install(&mut line)
 }
 
 /// On-device transcription with measured word timings (Parakeet through `transcribe.cpp`).
 pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
-    crate::win::speech::transcribe(audio)
+    let Some((_, transcribe_fn)) = SPEECH_HOOKS.get() else {
+        bail!("Windows Parakeet transcriber is not registered");
+    };
+    transcribe_fn(audio)
 }
 
 #[derive(Debug, Deserialize)]

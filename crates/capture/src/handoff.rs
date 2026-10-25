@@ -777,8 +777,6 @@ fn config() -> EngineConfig {
     engine_config()
 }
 
-pub use crate::app_config::{native_pill, pill_style, rune_ui, rune_ui_from, video_export};
-
 fn random_bytes_32() -> Result<[u8; 32]> {
     let mut bytes = [0_u8; 32];
     #[cfg(windows)]
@@ -2191,16 +2189,6 @@ mod tests {
     }
 
     #[test]
-    fn video_export_flag_defaults_off() {
-        let fixture = Fixture::new();
-        let path = fixture.0.join("config.json");
-        fs::write(&path, br#"{"autoSend":false}"#).unwrap();
-        assert_eq!(crate::app_config::load_from(&path).video_export, None);
-        fs::write(&path, br#"{"videoExport":true}"#).unwrap();
-        assert_eq!(crate::app_config::load_from(&path).video_export, Some(true));
-    }
-
-    #[test]
     fn sessions_read_their_directory_from_v2_location_or_v1_field() {
         let v2: OpenCodeSession = serde_json::from_str(
             r#"{"id":"ses_a","title":"A","time":{"updated":1},"location":{"directory":"/p/a"}}"#,
@@ -2270,12 +2258,8 @@ mod tests {
         )
         .unwrap();
         let cfg = load_config_from(&path);
-        let app_cfg = crate::app_config::load_from(&path);
         assert_eq!(cfg.agent_host.as_deref(), Some("studio"));
-        assert_eq!(app_cfg.video_export, Some(true));
-        assert_eq!(app_cfg.pill_style.as_deref(), Some("glass"));
         assert_eq!(cfg.auto_send, None);
-        assert_eq!(app_cfg.native_pill, None);
         assert!(cfg.usb_apps.is_empty());
         // Both spellings of one field: one is kept rather than neither.
         fs::write(
@@ -2454,24 +2438,6 @@ mod tests {
         assert!(format!("{err:#}").contains("didn't answer"), "{err:#}");
         assert!(started.elapsed() < Duration::from_secs(1));
         let _ = server.join();
-    }
-
-    #[test]
-    fn rune_ui_selector_defaults_to_gpui_and_respects_config_or_env() {
-        let fixture = Fixture::new();
-        let path = fixture.0.join("config.json");
-        let default_cfg = crate::app_config::load_from(&path);
-        assert!(!rune_ui_from(None, &default_cfg));
-        assert!(rune_ui_from(Some("rune"), &default_cfg));
-        assert!(rune_ui_from(Some(" RUNE "), &default_cfg));
-        assert!(!rune_ui_from(Some("gpui"), &default_cfg));
-
-        fs::write(&path, br#"{"ui":"rune","autoSend":false}"#).unwrap();
-        let rune_cfg = crate::app_config::load_from(&path);
-        assert_eq!(rune_cfg.ui.as_deref(), Some("rune"));
-        assert!(rune_ui_from(None, &rune_cfg));
-        assert!(rune_ui_from(Some(""), &rune_cfg));
-        assert!(!rune_ui_from(Some("gpui"), &rune_cfg));
     }
 }
 

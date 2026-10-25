@@ -1250,13 +1250,13 @@ mod tests {
         assert!(missing_to_record(Some(&grants(&ALL)), true, true).is_empty());
         // Nothing in Scrawl or its helper asks macOS for it.
         let sources = [
-            include_str!("capture.rs"),
-            include_str!("capture/macos.rs"),
+            include_str!("../crates/capture/src/capture.rs"),
+            include_str!("../crates/capture/src/capture/macos.rs"),
             include_str!("ui/macos.rs"),
             include_str!("onboarding.rs"),
             include_str!("settings.rs"),
             include_str!("ui.rs"),
-            include_str!("../helper/Permissions.swift"),
+            include_str!("../crates/capture/helper/Permissions.swift"),
             include_str!("../helper-ui/Onboarding.swift"),
             include_str!("../helper-ui/Settings.swift"),
             include_str!("../helper-ui/PermissionPanel.swift"),

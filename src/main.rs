@@ -572,6 +572,8 @@ enum Command {
 const SKILL: &str = include_str!("../skills/scrawl/SKILL.md");
 
 fn main() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    win::speech::register();
     if std::env::var_os("SCRAWL_BENCH_START").is_some() {
         ui::run_start_benchmark();
         return Ok(());

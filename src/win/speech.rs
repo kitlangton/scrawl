@@ -102,6 +102,11 @@ fn model_name(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// Registers Parakeet transcription and model installation with `scrawl-capture`'s Windows helper.
+pub fn register() {
+    crate::helper::register_speech_hooks(|line| install(line), transcribe);
+}
+
 pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
     let Some(path) = installed_models().into_iter().next() else {
         // The background download hasn't finished (or failed): the bundle is transcribed again

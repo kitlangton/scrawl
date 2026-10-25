@@ -605,7 +605,7 @@ pub fn layout_default_keycode(kind: ShortcutKind) -> u16 {
 
 /// The key codes and Carbon modifiers `cfg` registers: itself, plus for a default its aliases
 /// (⌃⌥⇧, ⌘⌥⇧, ⌃⌥⌘) on the active layout's key and the ANSI one.
-pub(crate) fn hotkey_combos(kind: ShortcutKind, cfg: &ShortcutConfig) -> Vec<(u32, u32)> {
+pub fn hotkey_combos(kind: ShortcutKind, cfg: &ShortcutConfig) -> Vec<(u32, u32)> {
     if cfg.is_unset() {
         return Vec::new();
     }
@@ -2626,9 +2626,7 @@ impl Capture {
         }
     }
 
-    pub(crate) fn stop_raw_screen(
-        self,
-    ) -> Option<(ScreenRecording, Option<crate::audio::RecordedAudio>)> {
+    pub fn stop_raw_screen(self) -> Option<(ScreenRecording, Option<crate::audio::RecordedAudio>)> {
         let _ = self.telemetry.finish_session();
         let _ = self.telemetry.take_flags();
         match self.source {

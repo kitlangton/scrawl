@@ -91,3 +91,54 @@ pub fn pill_style() -> crate::native::pill::PillStyle {
         .and_then(crate::native::pill::PillStyle::from_str_opt)
         .unwrap_or(crate::native::pill::PillStyle::Black)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn video_export_flag_defaults_off_and_bad_settings_keep_others() {
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-app-config-{}",
+            crate::pipeline::make_bundle_id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        fs::write(&path, br#"{"autoSend":false}"#).unwrap();
+        assert_eq!(load_from(&path).video_export, None);
+        fs::write(
+            &path,
+            r#"{"videoExport": true, "nativePill": 3, "pillStyle": "glass"}"#,
+        )
+        .unwrap();
+        let app_cfg = load_from(&path);
+        assert_eq!(app_cfg.video_export, Some(true));
+        assert_eq!(app_cfg.pill_style.as_deref(), Some("glass"));
+        assert_eq!(app_cfg.native_pill, None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rune_ui_selector_defaults_to_gpui_and_respects_config_or_env() {
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-rune-ui-{}",
+            crate::pipeline::make_bundle_id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        let default_cfg = load_from(&path);
+        assert!(!rune_ui_from(None, &default_cfg));
+        assert!(rune_ui_from(Some("rune"), &default_cfg));
+        assert!(rune_ui_from(Some(" RUNE "), &default_cfg));
+        assert!(!rune_ui_from(Some("gpui"), &default_cfg));
+
+        fs::write(&path, br#"{"ui":"rune","autoSend":false}"#).unwrap();
+        let rune_cfg = load_from(&path);
+        assert_eq!(rune_cfg.ui.as_deref(), Some("rune"));
+        assert!(rune_ui_from(None, &rune_cfg));
+        assert!(rune_ui_from(Some(""), &rune_cfg));
+        assert!(!rune_ui_from(Some("gpui"), &rune_cfg));
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

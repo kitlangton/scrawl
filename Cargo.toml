@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/capture"]
+
 [package]
 name = "scrawl"
 version = "0.3.13"
@@ -6,8 +9,14 @@ default-run = "scrawl"
 license = "MIT"
 
 [features]
-default = ["hex-client"]
-hex-client = []
+default = ["screen", "helper", "input", "mic", "phone", "hex-client", "cli"]
+screen = ["scrawl-capture/screen"]
+helper = ["scrawl-capture/helper"]
+input = ["scrawl-capture/input"]
+mic = ["scrawl-capture/mic"]
+phone = ["scrawl-capture/phone"]
+hex-client = ["scrawl-capture/hex-client"]
+cli = ["scrawl-capture/cli"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -18,6 +27,7 @@ flume = "0.12.0"
 hound = "3.5.1"
 libc = "0.2.189"
 png = "0.18.1"
+scrawl-capture = { path = "crates/capture", default-features = false, features = ["screen", "helper", "input", "mic", "phone"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 

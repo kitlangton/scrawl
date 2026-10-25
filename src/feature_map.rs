@@ -28,7 +28,11 @@ fn sources() -> Vec<(PathBuf, String)> {
         }
     }
     let mut files = Vec::new();
-    walk(&repo().join("src"), &mut files);
+    for dir in [repo().join("src"), repo().join("crates/capture/src")] {
+        if dir.is_dir() {
+            walk(&dir, &mut files);
+        }
+    }
     files.sort();
     files
         .into_iter()

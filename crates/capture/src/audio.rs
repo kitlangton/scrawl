@@ -1,7 +1,10 @@
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result, anyhow, bail, ensure};
+#[cfg(feature = "mic")]
+use anyhow::Context;
+use anyhow::{Result, anyhow, bail, ensure};
+#[cfg(feature = "mic")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 const SAMPLE_RATE: u32 = 16_000;
@@ -164,6 +167,12 @@ pub struct AudioRecorder {
 }
 
 impl AudioRecorder {
+    #[cfg(not(feature = "mic"))]
+    pub fn start() -> Result<Self> {
+        bail!("Built-in microphone recording requires the `mic` feature")
+    }
+
+    #[cfg(feature = "mic")]
     pub fn start() -> Result<Self> {
         let started = std::time::Instant::now();
         let samples = Arc::new(Mutex::new(Vec::new()));
@@ -204,6 +213,7 @@ impl AudioRecorder {
 
     /// The chosen microphone (`mic`), else the macOS default. A chosen device that is missing or
     /// won't open never stops the recording.
+    #[cfg(feature = "mic")]
     fn open_stream(
         samples: Arc<Mutex<Vec<f32>>>,
         error: Arc<Mutex<Option<String>>>,
@@ -253,6 +263,7 @@ impl AudioRecorder {
         Ok(stream)
     }
 
+    #[cfg(feature = "mic")]
     fn open_device(
         device: &cpal::Device,
         samples: Arc<Mutex<Vec<f32>>>,
@@ -348,10 +359,12 @@ impl Drop for AudioRecorder {
     }
 }
 
+#[cfg(feature = "mic")]
 fn device_name(device: &cpal::Device) -> Option<String> {
     Some(device.description().ok()?.name().to_owned())
 }
 
+#[cfg(feature = "mic")]
 fn input_stream<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,

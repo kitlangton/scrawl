@@ -113,6 +113,7 @@ pub fn save_in(path: &std::path::Path, id: &str, inputs: &Inputs) -> anyhow::Res
 }
 
 /// Enumerates input devices (CoreAudio, a few ms; never on the UI thread).
+#[cfg(feature = "mic")]
 pub fn inputs() -> Inputs {
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
@@ -135,7 +136,13 @@ pub fn inputs() -> Inputs {
     Inputs { devices, default }
 }
 
+#[cfg(not(feature = "mic"))]
+pub fn inputs() -> Inputs {
+    Inputs::default()
+}
+
 /// The cpal device for `id`, if connected.
+#[cfg(feature = "mic")]
 pub fn device(id: &str) -> Option<cpal::Device> {
     use cpal::traits::{DeviceTrait, HostTrait};
     cpal::default_host()

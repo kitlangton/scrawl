@@ -11,7 +11,6 @@ fn main() {
         return;
     }
     compile_laser_shader();
-    compile_helper();
     compile_ui_helper();
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     if let Ok(output) = Command::new("xcode-select").arg("-p").output()
@@ -160,55 +159,10 @@ fn compile_metal_shader(src_rel: &str, name: &str) {
     );
 }
 
-/// Builds `scrawl-helper` (Swift: SpeechAnalyzer, iPhone capture, movie decoding) beside the
-/// `scrawl` binary, where `helper::path` and `scripts/install-app.sh` look for it.
-fn compile_helper() {
-    let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let helper_dir = manifest_dir.join("helper");
-    println!("cargo:rerun-if-changed={}", helper_dir.display());
-    println!("cargo:rerun-if-env-changed=SCRAWL_HELPER_PLIST");
-    println!("cargo:rerun-if-env-changed=SCRAWL_HELPER_BUNDLE_ID");
-    println!("cargo:rerun-if-env-changed=SCRAWL_HELPER_NAME");
-    let mut sources: Vec<PathBuf> = std::fs::read_dir(&helper_dir)
-        .expect("helper/ is missing")
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|path| path.extension().is_some_and(|ext| ext == "swift"))
-        .collect();
-    sources.sort();
-    for source in &sources {
-        println!("cargo:rerun-if-changed={}", source.display());
-    }
-    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let default_plist = helper_dir.join("Info.plist");
-    println!("cargo:rerun-if-changed={}", default_plist.display());
-    let plist = if let Some(custom_plist) = std::env::var_os("SCRAWL_HELPER_PLIST") {
-        let p = PathBuf::from(custom_plist);
-        println!("cargo:rerun-if-changed={}", p.display());
-        p
-    } else if std::env::var_os("SCRAWL_HELPER_BUNDLE_ID").is_some()
-        || std::env::var_os("SCRAWL_HELPER_NAME").is_some()
-    {
-        let bundle_id = std::env::var("SCRAWL_HELPER_BUNDLE_ID")
-            .unwrap_or_else(|_| "dev.kitlangton.scrawl.helper".to_owned());
-        let name =
-            std::env::var("SCRAWL_HELPER_NAME").unwrap_or_else(|_| "Scrawl Helper".to_owned());
-        let template = std::fs::read_to_string(&default_plist).expect("read helper Info.plist");
-        let rendered = template
-            .replace("dev.kitlangton.scrawl.helper", &bundle_id)
-            .replace("Scrawl Helper", &name);
-        let generated = out_dir.join("scrawl-helper-Info.plist");
-        std::fs::write(&generated, rendered).expect("write generated helper Info.plist");
-        generated
-    } else {
-        default_plist
-    };
-    compile_swift_binary("scrawl-helper", &sources, &plist);
-}
-
 fn compile_ui_helper() {
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let ui_dir = manifest_dir.join("helper-ui");
-    let helper_dir = manifest_dir.join("helper");
+    let helper_dir = manifest_dir.join("crates/capture/helper");
     println!("cargo:rerun-if-changed={}", ui_dir.display());
     let mut sources: Vec<PathBuf> = std::fs::read_dir(&ui_dir)
         .expect("helper-ui/ is missing")
