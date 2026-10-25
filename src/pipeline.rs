@@ -284,6 +284,31 @@ pub fn finalize_capture_bundle(
     note: Option<String>,
     activity: windows::ActivityLog,
 ) -> Result<(PathBuf, ScrawlBundle, String)> {
+    finalize_capture_bundle_with(
+        bundle_dir,
+        target,
+        recording,
+        strokes,
+        events,
+        recorded_audio,
+        note,
+        activity,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn finalize_capture_bundle_with(
+    bundle_dir: &Path,
+    target: TargetInfo,
+    recording: capture::ScreenRecording,
+    strokes: Vec<Stroke>,
+    events: Vec<InteractionEvent>,
+    recorded_audio: Option<RecordedAudio>,
+    note: Option<String>,
+    activity: windows::ActivityLog,
+    transcriber: Option<&dyn transcribe::Transcriber>,
+) -> Result<(PathBuf, ScrawlBundle, String)> {
     let started_at = activity
         .stop_started
         .unwrap_or_else(std::time::Instant::now);
@@ -295,9 +320,13 @@ pub fn finalize_capture_bundle(
         video_offset_ms,
     } = recording;
     if let Some(ref audio) = recorded_audio {
-        let wav_path = bundle_dir.join("audio.wav");
-        let _ = std::fs::create_dir_all(bundle_dir);
-        let _ = std::fs::write(&wav_path, &audio.wav_bytes);
+        if let Ok(wav_bytes) = audio.wav_bytes_16k() {
+            if !wav_bytes.is_empty() {
+                let wav_path = bundle_dir.join("audio.wav");
+                let _ = std::fs::create_dir_all(bundle_dir);
+                let _ = std::fs::write(&wav_path, &*wav_bytes);
+            }
+        }
     }
     let wav_path = bundle_dir.join("audio.wav");
     let has_wav = wav_path.exists();
@@ -324,10 +353,17 @@ pub fn finalize_capture_bundle(
     let ((transcript, transcribe_ms), (predecoded, prepared)) = std::thread::scope(|scope| {
         let transcribe_handle = scope.spawn(|| {
             let t0 = std::time::Instant::now();
-            let tr = transcribe::transcribe(
-                has_wav.then_some(wav_path.as_path()),
-                recorded_audio.as_ref(),
-            );
+            let tr = match transcriber {
+                Some(transcriber) => transcribe::transcribe_with(
+                    has_wav.then_some(wav_path.as_path()),
+                    recorded_audio.as_ref(),
+                    transcriber,
+                ),
+                None => transcribe::transcribe(
+                    has_wav.then_some(wav_path.as_path()),
+                    recorded_audio.as_ref(),
+                ),
+            };
             (tr, t0.elapsed().as_millis() as u64)
         });
         let pre = if let Some(ref movie) = video_path

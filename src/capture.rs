@@ -659,6 +659,41 @@ impl Drop for ScreenCaptureSession {
 }
 
 /// Shared state collected by the global input monitor during an active capture session.
+/// Monotonic boot-time nanoseconds (`mach_absolute_time` scaled by `mach_timebase_info` on macOS,
+/// matching CoreAudio and CGEvent timestamps).
+pub fn boot_time_ns() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        #[repr(C)]
+        struct MachTimebaseInfo {
+            numer: u32,
+            denom: u32,
+        }
+        unsafe extern "C" {
+            fn mach_absolute_time() -> u64;
+            fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
+        }
+        static TIMEBASE: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+        let &(numer, denom) = TIMEBASE.get_or_init(|| {
+            let mut info = MachTimebaseInfo { numer: 0, denom: 0 };
+            let status = unsafe { mach_timebase_info(&mut info) };
+            if status == 0 && info.denom != 0 {
+                (info.numer, info.denom)
+            } else {
+                (1, 1)
+            }
+        });
+        let ticks = unsafe { mach_absolute_time() };
+        let nanos = u128::from(ticks) * u128::from(numer) / u128::from(denom);
+        u64::try_from(nanos).unwrap_or(u64::MAX)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as u64
+    }
+}
+
 pub struct SharedCaptureTelemetry {
     pub active: AtomicBool,
     pub selecting: AtomicBool,
@@ -670,6 +705,7 @@ pub struct SharedCaptureTelemetry {
     /// Settings is recording a new shortcut: none of Scrawl's fire (`pause_shortcuts`).
     pub shortcuts_paused: AtomicBool,
     pub started_at: Mutex<Instant>,
+    pub started_at_boot_ns: AtomicU64,
     pub picker_started_at: Mutex<Instant>,
     pub picker_rect: Mutex<Option<([f32; 4], u8)>>,
     pub target_frame: Mutex<TargetFrame>,
@@ -736,6 +772,7 @@ impl SharedCaptureTelemetry {
             paste_shortcut: Mutex::new(paste),
             shortcuts_paused: AtomicBool::new(false),
             started_at: Mutex::new(Instant::now()),
+            started_at_boot_ns: AtomicU64::new(boot_time_ns()),
             picker_started_at: Mutex::new(Instant::now()),
             picker_rect: Mutex::new(None),
             target_frame: Mutex::new(TargetFrame {
@@ -869,16 +906,30 @@ impl SharedCaptureTelemetry {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = rect;
     }
 
+    pub fn started_at_boot_ns(&self) -> u64 {
+        self.started_at_boot_ns.load(Ordering::Acquire)
+    }
+
     pub fn reset_for_session(&self, frame: TargetFrame) {
+        self.reset_for_session_at(frame, None);
+    }
+
+    pub fn reset_for_session_at(&self, frame: TargetFrame, t0_boot_ns: Option<u64>) {
         self.selecting.store(false, Ordering::Release);
         *self
             .picker_rect
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        let now_boot_ns = boot_time_ns();
+        let boot_ns = t0_boot_ns.unwrap_or(now_boot_ns);
+        self.started_at_boot_ns.store(boot_ns, Ordering::Release);
+        let started_instant = Instant::now()
+            .checked_sub(Duration::from_nanos(now_boot_ns.saturating_sub(boot_ns)))
+            .unwrap_or_else(Instant::now);
         *self
             .started_at
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Instant::now();
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = started_instant;
         *self
             .target_frame
             .lock()

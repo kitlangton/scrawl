@@ -131,11 +131,84 @@ pub fn spread_words(text: &str, start: u64, end: u64) -> (Vec<TranscriptSegment>
     (segments, words)
 }
 
+/// Builds sentence segments from word timings when a transcriber returns only `words`.
+pub fn segments_from_words(words: &[WordTiming]) -> Vec<TranscriptSegment> {
+    let mut segments = Vec::new();
+    let mut segment_start = 0;
+    for (index, word) in words.iter().enumerate() {
+        if ends_sentence(&word.text) || index + 1 == words.len() {
+            let phrase = &words[segment_start..=index];
+            segments.push(TranscriptSegment {
+                t0: phrase[0].t0,
+                t1: phrase[phrase.len() - 1].t1,
+                text: phrase
+                    .iter()
+                    .map(|w| w.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            });
+            segment_start = index + 1;
+        }
+    }
+    segments
+}
+
+/// Shifts word and segment timestamps by `start_offset_ms` onto the capture clock and populates
+/// `segments` from `words` when `segments` is empty.
+pub fn normalize_transcript(
+    mut transcript: TranscriptData,
+    start_offset_ms: u64,
+) -> TranscriptData {
+    if start_offset_ms > 0 {
+        for word in &mut transcript.words {
+            word.t0 = word.t0.saturating_add(start_offset_ms);
+            word.t1 = word.t1.saturating_add(start_offset_ms);
+        }
+        for segment in &mut transcript.segments {
+            segment.t0 = segment.t0.saturating_add(start_offset_ms);
+            segment.t1 = segment.t1.saturating_add(start_offset_ms);
+        }
+    }
+    if transcript.segments.is_empty() && !transcript.words.is_empty() {
+        transcript.segments = segments_from_words(&transcript.words);
+    }
+    transcript
+}
+
+fn with_temp_wav<T>(audio: &RecordedAudio, f: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
+    let wav = audio.wav_bytes_16k()?;
+    let path = std::env::temp_dir().join(format!(
+        "scrawl-transcribe-{}-{}.wav",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::write(&path, &*wav)?;
+    let out = f(&path);
+    let _ = std::fs::remove_file(&path);
+    out
+}
+
 /// Pluggable speech-to-text engine returning words with start/end times (`WordTiming`) and an
 /// `estimated` flag (`TranscriptData::estimated`: `false` for measured word times that can cut
 /// spoken-cue keyframes, `true` when word times are estimated across speech islands).
+///
+/// Word times (`t0`, `t1`) returned by [`Self::transcribe`] are milliseconds from
+/// `audio.samples[0]`; [`transcribe_with`] shifts them by `audio.start_offset_ms` onto the
+/// capture clock.
 pub trait Transcriber: Send + Sync {
-    fn transcribe(&self, wav_path: &Path, duration_ms: u64) -> Option<TranscriptData>;
+    fn transcribe(&self, audio: &RecordedAudio) -> Result<Option<TranscriptData>>;
+
+    fn transcribe_wav(&self, wav_path: &Path, duration_ms: u64) -> Result<Option<TranscriptData>> {
+        let bytes = std::fs::read(wav_path)?;
+        let mut audio = crate::audio::recorded_audio_from_wav(bytes)?;
+        if duration_ms > 0 {
+            audio.duration_ms = duration_ms;
+        }
+        self.transcribe(&audio)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -144,8 +217,12 @@ pub struct AppleTranscriber {
 }
 
 impl Transcriber for AppleTranscriber {
-    fn transcribe(&self, wav_path: &Path, _duration_ms: u64) -> Option<TranscriptData> {
-        Some(apple(wav_path))
+    fn transcribe(&self, audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
+        with_temp_wav(audio, |wav_path| Ok(Some(apple(wav_path))))
+    }
+
+    fn transcribe_wav(&self, wav_path: &Path, _duration_ms: u64) -> Result<Option<TranscriptData>> {
+        Ok(Some(apple(wav_path)))
     }
 }
 
@@ -155,7 +232,14 @@ pub struct CommandTranscriber {
 }
 
 impl Transcriber for CommandTranscriber {
-    fn transcribe(&self, wav_path: &Path, duration_ms: u64) -> Option<TranscriptData> {
+    fn transcribe(&self, audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
+        let duration_ms = audio
+            .total_duration_ms()
+            .saturating_sub(audio.start_offset_ms);
+        with_temp_wav(audio, |wav_path| self.transcribe_wav(wav_path, duration_ms))
+    }
+
+    fn transcribe_wav(&self, wav_path: &Path, duration_ms: u64) -> Result<Option<TranscriptData>> {
         let sample_count = (duration_ms.saturating_mul(16)) as usize;
         match crate::command_transcriber::transcribe(
             &self.program,
@@ -163,12 +247,12 @@ impl Transcriber for CommandTranscriber {
             sample_count,
             &mut |line| crate::log::scrawl_log(line),
         ) {
-            Ok(transcript) => Some(transcript),
+            Ok(transcript) => Ok(Some(transcript)),
             Err(error) => {
                 crate::log::scrawl_log(format!(
                     "Command transcription failed, using {LOCAL_ENGINE_TITLE}: {error:#}"
                 ));
-                None
+                Err(error.into())
             }
         }
     }
@@ -299,9 +383,13 @@ pub fn set_override(engine: Engine) {
     );
 }
 
+fn has_audio_samples(audio: &RecordedAudio) -> bool {
+    audio.sample_count > 0 || !audio.samples.is_empty()
+}
+
 /// Missing microphones and a failed transcriber never prevent saving a bundle.
 pub fn transcribe(wav: Option<&Path>, audio: Option<&RecordedAudio>) -> TranscriptData {
-    let (Some(wav), Some(audio)) = (wav, audio.filter(|audio| audio.sample_count > 0)) else {
+    let (Some(wav), Some(audio)) = (wav, audio.filter(|a| has_audio_samples(a))) else {
         return TranscriptData {
             source: "none".into(),
             ..Default::default()
@@ -309,7 +397,7 @@ pub fn transcribe(wav: Option<&Path>, audio: Option<&RecordedAudio>) -> Transcri
     };
     let live = audio.live.take();
     let engine = Engine::preferred();
-    run(
+    let transcript = run(
         engine,
         || match engine {
             Engine::Apple => Ok(None),
@@ -320,28 +408,47 @@ pub fn transcribe(wav: Option<&Path>, audio: Option<&RecordedAudio>) -> Transcri
             live.and_then(|live| finish_live(live, audio))
                 .unwrap_or_else(|| apple(wav))
         },
-    )
+    );
+    normalize_transcript(transcript, audio.start_offset_ms)
 }
 
-/// Transcribes `wav` using an explicit `Transcriber` implementation (such as a host app's own
-/// speech engine).
+/// Transcribes `audio` (or `wav` when only a WAV file on disk is available) using an explicit
+/// [`Transcriber`] implementation (such as a host app's own speech engine), without re-reading
+/// a WAV when `audio` is already in memory.
 pub fn transcribe_with(
     wav: Option<&Path>,
     audio: Option<&RecordedAudio>,
     transcriber: &dyn Transcriber,
 ) -> TranscriptData {
-    let (Some(wav), Some(audio)) = (wav, audio.filter(|audio| audio.sample_count > 0)) else {
+    if let Some(audio) = audio.filter(|a| has_audio_samples(a)) {
+        if let Some(live) = audio.live.take().and_then(|live| finish_live(live, audio)) {
+            return normalize_transcript(live, audio.start_offset_ms);
+        }
+        match transcriber.transcribe(audio) {
+            Ok(Some(transcript)) => return normalize_transcript(transcript, audio.start_offset_ms),
+            Ok(None) => {}
+            Err(error) => {
+                crate::log::scrawl_log(format!("Transcription failed: {error:#}"));
+            }
+        }
         return TranscriptData {
-            source: "none".into(),
-            ..Default::default()
-        };
-    };
-    transcriber
-        .transcribe(wav, audio.duration_ms)
-        .unwrap_or_else(|| TranscriptData {
             source: "offline".into(),
             ..Default::default()
-        })
+        };
+    }
+    if let Some(wav) = wav {
+        match transcriber.transcribe_wav(wav, 0) {
+            Ok(Some(transcript)) => return normalize_transcript(transcript, 0),
+            Ok(None) => {}
+            Err(error) => {
+                crate::log::scrawl_log(format!("Transcription failed: {error:#}"));
+            }
+        }
+    }
+    TranscriptData {
+        source: "none".into(),
+        ..Default::default()
+    }
 }
 
 /// The transcript made while recording, or `None` (logged) to transcribe the WAV instead.
@@ -570,5 +677,54 @@ mod tests {
     #[test]
     fn no_audio_is_none_without_asking_any_engine() {
         assert_eq!(transcribe(None, None).source, "none");
+    }
+
+    #[test]
+    fn in_memory_transcriber_shifts_words_and_builds_segments_without_reading_wav() {
+        struct InMemory;
+        impl Transcriber for InMemory {
+            fn transcribe(&self, audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
+                assert_eq!(audio.sample_rate, 16_000);
+                assert_eq!(audio.samples.len(), 160);
+                Ok(Some(TranscriptData {
+                    source: "hex".into(),
+                    model: Some("parakeet_v3".into()),
+                    text: "hello world.".into(),
+                    words: vec![
+                        WordTiming {
+                            t0: 10,
+                            t1: 50,
+                            text: "hello".into(),
+                        },
+                        WordTiming {
+                            t0: 60,
+                            t1: 100,
+                            text: "world.".into(),
+                        },
+                    ],
+                    ..Default::default()
+                }))
+            }
+        }
+
+        let audio = RecordedAudio::new(
+            vec![0.1; 160],
+            16_000,
+            250,
+            vec![crate::audio::GapSpan {
+                start_ms: 0,
+                end_ms: 250,
+            }],
+        );
+        let tr = transcribe_with(None, Some(&audio), &InMemory);
+        assert_eq!(tr.source, "hex");
+        assert_eq!(tr.words[0].t0, 260);
+        assert_eq!(tr.words[0].t1, 300);
+        assert_eq!(tr.words[1].t0, 310);
+        assert_eq!(tr.words[1].t1, 350);
+        assert_eq!(tr.segments.len(), 1);
+        assert_eq!(tr.segments[0].t0, 260);
+        assert_eq!(tr.segments[0].t1, 350);
+        assert_eq!(tr.segments[0].text, "hello world.");
     }
 }

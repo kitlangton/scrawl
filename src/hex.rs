@@ -423,19 +423,14 @@ pub struct HexTranscriber {
 }
 
 impl crate::transcribe::Transcriber for HexTranscriber {
-    fn transcribe(&self, wav_path: &Path, duration_ms: u64) -> Option<TranscriptData> {
-        let wav_bytes = std::fs::read(wav_path).ok()?;
-        let audio = RecordedAudio {
-            wav_bytes,
-            duration_ms,
-            sample_count: (duration_ms.saturating_mul(SAMPLE_RATE_KHZ)) as usize,
-            live: crate::live_transcribe::Slot::default(),
+    fn transcribe(&self, audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
+        let client = Client::connect()?;
+        let models = client.models()?;
+        let Some(model) = pick_model(&models, self.model.as_deref()) else {
+            return Ok(None);
         };
-        let client = Client::connect().ok()?;
-        let models = client.models().ok()?;
-        let model = pick_model(&models, self.model.as_deref())?;
         let language = self.language.as_deref().unwrap_or(DEFAULT_LANGUAGE);
-        transcribe_audio(&client, &model, language, &audio).ok()
+        Ok(Some(transcribe_audio(&client, &model, language, audio)?))
     }
 }
 
@@ -500,7 +495,7 @@ pub fn transcribe_audio(
     language: &str,
     audio: &RecordedAudio,
 ) -> Result<TranscriptData> {
-    let samples = audio::decode_wav_16k(&audio.wav_bytes)?;
+    let samples = audio.samples_16k()?;
     let duration_ms = samples.len() as u64 / SAMPLE_RATE_KHZ;
     let mut clips = plan_clips(&audio::speech_islands(&samples), duration_ms);
     if clips.is_empty() && duration_ms >= MIN_ISLAND_MS * 4 {
@@ -900,10 +895,15 @@ mod tests {
         let mut samples = vec![0.0_f32; 16_000 * 6];
         samples[16_000..16_000 * 2].fill(0.2);
         samples[16_000 * 4..16_000 * 5].fill(0.2);
+        let wav_bytes = audio::encode_wav_16k(&samples).unwrap();
         let audio = RecordedAudio {
             sample_count: samples.len(),
             duration_ms: 6_000,
-            wav_bytes: audio::encode_wav_16k(&samples).unwrap(),
+            wav_bytes,
+            samples,
+            sample_rate: 16_000,
+            start_offset_ms: 0,
+            gaps: Vec::new(),
             live: Default::default(),
         };
         let transcript = transcribe_audio(&client(fake.port), "parakeet_v3", "en", &audio).unwrap();
