@@ -195,6 +195,9 @@ pub struct Target {
     pub directory: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
+    /// On an ask's chips: `jev`, `smart` or `home` ([`jev::Chip`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<&'static str>,
 }
 
 // MARK: Deciding
@@ -376,6 +379,7 @@ fn target(c: &Candidate, score: Option<f64>) -> Target {
         title: c.label().to_owned(),
         directory: c.directory.as_ref().map(|d| d.display().to_string()),
         score,
+        from: None,
     }
 }
 
@@ -398,25 +402,28 @@ fn output_for(
     };
     let find = |id: &str| evidence.candidates.iter().find(|c| c.id == id);
     let candidates = if asked {
-        let scored = record
-            .probabilities
-            .iter()
-            .filter_map(|pick| Some(target(find(&pick.session)?, Some(pick.p))));
-        if band == Band::Ask {
-            let mut top: Vec<Target> = scored.take(3).collect();
-            if let Some(home) = jev::home_session(&evidence.candidates)
-                && !top.iter().any(|t| t.id == home.id)
-            {
-                let p = record
-                    .probabilities
-                    .iter()
-                    .find(|pick| pick.session == home.id)
-                    .map_or(0.0, |pick| pick.p);
-                top.push(target(&home, Some(p)));
-            }
-            top
-        } else {
-            scored.take(LISTED).collect()
+        match &judgement.decision {
+            // The chips the capsule would show, each with Jev's probability for it.
+            Decision::Offer { choices } if band == Band::Ask => choices
+                .iter()
+                .map(|s| {
+                    let p = record
+                        .probabilities
+                        .iter()
+                        .find(|pick| pick.session == s.candidate.id)
+                        .map_or(0.0, |pick| pick.p);
+                    Target {
+                        from: Some(jev::chip_source(s)),
+                        ..target(&s.candidate, Some(p))
+                    }
+                })
+                .collect(),
+            _ => record
+                .probabilities
+                .iter()
+                .filter_map(|pick| Some(target(find(&pick.session)?, Some(pick.p))))
+                .take(LISTED)
+                .collect(),
         }
     } else {
         match &judgement.decision {
@@ -934,8 +941,8 @@ struct Outcome {
 /// About this many input tokens per question, for the estimate printed first.
 const TOKENS_PER_CASE: u64 = 5_000;
 
-/// `lines: false` leaves the targets' recent lines out of every question, and `screen: false`
-/// the `screen`, to compare.
+/// `lines: true` puts the targets' recent lines in every question whatever the config says,
+/// and `screen: false` leaves the `screen` out, to compare.
 pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<()> {
     let cutoff = jev::now_ms().saturating_sub(since.as_millis() as u64);
     let captures = crate::handoff::default_captures_dir();
@@ -1001,11 +1008,11 @@ pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<
         "Skipped: {settled} settled without Jev (address, rule, page, port, publisher), \
          {unknown} with no known destination, {absent} whose destination wasn't among the sessions read"
     );
-    let thresholds = Thresholds::configured();
-    let mut hooks = jev::Hooks::default();
-    if !lines {
-        hooks.recent = |_, _, _| Vec::new();
-        println!("Targets without their recent lines (--no-lines)");
+    let mut thresholds = Thresholds::configured();
+    thresholds.lines |= lines;
+    let hooks = jev::Hooks::default();
+    if thresholds.lines {
+        println!("Targets with their recent lines (--lines or \"lines\": true)");
     }
     if !screen {
         println!("Without `screen` (--no-screen)");
@@ -1042,7 +1049,7 @@ pub fn eval(since: Duration, limit: usize, lines: bool, screen: bool) -> Result<
         if let Some(m) = &record.model {
             model.clone_from(m);
         }
-        let (landed, on_chips) = landed(&judgement.decision, &case.truth);
+        let (landed, on_chips) = landed(&judgement.decision, &case.truth, jev::CHIPS);
         let outcome = Outcome {
             band: record.band,
             pick: record.target.as_ref().map(|t| t.session.clone()),
@@ -1375,8 +1382,11 @@ fn short(dir: &std::path::Path) -> String {
         .to_owned()
 }
 
-/// Where a decision puts a capture, and whether `truth` is on one of the two chips it shows.
-fn landed(decision: &Decision, truth: &str) -> (Option<String>, bool) {
+/// The chips the capsule shows for smart routing's own offer.
+const SMART_CHIPS: usize = 2;
+
+/// Where a decision puts a capture, and whether `truth` is on one of the `chips` it shows.
+fn landed(decision: &Decision, truth: &str, chips: usize) -> (Option<String>, bool) {
     match decision {
         Decision::Send { to, instead } => (
             Some(to.candidate.id.clone()),
@@ -1384,7 +1394,7 @@ fn landed(decision: &Decision, truth: &str) -> (Option<String>, bool) {
         ),
         Decision::Offer { choices } => (
             choices.first().map(|c| c.candidate.id.clone()),
-            choices.iter().take(2).any(|c| c.candidate.id == truth),
+            choices.iter().take(chips).any(|c| c.candidate.id == truth),
         ),
         Decision::Keep { .. } => (None, false),
     }
@@ -1451,7 +1461,7 @@ fn report(
     }
     let (mut s_sent, mut s_wrong, mut s_offer, mut s_chips, mut s_keep) = (0, 0, 0, 0, 0);
     for (case, _) in results {
-        let (landed, on_chips) = landed(&case.smart.decision, &case.truth);
+        let (landed, on_chips) = landed(&case.smart.decision, &case.truth, SMART_CHIPS);
         match &case.smart.decision {
             Decision::Send { .. } => {
                 s_sent += 1;
@@ -1640,7 +1650,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unsure_answer_asks_with_the_top_three_and_home() {
+    fn an_unsure_answer_asks_with_jevs_top_two_and_home() {
         let out = run(json!({"item": {"transcript": "rename it"}}), unsure);
         assert_eq!(out["decision"], "ask", "{out}");
         assert_eq!(out["target"]["id"], "ses_b");
@@ -1650,8 +1660,15 @@ mod tests {
             .iter()
             .map(|c| c["id"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, ["ses_b", "ses_hex", "ses_a", "ses_home"]);
-        assert_eq!(out["candidates"][3]["score"], 0.04);
+        assert_eq!(ids, ["ses_b", "ses_hex", "ses_home"]);
+        assert_eq!(out["candidates"][2]["score"], 0.04);
+        let from: Vec<&str> = out["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["from"].as_str().unwrap())
+            .collect();
+        assert_eq!(from, ["jev", "jev", "home"]);
     }
 
     #[test]
@@ -1965,7 +1982,7 @@ mod tests {
     }
 
     #[test]
-    fn landing_counts_the_two_chips_an_offer_shows() {
+    fn landing_counts_the_chips_an_offer_shows() {
         let scored = |id: &str| smart::Scored {
             candidate: Candidate {
                 id: id.into(),
@@ -1981,7 +1998,7 @@ mod tests {
         let offer = Decision::Offer {
             choices: vec![scored("a"), scored("b"), scored("c")],
         };
-        assert_eq!(landed(&offer, "b"), (Some("a".into()), true));
-        assert_eq!(landed(&offer, "c"), (Some("a".into()), false));
+        assert_eq!(landed(&offer, "b", 2), (Some("a".into()), true));
+        assert_eq!(landed(&offer, "c", 2), (Some("a".into()), false));
     }
 }

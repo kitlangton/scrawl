@@ -88,6 +88,9 @@ pub struct Thresholds {
     pub offer: f64,
     pub no_fit: f64,
     pub low: Low,
+    /// Whether each target carries its latest exchange. Off by default: the first eval was
+    /// right more often, and cheaper, with title, folder and last active alone.
+    pub lines: bool,
 }
 
 impl Default for Thresholds {
@@ -98,13 +101,14 @@ impl Default for Thresholds {
             offer: OFFER_AT,
             no_fit: NO_FIT_AT,
             low: Low::Home,
+            lines: false,
         }
     }
 }
 
 impl Thresholds {
-    /// `"jevRouting": {"send": 0.85, "margin": 0.3, "offer": 0.5, "noFit": 0.2, "low": "home"}`
-    /// in `config.json`; anything missing or out of range keeps its default.
+    /// `"jevRouting": {"send": 0.85, "margin": 0.3, "offer": 0.5, "noFit": 0.2, "low": "home",
+    /// "lines": false}` in `config.json`; anything missing or out of range keeps its default.
     pub fn from_config(value: Option<&Value>) -> Self {
         let mut t = Self::default();
         let Some(value) = value else {
@@ -123,6 +127,10 @@ impl Thresholds {
         if value.get("low").and_then(Value::as_str) == Some("keep") {
             t.low = Low::Keep;
         }
+        t.lines = value
+            .get("lines")
+            .and_then(Value::as_bool)
+            .unwrap_or(t.lines);
         t
     }
 
@@ -282,6 +290,47 @@ pub struct Record {
     pub input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The sessions offered one click away, in order, and where each came from.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chips: Vec<Chip>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Chip {
+    pub session: String,
+    pub title: String,
+    /// `jev` (one of its top two), `smart` (smart routing's best that Jev didn't name) or
+    /// `home`.
+    pub from: String,
+}
+
+/// The most chips an ask offers: Jev's top two, smart routing's best, HOME.
+pub const CHIPS: usize = 4;
+
+/// Where a chip came from, by the basis `decision_for` gave it.
+pub fn chip_source(scored: &Scored) -> &'static str {
+    match scored.lead().map(|r| r.basis) {
+        Some(Basis::Jev) => "jev",
+        Some(Basis::JevHome) => "home",
+        _ => "smart",
+    }
+}
+
+/// The chips a decision shows: an offer's choices, or what a send may switch to.
+fn chips_of(decision: &Decision) -> Vec<Chip> {
+    let shown: &[Scored] = match decision {
+        Decision::Send { instead, .. } => instead,
+        Decision::Offer { choices } => choices,
+        Decision::Keep { .. } => &[],
+    };
+    shown
+        .iter()
+        .map(|s| Chip {
+            session: s.candidate.id.clone(),
+            title: s.candidate.label().to_owned(),
+            from: chip_source(s).to_owned(),
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -616,7 +665,11 @@ pub fn judge(
         );
     }
     let ids: Vec<String> = targets.iter().map(|c| c.id.clone()).collect();
-    let recent = (hooks.recent)(&ids, before_ms, hooks.recent_budget());
+    let recent = if thresholds.lines {
+        (hooks.recent)(&ids, before_ms, hooks.recent_budget())
+    } else {
+        Vec::new()
+    };
     let mut hints = hints(evidence, &targets);
     hints.extend(asking.screen.tab_hint(&targets));
     let history = history_state(&asking.history, &targets, &evidence.candidates);
@@ -651,7 +704,7 @@ pub fn judge(
     answer.ms = ms;
     let band = thresholds.band(&answer);
     let home = home_session(&evidence.candidates);
-    let (decision, reason) = decision_for(band, &answer, &targets, home.as_ref());
+    let (decision, reason) = decision_for(band, &answer, &targets, home.as_ref(), &smart);
     let pick = |t: &str, p: f64| {
         index_of(t).and_then(|i| targets.get(i)).map(|c| Pick {
             t: t.to_owned(),
@@ -677,6 +730,7 @@ pub fn judge(
             .collect(),
         input_tokens: answer.input_tokens,
         error: None,
+        chips: chips_of(&decision),
     };
     (
         Judgement {
@@ -767,6 +821,7 @@ fn decision_for(
     answer: &Answer,
     targets: &[Candidate],
     home: Option<&Candidate>,
+    smart: &Judgement,
 ) -> (Decision, String) {
     let ranked: Vec<(&Candidate, f64)> = answer
         .ranked()
@@ -802,17 +857,27 @@ fn decision_for(
             )
         }
         Band::Ask => {
-            // Two chips fit beside Paste: the best, then HOME when it isn't the best, so Kit can
-            // always send it there; the runners-up follow for the record.
+            // Jev's top two, then smart routing's best that isn't one of them (its chips held
+            // the truth more often than Jev's runner-up did), then HOME so Kit can always send it
+            // there.
             let mut choices = vec![jev(best, best_p)];
-            if let Some(home) = home.filter(|h| h.id != best.id) {
+            if let Some(&(c, p)) = ranked.get(1).filter(|(_, p)| *p > 0.0) {
+                choices.push(jev(c, p));
+            }
+            let fresh =
+                |choices: &[Scored], id: &str| !choices.iter().any(|s| s.candidate.id == id);
+            if let Some(s) = smart
+                .ranking
+                .iter()
+                .filter(|s| s.clues() > 0)
+                .find(|s| fresh(&choices, &s.candidate.id))
+            {
+                choices.push(s.clone());
+            }
+            if let Some(home) = home.filter(|h| fresh(&choices, &h.id)) {
                 choices.push(scored(home, Basis::JevHome, 0.0, "HOME".into()));
             }
-            for &(c, p) in ranked.iter().skip(1).take(2) {
-                if !choices.iter().any(|s| s.candidate.id == c.id) {
-                    choices.push(jev(c, p));
-                }
-            }
+            choices.truncate(CHIPS);
             (
                 Decision::Offer { choices },
                 format!("Jev leans to {} but isn't sure ({numbers})", best.label()),
@@ -1090,17 +1155,19 @@ impl Serialize for Ordered<'_> {
 
 const TARGET_INSTRUCTIONS: &str = "Kit recorded `capture` (his screen, voice and pointer) and it goes \
 to the OpenCode session it is about. `targets` are his open sessions, most recently active first: each \
-has a title, its project folder, when it was last active, and its latest exchange (`recent`). `hints` \
-are facts Scrawl observed while recording. Which target is `capture` about?";
+has a title, its project folder and when it was last active{lines}. `hints` are facts Scrawl observed \
+while recording. Which target is `capture` about?";
+const LINES_INSTRUCTIONS: &str = ", and its latest exchange (`recent`)";
 const HISTORY_INSTRUCTIONS: &str = " `history` lists Kit's earlier items, latest last, and where they \
 went; `corrected_to` is where he moved one by hand.";
 
-const SCREEN_INSTRUCTIONS: &str = " Use `screen` (visible windows, focused text, the OpenCode tab) \
-and each target's recent lines to judge; an OpenCode tab is a strong hint, not proof.";
+const SCREEN_INSTRUCTIONS: &str = " Use `screen` (visible windows, focused text, the OpenCode tab){lines} \
+to judge; an OpenCode tab is a strong hint, not proof.";
+const SCREEN_LINES: &str = " and each target's recent lines";
 
 const FITS_INSTRUCTIONS: &str = "Is `capture` clearly about the work in one of `targets`?";
 const FITS_TRUE: &str = "What Kit says or shows clearly matches one target's title, project folder or \
-recent exchange: the same app, feature, page, bug or conversation.";
+recent exchange (when it has one): the same app, feature, page, bug or conversation.";
 const FITS_FALSE: &str = "It is about something new or general, or none of the targets in particular, \
 or it fits several targets equally.";
 
@@ -1173,6 +1240,7 @@ pub fn request_body(
             (format!("t{}", i + 1), Value::Object(t))
         })
         .collect();
+    let has_lines = entries.iter().any(|(_, t)| t.get("recent").is_some());
     let criteria: Vec<(String, Value)> = entries
         .iter()
         .zip(targets)
@@ -1219,19 +1287,19 @@ pub fn request_body(
         questions: Questions {
             target: Choice {
                 kind: "choice",
-                instructions: format!(
-                    "{TARGET_INSTRUCTIONS}{}{}",
-                    if history.is_empty() {
-                        ""
-                    } else {
-                        HISTORY_INSTRUCTIONS
-                    },
-                    if screen.is_some() {
-                        SCREEN_INSTRUCTIONS
-                    } else {
-                        ""
+                instructions: {
+                    let lines = |text: &str, with: &str| {
+                        text.replace("{lines}", if has_lines { with } else { "" })
+                    };
+                    let mut text = lines(TARGET_INSTRUCTIONS, LINES_INSTRUCTIONS);
+                    if !history.is_empty() {
+                        text.push_str(HISTORY_INSTRUCTIONS);
                     }
-                ),
+                    if screen.is_some() {
+                        text.push_str(&lines(SCREEN_INSTRUCTIONS, SCREEN_LINES));
+                    }
+                    text
+                },
                 criteria: Ordered(&criteria),
             },
             any_fits: json!({
@@ -2004,6 +2072,14 @@ pub fn explain(record: &Record) -> String {
             pick.p, pick.t, pick.title, pick.session
         );
     }
+    if !record.chips.is_empty() {
+        let chips: Vec<String> = record
+            .chips
+            .iter()
+            .map(|c| format!("{} ({})", c.title, c.from))
+            .collect();
+        let _ = writeln!(out, "          chips: {}", chips.join(" · "));
+    }
     out
 }
 
@@ -2130,15 +2206,57 @@ mod tests {
     }
 
     #[test]
-    fn a_middling_answer_offers_the_best_then_home() {
+    fn a_middling_answer_offers_jevs_top_two_then_home() {
         reply("t3", 0.62, 0.6, json!({"t1": 0.3, "t2": 0.05, "t3": 0.65}));
         let (judgement, record) = run(&evidence(vec![]), &Thresholds::default());
         let Decision::Offer { choices } = &judgement.decision else {
             panic!("{:?}", judgement.decision)
         };
         let ids: Vec<&str> = choices.iter().map(|c| c.candidate.id.as_str()).collect();
-        assert_eq!(ids, ["ses_board", "ses_home", "ses_hex"]);
+        assert_eq!(ids, ["ses_board", "ses_hex", "ses_home"]);
         assert_eq!(record.band, Band::Ask);
+        let from: Vec<&str> = record.chips.iter().map(|c| c.from.as_str()).collect();
+        assert_eq!(from, ["jev", "jev", "home"]);
+    }
+
+    #[test]
+    fn an_ask_adds_smart_routings_best_when_jev_left_it_out() {
+        // Jev: HEX then HOME. The terminal points at the board's folder.
+        reply("t1", 0.6, 0.6, json!({"t1": 0.6, "t2": 0.3, "t3": 0.1}));
+        let terminal = Clue::new(
+            Source::Terminal,
+            Pointer::Folder(smart::Folder {
+                path: "/Users/k/code/board".into(),
+                root: "/Users/k/code/board".into(),
+                tree: true,
+                repo: None,
+            }),
+            "the terminal's focused pane is in /Users/k/code/board",
+        );
+        let (judgement, record) = run(&evidence(vec![terminal]), &Thresholds::default());
+        let Decision::Offer { choices } = &judgement.decision else {
+            panic!("{:?}", judgement.decision)
+        };
+        let ids: Vec<&str> = choices.iter().map(|c| c.candidate.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["ses_hex", "ses_home", "ses_board"],
+            "HOME isn't repeated"
+        );
+        let chips: Vec<(&str, &str)> = record
+            .chips
+            .iter()
+            .map(|c| (c.session.as_str(), c.from.as_str()))
+            .collect();
+        assert_eq!(
+            chips,
+            [
+                ("ses_hex", "jev"),
+                ("ses_home", "jev"),
+                ("ses_board", "smart")
+            ]
+        );
+        assert!(choices.len() <= CHIPS);
     }
 
     #[test]
@@ -2285,7 +2403,11 @@ mod tests {
             },
             "said",
         );
-        run(&evidence(vec![terminal, said]), &Thresholds::default());
+        let lines = Thresholds {
+            lines: true,
+            ..Thresholds::default()
+        };
+        run(&evidence(vec![terminal.clone(), said.clone()]), &lines);
         let sent = SENT.with(|s| s.borrow().clone()).unwrap();
         assert_eq!(sent["model"], MODEL);
         let targets = sent["state"]["targets"].as_object().unwrap();
@@ -2307,6 +2429,26 @@ mod tests {
             "{hints:?}"
         );
         assert_eq!(sent["questions"]["any_fits"]["type"], "noul");
+        let instructions = sent["questions"]["target"]["instructions"]
+            .as_str()
+            .unwrap();
+        assert!(instructions.contains("latest exchange"), "{instructions}");
+        // By default the targets go without their lines, and the question doesn't mention them.
+        run(&evidence(vec![terminal, said]), &Thresholds::default());
+        let sent = SENT.with(|s| s.borrow().clone()).unwrap();
+        assert!(sent["state"]["targets"]["t1"].get("recent").is_none());
+        let instructions = sent["questions"]["target"]["instructions"]
+            .as_str()
+            .unwrap();
+        assert!(!instructions.contains("latest exchange"), "{instructions}");
+        assert!(!instructions.contains("{lines}"), "{instructions}");
+    }
+
+    #[test]
+    fn lines_are_off_unless_configured() {
+        assert!(!Thresholds::default().lines);
+        assert!(Thresholds::from_config(Some(&json!({"lines": true}))).lines);
+        assert!(!Thresholds::from_config(Some(&json!({"lines": "yes"}))).lines);
     }
 
     #[test]

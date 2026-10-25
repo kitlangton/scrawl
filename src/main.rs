@@ -235,9 +235,9 @@ enum RouterCommand {
         /// At most this many captures.
         #[arg(long, default_value_t = 40)]
         limit: usize,
-        /// Leave the targets' recent lines out, to compare with a run that has them.
+        /// Put the targets' recent lines in (off by default), to compare with a run without.
         #[arg(long)]
-        no_lines: bool,
+        lines: bool,
         /// Leave `screen` (windows, focused text, the OpenCode tab) out, to compare.
         #[arg(long)]
         no_screen: bool,
@@ -2500,11 +2500,11 @@ fn main() -> Result<()> {
             RouterCommand::Eval {
                 since,
                 limit,
-                no_lines,
+                lines,
                 no_screen,
             } => {
                 let since = routing::router::parse_since(&since)?;
-                routing::router::eval(since, limit, !no_lines, !no_screen)
+                routing::router::eval(since, limit, lines, !no_screen)
             }
         },
         Command::Preview {

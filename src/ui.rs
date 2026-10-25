@@ -3023,9 +3023,15 @@ impl RouteChip {
 
     /// An offer's chips: "Send to DESKTOP", then the runner-up by name.
     fn asks(choices: &[crate::routing::smart::Scored], url: Option<&str>) -> Vec<Self> {
+        // Jev's asks offer up to four (its top two, smart routing's best, HOME).
+        let max = if crate::routing::jev::enabled() {
+            crate::routing::jev::CHIPS
+        } else {
+            Self::MAX
+        };
         choices
             .iter()
-            .take(Self::MAX)
+            .take(max)
             .enumerate()
             .map(|(i, scored)| {
                 let title = chip_title(scored.candidate.label());
