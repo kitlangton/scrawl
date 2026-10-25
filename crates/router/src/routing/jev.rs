@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use super::smart::{
     self, Basis, Candidate, Decision, Evidence, Judgement, Pointer, Reason, Scored, Source,
 };
-use crate::log::scrawl_log;
+use crate::env::log as scrawl_log;
 use crate::model::{InteractionEvent, ScrawlBundle};
 
 /// The experiment that asks Jev (only read when `smartRouting` is on too).
@@ -67,7 +67,7 @@ pub const RECENT_BUDGET: Duration = Duration::from_millis(1500);
 const HOME_TITLE: &str = "HOME";
 
 pub fn enabled() -> bool {
-    crate::handoff::experiment(super::SMART_ROUTING) && crate::handoff::experiment(JEV_ROUTING)
+    crate::env::get().config.jev_enabled()
 }
 
 // MARK: Thresholds
@@ -135,7 +135,7 @@ impl Thresholds {
     }
 
     pub fn configured() -> Self {
-        Self::from_config(crate::handoff::jev_routing_config().as_ref())
+        Self::from_config(crate::env::get().config.jev.as_ref())
     }
 
     pub fn band(&self, answer: &Answer) -> Band {
@@ -1038,7 +1038,7 @@ pub fn trim_middle(text: &str, max: usize) -> String {
     format!("{start} … {end}")
 }
 
-pub(crate) fn trim_end(text: &str, max: usize) -> String {
+fn trim_end(text: &str, max: usize) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= max {
         return flat;
@@ -1419,15 +1419,7 @@ pub fn parse_answer(body: &[u8]) -> Result<Answer> {
 /// POSTs `body` to Jev with `/usr/bin/curl`. The key reaches curl through a config on stdin, so
 /// it's never in an argument list or a log.
 pub fn gateway(body: &[u8], timeout: Duration) -> Result<Vec<u8>> {
-    gateway_with_key(crate::handoff::jev_api_key().as_deref(), body, timeout)
-}
-
-pub fn gateway_with_key(
-    configured_key: Option<&str>,
-    body: &[u8],
-    timeout: Duration,
-) -> Result<Vec<u8>> {
-    let key = api_key_with(configured_key)?;
+    let key = api_key()?;
     let body = std::str::from_utf8(body).context("request isn't UTF-8")?;
     with_retry(timeout, |left| post(&key, body, left), std::thread::sleep)
 }
@@ -1535,11 +1527,16 @@ fn post(key: &str, body: &str, timeout: Duration) -> Result<Reply> {
     })
 }
 
-/// The OpenCode key: `configured_key` (or `jevApiKey` in config.json), `$OPENCODE_API_KEY`, or
-/// the active `opencode` credential in OpenCode's database (read-only). Never printed or logged.
-fn api_key_with(configured_key: Option<&str>) -> Result<String> {
-    if let Some(key) = configured_key.map(str::trim).filter(|k| !k.is_empty()) {
-        return Ok(key.to_owned());
+/// The OpenCode key: the host's `jev_api_key`, `$OPENCODE_API_KEY`, or the active `opencode`
+/// credential in OpenCode's database (read-only). Never printed or logged.
+fn api_key() -> Result<String> {
+    if let Some(key) = crate::env::get()
+        .config
+        .jev_api_key
+        .clone()
+        .filter(|k| !k.trim().is_empty())
+    {
+        return Ok(key.trim().to_owned());
     }
     if let Ok(key) = std::env::var("OPENCODE_API_KEY")
         && !key.trim().is_empty()
@@ -1620,12 +1617,12 @@ fn sqlite_json(db: &Path, sql: &str) -> Option<Vec<Value>> {
 /// Each session's last messages: through OpenCode's API (within [`RECENT_BUDGET`], a session
 /// that doesn't fit gets none), or from its history before `before_ms`.
 pub fn read_recent(ids: &[String], before_ms: Option<u64>, budget: Duration) -> Vec<Recent> {
-    if cfg!(test) {
+    if !crate::env::get().live {
         return vec![Recent::default(); ids.len()];
     }
     match before_ms {
         Some(before) => recent_from_history(ids, before),
-        None => recent_from_api(ids, crate::handoff::api_get_within, budget),
+        None => recent_from_api(ids, crate::opencode::api_get_within, budget),
     }
 }
 
@@ -1652,8 +1649,8 @@ pub fn recent_from_api(
         let handles: Vec<_> = ids
             .iter()
             .map(|id| {
-                let id = crate::handoff::query_escape(id);
-                scope.spawn(move || {
+                let id = crate::opencode::query_escape(id);
+                crate::env::scope_spawn(scope, move || {
                     let user = get(&format!(
                         "/api/session/{id}/message?limit=1&order=desc&type=user"
                     ))
@@ -1777,40 +1774,27 @@ pub fn delivered_to(bundle: &Path, created_ms: u64) -> Option<String> {
 
 // MARK: The decisions log
 
-/// One line per decision and per correction, across captures:
-/// `~/Library/Application Support/scrawl/routing-decisions.jsonl` (`$SCRAWL_ROUTING_LOG`).
+/// One line per decision and per correction, across captures: the host's log
+/// ([`RouterDirs::log`](crate::RouterDirs)).
 pub fn log_path() -> Option<PathBuf> {
-    if cfg!(test) {
-        return None;
-    }
-    if let Some(path) = std::env::var_os("SCRAWL_ROUTING_LOG") {
-        return Some(PathBuf::from(path));
-    }
-    if !crate::handoff::scrawl_host_defaults_enabled() {
-        return None;
-    }
-    Some(dirs::home_dir()?.join("Library/Application Support/scrawl/routing-decisions.jsonl"))
+    crate::env::get().dirs.log.clone()
 }
 
 fn append(line: &Value) {
-    append_to(log_path().as_deref(), line);
-}
-
-pub fn append_to(path: Option<&Path>, line: &Value) {
-    let Some(path) = path else {
-        return;
-    };
-    if let Err(err) = try_append_to(path, line) {
+    if let Err(err) = try_append(line) {
         scrawl_log(format!("routing (jev): couldn't log a decision: {err:#}"));
     }
 }
 
-fn try_append_to(path: &Path, line: &Value) -> Result<()> {
+fn try_append(line: &Value) -> Result<()> {
+    let Some(path) = log_path() else {
+        return Ok(());
+    };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let mut file = super::undo::private(std::fs::OpenOptions::new().create(true).append(true))
-        .open(path)
+        .open(&path)
         .with_context(|| format!("couldn't open {}", path.display()))?;
     #[cfg(unix)]
     {
@@ -1902,13 +1886,8 @@ pub fn log_line(line: &Value) {
     append(line);
 }
 
-pub fn log_line_to(path: Option<&Path>, line: &Value) {
-    append_to(path, line);
-}
-
 /// How Kit corrected a route.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     /// Not sent after all (Esc or ✕ during the countdown; Hex's cancel).
     Cancel,
@@ -1921,14 +1900,11 @@ pub enum Action {
 }
 
 impl Action {
+    pub const ALL: [Self; 4] = [Self::Cancel, Self::Redirect, Self::Paste, Self::Edit];
+
+    /// `cancel`, `redirect`, `paste` or `edit`.
     pub fn parse(text: &str) -> Option<Self> {
-        match text.trim().to_ascii_lowercase().as_str() {
-            "cancel" => Some(Self::Cancel),
-            "redirect" => Some(Self::Redirect),
-            "paste" => Some(Self::Paste),
-            "edit" => Some(Self::Edit),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|a| a.label() == text)
     }
 
     pub fn label(self) -> &'static str {
@@ -1938,14 +1914,6 @@ impl Action {
             Self::Paste => "paste",
             Self::Edit => "edit",
         }
-    }
-}
-
-impl std::str::FromStr for Action {
-    type Err = String;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Self::parse(s).ok_or_else(|| format!("expected cancel, redirect, paste or edit, got {s:?}"))
     }
 }
 
@@ -1995,12 +1963,8 @@ impl Correction<'_> {
 /// Checks a correction line against the schema in `docs/routing.md` and appends it. Every
 /// correction comes through here: the app's, `scrawl router correct` and `scrawl router log`.
 pub fn write_correction(line: &Value) -> Result<()> {
-    write_correction_to(log_path().as_deref(), line)
-}
-
-pub fn write_correction_to(path: Option<&Path>, line: &Value) -> Result<()> {
     check(line)?;
-    append_to(path, line);
+    append(line);
     Ok(())
 }
 
@@ -2071,7 +2035,7 @@ pub fn correct_capture(dir: &Path, action: Action, detail: &str, to: Option<(&st
         return;
     }
     let from = suggested(dir);
-    let app = crate::handoff::load_bundle(dir)
+    let app = crate::bundle::load_bundle(dir)
         .ok()
         .and_then(|(_, bundle)| bundle.target.app);
     Correction {

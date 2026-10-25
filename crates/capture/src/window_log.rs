@@ -23,7 +23,7 @@ const IDLE_INTERVAL: Duration = Duration::from_millis(2_000);
 /// Cursor samples closer than this to the previous one (in capture points) are dropped.
 const CURSOR_MIN_MOVE_PT: f64 = 2.0;
 
-pub use crate::model::{CursorSample, WindowEntry, WindowSnapshot};
+pub use scrawl_router::model::{CursorSample, WindowEntry, WindowSnapshot};
 
 /// What the worker collected over one capture.
 #[derive(Clone, Debug, Default, PartialEq)]

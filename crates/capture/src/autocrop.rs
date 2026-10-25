@@ -564,7 +564,7 @@ impl Input {
     }
 }
 
-pub use crate::model::CropKind;
+pub use scrawl_router::model::CropKind;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -190,7 +190,10 @@ enum RouterCommand {
     Correct {
         #[arg(long)]
         decision: String,
-        #[arg(long)]
+        #[arg(long, value_parser = clap::builder::TypedValueParser::map(
+            clap::builder::PossibleValuesParser::new(["cancel", "redirect", "paste", "edit"]),
+            |action: String| routing::jev::Action::parse(&action).expect("a listed action"),
+        ))]
         action: routing::jev::Action,
         #[arg(long)]
         to: Option<String>,
@@ -673,6 +676,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let cli = Cli::parse();
+    scrawl_router::env::set_fallback(handoff::router_env);
     let command = match cli.command {
         Some(command) => command,
         // `scrawl` typed in a terminal (on PATH through Settings › Agents or Homebrew) would
@@ -1510,7 +1514,7 @@ fn main() -> Result<()> {
             let url = url.context("Pass --url or --browser")?;
             match routing::route_with_sites(
                 &url,
-                &handoff::routing_sites(),
+                &handoff::router_env().config.site_rules(),
                 &routing::Hooks::default(),
             ) {
                 Ok(dest) => println!("{}", serde_json::to_string_pretty(&dest)?),
@@ -1594,13 +1598,14 @@ fn main() -> Result<()> {
                     (None, Some(app)) => (RuleKind::App, app),
                     (None, None) => anyhow::bail!("give --site or --app"),
                 };
-                let config = handoff::default_config_path();
-                routing::policy::add_rule(&config, kind, &key, &folder)?;
+                handoff::update_routing(|routing| {
+                    routing::policy::add_rule(routing, kind, &key, &folder)
+                })?;
                 println!("Added: {key} → {folder}");
                 Ok(())
             }
             RouterCommand::Rule(RuleCommand::Refuse { key }) => {
-                routing::policy::refuse_rule(&handoff::default_config_path(), &key)?;
+                handoff::update_routing(|routing| routing::policy::refuse_rule(routing, &key))?;
                 println!("Won't offer a rule for {key} again");
                 Ok(())
             }

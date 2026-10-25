@@ -3,9 +3,10 @@
 //! needs a feature entry; every entry with a stable, main or experiment status must name keys
 //! and flags that still exist; and every doc it links must be in the repo.
 //!
-//! Keys are found in the source text: the fields of `handoff::Config`, and string literals passed
-//! to `set_config_value_in(_, "key", …)` or `config.get("key")`. A key read any other way, nested
-//! keys, shortcuts, platforms and whether a status is still true aren't checked here.
+//! Keys are found in the source text: the fields of `handoff::Config`, string literals passed to
+//! `set_config_value_in(_, "key", …)` or `config.get("key")`, and the router's `root.get("key")`.
+//! A key read any other way, nested keys, shortcuts, platforms and whether a status is still true
+//! aren't checked here.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -15,7 +16,8 @@ fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Each `.rs` file under `src/`, without comment lines or its `#[cfg(test)] mod`.
+/// Each `.rs` file under `src/` and the router's `crates/router/src/`, without comment lines or
+/// its `#[cfg(test)] mod`.
 fn sources() -> Vec<(PathBuf, String)> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(dir).unwrap().flatten() {
@@ -113,6 +115,16 @@ fn config_keys(sources: &[(PathBuf, String)]) -> BTreeSet<String> {
                 && let Some(key) = literal(rest)
             {
                 keys.insert(key.to_owned());
+            }
+        }
+        // The router reads its keys from the parsed file (`parse_scrawl_config`).
+        if path.ends_with("crates/router/src/config.rs") {
+            for pattern in ["root.get(", "text(root,"] {
+                for (at, _) in text.match_indices(pattern) {
+                    if let Some(key) = literal(&text[at + pattern.len()..]) {
+                        keys.insert(key.to_owned());
+                    }
+                }
             }
         }
         for (at, _) in text.match_indices("config.get(") {

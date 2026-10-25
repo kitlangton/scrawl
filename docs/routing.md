@@ -1,6 +1,6 @@
 # Smart routing
 
-Read this before changing `src/routing/smart.rs` or `src/routing/look.rs`. The ladder that runs when the experiment is off is described in `docs/iphone-and-routing.md`, and the words used here are defined in `CONTEXT.md`.
+Read this before changing `crates/router/src/routing/smart.rs` or `crates/router/src/routing/look.rs`. The ladder that runs when the experiment is off is described in `docs/iphone-and-routing.md`, and the words used here are defined in `CONTEXT.md`.
 
 Smart routing is an experiment, on with `"experiments": {"smartRouting": true}` in `~/.config/scrawl/config.json` (read through `handoff::experiment`). With it off the app calls `routing::route_capture` exactly as before. With it on, a Mac Screen or Window capture is routed in three steps.
 
@@ -181,7 +181,7 @@ A redirect whose `from` and `to` match (picking the suggested chip) is a confirm
 
 The tests in `smart.rs` and `look.rs` check each one. An address always wins, and a choice beats a recorded destination. A send needs `SEND_AT` from clues and a lead of `LEAD`. `decide` is pure, so the same evidence gives the same decision, in any order and with clues repeated. Recency never puts a session forward on its own and never reaches `SEND_AT`. Adding support for the leader never demotes it. The home folder and `/` are never projects. One medium clue (the viewed session, a terminal folder, the app's checkout or name) can't send without a second that agrees. `look::tests::the_ladder_policy_reproduces_route` checks that `Policy::Ladder` over the same hooks decides what `routing::route` does on a table of cases.
 
-Real captures replay as fixtures in `src/routing/fixtures/` (sessions trimmed): the OpenCode capture that was sent to OPENCODE IOS while Kit was talking about OpenCode's composer now asks about DESKTOP with OPENCODE IOS one click away; the same capture talking about the session suggests OPENCODE IOS; a dev site and two Device Hub captures decide as they did. Three gallery pages (`artifact-*.json`, with the file's path and time and the tool calls history held) that went to CANVAS on the port go to HEX, HEX and GAME ENGINE, who wrote them; without the history the two Hex pages ask about HEX and the third stays on the clipboard. A capture of the onboarding story's own server (`artifact-server-onboarding.json`) that went to HOME goes to KNOBS, who wrote most of it; without the history it isn't sent to HOME.
+Real captures replay as fixtures in `crates/router/src/routing/fixtures/` (sessions trimmed): the OpenCode capture that was sent to OPENCODE IOS while Kit was talking about OpenCode's composer now asks about DESKTOP with OPENCODE IOS one click away; the same capture talking about the session suggests OPENCODE IOS; a dev site and two Device Hub captures decide as they did. Three gallery pages (`artifact-*.json`, with the file's path and time and the tool calls history held) that went to CANVAS on the port go to HEX, HEX and GAME ENGINE, who wrote them; without the history the two Hex pages ask about HEX and the third stays on the clipboard. A capture of the onboarding story's own server (`artifact-server-onboarding.json`) that went to HOME goes to KNOBS, who wrote most of it; without the history it isn't sent to HOME.
 
 ## The pill
 

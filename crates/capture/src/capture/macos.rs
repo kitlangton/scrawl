@@ -61,11 +61,6 @@ pub(super) fn is_helper_process(pid: i32) -> bool {
     helpers.contains(&proc_path)
 }
 
-/// The executable a running process was started from (`proc_pidpath`, no processes spawned).
-pub fn process_executable(pid: i32) -> Option<PathBuf> {
-    process_path(pid)
-}
-
 fn process_path(pid: i32) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStringExt;
     let mut buf = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];

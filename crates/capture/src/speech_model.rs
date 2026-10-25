@@ -278,7 +278,48 @@ pub fn note_grants(grants: &crate::permissions::Grants) {
 /// The plain sentence for a capture without a transcript, from the helper's `missing`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn missing(why: &str, locale: &str, error: Option<&str>) -> MissingTranscript {
-    MissingTranscript::for_reason(why, locale, error)
+    let model = if cfg!(target_os = "windows") {
+        format!("The Parakeet speech model ({locale})")
+    } else {
+        format!("Apple's speech model ({locale})")
+    };
+    match why {
+        "downloading" => MissingTranscript {
+            reason: format!(
+                "{model} was still downloading. The audio is saved, and Scrawl adds the \
+                 transcript to this bundle when the download finishes."
+            ),
+            retry: true,
+        },
+        "permission" => MissingTranscript {
+            reason: "Speech Recognition is off for Scrawl. The audio is saved, and Scrawl adds \
+                     the transcript to this bundle once it's on (Scrawl Settings › Permissions)."
+                .to_owned(),
+            retry: true,
+        },
+        "dictation" => MissingTranscript {
+            reason: "Dictation's on-device model isn't on this Mac. Turn on Dictation in System \
+                     Settings › Keyboard, and Scrawl adds the transcript to this bundle once it's \
+                     there."
+                .to_owned(),
+            retry: true,
+        },
+        "unsupported" => MissingTranscript {
+            reason: format!(
+                "this Mac has no Apple speech model for {locale}. Hex can transcribe instead \
+                 (Scrawl Settings › Recording)."
+            ),
+            retry: false,
+        },
+        _ => MissingTranscript {
+            reason: format!(
+                "{model} couldn't be installed{}. The audio is saved, and Scrawl adds the \
+                 transcript to this bundle if a later try works.",
+                error.map(|e| format!(" ({e})")).unwrap_or_default()
+            ),
+            retry: true,
+        },
+    }
 }
 
 /// Marks a freshly written bundle whose transcript can come later; if the model has arrived

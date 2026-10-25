@@ -13,10 +13,10 @@ use anyhow::Result;
 use super::served;
 use super::smart::{Address, Candidate, Clue, Evidence, Folder, Pointer, Source, words};
 use super::{Hooks, WebUrl, parse_url, project_root, run_with_timeout};
-use crate::handoff::{
+use crate::model::ScrawlBundle;
+use crate::opencode::{
     ApiGet, OpenCodeSession, Scan, find_root_session, get_session, normalize_slug, query_escape,
 };
-use crate::model::ScrawlBundle;
 
 /// Pages of newest root sessions read (100 each), besides the exact-folder and by-ID reads.
 pub const SESSION_PAGES: usize = 2;
@@ -52,10 +52,10 @@ impl Default for Senses {
             hooks: Hooks::default(),
             own_port,
             terminal: terminal_pane,
-            servers: crate::handoff::routing_servers,
-            sites: crate::handoff::routing_sites,
-            apps: crate::handoff::routing_apps,
-            aliases: crate::handoff::routing_aliases,
+            servers: || crate::env::get().config.server_folders(),
+            sites: || crate::env::get().config.site_rules(),
+            apps: || crate::env::get().config.app_rules(),
+            aliases: || crate::env::get().config.alias_list(),
             writes: served::opencode_writes,
             executable: super::policy::executable_of,
         }
@@ -344,13 +344,7 @@ fn rule_clue(url: &str, senses: &Senses) -> Option<Clue> {
     let (pointer, to) = match target {
         super::SiteTarget::Session(id) => {
             let to = id.clone();
-            (
-                Pointer::Session {
-                    id,
-                    directory: None,
-                },
-                to,
-            )
+            (Pointer::Session { id, directory: None }, to)
         }
         super::SiteTarget::Folder(dir) => (
             Pointer::Folder(Folder {
@@ -437,7 +431,7 @@ fn spoken_address(bundle: &ScrawlBundle, candidates: &[Candidate]) -> Option<Clu
     named_clue(
         &bundle.transcript.text,
         candidates,
-        &crate::handoff::routing_aliases(),
+        &crate::env::get().config.alias_list(),
     )
 }
 
@@ -449,11 +443,11 @@ pub fn evidence_for(bundle: &ScrawlBundle, dir: &Path, live: Live) -> Evidence {
     clues.extend(bundle_clues(
         bundle,
         &live.candidates,
-        &crate::handoff::routing_apps(),
+        &crate::env::get().config.app_rules(),
     ));
     clues.extend(spoken_address(bundle, &live.candidates));
     Evidence {
-        address: crate::handoff::recorded_destination(dir).map(Address::Recorded),
+        address: crate::opencode::recorded_destination(dir).map(Address::Recorded),
         clues,
         candidates: live.candidates,
         now_ms: bundle.created_at_ms,
@@ -861,7 +855,7 @@ pub fn evidence_for_bundle(
     if url.is_none()
         && let Some(saved) = super::read_record(dir)
     {
-        let mut evidence = replay(saved, bundle, &crate::handoff::routing_apps());
+        let mut evidence = replay(saved, bundle, &crate::env::get().config.app_rules());
         // Captures saved before pages from file servers were looked at get that look now.
         evidence.url = evidence.url.take().or_else(recorded_url);
         let url = evidence.url.clone();
@@ -883,7 +877,7 @@ pub fn evidence_for_bundle(
         .as_deref()
         .map(|url| url_clues(url, senses, true))
         .unwrap_or_default();
-    let address = crate::handoff::recorded_destination(dir).map(Address::Recorded);
+    let address = crate::opencode::recorded_destination(dir).map(Address::Recorded);
     let (mut candidates, error) = read_for(&clues, address.as_ref(), senses);
     look_at_page(url.as_deref(), &mut clues, &mut candidates, senses);
     let live = Live {
@@ -989,7 +983,10 @@ pub fn read_candidates(
         }
     }
     let mut repos = HashMap::new();
-    Ok(raw.into_iter().map(|s| candidate(s, &mut repos)).collect())
+    Ok(raw
+        .into_iter()
+        .map(|s| candidate(s, &mut repos))
+        .collect())
 }
 
 // MARK: This Mac's own names
@@ -1095,8 +1092,8 @@ pub fn terminal_pane(bundle_id: &str) -> Option<(PathBuf, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handoff::fake_api::session;
-    use crate::web::Registration;
+    use crate::opencode::fake_api::session;
+    use crate::routing::Registration;
 
     #[test]
     fn tailscale_serve_maps_this_macs_name_to_a_loopback_port() {
@@ -1123,7 +1120,8 @@ mod tests {
 
     #[test]
     fn worktrees_share_their_repository() {
-        let base = std::env::temp_dir().join(format!("scrawl-repo-{}", crate::make_bundle_id()));
+        let base =
+            std::env::temp_dir().join(format!("scrawl-repo-{}", crate::util::make_bundle_id()));
         let main = base.join("main");
         std::fs::create_dir_all(main.join(".git/worktrees/wt")).unwrap();
         std::fs::write(main.join(".git/worktrees/wt/commondir"), "../..\n").unwrap();
@@ -1155,7 +1153,7 @@ mod tests {
         None
     }
     fn api(path: &str, _: Duration) -> Result<Vec<u8>> {
-        crate::handoff::fake_api::serve(
+        crate::opencode::fake_api::serve(
             &[
                 session("ses_board", "BOARD", "/p/board", 10),
                 session("ses_other", "OTHER", "/q", 20),
@@ -1169,7 +1167,7 @@ mod tests {
     struct World {
         reg: Option<Registration>,
         listeners: Vec<(u16, PathBuf)>,
-        sessions: Vec<crate::handoff::OpenCodeSession>,
+        sessions: Vec<crate::opencode::OpenCodeSession>,
     }
 
     thread_local! {
@@ -1193,7 +1191,7 @@ mod tests {
     }
     fn world_api(path: &str, _: Duration) -> Result<Vec<u8>> {
         let sessions = WORLD.with(|w| w.borrow().sessions.clone());
-        crate::handoff::fake_api::serve(&sessions, path)
+        crate::opencode::fake_api::serve(&sessions, path)
     }
     fn world_own_port(url: &WebUrl) -> Option<u16> {
         Some(url.port)
@@ -1204,7 +1202,8 @@ mod tests {
     #[test]
     fn the_ladder_policy_reproduces_route() {
         use super::super::smart::{Policy, decide, destination};
-        let base = std::env::temp_dir().join(format!("scrawl-ladder-{}", crate::make_bundle_id()));
+        let base =
+            std::env::temp_dir().join(format!("scrawl-ladder-{}", crate::util::make_bundle_id()));
         let repo = base.join("repo");
         std::fs::create_dir_all(repo.join(".git")).unwrap();
         std::fs::create_dir_all(repo.join("site")).unwrap();
@@ -1636,7 +1635,8 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(json).unwrap();
         let page = &value["page"];
         let (bundle, saved, _) = fixture(json);
-        let root = std::env::temp_dir().join(format!("scrawl-page-{}", crate::make_bundle_id()));
+        let root =
+            std::env::temp_dir().join(format!("scrawl-page-{}", crate::util::make_bundle_id()));
         let file = root.join(page["file"].as_str().unwrap());
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         let handle = std::fs::File::create(&file).unwrap();
@@ -1726,7 +1726,8 @@ mod tests {
         let json = ARTIFACTS[2];
         let value: serde_json::Value = serde_json::from_str(json).unwrap();
         let (bundle, saved, _) = fixture(json);
-        let root = std::env::temp_dir().join(format!("scrawl-mark-{}", crate::make_bundle_id()));
+        let root =
+            std::env::temp_dir().join(format!("scrawl-mark-{}", crate::util::make_bundle_id()));
         let file = root.join(value["page"]["file"].as_str().unwrap());
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "").unwrap();
@@ -1793,7 +1794,8 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(ONBOARDING).unwrap();
         let server = &value["server"];
         let (bundle, mut saved, _) = fixture(ONBOARDING);
-        let repo = std::env::temp_dir().join(format!("scrawl-story-{}", crate::make_bundle_id()));
+        let repo =
+            std::env::temp_dir().join(format!("scrawl-story-{}", crate::util::make_bundle_id()));
         std::fs::create_dir_all(repo.join(".git")).unwrap();
         let dir = repo.join(server["folder"].as_str().unwrap());
         std::fs::create_dir_all(&dir).unwrap();

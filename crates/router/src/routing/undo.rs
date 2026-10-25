@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{jev, policy, router};
-use crate::handoff::{self, Posted};
-use crate::log::scrawl_log;
+use crate::env::log as scrawl_log;
+use crate::opencode::{self, Posted};
 
 /// How long after a send it can be undone, unless `routing.undoWindowSec` says otherwise.
 pub const UNDO_WINDOW_SEC: u64 = 600;
@@ -138,24 +138,13 @@ impl Report {
     }
 }
 
-/// `router/deliveries`; never in tests.
+/// The host's deliveries folder ([`RouterDirs::deliveries`](crate::RouterDirs)).
 pub fn deliveries_dir() -> Option<PathBuf> {
-    router::router_dir().map(|d| d.join("deliveries"))
+    crate::env::get().dirs.deliveries.clone()
 }
 
 /// Remembers a send in [`deliveries_dir`] and says how to undo it. Failures are logged.
 pub fn remember(session: &str, title: Option<&str>, posted: &Posted, origin: Origin) -> Sent {
-    remember_in(deliveries_dir().as_deref(), session, title, posted, origin)
-}
-
-/// Remembers a send in `dir` and says how to undo it. Failures are logged.
-pub fn remember_in(
-    dir: Option<&Path>,
-    session: &str,
-    title: Option<&str>,
-    posted: &Posted,
-    origin: Origin,
-) -> Sent {
     let now = jev::now_ms();
     let record = Record {
         delivery_id: router::new_id(now),
@@ -168,11 +157,11 @@ pub fn remember_in(
         origin,
         undone: None,
     };
-    if let Some(dir) = dir {
-        if let Err(err) = write(dir, &record) {
+    if let Some(dir) = deliveries_dir() {
+        if let Err(err) = write(&dir, &record) {
             scrawl_log(format!("undo: couldn't remember a send: {err:#}"));
         }
-        router::prune(dir, KEEP_FOR);
+        router::prune(&dir, KEEP_FOR);
     }
     Sent {
         delivery_id: record.delivery_id,
@@ -220,7 +209,7 @@ fn read(dir: &Path, id: &str) -> Option<Record> {
 }
 
 /// The requests an undo makes, swappable in tests. A 4xx or 5xx answer is a
-/// [`handoff::HttpStatus`] error; anything else means the server couldn't be reached.
+/// [`opencode::HttpStatus`] error; anything else means the server couldn't be reached.
 #[derive(Clone, Copy)]
 pub struct Api {
     pub get: fn(&str) -> Result<Vec<u8>>,
@@ -229,19 +218,12 @@ pub struct Api {
     pub pause: fn(Duration),
 }
 
-struct ApiFns<'a> {
-    get: &'a dyn Fn(&str) -> Result<Vec<u8>>,
-    post: &'a dyn Fn(&str, &Value) -> Result<Vec<u8>>,
-    delete: &'a dyn Fn(&str) -> Result<Vec<u8>>,
-    pause: &'a dyn Fn(Duration),
-}
-
 impl Default for Api {
     fn default() -> Self {
         Self {
-            get: |path| handoff::api_within("GET", path, None, REQUEST),
-            post: |path, body| handoff::api_within("POST", path, Some(body), REQUEST),
-            delete: |path| handoff::api_within("DELETE", path, None, REQUEST),
+            get: |path| opencode::api_within("GET", path, None, REQUEST),
+            post: |path, body| opencode::api_within("POST", path, Some(body), REQUEST),
+            delete: |path| opencode::api_within("DELETE", path, None, REQUEST),
             pause: std::thread::sleep,
         }
     }
@@ -249,7 +231,12 @@ impl Default for Api {
 
 /// The undo window: `routing.undoWindowSec`, else ten minutes.
 pub fn window() -> Duration {
-    Duration::from_secs(handoff::routing_undo_window_sec().unwrap_or(UNDO_WINDOW_SEC))
+    Duration::from_secs(
+        crate::env::get()
+            .config
+            .undo_window_sec
+            .unwrap_or(UNDO_WINDOW_SEC),
+    )
 }
 
 /// `scrawl router undo <delivery_id>`.
@@ -261,75 +248,6 @@ pub fn undo(id: &str) -> Result<Report> {
 /// Undoes the send `id` remembered in `dir`. Errors only for a malformed ID or a server that
 /// can't be reached; an undo already made answers the same again.
 pub fn undo_with(dir: &Path, id: &str, api: &Api, window: Duration, now: u64) -> Result<Report> {
-    let fns = ApiFns {
-        get: &api.get,
-        post: &api.post,
-        delete: &api.delete,
-        pause: &api.pause,
-    };
-    undo_in(
-        dir,
-        policy::learned_file().as_deref(),
-        jev::log_path().as_deref(),
-        id,
-        &fns,
-        window,
-        now,
-    )
-}
-
-pub fn undo_with_config(
-    dirs: &crate::RouterDirs,
-    config: &crate::RouterConfig,
-    id: &str,
-    deadline: Duration,
-) -> Result<Report> {
-    let started = std::time::Instant::now();
-    let req_timeout = || {
-        let left = deadline.saturating_sub(started.elapsed());
-        REQUEST.min(left).max(Duration::from_millis(100))
-    };
-    let get = |path: &str| {
-        handoff::api_within_with_config("GET", path, None, req_timeout(), Some(config))
-    };
-    let post = |path: &str, body: &Value| {
-        handoff::api_within_with_config("POST", path, Some(body), req_timeout(), Some(config))
-    };
-    let delete = |path: &str| {
-        handoff::api_within_with_config("DELETE", path, None, req_timeout(), Some(config))
-    };
-    let pause = |dur: Duration| {
-        let left = deadline.saturating_sub(started.elapsed());
-        if !left.is_zero() {
-            std::thread::sleep(dur.min(left));
-        }
-    };
-    let fns = ApiFns {
-        get: &get,
-        post: &post,
-        delete: &delete,
-        pause: &pause,
-    };
-    undo_in(
-        &dirs.deliveries_dir(),
-        Some(&dirs.learned_file()),
-        Some(&dirs.decisions_log_path()),
-        id,
-        &fns,
-        Duration::from_secs(config.undo_window_sec),
-        jev::now_ms(),
-    )
-}
-
-fn undo_in(
-    dir: &Path,
-    learned_file: Option<&Path>,
-    log_file: Option<&Path>,
-    id: &str,
-    api: &ApiFns<'_>,
-    window: Duration,
-    now: u64,
-) -> Result<Report> {
     let id = id.trim();
     ensure!(router::valid_id(id), "{id:?} isn't a delivery ID");
     let Some(mut record) = read(dir, id) else {
@@ -346,7 +264,7 @@ fn undo_in(
     if let Err(err) = write(dir, &record) {
         scrawl_log(format!("undo: couldn't save the undo: {err:#}"));
     }
-    after(&record, undone, now, learned_file, log_file);
+    after(&record, undone, now);
     Ok(Report::of(undone, Some(&record)))
 }
 
@@ -354,7 +272,7 @@ fn undo_in(
 fn found(result: Result<Vec<u8>>) -> Result<Option<Vec<u8>>> {
     match result {
         Ok(body) => Ok(Some(body)),
-        Err(err) if handoff::http_status(&err) == Some(404) => Ok(None),
+        Err(err) if opencode::http_status(&err) == Some(404) => Ok(None),
         Err(err) => Err(err),
     }
 }
@@ -362,8 +280,8 @@ fn found(result: Result<Vec<u8>>) -> Result<Option<Vec<u8>>> {
 /// Times the inbox and messages are read before giving up on a send that keeps moving.
 const ROUNDS: usize = 3;
 
-fn take_back(record: &Record, api: &ApiFns<'_>) -> Result<Undone> {
-    let session = handoff::query_escape(&record.session);
+fn take_back(record: &Record, api: &Api) -> Result<Undone> {
+    let session = opencode::query_escape(&record.session);
     let Some(message) = record.message_id.as_deref() else {
         // Sent, but OpenCode's answer had no ID to find it by.
         return disown(&session, api);
@@ -380,12 +298,12 @@ fn take_back(record: &Record, api: &ApiFns<'_>) -> Result<Undone> {
             }
             let path = format!(
                 "/api/session/{session}/inbox/{}",
-                handoff::query_escape(message)
+                opencode::query_escape(message)
             );
             match found((api.delete)(&path)) {
                 Ok(Some(_)) => cancelled = true,
                 Ok(None) => return Ok(Undone::Gone),
-                Err(err) if handoff::http_status(&err).is_some() => {
+                Err(err) if opencode::http_status(&err).is_some() => {
                     scrawl_log(format!("undo: couldn't withdraw it ({err:#}); disowning"));
                     return disown(&session, api);
                 }
@@ -413,7 +331,7 @@ fn take_back(record: &Record, api: &ApiFns<'_>) -> Result<Undone> {
 }
 
 /// The session's waiting inbox items, by ID; `None` when the session is gone.
-fn inbox(session: &str, api: &ApiFns<'_>) -> Result<Option<Vec<String>>> {
+fn inbox(session: &str, api: &Api) -> Result<Option<Vec<String>>> {
     let Some(body) = found((api.get)(&format!("/api/session/{session}/inbox")))? else {
         return Ok(None);
     };
@@ -454,7 +372,7 @@ impl Standing {
 
 /// Reads the inbox, then (unless the send still waits) the messages. `None` when the session
 /// is gone.
-fn standing(session: &str, message: &str, api: &ApiFns<'_>) -> Result<Option<Standing>> {
+fn standing(session: &str, message: &str, api: &Api) -> Result<Option<Standing>> {
     let Some(waiting) = inbox(session, api)? else {
         return Ok(None);
     };
@@ -493,7 +411,7 @@ const QUIET: &[&str] = &[
 const SAID: &[&str] = &["user", "synthetic", "shell", "skill"];
 
 /// Reads the session's messages newest first until the sent one and the one before it.
-fn timeline(session: &str, message: &str, api: &ApiFns<'_>) -> Result<Option<Timeline>> {
+fn timeline(session: &str, message: &str, api: &Api) -> Result<Option<Timeline>> {
     let mut path = format!("/api/session/{session}/message?order=desc&limit={PAGE}");
     let mut timeline = Timeline::default();
     for _ in 0..PAGES {
@@ -532,7 +450,7 @@ fn timeline(session: &str, message: &str, api: &ApiFns<'_>) -> Result<Option<Tim
         }
         path = format!(
             "/api/session/{session}/message?cursor={}&limit={PAGE}",
-            handoff::query_escape(next)
+            opencode::query_escape(next)
         );
     }
     // Ran out of pages: it's long past, or not here.
@@ -544,7 +462,7 @@ fn timeline(session: &str, message: &str, api: &ApiFns<'_>) -> Result<Option<Tim
 
 /// Stops the turn it started and stages a revert to before it, files too. Once the turn is
 /// stopped, anything but a staged revert disowns it, which also wakes the session.
-fn revert(session: &str, message: &str, api: &ApiFns<'_>) -> Result<Undone> {
+fn revert(session: &str, message: &str, api: &Api) -> Result<Undone> {
     let interrupt = format!("/api/session/{session}/interrupt?resume=false");
     if found((api.post)(&interrupt, &json!({})))?.is_none() {
         return Ok(Undone::Gone);
@@ -566,9 +484,9 @@ fn revert(session: &str, message: &str, api: &ApiFns<'_>) -> Result<Undone> {
         match (api.post)(&stage, &body) {
             Ok(_) => return Ok(Undone::Reverted),
             // Busy while the interrupted turn winds down.
-            Err(err) if handoff::http_status(&err) == Some(409) => (api.pause)(STAGE_WAIT),
-            Err(err) if handoff::http_status(&err) == Some(404) => return Ok(Undone::Gone),
-            Err(err) if handoff::http_status(&err).is_some() => {
+            Err(err) if opencode::http_status(&err) == Some(409) => (api.pause)(STAGE_WAIT),
+            Err(err) if opencode::http_status(&err) == Some(404) => return Ok(Undone::Gone),
+            Err(err) if opencode::http_status(&err).is_some() => {
                 scrawl_log(format!(
                     "undo: couldn't stage the revert ({err:#}); disowning"
                 ));
@@ -583,12 +501,12 @@ fn revert(session: &str, message: &str, api: &ApiFns<'_>) -> Result<Undone> {
 
 /// After an interrupt, a failed request still owes the session a message: disown, or give
 /// back `err` when even that fails.
-fn disown_or(session: &str, api: &ApiFns<'_>, err: anyhow::Error) -> Result<Undone> {
+fn disown_or(session: &str, api: &Api, err: anyhow::Error) -> Result<Undone> {
     scrawl_log(format!("undo: {err:#} after the interrupt; disowning"));
     disown(session, api).map_err(|_| err)
 }
 
-fn disown(session: &str, api: &ApiFns<'_>) -> Result<Undone> {
+fn disown(session: &str, api: &Api) -> Result<Undone> {
     let path = format!("/api/session/{session}/prompt");
     let body = json!({"text": DISOWN, "delivery": "steer"});
     Ok(match found((api.post)(&path, &body))? {
@@ -598,23 +516,17 @@ fn disown(session: &str, api: &ApiFns<'_>) -> Result<Undone> {
 }
 
 /// Logs the undo as a correction, takes back the pick the send counted, and marks a capture.
-fn after(
-    record: &Record,
-    undone: Undone,
-    now: u64,
-    learned_file: Option<&Path>,
-    log_file: Option<&Path>,
-) {
+fn after(record: &Record, undone: Undone, now: u64) {
     if let Some(line) = correction(record, undone, now)
-        && let Err(err) = jev::write_correction_to(log_file, &line)
+        && let Err(err) = jev::write_correction(&line)
     {
         scrawl_log(format!("undo: correction not logged: {err:#}"));
     }
     if let Some(counted) = &record.origin.learned {
-        policy::unlearn_pick_in(learned_file, counted);
+        policy::unlearn_pick(counted);
     }
     if let Some(bundle) = &record.origin.bundle {
-        mark_capture(bundle, record, undone, now, learned_file);
+        mark_capture(bundle, record, undone, now);
     }
 }
 
@@ -654,13 +566,7 @@ pub fn correction(record: &Record, undone: Undone, now: u64) -> Option<Value> {
 
 /// A capture's `routing.json` gets `undone`, so evals don't take the session it went to as
 /// right, and loses the pick `learn_capture` counted.
-fn mark_capture(
-    bundle: &Path,
-    record: &Record,
-    undone: Undone,
-    now: u64,
-    learned_file: Option<&Path>,
-) {
+fn mark_capture(bundle: &Path, record: &Record, undone: Undone, now: u64) {
     let path = bundle.join(super::RECORD);
     let Some(mut body) = std::fs::read(&path)
         .ok()
@@ -673,7 +579,7 @@ fn mark_capture(
         .and_then(|c| serde_json::from_value::<policy::Counted>(c.clone()).ok())
         && record.origin.learned.is_none()
     {
-        policy::unlearn_pick_in(learned_file, &counted);
+        policy::unlearn_pick(&counted);
     }
     if let Some(map) = body.as_object_mut() {
         map.remove("learned");
@@ -734,7 +640,7 @@ mod tests {
     }
 
     fn status(code: u16) -> anyhow::Error {
-        handoff::HttpStatus(code).into()
+        opencode::HttpStatus(code).into()
     }
 
     fn get(path: &str) -> Result<Vec<u8>> {
@@ -834,8 +740,10 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("scrawl-undo-{name}-{}", crate::make_bundle_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-undo-{name}-{}",
+            crate::util::make_bundle_id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1150,7 +1058,7 @@ mod tests {
             });
             if path.ends_with("/revert/stage") && first {
                 FAKE.with(|f| f.borrow_mut().calls.push(format!("POST {path} {body}")));
-                return Err(anyhow::Error::new(handoff::HttpStatus(409))
+                return Err(anyhow::Error::new(opencode::HttpStatus(409))
                     .context("OpenCode API failed: HTTP 409 Conflict"));
             }
             post(path, body)
@@ -1322,7 +1230,7 @@ mod tests {
         assert_eq!(line["bundle"], "b.scrawl");
         assert_eq!(line["kind"], "capture");
         assert!(!capture_undone(&bundle));
-        mark_capture(&bundle, &record, Undone::Disowned, 9, None);
+        mark_capture(&bundle, &record, Undone::Disowned, 9);
         assert!(capture_undone(&bundle));
         let body: Value =
             serde_json::from_slice(&std::fs::read(bundle.join(super::super::RECORD)).unwrap())

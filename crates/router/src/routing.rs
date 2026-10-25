@@ -21,7 +21,7 @@ pub mod served;
 pub mod smart;
 pub mod undo;
 
-/// The experiment that routes Mac captures with [`smart`] (`handoff::experiment`).
+/// The experiment that routes Mac captures with [`smart`] ([`RouterConfig::smart_routing`](crate::RouterConfig)).
 pub const SMART_ROUTING: &str = "smartRouting";
 
 use std::path::{Path, PathBuf};
@@ -29,11 +29,35 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
-use crate::handoff::{ApiGet, OpenCodeSession};
-use crate::log::scrawl_log;
+use crate::env::log as scrawl_log;
 use crate::model::{Destination, ScrawlBundle};
-use crate::web::Registration;
+use crate::opencode::{ApiGet, OpenCodeSession};
+
+/// A page that loaded the host's `/sdk.js`, saying which session or folder it belongs to.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Registration {
+    pub origin: String,
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<String>,
+    /// A random ID per page load, so two tabs on one origin come and go separately.
+    #[serde(default)]
+    pub tab: String,
+    #[serde(default)]
+    pub seen_ms: u64,
+}
+
+/// The host's `/sdk.js` registration for `url` ([`crate::env::Pages`]), if it serves one.
+pub fn page_for(url: &str) -> Option<Registration> {
+    crate::env::get().pages.and_then(|pages| pages(url))
+}
 
 /// The parts of an `http(s)` URL routing needs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -200,7 +224,7 @@ pub fn route_with_sites(
     let mut api = within(hooks.api, SESSIONS_BUDGET);
     let ruled = match target {
         SiteTarget::Session(id) => {
-            let title = crate::handoff::get_session(&mut api, &id)
+            let title = crate::opencode::get_session(&mut api, &id)
                 .map_or_else(|_| id.clone(), |s| s.label().to_owned());
             Some(Destination {
                 session: id,
@@ -302,10 +326,7 @@ pub fn browser_tab_url(bundle_id: &str) -> Option<String> {
     (!url.is_empty()).then_some(url)
 }
 
-pub(crate) fn run_with_timeout(
-    command: &mut Command,
-    timeout: Duration,
-) -> Option<std::process::Output> {
+fn run_with_timeout(command: &mut Command, timeout: Duration) -> Option<std::process::Output> {
     use std::io::Read as _;
     let mut child = command
         .stdin(Stdio::null())
@@ -428,13 +449,13 @@ pub fn project_root(dir: &Path) -> (PathBuf, bool) {
 ///
 /// The server filters by exact directory, so that takes one request. A session in a subfolder
 /// only wins if it's newer, so the newest-first scan for one stops at the exact match's age (or
-/// after [`ROOT_SEARCH_PAGES`](crate::handoff::ROOT_SEARCH_PAGES)).
+/// after [`ROOT_SEARCH_PAGES`](crate::opencode::ROOT_SEARCH_PAGES)).
 pub fn session_for_directory(
     get: &mut ApiGet,
     root: &Path,
     whole_tree: bool,
 ) -> Result<Option<OpenCodeSession>> {
-    use crate::handoff::{ROOT_SEARCH_PAGES, Scan, find_root_session, query_escape};
+    use crate::opencode::{ROOT_SEARCH_PAGES, Scan, find_root_session, query_escape};
     if smart::is_home_or_root(root) {
         return Ok(None);
     }
@@ -473,9 +494,9 @@ pub struct Hooks {
 impl Default for Hooks {
     fn default() -> Self {
         Self {
-            sdk: crate::web::lookup,
+            sdk: page_for,
             listener_dir: listener_directory,
-            api: crate::handoff::api_get_within,
+            api: crate::opencode::api_get_within,
         }
     }
 }
@@ -523,7 +544,7 @@ pub fn route(url: &str, hooks: &Hooks) -> std::result::Result<Destination, Strin
 
     if let Some(reg) = (hooks.sdk)(url) {
         if let Some(id) = reg.session.as_deref() {
-            let title = crate::handoff::get_session(&mut api, id)
+            let title = crate::opencode::get_session(&mut api, id)
                 .map_or_else(|_| id.to_owned(), |s| s.label().to_owned());
             return Ok(Destination {
                 session: id.to_owned(),
@@ -546,11 +567,7 @@ pub fn route(url: &str, hooks: &Hooks) -> std::result::Result<Destination, Strin
 }
 
 fn routing_enabled() -> bool {
-    routing_enabled_in(&crate::handoff::engine_config())
-}
-
-fn routing_enabled_in(config: &crate::handoff::EngineConfig) -> bool {
-    config.auto_send() && std::env::var_os("SCRAWL_NO_OPENCODE").is_none()
+    crate::env::get().config.send_captures && std::env::var_os("SCRAWL_NO_OPENCODE").is_none()
 }
 
 /// Decides where a capture that just finished goes; `None` (logged) keeps it on the clipboard.
@@ -558,23 +575,15 @@ pub fn route_capture(
     front_bundle_id: Option<&str>,
     target_bundle_id: Option<&str>,
 ) -> Option<Destination> {
-    route_capture_with_config(
-        front_bundle_id,
-        target_bundle_id,
-        &crate::handoff::engine_config(),
-    )
-}
-
-pub fn route_capture_with_config(
-    front_bundle_id: Option<&str>,
-    target_bundle_id: Option<&str>,
-    config: &crate::handoff::EngineConfig,
-) -> Option<Destination> {
-    if !routing_enabled_in(config) {
+    if !routing_enabled() {
         return None;
     }
     let url = capture_url(front_bundle_id, target_bundle_id)?;
-    match route_with_sites(&url, &config.routing_sites(), &Hooks::default()) {
+    match route_with_sites(
+        &url,
+        &crate::env::get().config.site_rules(),
+        &Hooks::default(),
+    ) {
         Ok(dest) => {
             scrawl_log(format!(
                 "routing: {url} → {} ({}) via {}",
@@ -653,14 +662,7 @@ pub fn judge_capture(
         );
         (judgement, Some(record))
     } else {
-        (
-            gate_smart(
-                policy::AutoSend::configured(),
-                judgement,
-                &evidence.candidates,
-            ),
-            None,
-        )
+        (gate_smart(policy::AutoSend::configured(), judgement, &evidence.candidates), None)
     };
     if let Err(err) = write_record(dir, &evidence, &judgement, jev.as_ref()) {
         scrawl_log(format!("routing: couldn't save {RECORD}: {err:#}"));
@@ -710,8 +712,8 @@ fn gate_smart(
 /// Jev again now (one call). Read-only.
 pub fn explain_bundle(bundle: &Path, url: Option<&str>, ask_jev: bool) -> Result<String> {
     use std::fmt::Write as _;
-    let dir = crate::handoff::resolve_bundle_dir(bundle)?;
-    let (_, loaded) = crate::handoff::load_bundle(&dir)?;
+    let dir = crate::bundle::resolve_bundle_dir(bundle)?;
+    let (_, loaded) = crate::bundle::load_bundle(&dir)?;
     let (evidence, error, replayed) =
         look::evidence_for_bundle(&dir, &loaded, url, &look::Senses::default());
     let judgement = smart::decide(&evidence, smart::Policy::Weigh);
@@ -781,7 +783,11 @@ pub fn explain_bundle(bundle: &Path, url: Option<&str>, ask_jev: bool) -> Result
     }
     let today = match tab.as_deref() {
         Some(tab) => {
-            match route_with_sites(tab, &crate::handoff::routing_sites(), &Hooks::default()) {
+            match route_with_sites(
+                tab,
+                &crate::env::get().config.site_rules(),
+                &Hooks::default(),
+            ) {
                 Ok(dest) => format!("send to {} ({}) via {}", dest.title, dest.session, dest.via),
                 Err(reason) => format!("clipboard only: {reason}"),
             }
@@ -834,7 +840,7 @@ pub fn learn_capture(dir: &Path, session: &str) -> Option<policy::OfferRule> {
     }
     let candidate = evidence.candidates.iter().find(|c| c.id == session)?;
     let folder = policy::rule_folder(candidate)?;
-    let bundle_id = crate::handoff::load_bundle(dir)
+    let bundle_id = crate::bundle::load_bundle(dir)
         .ok()
         .and_then(|(_, bundle)| bundle.target.bundle_id);
     let (counted, offer) =
@@ -857,14 +863,14 @@ pub fn read_record(dir: &Path) -> Option<smart::Evidence> {
     serde_json::from_value(value.get("evidence")?.clone()).ok()
 }
 
-/// Writes `dest` into the bundle's `scrawl.json` and `summary.md`.
+/// Writes `dest` into the bundle's `scrawl.json`, and its `summary.md` when the host writes
+/// summaries ([`crate::env::Summary`]).
 pub fn record_destination(dir: &Path, bundle: &mut ScrawlBundle, dest: Destination) -> Result<()> {
     bundle.destination = Some(dest);
     std::fs::write(dir.join("scrawl.json"), serde_json::to_vec_pretty(bundle)?)?;
-    std::fs::write(
-        dir.join("summary.md"),
-        crate::sketch::summary_markdown(bundle, dir),
-    )?;
+    if let Some(summary) = crate::env::get().summary {
+        std::fs::write(dir.join("summary.md"), summary(bundle, dir))?;
+    }
     Ok(())
 }
 
@@ -908,10 +914,7 @@ mod tests {
             let smart::Decision::Offer { choices } = &gated.decision else {
                 unreachable!()
             };
-            assert_eq!(
-                choices[0].candidate.id, "ses_viewed",
-                "the pick comes first"
-            );
+            assert_eq!(choices[0].candidate.id, "ses_viewed", "the pick comes first");
         }
         assert!(!offered(&gate_smart(
             policy::AutoSend::Confident,
@@ -931,7 +934,7 @@ mod tests {
     }
 
     fn session(id: &str, dir: &str, updated: u64) -> OpenCodeSession {
-        crate::handoff::fake_api::session(id, &id.to_uppercase(), dir, updated)
+        crate::opencode::fake_api::session(id, &id.to_uppercase(), dir, updated)
     }
 
     #[test]
@@ -1008,7 +1011,8 @@ mod tests {
 
     #[test]
     fn project_root_walks_up_to_git() {
-        let base = std::env::temp_dir().join(format!("scrawl-root-{}", crate::make_bundle_id()));
+        let base =
+            std::env::temp_dir().join(format!("scrawl-root-{}", crate::util::make_bundle_id()));
         let site = base.join("repo/site/src");
         std::fs::create_dir_all(&site).unwrap();
         std::fs::create_dir_all(base.join("repo/.git")).unwrap();
@@ -1085,7 +1089,7 @@ mod tests {
             let found = session_for_directory(
                 &mut |path: &str| {
                     requests += 1;
-                    crate::handoff::fake_api::serve(sessions, path)
+                    crate::opencode::fake_api::serve(sessions, path)
                 },
                 Path::new(root),
                 tree,
@@ -1095,14 +1099,11 @@ mod tests {
             (found, requests)
         };
         // Exact folder: one filtered request.
-        assert_eq!(
-            pick(&sessions, "/p/app", false),
-            (Some("ses_app".into()), 1)
-        );
+        assert_eq!(pick(&sessions, "/p/app", false), (Some("ses_app".into()), 1));
         // A subfolder needs a newest-first scan, which is capped: past it the exact match stands.
         let (found, requests) = pick(&sessions, "/p/app", true);
         assert_eq!(found.as_deref(), Some("ses_app"));
-        assert_eq!(requests, 1 + crate::handoff::ROOT_SEARCH_PAGES);
+        assert_eq!(requests, 1 + crate::opencode::ROOT_SEARCH_PAGES);
         assert_eq!(pick(&sessions, "/p/none", false), (None, 1));
         assert_eq!(pick(&sessions, "/", true), (None, 0));
 
@@ -1140,7 +1141,7 @@ mod tests {
         (port == 4321).then(|| PathBuf::from("/p/app"))
     }
     fn api(path: &str, _: Duration) -> Result<Vec<u8>> {
-        crate::handoff::fake_api::serve(
+        crate::opencode::fake_api::serve(
             &[
                 session("ses_sdk", "/elsewhere", 5),
                 session("ses_app", "/p/app", 10),
@@ -1161,7 +1162,7 @@ mod tests {
             .map(|i| session(&format!("ses_{i}"), "/q", 1_000 + i))
             .chain([session("ses_app", "/p/app", 10)])
             .collect();
-        crate::handoff::fake_api::serve(&sessions, path)
+        crate::opencode::fake_api::serve(&sessions, path)
     }
 
     #[test]
@@ -1245,8 +1246,10 @@ mod tests {
 
     #[test]
     fn destination_is_recorded_and_preferred_by_send() {
-        let dir =
-            std::env::temp_dir().join(format!("scrawl-route-{}.scrawl", crate::make_bundle_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-route-{}.scrawl",
+            crate::util::make_bundle_id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let mut bundle: ScrawlBundle = serde_json::from_value(serde_json::json!({
             "version": 1, "id": "t", "createdAtMs": 0, "durationMs": 1_000,
@@ -1256,7 +1259,7 @@ mod tests {
             "strokes": [], "marks": [], "events": [], "keyframes": [], "contactSheet": "c.png"
         }))
         .unwrap();
-        assert_eq!(crate::handoff::recorded_destination(&dir), None);
+        assert_eq!(crate::opencode::recorded_destination(&dir), None);
         record_destination(
             &dir,
             &mut bundle,
@@ -1269,15 +1272,14 @@ mod tests {
             },
         )
         .unwrap();
-        let summary = std::fs::read_to_string(dir.join("summary.md")).unwrap();
         assert!(
-            summary.contains("For session: APP (ses_app) · page http://localhost:4321/"),
-            "{summary}"
+            !dir.join("summary.md").exists(),
+            "no summary without the host's"
         );
-        let (_, loaded) = crate::handoff::load_bundle(&dir).unwrap();
+        let (_, loaded) = crate::bundle::load_bundle(&dir).unwrap();
         assert_eq!(loaded.destination.unwrap().via, "localhost");
         assert_eq!(
-            crate::handoff::recorded_destination(&dir).as_deref(),
+            crate::opencode::recorded_destination(&dir).as_deref(),
             Some("ses_app")
         );
         std::fs::remove_dir_all(dir).unwrap();
