@@ -1655,7 +1655,8 @@ pub fn send_bundle_to_session(bundle_dir: &Path, session: &str) -> Result<()> {
     Ok(())
 }
 
-/// Queues `text` into an OpenCode session as a prompt (`scrawl router deliver`).
+/// Sends `text` into an OpenCode session as a prompt (`scrawl router deliver`), steering or
+/// queueing per `delivery_mode`.
 pub fn send_text_to_session(session: &str, text: &str) -> Result<()> {
     ensure!(
         session.starts_with("ses")
@@ -1667,7 +1668,7 @@ pub fn send_text_to_session(session: &str, text: &str) -> Result<()> {
     opencode_api(
         "post",
         &format!("/api/session/{session}/prompt"),
-        Some(&serde_json::json!({ "text": text, "delivery": "queue" })),
+        Some(&serde_json::json!({ "text": text, "delivery": delivery_mode() })),
     )?;
     Ok(())
 }
