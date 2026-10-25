@@ -23,12 +23,13 @@ const MIN_CHUNK_MS: u64 = 15_000;
 const VOICED_OVER_FLOOR: f64 = 2.0;
 const VOICED_MIN_RMS: f64 = 0.001;
 const VOICED_MAX_RMS: f64 = 0.01;
-/// A recording with no voiced window at all (speech too quiet for the voiced threshold) still
-/// sends each chunk whose level moves, as the old planner sent such a recording whole, once it
-/// lasts this long: the chunk's loudest window is above `SILENT_RMS` and `STEADY_OVER_FLOOR`
-/// times its own noise floor. Silence and white noise stay flat; band-limited noise may not,
-/// which is why this applies only when nothing in the recording is voiced.
+/// A chunk with no voiced window is still sent when the old planner would have sent the whole
+/// recording (no 120 ms island above `audio::island_threshold`, and it lasts this long) and the
+/// chunk's level moves: its loudest window is above `SILENT_RMS` and `STEADY_OVER_FLOOR` times
+/// its own noise floor. So nothing the old planner heard is left out unless it is flat
+/// (silence, white noise), and noise after audible speech is not sent, as before.
 const UNSURE_MIN_MS: u64 = 480;
+const OLD_MIN_ISLAND_MS: u64 = 120;
 const SILENT_RMS: f64 = 0.000_1;
 const STEADY_OVER_FLOOR: f64 = 1.25;
 
@@ -46,11 +47,16 @@ impl Plan {
         let threshold =
             (audio::noise_floor(&rms) * VOICED_OVER_FLOOR).clamp(VOICED_MIN_RMS, VOICED_MAX_RMS);
         let voiced = audio::islands_above(&rms, threshold, duration);
+        // The old planner's condition for sending everything: no speech island of 120 ms.
+        let all_quiet = duration >= UNSURE_MIN_MS
+            && audio::islands_above(&rms, audio::island_threshold(&rms), duration)
+                .iter()
+                .all(|&(a, b)| b - a < OLD_MIN_ISLAND_MS);
         let chunks = cuts(&rms, duration)
             .into_iter()
             .filter(|&(start, end)| {
                 voiced.iter().any(|&(a, b)| a < end && b > start)
-                    || (voiced.is_empty() && duration >= UNSURE_MIN_MS && moves(&rms, start, end))
+                    || (all_quiet && moves(&rms, start, end))
             })
             .collect();
         Plan { chunks, voiced }
@@ -602,6 +608,48 @@ mod tests {
         let chunks = Plan::new(&samples).chunks().to_vec();
         assert_eq!(chunks.len(), 1, "{chunks:?}");
         assert_eq!(chunks[0].0, 0);
+    }
+
+    #[test]
+    fn quiet_speech_the_old_planner_sent_whole_is_still_heard_beside_voiced_speech() {
+        // A 0.002 phrase is voiced but under the old island level, so the old planner sent the
+        // whole recording; the later whisper's chunk has no voiced window of its own.
+        let samples = recording(&[(0.002, 1_000), (0.0, 29_000), (0.0008, 200), (0.0, 4_800)]);
+        let plan = Plan::new(&samples);
+        assert!(crate::audio::speech_islands(&samples).is_empty());
+        assert!(
+            covers(&heard(&samples, &plan), 30_000, 30_200),
+            "{:?}",
+            plan.chunks()
+        );
+    }
+
+    #[test]
+    fn quiet_speech_under_the_old_island_level_keeps_the_old_fallback() {
+        // Voiced speech at 0.003 that the old planner never counted as an island, then a word
+        // under the voiced level more than 30 s later: the old planner sent all of it.
+        let mut samples = noise(0.0003, 60_000, 0.0);
+        let louder = |range: std::ops::Range<u64>, level: f32, samples: &mut Vec<f32>| {
+            for (i, s) in samples
+                [(range.start * SAMPLES_PER_MS) as usize..(range.end * SAMPLES_PER_MS) as usize]
+                .iter_mut()
+                .enumerate()
+            {
+                *s += if i % 2 == 0 { level } else { -level };
+            }
+        };
+        louder(0..10_000, 0.003, &mut samples);
+        louder(45_000..46_000, 0.0008, &mut samples);
+        let plan = Plan::new(&samples);
+        assert!(!plan.voiced().is_empty());
+        assert!(
+            covers(&heard(&samples, &plan), 45_000, 46_000),
+            "{:?}",
+            plan.chunks()
+        );
+        // A recording of rumble alone is still sent, as the old planner sent it whole.
+        let rumble = noise(0.004, 30_000, 100.0);
+        assert_eq!(Plan::new(&rumble).chunks(), [(0, 30_000)]);
     }
 
     #[test]

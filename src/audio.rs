@@ -319,9 +319,13 @@ pub fn speech_islands(samples_16k: &[f32]) -> Vec<(u64, u64)> {
     if rms.is_empty() {
         return Vec::new();
     }
-    let threshold = (noise_floor(&rms) * 3.0).clamp(0.005, 0.02);
     let duration = samples_16k.len() as u64 * 1_000 / u64::from(SAMPLE_RATE);
-    islands_above(&rms, threshold, duration)
+    islands_above(&rms, island_threshold(&rms), duration)
+}
+
+/// The level `speech_islands` counts as speech: 3x the noise floor, within 0.005..0.02.
+pub fn island_threshold(rms: &[f64]) -> f64 {
+    (noise_floor(rms) * 3.0).clamp(0.005, 0.02)
 }
 
 /// The RMS level of each `WINDOW_MS` window of `samples_16k` (the last one may be shorter).
