@@ -1605,6 +1605,7 @@ impl RuneCoordinator {
             }
         };
         match effect {
+            Effect::ShowSettings => self.open_settings(None),
             Effect::Close | Effect::Settings => {
                 if effect == Effect::Settings {
                     self.open_settings(None);
