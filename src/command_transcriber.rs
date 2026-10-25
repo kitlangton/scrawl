@@ -1,7 +1,8 @@
 //! The command transcriber (`"transcriber": "command"`): Scrawl runs a program the user names
 //! (`"transcribeCommand"`, an argv array) on the recording's WAV and reads one versioned JSON
 //! transcript from its stdout. A small wrapper adapts any local model to it; Scrawl knows about
-//! none of them.
+//! none of them. `"transcribeCommands"` lists more of them, each with its own `displayName`,
+//! chosen with `"transcriber": "command:<id>"` (`Commands`).
 //!
 //! The program runs without a shell, in its own process group, with stdin `/dev/null` and
 //! stderr discarded, under a wall-clock limit and an 8 MiB stdout cap. On timeout or overflow
@@ -71,6 +72,12 @@ pub enum Unusable {
     NotAbsolute,
     BadTimeout,
     Unsupported,
+    /// `transcribeCommands` is there but not an array.
+    CommandsNotAList,
+    /// The `transcribeCommands` entry at this index.
+    Entry(usize, Problem),
+    /// `transcriber` names a `command:<id>` that no entry has.
+    NotConfigured,
 }
 
 impl std::fmt::Display for Unusable {
@@ -81,11 +88,48 @@ impl std::fmt::Display for Unusable {
             Self::NotAbsolute => "transcribeCommand[0] is not an absolute path",
             Self::BadTimeout => "transcribeTimeoutSeconds is not a positive number",
             Self::Unsupported => "the command transcriber only runs on macOS for now",
+            Self::CommandsNotAList => "transcribeCommands is not a list",
+            Self::Entry(index, problem) => {
+                return write!(f, "transcribeCommands[{index}] {problem}");
+            }
+            Self::NotConfigured => "no command in the config has the chosen id",
         })
     }
 }
 
 impl std::error::Error for Unusable {}
+
+/// What is wrong with one `transcribeCommands` entry. Fixed text: never its argv or its label.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Problem {
+    NotAnObject,
+    NoDisplayName,
+    BadId,
+    NeedsId,
+    ReservedId,
+    DuplicateId,
+    NoCommand,
+    NotAList,
+    NotAbsolute,
+    BadTimeout,
+}
+
+impl std::fmt::Display for Problem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotAnObject => "is not an object",
+            Self::NoDisplayName => "has no displayName",
+            Self::BadId => "has an id that isn't lowercase letters, digits and dashes",
+            Self::NeedsId => "needs an id: its displayName has no letters or digits",
+            Self::ReservedId => "can't use the id \"command\", which is transcribeCommand's",
+            Self::DuplicateId => "shares its id with another entry",
+            Self::NoCommand => "has no command",
+            Self::NotAList => "has a command that is not a list of strings",
+            Self::NotAbsolute => "has a command whose first item is not an absolute path",
+            Self::BadTimeout => "has a timeoutSeconds that is not a positive number",
+        })
+    }
+}
 
 /// Why a run gave no transcript. `Display` is fixed text, safe to log.
 #[derive(Debug, PartialEq, Eq)]
@@ -133,6 +177,154 @@ fn display_name(value: Option<&Value>) -> Option<String> {
     (!name.is_empty()).then(|| name.to_owned())
 }
 
+/// The config file at `path` as JSON, `null` when missing or malformed.
+fn read_config(path: &Path) -> Value {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// An argv array: `Ok(None)` when unset, `Err` when not a list of strings.
+fn argv(value: Option<&Value>) -> Result<Option<Vec<String>>, ()> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| item.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .map(Some)
+            .ok_or(()),
+        Some(_) => Err(()),
+    }
+}
+
+/// A limit in seconds: `Ok(None)` when unset, `Err` unless a positive number.
+fn timeout(value: Option<&Value>) -> Result<Option<Duration>, ()> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => match value.as_f64() {
+            Some(seconds) if seconds > 0.0 && seconds.is_finite() => Ok(Some(
+                Duration::from_secs_f64(seconds.min(MAX_TIMEOUT_SECONDS)),
+            )),
+            _ => Err(()),
+        },
+    }
+}
+
+/// The id of the single `transcribeCommand`: `"transcriber": "command"` chooses it.
+const LEGACY_ID: &str = "command";
+
+/// `name` as an id: lowercase ASCII letters and digits, anything else between them one dash
+/// ("Whisper Large V3" is "whisper-large-v3"). Empty when `name` has no letter or digit.
+fn slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+/// The command a `transcriber` value chooses: `"command"` is `transcribeCommand`'s id,
+/// `"command:<id>"` a `transcribeCommands` entry's. `None` for any other value.
+pub fn command_id(transcriber: &str) -> Option<String> {
+    let choice = transcriber.trim().to_ascii_lowercase();
+    if choice == LEGACY_ID {
+        return Some(choice);
+    }
+    let id = choice.strip_prefix("command:")?.trim();
+    (!id.is_empty()).then(|| id.to_owned())
+}
+
+/// The `transcriber` value that chooses the command `id`, as Settings saves it.
+pub fn choice_for(id: &str) -> String {
+    if id == LEGACY_ID {
+        LEGACY_ID.to_owned()
+    } else {
+        format!("command:{id}")
+    }
+}
+
+/// Every configured command: `transcribeCommand` (id `"command"`), then each
+/// `transcribeCommands` entry. The one place a `transcriber` value becomes a program.
+pub struct Commands {
+    /// Each command with its id (`None` when it can't be told), usable or not.
+    entries: Vec<(Option<String>, Result<Program, Unusable>)>,
+    /// `transcribeCommands` is set but isn't an array.
+    list_malformed: bool,
+}
+
+impl Commands {
+    /// Reads only the command keys of the config file at `path`, like `Program::load_from`.
+    pub fn load_from(path: &Path) -> Self {
+        Self::from_config(&read_config(path))
+    }
+
+    fn from_config(config: &Value) -> Self {
+        let mut entries = vec![(Some(LEGACY_ID.to_owned()), Program::legacy(config))];
+        let list_malformed = match config.get("transcribeCommands") {
+            None | Some(Value::Null) => false,
+            Some(Value::Array(list)) => {
+                entries.extend(
+                    list.iter()
+                        .enumerate()
+                        .map(|(index, entry)| Program::entry(index, entry)),
+                );
+                false
+            }
+            Some(_) => true,
+        };
+        // An id two entries share chooses neither: which one was meant can't be told.
+        let ids: Vec<Option<String>> = entries.iter().map(|(id, _)| id.clone()).collect();
+        for (position, (id, program)) in entries.iter_mut().enumerate().skip(1) {
+            let shared = id.is_some()
+                && ids
+                    .iter()
+                    .enumerate()
+                    .any(|(other, other_id)| other != position && other_id == id);
+            if shared {
+                *program = Err(Unusable::Entry(position - 1, Problem::DuplicateId));
+            }
+        }
+        Self {
+            entries,
+            list_malformed,
+        }
+    }
+
+    /// The program the `transcriber` value `choice` names, or why there is none.
+    pub fn selected(&self, choice: &str) -> Result<Program, Unusable> {
+        let id = command_id(choice).ok_or(Unusable::NotConfigured)?;
+        match self
+            .entries
+            .iter()
+            .find(|(entry_id, _)| entry_id.as_deref() == Some(id.as_str()))
+        {
+            Some((_, program)) => program.clone(),
+            None if self.list_malformed => Err(Unusable::CommandsNotAList),
+            None => Err(Unusable::NotConfigured),
+        }
+    }
+
+    /// The usable commands as `(transcriber value, title)`, in config order: what a settings
+    /// menu offers. Never runs anything.
+    pub fn menu(&self) -> Vec<(String, String)> {
+        self.entries
+            .iter()
+            .filter_map(|(id, program)| {
+                Some((choice_for(id.as_deref()?), program.as_ref().ok()?.title()))
+            })
+            .collect()
+    }
+}
+
 impl Program {
     /// `argv[0]` must be an absolute path; `timeout` replaces the default limit.
     fn new(argv: Vec<String>, timeout: Option<Duration>) -> Result<Self, Unusable> {
@@ -153,35 +345,66 @@ impl Program {
     /// Reads only the command keys of the config file at `path`, so a malformed one never
     /// affects the rest of the config (and the rest never affects these).
     pub fn load_from(path: &Path) -> Result<Self, Unusable> {
-        let config: Value = std::fs::read(path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        let argv = match config.get("transcribeCommand") {
-            None | Some(Value::Null) => return Err(Unusable::Missing),
-            Some(Value::Array(items)) => items
-                .iter()
-                .map(|item| item.as_str().map(str::to_owned))
-                .collect::<Option<Vec<_>>>()
-                .ok_or(Unusable::NotAList)?,
-            Some(_) => return Err(Unusable::NotAList),
-        };
-        let timeout = match config.get("transcribeTimeoutSeconds") {
-            None | Some(Value::Null) => None,
-            Some(value) => match value.as_f64() {
-                Some(seconds) if seconds > 0.0 && seconds.is_finite() => {
-                    Some(Duration::from_secs_f64(seconds.min(MAX_TIMEOUT_SECONDS)))
-                }
-                _ => return Err(Unusable::BadTimeout),
-            },
-        };
+        Self::legacy(&read_config(path))
+    }
+
+    /// The single command of `transcribeCommand`, `transcribeTimeoutSeconds` and
+    /// `transcribeCommandDisplayName`.
+    fn legacy(config: &Value) -> Result<Self, Unusable> {
+        let argv = argv(config.get("transcribeCommand"))
+            .map_err(|()| Unusable::NotAList)?
+            .ok_or(Unusable::Missing)?;
+        let timeout =
+            timeout(config.get("transcribeTimeoutSeconds")).map_err(|()| Unusable::BadTimeout)?;
         let mut program = Self::new(argv, timeout)?;
         program.display_name = display_name(config.get("transcribeCommandDisplayName"));
         Ok(program)
     }
 
-    /// What a settings menu calls this engine: `transcribeCommandDisplayName`, else
-    /// "Command (<file name>)".
+    /// The `transcribeCommands` entry at `index`, with its id when one can be told (even if the
+    /// entry is otherwise unusable, so choosing it reports what is wrong with it).
+    fn entry(index: usize, entry: &Value) -> (Option<String>, Result<Self, Unusable>) {
+        let fail = |problem| Err(Unusable::Entry(index, problem));
+        let Some(entry) = entry.as_object() else {
+            return (None, fail(Problem::NotAnObject));
+        };
+        let name = display_name(entry.get("displayName"));
+        let id = match entry.get("id") {
+            None | Some(Value::Null) => match &name {
+                None => return (None, fail(Problem::NoDisplayName)),
+                Some(name) => slug(name),
+            },
+            Some(id) => match id.as_str() {
+                Some(id) if !id.is_empty() && slug(id) == id => id.to_owned(),
+                _ => return (None, fail(Problem::BadId)),
+            },
+        };
+        if id.is_empty() {
+            return (None, fail(Problem::NeedsId));
+        }
+        if id == LEGACY_ID {
+            return (None, fail(Problem::ReservedId));
+        }
+        let program = (|| {
+            let display_name = name.ok_or(Unusable::Entry(index, Problem::NoDisplayName))?;
+            let argv = argv(entry.get("command"))
+                .map_err(|()| Unusable::Entry(index, Problem::NotAList))?
+                .ok_or(Unusable::Entry(index, Problem::NoCommand))?;
+            let timeout = timeout(entry.get("timeoutSeconds"))
+                .map_err(|()| Unusable::Entry(index, Problem::BadTimeout))?;
+            let mut program = Self::new(argv, timeout).map_err(|unusable| match unusable {
+                Unusable::NotAbsolute => Unusable::Entry(index, Problem::NotAbsolute),
+                Unusable::NotAList => Unusable::Entry(index, Problem::NotAList),
+                other => other,
+            })?;
+            program.display_name = Some(display_name);
+            Ok(program)
+        })();
+        (Some(id), program)
+    }
+
+    /// What a settings menu calls this engine: its display name (`transcribeCommandDisplayName`,
+    /// or a `transcribeCommands` entry's `displayName`), else "Command (<file name>)".
     pub fn title(&self) -> String {
         self.display_name
             .clone()
@@ -781,6 +1004,312 @@ mod tests {
         );
     }
 
+    fn commands(json: &str) -> Commands {
+        Commands::from_config(&serde_json::from_str(json).unwrap())
+    }
+
+    fn menu(commands: &Commands) -> Vec<(String, String)> {
+        commands.menu()
+    }
+
+    fn item(id: &str, title: &str) -> (String, String) {
+        (id.to_owned(), title.to_owned())
+    }
+
+    #[test]
+    fn ids_and_choices() {
+        assert_eq!(slug("Whisper Large V3"), "whisper-large-v3");
+        assert_eq!(slug("  Parakeet (v2) "), "parakeet-v2");
+        assert_eq!(slug("--a__b--"), "a-b");
+        assert_eq!(slug("日本語"), "");
+        assert_eq!(command_id("command").as_deref(), Some("command"));
+        assert_eq!(command_id(" Command ").as_deref(), Some("command"));
+        assert_eq!(command_id("command:parakeet").as_deref(), Some("parakeet"));
+        assert_eq!(
+            command_id("COMMAND: Parakeet ").as_deref(),
+            Some("parakeet")
+        );
+        assert_eq!(command_id("command:command").as_deref(), Some("command"));
+        for none in ["command:", "command: ", "apple", "hex", "commands", ""] {
+            assert_eq!(command_id(none), None, "{none}");
+        }
+        assert_eq!(choice_for("command"), "command");
+        assert_eq!(choice_for("parakeet"), "command:parakeet");
+    }
+
+    #[test]
+    fn a_legacy_command_alone_is_chosen_by_command_as_before() {
+        let legacy = commands(
+            r#"{"transcribeCommand":["/opt/stt/whisper-scrawl","{audio}"],"transcribeTimeoutSeconds":600}"#,
+        );
+        let program = legacy.selected("command").unwrap();
+        assert_eq!(program.name(), "whisper-scrawl");
+        assert_eq!(program.limit(SECOND), Duration::from_secs(600));
+        assert_eq!(legacy.selected(" Command:Command "), Ok(program));
+        assert_eq!(
+            menu(&legacy),
+            vec![item("command", "Command (whisper-scrawl)")]
+        );
+        assert_eq!(
+            legacy.selected("command:whisper"),
+            Err(Unusable::NotConfigured)
+        );
+        assert_eq!(legacy.selected("apple"), Err(Unusable::NotConfigured));
+
+        // Exactly today's reasons for the single command.
+        let none = commands("{}");
+        assert_eq!(none.selected("command"), Err(Unusable::Missing));
+        assert!(menu(&none).is_empty());
+        assert_eq!(
+            commands(r#"{"transcribeCommand":["whisper"]}"#).selected("command"),
+            Err(Unusable::NotAbsolute)
+        );
+        assert_eq!(
+            commands(r#"{"transcribeCommand":["/bin/w"],"transcribeTimeoutSeconds":0}"#)
+                .selected("command"),
+            Err(Unusable::BadTimeout)
+        );
+    }
+
+    #[test]
+    fn a_list_alone_offers_each_entry_by_its_id() {
+        let list = commands(
+            r#"{"transcribeTimeoutSeconds":5,"transcribeCommands":[
+                {"displayName":" Whisper Large V3 ","command":["/opt/stt/whisper-scrawl","--model","large-v3","{audio}"],"timeoutSeconds":600},
+                {"id":"para","displayName":"Parakeet","command":["/opt/stt/parakeet-scrawl"]}
+            ]}"#,
+        );
+        assert_eq!(
+            menu(&list),
+            vec![
+                item("command:whisper-large-v3", "Whisper Large V3"),
+                item("command:para", "Parakeet"),
+            ]
+        );
+        let whisper = list.selected("command:whisper-large-v3").unwrap();
+        assert_eq!(whisper.name(), "whisper-scrawl");
+        assert_eq!(whisper.title(), "Whisper Large V3");
+        assert_eq!(whisper.limit(SECOND), Duration::from_secs(600));
+        assert_eq!(
+            whisper.arguments(Path::new("/a.wav")),
+            ["--model", "large-v3", "/a.wav"].map(OsString::from)
+        );
+        // `transcribeTimeoutSeconds` is the single command's alone.
+        let parakeet = list.selected("command:para").unwrap();
+        assert_eq!(parakeet.limit(SECOND), Duration::from_secs(300));
+        assert_eq!(parakeet.title(), "Parakeet");
+        // Its slug is not another name for an entry with an id.
+        assert_eq!(
+            list.selected("command:parakeet"),
+            Err(Unusable::NotConfigured)
+        );
+        assert_eq!(list.selected("command"), Err(Unusable::Missing));
+    }
+
+    #[test]
+    fn the_single_command_comes_first_and_both_are_offered() {
+        let both = commands(
+            r#"{"transcribeCommand":["/opt/stt/whisper-scrawl"],"transcribeCommandDisplayName":"Whisper",
+                "transcribeCommands":[{"displayName":"Parakeet","command":["/opt/stt/parakeet-scrawl"]}]}"#,
+        );
+        assert_eq!(
+            menu(&both),
+            vec![
+                item("command", "Whisper"),
+                item("command:parakeet", "Parakeet")
+            ]
+        );
+        assert_eq!(both.selected("command").unwrap().name(), "whisper-scrawl");
+        assert_eq!(
+            both.selected("command:parakeet").unwrap().name(),
+            "parakeet-scrawl"
+        );
+    }
+
+    #[test]
+    fn an_id_two_entries_share_chooses_neither() {
+        let shared = commands(
+            r#"{"transcribeCommands":[
+                {"displayName":"Whisper","command":["/opt/a"]},
+                {"displayName":"Parakeet","command":["/opt/b"]},
+                {"id":"whisper","displayName":"Other","command":["/opt/c"]},
+                {"displayName":"WHISPER!","command":"not a list"}
+            ]}"#,
+        );
+        assert_eq!(menu(&shared), vec![item("command:parakeet", "Parakeet")]);
+        assert_eq!(
+            shared.selected("command:whisper"),
+            Err(Unusable::Entry(0, Problem::DuplicateId))
+        );
+        let reasons: Vec<_> = shared
+            .entries
+            .iter()
+            .map(|(_, p)| p.clone().err())
+            .collect();
+        assert_eq!(
+            reasons,
+            vec![
+                Some(Unusable::Missing),
+                Some(Unusable::Entry(0, Problem::DuplicateId)),
+                None,
+                Some(Unusable::Entry(2, Problem::DuplicateId)),
+                Some(Unusable::Entry(3, Problem::DuplicateId)),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unusable_entry_says_why_when_chosen_and_never_hides_the_others() {
+        let problem = |entry: &str, choice: &str| {
+            commands(&format!(
+                r#"{{"transcribeCommands":[{entry},{{"displayName":"Ok","command":["/opt/ok"]}}]}}"#
+            ))
+            .selected(choice)
+        };
+        let cases = [
+            (
+                r#"{"id":"x","command":["/opt/x"]}"#,
+                "command:x",
+                Problem::NoDisplayName,
+            ),
+            (
+                r#"{"id":"x","displayName":"  ","command":["/opt/x"]}"#,
+                "command:x",
+                Problem::NoDisplayName,
+            ),
+            (
+                r#"{"id":"x","displayName":7,"command":["/opt/x"]}"#,
+                "command:x",
+                Problem::NoDisplayName,
+            ),
+            (r#"{"displayName":"X"}"#, "command:x", Problem::NoCommand),
+            (
+                r#"{"displayName":"X","command":"/opt/x {audio}"}"#,
+                "command:x",
+                Problem::NotAList,
+            ),
+            (
+                r#"{"displayName":"X","command":[]}"#,
+                "command:x",
+                Problem::NotAList,
+            ),
+            (
+                r#"{"displayName":"X","command":["/opt/x",1]}"#,
+                "command:x",
+                Problem::NotAList,
+            ),
+            (
+                r#"{"displayName":"X","command":["x"]}"#,
+                "command:x",
+                Problem::NotAbsolute,
+            ),
+            (
+                r#"{"displayName":"X","command":["/opt/x"],"timeoutSeconds":-1}"#,
+                "command:x",
+                Problem::BadTimeout,
+            ),
+            (
+                r#"{"displayName":"X","command":["/opt/x"],"timeoutSeconds":"60"}"#,
+                "command:x",
+                Problem::BadTimeout,
+            ),
+        ];
+        for (entry, choice, expected) in cases {
+            assert_eq!(
+                problem(entry, choice),
+                Err(Unusable::Entry(0, expected)),
+                "{entry}"
+            );
+            assert!(problem(entry, "command:ok").is_ok(), "{entry}");
+        }
+        // Entries whose id can't be told can't be chosen at all.
+        for entry in [
+            "7",
+            r#"{"command":["/opt/x"]}"#,
+            r#"{"id":"Bad Id","displayName":"X","command":["/opt/x"]}"#,
+            r#"{"id":"","displayName":"X","command":["/opt/x"]}"#,
+            r#"{"displayName":"日本語","command":["/opt/x"]}"#,
+            r#"{"displayName":"Command","command":["/opt/x"]}"#,
+        ] {
+            assert_eq!(
+                problem(entry, "command:x"),
+                Err(Unusable::NotConfigured),
+                "{entry}"
+            );
+        }
+        let reasons = |entry: &str| {
+            commands(&format!(r#"{{"transcribeCommands":[{entry}]}}"#)).entries[1]
+                .1
+                .clone()
+                .unwrap_err()
+        };
+        assert_eq!(reasons("7"), Unusable::Entry(0, Problem::NotAnObject));
+        assert_eq!(
+            reasons(r#"{"command":["/opt/x"]}"#),
+            Unusable::Entry(0, Problem::NoDisplayName)
+        );
+        assert_eq!(
+            reasons(r#"{"id":"Bad Id","displayName":"X"}"#),
+            Unusable::Entry(0, Problem::BadId)
+        );
+        assert_eq!(
+            reasons(r#"{"displayName":"日本語"}"#),
+            Unusable::Entry(0, Problem::NeedsId)
+        );
+        assert_eq!(
+            reasons(r#"{"id":"command","displayName":"X"}"#),
+            Unusable::Entry(0, Problem::ReservedId)
+        );
+        assert_eq!(
+            Unusable::Entry(2, Problem::NotAbsolute).to_string(),
+            "transcribeCommands[2] has a command whose first item is not an absolute path"
+        );
+    }
+
+    #[test]
+    fn a_malformed_list_leaves_the_single_command_alone() {
+        let malformed = commands(
+            r#"{"transcribeCommand":["/opt/stt/whisper-scrawl"],"transcribeCommands":{"parakeet":["/opt/p"]}}"#,
+        );
+        assert_eq!(
+            malformed.selected("command:parakeet"),
+            Err(Unusable::CommandsNotAList)
+        );
+        assert!(malformed.selected("command").is_ok());
+        assert_eq!(
+            menu(&malformed),
+            vec![item("command", "Command (whisper-scrawl)")]
+        );
+        // `null` is unset.
+        assert_eq!(
+            commands(r#"{"transcribeCommands":null}"#).selected("command:x"),
+            Err(Unusable::NotConfigured)
+        );
+    }
+
+    #[test]
+    fn commands_load_from_the_config_file_on_their_own() {
+        let dir = Dir::new();
+        let path = dir.0.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"autoSend":"nope","transcribeCommands":[{"displayName":"Parakeet","command":["/opt/p"]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            Commands::load_from(&path)
+                .selected("command:parakeet")
+                .unwrap()
+                .title(),
+            "Parakeet"
+        );
+        assert!(
+            Commands::load_from(&dir.0.join("none.json"))
+                .menu()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn the_default_limit_grows_with_the_audio() {
         let program = Program::new(vec!["/bin/true".into()], None).unwrap();
@@ -1358,6 +1887,23 @@ exit 0"#,
         }
         let unusable = Program::load_from(&dir.0.join("none")).unwrap_err();
         said.push(unusable.to_string());
+        let secret_entries = commands(
+            r#"{"transcribeCommands":[
+                {"id":"a","displayName":"SECRET","command":["SECRET"]},
+                {"id":"b","displayName":"SECRET","command":["/SECRET"],"timeoutSeconds":"SECRET"},
+                {"id":"c","command":["/SECRET"]},
+                {"id":"SECRET","displayName":"SECRET","command":["/SECRET"]}
+            ]}"#,
+        );
+        for (_, program) in &secret_entries.entries {
+            if let Err(unusable) = program {
+                said.push(unusable.to_string());
+                said.push(format!("{unusable:?}"));
+            }
+        }
+        for choice in ["command:a", "command:secret", "command:SECRET"] {
+            said.push(secret_entries.selected(choice).unwrap_err().to_string());
+        }
         assert!(said.len() > bodies.len() * 2, "{said:?}");
         for line in &said {
             assert!(!line.contains("SECRET"), "{line}");

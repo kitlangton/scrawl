@@ -448,9 +448,9 @@ pub struct Config {
     /// Feature flag: shows **Export Last Capture as Video…** in the menu (default off).
     #[serde(default)]
     pub video_export: Option<bool>,
-    /// `"apple"` (default), `"hex"` or `"command"`: which engine transcribes recordings
-    /// (`transcribe`). The command's own keys are read by `transcribe_command`, not here, so a
-    /// malformed one can't reset this struct.
+    /// `"apple"` (default), `"hex"`, `"command"` or `"command:<id>"`: which engine transcribes
+    /// recordings (`transcribe`). The commands' own keys are read by `transcribe_command`, not
+    /// here, so a malformed one can't reset this struct.
     #[serde(default)]
     pub transcriber: Option<String>,
     /// Lower the output volume while recording (`playback`) to `playbackLevel` percent of it.
@@ -806,11 +806,12 @@ pub fn apple_locale_from(config: &Config) -> Option<String> {
         .and_then(crate::speech_model::locale_id)
 }
 
-/// The command transcriber's program (`transcribeCommand`, `transcribeTimeoutSeconds`), read
-/// on its own from the config file.
-pub fn transcribe_command()
--> Result<crate::command_transcriber::Program, crate::command_transcriber::Unusable> {
-    crate::command_transcriber::Program::load_from(&default_config_path())
+/// The program the `transcriber` value `choice` names (`transcribeCommand` or a
+/// `transcribeCommands` entry), read on its own from the config file.
+pub fn transcribe_command(
+    choice: &str,
+) -> Result<crate::command_transcriber::Program, crate::command_transcriber::Unusable> {
+    crate::command_transcriber::Commands::load_from(&default_config_path()).selected(choice)
 }
 
 /// Whether the native AppKit + Metal recording pill is enabled (`SCRAWL_NATIVE_PILL` or
@@ -1936,11 +1937,11 @@ mod tests {
         let path = fixture.0.join("config.json");
         fs::write(
             &path,
-            br#"{"transcriber":"command","autoSend":false,"transcribeCommand":"whisper {audio}","transcribeTimeoutSeconds":"soon"}"#,
+            br#"{"transcriber":"command:whisper","autoSend":false,"transcribeCommand":"whisper {audio}","transcribeTimeoutSeconds":"soon","transcribeCommands":{"whisper":7}}"#,
         )
         .unwrap();
         let config = load_config_from(&path);
-        assert_eq!(config.transcriber.as_deref(), Some("command"));
+        assert_eq!(config.transcriber.as_deref(), Some("command:whisper"));
         assert_eq!(config.auto_send, Some(false));
     }
 

@@ -827,16 +827,24 @@ fn microphone_view(
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriberView {
-    /// What recordings use now: "apple", "hex" or "command".
-    pub engine: &'static str,
+    /// What recordings use now: "apple", "hex", or the `id` of one of `commands`.
+    pub engine: String,
     pub hex_title: &'static str,
     pub hex_enabled: bool,
     pub language: String,
     pub apple_locale: String,
     pub models: Vec<ModelView>,
-    /// The Command menu entry's title while `transcribeCommand` is usable (read, never run);
-    /// Command is offered only then. Every UI shows it as is.
-    pub command_title: Option<String>,
+    /// The usable commands (read, never run), in config order: `transcribeCommand`, then each
+    /// `transcribeCommands` entry. Every UI shows each title as is.
+    pub commands: Vec<CommandView>,
+}
+
+/// A command in the Transcription menu.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CommandView {
+    /// The `transcriber` value that chooses it: "command" or "command:<id>".
+    pub id: String,
+    pub title: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -960,7 +968,7 @@ fn shortcut_view(
 pub enum Action {
     /// A settings control: `launchAtLogin`, `autoSend`, `videoExport`, `lowerPlayback` (bool),
     /// `playbackLevel` (u8), `microphone` ("default" or a device id), `transcriber`
-    /// ("apple"/"hex"/"command"), `hexModel` (an id), `hexLanguage` (a code), `appleLocale`
+    /// ("apple"/"hex"/"command"/"command:<id>"), `hexModel` (an id), `hexLanguage` (a code), `appleLocale`
     /// (a locale id or "auto"), `retention` (a preset id).
     Set {
         key: String,
@@ -1208,8 +1216,8 @@ impl Panel {
                 }
             }
             ("transcriber", serde_json::Value::String(name)) => {
-                if let Some(engine) = crate::transcribe::Engine::parse(name) {
-                    write("transcriber", engine.name().into());
+                if let Some(choice) = crate::transcribe::canonical(name) {
+                    write("transcriber", choice.into());
                 }
             }
             ("hexModel", serde_json::Value::String(model)) if !model.trim().is_empty() => {
@@ -1302,9 +1310,14 @@ impl Panel {
             .and_then(crate::transcribe::Engine::parse)
             .unwrap_or_default();
         let menu = crate::transcribe::menu_state(engine, hex.as_ref(), config.hex_model.as_deref());
-        let command = crate::command_transcriber::Program::load_from(&host.config_path())
-            .ok()
-            .map(|program| program.title());
+        let commands = crate::command_transcriber::Commands::load_from(&host.config_path());
+        // The chosen command, when it is usable: what recordings would run.
+        let command = config
+            .transcriber
+            .as_deref()
+            .filter(|_| engine == crate::transcribe::Engine::Command)
+            .filter(|choice| commands.selected(choice).is_ok())
+            .and_then(crate::transcribe::canonical);
         let policy = crate::retention::Policy::load_from(&host.config_path());
         let login = login_item();
         // Windows asks for no screen or accessibility grant, and has no cabled iPhone.
@@ -1351,10 +1364,10 @@ impl Panel {
             lower_playback: config.lower_playback.unwrap_or(false),
             playback_level: config.recording_volume(),
             transcriber: TranscriberView {
-                engine: match engine {
-                    crate::transcribe::Engine::Command if command.is_some() => "command",
-                    _ if menu.hex_checked => "hex",
-                    _ => "apple",
+                engine: match command {
+                    Some(choice) => choice,
+                    None if menu.hex_checked => "hex".into(),
+                    None => "apple".into(),
                 },
                 hex_title: menu.hex_title,
                 hex_enabled: menu.hex_enabled,
@@ -1366,7 +1379,11 @@ impl Panel {
                     .into_iter()
                     .map(|(id, title, chosen)| ModelView { id, title, chosen })
                     .collect(),
-                command_title: command,
+                commands: commands
+                    .menu()
+                    .into_iter()
+                    .map(|(id, title)| CommandView { id, title })
+                    .collect(),
             },
             video_export: config.video_export.unwrap_or(false),
             retention: RetentionView {
@@ -2522,9 +2539,16 @@ mod tests {
         let dir = TempDir::new("command");
         let mut host = fake(&dir);
         let mut panel = Panel::default();
+        let titles = |view: &TranscriberView| {
+            view.commands
+                .iter()
+                .map(|c| (c.id.clone(), c.title.clone()))
+                .collect::<Vec<_>>()
+        };
+        let pair = |id: &str, title: &str| (id.to_owned(), title.to_owned());
         std::fs::write(&host.path, r#"{"transcriber":"command"}"#).unwrap();
         let view = panel.view(&host).transcriber;
-        assert_eq!((view.engine, view.command_title), ("apple", None));
+        assert_eq!((view.engine.as_str(), view.commands), ("apple", vec![]));
 
         std::fs::write(
             &host.path,
@@ -2533,7 +2557,10 @@ mod tests {
         .unwrap();
         let view = panel.view(&host).transcriber;
         assert_eq!(view.engine, "apple");
-        assert_eq!(view.command_title.as_deref(), Some("Command (whisper-scrawl)"));
+        assert_eq!(
+            titles(&view),
+            vec![pair("command", "Command (whisper-scrawl)")]
+        );
 
         std::fs::write(
             &host.path,
@@ -2541,7 +2568,7 @@ mod tests {
         )
         .unwrap();
         let view = panel.view(&host).transcriber;
-        assert_eq!(view.command_title.as_deref(), Some("Whisper Large V3"));
+        assert_eq!(titles(&view), vec![pair("command", "Whisper Large V3")]);
 
         std::fs::write(
             &host.path,
@@ -2556,6 +2583,63 @@ mod tests {
             &mut host,
         );
         assert_eq!(read_json(&host.path)["transcriber"], "command");
+        assert_eq!(panel.view(&host).transcriber.engine, "command");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn every_usable_command_is_offered_and_choosing_one_saves_its_id() {
+        let dir = TempDir::new("commands");
+        let mut host = fake(&dir);
+        let mut panel = Panel::default();
+        let config = |transcriber: &str| {
+            format!(
+                r#"{{"transcriber":"{transcriber}","transcribeCommand":["/opt/stt/whisper-scrawl","{{audio}}"],"transcribeCommandDisplayName":"Whisper Large V3","transcribeCommands":[
+                    {{"displayName":"Parakeet","command":["/opt/stt/parakeet-scrawl"]}},
+                    {{"id":"turbo","displayName":"Whisper Turbo","command":["/opt/stt/whisper-scrawl","--turbo"]}},
+                    {{"displayName":"Broken","command":["parakeet"]}}
+                ]}}"#
+            )
+        };
+        std::fs::write(&host.path, config("apple")).unwrap();
+        let view = panel.view(&host).transcriber;
+        assert_eq!(view.engine, "apple");
+        assert_eq!(
+            view.commands,
+            vec![
+                CommandView {
+                    id: "command".into(),
+                    title: "Whisper Large V3".into()
+                },
+                CommandView {
+                    id: "command:parakeet".into(),
+                    title: "Parakeet".into()
+                },
+                CommandView {
+                    id: "command:turbo".into(),
+                    title: "Whisper Turbo".into()
+                },
+            ]
+        );
+
+        panel.on(
+            Action::Set {
+                key: "transcriber".into(),
+                value: "Command:Parakeet".into(),
+            },
+            &mut host,
+        );
+        assert_eq!(read_json(&host.path)["transcriber"], "command:parakeet");
+        assert_eq!(panel.view(&host).transcriber.engine, "command:parakeet");
+        // The rest of the config is kept.
+        assert_eq!(read_json(&host.path)["transcribeCommands"][1]["id"], "turbo");
+
+        // A chosen command that is gone, or unusable, is Apple, as recordings would be.
+        for gone in ["command:whisper-large-v3", "command:broken", "command:"] {
+            std::fs::write(&host.path, config(gone)).unwrap();
+            assert_eq!(panel.view(&host).transcriber.engine, "apple", "{gone}");
+        }
+        std::fs::write(&host.path, config("command")).unwrap();
         assert_eq!(panel.view(&host).transcriber.engine, "command");
     }
 

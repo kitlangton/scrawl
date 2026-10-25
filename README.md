@@ -710,9 +710,9 @@ Or in
 { "transcriber": "hex", "hexModel": "whisper_large_v3_turbo", "hexLanguage": "nl" }
 ```
 
-`"transcriber"` is `"apple"` (default), `"hex"` or `"command"` (below); `hexModel` defaults to the
-first ready one of `parakeet_unified_en`, `parakeet_v3`, `parakeet_v2`, `whisper_large_v3_turbo`.
-Scrawl never downloads or prepares a Hex model: install it in Hex first.
+`"transcriber"` is `"apple"` (default), `"hex"`, `"command"` or `"command:<id>"` (below);
+`hexModel` defaults to the first ready one of `parakeet_unified_en`, `parakeet_v3`, `parakeet_v2`,
+`whisper_large_v3_turbo`. Scrawl never downloads or prepares a Hex model: install it in Hex first.
 
 **Language** in Settings › Recording picks the language Apple Speech transcribes; **Automatic**
 (the default) follows the Mac's language. In config it's `"appleLocale"`, e.g. `"zh-TW"` for
@@ -736,7 +736,7 @@ and ignore the hint.
   `"estimated": true`; because those times are approximate, spoken cues ("now", "here") don't cut
   keyframes from a Hex transcript. Marks, clicks, laser and scene changes still do.
 - `scrawl hex status` shows whether Hex is connected, its ready models and what the next recording
-  will use. `scrawl reprocess <bundle> --out … --transcriber hex|apple|command` (also
+  will use. `scrawl reprocess <bundle> --out … --transcriber hex|apple|command|command:<id>` (also
   `scrawl import`) picks an engine for one run.
 
 ### Your own model (command)
@@ -766,6 +766,31 @@ stays in the file):
   or not a string means unset), and the transcript's `source` still says `command:<file name>`.
 - `transcribeTimeoutSeconds` is optional, a positive number of seconds: by default the limit is
   `max(300, 60 + 10 × audio seconds)`, wall clock from the start, model loading included.
+- Several models: list them in `transcribeCommands`, and Settings › Recording › **Transcription**
+  offers each one by its `displayName`, after **Command** if `transcribeCommand` is set too:
+
+  ```json
+  {
+    "transcriber": "command:parakeet",
+    "transcribeCommands": [
+      {
+        "id": "whisper",
+        "displayName": "Whisper Large V3",
+        "command": ["/usr/local/bin/whisper-scrawl", "--model", "large-v3", "{audio}"],
+        "timeoutSeconds": 600
+      },
+      { "displayName": "Parakeet", "command": ["/usr/local/bin/parakeet-scrawl", "{audio}"] }
+    ]
+  }
+  ```
+
+  Each entry needs a `displayName` and a `command` (the same rules as `transcribeCommand`);
+  `timeoutSeconds` is optional, like `transcribeTimeoutSeconds`, which applies only to
+  `transcribeCommand`. `"transcriber": "command:<id>"` chooses one. Its `id` defaults to the
+  `displayName` in lowercase with dashes (`"Parakeet"` is `parakeet`, `"Whisper Large V3"` is
+  `whisper-large-v3`); an `id` you set must look like that. `"command"` stays
+  `transcribeCommand`'s, and an id two entries share chooses neither. A broken entry only hides
+  itself, and choosing an id that is gone or broken means Apple Speech, as below.
 - The program gets the whole recording as one 16 kHz mono 16-bit WAV, `SCRAWL_TRANSCRIBE_VERSION=1`
   and `SCRAWL_AUDIO=<path>`, stdin `/dev/null`, and its own process group. Its stderr is discarded.
   It must not change the audio, daemonize or leave processes behind, and must cope with two runs at
@@ -792,11 +817,12 @@ stays in the file):
 - Spans may overlap or be zero-length; Scrawl sorts them by `t0`. Ends up to 500 ms past the audio
   are clamped. A negative, fractional or reversed span, or one further past the end, makes Scrawl
   drop that array and keep the text, spreading it as above when `words` are dropped.
-- The transcript says `"source": "command:<file name of argv[0]>"`. Anything else going wrong (a
-  malformed `transcribeCommand` or timeout, the program missing, a non-zero exit, a timeout, invalid
-  JSON, another version) means Apple Speech transcribes that recording. Each problem is one line in
-  `~/Library/Logs/Scrawl` (a malformed config only once), never with the program's output,
-  arguments or what was said.
+- The transcript says `"source": "command:<file name of argv[0]>"`, whichever entry ran it (the
+  program's `model` tells two runs of one wrapper apart). Anything else going wrong (a
+  malformed `transcribeCommand`, entry or timeout, a chosen id no usable entry has, the program
+  missing, a non-zero exit, a timeout, invalid JSON, another version) means Apple Speech
+  transcribes that recording. Each problem is one line in `~/Library/Logs/Scrawl` (a malformed
+  config only once), never with the program's output, arguments or what was said.
 
 ### Transcribing while recording (experiment)
 

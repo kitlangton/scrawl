@@ -85,9 +85,10 @@ struct Cli {
     command: Option<Command>,
 }
 
-fn parse_engine(name: &str) -> Result<crate::transcribe::Engine, String> {
-    crate::transcribe::Engine::parse(name)
-        .ok_or_else(|| "expected `apple`, `hex` or `command`".to_owned())
+/// A `--transcriber` value, canonical (`transcribe::canonical`).
+fn parse_engine(name: &str) -> Result<String, String> {
+    crate::transcribe::canonical(name)
+        .ok_or_else(|| "expected `apple`, `hex`, `command` or `command:<id>`".to_owned())
 }
 
 /// `scrawl hex status`: connection, models and what the next recording would use.
@@ -95,7 +96,7 @@ fn hex_status() {
     let preferred = transcribe::Engine::configured();
     println!("Preferred transcriber: {}", preferred.name());
     // Never runs the program; argv is not printed.
-    let command = handoff::transcribe_command();
+    let command = handoff::transcribe_command(&handoff::transcriber().unwrap_or_default());
     if preferred == transcribe::Engine::Command {
         match &command {
             Ok(program) => println!("Command: {}", program.name()),
@@ -103,7 +104,7 @@ fn hex_status() {
         }
     }
     let next = |hex_model: Option<&str>| match (preferred, hex_model, &command) {
-        (transcribe::Engine::Command, _, Ok(program)) => format!("Command ({})", program.name()),
+        (transcribe::Engine::Command, _, Ok(program)) => program.title(),
         (transcribe::Engine::Hex, Some(model), _) => format!("Hex ({model})"),
         _ => transcribe::LOCAL_ENGINE_TITLE.to_owned(),
     };
@@ -263,9 +264,10 @@ enum Command {
         /// Copy the summary to the clipboard.
         #[arg(long)]
         clipboard: bool,
-        /// Transcribe with `apple`, `hex` or `command` instead of the configured transcriber.
+        /// Transcribe with `apple`, `hex`, `command` or `command:<id>` instead of the configured
+        /// transcriber.
         #[arg(long, value_parser = parse_engine)]
-        transcriber: Option<crate::transcribe::Engine>,
+        transcriber: Option<String>,
     },
     /// List cabled iPhones and iPads that can be captured.
     Devices,
@@ -301,9 +303,10 @@ enum Command {
         /// many times real time first, as if recording, so the finish only transcribes the tail.
         #[arg(long, hide = true, requires = "bench")]
         live_speed: Option<f64>,
-        /// Transcribe with `apple`, `hex` or `command` instead of the configured transcriber.
+        /// Transcribe with `apple`, `hex`, `command` or `command:<id>` instead of the configured
+        /// transcriber.
         #[arg(long, value_parser = parse_engine)]
-        transcriber: Option<crate::transcribe::Engine>,
+        transcriber: Option<String>,
         /// Turn an experiment on for this run, as `"experiments"` in `config.json` would
         /// (e.g. `agentContext`). Repeatable.
         #[arg(long = "experiment", value_name = "NAME")]
@@ -1688,8 +1691,8 @@ fn main() -> Result<()> {
             clipboard,
             transcriber,
         } => {
-            if let Some(engine) = transcriber {
-                transcribe::set_override(engine);
+            if let Some(choice) = transcriber {
+                transcribe::set_override(choice);
             }
             let (movie, timeline) =
                 phone::resolve_import(recording.as_deref(), timeline.as_deref())?;
@@ -1721,8 +1724,8 @@ fn main() -> Result<()> {
             transcriber,
             experiments,
         } => {
-            if let Some(engine) = transcriber {
-                transcribe::set_override(engine);
+            if let Some(choice) = transcriber {
+                transcribe::set_override(choice);
             }
             for name in &experiments {
                 handoff::enable_experiment(name);
