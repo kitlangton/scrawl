@@ -761,6 +761,9 @@ stays in the file):
   without one, the path is the last argument. Put your model's language in it too (`--language nl`):
   Settings' **Language** is Apple Speech's alone. These keys are read on their own, so a mistake in
   them never resets the rest of the config.
+- `transcribeCommandDisplayName` is optional: the name Settings shows for the model, such as
+  `"Whisper Large V3"`, instead of **Command (whisper-scrawl)**. It's only a label (trimmed; blank
+  or not a string means unset), and the transcript's `source` still says `command:<file name>`.
 - `transcribeTimeoutSeconds` is optional, a positive number of seconds: by default the limit is
   `max(300, 60 + 10 × audio seconds)`, wall clock from the start, model loading included.
 - The program gets the whole recording as one 16 kHz mono 16-bit WAV, `SCRAWL_TRANSCRIBE_VERSION=1`

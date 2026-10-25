@@ -834,9 +834,9 @@ pub struct TranscriberView {
     pub language: String,
     pub apple_locale: String,
     pub models: Vec<ModelView>,
-    /// The program's file name while `transcribeCommand` is usable (read, never run); Command
-    /// is offered only then.
-    pub command: Option<String>,
+    /// The Command menu entry's title while `transcribeCommand` is usable (read, never run);
+    /// Command is offered only then. Every UI shows it as is.
+    pub command_title: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1304,7 +1304,7 @@ impl Panel {
         let menu = crate::transcribe::menu_state(engine, hex.as_ref(), config.hex_model.as_deref());
         let command = crate::command_transcriber::Program::load_from(&host.config_path())
             .ok()
-            .map(|program| program.name());
+            .map(|program| program.title());
         let policy = crate::retention::Policy::load_from(&host.config_path());
         let login = login_item();
         // Windows asks for no screen or accessibility grant, and has no cabled iPhone.
@@ -1366,7 +1366,7 @@ impl Panel {
                     .into_iter()
                     .map(|(id, title, chosen)| ModelView { id, title, chosen })
                     .collect(),
-                command,
+                command_title: command,
             },
             video_export: config.video_export.unwrap_or(false),
             retention: RetentionView {
@@ -2524,7 +2524,7 @@ mod tests {
         let mut panel = Panel::default();
         std::fs::write(&host.path, r#"{"transcriber":"command"}"#).unwrap();
         let view = panel.view(&host).transcriber;
-        assert_eq!((view.engine, view.command), ("apple", None));
+        assert_eq!((view.engine, view.command_title), ("apple", None));
 
         std::fs::write(
             &host.path,
@@ -2533,8 +2533,21 @@ mod tests {
         .unwrap();
         let view = panel.view(&host).transcriber;
         assert_eq!(view.engine, "apple");
-        assert_eq!(view.command.as_deref(), Some("whisper-scrawl"));
+        assert_eq!(view.command_title.as_deref(), Some("Command (whisper-scrawl)"));
 
+        std::fs::write(
+            &host.path,
+            r#"{"transcribeCommand":["/opt/stt/whisper-scrawl","{audio}"],"transcribeCommandDisplayName":" Whisper Large V3 "}"#,
+        )
+        .unwrap();
+        let view = panel.view(&host).transcriber;
+        assert_eq!(view.command_title.as_deref(), Some("Whisper Large V3"));
+
+        std::fs::write(
+            &host.path,
+            r#"{"transcriber":"apple","transcribeCommand":["/opt/stt/whisper-scrawl","{audio}"]}"#,
+        )
+        .unwrap();
         panel.on(
             Action::Set {
                 key: "transcriber".into(),
