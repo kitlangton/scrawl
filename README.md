@@ -286,6 +286,9 @@ scrawl route --browser com.brave.Browser   # the browser's front tab
 Turn it off with **Send dev-site captures to OpenCode** in Settings › General, or `"autoSend": false` in
 `~/.config/scrawl/config.json`. `SCRAWL_NO_OPENCODE=1` also turns it off.
 
+A capture sent to a session that's busy joins the turn it's working on, the way a message typed
+while it works does. To have it wait until the turn ends instead, set `"delivery": "queue"`.
+
 ## Auto-crop (Screen captures)
 
 Instead of picking an area up front, record the whole screen: tap `⌥⇧S`, or choose **Screen**.
