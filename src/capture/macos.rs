@@ -18,12 +18,12 @@ use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 
 use super::{
     CANDIDATE_EDGE, CANDIDATE_EDGE_NO_VIDEO, CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY,
-    CARBON_SHIFT_KEY, Event, FRAME_SAMPLE_INTERVAL, Sampler, SharedCaptureTelemetry,
+    CARBON_SHIFT_KEY, Event, FRAME_SAMPLE_INTERVAL, InputEvent, Sampler, SharedCaptureTelemetry,
     ShortcutConfig, ShortcutKind, capture_size, clean_label, hotkey_combos, pick_display,
-    poll_clicks, track_shift_ink,
+    poll_clicks, pure_shift_state, track_shift_ink,
 };
 use crate::log::scrawl_log;
-use crate::model::{CaptureMode, InteractionEvent, RgbaFrame, TargetInfo};
+use crate::model::{CaptureMode, RgbaFrame, TargetInfo};
 
 /// Recordings may hold up to twice a frame's size in points (Retina pixels).
 pub const MAX_CAPTURE_SCALE: f64 = 2.0;
@@ -1559,49 +1559,41 @@ fn mouse_event(
     }
     let event_type = unsafe { CGEventGetType(event) };
     let flags = unsafe { CGEventGetFlags(event) };
-    let pure_shift =
+    let shift_only =
         (flags & FLAG_SHIFT) != 0 && (flags & (FLAG_COMMAND | FLAG_CONTROL | FLAG_ALTERNATE)) == 0;
     let t_ms = telemetry.elapsed_ms();
     let loc = unsafe { CGEventGetLocation(event) };
-    match event_type {
-        // A ⇧-press is never a click: a ⇧-click drops a pin, a ⇧-drag is ink (the poller's).
-        EVENT_LEFT_MOUSE_DOWN | EVENT_RIGHT_MOUSE_DOWN if !on_scrawl(loc.x, loc.y) => {
-            if !pure_shift {
-                telemetry.pointer_down(t_ms, loc.x, loc.y);
-            } else if event_type == EVENT_LEFT_MOUSE_DOWN {
-                telemetry.shift_down(t_ms, loc.x, loc.y);
-            }
-        }
-        EVENT_LEFT_MOUSE_UP | EVENT_RIGHT_MOUSE_UP => {
-            let right = event_type == EVENT_RIGHT_MOUSE_UP;
-            let shift_press = !right && telemetry.shift_up(t_ms, loc.x, loc.y);
-            if !shift_press && !pure_shift {
-                telemetry.pointer_up(t_ms, loc.x, loc.y, right);
-            }
-        }
+    let input = match event_type {
+        EVENT_LEFT_MOUSE_DOWN | EVENT_RIGHT_MOUSE_DOWN => InputEvent::ButtonDown {
+            t_ms,
+            x: loc.x,
+            y: loc.y,
+            right: event_type == EVENT_RIGHT_MOUSE_DOWN,
+            shift_only,
+        },
+        EVENT_LEFT_MOUSE_UP | EVENT_RIGHT_MOUSE_UP => InputEvent::ButtonUp {
+            t_ms,
+            x: loc.x,
+            y: loc.y,
+            right: event_type == EVENT_RIGHT_MOUSE_UP,
+            shift_only,
+        },
         EVENT_SCROLL_WHEEL => {
             let dy =
-                unsafe { CGEventGetIntegerValueField(event, SCROLL_WHEEL_DELTA_AXIS_1) } as f32;
+                unsafe { CGEventGetIntegerValueField(event, SCROLL_WHEEL_DELTA_AXIS_1) } as f64;
             let dx =
-                unsafe { CGEventGetIntegerValueField(event, SCROLL_WHEEL_DELTA_AXIS_2) } as f32;
-            if (dx.abs() > 0.0 || dy.abs() > 0.0) && !on_scrawl(loc.x, loc.y) {
-                let (nx, ny, _, _) = telemetry.normalize_point(loc.x, loc.y);
-                telemetry
-                    .events
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(InteractionEvent::Scroll {
-                        t: t_ms,
-                        x: nx,
-                        y: ny,
-                        dx,
-                        dy,
-                        label: None,
-                    });
+                unsafe { CGEventGetIntegerValueField(event, SCROLL_WHEEL_DELTA_AXIS_2) } as f64;
+            InputEvent::Scroll {
+                t_ms,
+                x: loc.x,
+                y: loc.y,
+                dx,
+                dy,
             }
         }
-        _ => {}
-    }
+        _ => return,
+    };
+    telemetry.handle_input_with(input, on_scrawl);
 }
 
 /// Stops the key tap (Accessibility was turned off). The port and its callback's `Arc` are left
@@ -1741,15 +1733,10 @@ unsafe extern "C" fn key_tap_callback(
                 chord.push('⌘');
             }
             chord.push_str(&key_name);
-            telemetry.window_log_request.store(true, Ordering::Release);
-            telemetry
-                .events
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(InteractionEvent::Key {
-                    t: t_ms,
-                    shortcut: chord,
-                });
+            telemetry.handle_input(InputEvent::KeyChord {
+                t_ms,
+                shortcut: chord,
+            });
         }
     }
     event
@@ -1843,11 +1830,7 @@ fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
         let ctrl = (flags & FLAG_CONTROL) != 0;
         let alt = (flags & FLAG_ALTERNATE) != 0;
         let shift = (flags & FLAG_SHIFT) != 0;
-        if !shift {
-            await_shift_release = false;
-        } else if cmd || ctrl || alt {
-            await_shift_release = true;
-        }
+        let pure_shift = pure_shift_state(shift, cmd || ctrl || alt, &mut await_shift_release);
         let mod_mask =
             (u8::from(cmd) << 3) | (u8::from(ctrl) << 2) | (u8::from(alt) << 1) | u8::from(shift);
         if mod_mask != prev_mod_mask {
@@ -1886,7 +1869,6 @@ fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
             |x, y| telemetry.on_scrawl_window(x, y),
         );
 
-        let pure_shift = shift && !cmd && !ctrl && !alt && !await_shift_release;
         // Hold Shift + move cursor inside the capture target = draw a persistent stroke.
         track_shift_ink(&telemetry, (loc.x, loc.y), pure_shift, prev_shift_ink);
 
@@ -1952,7 +1934,7 @@ fn ansi_key_char(keycode: u16) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::TargetFrame;
+    use crate::model::{InteractionEvent, TargetFrame};
 
     #[test]
     fn shortcut_keys_are_named_by_the_layout_not_their_qwerty_position() {

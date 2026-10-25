@@ -31,13 +31,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::{
-    CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY, CARBON_SHIFT_KEY, Event, Sampler,
-    SharedCaptureTelemetry, ShortcutConfig, ShortcutKind, clean_label, hotkey_combos,
-    layout_default_keycode, pick_display, poll_clicks, shortcut_label, shortcut_matches,
-    track_shift_ink,
+    CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY, CARBON_SHIFT_KEY, Event, InputEvent,
+    Sampler, SharedCaptureTelemetry, ShortcutConfig, ShortcutKind, clean_label, hotkey_combos,
+    layout_default_keycode, pick_display, poll_clicks, pure_shift_state, shortcut_label,
+    shortcut_matches, track_shift_ink,
 };
 use crate::log::scrawl_log;
-use crate::model::{CaptureMode, InteractionEvent, TargetFrame, TargetInfo};
+use crate::model::{CaptureMode, TargetFrame, TargetInfo};
 use crate::win;
 
 /// Frames are pixels already: a recording keeps at most the screen's own resolution.
@@ -863,15 +863,10 @@ fn handle_hook_event(telemetry: &SharedCaptureTelemetry, event: HookEvent) {
                     }
                 }
                 let t_ms = telemetry.elapsed_ms();
-                telemetry.window_log_request.store(true, Ordering::Release);
-                telemetry
-                    .events
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(InteractionEvent::Key {
-                        t: t_ms,
-                        shortcut: shortcut_label(carbon, &key),
-                    });
+                telemetry.handle_input(InputEvent::KeyChord {
+                    t_ms,
+                    shortcut: shortcut_label(carbon, &key),
+                });
             }
         }
         HookEvent::Button {
@@ -885,41 +880,37 @@ fn handle_hook_event(telemetry: &SharedCaptureTelemetry, event: HookEvent) {
                 return;
             }
             let t_ms = telemetry.elapsed_ms();
-            // A Shift-press is never a click: a Shift-click drops a pin, a Shift-drag is ink.
-            if down {
-                // Scrawl's own controls (the HUD) aren't part of what is being shown.
-                if !telemetry.on_scrawl_window(x, y) {
-                    if !pure_shift {
-                        telemetry.pointer_down(t_ms, x, y);
-                    } else if !right {
-                        telemetry.shift_down(t_ms, x, y);
-                    }
+            let event = if down {
+                InputEvent::ButtonDown {
+                    t_ms,
+                    x,
+                    y,
+                    right,
+                    shift_only: pure_shift,
                 }
             } else {
-                let shift_press = !right && telemetry.shift_up(t_ms, x, y);
-                if !shift_press && !pure_shift {
-                    telemetry.pointer_up(t_ms, x, y, right);
+                InputEvent::ButtonUp {
+                    t_ms,
+                    x,
+                    y,
+                    right,
+                    shift_only: pure_shift,
                 }
-            }
+            };
+            telemetry.handle_input(event);
         }
         HookEvent::Wheel { x, y, dx, dy } => {
-            if !telemetry.active.load(Ordering::Acquire) || telemetry.on_scrawl_window(x, y) {
+            if !telemetry.active.load(Ordering::Acquire) {
                 return;
             }
             let t_ms = telemetry.elapsed_ms();
-            let (nx, ny, _, _) = telemetry.normalize_point(x, y);
-            telemetry
-                .events
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(InteractionEvent::Scroll {
-                    t: t_ms,
-                    x: nx,
-                    y: ny,
-                    dx,
-                    dy,
-                    label: None,
-                });
+            telemetry.handle_input(InputEvent::Scroll {
+                t_ms,
+                x,
+                y,
+                dx: f64::from(dx),
+                dy: f64::from(dy),
+            });
         }
     }
 }
@@ -1007,11 +998,7 @@ fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
             alt,
             shift,
         } = mods;
-        if !shift {
-            await_shift_release = false;
-        } else if win || ctrl || alt {
-            await_shift_release = true;
-        }
+        let pure_shift = pure_shift_state(shift, win || ctrl || alt, &mut await_shift_release);
 
         // Esc for the picker, from key state while the keyboard hook is off.
         let escape_now = key_down(VK_ESCAPE.0);
@@ -1080,7 +1067,6 @@ fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
             |x, y| telemetry.on_scrawl_window(x, y),
         );
 
-        let pure_shift = shift && !win && !ctrl && !alt && !await_shift_release;
         // Hold Shift + move the cursor inside the capture target = draw a persistent stroke.
         track_shift_ink(&telemetry, (x, y), pure_shift, prev_shift_ink);
         prev_shift_ink = pure_shift;

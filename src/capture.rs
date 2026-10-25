@@ -694,6 +694,178 @@ pub fn boot_time_ns() -> u64 {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct InkSnapshot {
+    pub target: TargetFrame,
+    pub strokes: Vec<Stroke>,
+    pub live: Option<Stroke>,
+    pub laser: Option<Stroke>,
+    pub glow: bool,
+}
+
+/// A raw input event on the capture's clock, in global top-left screen points.
+#[derive(Clone, Debug, PartialEq)]
+pub enum InputEvent {
+    ButtonDown {
+        t_ms: u64,
+        x: f64,
+        y: f64,
+        right: bool,
+        shift_only: bool,
+    },
+    ButtonUp {
+        t_ms: u64,
+        x: f64,
+        y: f64,
+        right: bool,
+        shift_only: bool,
+    },
+    Scroll {
+        t_ms: u64,
+        x: f64,
+        y: f64,
+        dx: f64,
+        dy: f64,
+    },
+    Move {
+        t_ms: u64,
+        x: f64,
+        y: f64,
+        shift_only: bool,
+    },
+    Laser {
+        t_ms: u64,
+        x: f64,
+        y: f64,
+    },
+    KeyChord {
+        t_ms: u64,
+        shortcut: String,
+    },
+    Flag {
+        t_ms: u64,
+    },
+    UndoStroke,
+}
+
+/// Whether `shift` is held alone without other modifiers and is not left over from a multi-modifier
+/// chord (such as the capture shortcut `⌥⇧S`) before `shift` was released.
+pub fn pure_shift_state(
+    shift: bool,
+    other_modifiers: bool,
+    await_shift_release: &mut bool,
+) -> bool {
+    if !shift {
+        *await_shift_release = false;
+    } else if other_modifiers {
+        *await_shift_release = true;
+    }
+    shift && !other_modifiers && !*await_shift_release
+}
+
+/// Ink and pointer input in global top-left points, ms since capture start.
+#[derive(Clone)]
+pub struct InputSink {
+    telemetry: Arc<SharedCaptureTelemetry>,
+}
+
+impl Default for InputSink {
+    fn default() -> Self {
+        let (tx, _rx) = flume::unbounded();
+        Self {
+            telemetry: SharedCaptureTelemetry::new(tx, ShortcutConfig::defaults()),
+        }
+    }
+}
+
+impl InputSink {
+    pub fn new(telemetry: Arc<SharedCaptureTelemetry>) -> Self {
+        Self { telemetry }
+    }
+
+    pub fn telemetry(&self) -> &Arc<SharedCaptureTelemetry> {
+        &self.telemetry
+    }
+
+    pub fn send(&self, event: InputEvent) {
+        self.telemetry.handle_input(event);
+    }
+
+    pub fn button_down(&self, t_ms: u64, x: f64, y: f64, right: bool, shift_only: bool) {
+        self.send(InputEvent::ButtonDown {
+            t_ms,
+            x,
+            y,
+            right,
+            shift_only,
+        });
+    }
+
+    pub fn button_up(&self, t_ms: u64, x: f64, y: f64, right: bool, shift_only: bool) {
+        self.send(InputEvent::ButtonUp {
+            t_ms,
+            x,
+            y,
+            right,
+            shift_only,
+        });
+    }
+
+    pub fn pointer_down(&self, t_ms: u64, x: f64, y: f64) {
+        let shift_only = self.telemetry.shift_held.load(Ordering::Acquire);
+        self.button_down(t_ms, x, y, false, shift_only);
+    }
+
+    pub fn pointer_up(&self, t_ms: u64, x: f64, y: f64, right: bool) {
+        let shift_only = self.telemetry.shift_held.load(Ordering::Acquire);
+        self.button_up(t_ms, x, y, right, shift_only);
+    }
+
+    pub fn shift_down(&self, t_ms: u64, x: f64, y: f64) {
+        self.button_down(t_ms, x, y, false, true);
+    }
+
+    pub fn shift_up(&self, t_ms: u64, x: f64, y: f64) -> bool {
+        self.telemetry.shift_up(t_ms, x, y)
+    }
+
+    pub fn scroll(&self, t_ms: u64, x: f64, y: f64, dx: f64, dy: f64) {
+        self.send(InputEvent::Scroll { t_ms, x, y, dx, dy });
+    }
+
+    pub fn ink(&self, t_ms: u64, x: f64, y: f64, shift_held: bool) {
+        self.send(InputEvent::Move {
+            t_ms,
+            x,
+            y,
+            shift_only: shift_held,
+        });
+    }
+
+    pub fn laser(&self, t_ms: u64, x: f64, y: f64) {
+        self.send(InputEvent::Laser { t_ms, x, y });
+    }
+
+    pub fn key_chord(&self, t_ms: u64, shortcut: impl Into<String>) {
+        self.send(InputEvent::KeyChord {
+            t_ms,
+            shortcut: shortcut.into(),
+        });
+    }
+
+    pub fn flag(&self, t_ms: u64) {
+        self.send(InputEvent::Flag { t_ms });
+    }
+
+    pub fn undo_stroke(&self) -> bool {
+        self.telemetry.undo_last_stroke()
+    }
+
+    pub fn snapshot(&self) -> InkSnapshot {
+        self.telemetry.ink_snapshot()
+    }
+}
+
 pub struct SharedCaptureTelemetry {
     pub active: AtomicBool,
     pub selecting: AtomicBool,
@@ -712,6 +884,7 @@ pub struct SharedCaptureTelemetry {
     pub pointer_screen: Mutex<[f32; 2]>,
     pub events: Mutex<Vec<InteractionEvent>>,
     pub strokes: Mutex<Vec<Stroke>>,
+    pub flags: Mutex<Vec<u64>>,
     pub active_laser: Mutex<Option<Stroke>>,
     pub live_ink: Mutex<Option<Stroke>>,
     pub excluded_window_ids: Arc<Mutex<Vec<u32>>>,
@@ -785,6 +958,7 @@ impl SharedCaptureTelemetry {
             pointer_screen: Mutex::new([0.0, 0.0]),
             events: Mutex::new(Vec::new()),
             strokes: Mutex::new(Vec::new()),
+            flags: Mutex::new(Vec::new()),
             active_laser: Mutex::new(None),
             live_ink: Mutex::new(None),
             excluded_window_ids: Arc::new(Mutex::new(Vec::new())),
@@ -942,6 +1116,10 @@ impl SharedCaptureTelemetry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+        self.flags
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         *self
             .active_laser
             .lock()
@@ -1019,7 +1197,7 @@ impl SharedCaptureTelemetry {
     }
 
     /// A mouse button went down at a global point.
-    fn pointer_down(&self, t_ms: u64, screen_x: f64, screen_y: f64) {
+    pub fn pointer_down(&self, t_ms: u64, screen_x: f64, screen_y: f64) {
         if !self.contains_screen_point(screen_x, screen_y) {
             return;
         }
@@ -1047,7 +1225,7 @@ impl SharedCaptureTelemetry {
     }
 
     /// A mouse button came up: records the click or drag that `pointer_down` began.
-    fn pointer_up(&self, t_ms: u64, screen_x: f64, screen_y: f64, right: bool) {
+    pub fn pointer_up(&self, t_ms: u64, screen_x: f64, screen_y: f64, right: bool) {
         let Some((t0, x0, y0, start_label, start_frame)) = self
             .drag_start
             .lock()
@@ -1095,7 +1273,7 @@ impl SharedCaptureTelemetry {
     }
 
     /// The left button went down with only ⇧ held: a pin if it comes up as a click (`shift_up`).
-    fn shift_down(&self, t_ms: u64, screen_x: f64, screen_y: f64) {
+    pub fn shift_down(&self, t_ms: u64, screen_x: f64, screen_y: f64) {
         if !self.contains_screen_point(screen_x, screen_y) {
             return;
         }
@@ -1115,7 +1293,7 @@ impl SharedCaptureTelemetry {
     /// the middle of a drawing belongs to the drawing, so it neither pins nor counts as a click.
     /// A ⇧-drag is left to the ink the poller is drawing. Returns whether a ⇧-press was waiting,
     /// so the release isn't also taken as a click's.
-    fn shift_up(&self, t_ms: u64, screen_x: f64, screen_y: f64) -> bool {
+    pub fn shift_up(&self, t_ms: u64, screen_x: f64, screen_y: f64) -> bool {
         let Some((t0, x0, y0, start_frame)) = self
             .shift_press
             .lock()
@@ -1314,6 +1492,198 @@ impl SharedCaptureTelemetry {
         }
         (events, strokes)
     }
+
+    pub fn handle_input(&self, event: InputEvent) {
+        self.handle_input_with(event, |x, y| self.on_scrawl_window(x, y));
+    }
+
+    pub fn handle_input_with(&self, event: InputEvent, on_own_window: impl Fn(f64, f64) -> bool) {
+        match event {
+            // A ⇧-press is never a click: a ⇧-click drops a pin, a ⇧-drag is ink.
+            InputEvent::ButtonDown {
+                t_ms,
+                x,
+                y,
+                right,
+                shift_only,
+            } => {
+                if !on_own_window(x, y) {
+                    if !shift_only {
+                        self.pointer_down(t_ms, x, y);
+                    } else if !right {
+                        self.shift_down(t_ms, x, y);
+                    }
+                }
+            }
+            InputEvent::ButtonUp {
+                t_ms,
+                x,
+                y,
+                right,
+                shift_only,
+            } => {
+                let shift_press = !right && self.shift_up(t_ms, x, y);
+                if !shift_press && !shift_only {
+                    self.pointer_up(t_ms, x, y, right);
+                }
+            }
+            InputEvent::Scroll { t_ms, x, y, dx, dy } => {
+                if (dx.abs() > 0.0 || dy.abs() > 0.0) && !on_own_window(x, y) {
+                    self.scroll_at(t_ms, x, y, dx as f32, dy as f32);
+                }
+            }
+            InputEvent::Move {
+                t_ms,
+                x,
+                y,
+                shift_only,
+            } => {
+                *self
+                    .pointer_screen
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = [x as f32, y as f32];
+                self.track_ink_at(t_ms, (x, y), shift_only);
+            }
+            InputEvent::Laser { t_ms, x, y } => {
+                self.laser_at(t_ms, x, y);
+            }
+            InputEvent::KeyChord { t_ms, shortcut } => {
+                self.key_chord(t_ms, shortcut);
+            }
+            InputEvent::Flag { t_ms } => {
+                self.flag_at(t_ms);
+            }
+            InputEvent::UndoStroke => {
+                let _ = self.undo_last_stroke();
+            }
+        }
+    }
+
+    pub fn key_chord(&self, t_ms: u64, shortcut: String) {
+        self.window_log_request.store(true, Ordering::Release);
+        self.events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(InteractionEvent::Key { t: t_ms, shortcut });
+    }
+
+    pub fn scroll_at(&self, t_ms: u64, screen_x: f64, screen_y: f64, dx: f32, dy: f32) {
+        if (dx.abs() > 0.0 || dy.abs() > 0.0) && self.contains_screen_point(screen_x, screen_y) {
+            let (nx, ny, _, _) = self.normalize_point(screen_x, screen_y);
+            self.events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(InteractionEvent::Scroll {
+                    t: t_ms,
+                    x: nx,
+                    y: ny,
+                    dx,
+                    dy,
+                    label: None,
+                });
+        }
+    }
+
+    pub fn track_ink_at(&self, t_ms: u64, (x, y): (f64, f64), shift_held: bool) {
+        let prev = self.shift_held.load(Ordering::Acquire)
+            || self
+                .live_ink
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some();
+        track_shift_ink_at(self, t_ms, (x, y), shift_held, prev);
+    }
+
+    pub fn laser_at(&self, t_ms: u64, screen_x: f64, screen_y: f64) {
+        if !self.contains_screen_point(screen_x, screen_y) {
+            return;
+        }
+        let (nx, ny, fw, fh) = self.normalize_point(screen_x, screen_y);
+        let sx = (nx * SCALE as f32).round() as i32;
+        let sy = (ny * SCALE as f32).round() as i32;
+        let mut guard = self
+            .active_laser
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let stroke = guard.get_or_insert_with(|| Stroke {
+            t0: t_ms,
+            t1: t_ms,
+            fw,
+            fh,
+            on: None,
+            pin: None,
+            laser: true,
+            pts: Vec::new(),
+        });
+        let dt = t_ms.saturating_sub(stroke.t0) as i32;
+        if stroke.pts.len() / 3 < 2_400 {
+            stroke.pts.extend_from_slice(&[sx, sy, dt]);
+            stroke.t1 = t_ms;
+        }
+    }
+
+    pub fn flag_at(&self, t_ms: u64) {
+        self.flags
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(t_ms);
+        let _ = self.ui_sender.try_send(Event::RequestSnapshot);
+    }
+
+    pub fn take_flags(&self) -> Vec<u64> {
+        std::mem::take(
+            &mut *self
+                .flags
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    pub fn undo_last_stroke(&self) -> bool {
+        let mut live = self
+            .live_ink
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if live.take().is_some() {
+            return true;
+        }
+        drop(live);
+        self.strokes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop()
+            .is_some()
+    }
+
+    pub fn ink_snapshot(&self) -> InkSnapshot {
+        let target = *self
+            .target_frame
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let strokes = self
+            .strokes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let live = self
+            .live_ink
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let laser = self
+            .active_laser
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let glow = self.start_glow.load(Ordering::Acquire);
+        InkSnapshot {
+            target,
+            strokes,
+            live,
+            laser,
+            glow,
+        }
+    }
 }
 
 /// Clicks from the mouse buttons' polled state, while the mouse monitor (or hook) is missing: a
@@ -1331,19 +1701,31 @@ fn poll_clicks(
     if telemetry.mouse_live.load(Ordering::Acquire) {
         return;
     }
+    let t_ms = telemetry.elapsed_ms();
     for (button, (&down, &before)) in now.iter().zip(&was).enumerate() {
-        let left = button == 0;
-        if down && !before && !on_scrawl(x, y) {
-            if !pure_shift {
-                telemetry.pointer_down(telemetry.elapsed_ms(), x, y);
-            } else if left {
-                telemetry.shift_down(telemetry.elapsed_ms(), x, y);
-            }
+        let right = button != 0;
+        if down && !before {
+            telemetry.handle_input_with(
+                InputEvent::ButtonDown {
+                    t_ms,
+                    x,
+                    y,
+                    right,
+                    shift_only: pure_shift,
+                },
+                &on_scrawl,
+            );
         } else if !down && before {
-            let shift_press = left && telemetry.shift_up(telemetry.elapsed_ms(), x, y);
-            if !shift_press && !pure_shift {
-                telemetry.pointer_up(telemetry.elapsed_ms(), x, y, !left);
-            }
+            telemetry.handle_input_with(
+                InputEvent::ButtonUp {
+                    t_ms,
+                    x,
+                    y,
+                    right,
+                    shift_only: pure_shift,
+                },
+                &on_scrawl,
+            );
         }
     }
 }
@@ -1402,10 +1784,25 @@ fn track_shift_ink(
     pure_shift: bool,
     prev_shift_ink: bool,
 ) {
+    track_shift_ink_at(
+        telemetry,
+        telemetry.elapsed_ms(),
+        (x, y),
+        pure_shift,
+        prev_shift_ink,
+    );
+}
+
+fn track_shift_ink_at(
+    telemetry: &SharedCaptureTelemetry,
+    t_ms: u64,
+    (x, y): (f64, f64),
+    pure_shift: bool,
+    prev_shift_ink: bool,
+) {
     let inside_target = telemetry.contains_screen_point(x, y);
     if pure_shift && inside_target {
         telemetry.shift_held.store(true, Ordering::Release);
-        let t_ms = telemetry.elapsed_ms();
         let (nx, ny, fw, fh) = telemetry.normalize_point(x, y);
         let sx = (nx * SCALE as f32).round() as i32;
         let sy = (ny * SCALE as f32).round() as i32;
@@ -1985,6 +2382,56 @@ mod tests {
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].pin, Some(1));
         assert_eq!(strokes[0].normalized_points(), vec![[0.25, 0.75]]);
+    }
+
+    #[test]
+    fn input_sink_routes_clicks_pins_ink_and_chord_release() {
+        let telemetry = session(1000.0, 1000.0);
+        let sink = InputSink::new(Arc::clone(&telemetry));
+
+        // Residual Shift from a multi-modifier chord (⌥⇧S) is ignored until Shift is released.
+        let mut await_release = false;
+        assert!(!pure_shift_state(true, true, &mut await_release));
+        assert!(!pure_shift_state(true, false, &mut await_release));
+        assert!(!pure_shift_state(false, false, &mut await_release));
+        assert!(pure_shift_state(true, false, &mut await_release));
+
+        // Shift-ink stroke.
+        sink.ink(100, 100.0, 200.0, true);
+        sink.ink(120, 140.0, 200.0, true);
+        sink.ink(140, 180.0, 200.0, true);
+        assert!(sink.snapshot().live.is_some());
+        sink.ink(160, 180.0, 200.0, false);
+        assert_eq!(sink.snapshot().strokes.len(), 1);
+
+        // Shift-click pin via pointer_down/up while shift_held is active.
+        sink.ink(200, 500.0, 500.0, true);
+        sink.pointer_down(210, 500.0, 500.0);
+        sink.pointer_up(240, 500.0, 500.0, false);
+        sink.ink(250, 500.0, 500.0, false);
+        assert_eq!(sink.snapshot().strokes.len(), 2);
+        assert_eq!(sink.snapshot().strokes[1].pin, Some(1));
+
+        // Undo removes the pin, leaving the ink stroke.
+        assert!(sink.undo_stroke());
+        assert_eq!(sink.snapshot().strokes.len(), 1);
+
+        // Key chord and flag.
+        sink.key_chord(300, "⌘K");
+        sink.flag(350);
+
+        let flags = telemetry.take_flags();
+        let (events, strokes) = telemetry.finish_session();
+        assert_eq!(flags, vec![350]);
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].pin, None);
+        assert!(matches!(
+            &events[..],
+            [InteractionEvent::Key {
+                t: 300,
+                shortcut
+            }] if shortcut == "⌘K"
+        ));
     }
 
     #[test]
