@@ -75,15 +75,30 @@ impl Rgba {
         use rune::color::srgb_decode;
         Color { r: srgb_decode(self.r), g: srgb_decode(self.g), b: srgb_decode(self.b), a: self.a }
     }
+    pub fn from_color(c: Color) -> Self {
+        use rune::color::srgb_encode;
+        Rgba { r: srgb_encode(c.r), g: srgb_encode(c.g), b: srgb_encode(c.b), a: c.a }
+    }
 }
 
 /// `SettingsTheme`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Theme {
     pub dark: bool,
+    accent: Rgba,
+    focus: Color,
 }
 
 impl Theme {
+    /// The window's appearance and the user's accent colour.
+    pub fn of<S>(cx: &Cx<S>) -> Theme {
+        Theme { dark: cx.system_dark(), accent: Rgba::from_color(cx.accent()), focus: cx.focus_color() }
+    }
+    /// macOS's default blue accent.
+    pub fn new(dark: bool) -> Theme {
+        let system = rune::SystemAccent::DEFAULT;
+        Theme { dark, accent: Rgba::from_color(system.accent(dark)), focus: system.focus(dark) }
+    }
     fn ink(self, a: f32) -> Rgba {
         if self.dark { Rgba::WHITE.alpha(a) } else { Rgba::BLACK.alpha(a) }
     }
@@ -125,7 +140,11 @@ impl Theme {
         self.ink(if self.dark { 0.12 } else { 0.13 })
     }
     pub fn accent(self) -> Rgba {
-        if self.dark { Rgba::hex(0x0A84FF) } else { Rgba::hex(0x007AFF) }
+        self.accent
+    }
+    /// The keyboard focus ring's colour.
+    pub fn focus(self) -> Color {
+        self.focus
     }
     pub fn positive(self) -> Rgba {
         Rgba::rgb(0.2, 0.74, 0.42)
@@ -1341,9 +1360,9 @@ fn label(s: &str, size: f32, weight: f32, color: Color) -> El {
 }
 
 /// Reachable with Tab (with Full Keyboard Access on, as AppKit does) and pressed with Space,
-/// with macOS's keyboard-only accent ring `offset` outside the control.
+/// with macOS's keyboard-only focus ring `offset` outside the control.
 fn focus(e: El, enabled: bool, theme: Theme, offset: f32) -> El {
-    e.focusable(enabled).focus_ring(3.0, offset, theme.accent().alpha(0.5).color())
+    e.focusable(enabled).focus_ring(3.0, offset, theme.focus())
 }
 
 fn switch(on: bool, enabled: bool, theme: Theme, bg: Rgba, key: &str, f: impl Fn(&mut SettingsWin) + 'static) -> El {
@@ -1647,7 +1666,7 @@ fn recorder(s: &SettingsWin, shortcut: &Shortcut, theme: Theme) -> El {
     line = line
         .label(format!("{} shortcut, {value}", shortcut.title))
         .focusable(true)
-        .focus_ring(0.0, 0.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 })
+        .no_focus_ring()
         .on_press(move |s: &mut SettingsWin| {
             s.menu = None;
             s.act_kind(if recording { "cancel-shortcut" } else { "record-shortcut" }, &k_press);
@@ -1704,9 +1723,26 @@ fn playback_row(s: &SettingsWin, theme: Theme) -> El {
                 .radius(9.0)
                 .fill(Color::WHITE)
                 .border(0.5, Rgba::BLACK.alpha(0.12).over(Rgba::WHITE))
-                .box_shadow(rune::Shadow { x: 0.0, y: 0.5, blur: 2.0, spread: 0.0, color: Rgba::BLACK.alpha(0.25).color(), inset: false }),
+                .box_shadow(rune::Shadow { x: 0.0, y: 0.5, blur: 2.0, spread: 0.0, color: Rgba::BLACK.alpha(0.25).color(), inset: false })
+                // Around the knob, as NSSlider draws it.
+                .focus_ring(3.0, 0.0, theme.focus()),
         )
+        .key("playback-slider")
+        .label("Lower to")
         .cursor(rune::Cursor::Pointer)
+        // The arrows move 5%, Page Up and Down 50%, Home and End to the ends.
+        .on_step(move |s: &mut SettingsWin, delta: i32, tx: &mut Tx| {
+            let v = (value + 5.0 * f64::from(delta)).clamp(0.0, 100.0);
+            tx.instant();
+            s.playback = Some(v);
+            s.set("playbackLevel", json!(v.round() as i64));
+        })
+        .on_step_limit(|s: &mut SettingsWin, max: bool, tx: &mut Tx| {
+            let v = if max { 100.0 } else { 0.0 };
+            tx.instant();
+            s.playback = Some(v);
+            s.set("playbackLevel", json!(v as i64));
+        })
         .on_drag(move |s: &mut SettingsWin, d: &mut rune::Drag, tx: &mut Tx| {
             let v = f64::from((d.x / d.w).clamp(0.0, 1.0) * 100.0).round();
             tx.instant();
@@ -2243,7 +2279,7 @@ fn link(title: &str, shown: &str, url: &'static str, theme: Theme) -> El {
     .role("link")
     .focusable(true)
     // Inside the row: the group clips anything outside it.
-    .focus_ring(3.0, -3.0, theme.accent().alpha(0.5).color())
+    .focus_ring(3.0, -3.0, theme.focus())
     .on_press(move |_: &mut SettingsWin| open_url(url))
 }
 
@@ -2299,7 +2335,7 @@ fn sidebar_item(s: &SettingsWin, pane: Pane, theme: Theme) -> El {
         .label(pane.title())
         .focusable(true)
         .focus_selected(selected)
-        .focus_ring(3.0, 0.0, theme.accent().alpha(0.5).color())
+        .focus_ring(3.0, 0.0, theme.focus())
         // Selects on mouse-down, as a sidebar does.
         .on_drag(move |s: &mut SettingsWin, d: &mut rune::Drag, tx: &mut Tx| {
             if d.phase == Phase::Down {
@@ -2332,7 +2368,7 @@ fn traffic_lights() -> El {
 }
 
 fn view(s: &SettingsWin, cx: &mut Cx<SettingsWin>) -> El {
-    let theme = Theme { dark: cx.system_dark() };
+    let theme = Theme::of(cx);
     let sidebar = col()
         .w(SIDEBAR)
         .h_full()
@@ -2500,8 +2536,10 @@ fn on_key(s: &mut SettingsWin, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
             s.menu = None;
             return true;
         }
-        // Only reached when no control took the arrow (the sidebar's group, a popup or a field).
-        rune::Key::Up | rune::Key::Down if s.menu.is_none() && !key.mods.cmd && !key.mods.alt && !key.mods.ctrl => {
+        // Only while nothing has focus, as in System Settings.
+        rune::Key::Up | rune::Key::Down
+            if tx.focused().is_none() && s.menu.is_none() && !key.mods.cmd && !key.mods.alt && !key.mods.ctrl =>
+        {
             let pane = s.pane.step(if key.key == rune::Key::Up { -1 } else { 1 });
             if pane != s.pane {
                 tx.instant();
@@ -3149,6 +3187,36 @@ mod tests {
         assert_eq!(rt.state.pane, Pane::Agents);
         press(&mut rt, rune::Key::Command('9'), cmd);
         assert_eq!(rt.state.pane, Pane::Agents);
+    }
+
+    #[test]
+    fn arrows_leave_the_pane_alone_while_a_control_has_focus() {
+        let mut rt = keyboard("general");
+        press(&mut rt, rune::Key::Tab, Default::default());
+        press(&mut rt, rune::Key::Tab, Default::default());
+        assert_eq!(focused(&rt).unwrap().0, "login");
+        press(&mut rt, rune::Key::Down, Default::default());
+        assert_eq!(rt.state.pane, Pane::General);
+    }
+
+    #[test]
+    fn the_playback_slider_steps_with_the_arrows() {
+        let mut rt = keyboard("general-lower-playback");
+        rt.state.playback = Some(40.0);
+        rt.frame(0.0);
+        for _ in 0..20 {
+            if focused(&rt).is_some_and(|(k, _)| k == "playback-slider") {
+                break;
+            }
+            press(&mut rt, rune::Key::Tab, Default::default());
+        }
+        assert_eq!(focused(&rt), Some(("playback-slider".into(), true)));
+        press(&mut rt, rune::Key::Right, Default::default());
+        assert_eq!(rt.state.playback, Some(45.0));
+        press(&mut rt, rune::Key::Down, Default::default());
+        press(&mut rt, rune::Key::Down, Default::default());
+        assert_eq!(rt.state.playback, Some(35.0));
+        assert_eq!(rt.state.pane, Pane::General, "Down moves the slider, not the pane");
     }
 
     #[test]
