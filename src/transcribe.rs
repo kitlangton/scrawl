@@ -201,12 +201,9 @@ fn with_temp_wav<T>(audio: &RecordedAudio, f: impl FnOnce(&Path) -> Result<T>) -
 pub trait Transcriber: Send + Sync {
     fn transcribe(&self, audio: &RecordedAudio) -> Result<Option<TranscriptData>>;
 
-    fn transcribe_wav(&self, wav_path: &Path, duration_ms: u64) -> Result<Option<TranscriptData>> {
+    fn transcribe_wav(&self, wav_path: &Path, _duration_ms: u64) -> Result<Option<TranscriptData>> {
         let bytes = std::fs::read(wav_path)?;
-        let mut audio = crate::audio::recorded_audio_from_wav(bytes)?;
-        if duration_ms > 0 {
-            audio.duration_ms = duration_ms;
-        }
+        let audio = crate::audio::recorded_audio_from_wav(bytes)?;
         self.transcribe(&audio)
     }
 }
@@ -384,7 +381,7 @@ pub fn set_override(engine: Engine) {
 }
 
 fn has_audio_samples(audio: &RecordedAudio) -> bool {
-    audio.sample_count > 0 || !audio.samples.is_empty()
+    !audio.samples.is_empty()
 }
 
 /// Missing microphones and a failed transcriber never prevent saving a bundle.
@@ -395,7 +392,7 @@ pub fn transcribe(wav: Option<&Path>, audio: Option<&RecordedAudio>) -> Transcri
             ..Default::default()
         };
     };
-    let live = audio.live.take();
+    let live = audio.take_live();
     let engine = Engine::preferred();
     let transcript = run(
         engine,
@@ -421,7 +418,7 @@ pub fn transcribe_with(
     transcriber: &dyn Transcriber,
 ) -> TranscriptData {
     if let Some(audio) = audio.filter(|a| has_audio_samples(a)) {
-        if let Some(live) = audio.live.take().and_then(|live| finish_live(live, audio)) {
+        if let Some(live) = audio.take_live().and_then(|live| finish_live(live, audio)) {
             return normalize_transcript(live, audio.start_offset_ms);
         }
         match transcriber.transcribe(audio) {
@@ -456,13 +453,14 @@ fn finish_live(
     live: crate::live_transcribe::Live,
     audio: &RecordedAudio,
 ) -> Option<TranscriptData> {
-    match live.finish(&audio.wav_bytes) {
+    let wav_bytes = audio.wav_bytes_16k().ok()?;
+    match live.finish(&wav_bytes) {
         Ok(done) => {
             crate::log::scrawl_log(format!(
                 "Live transcription: {} words, {} of {} ms streamed, tail {} ms",
                 done.transcript.words.len(),
                 done.streamed_samples as u64 * 1_000 / 16_000,
-                audio.duration_ms,
+                audio.duration_ms(),
                 done.tail_ms
             ));
             Some(done.transcript)
@@ -513,8 +511,9 @@ fn try_command(wav: &Path, audio: &RecordedAudio) -> Result<Option<TranscriptDat
             return Ok(None);
         }
     };
+    let sample_count = audio.samples_16k()?.len();
     let transcript =
-        crate::command_transcriber::transcribe(&program, wav, audio.sample_count, &mut |line| {
+        crate::command_transcriber::transcribe(&program, wav, sample_count, &mut |line| {
             crate::log::scrawl_log(line)
         })?;
     Ok(Some(transcript))

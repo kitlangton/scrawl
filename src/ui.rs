@@ -5349,14 +5349,15 @@ pub fn run_start_benchmark() {
                     });
                     if !quick_stop {
                         assert!(recording.video.is_some(), "MP4 missing");
-                        assert!(audio.sample_count > 0, "Microphone returned no samples");
+                        assert!(audio.sample_count() > 0, "Microphone returned no samples");
                         // Candidates are small (480 px long edge); the MP4 keeps full size.
                         assert!(recording.frames.iter().any(|f| f.width == 480 && f.height == 320), "No real SCK frames (synthetic fallback only)");
                     }
-                    let wav = hound::WavReader::new(std::io::Cursor::new(&audio.wav_bytes)).unwrap();
-                    assert_eq!(wav.duration() as usize, audio.sample_count);
-                    std::fs::write(rec.bundle_dir.join("audio.wav"), &audio.wav_bytes).unwrap();
-                    println!("START_RUN {}", serde_json::json!({"run": run, "frames": recording.frames.len(), "first_frame_ms": recording.frames[0].t_ms, "audio_samples": audio.sample_count, "duration_ms": recording.duration_ms, "video_offset_ms": recording.video_offset_ms}));
+                    let wav_bytes = audio.wav_bytes_16k().unwrap();
+                    let wav = hound::WavReader::new(std::io::Cursor::new(&*wav_bytes)).unwrap();
+                    assert_eq!(wav.duration() as usize, audio.sample_count());
+                    std::fs::write(rec.bundle_dir.join("audio.wav"), &*wav_bytes).unwrap();
+                    println!("START_RUN {}", serde_json::json!({"run": run, "frames": recording.frames.len(), "first_frame_ms": recording.frames[0].t_ms, "audio_samples": audio.sample_count(), "duration_ms": recording.duration_ms, "video_offset_ms": recording.video_offset_ms}));
                     coord.set_island_phase(IslandPhase::Hidden);
                     close_capture_windows(cx);
                 }).unwrap();

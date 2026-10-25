@@ -310,6 +310,21 @@ pub fn simulate(wav_bytes: &[u8], speed: f64) -> Result<Live> {
     Ok(live)
 }
 
+static STASHED: Mutex<Option<Live>> = Mutex::new(None);
+
+pub fn stash(live: Option<Live>) {
+    *STASHED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = live;
+}
+
+pub fn take_stashed() -> Option<Live> {
+    STASHED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+}
+
 /// Shares a live transcription between copies of a recording; the first `take` gets it.
 #[derive(Clone, Default)]
 pub struct Slot(Arc<Mutex<Option<Live>>>);

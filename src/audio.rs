@@ -16,17 +16,12 @@ pub struct GapSpan {
 /// Mono audio on the capture's clock. `samples[0]` is `start_offset_ms` after the capture
 /// started; spans in `gaps` (also from the capture's start) are silence where audio was
 /// missing or dropped.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct RecordedAudio {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
     pub start_offset_ms: u64,
     pub gaps: Vec<GapSpan>,
-    pub sample_count: usize,
-    pub duration_ms: u64,
-    pub wav_bytes: Vec<u8>,
-    /// The transcription that ran while recording, if one did (`live_transcribe`).
-    pub live: crate::live_transcribe::Slot,
 }
 
 impl RecordedAudio {
@@ -41,54 +36,52 @@ impl RecordedAudio {
         } else {
             sample_rate
         };
-        let sample_count = samples.len();
-        let duration_ms = start_offset_ms + (sample_count as u64 * 1_000) / u64::from(rate);
         Self {
             samples,
             sample_rate: rate,
             start_offset_ms,
             gaps,
-            sample_count,
-            duration_ms,
-            wav_bytes: Vec::new(),
-            live: Default::default(),
         }
+    }
+
+    pub fn sample_count(&self) -> usize {
+        self.samples.len()
+    }
+
+    pub fn duration_ms(&self) -> u64 {
+        let rate = if self.sample_rate == 0 {
+            SAMPLE_RATE
+        } else {
+            self.sample_rate
+        };
+        self.start_offset_ms + (self.samples.len() as u64 * 1_000) / u64::from(rate)
     }
 
     pub fn total_duration_ms(&self) -> u64 {
-        if self.duration_ms > 0 {
-            self.duration_ms
-        } else if self.sample_rate > 0 {
-            self.start_offset_ms + (self.samples.len() as u64 * 1_000) / u64::from(self.sample_rate)
-        } else if self.sample_count > 0 {
-            self.start_offset_ms + (self.sample_count as u64 * 1_000) / u64::from(SAMPLE_RATE)
-        } else {
-            self.start_offset_ms
-        }
+        self.duration_ms()
     }
 
     pub fn samples_16k(&self) -> Result<std::borrow::Cow<'_, [f32]>> {
-        if !self.samples.is_empty() {
-            if self.sample_rate == 0 || self.sample_rate == SAMPLE_RATE {
-                return Ok(std::borrow::Cow::Borrowed(&self.samples));
-            }
-            return Ok(std::borrow::Cow::Owned(resample_to_16k(
-                &self.samples,
-                self.sample_rate,
-            )));
+        if self.sample_rate == 0 || self.sample_rate == SAMPLE_RATE {
+            return Ok(std::borrow::Cow::Borrowed(&self.samples));
         }
-        if !self.wav_bytes.is_empty() {
-            return Ok(std::borrow::Cow::Owned(decode_wav_16k(&self.wav_bytes)?));
-        }
-        Ok(std::borrow::Cow::Borrowed(&[]))
+        Ok(std::borrow::Cow::Owned(resample_to_16k(
+            &self.samples,
+            self.sample_rate,
+        )))
     }
 
     pub fn wav_bytes_16k(&self) -> Result<std::borrow::Cow<'_, [u8]>> {
-        if !self.wav_bytes.is_empty() {
-            return Ok(std::borrow::Cow::Borrowed(&self.wav_bytes));
-        }
         let samples = self.samples_16k()?;
         Ok(std::borrow::Cow::Owned(encode_wav_16k(&samples)?))
+    }
+
+    pub fn set_live(&self, live: Option<crate::live_transcribe::Live>) {
+        crate::live_transcribe::stash(live);
+    }
+
+    pub fn take_live(&self) -> Option<crate::live_transcribe::Live> {
+        crate::live_transcribe::take_stashed()
     }
 }
 
@@ -294,19 +287,10 @@ impl AudioRecorder {
             }
             crate::log::scrawl_log(format!("Microphone: {error}; keeping what it heard"));
         }
-        let sample_count = samples_16k.len();
-        let duration_ms = sample_count as u64 * 1_000 / SAMPLE_RATE as u64;
-        let wav_bytes = encode_wav_16k(&samples_16k)?;
-        Ok(RecordedAudio {
-            samples: samples_16k,
-            sample_rate: SAMPLE_RATE,
-            start_offset_ms: 0,
-            gaps: Vec::new(),
-            sample_count,
-            duration_ms,
-            wav_bytes,
-            live: crate::live_transcribe::Slot::new(self.live.take()),
-        })
+        let _ = encode_wav_16k(&samples_16k)?;
+        let audio = RecordedAudio::new(samples_16k, SAMPLE_RATE, 0, Vec::new());
+        audio.set_live(self.live.take());
+        Ok(audio)
     }
 }
 
@@ -379,17 +363,7 @@ where
 /// Reads a 16 kHz mono WAV (as written by `scrawl-helper audio`) back into a recording.
 pub fn recorded_audio_from_wav(wav_bytes: Vec<u8>) -> Result<RecordedAudio> {
     let samples = decode_wav_16k(&wav_bytes)?;
-    let sample_count = samples.len();
-    Ok(RecordedAudio {
-        samples,
-        sample_rate: SAMPLE_RATE,
-        start_offset_ms: 0,
-        gaps: Vec::new(),
-        sample_count,
-        duration_ms: sample_count as u64 * 1_000 / u64::from(SAMPLE_RATE),
-        wav_bytes,
-        live: Default::default(),
-    })
+    Ok(RecordedAudio::new(samples, SAMPLE_RATE, 0, Vec::new()))
 }
 
 /// Decodes a 16 kHz mono 16-bit WAV (this module's own format) into samples.
@@ -532,9 +506,10 @@ mod tests {
         }
         .stop()
         .unwrap();
-        assert_eq!(audio.sample_count, 3);
+        assert_eq!(audio.sample_count(), 3);
+        let wav = audio.wav_bytes_16k().unwrap();
         assert_eq!(
-            hound::WavReader::new(Cursor::new(audio.wav_bytes))
+            hound::WavReader::new(Cursor::new(&*wav))
                 .unwrap()
                 .duration(),
             3
@@ -550,7 +525,7 @@ mod tests {
             error: Arc::new(Mutex::new(Some("Device disconnected".into()))),
             live: None,
         };
-        assert_eq!(recorder(vec![0.1; 160]).stop().unwrap().sample_count, 160);
+        assert_eq!(recorder(vec![0.1; 160]).stop().unwrap().sample_count(), 160);
         assert!(recorder(Vec::new()).stop().is_err());
     }
 

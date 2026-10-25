@@ -895,17 +895,7 @@ mod tests {
         let mut samples = vec![0.0_f32; 16_000 * 6];
         samples[16_000..16_000 * 2].fill(0.2);
         samples[16_000 * 4..16_000 * 5].fill(0.2);
-        let wav_bytes = audio::encode_wav_16k(&samples).unwrap();
-        let audio = RecordedAudio {
-            sample_count: samples.len(),
-            duration_ms: 6_000,
-            wav_bytes,
-            samples,
-            sample_rate: 16_000,
-            start_offset_ms: 0,
-            gaps: Vec::new(),
-            live: Default::default(),
-        };
+        let audio = RecordedAudio::new(samples, 16_000, 0, Vec::new());
         let transcript = transcribe_audio(&client(fake.port), "parakeet_v3", "en", &audio).unwrap();
         assert_eq!(fake.requests.lock().unwrap().len(), 2);
         assert_eq!(transcript.words.len(), 6);

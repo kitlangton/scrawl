@@ -877,8 +877,8 @@ fn main() -> Result<()> {
                         let recorded = iter_wav
                             .map(audio::recorded_audio_from_wav)
                             .transpose()?
-                            .map(|mut recorded| {
-                                recorded.live = live_transcribe::Slot::new(live);
+                            .map(|recorded| {
+                                recorded.set_live(live);
                                 recorded
                             });
                         iter_activity.stop_started = Some(t0);

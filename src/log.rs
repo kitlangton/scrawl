@@ -3,6 +3,11 @@ use std::sync::{Arc, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Pluggable logging and metric sink for hosts (such as Hex routing to `tracing`).
+///
+/// Both methods must be non-blocking. [`Sink::metric`] is only called on one-shot capture
+/// lifecycle milestones (`sck_ready_ms`, `audio_ready_ms`, `bundle_ready_ms`), never on
+/// per-frame, per-event, or per-audio-chunk hot paths.
+///
 /// When no sink is installed, Scrawl writes to `stderr` and `scrawl.log`.
 pub trait Sink: Send + Sync + 'static {
     fn log(&self, line: &str);
@@ -13,8 +18,15 @@ pub trait Sink: Send + Sync + 'static {
 
 static SINK: RwLock<Option<Arc<dyn Sink>>> = RwLock::new(None);
 
+/// Installs or clears the process-global log/metric sink. Call this once during host
+/// initialization before `Engine::start` (or `Engine::new` installs a bridge to `Host::log` /
+/// `Host::metric` when none is set).
 pub fn set_sink(sink: Option<Arc<dyn Sink>>) {
     *SINK.write().unwrap_or_else(|e| e.into_inner()) = sink;
+}
+
+pub fn has_sink() -> bool {
+    SINK.read().unwrap_or_else(|e| e.into_inner()).is_some()
 }
 
 pub fn log_dir() -> Option<PathBuf> {
