@@ -520,7 +520,7 @@ objc2::define_class!(
         fn menu_needs_update(&self, menu: &NSMenu) {
             rebuild_inbox_menu_items(menu, self);
             if let Some(item) = menu.itemWithTag(RECORD_MENU_TAG) {
-                item.setTitle(&NSString::from_str(&record_menu_title()));
+                set_record_menu_shortcut(&item);
             }
             if let Some(item) = menu.itemWithTag(EXPORT_VIDEO_MENU_TAG) {
                 item.setHidden(!crate::handoff::video_export());
@@ -533,15 +533,60 @@ objc2::define_class!(
 const INBOX_MENU_TAG: isize = 0x5c4a;
 /// Tag on **Export Last Capture as Video…**, shown only with `"videoExport": true`.
 const EXPORT_VIDEO_MENU_TAG: isize = 0x5c4e;
-/// Tag on **Record Screen**, whose title carries the record shortcut.
+/// Tag on **Record Screen**, whose key equivalent carries the record shortcut.
 const RECORD_MENU_TAG: isize = 0x5c4d;
 
-/// "Record Screen" with the record shortcut as it is now (Settings can change it).
-fn record_menu_title() -> String {
-    format!(
-        "Record Screen  {}",
-        crate::settings::Shortcuts::load().record.label
-    )
+pub(super) fn menu_shortcut_equivalent(
+    shortcut: &crate::capture::ShortcutConfig,
+) -> (String, objc2_app_kit::NSEventModifierFlags) {
+    use crate::capture::{
+        CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY, CARBON_SHIFT_KEY,
+    };
+    use objc2_app_kit::NSEventModifierFlags;
+
+    let mut mask = NSEventModifierFlags::empty();
+    if shortcut.carbon_modifiers & CARBON_CONTROL_KEY != 0 {
+        mask |= NSEventModifierFlags::Control;
+    }
+    if shortcut.carbon_modifiers & CARBON_OPTION_KEY != 0 {
+        mask |= NSEventModifierFlags::Option;
+    }
+    if shortcut.carbon_modifiers & CARBON_SHIFT_KEY != 0 {
+        mask |= NSEventModifierFlags::Shift;
+    }
+    if shortcut.carbon_modifiers & CARBON_CMD_KEY != 0 {
+        mask |= NSEventModifierFlags::Command;
+    }
+    let raw = shortcut.key_label();
+    let key = match raw {
+        "Space" => " ".to_owned(),
+        "Return" | "Enter" | "↩" => "\r".to_owned(),
+        "Tab" | "⇥" => "\t".to_owned(),
+        "Esc" | "Escape" | "⎋" => "\u{1b}".to_owned(),
+        "Delete" | "⌫" => "\u{08}".to_owned(),
+        "ForwardDelete" | "⌦" => "\u{f728}".to_owned(),
+        "↑" | "Up" => "\u{f700}".to_owned(),
+        "↓" | "Down" => "\u{f701}".to_owned(),
+        "←" | "Left" => "\u{f702}".to_owned(),
+        "→" | "Right" => "\u{f703}".to_owned(),
+        k if k.starts_with('F')
+            && let Ok(n) = k[1..].parse::<u32>()
+            && (1..=24).contains(&n) =>
+        {
+            char::from_u32(0xf704 + n - 1).unwrap_or_default().to_string()
+        }
+        other => other.to_lowercase(),
+    };
+    (key, mask)
+}
+
+/// Sets the right-aligned shortcut on **Record Screen** from the current record shortcut
+/// (Settings can change it).
+fn set_record_menu_shortcut(item: &NSMenuItem) {
+    let shortcut = crate::settings::Shortcuts::load().record;
+    let (key, mask) = menu_shortcut_equivalent(&shortcut);
+    item.setKeyEquivalent(&NSString::from_str(&key));
+    item.setKeyEquivalentModifierMask(mask);
 }
 
 /// Lists unhandled iPhone captures at the top of the status menu, read fresh from disk so the
@@ -682,9 +727,10 @@ pub(super) fn install_status_bar() -> Option<flume::Receiver<MenuAction>> {
         menu.addItem(&item);
     };
 
-    add(&record_menu_title(), sel!(toggleCapture:));
+    add("Record Screen", sel!(toggleCapture:));
     if let Some(item) = menu.itemAtIndex(menu.numberOfItems() - 1) {
         item.setTag(RECORD_MENU_TAG);
+        set_record_menu_shortcut(&item);
     }
     add("Choose What to Record…", sel!(chooseTarget:));
     menu.addItem(&NSMenuItem::separatorItem(mtm));
