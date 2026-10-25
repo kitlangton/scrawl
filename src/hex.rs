@@ -459,7 +459,7 @@ pub fn transcribe_audio(
     let samples = audio::decode_wav_16k(&audio.wav_bytes)?;
     let deadline = Instant::now() + TOTAL_DEADLINE;
     let plan = speech_plan::Plan::new(&samples);
-    speech_plan::transcribe(
+    let mut transcript = speech_plan::transcribe(
         &samples,
         &plan,
         format!("hex:{model}"),
@@ -470,7 +470,10 @@ pub fn transcribe_audio(
             let text = client.transcribe_retrying(&wav, model, language)?;
             Ok(speech_plan::Heard::Text(text))
         },
-    )
+    )?;
+    // Hex never measures word times, even when it heard nothing.
+    transcript.estimated = true;
+    Ok(transcript)
 }
 
 #[cfg(test)]
@@ -819,5 +822,6 @@ mod tests {
         .unwrap();
         assert!(fake.requests.lock().unwrap().is_empty());
         assert!(transcript.text.is_empty() && transcript.words.is_empty());
+        assert!(transcript.estimated);
     }
 }

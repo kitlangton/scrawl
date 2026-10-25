@@ -2,8 +2,8 @@
 //! were said.
 //!
 //! `Plan` cuts the whole recording into chunks of at most 30 s, each cut at its quietest 50 ms
-//! window, so every word is heard however quietly or briefly it was said. Only a chunk with no
-//! voiced window (silence, steady noise) is left out, as a recognizer may invent words there.
+//! window, so every word is heard however quietly or briefly it was said. Only a chunk that is
+//! silent or steady noise is left out, as a recognizer may invent words there.
 //! Loudness never decides what is heard, only when: `transcribe` spreads a text-only answer
 //! (Hex) over the voiced spans of its own chunk by length (`spread`, also used by the command
 //! transcriber and Windows' Parakeet when they lack word times). Those times are estimates
@@ -23,9 +23,16 @@ const MIN_CHUNK_MS: u64 = 15_000;
 const VOICED_OVER_FLOOR: f64 = 2.0;
 const VOICED_MIN_RMS: f64 = 0.001;
 const VOICED_MAX_RMS: f64 = 0.01;
+/// A chunk with no voiced window is still sent when it lasts this long (the old planner's
+/// whole-recording fallback) and its level moves: its loudest window is above `SILENT_RMS`
+/// and `STEADY_OVER_FLOOR` times its own noise floor. Speech too quiet for the voiced
+/// threshold still rises and falls; silence and steady noise stay flat.
+const UNSURE_MIN_MS: u64 = 480;
+const SILENT_RMS: f64 = 0.000_1;
+const STEADY_OVER_FLOOR: f64 = 1.25;
 
 /// What a recognizer is given of one recording, and where its speech is.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Plan {
     chunks: Vec<(u64, u64)>,
     voiced: Vec<(u64, u64)>,
@@ -40,13 +47,15 @@ impl Plan {
         let voiced = audio::islands_above(&rms, threshold, duration);
         let chunks = cuts(&rms, duration)
             .into_iter()
-            .filter(|&(start, end)| voiced.iter().any(|&(a, b)| a < end && b > start))
+            .filter(|&(start, end)| {
+                voiced.iter().any(|&(a, b)| a < end && b > start) || moves(&rms, start, end)
+            })
             .collect();
         Plan { chunks, voiced }
     }
 
     /// The spans sent to the recognizer, in milliseconds: they tile the recording, each at most
-    /// 30 s, except that chunks without a voiced window are left out.
+    /// 30 s, except that silent or steady-noise chunks are left out.
     pub fn chunks(&self) -> &[(u64, u64)] {
         &self.chunks
     }
@@ -71,6 +80,19 @@ impl Plan {
             spans
         }
     }
+}
+
+/// Whether the level of `start..end` moves enough to be quiet speech (`UNSURE_MIN_MS`).
+fn moves(rms: &[f64], start: u64, end: u64) -> bool {
+    let first = (start / WINDOW_MS) as usize;
+    let last = (end.div_ceil(WINDOW_MS) as usize).min(rms.len());
+    let Some(windows) = rms.get(first..last) else {
+        return false;
+    };
+    let loudest = windows.iter().copied().fold(0.0, f64::max);
+    end - start >= UNSURE_MIN_MS
+        && loudest > SILENT_RMS
+        && loudest > audio::noise_floor(windows) * STEADY_OVER_FLOOR
 }
 
 /// `0..duration` cut into chunks of at most `MAX_CHUNK_MS`, each cut in the middle of the
@@ -526,5 +548,21 @@ mod tests {
         .unwrap();
         assert!(spread_out.estimated);
         assert_eq!(spread_out.words.len(), 2);
+    }
+
+    #[test]
+    fn low_gain_speech_under_the_voiced_threshold_is_still_heard() {
+        // Speech so quiet that no window reaches twice the noise floor: syllables at 1.6x a
+        // 0.004 floor, and a whisper at 0.0008 over digital silence (under 0.001).
+        let syllables: Vec<(f32, u64)> =
+            (0..8).flat_map(|_| [(0.0065, 200), (0.004, 200)]).collect();
+        let whisper: Vec<(f32, u64)> = (0..8).flat_map(|_| [(0.0008, 200), (0.0, 200)]).collect();
+        for samples in [recording(&syllables), recording(&whisper)] {
+            let plan = Plan::new(&samples);
+            assert!(plan.voiced().is_empty(), "{:?}", plan.voiced());
+            assert_eq!(heard(&samples, &plan), [(0, 3_200)]);
+        }
+        // Too short to be worth a request, as before.
+        assert!(Plan::new(&recording(&syllables[..2])).chunks().is_empty());
     }
 }
