@@ -30,6 +30,8 @@ pub enum Scene {
     Dismiss,
     /// Every scene above, one after another (`--repeat 0` loops them).
     All,
+    /// With `--rune`: every capsule state, one at a time, live in one ordinary window.
+    Grid,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +56,7 @@ impl Scene {
             Self::Cancel => "cancel",
             Self::Dismiss => "dismiss",
             Self::All => "all",
+            Self::Grid => "grid",
         }
     }
 
@@ -106,6 +109,8 @@ impl Scene {
             ],
             Self::Cancel => vec![(0.0, Step::Tap), (1.2, Step::Cancel)],
             Self::Dismiss => vec![(0.0, Step::Open), (1.2, Step::Dismiss)],
+            // The grid runs its own cells (`rune_pill::grid`).
+            Self::Grid => Vec::new(),
             Self::All => {
                 // Each scene starts after the last one's tail and a lead-in, as a repeat would.
                 let mut steps = Vec::new();

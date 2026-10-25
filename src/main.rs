@@ -2041,6 +2041,7 @@ fn main() -> Result<()> {
                 #[cfg(not(target_os = "macos"))]
                 anyhow::bail!("--rune is macOS-only for now ({snap:?} {state:?} {capture:?})");
             }
+            anyhow::ensure!(scene != ui::LabScene::Grid, "the grid needs --rune");
             ui::run_lab(ui::LabOptions {
                 scene,
                 repeat,

@@ -5,6 +5,10 @@ edition = "2024"
 default-run = "scrawl"
 license = "MIT"
 
+[features]
+# Live editing of the pill lab with Rune's `scripts/rune-dev` (it turns this on).
+hot = ["rune/hot"]
+
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }

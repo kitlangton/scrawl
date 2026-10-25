@@ -13,7 +13,7 @@
 use rune::Spring;
 
 use crate::native::pill::model::{
-    CHIP_GAP, CHIP_H, CX, ElemId, ISLAND_H, ISLAND_INSET, Metrics, Pres, TOP,
+    CHIP_H, CX, ElemId, ISLAND_H, ISLAND_INSET, Metrics, Pres, TOP,
 };
 use crate::ui::SelectionMode;
 use crate::ui::lab::PROCESSING_S;
@@ -21,16 +21,12 @@ use crate::ui::motion::Tune;
 
 /// Taller than the capsule so its drop shadow fades out inside the window (the SwiftUI panel).
 pub const PANEL_H: f32 = 112.0;
-/// Gap between groups (lead | chips | ✕), instead of 1 pt dividers.
-const GROUP_GAP: f32 = 6.0;
 /// The red dot's ink spans 12…20 of the lead's 32 pt square; the timer starts 8 pt after it.
 pub const LEAD_TEXT_X: f32 = 28.0;
-/// After the timer, equal to the dot's 12 pt inset.
-const LEAD_TRAIL: f32 = 12.0;
 pub const PROCESSING_TEXT_X: f32 = 31.5;
 const PROCESSING_TRAIL: f32 = 8.5;
-/// The check circle spans 5…27; its label starts 8 pt after.
-pub const DONE_TEXT_X: f32 = 35.0;
+/// The check's ink spans 12…20, as the recording dot's does; its label starts where the timer does.
+pub const DONE_TEXT_X: f32 = LEAD_TEXT_X;
 /// The capsule unfolds from this fraction of its height, anchored on its top edge.
 const TOP_FROM: f32 = 0.7;
 const SHELL_WAIT_S: f32 = 0.06;
@@ -86,7 +82,14 @@ const fn group_of(id: ElemId) -> u8 {
 /// Every state is centred on `CX`, except the recording capsule with its chips: it centres the
 /// chip row (`Area … ✕`) where the picker puts the same row and hangs the lead off its left, so
 /// switching to Area or Window moves no chip.
+///
+/// Gaps, chip padding and the lead's trail come from `style()`: the capsule's own values unless
+/// the pill lab is tuning them.
 pub fn layout(pres: &Pres, clock: &str, labels: Labels, m: &Metrics) -> ([f32; 4], Vec<Item>) {
+    let style = super::style::style();
+    let chip_width = |label: f32| label + 2.0 * style.chip_px;
+    // After the timer, equal to the dot's 12 pt inset.
+    let lead_trail = style.lead_trail;
     let mut raw: Vec<(ElemId, f32, bool, bool)> = Vec::with_capacity(8);
     let mut held_row = false;
     match pres {
@@ -96,12 +99,12 @@ pub fn layout(pres: &Pres, clock: &str, labels: Labels, m: &Metrics) -> ([f32; 4
                 raw.push((ElemId::from_mode(seg), m.segment_width(seg), seg == *mode, true));
             }
             if mode.shows_record() {
-                raw.push((ElemId::Record, Metrics::chip_width(m.record), false, true));
+                raw.push((ElemId::Record, chip_width(m.record), false, true));
             }
             raw.push((ElemId::Close, CHIP_H, false, true));
         }
         Pres::Recording { chips, has_iphone } => {
-            raw.push((ElemId::Lead, LEAD_TEXT_X + m.clock_width(clock) + LEAD_TRAIL, false, true));
+            raw.push((ElemId::Lead, LEAD_TEXT_X + m.clock_width(clock) + lead_trail, false, true));
             if *chips {
                 held_row = true;
                 for &seg in SelectionMode::available(*has_iphone) {
@@ -110,8 +113,8 @@ pub fn layout(pres: &Pres, clock: &str, labels: Labels, m: &Metrics) -> ([f32; 4
                 }
                 raw.push((ElemId::Close, CHIP_H, false, true));
             } else {
-                raw.push((ElemId::Cancel, Metrics::chip_width(m.cancel), false, true));
-                raw.push((ElemId::Finish, Metrics::chip_width(m.finish), false, true));
+                raw.push((ElemId::Cancel, chip_width(m.cancel), false, true));
+                raw.push((ElemId::Finish, chip_width(m.finish), false, true));
             }
         }
         Pres::Processing => {
@@ -119,20 +122,20 @@ pub fn layout(pres: &Pres, clock: &str, labels: Labels, m: &Metrics) -> ([f32; 4
             raw.push((ElemId::Processing, w, false, false));
         }
         Pres::Completed { routes, .. } => {
-            raw.push((ElemId::DoneLead, DONE_TEXT_X + labels.completed + LEAD_TRAIL, false, true));
-            raw.push((ElemId::Paste, Metrics::chip_width(m.paste), false, true));
+            raw.push((ElemId::DoneLead, DONE_TEXT_X + labels.completed + lead_trail, false, true));
+            raw.push((ElemId::Paste, chip_width(m.paste), false, true));
             for (i, id) in ElemId::ROUTES.into_iter().enumerate().take(routes.len()) {
-                raw.push((id, Metrics::chip_width(labels.routes[i]), false, true));
+                raw.push((id, chip_width(labels.routes[i]), false, true));
             }
-            raw.push((ElemId::Inspect, Metrics::chip_width(m.inspect), false, true));
+            raw.push((ElemId::Inspect, chip_width(m.inspect), false, true));
             raw.push((ElemId::Close, CHIP_H, false, true));
         }
     }
     let gap_after = |i: usize| {
         if group_of(raw[i].0) == group_of(raw[i + 1].0) {
-            CHIP_GAP
+            style.chip_gap
         } else {
-            GROUP_GAP
+            style.group_gap
         }
     };
     let span = |from: usize| -> f32 {
@@ -690,7 +693,7 @@ mod tests {
             assert!((shell[0] + shell[2] - last[0] - last[2] - ISLAND_INSET).abs() < 1e-3);
             for pair in items.windows(2) {
                 let gap = pair[1].rect[0] - pair[0].rect[0] - pair[0].rect[2];
-                assert!(gap == CHIP_GAP || gap == GROUP_GAP, "{gap}");
+                assert!(gap == crate::native::pill::model::CHIP_GAP || gap == 6.0, "{gap}");
             }
         }
     }
