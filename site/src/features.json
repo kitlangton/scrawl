@@ -838,6 +838,15 @@
       "docs": ["README.md#welcome-and-permissions"]
     },
     {
+      "id": "rune-permission-card",
+      "group": "install",
+      "name": "Permission card on Rune",
+      "says": "The same drag-in card, drawn by Scrawl itself with Rune instead of the Swift helper.",
+      "status": "experiment:runePermissionPanel",
+      "platforms": ["mac"],
+      "added": "2026-10-24"
+    },
+    {
       "id": "self-relaunch",
       "group": "install",
       "name": "Reopens after a grant",
