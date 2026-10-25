@@ -309,6 +309,33 @@ pub fn finalize_capture_bundle_with(
     activity: windows::ActivityLog,
     transcriber: Option<&dyn transcribe::Transcriber>,
 ) -> Result<(PathBuf, ScrawlBundle, String)> {
+    finalize_capture_bundle_with_flags(
+        bundle_dir,
+        target,
+        recording,
+        strokes,
+        events,
+        Vec::new(),
+        recorded_audio,
+        note,
+        activity,
+        transcriber,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn finalize_capture_bundle_with_flags(
+    bundle_dir: &Path,
+    target: TargetInfo,
+    recording: capture::ScreenRecording,
+    strokes: Vec<Stroke>,
+    events: Vec<InteractionEvent>,
+    flags: Vec<u64>,
+    recorded_audio: Option<RecordedAudio>,
+    note: Option<String>,
+    activity: windows::ActivityLog,
+    transcriber: Option<&dyn transcribe::Transcriber>,
+) -> Result<(PathBuf, ScrawlBundle, String)> {
     let started_at = activity
         .stop_started
         .unwrap_or_else(std::time::Instant::now);
@@ -370,6 +397,22 @@ pub fn finalize_capture_bundle_with(
             && !frames.is_empty()
         {
             let mut preview_marks = marks_of(&strokes);
+            for (i, &t) in flags.iter().enumerate() {
+                preview_marks.push(model::Mark {
+                    id: format!("f{}", i + 1),
+                    strokes: Vec::new(),
+                    t0: t,
+                    t1: t,
+                    box_norm: [0.0, 0.0, 1.0, 1.0],
+                    shape: Shape::Flag,
+                    from: None,
+                    to: None,
+                    pin: None,
+                    on: None,
+                    description: "flagged this moment".into(),
+                    frame: None,
+                });
+            }
             let budget = keyframe_budget(duration_ms);
             let preview = select_keyframes(
                 &frames,
@@ -426,6 +469,7 @@ pub fn finalize_capture_bundle_with(
         note,
         SourceExtras {
             activity,
+            flags,
             video_offset_ms,
             autocrop: Some(crop_settings),
             full_frames: video_path

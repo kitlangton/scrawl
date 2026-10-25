@@ -9,8 +9,7 @@ use scrawl::pipeline::{
 };
 use scrawl::*;
 
-use crate::audio::AudioRecorder;
-use crate::capture::{ScreenCaptureSession, discover_target};
+use crate::capture::discover_target;
 use crate::model::{CaptureMode, InteractionEvent, Shape, parse_clock_ms};
 use crate::sketch::summary_markdown;
 
@@ -646,38 +645,32 @@ fn main() -> Result<()> {
             note,
             out,
         } => {
-            let bundle_dir = out.unwrap_or_else(|| {
-                handoff::default_captures_dir().join(format!("{}.scrawl", make_bundle_id()))
-            });
-            std::fs::create_dir_all(&bundle_dir)?;
             let dev_id = window.or_else(|| {
                 helper::devices()
                     .ok()
                     .and_then(|mut d| d.drain(..).next().map(|p| p.id))
             });
             let playback = playback::Guard::start();
-            let session = phone::PhoneSession::start(
-                &bundle_dir.join("recording.mov"),
-                dev_id.as_deref(),
-                None,
-            )?;
+            let engine = capture::Engine::default_engine();
+            let mut req = capture::Start::phone(dev_id, None);
+            req.bundle_dir = out;
+            req.note = note;
+            let active = engine.start(req)?;
             let started = std::time::Instant::now();
-            while !session.has_recording()
-                && !session.has_ended()
+            while !active.has_phone_recording()
+                && !active.phone_has_ended()
                 && started.elapsed() < Duration::from_secs(15)
             {
                 std::thread::sleep(Duration::from_millis(50));
             }
             let record_started = std::time::Instant::now();
             let target_dur = Duration::from_secs(duration.max(1));
-            while !session.has_ended() && record_started.elapsed() < target_dur {
+            while !active.phone_has_ended() && record_started.elapsed() < target_dur {
                 std::thread::sleep(Duration::from_millis(50));
             }
             drop(playback);
-            let recording = session.stop()?;
-            let (_dir, _bundle, summary) =
-                phone::finalize_live_capture(&bundle_dir, recording, Vec::new(), Vec::new(), note)?;
-            print!("{summary}");
+            let finished = active.finish(None)?;
+            print!("{}", finished.summary);
             Ok(())
         }
         Command::Record {
@@ -688,43 +681,16 @@ fn main() -> Result<()> {
             out,
         } => {
             let target = discover_target(window.as_deref());
-            let bundle_dir = out.unwrap_or_else(|| {
-                handoff::default_captures_dir().join(format!("{}.scrawl", make_bundle_id()))
-            });
-            std::fs::create_dir_all(&bundle_dir)?;
-            let video_path = bundle_dir.join("recording.mp4");
             let playback = playback::Guard::start();
-            let audio = AudioRecorder::start().ok();
-            let session = ScreenCaptureSession::start(
-                target.clone(),
-                Some(video_path),
-                std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            );
-            let window_log = (target.mode == CaptureMode::Display).then(|| {
-                windows::WindowLogger::start(
-                    target.frame,
-                    std::time::Instant::now(),
-                    std::sync::Arc::default(),
-                )
-            });
+            let engine = capture::Engine::default_engine();
+            let mut req = capture::Start::screen(target);
+            req.bundle_dir = out;
+            req.note = note;
+            let active = engine.start(req)?;
             std::thread::sleep(Duration::from_secs(duration.max(1)));
             drop(playback);
-            let recording = session.stop();
-            let activity = window_log
-                .map(windows::WindowLogger::stop)
-                .unwrap_or_default();
-            let recorded_audio = audio.and_then(|a| a.stop().ok());
-            let (_dir, _bundle, summary) = finalize_capture_bundle(
-                &bundle_dir,
-                target,
-                recording,
-                Vec::new(),
-                Vec::new(),
-                recorded_audio,
-                note,
-                activity,
-            )?;
-            print!("{summary}");
+            let finished = active.finish(None)?;
+            print!("{}", finished.summary);
             Ok(())
         }
         Command::Import {

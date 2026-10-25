@@ -10,19 +10,13 @@ use crate::model::ScrawlBundle;
 /// Where captures go: `SCRAWL_CAPTURES_DIR`, else `"capturesDir"` in `config.json` (Settings ›
 /// Storage), else `builtin_captures_dir`. Tests never see the config file.
 pub fn default_captures_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("SCRAWL_CAPTURES_DIR") {
-        return PathBuf::from(dir);
+    if cfg!(test) {
+        if let Some(dir) = std::env::var_os("SCRAWL_CAPTURES_DIR") {
+            return PathBuf::from(dir);
+        }
+        return builtin_captures_dir();
     }
-    let configured = if cfg!(test) {
-        None
-    } else {
-        config().captures_dir
-    };
-    configured
-        .as_deref()
-        .and_then(configured_captures_dir)
-        .filter(|dir| usable_captures_dir(dir))
-        .unwrap_or_else(builtin_captures_dir)
+    config().resolved_captures_dir()
 }
 
 /// A chosen folder that exists (or can be made) and takes writes; otherwise it's logged once and the
@@ -568,6 +562,17 @@ impl EngineConfig {
 
     pub fn auto_send(&self) -> bool {
         self.auto_send.unwrap_or(true)
+    }
+
+    pub fn resolved_captures_dir(&self) -> PathBuf {
+        if let Some(dir) = std::env::var_os("SCRAWL_CAPTURES_DIR") {
+            return PathBuf::from(dir);
+        }
+        self.captures_dir
+            .as_deref()
+            .and_then(configured_captures_dir)
+            .filter(|dir| usable_captures_dir(dir))
+            .unwrap_or_else(builtin_captures_dir)
     }
 
     pub fn routing_apps(&self) -> Vec<(String, PathBuf)> {

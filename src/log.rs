@@ -74,14 +74,17 @@ pub fn scrawl_log(msg: impl AsRef<str>) {
     }
 }
 
-pub fn start_metric(name: &str, started: Instant) {
-    let ms = started.elapsed().as_secs_f64() * 1_000.0;
+pub fn record_metric(name: &str, ms: f64) {
     if let Some(sink) = SINK.read().unwrap_or_else(|e| e.into_inner()).clone() {
         sink.metric(name, ms);
     }
     if std::env::var_os("SCRAWL_BENCH_START").is_some() {
         eprintln!("START_METRIC {name}={ms:.6}");
     }
+}
+
+pub fn start_metric(name: &str, started: Instant) {
+    record_metric(name, started.elapsed().as_secs_f64() * 1_000.0);
 }
 
 #[cfg(test)]

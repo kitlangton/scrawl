@@ -119,6 +119,33 @@ pub struct ScreenRecording {
     pub video_offset_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Stage {
+    Recording,
+    Stopping,
+    Transcribing,
+    Rendering,
+    Writing,
+    Done,
+    Cancelled,
+    Failed,
+}
+
+impl Stage {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Recording => "recording",
+            Self::Stopping => "stopping",
+            Self::Transcribing => "transcribing",
+            Self::Rendering => "rendering",
+            Self::Writing => "writing",
+            Self::Done => "done",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 /// Live engine events emitted by the global input monitor, iPhone mirror and ingest server.
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -129,12 +156,170 @@ pub enum Event {
     RequestSnapshot,
     /// The iPhone mirror ended on its own (unplugged, never found, or access denied).
     PhoneEnded,
+    /// Lifecycle progress of an active or finishing capture.
+    Progress {
+        bundle: PathBuf,
+        stage: Stage,
+    },
     /// A ScrawlKit recording was ingested from an iPhone and compiled into a `.scrawl` bundle.
     IngestedBundle {
         dir: PathBuf,
         bundle: Box<crate::model::ScrawlBundle>,
         status: Option<String>,
     },
+    /// A capture bundle was delivered (or queued for retry) to a destination.
+    Delivered {
+        dir: PathBuf,
+        delivery: crate::delivery::Delivery,
+    },
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct OwnWindows {
+    /// Window IDs excluded from ScreenCaptureKit / Windows.Graphics.Capture recordings.
+    pub excluded: Vec<u32>,
+    /// Click-through window IDs (such as the ink overlay) ignored when checking whether a click
+    /// landed on the host's own UI.
+    pub passthrough: Vec<u32>,
+}
+
+/// What the host provides. Every method has a default except `emit`; `emit` and `log` must return
+/// without blocking.
+pub trait Host: Send + Sync + 'static {
+    fn emit(&self, event: Event);
+    fn log(&self, line: &str) {
+        scrawl_log(line);
+    }
+    fn metric(&self, name: &str, ms: f64) {
+        crate::log::record_metric(name, ms);
+    }
+    fn clipboard(&self) -> Option<&dyn crate::handoff::Clipboard> {
+        None
+    }
+    /// Window IDs to leave out of recordings (overlay, capsule, host windows) and to let clicks
+    /// through (`excluded_window_ids` / `passthrough_window_ids`).
+    fn own_windows(&self) -> OwnWindows {
+        OwnWindows::default()
+    }
+}
+
+pub struct ChannelHost {
+    sender: flume::Sender<Event>,
+}
+
+impl ChannelHost {
+    pub fn new(sender: flume::Sender<Event>) -> Self {
+        Self { sender }
+    }
+}
+
+impl Host for ChannelHost {
+    fn emit(&self, event: Event) {
+        let _ = self.sender.try_send(event);
+    }
+}
+
+pub trait ConfigSource: Send + Sync {
+    fn engine_config(&self) -> Result<crate::handoff::EngineConfig>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DefaultConfigSource;
+
+impl ConfigSource for DefaultConfigSource {
+    fn engine_config(&self) -> Result<crate::handoff::EngineConfig> {
+        Ok(crate::handoff::engine_config())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum Target {
+    /// Discover the display under the cursor (or focused window) when starting.
+    #[default]
+    ActiveDisplay,
+    /// Record a specific screen, window or region target.
+    Screen(TargetInfo),
+    /// Record a cabled iPhone (either a new session for `device` or an existing preview).
+    Phone {
+        device: Option<String>,
+        name: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AudioIn {
+    /// No engine-managed microphone stream; the host passes `Option<RecordedAudio>` to `finish`.
+    #[default]
+    External,
+    /// No audio at all.
+    None,
+    /// Open Scrawl's built-in `AudioRecorder` stream.
+    Microphone,
+}
+
+#[derive(Clone, Debug)]
+pub struct Start {
+    /// The capture's start on the boot-time nanosecond clock that audio and input timestamps share.
+    pub t0_boot_ns: u64,
+    pub target: Target,
+    pub bundle_dir: Option<PathBuf>,
+    pub audio: AudioIn,
+    pub window_log: bool,
+    pub note: Option<String>,
+}
+
+impl Default for Start {
+    fn default() -> Self {
+        Self {
+            t0_boot_ns: boot_time_ns(),
+            target: Target::ActiveDisplay,
+            bundle_dir: None,
+            audio: AudioIn::External,
+            window_log: true,
+            note: None,
+        }
+    }
+}
+
+impl Start {
+    pub fn screen(target: TargetInfo) -> Self {
+        let window_log = target.mode == CaptureMode::Display;
+        Self {
+            t0_boot_ns: boot_time_ns(),
+            target: Target::Screen(target),
+            bundle_dir: None,
+            audio: AudioIn::Microphone,
+            window_log,
+            note: None,
+        }
+    }
+
+    pub fn phone(device: Option<String>, name: Option<String>) -> Self {
+        Self {
+            t0_boot_ns: boot_time_ns(),
+            target: Target::Phone { device, name },
+            bundle_dir: None,
+            audio: AudioIn::None,
+            window_log: false,
+            note: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RouteContext {
+    pub front_bundle_id: Option<String>,
+    pub captured_bundle_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Finished {
+    pub dir: PathBuf,
+    pub bundle: crate::model::ScrawlBundle,
+    pub summary: String,
+    pub words: usize,
+    pub duration_ms: u64,
+    pub route_hint: RouteContext,
 }
 
 // Carbon HIToolbox modifier bits. The shortcut is stored with them on every platform.
@@ -1930,6 +2115,519 @@ pub fn write_bundle_artifacts(
     Ok(())
 }
 
+enum InnerSource {
+    Screen {
+        session: ScreenCaptureSession,
+        audio: Option<crate::audio::AudioRecorder>,
+        windows: Option<crate::windows::WindowLogger>,
+    },
+    Phone(crate::phone::PhoneSession),
+}
+
+pub struct Engine {
+    host: Arc<dyn Host>,
+    config: Arc<dyn ConfigSource>,
+    transcriber: Option<Arc<dyn crate::transcribe::Transcriber>>,
+    telemetry: Arc<SharedCaptureTelemetry>,
+}
+
+impl Engine {
+    pub fn new(host: Arc<dyn Host>, config: Arc<dyn ConfigSource>) -> Self {
+        let (tx, _rx) = flume::unbounded();
+        Self {
+            host,
+            config,
+            transcriber: None,
+            telemetry: SharedCaptureTelemetry::new(tx, ShortcutConfig::defaults()),
+        }
+    }
+
+    pub fn default_engine() -> Self {
+        let (tx, _rx) = flume::unbounded();
+        Self::new(
+            Arc::new(ChannelHost::new(tx)),
+            Arc::new(DefaultConfigSource),
+        )
+    }
+
+    pub fn with_telemetry(mut self, telemetry: Arc<SharedCaptureTelemetry>) -> Self {
+        self.telemetry = telemetry;
+        self
+    }
+
+    pub fn with_transcriber(
+        mut self,
+        transcriber: Arc<dyn crate::transcribe::Transcriber>,
+    ) -> Self {
+        self.transcriber = Some(transcriber);
+        self
+    }
+
+    pub fn telemetry(&self) -> &Arc<SharedCaptureTelemetry> {
+        &self.telemetry
+    }
+
+    pub fn discover_target(&self, window: Option<&str>, at: Option<[f64; 2]>) -> TargetInfo {
+        discover_target_at(window, at)
+    }
+
+    pub fn selectable_windows(&self) -> Vec<TargetInfo> {
+        list_selectable_windows()
+    }
+
+    pub fn phones(&self) -> Result<Vec<crate::helper::PhoneDevice>> {
+        crate::helper::devices()
+    }
+
+    pub fn start(&self, req: Start) -> Result<Capture> {
+        self.start_with_preview(req, None)
+    }
+
+    pub fn start_with_preview(
+        &self,
+        req: Start,
+        existing_preview: Option<crate::phone::PhoneSession>,
+    ) -> Result<Capture> {
+        let dir = match req.bundle_dir {
+            Some(dir) => {
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("could not create {}", dir.display()))?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+                }
+                dir
+            }
+            None => {
+                let root = match std::env::var_os("SCRAWL_BENCH_START") {
+                    Some(dir) => PathBuf::from(dir),
+                    None => self.config.engine_config()?.resolved_captures_dir(),
+                };
+                let id = crate::pipeline::make_bundle_id();
+                let dir = root.join(format!("{id}.scrawl"));
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("could not create {}", dir.display()))?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+                }
+                dir
+            }
+        };
+
+        let saved_excluded = self
+            .telemetry
+            .excluded_window_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let own = self.host.own_windows();
+
+        let (target, source) = match req.target {
+            Target::Phone { device, name } => {
+                let movie_path = dir.join("recording.mov");
+                let dev_name = name.as_deref().unwrap_or("iPhone");
+                let target = crate::phone::phone_target(dev_name, None, None, 0, 0);
+                let initial_frame = existing_preview
+                    .as_ref()
+                    .and_then(crate::phone::PhoneSession::rect)
+                    .map_or(
+                        TargetFrame {
+                            x: -100_000.0,
+                            y: -100_000.0,
+                            width: 1.0,
+                            height: 1.0,
+                            scale: 2.0,
+                        },
+                        |[rx, ry, rw, rh]| TargetFrame {
+                            x: f64::from(rx),
+                            y: f64::from(ry),
+                            width: f64::from(rw),
+                            height: f64::from(rh),
+                            scale: 2.0,
+                        },
+                    );
+                self.telemetry.set_capture_mode(CaptureMode::Device);
+                self.telemetry
+                    .reset_for_session_at(initial_frame, Some(req.t0_boot_ns));
+                self.restore_own_windows(&saved_excluded, &own);
+                // Hold interaction telemetry inactive until the helper's `recording` event arrives.
+                self.telemetry.active.store(false, Ordering::Release);
+                let session = if let Some(mut preview) = existing_preview {
+                    preview.begin_recording(&movie_path);
+                    preview
+                } else {
+                    match crate::phone::PhoneSession::start(
+                        &movie_path,
+                        device.as_deref(),
+                        Some(Arc::clone(&self.telemetry)),
+                    ) {
+                        Ok(session) => session,
+                        Err(error) => {
+                            let _ = self.telemetry.finish_session();
+                            let _ = self.telemetry.take_flags();
+                            let _ = std::fs::remove_dir_all(&dir);
+                            return Err(error);
+                        }
+                    }
+                };
+                (target, InnerSource::Phone(session))
+            }
+            Target::ActiveDisplay | Target::Screen(_) => {
+                let target = match req.target {
+                    Target::Screen(t) => t,
+                    Target::ActiveDisplay => discover_target_at(None, crate::screens::pointer()),
+                    Target::Phone { .. } => unreachable!(),
+                };
+                let video_path = dir.join("recording.mp4");
+                self.telemetry.set_capture_mode(target.mode);
+                self.telemetry
+                    .reset_for_session_at(target.frame, Some(req.t0_boot_ns));
+                self.restore_own_windows(&saved_excluded, &own);
+                let audio = match req.audio {
+                    AudioIn::Microphone => {
+                        let stage = Instant::now();
+                        let recorder = crate::audio::AudioRecorder::start().ok();
+                        self.host
+                            .metric("audio_start_ms", stage.elapsed().as_secs_f64() * 1_000.0);
+                        recorder
+                    }
+                    AudioIn::External | AudioIn::None => None,
+                };
+                let stage = Instant::now();
+                let session = ScreenCaptureSession::start(
+                    target.clone(),
+                    Some(video_path),
+                    Arc::clone(&self.telemetry.excluded_window_ids),
+                );
+                self.host
+                    .metric("sck_start_ms", stage.elapsed().as_secs_f64() * 1_000.0);
+                let windows = (req.window_log && target.mode == CaptureMode::Display).then(|| {
+                    let started_at = *self
+                        .telemetry
+                        .started_at
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    crate::windows::WindowLogger::start(
+                        target.frame,
+                        started_at,
+                        Arc::clone(&self.telemetry.window_log_request),
+                    )
+                });
+                (
+                    target,
+                    InnerSource::Screen {
+                        session,
+                        audio,
+                        windows,
+                    },
+                )
+            }
+        };
+
+        self.host.emit(Event::Progress {
+            bundle: dir.clone(),
+            stage: Stage::Recording,
+        });
+        Ok(Capture {
+            host: Arc::clone(&self.host),
+            transcriber: self.transcriber.clone(),
+            input: InputSink::new(Arc::clone(&self.telemetry)),
+            telemetry: Arc::clone(&self.telemetry),
+            dir,
+            target,
+            t0_boot_ns: req.t0_boot_ns,
+            note: req.note,
+            source,
+            stopped_input: None,
+        })
+    }
+
+    fn restore_own_windows(&self, saved_excluded: &[u32], own: &OwnWindows) {
+        let mut excluded = self
+            .telemetry
+            .excluded_window_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for &id in saved_excluded.iter().chain(&own.excluded) {
+            if !excluded.contains(&id) {
+                excluded.push(id);
+            }
+        }
+        drop(excluded);
+        let mut passthrough = self
+            .telemetry
+            .passthrough_window_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for &id in &own.passthrough {
+            if !passthrough.contains(&id) {
+                passthrough.push(id);
+            }
+        }
+    }
+}
+
+pub struct Capture {
+    host: Arc<dyn Host>,
+    transcriber: Option<Arc<dyn crate::transcribe::Transcriber>>,
+    telemetry: Arc<SharedCaptureTelemetry>,
+    input: InputSink,
+    dir: PathBuf,
+    target: TargetInfo,
+    t0_boot_ns: u64,
+    note: Option<String>,
+    source: InnerSource,
+    stopped_input: Option<(Vec<InteractionEvent>, Vec<Stroke>, Vec<u64>)>,
+}
+
+impl Capture {
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    pub fn target(&self) -> &TargetInfo {
+        &self.target
+    }
+
+    pub fn is_screen(&self) -> bool {
+        matches!(self.source, InnerSource::Screen { .. })
+    }
+
+    pub fn is_phone(&self) -> bool {
+        matches!(self.source, InnerSource::Phone(_))
+    }
+
+    pub fn has_phone_recording(&self) -> bool {
+        match &self.source {
+            InnerSource::Phone(session) => session.has_recording(),
+            InnerSource::Screen { .. } => false,
+        }
+    }
+
+    pub fn phone_has_ended(&self) -> bool {
+        match &self.source {
+            InnerSource::Phone(session) => session.has_ended(),
+            InnerSource::Screen { .. } => false,
+        }
+    }
+
+    pub fn started_at_boot_ns(&self) -> u64 {
+        self.t0_boot_ns
+    }
+
+    pub fn input(&self) -> &InputSink {
+        &self.input
+    }
+
+    pub fn ink(&self) -> InkSnapshot {
+        self.telemetry.ink_snapshot()
+    }
+
+    pub fn elapsed_ms(&self) -> u64 {
+        match &self.source {
+            InnerSource::Screen { session, .. } => session.elapsed_ms(),
+            InnerSource::Phone(session) => session.elapsed_ms(),
+        }
+    }
+
+    pub fn request_frame(&self) {
+        if let InnerSource::Screen { session, .. } = &self.source {
+            session.request_immediate_frame();
+        }
+    }
+
+    pub fn route_context(&self) -> RouteContext {
+        if !self.is_screen() {
+            return RouteContext::default();
+        }
+        let front_bundle_id = (self.target.mode != CaptureMode::Window)
+            .then(frontmost_app_info)
+            .flatten()
+            .and_then(|(_, _, id)| id);
+        RouteContext {
+            front_bundle_id,
+            captured_bundle_id: self.target.bundle_id.clone(),
+        }
+    }
+
+    /// Stops collecting pointer/ink input on the calling thread before moving `self` to a
+    /// background worker to run `finish`.
+    pub fn stop_input(&mut self) {
+        if self.stopped_input.is_none() {
+            let (events, strokes) = self.telemetry.finish_session();
+            let flags = self.telemetry.take_flags();
+            self.stopped_input = Some((events, strokes, flags));
+        }
+    }
+
+    pub(crate) fn stop_raw_screen(
+        self,
+    ) -> Option<(ScreenRecording, Option<crate::audio::RecordedAudio>)> {
+        let _ = self.telemetry.finish_session();
+        let _ = self.telemetry.take_flags();
+        match self.source {
+            InnerSource::Screen {
+                session,
+                audio,
+                windows,
+            } => {
+                if let Some(windows) = windows {
+                    let _ = windows.stop();
+                }
+                let (recording, recorded_audio) = std::thread::scope(|scope| {
+                    let screen = scope.spawn(|| session.stop());
+                    let audio = audio.and_then(|r| r.stop().ok());
+                    (screen.join().unwrap(), audio)
+                });
+                Some((recording, recorded_audio))
+            }
+            InnerSource::Phone(_) => None,
+        }
+    }
+
+    pub fn cancel(self) {
+        let _ = self.telemetry.finish_session();
+        let _ = self.telemetry.take_flags();
+        match self.source {
+            InnerSource::Screen {
+                session,
+                audio,
+                windows,
+            } => {
+                let _ = session.stop();
+                if let Some(audio) = audio {
+                    let _ = audio.stop();
+                }
+                if let Some(windows) = windows {
+                    let _ = windows.stop();
+                }
+            }
+            InnerSource::Phone(session) => session.cancel(),
+        }
+        if let Err(error) = std::fs::remove_dir_all(&self.dir) {
+            self.host
+                .log(&format!("could not remove {}: {error}", self.dir.display()));
+        }
+        self.host.emit(Event::Progress {
+            bundle: self.dir,
+            stage: Stage::Cancelled,
+        });
+    }
+
+    /// Blocking: stops streams, transcribes audio, renders keyframes and writes the bundle.
+    pub fn finish(
+        mut self,
+        external_audio: Option<crate::audio::RecordedAudio>,
+    ) -> Result<Finished> {
+        self.stop_input();
+        let (events, strokes, flags) = self.stopped_input.take().unwrap_or_default();
+        let route_hint = self.route_context();
+        let bundle_dir = self.dir.clone();
+        self.host.emit(Event::Progress {
+            bundle: bundle_dir.clone(),
+            stage: Stage::Stopping,
+        });
+
+        let result = match self.source {
+            InnerSource::Phone(session) => {
+                let finalized = session.stop().and_then(|mut recording| {
+                    for flag in flags {
+                        if flag >= recording.offset_ms {
+                            recording.flags.push(flag - recording.offset_ms);
+                        }
+                    }
+                    crate::phone::finalize_live_capture(
+                        &bundle_dir,
+                        recording,
+                        events,
+                        strokes,
+                        self.note,
+                    )
+                });
+                if let Err(error) = &finalized {
+                    self.host.log(&format!("iPhone capture failed: {error:#}"));
+                }
+                finalized.map(|(dir, bundle, summary)| {
+                    let words = bundle.transcript.words.len();
+                    let duration_ms = bundle.duration_ms;
+                    Finished {
+                        dir,
+                        bundle,
+                        summary,
+                        words,
+                        duration_ms,
+                        route_hint,
+                    }
+                })
+            }
+            InnerSource::Screen {
+                session,
+                audio,
+                windows,
+            } => {
+                let stop_started = Instant::now();
+                let (recording, recorded_audio, mut activity) = std::thread::scope(|s| {
+                    let screen_handle = s.spawn(|| session.stop());
+                    let win_handle = s.spawn(|| {
+                        windows
+                            .map(crate::windows::WindowLogger::stop)
+                            .unwrap_or_default()
+                    });
+                    let audio = external_audio.or_else(|| audio.and_then(|r| r.stop().ok()));
+                    (
+                        screen_handle.join().unwrap(),
+                        audio,
+                        win_handle.join().unwrap_or_default(),
+                    )
+                });
+                activity.stop_started = Some(stop_started);
+                activity.stop_ms = Some(stop_started.elapsed().as_millis() as u64);
+                let duration_ms = recording.duration_ms;
+                self.host.emit(Event::Progress {
+                    bundle: bundle_dir.clone(),
+                    stage: Stage::Transcribing,
+                });
+                crate::pipeline::finalize_capture_bundle_with_flags(
+                    &bundle_dir,
+                    self.target,
+                    recording,
+                    strokes,
+                    events,
+                    flags,
+                    recorded_audio,
+                    self.note,
+                    activity,
+                    self.transcriber.as_deref(),
+                )
+                .map(|(dir, bundle, summary)| {
+                    let words = bundle.transcript.words.len();
+                    Finished {
+                        dir,
+                        bundle,
+                        summary,
+                        words,
+                        duration_ms,
+                        route_hint,
+                    }
+                })
+            }
+        };
+
+        self.host.emit(Event::Progress {
+            bundle: bundle_dir,
+            stage: if result.is_ok() {
+                Stage::Done
+            } else {
+                Stage::Failed
+            },
+        });
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2432,6 +3130,121 @@ mod tests {
                 shortcut
             }] if shortcut == "⌘K"
         ));
+    }
+
+    #[test]
+    fn capture_finish_writes_bundle_and_emits_progress_with_host_and_transcriber() {
+        struct TestHost {
+            stages: Mutex<Vec<Stage>>,
+        }
+        impl Host for TestHost {
+            fn emit(&self, event: Event) {
+                if let Event::Progress { stage, .. } = event {
+                    self.stages.lock().unwrap().push(stage);
+                }
+            }
+        }
+        struct TestTranscriber;
+        impl crate::transcribe::Transcriber for TestTranscriber {
+            fn transcribe(
+                &self,
+                _audio: &crate::audio::RecordedAudio,
+            ) -> Result<Option<crate::model::TranscriptData>> {
+                Ok(Some(crate::model::TranscriptData {
+                    source: "test".into(),
+                    model: Some("parakeet".into()),
+                    text: "hello world".into(),
+                    words: vec![
+                        crate::model::WordTiming {
+                            t0: 0,
+                            t1: 300,
+                            text: "hello".into(),
+                        },
+                        crate::model::WordTiming {
+                            t0: 300,
+                            t1: 600,
+                            text: "world".into(),
+                        },
+                    ],
+                    segments: Vec::new(),
+                    estimated: false,
+                    missing: None,
+                }))
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-capture-test-{}.scrawl",
+            crate::pipeline::make_bundle_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host = Arc::new(TestHost {
+            stages: Mutex::new(Vec::new()),
+        });
+        let telemetry = session(200.0, 100.0);
+        let mut buf = CandidateBuffer::new(1 << 20);
+        buf.push(RgbaFrame::new(0, 20, 10, vec![40; 20 * 10 * 4]), false);
+        buf.push(RgbaFrame::new(500, 20, 10, vec![80; 20 * 10 * 4]), true);
+        let screen_session = ScreenCaptureSession {
+            started_at: Instant::now(),
+            stopping: Arc::new(AtomicBool::new(false)),
+            urgent_snapshot: Arc::new(AtomicBool::new(false)),
+            frames: Arc::new(Mutex::new(buf)),
+            video_offset_ms: Arc::new(AtomicU64::new(0)),
+            sampler_thread: None,
+            _recording: crate::retention::Recording::start(),
+        };
+        let target = TargetInfo {
+            mode: CaptureMode::Window,
+            app: Some("TestApp".into()),
+            bundle_id: Some("dev.test.app".into()),
+            window_title: Some("Main".into()),
+            window_id: Some(1),
+            display_id: 1,
+            frame: TargetFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 100.0,
+                scale: 1.0,
+            },
+        };
+        let capture = Capture {
+            host: host.clone(),
+            transcriber: Some(Arc::new(TestTranscriber)),
+            input: InputSink::new(Arc::clone(&telemetry)),
+            telemetry,
+            dir: dir.clone(),
+            target,
+            t0_boot_ns: 123_456_789,
+            note: Some("unit test".into()),
+            source: InnerSource::Screen {
+                session: screen_session,
+                audio: None,
+                windows: None,
+            },
+            stopped_input: None,
+        };
+        assert_eq!(capture.started_at_boot_ns(), 123_456_789);
+        capture.input().pointer_down(100, 50.0, 50.0);
+        capture.input().pointer_up(140, 50.0, 50.0, false);
+
+        let audio = crate::audio::RecordedAudio::new(vec![0.0; 16_000], 16_000, 200, Vec::new());
+        let finished = capture.finish(Some(audio)).unwrap();
+        assert_eq!(finished.dir, dir);
+        assert_eq!(finished.words, 2);
+        assert_eq!(
+            finished.route_hint.captured_bundle_id.as_deref(),
+            Some("dev.test.app")
+        );
+        assert!(dir.join("scrawl.json").is_file());
+        assert!(dir.join("summary.md").is_file());
+        assert!(dir.join("audio.wav").is_file());
+        assert_eq!(
+            *host.stages.lock().unwrap(),
+            vec![Stage::Stopping, Stage::Transcribing, Stage::Done]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
