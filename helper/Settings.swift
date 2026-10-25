@@ -102,8 +102,14 @@ struct SettingsTranscriber: Decodable, Equatable {
     let note = unknown ? nil : "\(name(saved)) isn't available on this Mac. Using \(name(effective))."
     return (title, saved, options, note)
   }
-  /// The program's file name while transcribeCommand is usable.
-  var command: String? = nil
+  /// The usable commands (transcribeCommand, then transcribeCommands), each titled by Rust.
+  var commands: [SettingsCommand] = []
+}
+
+struct SettingsCommand: Decodable, Equatable {
+  /// The transcriber value that chooses it: "command" or "command:<id>".
+  var id: String
+  var title: String
 }
 
 struct SettingsOption: Decodable, Equatable {
@@ -945,7 +951,8 @@ struct SettingsView: View {
     let language = SettingsTranscriber.languageMenu(saved: t.appleLocale, speech: t.speech)
     var engines: [(id: String, title: String, enabled: Bool)] = [("apple", "Apple Speech", true)]
     engines.append(("hex", t.hexTitle, t.hexEnabled))
-    if let command = t.command { engines.append(("command", "Command (\(command))", true)) }
+    engines += t.commands.map { ($0.id, $0.title, true) }
+    let commandChosen = t.commands.contains { $0.id == t.engine }
     let chosenModel = t.models.first(where: \.chosen)
     let mic = state.microphone
     return VStack(spacing: 0) {
@@ -994,8 +1001,8 @@ struct SettingsView: View {
           HexLanguageField(model: model, language: t.language)
         }
       }
-      SettingsCaption(text: t.engine == "command"
-        ? "Command runs transcribeCommand from config.json. If it fails, that recording uses Apple Speech."
+      SettingsCaption(text: commandChosen
+        ? "This model runs as a command from config.json. If it fails, that recording uses Apple Speech."
         : t.hexEnabled || t.engine == "hex"
         ? "Apple Speech times each word. Hex uses a model you have in Hex, and its word times are estimates."
         : "Apple Speech runs on this Mac and times each word. Hex shows up here while Hex is running.")
@@ -1615,7 +1622,14 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var languageUnsupported = ready
     languageUnsupported.transcriber.appleLocale = "xx-XX"
     var command = base
-    command.transcriber = SettingsTranscriber(engine: "command", command: "whisper-scrawl")
+    command.transcriber = SettingsTranscriber(engine: "command", commands: [SettingsCommand(id: "command", title: "Command (whisper-scrawl)")])
+    var commandDisplayNamed = base
+    commandDisplayNamed.transcriber = SettingsTranscriber(engine: "command", commands: [SettingsCommand(id: "command", title: "Whisper Large V3")])
+    var commands = base
+    commands.transcriber = SettingsTranscriber(engine: "command:parakeet", commands: [
+      SettingsCommand(id: "command", title: "Whisper Large V3"),
+      SettingsCommand(id: "command:parakeet", title: "Parakeet"),
+    ])
     var missing = base
     missing.permissions[0].status = "granted"
     missing.permissions[0].relaunch = true
@@ -1677,6 +1691,8 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
       ("recording-language-loading", .recording, languageLoading),
       ("recording-language-unsupported", .recording, languageUnsupported),
       ("recording-command", .recording, command),
+      ("recording-command-named", .recording, commandDisplayNamed),
+      ("recording-commands", .recording, commands),
       ("storage", .storage, base),
       ("storage-custom", .storage, storageCustom),
       ("permissions", .permissions, base),

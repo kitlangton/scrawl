@@ -1,11 +1,11 @@
 //! Transcription: Apple's SpeechAnalyzer through `scrawl-helper` (measured word and segment
 //! timings), Hex when `"transcriber": "hex"` is set and Hex is connected (`crate::hex`; word
-//! times estimated), or a program of the user's when `"transcriber": "command"`
-//! (`crate::command_transcriber`). Any Hex or command trouble falls back to Apple for that
-//! recording.
+//! times estimated), or a program of the user's when `"transcriber": "command"` or
+//! `"command:<id>"` (`crate::command_transcriber`). Any Hex or command trouble falls back to Apple
+//! for that recording.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::OnceLock;
 
 use anyhow::Result;
 
@@ -21,11 +21,13 @@ pub enum Engine {
 }
 
 impl Engine {
+    /// `"apple"`, `"hex"`, or `"command"`/`"command:<id>"` (which command is
+    /// `command_transcriber::command_id`'s to read).
     pub fn parse(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
             "apple" => Some(Self::Apple),
             "hex" => Some(Self::Hex),
-            "command" => Some(Self::Command),
+            _ if crate::command_transcriber::command_id(name).is_some() => Some(Self::Command),
             _ => None,
         }
     }
@@ -48,13 +50,27 @@ impl Engine {
 
     /// What recordings use now: a command-line `--transcriber`, else the configured engine.
     pub fn preferred() -> Self {
-        match OVERRIDE.load(Ordering::Relaxed) {
-            1 => Self::Apple,
-            2 => Self::Hex,
-            3 => Self::Command,
-            _ => Self::configured(),
-        }
+        choice()
+            .as_deref()
+            .and_then(Self::parse)
+            .unwrap_or_default()
     }
+}
+
+/// A `transcriber` value as Settings saves it: the engine's name, `"command:<id>"` for a
+/// `transcribeCommands` entry. `None` when it names no engine.
+pub fn canonical(name: &str) -> Option<String> {
+    match Engine::parse(name)? {
+        Engine::Command => crate::command_transcriber::command_id(name)
+            .map(|id| crate::command_transcriber::choice_for(&id)),
+        engine => Some(engine.name().to_owned()),
+    }
+}
+
+/// The `transcriber` value recordings follow now: a command-line `--transcriber`, else the
+/// config's, as written.
+pub fn choice() -> Option<String> {
+    OVERRIDE.get().cloned().or_else(crate::handoff::transcriber)
 }
 
 /// The on-device engine's name in menus: Apple's SpeechAnalyzer on macOS; on Windows, Parakeet
@@ -64,7 +80,8 @@ pub const LOCAL_ENGINE_TITLE: &str = "Apple Speech";
 #[cfg(not(target_os = "macos"))]
 pub const LOCAL_ENGINE_TITLE: &str = "Parakeet (on this PC)";
 
-static OVERRIDE: AtomicU8 = AtomicU8::new(0);
+/// `--transcriber`, canonical (`canonical`).
+static OVERRIDE: OnceLock<String> = OnceLock::new();
 static LOGGED_NOT_CONNECTED: std::sync::Once = std::sync::Once::new();
 static LOGGED_NO_COMMAND: std::sync::Once = std::sync::Once::new();
 
@@ -117,16 +134,10 @@ pub fn menu_state(
     }
 }
 
-/// Pins the engine for this process (`scrawl reprocess --transcriber`).
-pub fn set_override(engine: Engine) {
-    OVERRIDE.store(
-        match engine {
-            Engine::Apple => 1,
-            Engine::Hex => 2,
-            Engine::Command => 3,
-        },
-        Ordering::Relaxed,
-    );
+/// Pins the engine, and for Command which one, for this process (`scrawl reprocess
+/// --transcriber`): a value `canonical` accepted.
+pub fn set_override(choice: String) {
+    let _ = OVERRIDE.set(choice);
 }
 
 /// Missing microphones and a failed transcriber never prevent saving a bundle.
@@ -201,10 +212,10 @@ fn run(
     apple()
 }
 
-/// Runs `transcribeCommand`. Its errors are fixed reasons (`command_transcriber::Failure`),
+/// Runs the chosen command. Its errors are fixed reasons (`command_transcriber::Failure`),
 /// never what the program printed or was given.
 fn try_command(wav: &Path, audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
-    let program = match crate::handoff::transcribe_command() {
+    let program = match crate::handoff::transcribe_command(&choice().unwrap_or_default()) {
         Ok(program) => program,
         Err(unusable) => {
             LOGGED_NO_COMMAND.call_once(|| {
@@ -280,8 +291,27 @@ mod tests {
         assert_eq!(Engine::parse("hex"), Some(Engine::Hex));
         assert_eq!(Engine::parse(" Apple "), Some(Engine::Apple));
         assert_eq!(Engine::parse("Command"), Some(Engine::Command));
+        assert_eq!(Engine::parse("command:parakeet"), Some(Engine::Command));
+        assert_eq!(Engine::parse(" Command:Whisper "), Some(Engine::Command));
+        assert_eq!(Engine::parse("command:"), None);
+        assert_eq!(Engine::parse("commander"), None);
         assert_eq!(Engine::parse("whisper"), None);
         assert_eq!(Engine::default(), Engine::Apple);
+    }
+
+    #[test]
+    fn a_choice_is_saved_canonical() {
+        assert_eq!(canonical(" Apple ").as_deref(), Some("apple"));
+        assert_eq!(canonical("HEX").as_deref(), Some("hex"));
+        assert_eq!(canonical("command").as_deref(), Some("command"));
+        assert_eq!(canonical("command:command").as_deref(), Some("command"));
+        assert_eq!(
+            canonical(" Command: Parakeet ").as_deref(),
+            Some("command:parakeet")
+        );
+        for nothing in ["whisper", "command:", "commands:x", ""] {
+            assert_eq!(canonical(nothing), None, "{nothing}");
+        }
     }
 
     #[test]

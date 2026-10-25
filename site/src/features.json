@@ -382,7 +382,7 @@
       "platforms": ["mac"],
       "note": "Windows and Linux use Parakeet on device.",
       "config": [
-        { "key": "transcriber", "value": "\"apple\" | \"hex\" | \"command\"", "does": "Which engine transcribes" },
+        { "key": "transcriber", "value": "\"apple\" | \"hex\" | \"command\" | \"command:<id>\"", "does": "Which engine transcribes" },
         { "key": "appleLocale", "value": "\"zh-TW\"", "does": "Apple Speech language; absent follows the Mac" }
       ],
       "docs": ["README.md#transcription"]
@@ -421,6 +421,20 @@
       "config": [
         { "key": "transcribeCommand", "value": "[\"/abs/cmd\", \"{audio}\"]", "does": "Program to run" },
         { "key": "transcribeTimeoutSeconds", "value": "600", "does": "Its time limit" }
+      ],
+      "docs": ["README.md#your-own-model-command"]
+    },
+    {
+      "id": "command-transcribers",
+      "group": "agent",
+      "name": "Several own models",
+      "says": "Names your command models and lets Settings › Recording switch between them.",
+      "status": "main",
+      "platforms": ["mac"],
+      "note": "Windows keeps the local engine for now.",
+      "config": [
+        { "key": "transcribeCommandDisplayName", "value": "\"Whisper Large V3\"", "does": "Name Settings shows for transcribeCommand" },
+        { "key": "transcribeCommands", "value": "[{ \"displayName\": \"Parakeet\", \"command\": [\"/abs/cmd\", \"{audio}\"] }]", "does": "More models, each chosen as command:<id>" }
       ],
       "docs": ["README.md#your-own-model-command"]
     },
