@@ -18,10 +18,13 @@ use crate::native::pill::model::{CHIP_H, CX, ElemId, ISLAND_H, ISLAND_INSET, TOP
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Proto {
-    /// f: "Copied" with one hint; ⌥⇧V drops a list of sessions below the pill.
-    SendList,
-    /// f, auto-routed: "Sent to CONCLAVE"; the same list sends it elsewhere.
-    SendListAuto,
+    /// f, sure where it goes: "Sent to CONCLAVE", esc undoes it for a few seconds, ⌥⇧V sends
+    /// it elsewhere.
+    FSure,
+    /// f, unsure: "Copied", and the list opens by itself with the suggestions on top.
+    FUnsure,
+    /// f, nothing fits: "Copied"; ⌥⇧V opens the list of recent sessions.
+    FNoMatch,
     /// g: the recording shows where it'll go and ⌥⇧1–3 switch it; afterwards only "Sent · Undo".
     ChooseFirst,
     /// h: no routing UI at all: sent when Scrawl is sure (a dev site), else copied.
@@ -61,16 +64,25 @@ impl Frame {
     }
 }
 
-/// f's send-to list: suggested sessions (with why), then recent ones, filtered by what's typed.
+/// f's send-to list under the open pill (whose field holds what's typed): suggested sessions
+/// with why, then recent ones, filtered by what's typed.
 #[derive(Clone, Copy, Debug)]
 struct List {
     filter: &'static str,
     selected: usize,
-    /// It was already sent to the first suggestion.
-    auto: bool,
+    suggest: Suggest,
 }
 
-const SUGGESTED: [(&str, &str); 2] = [("CONCLAVE", "dev site localhost:5173"), ("HEX", "last sent")];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Suggest {
+    /// Nothing fits: recent sessions only.
+    None,
+    Some,
+    /// It was already sent to the first suggestion.
+    Sent,
+}
+
+const SUGGESTED: [(&str, &str); 2] = [("CONCLAVE", "dev site · localhost:5173"), ("HEX", "last sent")];
 const RECENT: [(&str, &str); 3] = [
     ("Scrawl · Rune pill lab follow-ups", "2 min ago"),
     ("OpenCode Desktop · Problems board rewrite", "1 h ago"),
@@ -84,49 +96,67 @@ impl List {
         let keep = |rows: &[(&'static str, &'static str)]| -> Vec<(&'static str, &'static str)> {
             rows.iter().copied().filter(|(name, _)| name.to_lowercase().contains(&filter)).collect()
         };
-        let mut suggested = keep(&SUGGESTED);
-        if self.auto
+        let mut suggested = if self.suggest == Suggest::None { Vec::new() } else { keep(&SUGGESTED) };
+        if self.suggest == Suggest::Sent
             && let Some(first) = suggested.first_mut()
             && first.0 == SUGGESTED[0].0
         {
-            first.1 = "sent · localhost:5173";
+            first.1 = "sent";
         }
         [("Suggested", suggested), ("Recent", keep(&RECENT))].into_iter().filter(|(_, rows)| !rows.is_empty()).collect()
     }
 
     fn height(self) -> f32 {
         let rows: f32 = self.sections().iter().map(|(_, rows)| HEADER_H + rows.len() as f32 * ROW_H).sum();
-        2.0 * LIST_PAD + FILTER_H + 1.0 + rows + FOOTER_H
+        2.0 * LIST_PAD + rows + LIST_PAD + 1.0 + FOOTER_H
     }
 }
 
-const LIST_W: f32 = 340.0;
+/// The open pill's width (its field takes what the rest leaves), and the list's under it.
+const LIST_W: f32 = 360.0;
+const FIELD_MIN: f32 = 120.0;
 const LIST_PAD: f32 = 6.0;
-const LIST_Y: f32 = TOP + ISLAND_H + 8.0;
-const FILTER_H: f32 = 34.0;
-const HEADER_H: f32 = 22.0;
+const LIST_Y: f32 = TOP + ISLAND_H + 6.0;
+const HEADER_H: f32 = 24.0;
 const ROW_H: f32 = 30.0;
-const FOOTER_H: f32 = 30.0;
+const FOOTER_H: f32 = 28.0;
 const STRIP_H: f32 = 30.0;
 
 /// Frames move on one plain spring (the real capsule's are keyed on the kind of change).
 const MOVE: Spring = Spring::new(0.32, 0.0);
 
 impl Proto {
-    /// f–h, the designs after Kit's look at b–e, first in the lab.
-    pub const NEW: [Proto; 4] = [Self::SendList, Self::SendListAuto, Self::ChooseFirst, Self::NoRouting];
+    /// f's three bands, then g and h: the designs after Kit's look at b–e.
+    pub const NEW: [Proto; 5] = [Self::FSure, Self::FUnsure, Self::FNoMatch, Self::ChooseFirst, Self::NoRouting];
     pub const OLD: [Proto; 4] = [Self::SentNamed, Self::Numbered, Self::PinnedShortcut, Self::RecordingDest];
 
-    pub fn title(self) -> &'static str {
+    /// Its name in the lab's sidebar.
+    pub fn name(self) -> &'static str {
         match self {
-            Self::SendList => "f · Send-to list: Copied, ⌥⇧V drops sessions below",
-            Self::SendListAuto => "f · auto-routed: Sent, ⌥⇧V to send elsewhere",
-            Self::ChooseFirst => "g · Choose before you finish: ⌥⇧1–3 while recording",
-            Self::NoRouting => "h · No routing UI: dev site → Sent, else Copied · Paste",
-            Self::SentNamed => "b · Name it: ✓ Sent to CONCLAVE, one “instead” chip",
-            Self::Numbered => "c · Pick by key: ⌥⇧1…3 while the pill is up",
-            Self::PinnedShortcut => "d · Pinned HOME, sent with its own shortcut",
-            Self::RecordingDest => "e · While recording: where it's going",
+            Self::FSure => "f · Sure",
+            Self::FUnsure => "f · Unsure",
+            Self::FNoMatch => "f · Nothing fits",
+            Self::ChooseFirst => "g · Choose while recording",
+            Self::NoRouting => "h · No routing UI",
+            Self::SentNamed => "b · Name it",
+            Self::Numbered => "c · Pick by key",
+            Self::PinnedShortcut => "d · Pinned shortcut",
+            Self::RecordingDest => "e · Destination while recording",
+        }
+    }
+
+    /// One line on what it shows.
+    pub fn about(self) -> &'static str {
+        match self {
+            Self::FSure => "Scrawl is sure where it goes: Sent to CONCLAVE, esc undoes it for 3 s, ⌥⇧V sends it elsewhere.",
+            Self::FUnsure => "Scrawl has a guess but isn't sure: Copied, and the list opens by itself with its suggestions on top.",
+            Self::FNoMatch => "Nothing fits: Copied, and ⌥⇧V opens the list of recent sessions.",
+            Self::ChooseFirst => "The recording shows where it'll go; hold ⌥⇧ and press 1–3 to switch. Afterwards only Sent · Undo.",
+            Self::NoRouting => "Sent when Scrawl is sure (a dev site), else Copied · Paste.",
+            Self::SentNamed => "Sent to CONCLAVE, with one chip to send it elsewhere instead.",
+            Self::Numbered => "⌥⇧1…3 pick a destination while the pill is up.",
+            Self::PinnedShortcut => "A pinned destination's own shortcut sent it straight there.",
+            Self::RecordingDest => "The recording says where it will go.",
         }
     }
 
@@ -138,32 +168,43 @@ impl Proto {
     pub(super) fn frames(self) -> Vec<Frame> {
         use Item::*;
         let rec = |clock, dest| vec![Rec(clock, dest), Button("Cancel", false), Button("Finish", true)];
-        let sent = |to| vec![Done(Lead::Check, to), Chip("Undo", None), Close];
-        let send = |lead| vec![Done(Lead::Check, lead), Chip("Send…", Some("⌥⇧V")), Close];
-        let list = |filter, selected, auto| List { filter, selected, auto };
+        let sent = |to| vec![Done(Lead::Check, to), Chip("Undo", Some("esc")), Close];
+        let send = |lead, chip| vec![Done(Lead::Check, lead), Chip(chip, Some("⌥⇧V")), Close];
+        let open = |lead, typed| vec![Done(Lead::Check, lead), Field(typed), Close];
+        let list = |filter, selected, suggest| List { filter, selected, suggest };
+        let sure = |undo| vec![Done(Lead::Check, "Sent to CONCLAVE"), Chip(undo, Some("esc")), Chip("Elsewhere…", Some("⌥⇧V")), Close];
         match self {
-            Self::SendList => vec![
-                Frame::pill(send("Copied")),
-                Frame::pill(send("Copied")).list(list("", 0, false)),
-                Frame::pill(send("Copied")).list(list("co", 0, false)),
-                Frame::pill(sent("Sent to CONCLAVE")),
-            ],
-            Self::SendListAuto => vec![
-                Frame::pill(send("Sent to CONCLAVE")),
-                Frame::pill(send("Sent to CONCLAVE")).list(list("", 0, true)),
-                Frame::pill(send("Sent to CONCLAVE")).list(list("", 1, true)),
+            Self::FSure => vec![
+                Frame::pill(sure("Undo 3")),
+                Frame::pill(sure("Undo 2")),
+                Frame::pill(sure("Undo 1")),
+                Frame::pill(send("Sent to CONCLAVE", "Elsewhere…")),
+                Frame::pill(open("Sent to CONCLAVE", "")).list(list("", 1, Suggest::Sent)),
+                Frame::pill(open("Sent to CONCLAVE", "he")).list(list("he", 0, Suggest::Sent)),
                 Frame::pill(sent("Sent to HEX")),
+            ],
+            Self::FUnsure => vec![
+                Frame::pill(send("Copied", "Send…")),
+                Frame::pill(open("Copied", "")).list(list("", 0, Suggest::Some)),
+                Frame::pill(open("Copied", "")).list(list("", 1, Suggest::Some)),
+                Frame::pill(sent("Sent to HEX")),
+            ],
+            Self::FNoMatch => vec![
+                Frame::pill(send("Copied", "Send…")),
+                Frame::pill(open("Copied", "")).list(list("", 0, Suggest::None)),
+                Frame::pill(open("Copied", "ho")).list(list("ho", 0, Suggest::None)),
+                Frame::pill(sent("Sent to HOME")),
             ],
             Self::ChooseFirst => vec![
                 Frame::pill(rec("0:07", "CONCLAVE")),
                 Frame::pill(rec("0:07", "CONCLAVE")).strip(0),
                 Frame::pill(rec("0:08", "HEX")).strip(1),
                 Frame::pill(rec("0:09", "HEX")),
-                Frame::pill(sent("Sent to HEX")),
+                Frame::pill(vec![Done(Lead::Check, "Sent to HEX"), Chip("Undo", None), Close]),
             ],
             Self::NoRouting => vec![
                 Frame::pill(vec![Done(Lead::Check, "Copied"), Button("Paste", true), Close]),
-                Frame::pill(sent("Sent to CONCLAVE")),
+                Frame::pill(vec![Done(Lead::Check, "Sent to CONCLAVE"), Chip("Undo", None), Close]),
             ],
             Self::SentNamed => vec![Frame::pill(vec![
                 Done(Lead::Check, "Sent to CONCLAVE"),
@@ -187,21 +228,23 @@ impl Proto {
     /// When it shows which frame, in seconds from its entry (`None`: it leaves). `hold` is how
     /// long a one-frame design stays up.
     pub fn steps(self, hold: f64) -> Vec<(f64, Option<usize>)> {
+        let at = |times: &[f64], end: f64| {
+            times.iter().enumerate().map(|(i, t)| (*t, Some(i))).chain([(end, None)]).collect()
+        };
         match self {
-            Self::SendList => vec![(0.0, Some(0)), (1.2, Some(1)), (2.6, Some(2)), (3.8, Some(3)), (5.6, None)],
-            Self::SendListAuto => vec![(0.0, Some(0)), (1.2, Some(1)), (2.3, Some(2)), (3.4, Some(3)), (5.2, None)],
-            Self::ChooseFirst => {
-                vec![(0.0, Some(0)), (1.0, Some(1)), (1.7, Some(2)), (2.5, Some(3)), (3.3, Some(4)), (5.1, None)]
-            }
+            Self::FSure => at(&[0.0, 1.0, 2.0, 3.0, 4.3, 5.4, 6.5], 8.3),
+            Self::FUnsure => at(&[0.0, 0.5, 1.9, 3.0], 4.8),
+            Self::FNoMatch => at(&[0.0, 1.4, 2.5, 3.6], 5.4),
+            Self::ChooseFirst => at(&[0.0, 1.0, 1.7, 2.5, 3.3], 5.1),
             Self::NoRouting => vec![(0.0, Some(0)), (1.8, None), (2.2, Some(1)), (4.0, None)],
             _ => vec![(0.0, Some(0)), (hold, None)],
         }
     }
 
-    /// The frame a held cell rests on: the one that shows the idea.
+    /// The frame a held scene rests on: the one that shows the idea.
     pub fn held(self) -> usize {
         match self {
-            Self::SendList | Self::SendListAuto => 1,
+            Self::FUnsure => 1,
             Self::ChooseFirst => 2,
             _ => 0,
         }
@@ -230,6 +273,8 @@ enum Item {
     Chip(&'static str, Option<&'static str>),
     /// A keycap on its own: the shortcut that did this.
     Hint(&'static str),
+    /// The open pill's text field: what's typed, or a placeholder, and the caret.
+    Field(&'static str),
     /// Cancel or Undo (quiet), Finish or Paste (accent).
     Button(&'static str, bool),
     Close,
@@ -290,6 +335,7 @@ impl Item {
                 key + measure_with(text, s.medium_text()) + 2.0 * s.chip_px
             }
             Self::Hint(keys) => keycap_width(keys) + 2.0 * 4.0,
+            Self::Field(_) => FIELD_MIN,
             Self::Button(text, primary) => {
                 measure_with(text, if primary { s.semibold_text() } else { s.medium_text() }) + 2.0 * s.chip_px
             }
@@ -310,7 +356,10 @@ impl Item {
         match self {
             Self::Done(..) => "done".into(),
             Self::Rec(..) => "rec".into(),
-            Self::Chip(text, _) => format!("chip-{text}"),
+            // A chip with a key stays itself while its label changes (the undo countdown).
+            Self::Chip(_, Some(key)) => format!("chip-{key}"),
+            Self::Chip(text, None) => format!("chip-{text}"),
+            Self::Field(_) => "field".into(),
             Self::Hint(keys) => format!("hint-{keys}"),
             Self::Button(text, _) => format!("button-{text}"),
             Self::Close => "close".into(),
@@ -322,8 +371,14 @@ impl Item {
 fn layout(items: &[Item]) -> ([f32; 4], Vec<(Item, [f32; 4])>) {
     let s = style();
     let gap = |a: Item, b: Item| if a.group() == b.group() { s.chip_gap } else { s.group_gap };
-    let widths: Vec<f32> = items.iter().map(|i| i.width()).collect();
-    let span = widths.iter().sum::<f32>() + items.windows(2).map(|w| gap(w[0], w[1])).sum::<f32>();
+    let mut widths: Vec<f32> = items.iter().map(|i| i.width()).collect();
+    let mut span = widths.iter().sum::<f32>() + items.windows(2).map(|w| gap(w[0], w[1])).sum::<f32>();
+    // The open pill is as wide as the list under it: its field takes what the rest leaves.
+    if let Some(field) = items.iter().position(|i| matches!(i, Item::Field(_))) {
+        let grow = (LIST_W - 2.0 * ISLAND_INSET - span).max(0.0);
+        widths[field] += grow;
+        span += grow;
+    }
     let w = span + 2.0 * ISLAND_INSET;
     let l = CX - w * 0.5;
     let mut x = l + ISLAND_INSET;
@@ -356,7 +411,7 @@ pub(super) fn capsule(proto: Proto, frame: usize, meter: &Meter, shown: bool, pr
     }
     let mut up = el().key("proto").absolute(0.0, 0.0).size(PANEL_W, proto.panel_h()).child(body).child(content);
     if let Some(list) = frame.list {
-        up = up.child(list_view(list));
+        up = up.child(list_view(list, x, w));
     }
     if let Some(picked) = frame.strip {
         up = up.child(strip(picked));
@@ -373,29 +428,22 @@ fn panel(e: El, w: f32, h: f32, radius: f32) -> El {
         .child(el().absolute(0.0, 0.0).size(w, h).radius(radius).border_gradient(0.5, veil(0.15), veil(0.04)).motion(MOVE))
 }
 
-fn list_view(list: List) -> El {
+/// The list hanging under the open pill, `x` and `w` its shell's.
+fn list_view(list: List, x: f32, w: f32) -> El {
     let s = style();
     let h = list.height();
-    let mut body = col().absolute(0.0, 0.0).w(LIST_W).padding(LIST_PAD);
-    let filter = if list.filter.is_empty() {
-        row().center_y().h(FILTER_H).px(10.0).child(label("Send to…", medium(), white(0.42)))
-    } else {
-        row().center_y().h(FILTER_H).px(10.0).gap(1.0)
-            .child(label(list.filter, medium(), text_color()))
-            .child(el().size(1.5, 16.0).radius(0.75).fill(accent(false)))
-    };
-    body = body.child(filter).child(el().h(1.0).w_full().fill(veil(0.08)));
+    let mut body = col().absolute(0.0, 0.0).w(w).padding(LIST_PAD);
     let mut n = 0;
     for (title, rows) in list.sections() {
         body = body.child(
             row().center_y().h(HEADER_H).px(10.0)
-                .child(label(&title.to_uppercase(), TextStyle::new(10.0, s.semibold).tracking(0.5), white(0.45))),
+                .child(label(&title.to_uppercase(), TextStyle::new(10.0, s.semibold).tracking(0.5), white(0.42))),
         );
         for (name, why) in rows {
             let why_w = measure_with(why, small());
-            let max = LIST_W - 2.0 * LIST_PAD - 2.0 * 10.0 - 10.0 - 2.0 * 10.0 - why_w;
+            let max = w - 2.0 * LIST_PAD - 2.0 * 10.0 - 10.0 - 3.0 * 10.0 - why_w;
             let mut entry = row().center_y().h(ROW_H).px(10.0).gap(10.0).radius(8.0)
-                .child(label(&(n + 1).to_string(), timer_style(), white(0.45)).w(10.0))
+                .child(label(&(n + 1).to_string(), timer_style(), white(0.4)).w(10.0))
                 .child(label(&ellipsize(name, medium(), max), medium(), text_color()))
                 .child(el().grow(1.0))
                 .child(label(why, small(), rgb3(s.secondary)));
@@ -406,20 +454,32 @@ fn list_view(list: List) -> El {
             n += 1;
         }
     }
-    let keep = if list.auto { "Keep in CONCLAVE" } else { "Keep copied" };
-    body = body.child(
-        row().center_y().h(FOOTER_H).px(10.0).gap(6.0)
-            .child(keycap("↵", true))
-            .child(label("Send", small(), rgb3(s.secondary)))
-            .child(el().w(8.0))
+    let keep = if list.suggest == Suggest::Sent { "Keep CONCLAVE" } else { "Keep copied" };
+    let quiet = |text: &str| label(text, small(), white(0.5));
+    body = body.child(el().h(1.0).w_full().mt(LIST_PAD).fill(veil(0.07))).child(
+        row().center_y().h(FOOTER_H).px(10.0).gap(5.0)
+            .child(keycap("return", true))
+            .child(quiet("Send"))
+            .child(el().w(10.0))
             .child(keycap("esc", true))
-            .child(label(keep, small(), rgb3(s.secondary))),
+            .child(quiet(keep)),
     );
-    panel(el().key("list").absolute(CX - LIST_W * 0.5, LIST_Y).size(LIST_W, h), LIST_W, h, 14.0)
+    panel(el().key("list").absolute(x, LIST_Y).size(w, h), w, h, 14.0)
         .clip_rounded(14.0)
         .child(body)
         .motion(MOVE)
         .transition(Transition::offset(0.0, -6.0).combined(fade()))
+}
+
+/// The open pill's field: what's typed and the caret, or the placeholder.
+fn field(typed: &str) -> El {
+    let caret = el().size(1.5, 15.0).radius(0.75).fill(accent(false));
+    let inner = if typed.is_empty() {
+        row().center_y().gap(1.0).child(caret).child(label("Send to…", medium(), white(0.4)))
+    } else {
+        row().center_y().gap(1.0).child(label(typed, medium(), text_color())).child(caret)
+    };
+    row().center_y().px(12.0).radius(CHIP_H * 0.5).fill(veil(0.05)).child(inner)
 }
 
 /// g's hint while ⌥⇧ is held during a recording: the keys and where each sends it.
@@ -484,6 +544,7 @@ fn draw(item: Item, meter: &Meter) -> El {
             chip.child(label(text, medium(), rgb3(s.secondary)))
         }
         Item::Hint(keys) => row().center().child(keycap(keys, true)),
+        Item::Field(typed) => field(typed),
         Item::Button(text, primary) => {
             let chip = row().center().radius(CHIP_H * 0.5);
             if primary {
@@ -531,6 +592,9 @@ mod tests {
                 }
                 if let Some(list) = frame.list {
                     assert!(LIST_Y + list.height() <= proto.panel_h(), "{proto:?}: the list fits its panel");
+                }
+                if frame.items.iter().any(|i| matches!(i, Item::Field(_))) {
+                    assert!((shell[2] - LIST_W).abs() < 0.5, "{proto:?}: the open pill is the list's width");
                 }
             }
         }

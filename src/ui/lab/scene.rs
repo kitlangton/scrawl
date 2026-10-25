@@ -30,7 +30,7 @@ pub enum Scene {
     Dismiss,
     /// Every scene above, one after another (`--repeat 0` loops them).
     All,
-    /// With `--rune`: every capsule state at once, live, in one ordinary window.
+    /// With `--rune`: every capsule state, one at a time, live in one ordinary window.
     Grid,
 }
 

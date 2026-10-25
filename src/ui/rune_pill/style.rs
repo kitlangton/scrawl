@@ -149,6 +149,18 @@ pub(crate) fn style() -> Style {
     CURRENT.get()
 }
 
+/// The lab's knobs: draw with `next` now and save it to `pill-lab.json`, which the next poll
+/// reads back unchanged.
+pub(crate) fn set_style(next: Style) {
+    CURRENT.set(next);
+    let Some(path) = lab_path() else { return };
+    let json = serde_json::to_string_pretty(&next.to_json()).unwrap_or_default();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, json + "\n");
+}
+
 pub(crate) fn lab_path() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("SCRAWL_PILL_LAB") {
         return Some(PathBuf::from(path));
