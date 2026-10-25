@@ -18,7 +18,7 @@ use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 
 use super::{
     CANDIDATE_EDGE, CANDIDATE_EDGE_NO_VIDEO, CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY,
-    CARBON_SHIFT_KEY, FRAME_SAMPLE_INTERVAL, LiveOverlayEvent, Sampler, SharedCaptureTelemetry,
+    CARBON_SHIFT_KEY, Event, FRAME_SAMPLE_INTERVAL, Sampler, SharedCaptureTelemetry,
     ShortcutConfig, ShortcutKind, capture_size, clean_label, hotkey_combos, pick_display,
     poll_clicks, track_shift_ink,
 };
@@ -31,7 +31,8 @@ pub const MAX_CAPTURE_SCALE: f64 = 2.0;
 /// Where a session's clicks and keys come from, for the log.
 pub(super) const MOUSE_SOURCE: &str = "the mouse monitor";
 pub(super) const KEY_SOURCE: &str = "the key tap";
-pub(super) const NO_KEY_SOURCE: &str = "nowhere (Accessibility off; the record shortcut still works)";
+pub(super) const NO_KEY_SOURCE: &str =
+    "nowhere (Accessibility off; the record shortcut still works)";
 
 pub fn main_display_id() -> u32 {
     unsafe { CGMainDisplayID() }
@@ -1428,7 +1429,6 @@ fn sck_lists_windows(ids: &[u32]) -> Vec<u32> {
         .unwrap_or_default()
 }
 
-
 /// Keeps the key event tap in step with Accessibility, which macOS reports live: makes the tap
 /// once it's on (no relaunch), stops it if it's turned off (an active tap whose grant is gone can
 /// hold up input), and re-enables it if macOS turned it off. Returns whether it is delivering.
@@ -1552,8 +1552,8 @@ fn mouse_event(
     }
     let event_type = unsafe { CGEventGetType(event) };
     let flags = unsafe { CGEventGetFlags(event) };
-    let pure_shift = (flags & FLAG_SHIFT) != 0
-        && (flags & (FLAG_COMMAND | FLAG_CONTROL | FLAG_ALTERNATE)) == 0;
+    let pure_shift =
+        (flags & FLAG_SHIFT) != 0 && (flags & (FLAG_COMMAND | FLAG_CONTROL | FLAG_ALTERNATE)) == 0;
     let t_ms = telemetry.elapsed_ms();
     let loc = unsafe { CGEventGetLocation(event) };
     match event_type {
@@ -1716,7 +1716,7 @@ unsafe extern "C" fn key_tap_callback(
 
     let t_ms = telemetry.elapsed_ms();
     if cmd && !ctrl && !alt && !shift && (keycode == layout_z_keycode() || keycode == KEY_Z) {
-        let _ = telemetry.ui_sender.try_send(LiveOverlayEvent::UndoStroke);
+        let _ = telemetry.ui_sender.try_send(Event::UndoStroke);
     } else if cmd || ctrl {
         // Only log modifier-chord shortcuts, never ordinary typing or secrets.
         if let Some(key_name) = shortcut_key_name(keycode) {
@@ -1994,7 +1994,10 @@ mod tests {
         let event = event.expect("an NSEvent");
         let back: *mut OpaqueCgEvent = unsafe { msg_send![&*event, CGEvent] };
         assert!(!back.is_null());
-        assert_eq!(unsafe { CGEventGetType(back.cast()) }, EVENT_LEFT_MOUSE_DOWN);
+        assert_eq!(
+            unsafe { CGEventGetType(back.cast()) },
+            EVENT_LEFT_MOUSE_DOWN
+        );
 
         let (sender, _receiver) = flume::unbounded();
         let telemetry = SharedCaptureTelemetry::new(sender);
@@ -2017,7 +2020,11 @@ mod tests {
             matches!(events[..], [InteractionEvent::Click { x, y, .. }] if (x - 0.1).abs() < 1e-3 && (y - 0.2).abs() < 1e-3),
             "{events:?}"
         );
-        assert_eq!(MOUSE_MONITOR_MASK & (1 << EVENT_KEY_DOWN), 0, "keys need Accessibility");
+        assert_eq!(
+            MOUSE_MONITOR_MASK & (1 << EVENT_KEY_DOWN),
+            0,
+            "keys need Accessibility"
+        );
     }
 
     /// A left click from the mouse monitor: down at `from` with `flags`, up at `to` with `up_flags`.

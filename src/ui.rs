@@ -24,10 +24,10 @@ pub(crate) use platform::{gpui_display_for, hwnd_of, set_app_icon};
 
 use crate::audio::AudioRecorder;
 use crate::capture::{
-    LiveOverlayEvent, ScreenCaptureSession, SharedCaptureTelemetry, current_mouse_screen,
+    Event as CaptureEvent, ScreenCaptureSession, SharedCaptureTelemetry, current_mouse_screen,
     discover_target, install_global_hotkeys, list_selectable_windows,
-    record_external_frontmost_app, region_target, selectable_window_at,
-    shortcut_from_key_and_mods, start_global_input_tap, update_global_shortcut,
+    record_external_frontmost_app, region_target, selectable_window_at, shortcut_from_key_and_mods,
+    start_global_input_tap, update_global_shortcut,
 };
 use crate::helper::PhoneDevice;
 #[cfg(target_os = "macos")]
@@ -97,11 +97,11 @@ pub(crate) mod rune_settings;
 pub(crate) mod rune_symbols;
 
 pub use lab::{Options as LabOptions, Scene as LabScene, run as run_lab};
+pub use motion::{TuneAction, tune_command};
 #[cfg(target_os = "macos")]
 pub use rune_app::RuneAppOptions;
 #[cfg(target_os = "macos")]
 pub use rune_pill::{Options as RuneLabOptions, run as run_rune_lab};
-pub use motion::{TuneAction, tune_command};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Spring {
@@ -685,8 +685,20 @@ impl ActiveRecording {
 }
 
 /// Shared coordinator owned by the GPUI app.
+/// Live UI events combining engine `capture::Event` with onboarding and Settings window events.
+#[derive(Clone, Debug)]
+pub enum LiveOverlayEvent {
+    Capture(CaptureEvent),
+    /// The welcome window: a button, fresh permission states, or the helper exiting.
+    Onboarding(crate::onboarding::Event),
+    /// The Settings window: an action, fresh permission states, or the helper exiting.
+    Settings(crate::settings::Event),
+}
+
 pub struct ScrawlCoordinator {
     telemetry: Arc<SharedCaptureTelemetry>,
+    app_sender: flume::Sender<LiveOverlayEvent>,
+    app_receiver: flume::Receiver<LiveOverlayEvent>,
     active_recording: Option<ActiveRecording>,
     playback: Option<crate::playback::Guard>,
     picker_metal_overlay: Option<LaserOverlay>,
@@ -798,8 +810,11 @@ impl ScrawlCoordinator {
         initial_bundle: Option<(PathBuf, ScrawlBundle)>,
     ) -> Self {
         crate::playback::warm_up();
+        let (app_sender, app_receiver) = flume::unbounded();
         Self {
             telemetry,
+            app_sender,
+            app_receiver,
             active_recording: None,
             playback: None,
             picker_metal_overlay: None,
@@ -978,7 +993,7 @@ impl ScrawlCoordinator {
     pub fn open_onboarding(&mut self, flow: crate::onboarding::Flow) {
         // Drop the old window before the new one opens.
         self.onboarding = None;
-        let sender = self.telemetry.ui_sender.clone();
+        let sender = self.app_sender.clone();
         let events = move |event| {
             let _ = sender.send(LiveOverlayEvent::Onboarding(event));
         };
@@ -994,7 +1009,7 @@ impl ScrawlCoordinator {
             session.show(pane);
             return;
         }
-        let sender = self.telemetry.ui_sender.clone();
+        let sender = self.app_sender.clone();
         let events = move |event| {
             let _ = sender.send(LiveOverlayEvent::Settings(event));
         };
@@ -1923,7 +1938,11 @@ impl ScrawlCoordinator {
         }
     }
 
-    fn apply_pill_action(&mut self, action: crate::native::pill::PillAction, cx: &mut Context<Self>) {
+    fn apply_pill_action(
+        &mut self,
+        action: crate::native::pill::PillAction,
+        cx: &mut Context<Self>,
+    ) {
         use crate::native::pill::PillAction;
         match action {
             PillAction::SelectMode(mode) => self.click_selection_mode(mode, cx),
@@ -2157,9 +2176,11 @@ impl ScrawlCoordinator {
         let spawned = std::thread::Builder::new()
             .name("scrawl-send".into())
             .spawn(move || {
-                if let Err(err) = crate::handoff::load_bundle(&send_dir).and_then(|(_, mut bundle)| {
-                    crate::routing::record_destination(&send_dir, &mut bundle, dest.clone())
-                }) {
+                if let Err(err) =
+                    crate::handoff::load_bundle(&send_dir).and_then(|(_, mut bundle)| {
+                        crate::routing::record_destination(&send_dir, &mut bundle, dest.clone())
+                    })
+                {
                     scrawl_log(format!("routing: couldn't record the destination: {err:#}"));
                 }
                 let _ = sender.send(crate::delivery::deliver(
@@ -2280,10 +2301,7 @@ impl ScrawlCoordinator {
                 .native_pill
                 .as_ref()
                 .map_or_else(pointer_on_hud_pill, |p| p.pointer_on_pill());
-            if self
-                .reveal
-                .tick(reveal_clock_ms(), on_pill, activity)
-            {
+            if self.reveal.tick(reveal_clock_ms(), on_pill, activity) {
                 self.play_fold();
             }
         }
@@ -2977,12 +2995,7 @@ impl ScrawlCoordinator {
 
     /// Acts on a local capture's route once it's worked out, unless ✕ or Paste on the Completed
     /// island kept the capture on the clipboard first.
-    fn route_arrived(
-        &mut self,
-        dir: PathBuf,
-        route: RouteOutcome,
-        cx: &mut Context<Self>,
-    ) {
+    fn route_arrived(&mut self, dir: PathBuf, route: RouteOutcome, cx: &mut Context<Self>) {
         if self.routing.as_deref() != Some(dir.as_path()) {
             if !matches!(route, RouteOutcome::None) {
                 scrawl_log(format!(
@@ -3391,21 +3404,18 @@ impl Render for HudPillWindow {
                         .map(|(i, key)| Some((key, alpha(i))))
                         .collect(),
                 )
-                .children(
-                    SelectionMode::available(has_iphone)
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &segment)| {
-                            let c_segment = self.coordinator.clone();
-                            mode_segment_level(segment, highlight(segment, mode))
-                                .opacity(alpha(i))
-                                .on_click(move |_, _, cx| {
-                                    c_segment.update(cx, |coord, cx| {
-                                        coord.click_selection_mode(segment, cx)
-                                    });
-                                })
-                        }),
-                )
+                .children(SelectionMode::available(has_iphone).iter().enumerate().map(
+                    |(i, &segment)| {
+                        let c_segment = self.coordinator.clone();
+                        mode_segment_level(segment, highlight(segment, mode))
+                            .opacity(alpha(i))
+                            .on_click(move |_, _, cx| {
+                                c_segment.update(cx, |coord, cx| {
+                                    coord.click_selection_mode(segment, cx)
+                                });
+                            })
+                    },
+                ))
                 .when(record, |row| {
                     row.child(
                         primary_chip("sel-record", "Record")
@@ -4051,7 +4061,12 @@ impl Render for TargetPickerWindow {
                 let w = (a[0] - b[0]).abs().max(1.0);
                 let h = (a[1] - b[1]).abs().max(1.0);
                 (
-                    [(a[0].min(b[0]) - origin[0]) * k, (a[1].min(b[1]) - origin[1]) * k, w * k, h * k],
+                    [
+                        (a[0].min(b[0]) - origin[0]) * k,
+                        (a[1].min(b[1]) - origin[1]) * k,
+                        w * k,
+                        h * k,
+                    ],
                     format!("{} × {}", w.round() as i32, h.round() as i32),
                 )
             }),
@@ -4073,7 +4088,10 @@ impl Render for TargetPickerWindow {
                     t.frame.width as f32,
                     t.frame.height as f32,
                 ]);
-                ([(rx - origin[0]) * k, (ry - origin[1]) * k, rw * k, rh * k], title)
+                (
+                    [(rx - origin[0]) * k, (ry - origin[1]) * k, rw * k, rh * k],
+                    title,
+                )
             }),
             SelectionMode::Screen => Some((
                 [0.0, 0.0, screen[0], screen[1]],
@@ -4455,7 +4473,8 @@ impl Render for BundleReviewWindow {
                         .child(
                             action_button("empty-demo", "Load Demo Bundle", false).on_click(
                                 move |_, _, cx| {
-                                    if let Ok((dir, bundle, _)) = crate::pipeline::generate_demo_bundle(None)
+                                    if let Ok((dir, bundle, _)) =
+                                        crate::pipeline::generate_demo_bundle(None)
                                     {
                                         c_demo.update(cx, |coord, cx| {
                                             coord.set_review_bundle(
@@ -5367,7 +5386,8 @@ pub fn run_app(
         scrawl_log(format!("run_app started pid={}", std::process::id()));
         platform::keep_alive(cx);
         // ⌘W, Esc, the close button or Scrawl itself: every way a window closes ends up here.
-        cx.on_window_closed(|cx| cx.defer(platform::hand_back_keys)).detach();
+        cx.on_window_closed(|cx| cx.defer(platform::hand_back_keys))
+            .detach();
         let (ui_sender, ui_receiver) = flume::unbounded();
         crate::phone::start_ingest_server(ui_sender.clone());
         let telemetry = SharedCaptureTelemetry::new(ui_sender);
@@ -5380,9 +5400,11 @@ pub fn run_app(
         crate::speech_model::ensure();
         let menu_rx = install_status_bar();
 
+        let has_initial = initial_bundle.is_some();
+        let coordinator = cx.new(|_| ScrawlCoordinator::new(telemetry, initial_bundle));
         // Onboarding opens on first launch, or for a permission that went away.
         if screenshot_out.is_none() && std::env::var_os("SCRAWL_NO_ONBOARDING").is_none() {
-            let sender = telemetry.ui_sender.clone();
+            let sender = coordinator.read(cx).app_sender.clone();
             std::thread::spawn(move || {
                 if let Some(grants) = crate::onboarding::read_grants() {
                     let event = crate::onboarding::Event::Launch(grants);
@@ -5390,8 +5412,6 @@ pub fn run_app(
                 }
             });
         }
-        let has_initial = initial_bundle.is_some();
-        let coordinator = cx.new(|_| ScrawlCoordinator::new(telemetry, initial_bundle));
         set_status_inbox_count(coordinator.read(cx).inbox.len());
 
         if has_initial {
@@ -5502,31 +5522,41 @@ pub fn run_app(
                     }
 
                     let mut should_open_pill = false;
-                    while let Ok(ev) = ui_receiver.try_recv() {
+                    let app_rx = loop_coord.read(cx).app_receiver.clone();
+                    let pending_events: Vec<LiveOverlayEvent> = ui_receiver
+                        .try_iter()
+                        .map(LiveOverlayEvent::Capture)
+                        .chain(app_rx.try_iter())
+                        .collect();
+                    for ev in pending_events {
                         loop_coord.update(cx, |coord, cx| match ev {
-                            LiveOverlayEvent::CaptureShortcut => coord.press_shortcut(cx),
-                            LiveOverlayEvent::PasteLatestShortcut => {
+                            LiveOverlayEvent::Capture(CaptureEvent::CaptureShortcut) => {
+                                coord.press_shortcut(cx)
+                            }
+                            LiveOverlayEvent::Capture(CaptureEvent::PasteLatestShortcut) => {
                                 if !coord.is_recording() && !coord.is_selecting() {
                                     coord.paste_latest(cx);
                                 }
                             }
-                            LiveOverlayEvent::UndoStroke => {
+                            LiveOverlayEvent::Capture(CaptureEvent::UndoStroke) => {
                                 coord.undo_stroke(cx);
                             }
-                            LiveOverlayEvent::RequestSnapshot => {
+                            LiveOverlayEvent::Capture(CaptureEvent::RequestSnapshot) => {
                                 coord.request_immediate_frame();
                                 cx.notify();
                             }
-                            LiveOverlayEvent::PhoneEnded => coord.phone_ended(cx),
+                            LiveOverlayEvent::Capture(CaptureEvent::PhoneEnded) => {
+                                coord.phone_ended(cx)
+                            }
                             LiveOverlayEvent::Onboarding(event) => {
                                 coord.onboarding_event(event, cx)
                             }
                             LiveOverlayEvent::Settings(event) => coord.settings_event(event, cx),
-                            LiveOverlayEvent::IngestedBundle {
+                            LiveOverlayEvent::Capture(CaptureEvent::IngestedBundle {
                                 dir,
                                 bundle,
                                 status,
-                            } => {
+                            }) => {
                                 let frame_count = bundle.keyframes.len();
                                 let duration_ms = bundle.duration_ms;
                                 let inbox_count = coord.add_to_inbox(&dir, &bundle);

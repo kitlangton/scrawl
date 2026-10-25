@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
-use crate::capture::{LiveOverlayEvent, SharedCaptureTelemetry};
+use crate::capture::{Event, SharedCaptureTelemetry};
 use crate::delivery::{Delivery, Outcome};
 use crate::helper::{self, FrameTimes, PhoneDevice};
 use crate::log::scrawl_log;
@@ -141,7 +141,12 @@ impl PhoneSession {
         }
         // Narration comes from the Mac's microphone: the chosen one, if any.
         if let Some(choice) = crate::mic::choice() {
-            command.args(["--microphone", &choice.id, "--microphone-name", &choice.name]);
+            command.args([
+                "--microphone",
+                &choice.id,
+                "--microphone-name",
+                &choice.name,
+            ]);
         }
         let mut child = command
             .stdin(Stdio::piped())
@@ -249,7 +254,7 @@ impl PhoneSession {
                 if !reader_cancelled.load(std::sync::atomic::Ordering::Acquire)
                     && let Some(telemetry) = &telemetry
                 {
-                    let _ = telemetry.ui_sender.try_send(LiveOverlayEvent::PhoneEnded);
+                    let _ = telemetry.ui_sender.try_send(Event::PhoneEnded);
                 }
             })
             .context("Could not watch the iPhone mirror")?;
@@ -468,105 +473,99 @@ pub fn build_movie_bundle(
         .collect();
     mark_times.sort_unstable();
     mark_times.dedup();
-    let ((transcript, audio_ms, transcribe_ms, audio_err), joined) =
-        std::thread::scope(|scope| {
-            let base_target = capture.target.clone();
-            let strokes_ref = &capture.strokes;
-            let events_ref = &capture.events;
-            let flags_ref = &capture.flags;
-            let movie_ref = &capture.movie;
-            let frames = scope.spawn(move || -> Result<_> {
-                let probe = helper::probe(movie_ref)?;
-                ensure!(probe.duration_ms > 0, "The recording is empty");
-                let mut target = base_target;
-                if probe.width > 0 && probe.height > 0 {
-                    target.frame.width = f64::from(probe.width);
-                    target.frame.height = f64::from(probe.height);
-                }
-                let every = (probe.duration_ms / MAX_CANDIDATES).max(250);
-                let t0 = Instant::now();
-                let budget = crate::model::keyframe_budget(probe.duration_ms);
-                // With a mark for every slot, only the frames under the marks are needed, unless
-                // marks on one screen share a keyframe and leave slots for other moments.
-                if mark_times.len() >= budget {
-                    let direct = helper::frames(
-                        movie_ref,
-                        FrameTimes::At(&mark_times),
-                        PHONE_FRAME_EDGE,
+    let ((transcript, audio_ms, transcribe_ms, audio_err), joined) = std::thread::scope(|scope| {
+        let base_target = capture.target.clone();
+        let strokes_ref = &capture.strokes;
+        let events_ref = &capture.events;
+        let flags_ref = &capture.flags;
+        let movie_ref = &capture.movie;
+        let frames = scope.spawn(move || -> Result<_> {
+            let probe = helper::probe(movie_ref)?;
+            ensure!(probe.duration_ms > 0, "The recording is empty");
+            let mut target = base_target;
+            if probe.width > 0 && probe.height > 0 {
+                target.frame.width = f64::from(probe.width);
+                target.frame.height = f64::from(probe.height);
+            }
+            let every = (probe.duration_ms / MAX_CANDIDATES).max(250);
+            let t0 = Instant::now();
+            let budget = crate::model::keyframe_budget(probe.duration_ms);
+            // With a mark for every slot, only the frames under the marks are needed, unless
+            // marks on one screen share a keyframe and leave slots for other moments.
+            if mark_times.len() >= budget {
+                let direct =
+                    helper::frames(movie_ref, FrameTimes::At(&mark_times), PHONE_FRAME_EDGE);
+                let decode_ms = t0.elapsed().as_millis() as u64;
+                if let Ok(raw_frames) = direct
+                    && !raw_frames.is_empty()
+                {
+                    let mut preview_marks = crate::sketch::marks_of(strokes_ref);
+                    for (i, &t) in flags_ref.iter().enumerate() {
+                        preview_marks.push(crate::model::Mark {
+                            id: format!("f{}", i + 1),
+                            strokes: Vec::new(),
+                            t0: t,
+                            t1: t,
+                            box_norm: [0.0, 0.0, 1.0, 1.0],
+                            shape: crate::model::Shape::Flag,
+                            from: None,
+                            to: None,
+                            pin: None,
+                            on: None,
+                            description: "flagged this moment".into(),
+                            frame: None,
+                        });
+                    }
+                    let preview = crate::keyframes::select_keyframes(
+                        &raw_frames,
+                        strokes_ref,
+                        &mut preview_marks,
+                        events_ref,
+                        &crate::model::TranscriptData::default(),
+                        budget,
                     );
-                    let decode_ms = t0.elapsed().as_millis() as u64;
-                    if let Ok(raw_frames) = direct
-                        && !raw_frames.is_empty()
+                    if preview.len() == budget
+                        && preview
+                            .iter()
+                            .all(|(k, _)| k.reason == crate::model::KeyframeReason::Mark)
                     {
-                        let mut preview_marks = crate::sketch::marks_of(strokes_ref);
-                        for (i, &t) in flags_ref.iter().enumerate() {
-                            preview_marks.push(crate::model::Mark {
-                                id: format!("f{}", i + 1),
-                                strokes: Vec::new(),
-                                t0: t,
-                                t1: t,
-                                box_norm: [0.0, 0.0, 1.0, 1.0],
-                                shape: crate::model::Shape::Flag,
-                                from: None,
-                                to: None,
-                                pin: None,
-                                on: None,
-                                description: "flagged this moment".into(),
-                                frame: None,
-                            });
-                        }
-                        let preview = crate::keyframes::select_keyframes(
-                            &raw_frames,
+                        let prep = crate::pipeline::prepare_visuals(
+                            preview,
+                            raw_frames.first(),
+                            None,
+                            &target,
+                            probe.duration_ms,
                             strokes_ref,
-                            &mut preview_marks,
+                            &preview_marks,
                             events_ref,
-                            &crate::model::TranscriptData::default(),
-                            budget,
+                            &crate::windows::ActivityLog::default(),
                         );
-                        if preview.len() == budget
-                            && preview
-                                .iter()
-                                .all(|(k, _)| k.reason == crate::model::KeyframeReason::Mark)
-                        {
-                            let prep = crate::pipeline::prepare_visuals(
-                                preview,
-                                raw_frames.first(),
-                                None,
-                                &target,
-                                probe.duration_ms,
-                                strokes_ref,
-                                &preview_marks,
-                                events_ref,
-                                &crate::windows::ActivityLog::default(),
-                            );
-                            return Ok((probe, raw_frames, decode_ms, true, prep));
-                        }
+                        return Ok((probe, raw_frames, decode_ms, true, prep));
                     }
                 }
-                let res = helper::frames(movie_ref, FrameTimes::Every(every), CANDIDATE_EDGE)?;
-                Ok((probe, res, t0.elapsed().as_millis() as u64, false, None))
-            });
-            let audio_started = Instant::now();
-            let exported = helper::export_audio(&capture.movie, &wav)
-                .and_then(|()| crate::audio::recorded_audio_from_wav(std::fs::read(&wav)?));
-            let audio_ms = audio_started.elapsed().as_millis() as u64;
-            let (audio, audio_err) = match exported {
-                Ok(a) => (Some(a), None),
-                Err(e) => (None, Some(e)),
-            };
-            let t0 = Instant::now();
-            let transcript = crate::transcribe::transcribe(
-                audio.as_ref().map(|_| wav.as_path()),
-                audio.as_ref(),
-            );
-            let transcribe_ms = t0.elapsed().as_millis() as u64;
-            (
-                (transcript, audio_ms, transcribe_ms, audio_err),
-                frames.join(),
-            )
+            }
+            let res = helper::frames(movie_ref, FrameTimes::Every(every), CANDIDATE_EDGE)?;
+            Ok((probe, res, t0.elapsed().as_millis() as u64, false, None))
         });
-    let (probe, frames, candidates_ms, already_full, prepared) = joined
-        .map_err(|_| anyhow::anyhow!("Frame decoding panicked"))??;
+        let audio_started = Instant::now();
+        let exported = helper::export_audio(&capture.movie, &wav)
+            .and_then(|()| crate::audio::recorded_audio_from_wav(std::fs::read(&wav)?));
+        let audio_ms = audio_started.elapsed().as_millis() as u64;
+        let (audio, audio_err) = match exported {
+            Ok(a) => (Some(a), None),
+            Err(e) => (None, Some(e)),
+        };
+        let t0 = Instant::now();
+        let transcript =
+            crate::transcribe::transcribe(audio.as_ref().map(|_| wav.as_path()), audio.as_ref());
+        let transcribe_ms = t0.elapsed().as_millis() as u64;
+        (
+            (transcript, audio_ms, transcribe_ms, audio_err),
+            frames.join(),
+        )
+    });
+    let (probe, frames, candidates_ms, already_full, prepared) =
+        joined.map_err(|_| anyhow::anyhow!("Frame decoding panicked"))??;
     if probe.audio_tracks > 0
         && let Some(error) = audio_err
     {
@@ -1202,10 +1201,7 @@ pub fn format_setup_link(
     token: &str,
     session: Option<&str>,
 ) -> Result<String> {
-    let scheme = scheme
-        .trim()
-        .trim_end_matches("://")
-        .trim_end_matches(':');
+    let scheme = scheme.trim().trim_end_matches("://").trim_end_matches(':');
     ensure!(
         !scheme.is_empty()
             && scheme
@@ -1243,7 +1239,7 @@ pub fn format_setup_link(
 /// `0.0.0.0:47777` the phone uploads to, and a cabled-iPhone `devicectl` watcher for when the
 /// network can't reach the Mac. Each recording becomes a `.scrawl` bundle, lands on the clipboard
 /// and is queued into the OpenCode session matching the app.
-pub fn start_ingest_server(ui_sender: flume::Sender<LiveOverlayEvent>) {
+pub fn start_ingest_server(ui_sender: flume::Sender<Event>) {
     if let Err(err) = crate::handoff::ensure_ingest_token() {
         scrawl_log(format!("ingest token setup failed: {err:#}"));
     }
@@ -1252,7 +1248,7 @@ pub fn start_ingest_server(ui_sender: flume::Sender<LiveOverlayEvent>) {
         copy_clipboard: true,
         route_opencode,
         on_bundle: Some(Arc::new(move |dir, bundle, status| {
-            let _ = ui_sender.send(LiveOverlayEvent::IngestedBundle {
+            let _ = ui_sender.send(Event::IngestedBundle {
                 dir,
                 bundle: Box::new(bundle),
                 status,
@@ -1558,10 +1554,7 @@ fn http_unauthorized(stream: &mut std::net::TcpStream) {
     }
 }
 
-fn handle_ingest_connection(
-    stream: std::net::TcpStream,
-    config: &IngestConfig,
-) -> Result<()> {
+fn handle_ingest_connection(stream: std::net::TcpStream, config: &IngestConfig) -> Result<()> {
     let expected_token = crate::handoff::ensure_ingest_token()?;
     handle_ingest_connection_with_token(stream, &expected_token, config)
 }
@@ -1584,8 +1577,8 @@ fn handle_ingest_connection_with_token(
     if crate::web::handle(&mut stream, &header, expected_token)? {
         return Ok(());
     }
-    let authorized = bearer_token(&header)
-        .is_some_and(|provided| constant_time_eq(provided, expected_token));
+    let authorized =
+        bearer_token(&header).is_some_and(|provided| constant_time_eq(provided, expected_token));
     if !authorized {
         http_unauthorized(&mut stream);
         return Ok(());
@@ -1621,7 +1614,10 @@ fn handle_ingest_connection_with_token(
     ensure!(4 + json_len < payload.len(), "Invalid framed payload");
     let json_bytes = &payload[4..4 + json_len];
     let timeline: Timeline = serde_json::from_slice(json_bytes).unwrap_or_default();
-    let staging = std::env::temp_dir().join(format!("scrawl-ingest-{}", crate::pipeline::make_bundle_id()));
+    let staging = std::env::temp_dir().join(format!(
+        "scrawl-ingest-{}",
+        crate::pipeline::make_bundle_id()
+    ));
     std::fs::create_dir_all(&staging)?;
     let timeline_path = staging.join("timeline.json");
     let movie_path = staging.join("recording.mp4");
@@ -1782,8 +1778,8 @@ fn poll_usb_app_containers(apps: &[String], config: &IngestConfig) -> Result<()>
                 if usb_backing_off(&retry_key) {
                     continue;
                 }
-                let staging =
-                    std::env::temp_dir().join(format!("scrawl-usb-{}", crate::pipeline::make_bundle_id()));
+                let staging = std::env::temp_dir()
+                    .join(format!("scrawl-usb-{}", crate::pipeline::make_bundle_id()));
                 std::fs::create_dir_all(&staging)?;
                 let local_json = staging.join(format!("{stem}.json"));
                 let local_mp4 = staging.join(format!("{stem}.mp4"));
@@ -1835,8 +1831,8 @@ fn poll_usb_app_containers(apps: &[String], config: &IngestConfig) -> Result<()>
                     .remove(&retry_key);
                 // `.delivery` (the HTTP reply) goes first: ScrawlKit reads it once `.sent`
                 // appears. Builds from before it only read `.sent`, the session's name.
-                let replies =
-                    std::env::temp_dir().join(format!("scrawl-usb-{}", crate::pipeline::make_bundle_id()));
+                let replies = std::env::temp_dir()
+                    .join(format!("scrawl-usb-{}", crate::pipeline::make_bundle_id()));
                 std::fs::create_dir_all(&replies)?;
                 let delivery = replies.join(format!("{stem}.delivery"));
                 let sent = replies.join(format!("{stem}.sent"));
@@ -2061,30 +2057,17 @@ mod tests {
             "http://192.168.1.20:47777".to_owned(),
             "http://100.64.0.12:47777".to_owned(),
         ];
-        let link = format_setup_link(
-            "updown://",
-            &urls,
-            "deadbeef0123",
-            Some("ses_abc123"),
-        )
-        .unwrap();
+        let link =
+            format_setup_link("updown://", &urls, "deadbeef0123", Some("ses_abc123")).unwrap();
         assert_eq!(
             link,
             "updown://scrawl?url=http%3A%2F%2F100.64.0.12%3A47777&url=http%3A%2F%2F192.168.1.20%3A47777&token=deadbeef0123&session=ses_abc123"
         );
 
         assert!(format_setup_link("updown", &[], "tok", None).is_err());
-        assert!(
-            format_setup_link("updown", &["ftp://1.2.3.4:47777".into()], "tok", None)
-                .is_err()
-        );
-        assert!(
-            format_setup_link("updown", &["http://1.2.3.4:47777".into()], "", None)
-                .is_err()
-        );
-        assert!(
-            format_setup_link("", &["http://1.2.3.4:47777".into()], "tok", None).is_err()
-        );
+        assert!(format_setup_link("updown", &["ftp://1.2.3.4:47777".into()], "tok", None).is_err());
+        assert!(format_setup_link("updown", &["http://1.2.3.4:47777".into()], "", None).is_err());
+        assert!(format_setup_link("", &["http://1.2.3.4:47777".into()], "tok", None).is_err());
     }
 
     fn send_raw_http_request(request: &[u8], expected_token: &str) -> String {
@@ -2111,10 +2094,8 @@ mod tests {
         let secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
         // 1. Health without token -> 401 with empty body
-        let no_auth = send_raw_http_request(
-            b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n",
-            secret,
-        );
+        let no_auth =
+            send_raw_http_request(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n", secret);
         assert!(no_auth.starts_with("HTTP/1.1 401 Unauthorized\r\n"));
         assert!(no_auth.ends_with("\r\n\r\n"));
 
@@ -2226,8 +2207,10 @@ mod tests {
     }
 
     fn temp_captures() -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("scrawl-ingest-test-{}", crate::pipeline::make_bundle_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-ingest-test-{}",
+            crate::pipeline::make_bundle_id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

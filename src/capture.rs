@@ -119,9 +119,9 @@ pub struct ScreenRecording {
     pub video_offset_ms: u64,
 }
 
-/// Live UI events emitted by the global input monitor to drive Scrawl's HUD & Review windows.
+/// Live engine events emitted by the global input monitor, iPhone mirror and ingest server.
 #[derive(Clone, Debug)]
-pub enum LiveOverlayEvent {
+pub enum Event {
     /// ⌥⇧S (or the configured shortcut) went down; `shortcut::Shortcut` decides what it means.
     CaptureShortcut,
     PasteLatestShortcut,
@@ -129,10 +129,6 @@ pub enum LiveOverlayEvent {
     RequestSnapshot,
     /// The iPhone mirror ended on its own (unplugged, never found, or access denied).
     PhoneEnded,
-    /// The welcome window: a button, fresh permission states, or the helper exiting.
-    Onboarding(crate::onboarding::Event),
-    /// The Settings window: an action, fresh permission states, or the helper exiting.
-    Settings(crate::settings::Event),
     /// A ScrawlKit recording was ingested from an iPhone and compiled into a `.scrawl` bundle.
     IngestedBundle {
         dir: PathBuf,
@@ -682,7 +678,7 @@ pub struct SharedCaptureTelemetry {
     /// Raised when a click, ink stroke or shortcut starts, so the Screen-mode window log takes
     /// a snapshot right away.
     pub window_log_request: Arc<AtomicBool>,
-    pub ui_sender: flume::Sender<LiveOverlayEvent>,
+    pub ui_sender: flume::Sender<Event>,
     /// Scrawl's windows that let clicks through (the ink overlay), skipped when deciding whether
     /// a click landed on Scrawl itself.
     pub passthrough_window_ids: Mutex<Vec<u32>>,
@@ -722,7 +718,7 @@ pub struct SharedCaptureTelemetry {
 }
 
 impl SharedCaptureTelemetry {
-    pub fn new(ui_sender: flume::Sender<LiveOverlayEvent>) -> Arc<Self> {
+    pub fn new(ui_sender: flume::Sender<Event>) -> Arc<Self> {
         let shortcuts = crate::settings::Shortcuts::load();
         crate::settings::note_paste_label(&shortcuts.paste.label);
         Arc::new(Self {
@@ -787,7 +783,7 @@ impl SharedCaptureTelemetry {
                 .is_ok()
         {
             scrawl_log("emit_capture_shortcut");
-            let _ = self.ui_sender.try_send(LiveOverlayEvent::CaptureShortcut);
+            let _ = self.ui_sender.try_send(Event::CaptureShortcut);
         }
     }
 
@@ -807,9 +803,7 @@ impl SharedCaptureTelemetry {
                 .is_ok()
         {
             scrawl_log("emit_paste_shortcut -> sending PasteLatestShortcut");
-            let _ = self
-                .ui_sender
-                .try_send(LiveOverlayEvent::PasteLatestShortcut);
+            let _ = self.ui_sender.try_send(Event::PasteLatestShortcut);
         }
     }
 
@@ -1014,7 +1008,7 @@ impl SharedCaptureTelemetry {
         }
         let (nx, ny, fw, fh) = self.normalize_point(screen_x, screen_y);
         let dist_px = ((nx - x0) * fw as f32).hypot((ny - y0) * fh as f32);
-        let _ = self.ui_sender.try_send(LiveOverlayEvent::RequestSnapshot);
+        let _ = self.ui_sender.try_send(Event::RequestSnapshot);
         let event = if dist_px < CLICK_SLOP_PT {
             InteractionEvent::Click {
                 t: t0,
@@ -1116,7 +1110,7 @@ impl SharedCaptureTelemetry {
         });
         drop(strokes);
         self.window_log_request.store(true, Ordering::Release);
-        let _ = self.ui_sender.try_send(LiveOverlayEvent::RequestSnapshot);
+        let _ = self.ui_sender.try_send(Event::RequestSnapshot);
         true
     }
 
@@ -1409,9 +1403,7 @@ fn track_shift_ink(
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(stroke);
-            let _ = telemetry
-                .ui_sender
-                .try_send(LiveOverlayEvent::RequestSnapshot);
+            let _ = telemetry.ui_sender.try_send(Event::RequestSnapshot);
         }
     }
 }
@@ -1705,7 +1697,11 @@ mod tests {
         );
         assert_eq!(
             hotkey_combos(ShortcutKind::Record, &default).len(),
-            if u32::from(KEY_S) == default.key_code { 4 } else { 8 },
+            if u32::from(KEY_S) == default.key_code {
+                4
+            } else {
+                8
+            },
             "⌥⇧S and three aliases, on the layout's key and the ANSI one"
         );
 
@@ -1853,7 +1849,6 @@ mod tests {
         telemetry
     }
 
-
     #[test]
     fn a_long_still_shift_press_drops_no_pin() {
         let down = (1_000, 10.0, 10.0);
@@ -1934,7 +1929,6 @@ mod tests {
         assert_eq!(strokes[0].pin, Some(1));
         assert_eq!(strokes[0].normalized_points(), vec![[0.25, 0.75]]);
     }
-
 
     #[test]
     fn candidate_buffer_stays_bounded_and_keeps_the_whole_timeline() {

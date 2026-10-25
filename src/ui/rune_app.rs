@@ -21,17 +21,18 @@ use super::rune_pill::{Capsule, PANEL_H, PANEL_W, PANEL_Y, Surface};
 use super::{
     ACCENT_COLOR, ACCENT_HOVER, ActiveRecording, BADGE_H, BADGE_MARGIN, BADGE_PX, BADGE_TEXT,
     BadgeAnchor, CANVAS_BG, CaptureSource, INK_RED, IslandPhase, LINE_COLOR, LaserOverlay,
-    MUTED_COLOR, MenuAction, ReviewTab, RouteChip, RouteOutcome, SIDEBAR_BG, SMART_SEND_UNDO,
-    SURFACE_BG, SURFACE_HOVER, SURFACE_SELECTED, SelectionMode, TEXT_COLOR, TEXT_SOFT, area_rect,
-    clamp_point, clip_rect, clock_template, completed_delivery_note, completed_label, island_title,
-    motion, place_badge, reveal_clock_ms, split_timeline_line, start_video_export,
+    LiveOverlayEvent, MUTED_COLOR, MenuAction, ReviewTab, RouteChip, RouteOutcome, SIDEBAR_BG,
+    SMART_SEND_UNDO, SURFACE_BG, SURFACE_HOVER, SURFACE_SELECTED, SelectionMode, TEXT_COLOR,
+    TEXT_SOFT, area_rect, clamp_point, clip_rect, clock_template, completed_delivery_note,
+    completed_label, island_title, motion, place_badge, reveal_clock_ms, split_timeline_line,
+    start_video_export,
 };
 use crate::audio::AudioRecorder;
 use crate::capture::{
-    LiveOverlayEvent, ScreenCaptureSession, SharedCaptureTelemetry, current_mouse_screen,
+    Event as CaptureEvent, ScreenCaptureSession, SharedCaptureTelemetry, current_mouse_screen,
     discover_target, install_global_hotkeys, list_selectable_windows,
-    record_external_frontmost_app, region_target, selectable_window_at,
-    shortcut_from_key_and_mods, start_global_input_tap, update_global_shortcut,
+    record_external_frontmost_app, region_target, selectable_window_at, shortcut_from_key_and_mods,
+    start_global_input_tap, update_global_shortcut,
 };
 use crate::helper::PhoneDevice;
 use crate::log::{scrawl_log, start_metric};
@@ -762,6 +763,7 @@ enum SelectedRecord {
 
 struct RuneCoordinator {
     telemetry: Arc<SharedCaptureTelemetry>,
+    ui_sender: flume::Sender<LiveOverlayEvent>,
     ui_receiver: Option<flume::Receiver<LiveOverlayEvent>>,
     events_tx: flume::Sender<InternalEvent>,
     events_rx: flume::Receiver<InternalEvent>,
@@ -834,6 +836,7 @@ impl RuneCoordinator {
     #[allow(clippy::too_many_arguments)]
     fn new(
         telemetry: Arc<SharedCaptureTelemetry>,
+        ui_sender: flume::Sender<LiveOverlayEvent>,
         ui_receiver: Option<flume::Receiver<LiveOverlayEvent>>,
         events_tx: flume::Sender<InternalEvent>,
         events_rx: flume::Receiver<InternalEvent>,
@@ -863,6 +866,7 @@ impl RuneCoordinator {
             .map_or([0.0, 0.0, 1440.0, 900.0], |d| d.frame.map(|v| v as f32));
         Self {
             telemetry,
+            ui_sender,
             ui_receiver,
             events_tx,
             events_rx,
@@ -1439,7 +1443,7 @@ impl RuneCoordinator {
             return;
         }
         self.onboarding = None;
-        let sender = self.telemetry.ui_sender.clone();
+        let sender = self.ui_sender.clone();
         let events = move |event| {
             let _ = sender.send(LiveOverlayEvent::Onboarding(event));
         };
@@ -1462,7 +1466,7 @@ impl RuneCoordinator {
                 session.show(pane);
                 return;
             }
-            let sender = self.telemetry.ui_sender.clone();
+            let sender = self.ui_sender.clone();
             let events = move |event| {
                 let _ = sender.send(LiveOverlayEvent::Settings(event));
             };
@@ -3099,22 +3103,24 @@ impl RuneCoordinator {
             .unwrap_or_default();
         for ev in ui_events {
             match ev {
-                LiveOverlayEvent::CaptureShortcut => self.press_shortcut(),
-                LiveOverlayEvent::PasteLatestShortcut => {
+                LiveOverlayEvent::Capture(CaptureEvent::CaptureShortcut) => self.press_shortcut(),
+                LiveOverlayEvent::Capture(CaptureEvent::PasteLatestShortcut) => {
                     if !self.is_recording() && !self.is_selecting() {
                         self.paste_latest();
                     }
                 }
-                LiveOverlayEvent::UndoStroke => self.undo_stroke(),
-                LiveOverlayEvent::RequestSnapshot => self.request_immediate_frame(),
-                LiveOverlayEvent::PhoneEnded => self.phone_ended(),
+                LiveOverlayEvent::Capture(CaptureEvent::UndoStroke) => self.undo_stroke(),
+                LiveOverlayEvent::Capture(CaptureEvent::RequestSnapshot) => {
+                    self.request_immediate_frame()
+                }
+                LiveOverlayEvent::Capture(CaptureEvent::PhoneEnded) => self.phone_ended(),
                 LiveOverlayEvent::Onboarding(event) => self.onboarding_event(event),
                 LiveOverlayEvent::Settings(event) => self.settings_event(event),
-                LiveOverlayEvent::IngestedBundle {
+                LiveOverlayEvent::Capture(CaptureEvent::IngestedBundle {
                     dir,
                     bundle,
                     status,
-                } => {
+                }) => {
                     let frame_count = bundle.keyframes.len();
                     let duration_ms = bundle.duration_ms;
                     let inbox_count = self.add_to_inbox(&dir, &bundle);
@@ -3603,7 +3609,9 @@ fn review_view(s: &ReviewState, cx: &mut Cx<ReviewState>) -> El {
                         None,
                         false,
                         |state| {
-                            if let Ok((dir, bundle, _)) = crate::pipeline::generate_demo_bundle(None) {
+                            if let Ok((dir, bundle, _)) =
+                                crate::pipeline::generate_demo_bundle(None)
+                            {
                                 state.coord.set_review_bundle(
                                     (dir, bundle),
                                     Some("Generated demo bundle".into()),
@@ -3981,7 +3989,8 @@ const PICKER_SCENES: &[(&str, fn(&mut PickerState))] = &[
 
 fn ensure_demo_bundle_in_review(s: &mut ReviewState) {
     if s.coord.review_bundle.is_none() {
-        let temp_dir = std::env::temp_dir().join(format!("{}.scrawl", crate::pipeline::make_bundle_id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("{}.scrawl", crate::pipeline::make_bundle_id()));
         if let Ok((dir, bundle, _)) = crate::pipeline::generate_demo_bundle(Some(temp_dir)) {
             s.coord.set_review_bundle((dir, bundle), None);
         }
@@ -4011,11 +4020,13 @@ const REVIEW_SCENES: &[(&str, fn(&mut ReviewState))] = &[
 ];
 
 fn dummy_review_init() -> ReviewState {
+    let (capture_tx, _capture_rx) = flume::unbounded();
     let (ui_tx, _ui_rx) = flume::unbounded();
     let (ev_tx, ev_rx) = flume::unbounded();
-    let telemetry = SharedCaptureTelemetry::new(ui_tx);
+    let telemetry = SharedCaptureTelemetry::new(capture_tx);
     let coord = RuneCoordinator::new(
         telemetry,
+        ui_tx,
         None,
         ev_tx,
         ev_rx,
@@ -4182,9 +4193,21 @@ pub fn run_app(
     }
 
     scrawl_log(format!("rune_app started pid={}", std::process::id()));
+    let (capture_sender, capture_receiver) = flume::unbounded();
     let (ui_sender, ui_receiver) = flume::unbounded();
-    crate::phone::start_ingest_server(ui_sender.clone());
-    let telemetry = SharedCaptureTelemetry::new(ui_sender);
+    crate::phone::start_ingest_server(capture_sender.clone());
+    let telemetry = SharedCaptureTelemetry::new(capture_sender);
+    let capture_to_ui = ui_sender.clone();
+    std::thread::Builder::new()
+        .name("rune-scrawl-capture-events".into())
+        .spawn(move || {
+            while let Ok(ev) = capture_receiver.recv() {
+                if capture_to_ui.send(LiveOverlayEvent::Capture(ev)).is_err() {
+                    break;
+                }
+            }
+        })
+        .expect("capture events thread");
     install_global_hotkeys(&telemetry);
     start_global_input_tap(Arc::clone(&telemetry));
     super::platform::start_updates();
@@ -4194,7 +4217,7 @@ pub fn run_app(
     crate::speech_model::ensure();
 
     if std::env::var_os("SCRAWL_NO_ONBOARDING").is_none() {
-        let sender = telemetry.ui_sender.clone();
+        let sender = ui_sender.clone();
         std::thread::spawn(move || {
             if let Some(grants) = crate::onboarding::read_grants() {
                 let event = crate::onboarding::Event::Launch(grants);
@@ -4423,6 +4446,7 @@ pub fn run_app(
     let app = app.init(move || {
         let coord = RuneCoordinator::new(
             telemetry,
+            ui_sender,
             Some(ui_forwarded_rx),
             events_tx,
             events_rx,
