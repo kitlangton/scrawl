@@ -1306,7 +1306,7 @@ impl RuneCoordinator {
             dir,
             bundle,
             source,
-            crate::now_epoch_ms(),
+            crate::pipeline::now_epoch_ms(),
         ));
         super::platform::set_status_inbox_count(self.inbox.len());
         self.inbox.len()
@@ -2697,7 +2697,7 @@ impl RuneCoordinator {
         self.selection_drag = None;
         self.hovered_window = None;
         self.animated_window_rect = None;
-        let id = crate::make_bundle_id();
+        let id = crate::pipeline::make_bundle_id();
         let root = std::env::var_os("SCRAWL_BENCH_START")
             .map(PathBuf::from)
             .unwrap_or_else(crate::handoff::default_captures_dir);
@@ -2794,7 +2794,7 @@ impl RuneCoordinator {
         self.hovered_window = None;
         self.animated_window_rect = None;
         let bundle_dir = crate::handoff::default_captures_dir()
-            .join(format!("{}.scrawl", crate::make_bundle_id()));
+            .join(format!("{}.scrawl", crate::pipeline::make_bundle_id()));
         let _ = std::fs::create_dir_all(&bundle_dir);
         let movie_path = bundle_dir.join("recording.mov");
         let existing_preview = self.iphone_preview.take();
@@ -2961,7 +2961,7 @@ impl RuneCoordinator {
                     activity.stop_started = Some(stop_started);
                     activity.stop_ms = Some(stop_started.elapsed().as_millis() as u64);
                     let duration_ms = recording.duration_ms;
-                    let finalized = crate::finalize_capture_bundle(
+                    let finalized = crate::pipeline::finalize_capture_bundle(
                         &bundle_dir,
                         target,
                         recording,
@@ -3206,7 +3206,7 @@ impl RuneCoordinator {
                         frame_count = bundle.keyframes.len();
                         let _ = crate::handoff::copy_bundle_to_clipboard(&dir);
                         self.completed_dir = Some(dir.clone());
-                        self.last_local_capture_ms = crate::now_epoch_ms();
+                        self.last_local_capture_ms = crate::pipeline::now_epoch_ms();
                         if route.is_some() || look.is_some() {
                             self.routing = Some(dir.clone());
                             routed = Some((dir.clone(), look.is_some().then(|| bundle.clone())));
@@ -3602,7 +3602,7 @@ fn review_view(s: &ReviewState, cx: &mut Cx<ReviewState>) -> El {
                         None,
                         false,
                         |state| {
-                            if let Ok((dir, bundle, _)) = crate::generate_demo_bundle(None) {
+                            if let Ok((dir, bundle, _)) = crate::pipeline::generate_demo_bundle(None) {
                                 state.coord.set_review_bundle(
                                     (dir, bundle),
                                     Some("Generated demo bundle".into()),
@@ -3980,8 +3980,8 @@ const PICKER_SCENES: &[(&str, fn(&mut PickerState))] = &[
 
 fn ensure_demo_bundle_in_review(s: &mut ReviewState) {
     if s.coord.review_bundle.is_none() {
-        let temp_dir = std::env::temp_dir().join(format!("{}.scrawl", crate::make_bundle_id()));
-        if let Ok((dir, bundle, _)) = crate::generate_demo_bundle(Some(temp_dir)) {
+        let temp_dir = std::env::temp_dir().join(format!("{}.scrawl", crate::pipeline::make_bundle_id()));
+        if let Ok((dir, bundle, _)) = crate::pipeline::generate_demo_bundle(Some(temp_dir)) {
             s.coord.set_review_bundle((dir, bundle), None);
         }
     }

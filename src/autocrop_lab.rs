@@ -419,7 +419,7 @@ pub fn build_fixture(
         std::fs::remove_dir_all(out)?;
     }
     std::fs::create_dir_all(out)?;
-    crate::build_bundle_from_parts(
+    crate::pipeline::build_bundle_from_parts(
         out,
         scenario.target,
         scenario.duration_ms,
@@ -429,7 +429,7 @@ pub fn build_fixture(
         transcript,
         None,
         scenario.note,
-        crate::SourceExtras {
+        crate::pipeline::SourceExtras {
             activity: ActivityLog {
                 windows: scenario.windows,
                 cursor: scenario.cursor,
@@ -629,7 +629,7 @@ pub fn simulate_capture(
         missing: None,
     };
     let started = std::time::Instant::now();
-    let (_, bundle, _) = crate::build_bundle_from_parts(
+    let (_, bundle, _) = crate::pipeline::build_bundle_from_parts(
         out,
         scenario.target,
         total,
@@ -639,7 +639,7 @@ pub fn simulate_capture(
         transcript,
         video.clone(),
         None,
-        crate::SourceExtras {
+        crate::pipeline::SourceExtras {
             activity: ActivityLog {
                 windows,
                 cursor,
@@ -647,7 +647,7 @@ pub fn simulate_capture(
             },
             full_frames: video
                 .filter(|_| !legacy)
-                .map(|v| crate::movie_keyframes(v, 0)),
+                .map(|v| crate::pipeline::movie_keyframes(v, 0)),
             ..Default::default()
         },
     )?;

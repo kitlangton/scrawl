@@ -1649,7 +1649,7 @@ pub fn extract_frames_range(
         let step_ms = (1_000 / u64::from(fps)).max(1);
         let times: Vec<u64> = (from_ms..=to_ms).step_by(step_ms as usize).collect();
         if !times.is_empty()
-            && let Ok(decoded) = crate::movie_frames_at(&video, &times, offset_ms, 0)
+            && let Ok(decoded) = crate::pipeline::movie_frames_at(&video, &times, offset_ms, 0)
             && !decoded.is_empty()
         {
             fs::create_dir_all(&output_dir)?;
@@ -1844,7 +1844,7 @@ mod tests {
 
     #[test]
     fn recordings_go_to_their_addressed_session_not_the_viewed_one() {
-        let dir = std::env::temp_dir().join(format!("scrawl-dest-{}", crate::make_bundle_id()));
+        let dir = std::env::temp_dir().join(format!("scrawl-dest-{}", crate::pipeline::make_bundle_id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join("timeline.json"),

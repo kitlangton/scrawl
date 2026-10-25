@@ -121,7 +121,7 @@ impl PhoneSession {
         device_id: Option<&str>,
         telemetry: Option<Arc<SharedCaptureTelemetry>>,
     ) -> Result<Self> {
-        let session_epoch_ms = crate::now_epoch_ms();
+        let session_epoch_ms = crate::pipeline::now_epoch_ms();
         let recording = movie.map(|_| crate::retention::Recording::start());
         let mut command = Command::new(helper::path()?);
         command.arg("mirror");
@@ -267,7 +267,7 @@ impl PhoneSession {
     /// Transitions an open preview session into active movie recording.
     pub fn begin_recording(&mut self, movie: &Path) {
         self.started_at = Instant::now();
-        self.session_epoch_ms = crate::now_epoch_ms();
+        self.session_epoch_ms = crate::pipeline::now_epoch_ms();
         self.busy
             .get_or_insert_with(crate::retention::Recording::start);
         {
@@ -527,7 +527,7 @@ pub fn build_movie_bundle(
                                 .iter()
                                 .all(|(k, _)| k.reason == crate::model::KeyframeReason::Mark)
                         {
-                            let prep = crate::prepare_visuals(
+                            let prep = crate::pipeline::prepare_visuals(
                                 preview,
                                 raw_frames.first(),
                                 None,
@@ -579,20 +579,20 @@ pub fn build_movie_bundle(
     }
     ensure!(!frames.is_empty(), "No frames could be decoded");
     let movie = capture.movie.clone();
-    let extras = crate::SourceExtras {
+    let extras = crate::pipeline::SourceExtras {
         source: Some("iphone".into()),
         device: Some(capture.device),
         context: capture.context,
         context_changes: capture.context_changes,
         screens: capture.screens,
         flags: capture.flags,
-        full_frames: (!already_full).then(|| -> crate::FullFrames {
+        full_frames: (!already_full).then(|| -> crate::pipeline::FullFrames {
             Box::new(move |times: &[u64]| -> Result<Vec<RgbaFrame>> {
                 helper::frames(&movie, FrameTimes::At(times), PHONE_FRAME_EDGE)
             })
         }),
         prepared,
-        timings: crate::StageTimings {
+        timings: crate::pipeline::StageTimings {
             started_at: Some(started_at),
             audio_ms: Some(audio_ms),
             candidates_ms: Some(candidates_ms),
@@ -601,7 +601,7 @@ pub fn build_movie_bundle(
         },
         ..Default::default()
     };
-    crate::build_bundle_from_parts(
+    crate::pipeline::build_bundle_from_parts(
         bundle_dir,
         capture.target,
         probe.duration_ms,
@@ -1361,7 +1361,7 @@ fn ingest_key(timeline: &Timeline) -> String {
         .recorded_at
         .clone()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(crate::make_bundle_id)
+        .unwrap_or_else(crate::pipeline::make_bundle_id)
 }
 
 /// A retried delivery went through: later copies of that recording hear it was sent.
@@ -1508,7 +1508,7 @@ fn build_ingested(
 ) -> Result<Delivery> {
     let bundle_dir = config
         .captures_dir()
-        .join(format!("{}.scrawl", crate::make_bundle_id()));
+        .join(format!("{}.scrawl", crate::pipeline::make_bundle_id()));
     let (dir, bundle) = (config.hooks.build)(movie, timeline_path, &bundle_dir)?;
     if config.copy_clipboard {
         let _ = crate::handoff::copy_bundle_to_clipboard(&dir);
@@ -1620,7 +1620,7 @@ fn handle_ingest_connection_with_token(
     ensure!(4 + json_len < payload.len(), "Invalid framed payload");
     let json_bytes = &payload[4..4 + json_len];
     let timeline: Timeline = serde_json::from_slice(json_bytes).unwrap_or_default();
-    let staging = std::env::temp_dir().join(format!("scrawl-ingest-{}", crate::make_bundle_id()));
+    let staging = std::env::temp_dir().join(format!("scrawl-ingest-{}", crate::pipeline::make_bundle_id()));
     std::fs::create_dir_all(&staging)?;
     let timeline_path = staging.join("timeline.json");
     let movie_path = staging.join("recording.mp4");
@@ -1782,7 +1782,7 @@ fn poll_usb_app_containers(apps: &[String], config: &IngestConfig) -> Result<()>
                     continue;
                 }
                 let staging =
-                    std::env::temp_dir().join(format!("scrawl-usb-{}", crate::make_bundle_id()));
+                    std::env::temp_dir().join(format!("scrawl-usb-{}", crate::pipeline::make_bundle_id()));
                 std::fs::create_dir_all(&staging)?;
                 let local_json = staging.join(format!("{stem}.json"));
                 let local_mp4 = staging.join(format!("{stem}.mp4"));
@@ -1835,7 +1835,7 @@ fn poll_usb_app_containers(apps: &[String], config: &IngestConfig) -> Result<()>
                 // `.delivery` (the HTTP reply) goes first: ScrawlKit reads it once `.sent`
                 // appears. Builds from before it only read `.sent`, the session's name.
                 let replies =
-                    std::env::temp_dir().join(format!("scrawl-usb-{}", crate::make_bundle_id()));
+                    std::env::temp_dir().join(format!("scrawl-usb-{}", crate::pipeline::make_bundle_id()));
                 std::fs::create_dir_all(&replies)?;
                 let delivery = replies.join(format!("{stem}.delivery"));
                 let sent = replies.join(format!("{stem}.sent"));
@@ -2021,7 +2021,7 @@ mod tests {
 
     #[test]
     fn import_pairs_movie_and_timeline_by_name() {
-        let dir = std::env::temp_dir().join(crate::make_bundle_id());
+        let dir = std::env::temp_dir().join(crate::pipeline::make_bundle_id());
         std::fs::create_dir_all(&dir).unwrap();
         let movie = dir.join("20261013T164000.mp4");
         let json = dir.join("20261013T164000.json");
@@ -2226,7 +2226,7 @@ mod tests {
 
     fn temp_captures() -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("scrawl-ingest-test-{}", crate::make_bundle_id()));
+            std::env::temp_dir().join(format!("scrawl-ingest-test-{}", crate::pipeline::make_bundle_id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

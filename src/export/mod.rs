@@ -299,7 +299,7 @@ pub fn export(
         ink: &ink,
     };
     let plan_path =
-        std::env::temp_dir().join(format!("scrawl-export-{}.json", crate::make_bundle_id()));
+        std::env::temp_dir().join(format!("scrawl-export-{}.json", crate::pipeline::make_bundle_id()));
     std::fs::write(&plan_path, serde_json::to_vec(&plan)?)?;
     let result = run_helper(&plan_path, options.background, progress);
     let _ = std::fs::remove_file(&plan_path);

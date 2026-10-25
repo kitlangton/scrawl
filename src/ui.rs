@@ -877,7 +877,7 @@ impl ScrawlCoordinator {
             dir,
             bundle,
             source,
-            crate::now_epoch_ms(),
+            crate::pipeline::now_epoch_ms(),
         ));
         set_status_inbox_count(self.inbox.len());
         self.inbox.len()
@@ -2539,7 +2539,7 @@ impl ScrawlCoordinator {
         self.selection_drag = None;
         self.hovered_window = None;
         self.animated_window_rect = None;
-        let id = crate::make_bundle_id();
+        let id = crate::pipeline::make_bundle_id();
         let root = std::env::var_os("SCRAWL_BENCH_START")
             .map(PathBuf::from)
             .unwrap_or_else(crate::handoff::default_captures_dir);
@@ -2682,7 +2682,7 @@ impl ScrawlCoordinator {
         self.hovered_window = None;
         self.animated_window_rect = None;
         let bundle_dir = crate::handoff::default_captures_dir()
-            .join(format!("{}.scrawl", crate::make_bundle_id()));
+            .join(format!("{}.scrawl", crate::pipeline::make_bundle_id()));
         let _ = std::fs::create_dir_all(&bundle_dir);
         let movie_path = bundle_dir.join("recording.mov");
         let existing_preview = self.iphone_preview.take();
@@ -2899,7 +2899,7 @@ impl ScrawlCoordinator {
                     activity.stop_started = Some(stop_started);
                     activity.stop_ms = Some(stop_started.elapsed().as_millis() as u64);
                     let duration_ms = recording.duration_ms;
-                    let finalized = crate::finalize_capture_bundle(
+                    let finalized = crate::pipeline::finalize_capture_bundle(
                         &bundle_dir,
                         target,
                         recording,
@@ -2926,7 +2926,7 @@ impl ScrawlCoordinator {
                         frame_count = bundle.keyframes.len();
                         let _ = crate::handoff::copy_bundle_to_clipboard(&dir);
                         coord.completed_dir = Some(dir.clone());
-                        coord.last_local_capture_ms = crate::now_epoch_ms();
+                        coord.last_local_capture_ms = crate::pipeline::now_epoch_ms();
                         if route.is_some() || look.is_some() {
                             coord.routing = Some(dir.clone());
                             routed = Some((dir.clone(), look.is_some().then(|| bundle.clone())));
@@ -4454,7 +4454,7 @@ impl Render for BundleReviewWindow {
                         .child(
                             action_button("empty-demo", "Load Demo Bundle", false).on_click(
                                 move |_, _, cx| {
-                                    if let Ok((dir, bundle, _)) = crate::generate_demo_bundle(None)
+                                    if let Ok((dir, bundle, _)) = crate::pipeline::generate_demo_bundle(None)
                                     {
                                         c_demo.update(cx, |coord, cx| {
                                             coord.set_review_bundle(

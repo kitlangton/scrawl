@@ -157,7 +157,7 @@ pub fn deliver(
             scrawl_log(format!(
                 "deliver: OpenCode send to {title} failed ({error}); retrying from the Mac"
             ));
-            let pending = Pending::new(session, title, key, &error, crate::now_epoch_ms());
+            let pending = Pending::new(session, title, key, &error, crate::pipeline::now_epoch_ms());
             if let Err(err) = pending.write(dir) {
                 scrawl_log(format!("deliver: {err:#}"));
             }
@@ -255,7 +255,7 @@ pub fn spawn_retries(captures: PathBuf, forward: Forward, on_sent: fn(&Path, &Pe
         .spawn(move || {
             loop {
                 std::thread::sleep(SCAN_EVERY);
-                for (dir, pending) in retry_due(&captures, crate::now_epoch_ms(), forward).sent {
+                for (dir, pending) in retry_due(&captures, crate::pipeline::now_epoch_ms(), forward).sent {
                     on_sent(&dir, &pending);
                 }
             }
@@ -268,7 +268,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     fn temp_captures() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("scrawl-deliver-{}", crate::make_bundle_id()));
+        let dir = std::env::temp_dir().join(format!("scrawl-deliver-{}", crate::pipeline::make_bundle_id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

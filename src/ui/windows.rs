@@ -730,7 +730,7 @@ fn refresh(tray: &mut Tray) {
     }
     let inbox = crate::inbox::Inbox::load_default();
     if inbox.len() > 0 {
-        let now = crate::now_epoch_ms();
+        let now = crate::pipeline::now_epoch_ms();
         let mut rows: Vec<Box<dyn IsMenuItem>> =
             vec![Box::new(MenuItem::new("From iPhone", false, None))];
         for entry in inbox.entries() {

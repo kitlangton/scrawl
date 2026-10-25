@@ -607,7 +607,7 @@ fn rebuild_inbox_menu_items(menu: &NSMenu, target: &ScrawlMenuTarget) {
     if inbox.len() == 0 {
         return;
     }
-    let now = crate::now_epoch_ms();
+    let now = crate::pipeline::now_epoch_ms();
     let mut rows = Vec::new();
     let has_section_header: bool = unsafe {
         msg_send![objc2::class!(NSMenuItem), respondsToSelector: sel!(sectionHeaderWithTitle:)]

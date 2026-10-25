@@ -793,7 +793,7 @@ mod tests {
 
     #[test]
     fn project_root_walks_up_to_git() {
-        let base = std::env::temp_dir().join(format!("scrawl-root-{}", crate::make_bundle_id()));
+        let base = std::env::temp_dir().join(format!("scrawl-root-{}", crate::pipeline::make_bundle_id()));
         let site = base.join("repo/site/src");
         std::fs::create_dir_all(&site).unwrap();
         std::fs::create_dir_all(base.join("repo/.git")).unwrap();
@@ -1028,7 +1028,7 @@ mod tests {
     #[test]
     fn destination_is_recorded_and_preferred_by_send() {
         let dir =
-            std::env::temp_dir().join(format!("scrawl-route-{}.scrawl", crate::make_bundle_id()));
+            std::env::temp_dir().join(format!("scrawl-route-{}.scrawl", crate::pipeline::make_bundle_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut bundle: ScrawlBundle = serde_json::from_value(serde_json::json!({
             "version": 1, "id": "t", "createdAtMs": 0, "durationMs": 1_000,

@@ -1198,7 +1198,7 @@ impl Capture {
             anyhow::bail!("the capture never started");
         };
         let excluded = self.excluded.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-        crate::finalize_capture_bundle(
+        crate::pipeline::finalize_capture_bundle(
             &self.dir,
             target,
             session.stop(),

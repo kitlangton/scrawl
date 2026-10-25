@@ -185,7 +185,7 @@ pub fn rebuild(dir: &Path, media: &Media) -> Result<String> {
     scrawl_log(format!("recover: rebuilding {}", dir.display()));
     let result = if dir.join(UNFINISHED).is_file() {
         read(dir)
-            .and_then(|unfinished| crate::rebuild_screen_bundle_with(dir, unfinished, None, media))
+            .and_then(|unfinished| crate::pipeline::rebuild_screen_bundle_with(dir, unfinished, None, media))
     } else if orphaned(dir) {
         let probe = (media.probe)(&dir.join(VIDEO));
         let audio_ms = std::fs::read(dir.join(AUDIO))
@@ -193,7 +193,7 @@ pub fn rebuild(dir: &Path, media: &Media) -> Result<String> {
             .and_then(|wav| crate::audio::recorded_audio_from_wav(wav).ok())
             .map(|audio| audio.duration_ms);
         probe.and_then(|probe| {
-            crate::rebuild_screen_bundle_with(
+            crate::pipeline::rebuild_screen_bundle_with(
                 dir,
                 orphan_recipe(&probe, audio_ms),
                 Some(None),

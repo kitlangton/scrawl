@@ -159,7 +159,7 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let root =
-                std::env::temp_dir().join(format!("scrawl-inbox-{}", crate::make_bundle_id()));
+                std::env::temp_dir().join(format!("scrawl-inbox-{}", crate::pipeline::make_bundle_id()));
             std::fs::create_dir_all(&root).unwrap();
             let root = root.canonicalize().unwrap();
             Self { root }

@@ -554,7 +554,7 @@ mod tests {
 
     fn temp(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("scrawl-served-{name}-{}", crate::make_bundle_id()));
+            std::env::temp_dir().join(format!("scrawl-served-{name}-{}", crate::pipeline::make_bundle_id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

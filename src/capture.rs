@@ -1279,7 +1279,7 @@ impl SharedCaptureTelemetry {
             let hits = crate::ax::Prober::shared().finish();
             crate::ax::apply(&hits, &mut events, &mut strokes);
             if self.capture_mode.load(Ordering::Acquire) != 3 {
-                let end = crate::now_epoch_ms();
+                let end = crate::pipeline::now_epoch_ms();
                 let start = end.saturating_sub(self.elapsed_ms());
                 let page = crate::page::between(start, end);
                 crate::page::apply(&page, start, &mut events, &mut strokes);
@@ -1518,7 +1518,7 @@ mod tests {
         let frames = Arc::new(Mutex::new(CandidateBuffer::new(1 << 20)));
         let worker_stopping = Arc::clone(&stopping);
         let worker_frames = Arc::clone(&frames);
-        let path = std::env::temp_dir().join(crate::make_bundle_id());
+        let path = std::env::temp_dir().join(crate::pipeline::make_bundle_id());
         let worker_path = path.clone();
         let worker = thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(2);

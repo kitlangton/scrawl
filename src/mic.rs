@@ -352,7 +352,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "scrawl-mic-{}-{}",
             std::process::id(),
-            crate::now_epoch_ms()
+            crate::pipeline::now_epoch_ms()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.json");

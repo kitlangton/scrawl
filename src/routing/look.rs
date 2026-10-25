@@ -1005,7 +1005,7 @@ mod tests {
 
     #[test]
     fn worktrees_share_their_repository() {
-        let base = std::env::temp_dir().join(format!("scrawl-repo-{}", crate::make_bundle_id()));
+        let base = std::env::temp_dir().join(format!("scrawl-repo-{}", crate::pipeline::make_bundle_id()));
         let main = base.join("main");
         std::fs::create_dir_all(main.join(".git/worktrees/wt")).unwrap();
         std::fs::write(main.join(".git/worktrees/wt/commondir"), "../..\n").unwrap();
@@ -1086,7 +1086,7 @@ mod tests {
     #[test]
     fn the_ladder_policy_reproduces_route() {
         use super::super::smart::{Policy, decide, destination};
-        let base = std::env::temp_dir().join(format!("scrawl-ladder-{}", crate::make_bundle_id()));
+        let base = std::env::temp_dir().join(format!("scrawl-ladder-{}", crate::pipeline::make_bundle_id()));
         let repo = base.join("repo");
         std::fs::create_dir_all(repo.join(".git")).unwrap();
         std::fs::create_dir_all(repo.join("site")).unwrap();
@@ -1515,7 +1515,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(json).unwrap();
         let page = &value["page"];
         let (bundle, saved, _) = fixture(json);
-        let root = std::env::temp_dir().join(format!("scrawl-page-{}", crate::make_bundle_id()));
+        let root = std::env::temp_dir().join(format!("scrawl-page-{}", crate::pipeline::make_bundle_id()));
         let file = root.join(page["file"].as_str().unwrap());
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         let handle = std::fs::File::create(&file).unwrap();
@@ -1605,7 +1605,7 @@ mod tests {
         let json = ARTIFACTS[2];
         let value: serde_json::Value = serde_json::from_str(json).unwrap();
         let (bundle, saved, _) = fixture(json);
-        let root = std::env::temp_dir().join(format!("scrawl-mark-{}", crate::make_bundle_id()));
+        let root = std::env::temp_dir().join(format!("scrawl-mark-{}", crate::pipeline::make_bundle_id()));
         let file = root.join(value["page"]["file"].as_str().unwrap());
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "").unwrap();
@@ -1672,7 +1672,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(ONBOARDING).unwrap();
         let server = &value["server"];
         let (bundle, mut saved, _) = fixture(ONBOARDING);
-        let repo = std::env::temp_dir().join(format!("scrawl-story-{}", crate::make_bundle_id()));
+        let repo = std::env::temp_dir().join(format!("scrawl-story-{}", crate::pipeline::make_bundle_id()));
         std::fs::create_dir_all(repo.join(".git")).unwrap();
         let dir = repo.join(server["folder"].as_str().unwrap());
         std::fs::create_dir_all(&dir).unwrap();

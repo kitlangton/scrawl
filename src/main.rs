@@ -3,6 +3,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
+use scrawl::pipeline::{
+    finalize_capture_bundle, generate_demo_bundle, make_bundle_id, now_epoch_ms,
+    rebuild_screen_bundle,
+};
 use scrawl::*;
 
 use crate::audio::AudioRecorder;
