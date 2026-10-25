@@ -736,18 +736,7 @@ fn poll(g: &mut Grid, now: f64, tx: &mut Tx) -> bool {
 
 fn on_key(g: &mut Grid, key: &KeyEvent, tx: &mut Tx) -> bool {
     match &key.key {
-        // Rune's default app menu has Quit but no Close, so ⌘W never reached the window.
-        // Closing the only window ends the process, as the close button does.
-        Key::Command('w') => {
-            dbg_log("close");
-            tx.close_window();
-            return true;
-        }
-        Key::Command('q') => {
-            dbg_log("quit");
-            tx.quit();
-            return true;
-        }
+        // ⌘W and ⌘Q are Rune's standard menu items; no chord is a lab shortcut.
         _ if key.mods.cmd || key.mods.ctrl => return false,
         Key::Up => g.step(-1),
         Key::Down => g.step(1),
@@ -1283,7 +1272,7 @@ mod tests {
     #[test]
     fn the_sidebar_lists_f_first_and_every_group_together() {
         let defs = defs();
-        assert_eq!(defs[0].name, "f · Sure");
+        assert_eq!(defs[0].name, "f · A rule sends");
         let groups: Vec<Group> = defs.iter().map(|d| d.group).collect();
         let mut seen = groups.clone();
         seen.dedup();

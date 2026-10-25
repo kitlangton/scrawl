@@ -18,13 +18,23 @@ use crate::native::pill::model::{CHIP_H, CX, ElemId, ISLAND_H, ISLAND_INSET, TOP
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Proto {
-    /// f, sure where it goes: "Sent to CONCLAVE", esc undoes it for a few seconds, ⌥⇧V sends
-    /// it elsewhere.
-    FSure,
-    /// f, unsure: "Copied", and the list opens by itself with the suggestions on top.
-    FUnsure,
+    /// f, a rule matched (site, app, signed page, named session, dev build): "Sent to SEER",
+    /// esc undoes it for a few seconds, ⌥⇧V sends it elsewhere. Only a rule ever sends.
+    FRule,
+    /// f, a guess: "Copied", and the list opens by itself with the guess on top, selected.
+    FGuessOpen,
+    /// f, a guess: "Copied · ⌥⇧V → SEER?"; ⌥⇧V opens the list with it selected.
+    FGuessAsk,
     /// f, nothing fits: "Copied"; ⌥⇧V opens the list of recent sessions.
     FNoMatch,
+    /// f, the second pick for the same site: the list's footer offers ⇧⏎ to always send it there.
+    FRuleOffer,
+    /// f, after ⇧⏎: "Sent to SEER · rule saved".
+    FRuleSaved,
+    /// f, three guesses: the pill names the top one and counts the rest; the list has them all.
+    FManyTop,
+    /// f, three guesses, the other way: the pill only counts them.
+    FManyCount,
     /// g: the recording shows where it'll go and ⌥⇧1–3 switch it; afterwards only "Sent · Undo".
     ChooseFirst,
     /// h: no routing UI at all: sent when Scrawl is sure (a dev site), else copied.
@@ -71,18 +81,27 @@ struct List {
     filter: &'static str,
     selected: usize,
     suggest: Suggest,
+    /// The footer offers ⇧⏎: always send this site to the selected session.
+    offer: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Suggest {
     /// Nothing fits: recent sessions only.
     None,
-    Some,
-    /// It was already sent to the first suggestion.
-    Sent,
+    /// One guess (and the last place it went).
+    Guess,
+    /// Three guesses.
+    Many,
+    /// A rule already sent it to the first.
+    Rule,
 }
 
-const SUGGESTED: [(&str, &str); 2] = [("CONCLAVE", "dev site · localhost:5173"), ("HEX", "last sent")];
+const SITE: &str = "problems.kitlangton.com";
+const GUESS: [(&str, &str); 2] = [("SEER", "guess · problems.kitlangton.com"), ("HEX", "last sent")];
+const MANY: [(&str, &str); 3] =
+    [("SEER", "guess · problems.kitlangton.com"), ("HEX", "last sent"), ("CONCLAVE", "same repo")];
+const RULED: [(&str, &str); 2] = [("SEER", "sent · rule"), ("HEX", "last sent")];
 const RECENT: [(&str, &str); 3] = [
     ("Scrawl · Rune pill lab follow-ups", "2 min ago"),
     ("OpenCode Desktop · Problems board rewrite", "1 h ago"),
@@ -96,14 +115,17 @@ impl List {
         let keep = |rows: &[(&'static str, &'static str)]| -> Vec<(&'static str, &'static str)> {
             rows.iter().copied().filter(|(name, _)| name.to_lowercase().contains(&filter)).collect()
         };
-        let mut suggested = if self.suggest == Suggest::None { Vec::new() } else { keep(&SUGGESTED) };
-        if self.suggest == Suggest::Sent
-            && let Some(first) = suggested.first_mut()
-            && first.0 == SUGGESTED[0].0
-        {
-            first.1 = "sent";
-        }
+        let suggested = match self.suggest {
+            Suggest::None => Vec::new(),
+            Suggest::Guess => keep(&GUESS),
+            Suggest::Many => keep(&MANY),
+            Suggest::Rule => keep(&RULED),
+        };
         [("Suggested", suggested), ("Recent", keep(&RECENT))].into_iter().filter(|(_, rows)| !rows.is_empty()).collect()
+    }
+
+    fn selected_name(self) -> Option<&'static str> {
+        self.sections().into_iter().flat_map(|(_, rows)| rows).nth(self.selected).map(|(name, _)| name)
     }
 
     fn height(self) -> f32 {
@@ -113,29 +135,46 @@ impl List {
 }
 
 /// The open pill's width (its field takes what the rest leaves), and the list's under it.
-const LIST_W: f32 = 360.0;
+const LIST_W: f32 = 420.0;
 const FIELD_MIN: f32 = 120.0;
 const LIST_PAD: f32 = 6.0;
 const LIST_Y: f32 = TOP + ISLAND_H + 6.0;
 const HEADER_H: f32 = 24.0;
 const ROW_H: f32 = 30.0;
 const FOOTER_H: f32 = 28.0;
+const FOOTER_GAP: f32 = 24.0;
 const STRIP_H: f32 = 30.0;
 
 /// Frames move on one plain spring (the real capsule's are keyed on the kind of change).
 const MOVE: Spring = Spring::new(0.32, 0.0);
 
 impl Proto {
-    /// f's three bands, then g and h: the designs after Kit's look at b–e.
-    pub const NEW: [Proto; 5] = [Self::FSure, Self::FUnsure, Self::FNoMatch, Self::ChooseFirst, Self::NoRouting];
+    /// f (rules send, guesses suggest), then g and h: the designs after Kit's look at b–e.
+    pub const NEW: [Proto; 10] = [
+        Self::FRule,
+        Self::FGuessAsk,
+        Self::FGuessOpen,
+        Self::FNoMatch,
+        Self::FRuleOffer,
+        Self::FRuleSaved,
+        Self::FManyTop,
+        Self::FManyCount,
+        Self::ChooseFirst,
+        Self::NoRouting,
+    ];
     pub const OLD: [Proto; 4] = [Self::SentNamed, Self::Numbered, Self::PinnedShortcut, Self::RecordingDest];
 
     /// Its name in the lab's sidebar.
     pub fn name(self) -> &'static str {
         match self {
-            Self::FSure => "f · Sure",
-            Self::FUnsure => "f · Unsure",
+            Self::FRule => "f · A rule sends",
+            Self::FGuessAsk => "f · A guess · the pill asks",
+            Self::FGuessOpen => "f · A guess · the list opens",
             Self::FNoMatch => "f · Nothing fits",
+            Self::FRuleOffer => "f · Offer a rule",
+            Self::FRuleSaved => "f · Rule saved",
+            Self::FManyTop => "f · 3 guesses · top one",
+            Self::FManyCount => "f · 3 guesses · count only",
             Self::ChooseFirst => "g · Choose while recording",
             Self::NoRouting => "h · No routing UI",
             Self::SentNamed => "b · Name it",
@@ -148,9 +187,14 @@ impl Proto {
     /// One line on what it shows.
     pub fn about(self) -> &'static str {
         match self {
-            Self::FSure => "Scrawl is sure where it goes: Sent to CONCLAVE, esc undoes it for 3 s, ⌥⇧V sends it elsewhere.",
-            Self::FUnsure => "Scrawl has a guess but isn't sure: Copied, and the list opens by itself with its suggestions on top.",
+            Self::FRule => "A rule matched (site, app, signed page, named session, dev build), so it's sent: esc undoes it for 3 s, ⌥⇧V sends it elsewhere.",
+            Self::FGuessAsk => "A guess only suggests: Copied, and the pill asks. ⌥⇧V opens the list with SEER selected; return sends.",
+            Self::FGuessOpen => "A guess only suggests: Copied, and the list opens by itself with SEER selected; return sends. It takes the keyboard, so ⌘V lands in its field.",
             Self::FNoMatch => "Nothing fits: Copied, and ⌥⇧V opens the list of recent sessions.",
+            Self::FRuleOffer => "The second pick of SEER for this site: the footer offers ⇧⏎ to always send problems.kitlangton.com there.",
+            Self::FRuleSaved => "After ⇧⏎: sent, and the rule is saved. Next time this site sends on its own.",
+            Self::FManyTop => "Three guesses: the pill names the top one and counts the rest, one chip whatever the number. ⌥⇧V opens them all.",
+            Self::FManyCount => "Three guesses, the other way: the pill only counts them, and you read the list to see where.",
             Self::ChooseFirst => "The recording shows where it'll go; hold ⌥⇧ and press 1–3 to switch. Afterwards only Sent · Undo.",
             Self::NoRouting => "Sent when Scrawl is sure (a dev site), else Copied · Paste.",
             Self::SentNamed => "Sent to CONCLAVE, with one chip to send it elsewhere instead.",
@@ -171,29 +215,52 @@ impl Proto {
         let sent = |to| vec![Done(Lead::Check, to), Chip("Undo", Some("esc")), Close];
         let send = |lead, chip| vec![Done(Lead::Check, lead), Chip(chip, Some("⌥⇧V")), Close];
         let open = |lead, typed| vec![Done(Lead::Check, lead), Field(typed), Close];
-        let list = |filter, selected, suggest| List { filter, selected, suggest };
-        let sure = |undo| vec![Done(Lead::Check, "Sent to CONCLAVE"), Chip(undo, Some("esc")), Chip("Elsewhere…", Some("⌥⇧V")), Close];
+        let list = |filter, selected, suggest| List { filter, selected, suggest, offer: false };
+        let ruled = |undo| {
+            vec![Done(Lead::Check, "Sent to SEER"), Why("rule"), Chip(undo, Some("esc")), Chip("Elsewhere…", Some("⌥⇧V")), Close]
+        };
+        let saved = vec![Done(Lead::Check, "Sent to SEER"), Why("rule saved"), Chip("Undo", Some("esc")), Close];
+        let ask = |chip| send("Copied", chip);
         match self {
-            Self::FSure => vec![
-                Frame::pill(sure("Undo 3")),
-                Frame::pill(sure("Undo 2")),
-                Frame::pill(sure("Undo 1")),
-                Frame::pill(send("Sent to CONCLAVE", "Elsewhere…")),
-                Frame::pill(open("Sent to CONCLAVE", "")).list(list("", 1, Suggest::Sent)),
-                Frame::pill(open("Sent to CONCLAVE", "he")).list(list("he", 0, Suggest::Sent)),
+            Self::FRule => vec![
+                Frame::pill(ruled("Undo 3")),
+                Frame::pill(ruled("Undo 2")),
+                Frame::pill(ruled("Undo 1")),
+                Frame::pill(vec![Done(Lead::Check, "Sent to SEER"), Why("rule"), Chip("Elsewhere…", Some("⌥⇧V")), Close]),
+                Frame::pill(open("Sent to SEER", "")).list(list("", 1, Suggest::Rule)),
+                Frame::pill(open("Sent to SEER", "he")).list(list("he", 0, Suggest::Rule)),
                 Frame::pill(sent("Sent to HEX")),
             ],
-            Self::FUnsure => vec![
-                Frame::pill(send("Copied", "Send…")),
-                Frame::pill(open("Copied", "")).list(list("", 0, Suggest::Some)),
-                Frame::pill(open("Copied", "")).list(list("", 1, Suggest::Some)),
-                Frame::pill(sent("Sent to HEX")),
+            Self::FGuessAsk => vec![
+                Frame::pill(ask("→ SEER?")),
+                Frame::pill(open("Copied", "")).list(list("", 0, Suggest::Guess)),
+                Frame::pill(sent("Sent to SEER")),
+            ],
+            Self::FGuessOpen => vec![
+                Frame::pill(vec![Done(Lead::Check, "Copied"), Close]),
+                Frame::pill(open("Copied", "")).list(list("", 0, Suggest::Guess)),
+                Frame::pill(sent("Sent to SEER")),
             ],
             Self::FNoMatch => vec![
-                Frame::pill(send("Copied", "Send…")),
+                Frame::pill(ask("Send to…")),
                 Frame::pill(open("Copied", "")).list(list("", 0, Suggest::None)),
                 Frame::pill(open("Copied", "ho")).list(list("ho", 0, Suggest::None)),
                 Frame::pill(sent("Sent to HOME")),
+            ],
+            Self::FRuleOffer => vec![
+                Frame::pill(open("Copied", "")).list(List { offer: true, ..list("", 0, Suggest::Guess) }),
+                Frame::pill(saved.clone()),
+            ],
+            Self::FRuleSaved => vec![Frame::pill(saved)],
+            Self::FManyTop => vec![
+                Frame::pill(ask("→ SEER? +2")),
+                Frame::pill(open("Copied", "")).list(list("", 0, Suggest::Many)),
+                Frame::pill(sent("Sent to SEER")),
+            ],
+            Self::FManyCount => vec![
+                Frame::pill(ask("3 suggestions")),
+                Frame::pill(open("Copied", "")).list(list("", 0, Suggest::Many)),
+                Frame::pill(sent("Sent to SEER")),
             ],
             Self::ChooseFirst => vec![
                 Frame::pill(rec("0:07", "CONCLAVE")),
@@ -232,9 +299,11 @@ impl Proto {
             times.iter().enumerate().map(|(i, t)| (*t, Some(i))).chain([(end, None)]).collect()
         };
         match self {
-            Self::FSure => at(&[0.0, 1.0, 2.0, 3.0, 4.3, 5.4, 6.5], 8.3),
-            Self::FUnsure => at(&[0.0, 0.5, 1.9, 3.0], 4.8),
+            Self::FRule => at(&[0.0, 1.0, 2.0, 3.0, 4.3, 5.4, 6.5], 8.3),
+            Self::FGuessAsk | Self::FManyTop | Self::FManyCount => at(&[0.0, 1.8, 3.2], 5.0),
+            Self::FGuessOpen => at(&[0.0, 0.5, 2.2], 4.0),
             Self::FNoMatch => at(&[0.0, 1.4, 2.5, 3.6], 5.4),
+            Self::FRuleOffer => at(&[0.0, 2.4], 4.4),
             Self::ChooseFirst => at(&[0.0, 1.0, 1.7, 2.5, 3.3], 5.1),
             Self::NoRouting => vec![(0.0, Some(0)), (1.8, None), (2.2, Some(1)), (4.0, None)],
             _ => vec![(0.0, Some(0)), (hold, None)],
@@ -244,7 +313,7 @@ impl Proto {
     /// The frame a held scene rests on: the one that shows the idea.
     pub fn held(self) -> usize {
         match self {
-            Self::FUnsure => 1,
+            Self::FGuessOpen => 1,
             Self::ChooseFirst => 2,
             _ => 0,
         }
@@ -267,6 +336,8 @@ enum Lead {
 enum Item {
     /// The done lead: a plain check (or pin) and its text.
     Done(Lead, &'static str),
+    /// A quiet word on why, after the lead ("rule").
+    Why(&'static str),
     /// The recording lead: the dot, the timer, then "→ destination".
     Rec(&'static str, &'static str),
     /// A quiet chip, with a keycap before its label when it has a shortcut.
@@ -323,6 +394,7 @@ impl Item {
         let s = style();
         match self {
             Self::Done(_, text) => DONE_TEXT_X + measure_with(text, s.semibold_text()) + s.lead_trail,
+            Self::Why(text) => measure_with(text, small()) + s.lead_trail * 0.5,
             Self::Rec(clock, dest) => {
                 LEAD_TEXT_X
                     + measure_with(clock, timer_style())
@@ -345,7 +417,7 @@ impl Item {
 
     fn group(self) -> u8 {
         match self {
-            Self::Done(..) | Self::Rec(..) => 0,
+            Self::Done(..) | Self::Why(_) | Self::Rec(..) => 0,
             Self::Close => 3,
             _ => 2,
         }
@@ -355,6 +427,7 @@ impl Item {
     fn key(self) -> String {
         match self {
             Self::Done(..) => "done".into(),
+            Self::Why(_) => "why".into(),
             Self::Rec(..) => "rec".into(),
             // A chip with a key stays itself while its label changes (the undo countdown).
             Self::Chip(_, Some(key)) => format!("chip-{key}"),
@@ -454,15 +527,26 @@ fn list_view(list: List, x: f32, w: f32) -> El {
             n += 1;
         }
     }
-    let keep = if list.suggest == Suggest::Sent { "Keep CONCLAVE" } else { "Keep copied" };
     let quiet = |text: &str| label(text, small(), white(0.5));
+    let room = w - 2.0 * LIST_PAD - 2.0 * 10.0;
+    let send = list.selected_name().map_or("Send".to_owned(), |name| format!("Send to {name}"));
+    let send = ellipsize(&send, small(), room * 0.4);
+    let used = keycap_width("⏎") + 5.0 + measure_with(&send, small()) + FOOTER_GAP;
+    let (keys, second) = if list.offer {
+        ("⇧⏎", format!("Always for {SITE}"))
+    } else if list.suggest == Suggest::Rule {
+        ("esc", "Keep SEER".to_owned())
+    } else {
+        ("esc", "Keep copied".to_owned())
+    };
+    let second = ellipsize(&second, small(), room - used - keycap_width(keys) - 5.0);
     body = body.child(el().h(1.0).w_full().mt(LIST_PAD).fill(veil(0.07))).child(
         row().center_y().h(FOOTER_H).px(10.0).gap(5.0)
-            .child(keycap("return", true))
-            .child(quiet("Send"))
-            .child(el().w(10.0))
-            .child(keycap("esc", true))
-            .child(quiet(keep)),
+            .child(keycap("⏎", true))
+            .child(quiet(&send))
+            .child(el().w(FOOTER_GAP - 10.0))
+            .child(keycap(keys, true))
+            .child(quiet(&second)),
     );
     panel(el().key("list").absolute(x, LIST_Y).size(w, h), w, h, 14.0)
         .clip_rounded(14.0)
@@ -543,6 +627,7 @@ fn draw(item: Item, meter: &Meter) -> El {
             }
             chip.child(label(text, medium(), rgb3(s.secondary)))
         }
+        Item::Why(text) => row().center_y().child(label(text, small(), white(0.42))),
         Item::Hint(keys) => row().center().child(keycap(keys, true)),
         Item::Field(typed) => field(typed),
         Item::Button(text, primary) => {

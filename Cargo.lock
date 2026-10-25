@@ -2407,7 +2407,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.21",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -4560,7 +4560,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -5458,7 +5458,7 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?rev=163ac514e6cd3e135bb6275c10b57d28bd22015d#163ac514e6cd3e135bb6275c10b57d28bd22015d"
+source = "git+https://github.com/anomalyco/rune?rev=3f78d42649ced2b21d9edf464d3ece5abd45f4c4#3f78d42649ced2b21d9edf464d3ece5abd45f4c4"
 dependencies = [
  "arboard",
  "blake3",
@@ -5515,7 +5515,7 @@ dependencies = [
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+https://github.com/anomalyco/rune?rev=163ac514e6cd3e135bb6275c10b57d28bd22015d#163ac514e6cd3e135bb6275c10b57d28bd22015d"
+source = "git+https://github.com/anomalyco/rune?rev=3f78d42649ced2b21d9edf464d3ece5abd45f4c4#3f78d42649ced2b21d9edf464d3ece5abd45f4c4"
 
 [[package]]
 name = "rust-embed"
@@ -7713,7 +7713,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
