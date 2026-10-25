@@ -462,7 +462,15 @@ pub fn phone_target(
 /// native video.
 pub fn build_movie_bundle(
     bundle_dir: &Path,
+    capture: MovieCapture,
+) -> Result<(PathBuf, ScrawlBundle, String)> {
+    build_movie_bundle_with(bundle_dir, capture, None)
+}
+
+fn build_movie_bundle_with(
+    bundle_dir: &Path,
     mut capture: MovieCapture,
+    agent_context: Option<bool>,
 ) -> Result<(PathBuf, ScrawlBundle, String)> {
     let started_at = Instant::now();
     let wav = bundle_dir.join("audio.wav");
@@ -586,6 +594,7 @@ pub fn build_movie_bundle(
         context_changes: capture.context_changes,
         screens: capture.screens,
         flags: capture.flags,
+        agent_context,
         full_frames: (!already_full).then(|| -> crate::pipeline::FullFrames {
             Box::new(move |times: &[u64]| -> Result<Vec<RgbaFrame>> {
                 helper::frames(&movie, FrameTimes::At(times), PHONE_FRAME_EDGE)
@@ -619,9 +628,20 @@ pub fn build_movie_bundle(
 pub fn finalize_live_capture(
     bundle_dir: &Path,
     recording: PhoneRecording,
+    events: Vec<InteractionEvent>,
+    strokes: Vec<Stroke>,
+    note: Option<String>,
+) -> Result<(PathBuf, ScrawlBundle, String)> {
+    finalize_live_capture_for_config(bundle_dir, recording, events, strokes, note, None)
+}
+
+pub fn finalize_live_capture_for_config(
+    bundle_dir: &Path,
+    recording: PhoneRecording,
     mut events: Vec<InteractionEvent>,
     mut strokes: Vec<Stroke>,
     note: Option<String>,
+    engine_cfg: Option<&crate::handoff::EngineConfig>,
 ) -> Result<(PathBuf, ScrawlBundle, String)> {
     events.retain_mut(|event| event.rebase(recording.offset_ms));
     strokes.retain_mut(|stroke| stroke.rebase(recording.offset_ms));
@@ -636,7 +656,7 @@ pub fn finalize_live_capture(
         height: device.height,
         ..Default::default()
     };
-    let built = build_movie_bundle(
+    let built = build_movie_bundle_with(
         bundle_dir,
         MovieCapture {
             movie: recording.movie,
@@ -650,6 +670,7 @@ pub fn finalize_live_capture(
             context_changes: Vec::new(),
             screens: Vec::new(),
         },
+        engine_cfg.map(|cfg| cfg.experiment(crate::handoff::AGENT_CONTEXT)),
     )?;
     // The native video is ~18 Mbps; re-encode it a minute from now (in the app).
     crate::retention::after_phone_capture(&built.0);

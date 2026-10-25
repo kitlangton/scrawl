@@ -197,6 +197,8 @@ pub struct SourceExtras {
     pub video_offset_ms: u64,
     /// Screen-capture auto-crop: `None` follows the config, `Some(None)` is off.
     pub autocrop: Option<Option<autocrop::Settings>>,
+    /// Whether the `agentContext` summary format is enabled (`None` reads `handoff::engine_config()`).
+    pub agent_context: Option<bool>,
     /// Decodes the chosen keyframes again at full quality, for sources that select on small
     /// candidate frames (phone movies).
     pub full_frames: Option<FullFrames>,
@@ -336,6 +338,35 @@ pub fn finalize_capture_bundle_with_flags(
     activity: windows::ActivityLog,
     transcriber: Option<&dyn transcribe::Transcriber>,
 ) -> Result<(PathBuf, ScrawlBundle, String)> {
+    finalize_capture_bundle_for_config(
+        bundle_dir,
+        target,
+        recording,
+        strokes,
+        events,
+        flags,
+        recorded_audio,
+        note,
+        activity,
+        transcriber,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn finalize_capture_bundle_for_config(
+    bundle_dir: &Path,
+    target: TargetInfo,
+    recording: capture::ScreenRecording,
+    strokes: Vec<Stroke>,
+    events: Vec<InteractionEvent>,
+    flags: Vec<u64>,
+    recorded_audio: Option<RecordedAudio>,
+    note: Option<String>,
+    activity: windows::ActivityLog,
+    transcriber: Option<&dyn transcribe::Transcriber>,
+    engine_cfg: Option<&handoff::EngineConfig>,
+) -> Result<(PathBuf, ScrawlBundle, String)> {
     let started_at = activity
         .stop_started
         .unwrap_or_else(std::time::Instant::now);
@@ -375,8 +406,12 @@ pub fn finalize_capture_bundle_with_flags(
         },
     );
     let crop_settings = (target.mode == CaptureMode::Display)
-        .then(autocrop::Settings::configured)
+        .then(|| match engine_cfg {
+            Some(cfg) => autocrop::Settings::from_engine_config(cfg),
+            None => autocrop::Settings::configured(),
+        })
         .flatten();
+    let agent_context = engine_cfg.map(|cfg| cfg.experiment(handoff::AGENT_CONTEXT));
     let ((transcript, transcribe_ms), (predecoded, prepared)) = std::thread::scope(|scope| {
         let transcribe_handle = scope.spawn(|| {
             let t0 = std::time::Instant::now();
@@ -472,6 +507,7 @@ pub fn finalize_capture_bundle_with_flags(
             flags,
             video_offset_ms,
             autocrop: Some(crop_settings),
+            agent_context,
             full_frames: video_path
                 .map(|movie| movie_keyframes_with_cache(movie, video_offset_ms, predecoded)),
             prepared,
@@ -777,7 +813,12 @@ pub fn build_bundle_from_parts(
         autocrop,
         destination: None,
     };
-    let summary = summary_markdown(&bundle, bundle_dir);
+    let summary = match extras.agent_context {
+        Some(agent_context) => {
+            crate::sketch::summary_markdown_with(&bundle, bundle_dir, agent_context)
+        }
+        None => summary_markdown(&bundle, bundle_dir),
+    };
 
     match output {
         BundleOutput::Prepared(prep) => {
