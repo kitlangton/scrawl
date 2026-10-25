@@ -27,7 +27,7 @@ pub struct PhoneDevice {
 /// What Windows lets Scrawl use: the microphone and camera privacy switches. Screen capture,
 /// input monitoring and pasting need no permission.
 pub fn permissions()
--> Result<std::collections::BTreeMap<crate::onboarding::Permission, crate::onboarding::Status>> {
+-> Result<std::collections::BTreeMap<crate::permissions::Permission, crate::permissions::Status>> {
     Ok(crate::win::privacy::permissions())
 }
 

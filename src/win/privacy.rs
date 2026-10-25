@@ -10,7 +10,7 @@ use windows::Win32::System::Registry::{
 use windows::core::PCWSTR;
 
 use super::wide;
-use crate::onboarding::{Permission, Status};
+use crate::permissions::{Permission, Status};
 
 const CONSENT: &str =
     r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore";

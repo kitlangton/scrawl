@@ -34,6 +34,7 @@ pub mod native;
 pub mod onboarding;
 pub mod onboarding_window;
 pub mod page;
+pub mod permissions;
 pub mod phone;
 pub mod pipeline;
 // Lowers the output volume while recording on macOS; elsewhere a no-op.

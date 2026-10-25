@@ -21,7 +21,7 @@ use crate::capture::{
     CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY, CARBON_SHIFT_KEY, ShortcutConfig,
     ShortcutKind, modifier_symbols,
 };
-use crate::onboarding::{Grants, Permission, Status};
+use crate::permissions::{Grants, Permission, Status};
 
 // MARK: Shortcuts in the config
 
@@ -1532,7 +1532,7 @@ impl Session {
                         crate::retention::captures_size(&crate::handoff::default_captures_dir());
                     poll(Event::CapturesSize(size));
                 }
-                if let Some(grants) = crate::onboarding::read_grants()
+                if let Some(grants) = crate::permissions::read_grants()
                     && alive.load(Ordering::Acquire)
                 {
                     poll(Event::Grants(grants));
@@ -1607,9 +1607,7 @@ impl Session {
                 {
                     match serde_json::from_str::<Action>(&line) {
                         Ok(action) => events(Event::Action(action)),
-                        Err(error) => {
-                            crate::log::scrawl_log(format!("settings: {error}: {line}"))
-                        }
+                        Err(error) => crate::log::scrawl_log(format!("settings: {error}: {line}")),
                     }
                 }
             }
@@ -1854,12 +1852,7 @@ mod tests {
     #[test]
     fn a_shortcut_needs_a_real_modifier_and_a_free_key() {
         let paste = ShortcutConfig::default_paste();
-        let ok = validate(
-            ShortcutKind::Record,
-            &pressed(R, CTRL_OPT, "r"),
-            &paste,
-        )
-        .unwrap();
+        let ok = validate(ShortcutKind::Record, &pressed(R, CTRL_OPT, "r"), &paste).unwrap();
         assert_eq!(ok.label, label(CTRL_OPT, "R"));
         assert_eq!(ok.key_label(), "R");
         // Labels follow the platform's order whatever order the bits come in.
@@ -2381,7 +2374,12 @@ mod tests {
         assert_eq!(read_json(&host.path)["appleLocale"], "zh-TW");
         assert_eq!(panel.view(&host).transcriber.apple_locale, "zh-TW");
         assert_eq!(
-            set(&mut panel, &mut host, "appleLocale", "zh-TW --install".into()),
+            set(
+                &mut panel,
+                &mut host,
+                "appleLocale",
+                "zh-TW --install".into()
+            ),
             Effect::None
         );
         assert_eq!(read_json(&host.path)["appleLocale"], "zh-TW");

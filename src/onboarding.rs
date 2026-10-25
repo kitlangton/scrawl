@@ -22,59 +22,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Permission {
-    ScreenRecording,
-    Microphone,
-    /// No longer asked for, shown or read (macOS wants a relaunch after granting it). Kept so
-    /// a config written by 0.3.x, which lists it under `granted`, still loads.
-    InputMonitoring,
-    Accessibility,
-    Camera,
-    /// SFSpeechRecognizer's own permission, for transcripts on macOS 15. Optional, and only on
-    /// the screen when the helper reports it (SpeechAnalyzer on macOS 26 needs none).
-    SpeechRecognition,
-}
-
-impl Permission {
-    /// What a capture needs, in the order the checklist shows them. Screen Recording comes first
-    /// because it's the one that may relaunch Scrawl. Accessibility drives the key event tap
-    /// (⌘Z, Esc) and ⌥⇧V's paste. Camera is asked for when first used.
-    pub const REQUIRED: [Permission; 3] = [
-        Permission::ScreenRecording,
-        Permission::Microphone,
-        Permission::Accessibility,
-    ];
-
-    /// The tour's checklist: the required ones, then Speech Recognition where it's asked for.
-    pub const TOUR: [Permission; 4] = [
-        Permission::ScreenRecording,
-        Permission::Microphone,
-        Permission::Accessibility,
-        Permission::SpeechRecognition,
-    ];
-
-    pub fn required(self) -> bool {
-        Self::REQUIRED.contains(&self)
-    }
-
-    /// Whether this Mac asks for it at all: Speech Recognition only when the helper reports it
-    /// (macOS before 26).
-    pub fn asked(self, grants: Option<&Grants>) -> bool {
-        self != Permission::SpeechRecognition
-            || grants.is_some_and(|g| g.statuses.contains_key(&self))
-    }
-
-    /// Privacy lists the app can be dragged into: Grant flies the drag panel to System
-    /// Settings (`scrawl-helper permission-panel`) instead of raising Apple's prompt.
-    pub fn draggable(self) -> bool {
-        matches!(
-            self,
-            Permission::ScreenRecording | Permission::Accessibility
-        )
-    }
-}
+pub use crate::permissions::{Grants, Permission, Status, read_grants};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -128,40 +76,6 @@ pub enum Tutorial {
     Watched,
     /// The user drew a mark of their own on the demo.
     Practiced,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Status {
-    #[default]
-    NotDetermined,
-    Denied,
-    Granted,
-}
-
-/// What macOS has granted Scrawl, from a fresh `scrawl-helper permissions`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Grants {
-    pub statuses: BTreeMap<Permission, Status>,
-    /// Screen recording is granted, but this running copy of Scrawl can't use it until it
-    /// relaunches.
-    pub screen_needs_relaunch: bool,
-}
-
-impl Grants {
-    pub fn status(&self, permission: Permission) -> Status {
-        self.statuses.get(&permission).copied().unwrap_or_default()
-    }
-
-    pub fn granted(&self, permission: Permission) -> bool {
-        self.status(permission) == Status::Granted
-    }
-
-    /// Granted and usable now (screen recording may need a relaunch first).
-    fn usable(&self, permission: Permission) -> bool {
-        self.granted(permission)
-            && !(permission == Permission::ScreenRecording && self.screen_needs_relaunch)
-    }
 }
 
 /// Once everything a fix asks for is on, its window shows the checks this long, then closes.
@@ -792,22 +706,6 @@ pub enum Event {
     Exited,
 }
 
-/// Reads what's granted now from a fresh helper, plus whether this process can use a Screen
-/// Recording grant yet. Only once the helper says it's granted does this process try a real
-/// ScreenCaptureKit capture (`capture::screen_capture_usable`), so no prompt can come of it.
-pub fn read_grants() -> Option<Grants> {
-    let statuses = crate::helper::permissions()
-        .inspect_err(|error| crate::log::scrawl_log(format!("permissions: {error:#}")))
-        .ok()?;
-    let screen = statuses.get(&Permission::ScreenRecording) == Some(&Status::Granted);
-    let grants = Grants {
-        statuses,
-        screen_needs_relaunch: screen && !crate::capture::screen_capture_usable(true),
-    };
-    crate::speech_model::note_grants(&grants);
-    Some(grants)
-}
-
 /// What draws the welcome window: the SwiftUI `scrawl-helper onboarding` process on macOS, an
 /// in-process GPUI window (`crate::onboarding_window`) on Windows. Both take the same JSON
 /// messages and report the same button actions.
@@ -1121,7 +1019,10 @@ pub fn relaunch() {
     };
     let _ = std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
-        .env(crate::win::shell::RELAUNCHED_BY, std::process::id().to_string())
+        .env(
+            crate::win::shell::RELAUNCHED_BY,
+            std::process::id().to_string(),
+        )
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -1321,7 +1222,8 @@ mod tests {
         let fresh = serde_json::to_value(Flow::tour(Step::Welcome, None).view()).unwrap();
         assert!(fresh["tutorial"].is_null());
         // An older config without the key loads as nothing yet.
-        let old: Progress = serde_json::from_str(r#"{"seen":false,"resume":"how-it-works"}"#).unwrap();
+        let old: Progress =
+            serde_json::from_str(r#"{"seen":false,"resume":"how-it-works"}"#).unwrap();
         assert_eq!(old.tutorial, None);
     }
 
@@ -1462,7 +1364,10 @@ mod tests {
         let relaunch = Effect::Relaunch {
             resume: Some(Step::Permissions),
         };
-        assert_eq!(tick(&mut flow, &granted, 1_000 + RELAUNCH_AFTER_MS), relaunch);
+        assert_eq!(
+            tick(&mut flow, &granted, 1_000 + RELAUNCH_AFTER_MS),
+            relaunch
+        );
         // Never twice from one window.
         assert_eq!(tick(&mut flow, &granted, 9_000), Effect::None);
         assert_eq!(flow.on(Input::Grant(ScreenRecording)), Effect::None);
@@ -1474,7 +1379,10 @@ mod tests {
             Effect::ConfirmScreen
         );
         for t in [5_000, 60_000] {
-            assert_eq!(tick(&mut flow, &grants(&[ScreenRecording]), t), Effect::None);
+            assert_eq!(
+                tick(&mut flow, &grants(&[ScreenRecording]), t),
+                Effect::None
+            );
         }
         assert!(!flow.view().rows[0].reopening);
     }
@@ -1582,7 +1490,10 @@ mod tests {
         assert!(!view.rows[0].reopening && !view.rows[0].relaunch);
         // The next row to do is Microphone.
         assert_eq!(
-            view.rows.iter().find(|r| r.status != Status::Granted).map(|r| r.permission),
+            view.rows
+                .iter()
+                .find(|r| r.status != Status::Granted)
+                .map(|r| r.permission),
             Some(Microphone)
         );
         // macOS's Quit & Reopen: Scrawl never noted a relaunch, but the step it saved while

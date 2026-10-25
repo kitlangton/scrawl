@@ -99,7 +99,7 @@ pub struct PhoneDevice {
 /// What macOS has granted Scrawl, from a fresh helper process (a long-running one can miss a
 /// Screen Recording grant).
 pub fn permissions()
--> Result<std::collections::BTreeMap<crate::onboarding::Permission, crate::onboarding::Status>> {
+-> Result<std::collections::BTreeMap<crate::permissions::Permission, crate::permissions::Status>> {
     run(&[os("permissions")], Duration::from_secs(5))
 }
 
@@ -309,7 +309,10 @@ pub enum FrameTimes<'a> {
 
 /// Decodes movie frames into memory; `max_edge` 0 keeps native size.
 pub fn frames(movie: &Path, times: FrameTimes, max_edge: u32) -> Result<Vec<RgbaFrame>> {
-    let dir = std::env::temp_dir().join(format!("scrawl-frames-{}", crate::pipeline::make_bundle_id()));
+    let dir = std::env::temp_dir().join(format!(
+        "scrawl-frames-{}",
+        crate::pipeline::make_bundle_id()
+    ));
     let (flag, value, sampled) = match times {
         FrameTimes::Every(ms) => ("--every", ms.max(1).to_string(), true),
         FrameTimes::At(times) => {
