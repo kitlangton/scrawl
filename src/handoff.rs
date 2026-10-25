@@ -445,6 +445,11 @@ pub struct Config {
     /// site's OpenCode session (`routing`).
     #[serde(default)]
     pub auto_send: Option<bool>,
+    /// `"steer"` (default) or `"queue"`: whether a capture sent to a busy session joins its
+    /// current turn or waits until the turn ends (`delivery_mode`). Read as a value so a bad
+    /// one can't reset this struct.
+    #[serde(default)]
+    pub delivery: Option<serde_json::Value>,
     /// Feature flag: shows **Export Last Capture as Video…** in the menu (default off).
     #[serde(default)]
     pub video_export: Option<bool>,
@@ -760,6 +765,30 @@ fn routing_paths(
 /// Whether Mac captures of a dev site go straight to its session (`autoSend`, default on).
 pub fn auto_send() -> bool {
     config().auto_send.unwrap_or(true)
+}
+
+/// How a capture enters a busy OpenCode session (`"delivery"`): `"steer"` joins its current
+/// turn, `"queue"` waits until the turn ends. Anything else is logged once and steers.
+pub fn delivery_mode() -> &'static str {
+    if cfg!(test) {
+        return "steer";
+    }
+    delivery_mode_of(config().delivery.as_ref())
+}
+
+fn delivery_mode_of(value: Option<&serde_json::Value>) -> &'static str {
+    match value.and_then(serde_json::Value::as_str) {
+        None if value.is_none() => "steer",
+        Some("steer") => "steer",
+        Some("queue") => "queue",
+        _ => {
+            log_config_once(format!(
+                "config.json: delivery {} isn't \"steer\" or \"queue\"; steering",
+                value.map(ToString::to_string).unwrap_or_default()
+            ));
+            "steer"
+        }
+    }
 }
 
 /// Whether the menu offers video export (`videoExport`, default off). `scrawl export` works
@@ -1517,7 +1546,7 @@ pub fn send_bundle_to_session(bundle_dir: &Path, session: &str) -> Result<()> {
                 "name": "contact-sheet.png",
                 "description": "Scrawl contact sheet: the capture's keyframes in order",
             }],
-            "delivery": "queue",
+            "delivery": delivery_mode(),
         })),
     )?;
     Ok(())
@@ -1942,6 +1971,18 @@ mod tests {
         let config = load_config_from(&path);
         assert_eq!(config.transcriber.as_deref(), Some("command"));
         assert_eq!(config.auto_send, Some(false));
+    }
+
+    #[test]
+    fn captures_steer_unless_delivery_says_queue() {
+        use serde_json::json;
+        assert_eq!(delivery_mode_of(None), "steer");
+        assert_eq!(delivery_mode_of(Some(&json!("steer"))), "steer");
+        assert_eq!(delivery_mode_of(Some(&json!("queue"))), "queue");
+        assert_eq!(delivery_mode_of(Some(&json!("later"))), "steer");
+        assert_eq!(delivery_mode_of(Some(&json!(true))), "steer");
+        let config: Config = serde_json::from_str(r#"{"delivery": 3, "autoSend": false}"#).unwrap();
+        assert_eq!(config.auto_send, Some(false), "a bad delivery keeps the other keys");
     }
 
     #[test]
