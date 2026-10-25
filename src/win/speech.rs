@@ -36,7 +36,7 @@ pub const PARAKEET: Artifact = Artifact {
 };
 
 fn models_dir() -> PathBuf {
-    crate::hex::support_dir().join("models")
+    crate::transcribe::hex_support_dir().join("models")
 }
 
 /// Where Scrawl keeps the model it downloaded (`SCRAWL_MODELS_DIR` for tests).
@@ -76,7 +76,7 @@ pub fn installed_models() -> Vec<PathBuf> {
 }
 
 fn hex_models() -> Vec<PathBuf> {
-    let chosen = std::fs::read(crate::hex::support_dir().join("settings.json"))
+    let chosen = std::fs::read(crate::transcribe::hex_support_dir().join("settings.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|settings| {
@@ -125,7 +125,8 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
         std::fs::read(audio).with_context(|| format!("Could not read {}", audio.display()))?;
     let samples = crate::audio::decode_wav_16k(&wav)?;
     let duration_ms = samples.len() as u64 / KHZ;
-    let mut clips = crate::hex::plan_clips(&crate::audio::speech_islands(&samples), duration_ms);
+    let mut clips =
+        crate::transcribe::plan_clips(&crate::audio::speech_islands(&samples), duration_ms);
     if clips.is_empty() && duration_ms >= 480 {
         clips.push((0, duration_ms));
     }
@@ -174,7 +175,7 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
             .collect();
         if words.is_empty() {
             // No word times from this model: spread the text over the clip, and say so.
-            let (segments, words) = crate::hex::spread_words(&text, start, end);
+            let (segments, words) = crate::transcribe::spread_words(&text, start, end);
             transcript.estimated = true;
             transcript.segments.extend(segments);
             transcript.words.extend(words);

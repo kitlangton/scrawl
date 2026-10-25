@@ -22,7 +22,11 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
 use crate::audio::{self, RecordedAudio};
-use crate::model::{TranscriptData, TranscriptSegment, WordTiming};
+use crate::model::TranscriptData;
+pub use crate::transcribe::{
+    DEFAULT_LANGUAGE, MAX_CLIPS, hex_support_dir as support_dir, language_code, plan_clips,
+    spread_words,
+};
 
 /// Tried in this order when no model is configured. Anything else is the user's explicit pick.
 pub const PREFERRED_MODELS: [&str; 4] = [
@@ -32,23 +36,6 @@ pub const PREFERRED_MODELS: [&str; 4] = [
     "whisper_large_v3_turbo",
 ];
 
-/// Keep the previous English default; Hex, not Scrawl, validates model/language support.
-pub const DEFAULT_LANGUAGE: &str = "en";
-
-/// Accept language-code syntax without maintaining another list of Hex's languages.
-/// Blank resets to English; disallow query delimiters before constructing the API URL.
-pub fn language_code(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Some(DEFAULT_LANGUAGE.into());
-    }
-    (value.len() <= 35
-        && value
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
-        && value.as_bytes()[0].is_ascii_alphabetic())
-    .then(|| value.to_ascii_lowercase())
-}
 const SAMPLE_RATE_KHZ: u64 = 16;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(300);
 const QUICK_READ_TIMEOUT: Duration = Duration::from_secs(2);
@@ -61,10 +48,6 @@ const BUSY_RETRIES: u32 = 5;
 const BUSY_BACKOFF: Duration = Duration::from_millis(200);
 
 const MIN_ISLAND_MS: u64 = 120;
-const MERGE_GAP_MS: u64 = 700;
-const MAX_MERGED_MS: u64 = 30_000;
-const MAX_FORCED_MERGE_MS: u64 = 8 * 60_000;
-const MAX_CLIPS: usize = 24;
 /// Extra audio on each side of an island sent to Hex, so edge words aren't clipped.
 const CLIP_PAD_MS: u64 = 200;
 
@@ -86,28 +69,6 @@ struct Discovery {
     port: u16,
     token: String,
     api_version: String,
-}
-
-/// Hex's support folder, as Hex's `app_paths::support_dir` resolves it: `~/Library/Application
-/// Support/hex` on macOS (`voice-control` before Hex moved it), `%APPDATA%\voice-control` on Windows.
-pub fn support_dir() -> PathBuf {
-    std::env::var_os("HEX_APPLICATION_SUPPORT_DIR")
-        .map(PathBuf::from)
-        .filter(|dir| !dir.as_os_str().is_empty())
-        .unwrap_or_else(|| {
-            let data = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-            let legacy = data.join("voice-control");
-            // Hex on macOS moved its data from voice-control to hex, leaving a symlink; an
-            // unmigrated voice-control folder stays in use. Windows keeps voice-control.
-            if cfg!(target_os = "macos")
-                && (std::fs::read_link(&legacy).is_ok_and(|target| target.ends_with("hex"))
-                    || !legacy.exists())
-            {
-                data.join("hex")
-            } else {
-                legacy
-            }
-        })
 }
 
 pub fn discovery_path() -> PathBuf {
@@ -455,79 +416,27 @@ pub fn watch() {
         });
 }
 
-/// Speech spans worth one request each: tiny blips dropped, near neighbours joined so a clip
-/// holds whole phrases, and never more than `MAX_CLIPS`.
-pub fn plan_clips(islands: &[(u64, u64)], duration_ms: u64) -> Vec<(u64, u64)> {
-    let mut clips: Vec<(u64, u64)> = Vec::new();
-    for &(start, end) in islands {
-        let (start, end) = (start.min(duration_ms), end.min(duration_ms));
-        if end.saturating_sub(start) < MIN_ISLAND_MS {
-            continue;
-        }
-        match clips.last_mut() {
-            Some(last)
-                if start.saturating_sub(last.1) < MERGE_GAP_MS && end - last.0 <= MAX_MERGED_MS =>
-            {
-                last.1 = end;
-            }
-            _ => clips.push((start, end)),
-        }
-    }
-    while clips.len() > MAX_CLIPS {
-        let Some(index) = (1..clips.len())
-            .filter(|&i| clips[i].1 - clips[i - 1].0 <= MAX_FORCED_MERGE_MS)
-            .min_by_key(|&i| clips[i].0 - clips[i - 1].1)
-        else {
-            break;
+#[derive(Clone, Debug, Default)]
+pub struct HexTranscriber {
+    pub model: Option<String>,
+    pub language: Option<String>,
+}
+
+impl crate::transcribe::Transcriber for HexTranscriber {
+    fn transcribe(&self, wav_path: &Path, duration_ms: u64) -> Option<TranscriptData> {
+        let wav_bytes = std::fs::read(wav_path).ok()?;
+        let audio = RecordedAudio {
+            wav_bytes,
+            duration_ms,
+            sample_count: (duration_ms.saturating_mul(SAMPLE_RATE_KHZ)) as usize,
+            live: crate::live_transcribe::Slot::default(),
         };
-        clips[index - 1].1 = clips[index].1;
-        clips.remove(index);
+        let client = Client::connect().ok()?;
+        let models = client.models().ok()?;
+        let model = pick_model(&models, self.model.as_deref())?;
+        let language = self.language.as_deref().unwrap_or(DEFAULT_LANGUAGE);
+        transcribe_audio(&client, &model, language, &audio).ok()
     }
-    clips
-}
-
-fn ends_sentence(word: &str) -> bool {
-    word.trim_end_matches(['"', '\'', '”', '’', ')', ']'])
-        .ends_with(['.', '!', '?', ';', ':'])
-}
-
-/// Spreads `text` over `start..end`, each word's share weighted by its length. Words tile the
-/// span exactly (no gaps, no overlap), so the first begins at `start` and the last ends at `end`.
-pub fn spread_words(text: &str, start: u64, end: u64) -> (Vec<TranscriptSegment>, Vec<WordTiming>) {
-    let tokens: Vec<&str> = text.split_whitespace().collect();
-    let end = end.max(start);
-    let total: u128 = tokens
-        .iter()
-        .map(|token| token.chars().count().max(1) as u128)
-        .sum();
-    let mut words: Vec<WordTiming> = Vec::with_capacity(tokens.len());
-    let mut segments = Vec::new();
-    let mut segment_start = 0;
-    let mut weight: u128 = 0;
-    for (index, token) in tokens.iter().enumerate() {
-        let at = |weight: u128| start + (u128::from(end - start) * weight / total) as u64;
-        let t0 = at(weight);
-        weight += token.chars().count().max(1) as u128;
-        words.push(WordTiming {
-            t0,
-            t1: at(weight),
-            text: (*token).to_owned(),
-        });
-        if ends_sentence(token) || index + 1 == tokens.len() {
-            let phrase = &words[segment_start..];
-            segments.push(TranscriptSegment {
-                t0: phrase[0].t0,
-                t1: phrase[phrase.len() - 1].t1,
-                text: phrase
-                    .iter()
-                    .map(|word| word.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            });
-            segment_start = words.len();
-        }
-    }
-    (segments, words)
 }
 
 /// Transcribes each clip with `send` (given that clip's WAV) and spreads its words over it.
@@ -850,8 +759,13 @@ mod tests {
         assert_eq!(method, "POST");
         assert_eq!(path, "/transcriptions?model=m&language=nl");
         assert_eq!(length, 4);
-        assert!(fake.requests.lock().unwrap().iter()
-            .all(|(_, path, _)| path == "/transcriptions?model=m&language=nl"));
+        assert!(
+            fake.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(_, path, _)| path == "/transcriptions?model=m&language=nl")
+        );
 
         let refused = fake_hex(|_, _, _| (409, r#"{"code":"model-not-ready"}"#.into()));
         assert!(matches!(

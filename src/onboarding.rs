@@ -17,7 +17,7 @@
 //! tour comes back on the same screen. Input Monitoring is never asked for: clicks come from an
 //! AppKit mouse monitor that needs no permission, keys from an Accessibility event tap.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -1070,6 +1070,8 @@ pub fn relaunch() {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     use Permission::{Accessibility, Camera, InputMonitoring, Microphone, ScreenRecording};

@@ -20,6 +20,7 @@ mod feature_map;
 pub mod handoff;
 #[cfg_attr(target_os = "windows", path = "win/helper.rs")]
 pub mod helper;
+#[cfg(feature = "hex-client")]
 pub mod hex;
 pub mod icons;
 pub mod inbox;

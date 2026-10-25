@@ -4,13 +4,175 @@
 //! (`crate::command_transcriber`). Any Hex or command trouble falls back to Apple for that
 //! recording.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use anyhow::Result;
 
 use crate::audio::RecordedAudio;
-use crate::model::TranscriptData;
+use crate::model::{TranscriptData, TranscriptSegment, WordTiming};
+
+/// Keep the previous English default; Hex, not Scrawl, validates model/language support.
+pub const DEFAULT_LANGUAGE: &str = "en";
+
+/// Accept language-code syntax without maintaining another list of Hex's languages.
+/// Blank resets to English; disallow query delimiters before constructing the API URL.
+pub fn language_code(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Some(DEFAULT_LANGUAGE.into());
+    }
+    (value.len() <= 35
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        && value.as_bytes()[0].is_ascii_alphabetic())
+    .then(|| value.to_ascii_lowercase())
+}
+
+const MIN_ISLAND_MS: u64 = 120;
+const MERGE_GAP_MS: u64 = 700;
+const MAX_MERGED_MS: u64 = 30_000;
+const MAX_FORCED_MERGE_MS: u64 = 8 * 60_000;
+pub const MAX_CLIPS: usize = 24;
+
+/// Hex's support folder, as Hex's `app_paths::support_dir` resolves it: `~/Library/Application
+/// Support/hex` on macOS (`voice-control` before Hex moved it), `%APPDATA%\voice-control` on Windows.
+pub fn hex_support_dir() -> PathBuf {
+    std::env::var_os("HEX_APPLICATION_SUPPORT_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or_else(|| {
+            let data = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+            let legacy = data.join("voice-control");
+            if cfg!(target_os = "macos")
+                && (std::fs::read_link(&legacy).is_ok_and(|target| target.ends_with("hex"))
+                    || !legacy.exists())
+            {
+                data.join("hex")
+            } else {
+                legacy
+            }
+        })
+}
+
+/// Speech spans worth one request each: tiny blips dropped, near neighbours joined so a clip
+/// holds whole phrases, and never more than `MAX_CLIPS`.
+pub fn plan_clips(islands: &[(u64, u64)], duration_ms: u64) -> Vec<(u64, u64)> {
+    let mut clips: Vec<(u64, u64)> = Vec::new();
+    for &(start, end) in islands {
+        let (start, end) = (start.min(duration_ms), end.min(duration_ms));
+        if end.saturating_sub(start) < MIN_ISLAND_MS {
+            continue;
+        }
+        match clips.last_mut() {
+            Some(last)
+                if start.saturating_sub(last.1) < MERGE_GAP_MS && end - last.0 <= MAX_MERGED_MS =>
+            {
+                last.1 = end;
+            }
+            _ => clips.push((start, end)),
+        }
+    }
+    while clips.len() > MAX_CLIPS {
+        let Some(index) = (1..clips.len())
+            .filter(|&i| clips[i].1 - clips[i - 1].0 <= MAX_FORCED_MERGE_MS)
+            .min_by_key(|&i| clips[i].0 - clips[i - 1].1)
+        else {
+            break;
+        };
+        clips[index - 1].1 = clips[index].1;
+        clips.remove(index);
+    }
+    clips
+}
+
+fn ends_sentence(word: &str) -> bool {
+    word.trim_end_matches(['"', '\'', '”', '’', ')', ']'])
+        .ends_with(['.', '!', '?', ';', ':'])
+}
+
+/// Spreads `text` over `start..end`, each word's share weighted by its length. Words tile the
+/// span exactly (no gaps, no overlap), so the first begins at `start` and the last ends at `end`.
+pub fn spread_words(text: &str, start: u64, end: u64) -> (Vec<TranscriptSegment>, Vec<WordTiming>) {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let end = end.max(start);
+    let total: u128 = tokens
+        .iter()
+        .map(|token| token.chars().count().max(1) as u128)
+        .sum();
+    let mut words: Vec<WordTiming> = Vec::with_capacity(tokens.len());
+    let mut segments = Vec::new();
+    let mut segment_start = 0;
+    let mut weight: u128 = 0;
+    for (index, token) in tokens.iter().enumerate() {
+        let at = |weight: u128| start + (u128::from(end - start) * weight / total) as u64;
+        let t0 = at(weight);
+        weight += token.chars().count().max(1) as u128;
+        words.push(WordTiming {
+            t0,
+            t1: at(weight),
+            text: (*token).to_owned(),
+        });
+        if ends_sentence(token) || index + 1 == tokens.len() {
+            let phrase = &words[segment_start..];
+            segments.push(TranscriptSegment {
+                t0: phrase[0].t0,
+                t1: phrase[phrase.len() - 1].t1,
+                text: phrase
+                    .iter()
+                    .map(|word| word.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            });
+            segment_start = words.len();
+        }
+    }
+    (segments, words)
+}
+
+/// Pluggable speech-to-text engine returning words with start/end times (`WordTiming`) and an
+/// `estimated` flag (`TranscriptData::estimated`: `false` for measured word times that can cut
+/// spoken-cue keyframes, `true` when word times are estimated across speech islands).
+pub trait Transcriber: Send + Sync {
+    fn transcribe(&self, wav_path: &Path, duration_ms: u64) -> Option<TranscriptData>;
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AppleTranscriber {
+    pub locale: Option<String>,
+}
+
+impl Transcriber for AppleTranscriber {
+    fn transcribe(&self, wav_path: &Path, _duration_ms: u64) -> Option<TranscriptData> {
+        Some(apple(wav_path))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CommandTranscriber {
+    pub program: crate::command_transcriber::Program,
+}
+
+impl Transcriber for CommandTranscriber {
+    fn transcribe(&self, wav_path: &Path, duration_ms: u64) -> Option<TranscriptData> {
+        let sample_count = (duration_ms.saturating_mul(16)) as usize;
+        match crate::command_transcriber::transcribe(
+            &self.program,
+            wav_path,
+            sample_count,
+            &mut |line| crate::log::scrawl_log(line),
+        ) {
+            Ok(transcript) => Some(transcript),
+            Err(error) => {
+                crate::log::scrawl_log(format!(
+                    "Command transcription failed, using {LOCAL_ENGINE_TITLE}: {error:#}"
+                ));
+                None
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Engine {
@@ -86,6 +248,7 @@ pub struct MenuState {
     pub models: Vec<(String, String, bool)>,
 }
 
+#[cfg(feature = "hex-client")]
 pub fn menu_state(
     preferred: Engine,
     status: Option<&crate::hex::Status>,
@@ -160,6 +323,27 @@ pub fn transcribe(wav: Option<&Path>, audio: Option<&RecordedAudio>) -> Transcri
     )
 }
 
+/// Transcribes `wav` using an explicit `Transcriber` implementation (such as a host app's own
+/// speech engine).
+pub fn transcribe_with(
+    wav: Option<&Path>,
+    audio: Option<&RecordedAudio>,
+    transcriber: &dyn Transcriber,
+) -> TranscriptData {
+    let (Some(wav), Some(audio)) = (wav, audio.filter(|audio| audio.sample_count > 0)) else {
+        return TranscriptData {
+            source: "none".into(),
+            ..Default::default()
+        };
+    };
+    transcriber
+        .transcribe(wav, audio.duration_ms)
+        .unwrap_or_else(|| TranscriptData {
+            source: "offline".into(),
+            ..Default::default()
+        })
+}
+
 /// The transcript made while recording, or `None` (logged) to transcribe the WAV instead.
 fn finish_live(
     live: crate::live_transcribe::Live,
@@ -229,6 +413,7 @@ fn try_command(wav: &Path, audio: &RecordedAudio) -> Result<Option<TranscriptDat
     Ok(Some(transcript))
 }
 
+#[cfg(feature = "hex-client")]
 fn try_hex(audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
     let not_connected = |reason: String| {
         LOGGED_NOT_CONNECTED.call_once(|| {
@@ -248,6 +433,16 @@ fn try_hex(audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
         return not_connected("no ready model".into());
     };
     crate::hex::transcribe_audio(&client, &model, &crate::handoff::hex_language(), audio).map(Some)
+}
+
+#[cfg(not(feature = "hex-client"))]
+fn try_hex(_audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
+    LOGGED_NOT_CONNECTED.call_once(|| {
+        crate::log::scrawl_log(format!(
+            "Hex preferred but hex-client feature is disabled; using {LOCAL_ENGINE_TITLE}"
+        ));
+    });
+    Ok(None)
 }
 
 fn apple(wav: &Path) -> TranscriptData {
@@ -327,6 +522,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "hex-client")]
     fn menu_follows_what_recordings_would_use() {
         use crate::hex::{Model, Status};
         let status = |models: Vec<Model>| Status {

@@ -897,8 +897,8 @@ pub fn hex_language_from(config: &EngineConfig) -> String {
     config
         .hex_language
         .as_deref()
-        .and_then(crate::hex::language_code)
-        .unwrap_or_else(|| crate::hex::DEFAULT_LANGUAGE.into())
+        .and_then(crate::transcribe::language_code)
+        .unwrap_or_else(|| crate::transcribe::DEFAULT_LANGUAGE.into())
 }
 
 /// The configured Apple Speech locale, or the Mac's own language when unset.

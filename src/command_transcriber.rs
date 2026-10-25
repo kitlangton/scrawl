@@ -461,12 +461,12 @@ fn parse(
     transcript.words = if words.is_empty() {
         // No word times: spread the text over each segment, else over the recording.
         let mut spread: Vec<WordTiming> = if segments.is_empty() {
-            crate::hex::spread_words(text, 0, audio_ms).1
+            crate::transcribe::spread_words(text, 0, audio_ms).1
         } else {
             segments
                 .iter()
                 .flat_map(|segment| {
-                    crate::hex::spread_words(&segment.text, segment.t0, segment.t1).1
+                    crate::transcribe::spread_words(&segment.text, segment.t0, segment.t1).1
                 })
                 .collect()
         };
