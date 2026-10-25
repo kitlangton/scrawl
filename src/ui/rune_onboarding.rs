@@ -142,6 +142,11 @@ impl Default for State {
 }
 
 impl State {
+    /// Whether the tour shows Back (and takes ⌘[ or ←).
+    fn can_go_back(&self) -> bool {
+        self.index > 0 && !self.fix && self.step != "done"
+    }
+
     /// The demo has played through (or been drawn on): its button reads Continue, not Skip.
     fn tutorial_seen(&self) -> bool {
         matches!(self.tutorial.as_deref(), Some("watched" | "practiced"))
@@ -1387,6 +1392,12 @@ fn permission_info(permission: &str, paste: &str) -> (&'static rune::Icon, Strin
 
 // MARK: Building blocks
 
+/// Reachable with Tab (with Full Keyboard Access on, as AppKit does) and pressed with Space,
+/// with macOS's keyboard-only accent ring.
+fn focus(e: El, enabled: bool) -> El {
+    e.focusable(enabled).focus_ring(3.0, 0.0, Rgba::hex(0x0A84FF).alpha(0.5).color())
+}
+
 fn primary_button(title: &str, enabled: bool, quiet: bool, action: String, reduce: bool) -> El {
     let red = enabled && !quiet;
     let base = if red {
@@ -1401,7 +1412,8 @@ fn primary_button(title: &str, enabled: bool, quiet: bool, action: String, reduc
     // Disabled: 0.55, then the plain button style's own half, composited in sRGB like SwiftUI.
     let dim = |c: Rgba| if enabled { c } else { c.alpha(0.55 * 0.5).over_rgba(CANVAS) };
     let fill = dim(base);
-    el().key("primary")
+    focus(el(), enabled)
+        .key("primary")
         .h(34.0)
         .min_w(180.0)
         .px(22.0)
@@ -1425,9 +1437,12 @@ fn primary_button(title: &str, enabled: bool, quiet: bool, action: String, reduc
 }
 
 fn quiet_button(title: &str, action: &'static str) -> El {
-    el().h(22.0)
+    focus(el(), true)
+        .role("button")
+        .h(22.0)
         .px(10.0)
         .center()
+        .radius(6.0)
         .cursor(rune::Cursor::Pointer)
         .child(label(title, 12.0, 500.0, MUTED.over(CANVAS)))
         .on_press(move |s: &mut OnboardingWin| s.send(action))
@@ -1437,7 +1452,9 @@ fn row_button(title: &str, prominent: bool, permission: &str) -> El {
     let fill = if prominent { INK } else { Rgba::WHITE.alpha(0.10).over_rgba(SURFACE) };
     let p = permission.to_owned();
     let layout = permission.to_owned();
-    el().h(26.0)
+    focus(el(), true)
+        .role("button")
+        .h(26.0)
         .px(12.0)
         .center()
         .radius(13.0)
@@ -1858,7 +1875,7 @@ fn footer(s: &OnboardingWin) -> El {
             .collect::<Vec<_>>();
         bottom = bottom.child(row().gap(6.0).center_y().children(dots));
     }
-    if st.index > 0 && !st.fix && st.step != "done" {
+    if st.can_go_back() {
         bottom = bottom.child(quiet_button("Back", "back").absolute(0.0, 0.0));
     }
     f.child(bottom)
@@ -1948,9 +1965,34 @@ fn hand_back_keys() {
 }
 
 fn on_key(s: &mut OnboardingWin, key: &rune::KeyEvent, tx: &mut Tx) -> bool {
-    if matches!(key.key, rune::Key::Command('w')) || (key.mods.cmd && matches!(key.key, rune::Key::Text(ref c) if c == "w")) {
-        tx.close_window();
-        return true;
+    let plain = !key.mods.cmd && !key.mods.alt && !key.mods.ctrl && !key.mods.shift;
+    match key.key {
+        // No close button, so Rune's standard Close doesn't reach this window.
+        rune::Key::Command('w') => {
+            tx.close_window();
+            return true;
+        }
+        rune::Key::Command('q') => {
+            tx.quit();
+            return true;
+        }
+        rune::Key::Command(',') => {
+            s.send("settings");
+            return true;
+        }
+        rune::Key::Escape if plain && s.state.fix => {
+            s.send("later");
+            return true;
+        }
+        rune::Key::Command('[') if s.state.can_go_back() => {
+            s.send("back");
+            return true;
+        }
+        rune::Key::Left if plain && s.state.can_go_back() => {
+            s.send("back");
+            return true;
+        }
+        _ => {}
     }
     if matches!(key.key, rune::Key::Enter) && !key.mods.cmd {
         let st = &s.state;
@@ -2007,6 +2049,7 @@ pub(crate) fn install<S: 'static>(app: &mut App<S>) {
         })
         .chrome(CHROME)
         .srgb_blend(true)
+        .tab_visits_controls(true)
         .on_focus(on_focus);
     spec.app = spec.app.on_close(on_close);
     let (handle, _window) = app.window(spec);
@@ -2414,5 +2457,58 @@ mod tests {
         assert!(spring_step(2.0, 1.0, 0.4) > 0.999);
         let mark = geo::mark_path(1.0);
         assert_eq!(mark.len(), 81);
+    }
+
+    fn keyboard(name: &str) -> (rune::Runtime<OnboardingWin>, Arc<std::sync::Mutex<Vec<String>>>) {
+        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut win = OnboardingWin::new();
+        win.state = sample_state(name).0;
+        let log = Arc::clone(&sent);
+        win.events = Some(Arc::new(move |event| {
+            if let crate::onboarding::Event::Action(action) = event {
+                log.lock().unwrap().push(action);
+            }
+        }));
+        let mut rt = rune::Runtime::new(win, view, (WIDTH, HEIGHT), rune::Env::new(true, 2.0));
+        rt.on_key = Some(on_key);
+        rt.set_full_keyboard_access(false);
+        rt.set_tab_visits_controls(true);
+        rt.frame(0.0);
+        (rt, sent)
+    }
+
+    fn press(rt: &mut rune::Runtime<OnboardingWin>, key: rune::Key, mods: rune::Mods) {
+        rt.key(rune::KeyEvent { key, mods });
+        rt.frame(0.0);
+    }
+
+    #[test]
+    fn keys_send_not_now_back_and_settings() {
+        let cmd = rune::Mods { cmd: true, ..Default::default() };
+        let (mut rt, sent) = keyboard("fix-camera");
+        press(&mut rt, rune::Key::Left, Default::default());
+        press(&mut rt, rune::Key::Escape, Default::default());
+        press(&mut rt, rune::Key::Command(','), cmd);
+        assert_eq!(*sent.lock().unwrap(), ["later", "settings"], "a fix has no Back");
+
+        let (mut rt, sent) = keyboard("how-it-works");
+        press(&mut rt, rune::Key::Escape, Default::default());
+        press(&mut rt, rune::Key::Command('['), cmd);
+        press(&mut rt, rune::Key::Left, Default::default());
+        assert_eq!(*sent.lock().unwrap(), ["back", "back"], "Esc only means Not now in a fix");
+
+        let (mut rt, sent) = keyboard("welcome");
+        press(&mut rt, rune::Key::Left, Default::default());
+        assert!(sent.lock().unwrap().is_empty(), "the first step has no Back");
+    }
+
+    #[test]
+    fn tab_and_space_press_the_buttons() {
+        let (mut rt, sent) = keyboard("fix-camera");
+        press(&mut rt, rune::Key::Tab, Default::default());
+        let focused = rt.elements().into_iter().find(|e| e.focused).expect("a button takes focus");
+        assert!(focused.focus_visible);
+        press(&mut rt, rune::Key::Text(" ".into()), Default::default());
+        assert_eq!(sent.lock().unwrap().len(), 1, "{:?}", sent.lock().unwrap());
     }
 }

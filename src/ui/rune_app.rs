@@ -11,9 +11,10 @@ use std::time::{Duration, Instant};
 use rune::color::srgb_decode;
 use rune::{
     App, AppHandle, AppSpec, Chrome, Color, Cursor, Cx, DisplayTarget, Drag, El, Image, ImageCache,
-    Key, KeyEvent, KeyPolicy, LineCap, NativeDisplayId, OverlayHandle, OverlayInput, OverlayLevel,
-    OverlayOptions, OverlayPlacement, OverlaySpec, Path, Phase, PointerPress, RunOptions,
-    ScrollSpec, Shape, TextStyle, Tx, Waker, WindowOptions, WindowSpec, canvas, col, el, row, text,
+    Key, KeyEvent, KeyPolicy, LineCap, MenuItem, NativeDisplayId, OverlayHandle, OverlayInput,
+    OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Path, Phase, PointerPress,
+    RunOptions, ScrollSpec, Shape, TextStyle, Tx, Waker, WindowOptions, WindowSpec, canvas, col,
+    el, row, text,
 };
 
 use super::rune_pill::{Capsule, PANEL_H, PANEL_W, PANEL_Y, Surface};
@@ -634,6 +635,31 @@ fn picker_view(s: &PickerState, _cx: &mut Cx<PickerState>) -> El {
     root
 }
 
+fn command_key(event: &KeyEvent) -> Option<char> {
+    let m = event.mods;
+    let other_ctrl = if cfg!(target_os = "macos") {
+        m.ctrl
+    } else {
+        m.logo
+    };
+    if other_ctrl || m.alt || m.shift {
+        return None;
+    }
+    match &event.key {
+        Key::Command(ch) => Some(ch.to_ascii_lowercase()),
+        Key::Text(ch) if m.cmd => ch.chars().next().map(|c| c.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
+fn event_key_str<'a>(key: &'a Key, buf: &'a mut [u8; 4]) -> Option<&'a str> {
+    match key {
+        Key::Text(ch) => Some(ch.as_str()),
+        Key::Command(ch) => Some(ch.encode_utf8(buf)),
+        _ => None,
+    }
+}
+
 fn picker_on_key(s: &mut PickerState, event: &KeyEvent, tx: &mut Tx) -> bool {
     let repeat = tx.key_repeat();
     if !s.still {
@@ -647,6 +673,10 @@ fn picker_on_key(s: &mut PickerState, event: &KeyEvent, tx: &mut Tx) -> bool {
     let has_iphone = s.snapshot.has_iphone;
     match &event.key {
         Key::Escape => {
+            s.snapshot.active = false;
+            s.snapshot.drag = None;
+        }
+        _ if command_key(event) == Some('w') => {
             s.snapshot.active = false;
             s.snapshot.drag = None;
         }
@@ -722,6 +752,13 @@ fn screens_match(a: &[crate::screens::Screen], b: &[crate::screens::Screen]) -> 
         })
 }
 
+#[derive(Debug, Clone)]
+enum SelectedRecord {
+    Iphone,
+    FullScreen,
+    Target(TargetInfo),
+}
+
 struct RuneCoordinator {
     telemetry: Arc<SharedCaptureTelemetry>,
     ui_receiver: Option<flume::Receiver<LiveOverlayEvent>>,
@@ -788,6 +825,8 @@ struct RuneCoordinator {
     shortcut: crate::shortcut::Shortcut,
     hold_mods: u64,
     should_quit: bool,
+    #[cfg(test)]
+    settings_requested: bool,
 }
 
 impl RuneCoordinator {
@@ -886,6 +925,8 @@ impl RuneCoordinator {
             shortcut: crate::shortcut::Shortcut::default(),
             hold_mods: 0,
             should_quit: false,
+            #[cfg(test)]
+            settings_requested: false,
         }
     }
 
@@ -1359,7 +1400,43 @@ impl RuneCoordinator {
         self.selected_keyframe = 0;
     }
 
+    fn copy_review_bundle(&mut self) -> bool {
+        let Some((dir, _)) = self.review_bundle.as_ref().map(|(d, b)| (d.clone(), b)) else {
+            return false;
+        };
+        let res = if cfg!(test) {
+            Ok(())
+        } else {
+            crate::handoff::copy_bundle_to_clipboard(&dir)
+        };
+        if res.is_ok() {
+            self.mark_handled(&dir);
+        }
+        self.review_status = Some(match res {
+            Ok(()) => "Copied ✓".into(),
+            Err(e) => format!("Copy failed: {e}"),
+        });
+        true
+    }
+
+    fn step_keyframe(&mut self, delta: isize) -> bool {
+        let len = self
+            .review_bundle
+            .as_ref()
+            .map_or(0, |(_, b)| b.keyframes.len());
+        if len == 0 {
+            return false;
+        }
+        self.selected_tab = ReviewTab::Keyframes;
+        let cur = self.selected_keyframe.min(len - 1) as isize;
+        self.selected_keyframe = (cur + delta).clamp(0, len as isize - 1) as usize;
+        true
+    }
+
     fn open_onboarding(&mut self, flow: crate::onboarding::Flow) {
+        if cfg!(test) {
+            return;
+        }
         self.onboarding = None;
         let sender = self.telemetry.ui_sender.clone();
         let events = move |event| {
@@ -1372,22 +1449,31 @@ impl RuneCoordinator {
     }
 
     fn open_settings(&mut self, pane: Option<crate::settings::Pane>) {
-        if let Some(session) = self.settings.as_mut() {
-            session.show(pane);
+        #[cfg(test)]
+        {
+            let _ = pane;
+            self.settings_requested = true;
             return;
         }
-        let sender = self.telemetry.ui_sender.clone();
-        let events = move |event| {
-            let _ = sender.send(LiveOverlayEvent::Settings(event));
-        };
-        match crate::settings::Session::open(pane, self.grants.clone(), events) {
-            Ok(mut session) => {
-                session.sync(&crate::settings::AppHost {
-                    telemetry: &self.telemetry,
-                });
-                self.settings = Some(session);
+        #[cfg(not(test))]
+        {
+            if let Some(session) = self.settings.as_mut() {
+                session.show(pane);
+                return;
             }
-            Err(error) => scrawl_log(format!("Settings could not open: {error:#}")),
+            let sender = self.telemetry.ui_sender.clone();
+            let events = move |event| {
+                let _ = sender.send(LiveOverlayEvent::Settings(event));
+            };
+            match crate::settings::Session::open(pane, self.grants.clone(), events) {
+                Ok(mut session) => {
+                    session.sync(&crate::settings::AppHost {
+                        telemetry: &self.telemetry,
+                    });
+                    self.settings = Some(session);
+                }
+                Err(error) => scrawl_log(format!("Settings could not open: {error:#}")),
+            }
         }
     }
 
@@ -1522,6 +1608,7 @@ impl RuneCoordinator {
             }
         };
         match effect {
+            Effect::ShowSettings => self.open_settings(None),
             Effect::Close | Effect::Settings => {
                 if effect == Effect::Settings {
                     self.open_settings(None);
@@ -1854,25 +1941,52 @@ impl RuneCoordinator {
         }
     }
 
+    fn resolve_selected_record(&mut self) -> Option<SelectedRecord> {
+        match self.selection_mode()? {
+            SelectionMode::Iphone => Some(SelectedRecord::Iphone),
+            SelectionMode::Screen => Some(SelectedRecord::FullScreen),
+            SelectionMode::Window => {
+                if self.windows_loading {
+                    return None;
+                }
+                let target = self.hovered_window.clone().or_else(|| {
+                    let [x, y] = self.selection_pointer.or_else(current_mouse_screen)?;
+                    selectable_window_at(&self.selectable_windows, f64::from(x), f64::from(y))
+                        .cloned()
+                })?;
+                Some(SelectedRecord::Target(target))
+            }
+            SelectionMode::Area => {
+                let (start, end) = self.selection_drag?;
+                let [x, y, w, h] = area_rect(start, end, self.display_rect)?;
+                self.selection_drag = None;
+                Some(SelectedRecord::Target(region_target(
+                    x,
+                    y,
+                    w,
+                    h,
+                    &self.selectable_windows,
+                )))
+            }
+        }
+    }
+
     fn record_selected_mode(&mut self) {
-        match self.selection_mode() {
-            Some(SelectionMode::Iphone) => self.start_recording_iphone(),
-            Some(_) => self.start_recording_full_screen(),
+        match self.resolve_selected_record() {
+            Some(SelectedRecord::Iphone) => self.start_recording_iphone(),
+            Some(SelectedRecord::FullScreen) => self.start_recording_full_screen(),
+            Some(SelectedRecord::Target(target)) => self.start_recording_with_target(target),
             None => {}
         }
     }
 
     fn handle_app_key_event(&mut self, event: &KeyEvent) -> bool {
-        let m = event.mods;
-        if !m.cmd || m.ctrl || m.alt || m.shift {
-            return false;
-        }
-        match &event.key {
-            Key::Text(ch) if ch.eq_ignore_ascii_case("q") => {
+        match command_key(event) {
+            Some('q') => {
                 self.should_quit = true;
                 true
             }
-            Key::Text(ch) if ch == "," => {
+            Some(',') => {
                 if self.is_selecting() {
                     self.cancel_recording();
                 }
@@ -1888,7 +2002,7 @@ impl RuneCoordinator {
         let Some(mode) = self.selection_mode() else {
             return false;
         };
-        if event.key == Key::Escape {
+        if event.key == Key::Escape || command_key(event) == Some('w') {
             self.cancel_recording();
             return true;
         }
@@ -1896,7 +2010,8 @@ impl RuneCoordinator {
             return true;
         }
         let m = event.mods;
-        if let Key::Text(ref ch) = event.key
+        let mut key_buf = [0u8; 4];
+        if let Some(ch) = event_key_str(&event.key, &mut key_buf)
             && let Some(cfg) = shortcut_from_key_and_mods(ch, m.cmd, m.ctrl, m.alt, m.shift)
             && self
                 .telemetry
@@ -1907,7 +2022,7 @@ impl RuneCoordinator {
             }
             return true;
         }
-        if m.cmd || m.ctrl || m.alt {
+        if m.cmd || m.ctrl || m.alt || matches!(event.key, Key::Command(_)) {
             return false;
         }
         let has_iphone = self.iphone.is_some();
@@ -2303,7 +2418,7 @@ impl RuneCoordinator {
     fn send_after_undo(&mut self, dir: PathBuf, dest: crate::model::Destination) {
         self.pending_send = Some(dir.clone());
         if self.completed_dir.as_deref() == Some(dir.as_path()) {
-            self.completed_note = Some(format!("Sending to {}…", island_title(&dest.title)));
+            self.completed_note = Some(sending_to_note(&dest.title));
             self.sync_rune_pill();
         }
         let tx = self.events_tx.clone();
@@ -2341,15 +2456,16 @@ impl RuneCoordinator {
 
     fn send_completed(&mut self, dir: PathBuf, dest: crate::model::Destination) {
         let title = island_title(&dest.title);
+        let sending = sending_to_note(&dest.title);
         if self.completed_dir.as_deref() == Some(dir.as_path()) {
-            self.completed_note = Some(format!("Sending to {title}…"));
+            self.completed_note = Some(sending.clone());
         }
         if self
             .review_bundle
             .as_ref()
             .is_some_and(|(shown, _)| *shown == dir)
         {
-            self.review_status = Some(format!("Sending to {title}…"));
+            self.review_status = Some(sending);
         }
         self.sync_rune_pill();
         let tx = self.events_tx.clone();
@@ -3284,7 +3400,8 @@ fn review_on_key(s: &mut ReviewState, event: &KeyEvent, tx: &mut Tx) -> bool {
             return true;
         }
         let m = event.mods;
-        if let Key::Text(ref ch) = event.key
+        let mut key_buf = [0u8; 4];
+        if let Some(ch) = event_key_str(&event.key, &mut key_buf)
             && let Some(cfg) = shortcut_from_key_and_mods(ch, m.cmd, m.ctrl, m.alt, m.shift)
         {
             update_global_shortcut(&s.coord.telemetry, cfg);
@@ -3299,7 +3416,8 @@ fn review_on_key(s: &mut ReviewState, event: &KeyEvent, tx: &mut Tx) -> bool {
         return true;
     }
     let m = event.mods;
-    if let Key::Text(ref ch) = event.key
+    let mut key_buf = [0u8; 4];
+    if let Some(ch) = event_key_str(&event.key, &mut key_buf)
         && let Some(cfg) = shortcut_from_key_and_mods(ch, m.cmd, m.ctrl, m.alt, m.shift)
         && s.coord
             .telemetry
@@ -3310,15 +3428,19 @@ fn review_on_key(s: &mut ReviewState, event: &KeyEvent, tx: &mut Tx) -> bool {
         }
         return true;
     }
-    let is_close = event.key == Key::Escape
-        || (m.cmd
-            && !m.ctrl
-            && !m.alt
-            && !m.shift
-            && matches!(&event.key, Key::Text(ch) if ch.eq_ignore_ascii_case("w")));
-    if is_close {
+    if command_key(event) == Some('c') {
+        return s.coord.copy_review_bundle();
+    }
+    if event.key == Key::Escape {
         tx.close_window();
         return true;
+    }
+    if !m.cmd && !m.ctrl && !m.alt && !m.shift {
+        match event.key {
+            Key::Left => return s.coord.step_keyframe(-1),
+            Key::Right => return s.coord.step_keyframe(1),
+            _ => {}
+        }
     }
     false
 }
@@ -3504,7 +3626,6 @@ fn review_view(s: &ReviewState, cx: &mut Cx<ReviewState>) -> El {
     let selected_kf = s.coord.selected_keyframe;
     let recording_shortcut = s.coord.recording_shortcut_key;
     let status = s.coord.review_status.as_deref();
-    let copy_dir = dir.clone();
     let reveal_dir = dir.clone();
 
     let stage_content = match tab {
@@ -3727,15 +3848,8 @@ fn review_view(s: &ReviewState, cx: &mut Cx<ReviewState>) -> El {
                             },
                             None,
                             true,
-                            move |state| {
-                                let res = crate::handoff::copy_bundle_to_clipboard(&copy_dir);
-                                if res.is_ok() {
-                                    state.coord.mark_handled(&copy_dir);
-                                }
-                                state.coord.review_status = Some(match res {
-                                    Ok(()) => "Copied ✓".into(),
-                                    Err(e) => format!("Copy failed: {e}"),
-                                });
+                            |state| {
+                                state.coord.copy_review_bundle();
                             },
                         )),
                 ),
@@ -4030,6 +4144,8 @@ fn run_headless(
             drag_regions: true,
         })
         .accessory()
+        .standard_menus()
+        .tab_visits_controls(true)
         .init(move || {
             let mut state = dummy_review_init();
             state.coord.review_bundle = initial_bundle;
@@ -4107,8 +4223,28 @@ pub fn run_app(
             drag_regions: true,
         })
         .accessory()
+        .standard_menus()
+        .tab_visits_controls(true)
         .keep_running()
         .on_close(on_review_close)
+        .menu_item(
+            MenuItem::new("Settings…", |s: &mut ReviewState, _tx: &mut Tx| {
+                if s.coord.is_selecting() {
+                    s.coord.cancel_recording();
+                }
+                s.coord.open_settings(None);
+            })
+            .id("settings")
+            .key_equivalent("cmd+comma".parse().expect("cmd+comma shortcut")),
+        )
+        .menu_item(
+            MenuItem::new("Quit Scrawl", |s: &mut ReviewState, tx: &mut Tx| {
+                s.coord.should_quit = true;
+                tx.quit();
+            })
+            .id("quit")
+            .key_equivalent("cmd+q".parse().expect("cmd+q shortcut")),
+        )
         .args(Vec::<String>::new());
     if initial_bundle.is_none() {
         app = app.windowless();
@@ -4309,6 +4445,11 @@ pub fn run_app(
     stop_ticker.store(true, Ordering::Relaxed);
 }
 
+fn sending_to_note(title: &str) -> String {
+    let short = island_title(title);
+    format!("Sending to {}…", short.trim_end_matches('…'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4324,6 +4465,9 @@ mod tests {
         );
         assert_eq!(pill.hidden_since, Some(f64::NEG_INFINITY));
         assert!(!pill.shown);
+        assert_eq!(sending_to_note("DESKTOP"), "Sending to DESKTOP…");
+        let long_sending = sending_to_note("Make Mac captures route to the site session");
+        assert!(long_sending.ends_with('…') && !long_sending.ends_with("……"));
         assert_eq!(ALL_SCENES.len(), PICKER_SCENES.len() + REVIEW_SCENES.len());
         let mut picker = dummy_picker_init();
         for &(name, apply) in PICKER_SCENES {
@@ -4365,5 +4509,183 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1));
         review.coord.step_island();
         assert!(matches!(review.coord.island_phase, IslandPhase::Hidden));
+    }
+
+    #[test]
+    fn shortcuts_and_picker_modes_behave_as_expected() {
+        let cmd_mods = rune::Mods {
+            cmd: true,
+            logo: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
+            ..Default::default()
+        };
+        let cmd_event = |c: char| KeyEvent {
+            key: Key::Command(c),
+            mods: cmd_mods,
+        };
+        assert_eq!(command_key(&cmd_event('w')), Some('w'));
+        assert_eq!(command_key(&cmd_event('q')), Some('q'));
+        assert_eq!(command_key(&cmd_event(',')), Some(','));
+        assert_eq!(command_key(&cmd_event('c')), Some('c'));
+        assert_eq!(
+            command_key(&KeyEvent {
+                key: Key::Command('w'),
+                mods: rune::Mods {
+                    shift: true,
+                    ..cmd_mods
+                },
+            }),
+            None
+        );
+
+        // Review window: ⌘, opens Settings, ⌘Q quits, ⌘C copies, ←/→ step keyframes
+        // (Close ⌘W is handled by Rune's App::standard_menus() default close path).
+        let mut review = dummy_review_init();
+        let mut tx = Tx::default();
+        assert!(cmd_event('w').is_command('w'));
+        assert!(!review_on_key(&mut review, &cmd_event('c'), &mut tx));
+
+        review_scene_contact_sheet(&mut review);
+        let kf_len = review
+            .coord
+            .review_bundle
+            .as_ref()
+            .map_or(0, |(_, b)| b.keyframes.len());
+        assert!(kf_len >= 2, "demo bundle must have at least 2 keyframes");
+        assert_eq!(review.coord.selected_tab, ReviewTab::ContactSheet);
+        assert_eq!(review.coord.selected_keyframe, 0);
+
+        let right_ev = KeyEvent {
+            key: Key::Right,
+            mods: rune::Mods::default(),
+        };
+        let left_ev = KeyEvent {
+            key: Key::Left,
+            mods: rune::Mods::default(),
+        };
+        assert!(review_on_key(&mut review, &right_ev, &mut tx));
+        assert_eq!(review.coord.selected_tab, ReviewTab::Keyframes);
+        assert_eq!(review.coord.selected_keyframe, 1);
+        assert!(review_on_key(&mut review, &left_ev, &mut tx));
+        assert_eq!(review.coord.selected_keyframe, 0);
+        assert!(review_on_key(&mut review, &left_ev, &mut tx));
+        assert_eq!(review.coord.selected_keyframe, 0);
+
+        assert!(review_on_key(&mut review, &cmd_event('c'), &mut tx));
+        assert_eq!(review.coord.review_status.as_deref(), Some("Copied ✓"));
+
+        assert!(review_on_key(&mut review, &cmd_event(','), &mut tx));
+        assert!(review.coord.settings_requested);
+        assert!(!review.coord.should_quit);
+        assert!(review_on_key(&mut review, &cmd_event('q'), &mut tx));
+        assert!(review.coord.should_quit);
+
+        // Picker: ⌘W cancels, ⌘, cancels and opens Settings, ⌘Q quits.
+        let mut picker = dummy_picker_init();
+        picker_scene_window(&mut picker);
+        assert!(picker.snapshot.active);
+        assert!(picker_on_key(&mut picker, &cmd_event('w'), &mut tx));
+        assert!(!picker.snapshot.active);
+
+        let mut review = dummy_review_init();
+        review.coord.set_island_phase(IslandPhase::Selecting {
+            mode: SelectionMode::Window,
+        });
+        assert!(
+            review
+                .coord
+                .handle_selection_key_event(&cmd_event('w'), false)
+        );
+        assert!(!review.coord.is_selecting());
+
+        review.coord.set_island_phase(IslandPhase::Selecting {
+            mode: SelectionMode::Area,
+        });
+        assert!(
+            review
+                .coord
+                .handle_selection_key_event(&cmd_event(','), false)
+        );
+        assert!(!review.coord.is_selecting());
+        assert!(review.coord.settings_requested);
+
+        // Picker Return / S target resolution per mode:
+        // Window mode records hovered_window (never falls back to full screen when none is hovered).
+        review.coord.set_island_phase(IslandPhase::Selecting {
+            mode: SelectionMode::Window,
+        });
+        review.coord.hovered_window = None;
+        review.coord.selectable_windows.clear();
+        review.coord.selection_pointer = Some([50.0, 50.0]);
+        assert!(review.coord.resolve_selected_record().is_none());
+        let win = sample_windows().into_iter().next().expect("sample window");
+        review.coord.hovered_window = Some(win.clone());
+        match review.coord.resolve_selected_record() {
+            Some(SelectedRecord::Target(t)) => {
+                assert_eq!(t.mode, CaptureMode::Window);
+                assert_eq!(t.window_id, win.window_id);
+            }
+            other => panic!("expected window target, got {other:?}"),
+        }
+
+        // Area mode waits for a drawn area, then records that region.
+        review.coord.set_island_phase(IslandPhase::Selecting {
+            mode: SelectionMode::Area,
+        });
+        review.coord.selection_drag = None;
+        assert!(review.coord.resolve_selected_record().is_none());
+        review.coord.selection_drag = Some(([100.0, 120.0], [420.0, 360.0]));
+        match review.coord.resolve_selected_record() {
+            Some(SelectedRecord::Target(t)) => {
+                assert_eq!(t.mode, CaptureMode::Region);
+                assert_eq!(
+                    [t.frame.x, t.frame.y, t.frame.width, t.frame.height],
+                    [100.0, 120.0, 320.0, 240.0]
+                );
+            }
+            other => panic!("expected region target, got {other:?}"),
+        }
+
+        // Screen and iPhone modes resolve to FullScreen and Iphone.
+        review.coord.set_island_phase(IslandPhase::Selecting {
+            mode: SelectionMode::Screen,
+        });
+        assert!(matches!(
+            review.coord.resolve_selected_record(),
+            Some(SelectedRecord::FullScreen)
+        ));
+        review.coord.set_island_phase(IslandPhase::Selecting {
+            mode: SelectionMode::Iphone,
+        });
+        assert!(matches!(
+            review.coord.resolve_selected_record(),
+            Some(SelectedRecord::Iphone)
+        ));
+
+        #[cfg(target_os = "macos")]
+        {
+            use crate::capture::{CARBON_CMD_KEY, CARBON_CONTROL_KEY, ShortcutConfig};
+            use objc2_app_kit::NSEventModifierFlags;
+
+            let (key, mask) =
+                super::super::platform::menu_shortcut_equivalent(&ShortcutConfig::default_record());
+            assert_eq!(key, "s");
+            assert_eq!(
+                mask,
+                NSEventModifierFlags::Option | NSEventModifierFlags::Shift
+            );
+
+            let custom = ShortcutConfig {
+                key_code: 15,
+                carbon_modifiers: CARBON_CONTROL_KEY | CARBON_CMD_KEY,
+                label: "⌃⌘R".into(),
+            };
+            let (key, mask) = super::super::platform::menu_shortcut_equivalent(&custom);
+            assert_eq!(key, "r");
+            assert_eq!(
+                mask,
+                NSEventModifierFlags::Control | NSEventModifierFlags::Command
+            );
+        }
     }
 }
