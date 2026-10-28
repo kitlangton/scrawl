@@ -623,6 +623,8 @@ pub struct View {
     pub auto_send: bool,
     pub shortcuts: Vec<ShortcutView>,
     pub microphone: MicrophoneView,
+    /// Show what the microphone hears while recording (`liveAudio`).
+    pub live_audio: bool,
     pub transcriber: TranscriberView,
     pub lower_playback: bool,
     pub playback_level: u8,
@@ -958,7 +960,8 @@ fn shortcut_view(
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum Action {
-    /// A settings control: `launchAtLogin`, `autoSend`, `videoExport`, `lowerPlayback` (bool),
+    /// A settings control: `launchAtLogin`, `autoSend`, `videoExport`, `lowerPlayback`,
+    /// `liveAudio` (bool),
     /// `playbackLevel` (u8), `microphone` ("default" or a device id), `transcriber`
     /// ("apple"/"hex"/"command"), `hexModel` (an id), `hexLanguage` (a code), `appleLocale`
     /// (a locale id or "auto"), `retention` (a preset id).
@@ -1193,9 +1196,10 @@ impl Panel {
                     return Effect::OpenLoginItems;
                 }
             }
-            ("autoSend" | "videoExport" | "lowerPlayback", serde_json::Value::Bool(on)) => {
-                write(key, (*on).into())
-            }
+            (
+                "autoSend" | "videoExport" | "lowerPlayback" | "liveAudio",
+                serde_json::Value::Bool(on),
+            ) => write(key, (*on).into()),
             ("playbackLevel", serde_json::Value::Number(level))
                 if level.as_u64().is_some_and(|n| n <= 100) =>
             {
@@ -1348,6 +1352,7 @@ impl Panel {
                 self.inputs.as_ref(),
                 self.status(Permission::Microphone) == Status::Granted,
             ),
+            live_audio: config.live_audio.unwrap_or(false),
             lower_playback: config.lower_playback.unwrap_or(false),
             playback_level: config.recording_volume(),
             transcriber: TranscriberView {
@@ -2317,6 +2322,13 @@ mod tests {
         set(&mut panel, &mut host, "playbackLevel", 0.5.into());
         assert!(Panel::default().view(&host).lower_playback);
         assert_eq!(Panel::default().view(&host).playback_level, 35);
+        assert!(!panel.view(&host).live_audio);
+        set(&mut panel, &mut host, "liveAudio", true.into());
+        assert!(Panel::default().view(&host).live_audio);
+        set(&mut panel, &mut host, "liveAudio", "yes".into());
+        assert!(Panel::default().view(&host).live_audio);
+        set(&mut panel, &mut host, "liveAudio", false.into());
+        assert!(!Panel::default().view(&host).live_audio);
         set(&mut panel, &mut host, "autoSend", false.into());
         set(&mut panel, &mut host, "videoExport", true.into());
         set(&mut panel, &mut host, "transcriber", "hex".into());

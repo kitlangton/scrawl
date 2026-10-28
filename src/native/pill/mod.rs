@@ -39,13 +39,27 @@ use objc2_quartz_core::{CALayer, CATransaction};
 
 use self::atlas::{GlyphAtlas, IconKind};
 use self::model::{
-    CHIP_H, CHIP_PX, ElemId, FrameState, PANEL_H, PANEL_W, PillModel, Pres,
+    CAPTION_LINE, CAPTION_LINES, CAPTION_PX, CAPTION_W, CHIP_H, CHIP_PX, ElemId, FrameState,
+    ISLAND_INSET, PANEL_H, PANEL_W, PillModel, Pres, WAVE_W,
 };
 use crate::ui::{SelectionMode, motion};
 
 const OFFSCREEN_W_PT: f32 = 960.0;
 const OFFSCREEN_H_PT: f32 = 256.0;
 const TILE_PAD_PT: f32 = 20.0;
+
+// The waveform (`ElemId::Wave`): one bar per `live_audio::BUCKET`, newest at the right, scrolling
+// left as the next one fills; silence is a row of dots.
+const BAR_W: f32 = 2.0;
+const BAR_PITCH: f32 = 4.0;
+const BAR_MIN_H: f32 = 2.0;
+const BAR_MAX_H: f32 = 20.0;
+const WAVE_PAD: f32 = 6.0;
+const WAVE_BARS: usize = ((WAVE_W - 2.0 * WAVE_PAD) / BAR_PITCH) as usize + 1;
+/// The live words wrap at this width whatever the row's, so they don't reflow as it changes.
+const CAPTION_TEXT_W: f32 = CAPTION_W + 2.0 * ISLAND_INSET - 2.0 * CAPTION_PX;
+/// The waveform redraws at most this often (the timer and springs draw as they need).
+const WAVE_FRAME: std::time::Duration = std::time::Duration::from_millis(16);
 
 unsafe extern "C" {
     static _dispatch_main_q: c_void;
@@ -272,6 +286,29 @@ impl MetalPipelines {
     }
 }
 
+/// What the live audio elements draw this frame (`live_audio`).
+#[derive(Clone, Debug, Default)]
+struct LiveDraw {
+    /// Oldest first; `WAVE_BARS` of them.
+    bars: Vec<f32>,
+    /// The bar being filled and how far it is (0…1).
+    filling: f32,
+    progress: f32,
+    /// The microphone is sending nothing.
+    stalled: bool,
+    /// No words yet: the row says it's listening.
+    placeholder: bool,
+}
+
+/// The live words as last laid out (`live_audio::wrap`).
+#[derive(Default)]
+struct CaptionView {
+    feed: u64,
+    version: Option<u64>,
+    start: usize,
+    placeholder: bool,
+}
+
 struct PillRuntimeState {
     model: PillModel,
     pipelines: MetalPipelines,
@@ -286,6 +323,12 @@ struct PillRuntimeState {
     press_down_elem: Option<ElemId>,
     paste_drag_start_screen: Option<[f32; 2]>,
     action_tx: flume::Sender<PillAction>,
+    levels: crate::live_audio::Levels,
+    caption: CaptionView,
+    /// A recording is showing its audio now.
+    live_active: bool,
+    wave_pending: bool,
+    drawn_at: std::time::Instant,
 }
 
 // Accessed only on the main thread (guarded by `MainThreadMarker::new()` in `tick_main`).
@@ -401,6 +444,11 @@ impl NativePill {
                 press_down_elem: None,
                 paste_drag_start_screen: None,
                 action_tx,
+                levels: Default::default(),
+                caption: CaptionView::default(),
+                live_active: false,
+                wave_pending: false,
+                drawn_at: std::time::Instant::now(),
             }),
             tick_queued: AtomicBool::new(false),
             alive: AtomicBool::new(true),
@@ -675,6 +723,7 @@ impl SharedNativePill {
 
         // Poll mouse cursor and button state for hover, press squish, click, and Paste drag.
         st.poll_pointer_and_input();
+        st.poll_live();
 
         let now = motion::now();
         let raw_dt = (now - st.last_tick_now).max(0.0) as f32;
@@ -687,7 +736,8 @@ impl SharedNativePill {
 
         let animating = !st.model.is_at_rest()
             || matches!(st.model.pres, Pres::Processing);
-        if !animating && !st.dirty {
+        let wave_due = st.wave_pending && st.drawn_at.elapsed() >= WAVE_FRAME;
+        if !animating && !st.dirty && !wave_due {
             if motion::tracing() && !st.model.is_fully_hidden() {
                 let frame = st.model.frame();
                 st.emit_trace(&frame);
@@ -709,6 +759,62 @@ impl SharedNativePill {
 }
 
 impl PillRuntimeState {
+    /// Reads what the recording heard since the last frame, and lays out its words when they
+    /// changed (`live_audio`).
+    fn poll_live(&mut self) {
+        let feed = crate::live_audio::current();
+        self.live_active = feed.is_some();
+        let Some(feed) = feed else {
+            return;
+        };
+        if self.levels.update(&feed, std::time::Instant::now()) {
+            self.wave_pending = true;
+        }
+        let Some(caption) = &feed.caption else {
+            return;
+        };
+        if self.caption.feed != feed.id {
+            self.caption = CaptionView {
+                feed: feed.id,
+                ..CaptionView::default()
+            };
+        }
+        let text = {
+            let caption = caption
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.caption.version == Some(caption.version) {
+                return;
+            }
+            self.caption.version = Some(caption.version);
+            caption.text()
+        };
+        let (start, mut lines) = crate::live_audio::wrap(
+            &text,
+            self.caption.start,
+            CAPTION_TEXT_W,
+            CAPTION_LINES,
+            atlas::measure_caption,
+        );
+        self.caption.start = start;
+        self.caption.placeholder = lines.is_empty();
+        if lines.is_empty() {
+            lines.push("Listening…".to_owned());
+        }
+        self.pipelines.atlas.update_caption(&lines);
+        self.dirty = true;
+    }
+
+    fn live_draw(&self) -> LiveDraw {
+        LiveDraw {
+            bars: self.levels.bars(WAVE_BARS).collect(),
+            filling: self.levels.filling(),
+            progress: self.levels.progress(),
+            stalled: self.live_active && self.levels.stalled(std::time::Instant::now()),
+            placeholder: self.caption.placeholder,
+        }
+    }
+
     fn poll_pointer_and_input(&mut self) {
         if self.model.is_fully_hidden() {
             if !self.ignores_mouse {
@@ -873,7 +979,12 @@ impl PillRuntimeState {
         let Some(drawable) = self.pipelines.layer.next_drawable() else {
             return;
         };
-        let cmd = self.pipelines.encode(frame, use_glass, drawable.texture());
+        self.wave_pending = false;
+        self.drawn_at = std::time::Instant::now();
+        let live = self.live_draw();
+        let cmd = self
+            .pipelines
+            .encode(frame, use_glass, &live, drawable.texture());
 
         // Synchronize `NSGlassEffectView` geometry and Metal drawable presentation in one CATransaction.
         CATransaction::begin();
@@ -922,6 +1033,7 @@ impl MetalPipelines {
         &self,
         frame: &FrameState,
         use_glass: bool,
+        live: &LiveDraw,
         target: &metal::TextureRef,
     ) -> metal::CommandBuffer {
         let mut prims: Vec<TilePrim> = Vec::with_capacity(frame.elems.len() * 3);
@@ -950,6 +1062,7 @@ impl MetalPipelines {
                 elem,
                 [slot_x + TILE_PAD_PT, slot_y + TILE_PAD_PT],
                 frame.t,
+                live,
                 &mut prims,
             );
 
@@ -1119,6 +1232,7 @@ fn emit_elem_prims(
     elem: &model::FrameElem,
     [ox, oy]: [f32; 2],
     t: f32,
+    live: &LiveDraw,
     out: &mut Vec<TilePrim>,
 ) {
     let [bw, bh] = elem.base_size;
@@ -1334,6 +1448,74 @@ fn emit_elem_prims(
                 [fg, fg, fg, 1.0],
             );
         }
+        ElemId::Wave => {
+            // Bar `k` from the right: 0 is the one filling (sliding in), 1 the newest whole one.
+            let right = ox + bw - WAVE_PAD;
+            let left = ox + WAVE_PAD;
+            let n = live.bars.len();
+            let levels = live
+                .bars
+                .iter()
+                .copied()
+                .chain(std::iter::once(live.filling));
+            for (i, level) in levels.enumerate() {
+                let k = (n - i) as f32;
+                let x = right - BAR_W - (k - 1.0 + live.progress) * BAR_PITCH;
+                if x < left - BAR_W {
+                    continue;
+                }
+                let enter = ((right + BAR_PITCH - BAR_W - x) / BAR_PITCH).clamp(0.0, 1.0);
+                let leave = ((x - left) / 12.0).clamp(0.0, 1.0);
+                let (h, rgb, a) = if live.stalled {
+                    // Nothing is coming from the microphone: a flat red line.
+                    (BAR_MIN_H, [0.941, 0.267, 0.220], 0.8)
+                } else {
+                    let level = level.clamp(0.0, 1.0);
+                    (
+                        BAR_MIN_H + (BAR_MAX_H - BAR_MIN_H) * level,
+                        [0.961, 0.961, 0.969],
+                        0.36 + 0.6 * (level * 2.0).min(1.0),
+                    )
+                };
+                let a = a * enter * leave;
+                if a > 0.004 {
+                    push_shape(
+                        out,
+                        [x, oy + (bh - h) * 0.5, BAR_W, h],
+                        BAR_W * 0.5,
+                        [rgb[0], rgb[1], rgb[2], a],
+                    );
+                }
+            }
+        }
+        ElemId::Caption => {
+            push_shape(
+                out,
+                [
+                    ox + CAPTION_PX - 2.0,
+                    oy,
+                    bw - 2.0 * (CAPTION_PX - 2.0),
+                    1.0,
+                ],
+                0.5,
+                [1.0, 1.0, 1.0, 0.09],
+            );
+            let fg = if live.placeholder { 0.55 } else { 0.92 };
+            for (i, sp) in atlas.caption_sprites.iter().enumerate() {
+                // Sprites carry 2 pt of padding on every side.
+                push_sprite(
+                    out,
+                    [
+                        ox + CAPTION_PX - 2.0,
+                        oy + 2.5 + i as f32 * CAPTION_LINE,
+                        sp.size_pt[0],
+                        sp.size_pt[1],
+                    ],
+                    sp.uv,
+                    [fg, fg, fg, 1.0],
+                );
+            }
+        }
         ElemId::DividerLead | ElemId::DividerClose => {
             push_shape(
                 out,
@@ -1423,6 +1605,16 @@ mod tests {
         pres: &Pres,
         seconds: f32,
     ) -> crate::model::RgbaFrame {
+        still_live(pipelines, model, pres, seconds, &LiveDraw::default())
+    }
+
+    fn still_live(
+        pipelines: &mut MetalPipelines,
+        model: &mut PillModel,
+        pres: &Pres,
+        seconds: f32,
+        live: &LiveDraw,
+    ) -> crate::model::RgbaFrame {
         if let Pres::Completed { label, routes } = pres {
             let mut labels = model.labels;
             labels.completed = pipelines.atlas.update_completed(label).size_pt[0];
@@ -1450,7 +1642,7 @@ mod tests {
         desc.set_storage_mode(metal::MTLStorageMode::Shared);
         desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
         let target = pipelines._device.new_texture(&desc);
-        let cmd = pipelines.encode(&frame, false, &target);
+        let cmd = pipelines.encode(&frame, false, live, &target);
         cmd.commit();
         cmd.wait_until_completed();
         let mut bgra = vec![0_u8; (w * h * 4) as usize];
@@ -1483,6 +1675,128 @@ mod tests {
             height: h as u32,
             rgba,
             badge_top_right: false,
+        }
+    }
+
+    /// The recording capsule showing what the microphone hears (`live_audio`), drawn offscreen.
+    /// With `SCRAWL_PILL_STILLS=DIR` the stills are written there.
+    #[test]
+    fn live_audio_renders_offscreen() {
+        let mut pipelines = MetalPipelines::new(2.0).expect("MetalPipelines::new failed");
+        let mut model = PillModel::new(atlas::measure_metrics());
+        let recording = |chips, wave, caption| Pres::Recording {
+            chips,
+            has_iphone: false,
+            live: model::Rows { wave, caption },
+        };
+        // Speech with a pause in it.
+        let speech: Vec<f32> = (0..WAVE_BARS)
+            .map(|i| {
+                let t = i as f32 * 0.55;
+                let pause = (9..13).contains(&i);
+                if pause {
+                    0.0
+                } else {
+                    (0.45 + 0.4 * t.sin() * (t * 0.37).cos()).clamp(0.05, 1.0)
+                }
+            })
+            .collect();
+        let talking = LiveDraw {
+            bars: speech,
+            filling: 0.7,
+            progress: 0.4,
+            stalled: false,
+            placeholder: false,
+        };
+        let quiet = LiveDraw {
+            bars: vec![0.0; WAVE_BARS],
+            ..LiveDraw::default()
+        };
+        let dead = LiveDraw {
+            stalled: true,
+            ..quiet.clone()
+        };
+        let listening = LiveDraw {
+            placeholder: true,
+            ..quiet.clone()
+        };
+        let said = "Okay so the checkout button runs out of its card on narrow windows, and the \
+                    total doesn't update when I change the quantity here";
+        let (_, words) = crate::live_audio::wrap(
+            said,
+            0,
+            CAPTION_TEXT_W,
+            CAPTION_LINES,
+            atlas::measure_caption,
+        );
+        assert_eq!(words.len(), CAPTION_LINES);
+        assert!(
+            words
+                .iter()
+                .all(|l| atlas::measure_caption(l) <= CAPTION_TEXT_W)
+        );
+        let states: [(&str, Pres, &LiveDraw, Vec<String>); 6] = [
+            (
+                "live-1-talking",
+                recording(false, true, false),
+                &talking,
+                vec![],
+            ),
+            (
+                "live-2-silence",
+                recording(false, true, false),
+                &quiet,
+                vec![],
+            ),
+            (
+                "live-3-no-signal",
+                recording(false, true, false),
+                &dead,
+                vec![],
+            ),
+            (
+                "live-4-listening",
+                recording(false, true, true),
+                &listening,
+                vec!["Listening…".into()],
+            ),
+            (
+                "live-5-words",
+                recording(false, true, true),
+                &talking,
+                words.clone(),
+            ),
+            ("live-6-chips", recording(true, true, true), &talking, words),
+        ];
+        let out = std::env::var_os("SCRAWL_PILL_STILLS").map(std::path::PathBuf::from);
+        if let Some(dir) = &out {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let px = |frame: &crate::model::RgbaFrame, x: f32, y: f32| {
+            let (x, y) = ((x * 2.0) as usize, (y * 2.0) as usize);
+            let i = (y * frame.width as usize + x) * 4;
+            [frame.rgba[i], frame.rgba[i + 1], frame.rgba[i + 2]]
+        };
+        for (name, pres, live, lines) in &states {
+            pipelines.atlas.update_caption(lines);
+            let frame = still_live(&mut pipelines, &mut model, pres, 1.5, live);
+            assert!(model.is_at_rest(), "{name} didn't settle");
+            let (lay, items) = model::layout_of(pres, "0:00", model.labels, &model.metrics);
+            // The capsule reaches down over the words' row only when it shows.
+            let below = px(&frame, lay.r - 8.0, model::TOP + model::ISLAND_H + 16.0);
+            let caption = matches!(pres, Pres::Recording { live, .. } if live.caption);
+            assert_eq!(below[0] < 0x30, caption, "{name}: {below:?}");
+            // A dead microphone draws its line red; a working one never does.
+            let wave = items.iter().find(|i| i.id == ElemId::Wave).unwrap().rect;
+            let red = (0..wave[2] as usize).any(|dx| {
+                let [r, g, _] = px(&frame, wave[0] + dx as f32, wave[1] + wave[3] * 0.5);
+                r > g.saturating_add(60)
+            });
+            assert_eq!(red, live.stalled, "{name}");
+            assert!(lay.b < PANEL_H);
+            if let Some(dir) = &out {
+                crate::render::save_png(&frame, &dir.join(format!("{name}.png"))).unwrap();
+            }
         }
     }
 

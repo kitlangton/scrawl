@@ -168,9 +168,9 @@ granted and each on-demand sheet: `target/debug/scrawl-helper onboarding --rende
 
 - **General**: Launch at login, Send dev-site captures to OpenCode, and the two shortcuts, Record
   (`⌥⇧S`) and Paste last capture (`⌥⇧V`, which can be turned off).
-- **Recording**: the microphone, with its input level, the transcriber (Apple Speech with its
-  language, Hex while it runs, with its model and language, or Command when it's configured) and,
-  under Experimental, Video export.
+- **Recording**: the microphone, with its input level and Show live audio while recording, the
+  transcriber (Apple Speech with its language, Hex while it runs, with its model and language, or
+  Command when it's configured) and, under Experimental, Video export.
 - **Storage**: how long recordings are kept, where new captures go (Change…/Reset on macOS, `"capturesDir"` in
   `~/.config/scrawl/config.json` everywhere; captures already made stay put, and an unusable folder falls back to the built-in one), how much space they take, and Show in Finder.
 - **Permissions**: the onboarding checklist, so a permission can be turned on later.
@@ -191,7 +191,13 @@ uses as it changes. The list updates as devices are plugged in or out. A chosen 
 its CoreAudio UID as `"microphone": {"id", "name"}`; if it isn't connected when you record, Scrawl
 records from the default instead and says so under the popup (and once in the log). The level
 meter runs only while the Recording pane is on screen and Microphone is allowed. Cabled-iPhone
-narration uses the same microphone. From the terminal, `scrawl mic list` shows the inputs and the
+narration uses the same microphone.
+
+**Show live audio while recording** (off by default, `"liveAudio": true`) puts a waveform beside
+the timer while you record, so you can see the microphone is hearing you: dim dots are silence,
+and a flat red line means the microphone is sending nothing at all. With Apple Speech on macOS 26,
+the capsule also grows a row under the controls with the words as you say them, about a second
+behind. It's only for you: the transcript is still made from the finished recording. From the terminal, `scrawl mic list` shows the inputs and the
 one recordings will use, `scrawl mic set <id|default>` chooses, and `scrawl mic watch` prints the
 list again on every change.
 

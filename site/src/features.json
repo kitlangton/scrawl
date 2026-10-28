@@ -185,6 +185,20 @@
       "docs": ["docs/onboarding-and-settings.md"]
     },
     {
+      "id": "live-audio",
+      "group": "record",
+      "name": "Live audio",
+      "says": "A waveform in the recording capsule shows the microphone is hearing you, and with Apple Speech the words appear under it as you say them.",
+      "status": "main",
+      "platforms": ["mac"],
+      "added": "2026-10-28",
+      "note": "Off by default (Settings › Recording › Show live audio while recording). A flat red line means the microphone is sending nothing. The words need macOS 26's SpeechAnalyzer: Hex and command recordings show the waveform only, and iPhone recordings neither.",
+      "config": [
+        { "key": "liveAudio", "value": "true", "does": "Show live audio while recording" }
+      ],
+      "docs": ["docs/onboarding-and-settings.md"]
+    },
+    {
       "id": "live-transcribe",
       "group": "record",
       "name": "Transcribe while recording",
