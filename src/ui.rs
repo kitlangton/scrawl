@@ -1876,6 +1876,7 @@ impl ScrawlCoordinator {
             IslandPhase::Recording => Pres::Recording {
                 chips: self.reveal.is_open(),
                 has_iphone,
+                live: crate::live_audio::rows(),
             },
             IslandPhase::Processing => Pres::Processing,
             IslandPhase::Completed { inbox_count, .. } => Pres::Completed {

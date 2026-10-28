@@ -6,6 +6,12 @@
 //! that tail is left to transcribe, so the words and times are the WAV's own. Anything wrong (the
 //! helper fails, the model isn't installed, it lost samples or took too long) returns an error and
 //! the caller transcribes the WAV as before.
+//!
+//! The same stream shows the words as they're said (`live_audio`, `"liveAudio": true`): given a
+//! `Caption`, the helper also reports its guesses at the words in progress (`--volatile`), and
+//! the reader keeps the caption up to date. With the experiment off, a `preview` stream does only
+//! that, asks for quicker guesses (`--fast`, which may cost the finalized words some accuracy),
+//! and is dropped when the recording stops.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -18,6 +24,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use serde::Deserialize;
 
+use crate::live_audio::Caption;
 use crate::model::{TranscriptData, TranscriptSegment, WordTiming};
 
 const FEED_EVERY: Duration = Duration::from_millis(160);
@@ -71,6 +78,8 @@ enum Event {
         #[serde(default)]
         words: Vec<WordTiming>,
     },
+    /// A guess at the words still being said (`--volatile`), for showing only.
+    Volatile { volatile: TranscriptSegment },
 }
 
 enum Line {
@@ -89,16 +98,35 @@ pub struct Finished {
 
 impl Live {
     /// Starts streaming `samples` (the recorder's 16 kHz buffer, which only grows until the
-    /// recording stops) to a new helper. Nothing here blocks: the helper starts on the feeder
-    /// thread.
-    pub fn start(samples: Arc<Mutex<Vec<f32>>>) -> Result<Self> {
+    /// recording stops) to a new helper, keeping `caption` up to date with the words when given.
+    /// Nothing here blocks: the helper starts on the feeder thread.
+    pub fn start(
+        samples: Arc<Mutex<Vec<f32>>>,
+        caption: Option<Arc<Mutex<Caption>>>,
+    ) -> Result<Self> {
         let mut command = Command::new(crate::helper::path()?);
         command.arg("transcribe-stream");
         command.args(crate::speech_model::locale_args());
-        Self::start_with(command, samples)
+        if caption.is_some() {
+            command.arg("--volatile");
+        }
+        Self::start_with(command, samples, caption)
     }
 
-    fn start_with(mut command: Command, samples: Arc<Mutex<Vec<f32>>>) -> Result<Self> {
+    /// Streams `samples` only to show the words in `caption`, guessing at them about every second
+    /// (`--fast`); never `finish`ed, just dropped when the recording stops.
+    pub fn preview(samples: Arc<Mutex<Vec<f32>>>, caption: Arc<Mutex<Caption>>) -> Result<Self> {
+        let mut command = Command::new(crate::helper::path()?);
+        command.args(["transcribe-stream", "--volatile", "--fast"]);
+        command.args(crate::speech_model::locale_args());
+        Self::start_with(command, samples, Some(caption))
+    }
+
+    fn start_with(
+        mut command: Command,
+        samples: Arc<Mutex<Vec<f32>>>,
+        caption: Option<Arc<Mutex<Caption>>>,
+    ) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let feeder_stop = Arc::clone(&stop);
         command
@@ -107,7 +135,7 @@ impl Live {
             .stderr(Stdio::piped());
         let feeder = std::thread::Builder::new()
             .name("scrawl-live-transcribe".into())
-            .spawn(move || feed(command, &samples, &feeder_stop))
+            .spawn(move || feed(command, &samples, &feeder_stop, caption))
             .context("Could not spawn the live transcription thread")?;
         Ok(Self {
             stop,
@@ -146,6 +174,7 @@ impl Live {
             let left = deadline.saturating_duration_since(Instant::now());
             match feeding.lines.recv_timeout(left) {
                 Ok(Line::Event(Event::Ready { locale: l, .. })) => locale = Some(l),
+                Ok(Line::Event(Event::Volatile { .. })) => {}
                 Ok(Line::Event(Event::Result {
                     segment,
                     words: more,
@@ -223,10 +252,28 @@ fn transcript(
     }
 }
 
-fn feed(mut command: Command, samples: &Mutex<Vec<f32>>, stop: &AtomicBool) -> Result<Feeding> {
-    let mut child = command
-        .spawn()
-        .context("Could not start scrawl-helper transcribe-stream")?;
+fn feed(
+    mut command: Command,
+    samples: &Mutex<Vec<f32>>,
+    stop: &AtomicBool,
+    caption: Option<Arc<Mutex<Caption>>>,
+) -> Result<Feeding> {
+    let show = |change: &dyn Fn(&mut Caption)| {
+        if let Some(caption) = &caption {
+            change(
+                &mut caption
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+        }
+    };
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            show(&Caption::failed);
+            return Err(error).context("Could not start scrawl-helper transcribe-stream");
+        }
+    };
     let stdin = child.stdin.take().context("No helper stdin")?;
     let stdout = child.stdout.take().context("No helper stdout")?;
     let mut stderr = child.stderr.take().context("No helper stderr")?;
@@ -234,10 +281,29 @@ fn feed(mut command: Command, samples: &Mutex<Vec<f32>>, stop: &AtomicBool) -> R
     std::thread::Builder::new()
         .name("scrawl-live-transcribe-out".into())
         .spawn(move || {
+            let show = |change: &dyn Fn(&mut Caption)| {
+                if let Some(caption) = &caption {
+                    change(
+                        &mut caption
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    );
+                }
+            };
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
                 match serde_json::from_str::<Event>(&line) {
                     Ok(event) => {
+                        match &event {
+                            Event::Ready { .. } => show(&Caption::listening),
+                            Event::Result { segment, .. } => {
+                                show(&|c: &mut Caption| c.finalized(&segment.text));
+                            }
+                            Event::Volatile { volatile } => {
+                                show(&|c: &mut Caption| c.volatile(&volatile.text));
+                            }
+                            Event::Done { .. } => {}
+                        }
                         let _ = sender.send(Line::Event(event));
                     }
                     Err(error) => crate::capture::scrawl_log(format!(
@@ -247,6 +313,7 @@ fn feed(mut command: Command, samples: &Mutex<Vec<f32>>, stop: &AtomicBool) -> R
             }
             let mut message = String::new();
             let _ = stderr.read_to_string(&mut message);
+            show(&Caption::failed);
             let _ = sender.send(Line::Closed(message));
         })
         .context("Could not spawn the live transcription reader")?;
@@ -293,7 +360,7 @@ fn le_bytes(samples: &[i16]) -> Vec<u8> {
 pub fn simulate(wav_bytes: &[u8], speed: f64) -> Result<Live> {
     let samples = crate::audio::decode_wav_16k(wav_bytes)?;
     let buffer = Arc::new(Mutex::new(Vec::with_capacity(samples.len())));
-    let live = Live::start(Arc::clone(&buffer))?;
+    let live = Live::start(Arc::clone(&buffer), None)?;
     let started = Instant::now();
     for (i, chunk) in samples.chunks(160).enumerate() {
         buffer
@@ -361,7 +428,7 @@ mod tests {
             r#"{READY}; n=$(wc -c | tr -d ' '); echo '{{"segment":{{"t0":900,"t1":1500,"text":"Look here."}},"words":[{{"t0":900,"t1":1200,"text":"Look"}},{{"t0":1200,"t1":1500,"text":"here."}}]}}'; echo '{{"segment":{{"t0":60,"t1":600,"text":"Okay,"}},"words":[{{"t0":60,"t1":600,"text":"Okay,"}}]}}'; echo "{{\"done\":true,\"samples\":$((n / 2))}}""#
         );
         let buffer = Arc::new(Mutex::new(vec![0.25_f32; 4_000]));
-        let mut live = Live::start_with(fake(&script), Arc::clone(&buffer)).unwrap();
+        let mut live = Live::start_with(fake(&script), Arc::clone(&buffer), None).unwrap();
         std::thread::sleep(Duration::from_millis(250));
         let mut all = vec![0.25_f32; 4_000];
         all.extend([-0.5_f32; 1_000]);
@@ -394,7 +461,7 @@ mod tests {
             out.display()
         );
         let buffer = Arc::new(Mutex::new(vec![0.5_f32, -0.25]));
-        let mut live = Live::start_with(fake(&script), Arc::clone(&buffer)).unwrap();
+        let mut live = Live::start_with(fake(&script), Arc::clone(&buffer), None).unwrap();
         std::thread::sleep(Duration::from_millis(250));
         buffer.lock().unwrap().clear();
         let recording = [0.5_f32, -0.25, 1.5];
@@ -413,13 +480,14 @@ mod tests {
         let failed = Live::start_with(
             fake("echo 'scrawl-helper: the speech model isnt installed' >&2; exit 1"),
             buffer(),
+            None,
         )
         .unwrap()
         .finish_within(&wav(&[0.1; 320]), Duration::from_secs(5));
         assert!(failed.is_err());
 
         let short = format!(r#"{READY}; cat > /dev/null; echo '{{"done":true,"samples":7}}'"#);
-        let lost = Live::start_with(fake(&short), buffer())
+        let lost = Live::start_with(fake(&short), buffer(), None)
             .unwrap()
             .finish_within(&wav(&[0.1; 320]), Duration::from_secs(5));
         assert!(lost.unwrap_err().to_string().contains("heard 7 samples"));
@@ -427,15 +495,108 @@ mod tests {
         let hung = Live::start_with(
             fake(&format!("{READY}; cat > /dev/null; sleep 30")),
             buffer(),
+            None,
         )
         .unwrap()
         .finish_within(&wav(&[0.1; 320]), Duration::from_millis(300));
         assert!(hung.unwrap_err().to_string().contains("to finish"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn the_caption_shows_guesses_then_finalized_words_and_the_transcript_ignores_guesses() {
+        let script = format!(
+            r#"{READY}; echo '{{"volatile":{{"t0":60,"t1":400,"text":"Okay"}}}}'; echo '{{"volatile":{{"t0":60,"t1":700,"text":"Okay so"}}}}'; echo '{{"segment":{{"t0":60,"t1":900,"text":"Okay, so."}},"words":[{{"t0":60,"t1":900,"text":"Okay, so."}}]}}'; echo '{{"volatile":{{"t0":1000,"t1":1200,"text":"this"}}}}'; n=$(wc -c | tr -d ' '); echo "{{\"done\":true,\"samples\":$((n / 2))}}""#
+        );
+        let caption = Arc::new(Mutex::new(Caption::default()));
+        let buffer = Arc::new(Mutex::new(vec![0.25_f32; 1_600]));
+        let mut live = Live::start_with(
+            fake(&script),
+            Arc::clone(&buffer),
+            Some(Arc::clone(&caption)),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while caption.lock().unwrap().text() != "Okay, so. this" && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(caption.lock().unwrap().text(), "Okay, so. this");
+        assert_eq!(
+            caption.lock().unwrap().state,
+            crate::live_audio::CaptionState::Listening
+        );
+        let done = live
+            .finish_within(&wav(&[0.25; 1_600]), Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(done.transcript.text, "Okay, so.");
+        // The helper exited after it was done.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while caption.lock().unwrap().state != crate::live_audio::CaptionState::Failed
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            caption.lock().unwrap().state,
+            crate::live_audio::CaptionState::Failed
+        );
+    }
+
+    #[test]
+    fn a_helper_that_cant_start_fails_the_caption() {
+        let caption = Arc::new(Mutex::new(Caption::default()));
+        let live = Live::start_with(
+            Command::new("/nonexistent/scrawl-helper"),
+            Arc::new(Mutex::new(Vec::new())),
+            Some(Arc::clone(&caption)),
+        )
+        .unwrap();
+        drop(live);
+        assert_eq!(
+            caption.lock().unwrap().state,
+            crate::live_audio::CaptionState::Failed
+        );
+    }
+
+    /// The words of a real recording showing as it plays, through the real helper (needs macOS
+    /// 26 with the speech model installed): `SCRAWL_LIVE_WAV=audio.wav cargo test
+    /// live_words_from_the_real_helper -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_words_from_the_real_helper() {
+        let wav =
+            std::fs::read(std::env::var_os("SCRAWL_LIVE_WAV").expect("SCRAWL_LIVE_WAV")).unwrap();
+        let mut samples = crate::audio::decode_wav_16k(&wav).unwrap();
+        // A microphone goes on sending silence after the words, which lets the last ones settle.
+        samples.extend([0.0; 16_000 * 3]);
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let caption = Arc::new(Mutex::new(Caption::default()));
+        let live = Live::preview(Arc::clone(&buffer), Arc::clone(&caption)).unwrap();
+        let started = Instant::now();
+        let mut shown = String::new();
+        for (i, chunk) in samples.chunks(160).enumerate() {
+            buffer.lock().unwrap().extend_from_slice(chunk);
+            let due = Duration::from_millis(10 * (i as u64 + 1));
+            if let Some(wait) = due.checked_sub(started.elapsed()) {
+                std::thread::sleep(wait);
+            }
+            let text = caption.lock().unwrap().text();
+            if text != shown {
+                println!("{:5.2}s  {text}", started.elapsed().as_secs_f32());
+                shown = text;
+            }
+        }
+        let caption = caption.lock().unwrap().clone();
+        println!("{:?}: {}", caption.state, caption.text());
+        assert_eq!(caption.state, crate::live_audio::CaptionState::Listening);
+        assert!(!caption.text().is_empty());
+        drop(live);
+    }
+
     #[test]
     fn dropping_an_unfinished_stream_stops_the_helper() {
-        let live = Live::start_with(fake("sleep 30"), Arc::new(Mutex::new(Vec::new()))).unwrap();
+        let live =
+            Live::start_with(fake("sleep 30"), Arc::new(Mutex::new(Vec::new())), None).unwrap();
         let started = Instant::now();
         drop(live);
         assert!(started.elapsed() < Duration::from_secs(2));
