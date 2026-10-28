@@ -8,6 +8,9 @@
 //! from a `transcribe-stream` that's thrown away when the recording stops (unless the
 //! `liveTranscribe` experiment already streams, in which case its stream shows them too).
 
+// Only the native (macOS) capsule draws the waveform and the words.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
