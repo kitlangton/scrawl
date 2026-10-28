@@ -46,10 +46,14 @@ pub const SEG_ICON_GAP: f32 = 5.0;
 pub const HUD_TEXT: f32 = 13.0;
 /// The microphone's waveform beside the timer (`live_audio`).
 pub const WAVE_W: f32 = 96.0;
-/// The live words' row under the controls: its box runs from the controls' bottom to 2 pt above
-/// the capsule's, the full width less 2 pt a side, so its clearance core (`CHIP_CORE_ROUND`)
-/// sits on the capsule's corner arcs, like a chip's. The capsule is at least `CAPTION_W` inside.
-pub const CAPTION_H: f32 = 44.0;
+/// The live words' row under the controls: its box runs from `CAPTION_GAP` below the controls to
+/// 2 pt above the capsule's bottom, the full width less 2 pt a side, so its clearance core
+/// (`CHIP_CORE_ROUND`) sits on the capsule's corner arcs, like a chip's. The capsule is at least
+/// `CAPTION_W` inside.
+pub const CAPTION_H: f32 = 47.0;
+/// From the controls to the row's hairline: the inset above them less the capsule's 1 pt rim, so
+/// a selected chip sits as far from the hairline as from the rim.
+pub const CAPTION_GAP: f32 = ISLAND_INSET - 1.0;
 pub const CAPTION_W: f32 = 360.0;
 pub const CAPTION_INSET: f32 = 2.0;
 /// Where the words start inside the row's box, and their line pitch.
@@ -785,9 +789,9 @@ pub fn layout_of(
             id: ElemId::Caption,
             rect: [
                 lay.l + CAPTION_INSET,
-                y0 + CHIP_H,
+                y0 + CHIP_H + CAPTION_GAP,
                 outer_w - 2.0 * CAPTION_INSET,
-                lay.b - CAPTION_INSET - (y0 + CHIP_H),
+                lay.b - CAPTION_INSET - (y0 + CHIP_H + CAPTION_GAP),
             ],
             round: CHIP_CORE_ROUND,
             rank: last,
@@ -2224,8 +2228,8 @@ mod tests {
         assert!((wave[0] - (lay.l + ISLAND_INSET + items[0].rect[2] + CHIP_GAP)).abs() < 0.5);
         let caption = items.iter().find(|i| i.id == ElemId::Caption).unwrap();
         assert!(
-            caption.rect[1] >= wave[1] + wave[3] - 0.5,
-            "under the controls"
+            (caption.rect[1] - (wave[1] + wave[3]) - CAPTION_GAP).abs() < 0.5,
+            "a gap under the controls like the one above them"
         );
         assert!((lay.b - (caption.rect[1] + caption.rect[3]) - CAPTION_INSET).abs() < 0.5);
         assert!(!caption.id.is_interactive() && !ElemId::Wave.is_interactive());
