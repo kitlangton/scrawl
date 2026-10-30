@@ -838,7 +838,17 @@ pub fn discover_target_at(window_query: Option<&str>, point: Option<[f64; 2]>) -
         if let Some(display) = displays.get(pick_display(&rects, point, focused)) {
             let f = display.frame();
             let rect = [f.origin.x, f.origin.y, f.size.width, f.size.height];
-            let window_title = front_window.as_ref().and_then(|w| w.title());
+            // The title of the window in front on the recorded display. The window server's
+            // list is in z-order; `SCShareableContent::windows` is not, so with several
+            // windows of one app `front_window` can be any of them.
+            let window_title = frontmost
+                .as_ref()
+                .and_then(|(pid, _, _)| {
+                    let raw = crate::windows::raw_windows();
+                    crate::windows::frontmost_window_of(&raw, *pid, rect).map(|w| w.title.clone())
+                })
+                .or_else(|| front_window.as_ref().and_then(|w| w.title()))
+                .filter(|t| !t.is_empty());
             let scale = screens
                 .iter()
                 .find(|s| s.id == display.display_id())

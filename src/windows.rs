@@ -270,6 +270,26 @@ pub fn owned_window_at(
         .is_some_and(|w| ours(w.pid))
 }
 
+/// The topmost normal window of `pid` that overlaps `rect` (`[x, y, w, h]`, global points), from
+/// the window server's front-to-back list. This is the window the user is looking at when that
+/// app is in front; ScreenCaptureKit's window array has no such order.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn frontmost_window_of(raw: &[RawWindow], pid: i32, rect: [f64; 4]) -> Option<&RawWindow> {
+    let [rx, ry, rw, rh] = rect;
+    raw.iter().find(|w| {
+        let [x, y, width, height] = w.bounds;
+        w.pid == pid
+            && w.layer == 0
+            && w.alpha > 0.01
+            && width >= 80.0
+            && height >= 80.0
+            && x < rx + rw
+            && x + width > rx
+            && y < ry + rh
+            && y + height > ry
+    })
+}
+
 /// Reads the on-screen window list (front to back) from the window server.
 #[cfg(target_os = "macos")]
 pub fn raw_windows() -> Vec<RawWindow> {
@@ -857,5 +877,36 @@ mod tests {
             settings[0].clone(),
         ];
         assert!(!macos_is_asking(&behind));
+    }
+
+    #[test]
+    fn the_frontmost_window_of_an_app_is_its_topmost_one_on_that_display() {
+        let raw = |id, pid, title: &str, bounds| RawWindow {
+            id,
+            pid,
+            owner: "Google Chrome".into(),
+            title: title.into(),
+            bounds,
+            layer: 0,
+            alpha: 1.0,
+        };
+        // Front to back; ids are not in z-order, and one Chrome window is on the second display.
+        let windows = [
+            raw(30, 5, "Other display", [1000.0, 0.0, 800.0, 600.0]),
+            raw(12, 6, "Notes", [0.0, 0.0, 400.0, 400.0]),
+            raw(20, 5, "Working here", [0.0, 0.0, 900.0, 700.0]),
+            raw(10, 5, "effect.institute", [50.0, 50.0, 900.0, 700.0]),
+        ];
+        let first = [0.0, 0.0, 1000.0, 800.0];
+        assert_eq!(
+            frontmost_window_of(&windows, 5, first).map(|w| w.title.as_str()),
+            Some("Working here"),
+            "topmost on the recorded display, not the lowest id or another display's window"
+        );
+        assert_eq!(
+            frontmost_window_of(&windows, 5, [1000.0, 0.0, 800.0, 600.0]).map(|w| w.id),
+            Some(30)
+        );
+        assert!(frontmost_window_of(&windows, 7, first).is_none());
     }
 }
