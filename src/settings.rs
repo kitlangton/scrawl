@@ -1840,12 +1840,7 @@ mod tests {
     #[test]
     fn a_shortcut_needs_a_real_modifier_and_a_free_key() {
         let paste = ShortcutConfig::default_paste();
-        let ok = validate(
-            ShortcutKind::Record,
-            &pressed(R, CTRL_OPT, "r"),
-            &paste,
-        )
-        .unwrap();
+        let ok = validate(ShortcutKind::Record, &pressed(R, CTRL_OPT, "r"), &paste).unwrap();
         assert_eq!(ok.label, label(CTRL_OPT, "R"));
         assert_eq!(ok.key_label(), "R");
         // Labels follow the platform's order whatever order the bits come in.
@@ -2374,7 +2369,12 @@ mod tests {
         assert_eq!(read_json(&host.path)["appleLocale"], "zh-TW");
         assert_eq!(panel.view(&host).transcriber.apple_locale, "zh-TW");
         assert_eq!(
-            set(&mut panel, &mut host, "appleLocale", "zh-TW --install".into()),
+            set(
+                &mut panel,
+                &mut host,
+                "appleLocale",
+                "zh-TW --install".into()
+            ),
             Effect::None
         );
         assert_eq!(read_json(&host.path)["appleLocale"], "zh-TW");

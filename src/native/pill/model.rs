@@ -998,7 +998,8 @@ impl PillModel {
         let next = self.pres.clone();
         let landing_idle = matches!(next, Pres::Hidden);
         let from_hidden = !landing_idle
-            && (self.shell_alpha.x < 0.02 || matches!(self.geo_pres, Pres::Hidden) && self.shell_alpha.x < 0.08);
+            && (self.shell_alpha.x < 0.02
+                || matches!(self.geo_pres, Pres::Hidden) && self.shell_alpha.x < 0.08);
         self.entering_from_hidden = from_hidden;
         self.geo_pres = next.clone();
         let (lay, items) = layout_of(&next, &self.clock, self.labels, &self.metrics);
@@ -1082,8 +1083,8 @@ impl PillModel {
                 // Visible state-to-state width-led morph (`≤ 350 ms` settled, velocity preserved).
                 let dw = (lay.l - before_l).abs().max((lay.r - before_r).abs());
                 let dh = (lay.b - before_b).abs();
-                let opening = lay.width() * lay.height()
-                    >= (before_r - before_l) * (before_b - TOP) - 1.0;
+                let opening =
+                    lay.width() * lay.height() >= (before_r - before_l) * (before_b - TOP) - 1.0;
                 let base = if opening { OPEN_SPRING } else { CLOSE_SPRING };
                 let f = (dw.hypot(dh) / REF_DIST).clamp(0.0, 1.0);
                 let dur = (base.duration * mix(DISTANCE_FLOOR, 1.0, f)).max(0.14);
@@ -1324,8 +1325,7 @@ impl PillModel {
             self.press.snap(0.0);
             self.squish.snap(0.0);
             self.shell_scale.snap(1.0);
-            self.shell_alpha
-                .step_critical(dt, REDUCED_FADE_S, 100.0);
+            self.shell_alpha.step_critical(dt, REDUCED_FADE_S, 100.0);
             self.shell_blur.snap(0.0);
             self.dis = (self.dis + dt / REDUCED_FADE_S).min(1.0);
             if self.dis >= 1.0 {
@@ -1395,10 +1395,8 @@ impl PillModel {
             let is_pressed = self.pressed == Some(id);
 
             let st = &mut self.elems[idx];
-            st.hover.to(
-                f32::from(u8::from(is_hovered)),
-                SpringCfg::new(0.14, 0.0),
-            );
+            st.hover
+                .to(f32::from(u8::from(is_hovered)), SpringCfg::new(0.14, 0.0));
             st.press.to(
                 f32::from(u8::from(is_pressed)),
                 SpringCfg::new(if is_pressed { 0.10 } else { 0.20 }, 0.0),
@@ -1498,10 +1496,7 @@ impl PillModel {
                 CONTENT_STAGGER_S * from_cap as f32 * 0.5
             };
             if self.t - st.want_since >= turn - 1e-6 {
-                st.a.to(
-                    f32::from(u8::from(want)),
-                    if want { inn } else { out },
-                );
+                st.a.to(f32::from(u8::from(want)), if want { inn } else { out });
             }
             let on = st.a.target >= 0.5;
             st.a.step(dt);
@@ -1710,20 +1705,14 @@ mod tests {
     /// Independent rounded-rect inside distance check (from `island/model.test.js`), written
     /// without sharing `outline_sdf` or `box_clearance` with the implementation under test.
     fn independent_inside(sh: &Silhouette, x: f32, y: f32) -> f32 {
-        let r = sh
-            .radius
-            .min((sh.r - sh.l) * 0.5)
-            .min((sh.b - sh.t) * 0.5);
+        let r = sh.radius.min((sh.r - sh.l) * 0.5).min((sh.b - sh.t) * 0.5);
         let nx = x.clamp(sh.l + r, sh.r - r);
         let ny = y.clamp(sh.t + r, sh.b - r);
         let from_core = (x - nx).hypot(y - ny);
         if from_core > 0.0 {
             r - from_core
         } else {
-            (x - sh.l)
-                .min(sh.r - x)
-                .min(y - sh.t)
-                .min(sh.b - y)
+            (x - sh.l).min(sh.r - x).min(y - sh.t).min(sh.b - y)
         }
     }
 
@@ -1927,7 +1916,11 @@ mod tests {
             m.advance(FRAME_DT);
         }
         let before = (m.l.x, m.l.v, m.r.x, m.r.v, m.b.x, m.b.v);
-        assert!(before.3 > 50.0, "expected active outward velocity, got {}", before.3);
+        assert!(
+            before.3 > 50.0,
+            "expected active outward velocity, got {}",
+            before.3
+        );
 
         // Retarget mid-expansion to Selecting(Area): position and velocity must carry over unchanged.
         m.set_pres(Pres::Selecting {
@@ -2078,7 +2071,10 @@ mod tests {
             "entry should start at ~0.94 scale of target width (not a narrow lozenge), got {}",
             f0.shape.width()
         );
-        assert!(f0.shape.blur > SHELL_BLUR_MAX * 0.6, "expected blurred shell on entry start");
+        assert!(
+            f0.shape.blur > SHELL_BLUR_MAX * 0.6,
+            "expected blurred shell on entry start"
+        );
 
         for _ in 0..60 {
             m.advance(FRAME_DT);
@@ -2181,12 +2177,16 @@ mod tests {
             has_iphone: false,
             live: Rows::default(),
         };
-        let (layout, items) =
-            layout_of(&pres, "0:00", LabelWidths::default(), &Metrics::default());
+        let (layout, items) = layout_of(&pres, "0:00", LabelWidths::default(), &Metrics::default());
         let ids: Vec<ElemId> = items.iter().map(|i| i.id).collect();
         assert_eq!(
             ids,
-            [ElemId::Lead, ElemId::DividerLead, ElemId::Cancel, ElemId::Finish]
+            [
+                ElemId::Lead,
+                ElemId::DividerLead,
+                ElemId::Cancel,
+                ElemId::Finish
+            ]
         );
         let last = items.last().unwrap().rect;
         assert!((layout.r - (last[0] + last[2]) - ISLAND_INSET).abs() < 0.5);

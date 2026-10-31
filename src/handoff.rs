@@ -527,7 +527,9 @@ where
     let mut out = std::collections::BTreeMap::new();
     let Value::Object(map) = value else {
         if !value.is_null() {
-            log_config_once(format!("config.json: ignoring \"experiments\": {value} (expected an object)"));
+            log_config_once(format!(
+                "config.json: ignoring \"experiments\": {value} (expected an object)"
+            ));
         }
         return Ok(out);
     };
@@ -557,7 +559,9 @@ where
 /// Config problems are logged once per process, not on every read.
 fn log_config_once(message: String) {
     static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-    let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut seen = SEEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !seen.contains(&message) {
         crate::capture::scrawl_log(&message);
         seen.push(message);
@@ -627,7 +631,8 @@ fn config_from_value(value: serde_json::Value) -> Config {
     let mut kept = serde_json::Map::new();
     for (key, value) in map {
         kept.insert(key.clone(), value.clone());
-        if let Err(error) = serde_json::from_value::<Config>(serde_json::Value::Object(kept.clone()))
+        if let Err(error) =
+            serde_json::from_value::<Config>(serde_json::Value::Object(kept.clone()))
         {
             kept.remove(&key);
             log_config_once(format!("config.json: ignoring \"{key}\": {error}"));
@@ -989,7 +994,9 @@ pub fn sync_bundle_to(host: &str, bundle_dir: &Path) -> Result<()> {
         format!(" && touch {bundle_q}/{MEDIA_PENDING}")
     };
     let output = ssh(host)
-        .arg(format!("mkdir -p {parent_q} && tar -C {parent_q} -xf -{mark_pending}"))
+        .arg(format!(
+            "mkdir -p {parent_q} && tar -C {parent_q} -xf -{mark_pending}"
+        ))
         .stdin(tar.stdout.take().context("No tar output")?)
         .output()
         .context("Could not start ssh")?;
@@ -1145,7 +1152,10 @@ impl ServiceFile {
 }
 
 fn non_empty(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned)
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
 }
 
 /// The socket address in `http://127.0.0.1:4096…` when its host is an IP or `localhost` (no
@@ -1191,10 +1201,12 @@ fn local_server() -> (std::net::SocketAddr, Option<String>) {
     let home = dirs::home_dir();
     let files: Vec<ServiceFile> = [
         env_dir("XDG_STATE_HOME").map(|d| d.join("opencode/service.json")),
-        home.as_ref().map(|h| h.join(".local/state/opencode/service.json")),
+        home.as_ref()
+            .map(|h| h.join(".local/state/opencode/service.json")),
         env_dir("OPENCODE_CONFIG_DIR").map(|d| d.join("service.json")),
         env_dir("XDG_CONFIG_HOME").map(|d| d.join("opencode/service.json")),
-        home.as_ref().map(|h| h.join(".config/opencode/service.json")),
+        home.as_ref()
+            .map(|h| h.join(".config/opencode/service.json")),
     ]
     .into_iter()
     .flatten()
@@ -1230,7 +1242,9 @@ fn http_get(
     timeout: std::time::Duration,
 ) -> Result<Vec<u8>> {
     use std::io::{Read, Write};
-    let connect = SERVER_CONNECT_TIMEOUT.min(timeout).max(std::time::Duration::from_millis(1));
+    let connect = SERVER_CONNECT_TIMEOUT
+        .min(timeout)
+        .max(std::time::Duration::from_millis(1));
     let timeout = timeout.max(std::time::Duration::from_millis(1));
     let mut stream = std::net::TcpStream::connect_timeout(&address, connect)
         .with_context(|| format!("Could not reach server at http://{address}"))?;
@@ -1243,9 +1257,8 @@ fn http_get(
         ),
         _ => String::new(),
     };
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {address}\r\n{auth}Connection: close\r\n\r\n"
-    );
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: {address}\r\n{auth}Connection: close\r\n\r\n");
     stream
         .write_all(request.as_bytes())
         .with_context(|| format!("Could not write to server at http://{address}"))?;
@@ -1482,7 +1495,9 @@ pub fn resolve_opencode_session_with(
     let matched = matched
         .or_else(|| {
             let id = env_session.filter(|id| !id.trim().is_empty())?;
-            get_session(get, id).ok().filter(OpenCodeSession::is_open_root)
+            get_session(get, id)
+                .ok()
+                .filter(OpenCodeSession::is_open_root)
         })
         .or(newest)
         .context("No root OpenCode session found; pass a session ID")?;
@@ -1832,14 +1847,23 @@ mod tests {
         let addressed = recorded_destination(&dir);
         assert_eq!(addressed.as_deref(), Some("ses_ios"));
         let addressed = addressed.as_deref();
-        assert_eq!(choose_destination(None, addressed, false).unwrap(), Some("ses_ios"));
+        assert_eq!(
+            choose_destination(None, addressed, false).unwrap(),
+            Some("ses_ios")
+        );
         assert!(choose_destination(Some("ses_motion"), addressed, false).is_err());
         assert_eq!(
             choose_destination(Some("ses_motion"), addressed, true).unwrap(),
             Some("ses_motion")
         );
-        assert_eq!(choose_destination(Some("ses_ios"), addressed, false).unwrap(), Some("ses_ios"));
-        assert_eq!(choose_destination(Some("ses_x"), None, false).unwrap(), Some("ses_x"));
+        assert_eq!(
+            choose_destination(Some("ses_ios"), addressed, false).unwrap(),
+            Some("ses_ios")
+        );
+        assert_eq!(
+            choose_destination(Some("ses_x"), None, false).unwrap(),
+            Some("ses_x")
+        );
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(recorded_destination(&dir), None);
     }
@@ -1957,7 +1981,11 @@ mod tests {
     fn auto_send_defaults_on_and_the_toggle_keeps_other_keys() {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
-        fs::write(&path, br#"{"ingestToken":"abc","retention":{"mediaDays":7}}"#).unwrap();
+        fs::write(
+            &path,
+            br#"{"ingestToken":"abc","retention":{"mediaDays":7}}"#,
+        )
+        .unwrap();
         assert_eq!(load_config_from(&path).auto_send, None);
         set_config_value_in(&path, "autoSend", serde_json::Value::Bool(false)).unwrap();
         let config = load_config_from(&path);
@@ -1968,7 +1996,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
     }
 
@@ -1991,7 +2022,8 @@ mod tests {
         assert_eq!(v2.directory(), Some("/p/a"));
         assert!(v2.is_open_root());
         let v1: OpenCodeSession =
-            serde_json::from_str(r#"{"id":"ses_b","parentID":"ses_a","directory":"/p/b"}"#).unwrap();
+            serde_json::from_str(r#"{"id":"ses_b","parentID":"ses_a","directory":"/p/b"}"#)
+                .unwrap();
         assert_eq!(v1.directory(), Some("/p/b"));
         assert!(!v1.is_open_root());
         assert_eq!(v1.label(), "ses_b");
@@ -2058,7 +2090,11 @@ mod tests {
         assert_eq!(cfg.native_pill, None);
         assert!(cfg.usb_apps.is_empty());
         // Both spellings of one field: one is kept rather than neither.
-        fs::write(&path, r#"{"usbApps": ["a"], "tetherApps": ["b"], "agentHost": "pro"}"#).unwrap();
+        fs::write(
+            &path,
+            r#"{"usbApps": ["a"], "tetherApps": ["b"], "agentHost": "pro"}"#,
+        )
+        .unwrap();
         let cfg = load_config_from(&path);
         assert_eq!(cfg.agent_host.as_deref(), Some("pro"));
         assert_eq!(cfg.usb_apps.len(), 1);
@@ -2201,17 +2237,32 @@ mod tests {
             }
         });
 
-        let body = http_get(address, Some("secret"), "/api/session", Duration::from_secs(1)).unwrap();
+        let body = http_get(
+            address,
+            Some("secret"),
+            "/api/session",
+            Duration::from_secs(1),
+        )
+        .unwrap();
         assert_eq!(body, br#"{"data":[]}"#);
 
-        let err =
-            http_get(address, Some("secret"), "/api/session/missing", Duration::from_secs(1))
-                .unwrap_err();
+        let err = http_get(
+            address,
+            Some("secret"),
+            "/api/session/missing",
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
         assert!(format!("{err:#}").contains("HTTP 404"), "{err:#}");
 
         let started = Instant::now();
-        let err = http_get(address, Some("secret"), "/api/session", Duration::from_millis(100))
-            .unwrap_err();
+        let err = http_get(
+            address,
+            Some("secret"),
+            "/api/session",
+            Duration::from_millis(100),
+        )
+        .unwrap_err();
         assert!(format!("{err:#}").contains("didn't answer"), "{err:#}");
         assert!(started.elapsed() < Duration::from_secs(1));
         let _ = server.join();
@@ -2225,7 +2276,8 @@ mod sync_live_check {
     #[test]
     #[ignore]
     fn sync_to_pro() {
-        let base = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("Library/Caches/scrawl-sync-live");
+        let base = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+            .join("Library/Caches/scrawl-sync-live");
         let _ = std::fs::remove_dir_all(&base);
         let bundle = base.join("scrawl-synctest.scrawl");
         std::fs::create_dir_all(bundle.join("frames-full")).unwrap();
@@ -2244,8 +2296,18 @@ mod sync_live_check {
                 break;
             }
         }
-        let _ = super::ssh("pro").arg(format!("rm -rf {}", super::shell_quote(&base.to_string_lossy()))).status();
-        assert!(out.contains("8000000") && out.contains("frame-01.png") && !out.contains(super::MEDIA_PENDING), "{out}");
+        let _ = super::ssh("pro")
+            .arg(format!(
+                "rm -rf {}",
+                super::shell_quote(&base.to_string_lossy())
+            ))
+            .status();
+        assert!(
+            out.contains("8000000")
+                && out.contains("frame-01.png")
+                && !out.contains(super::MEDIA_PENDING),
+            "{out}"
+        );
     }
 }
 
@@ -2332,7 +2394,14 @@ mod session_lookup {
 
     fn many(count: usize) -> Vec<OpenCodeSession> {
         (0..count)
-            .map(|i| session(&format!("ses_{i:05}"), &format!("Chat {i}"), "/p/x", 100_000 - i as u64))
+            .map(|i| {
+                session(
+                    &format!("ses_{i:05}"),
+                    &format!("Chat {i}"),
+                    "/p/x",
+                    100_000 - i as u64,
+                )
+            })
             .collect()
     }
 

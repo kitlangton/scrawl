@@ -252,12 +252,48 @@ impl Render for Backdrop {
                         .items_center()
                         .justify_center()
                         .gap(px(10.0))
-                        .child(div().w(px(88.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0x1e293b)))
-                        .child(div().w(px(64.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0x2563eb)))
-                        .child(div().w(px(108.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0x94a3b8)))
-                        .child(div().w(px(74.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0x10b981)))
-                        .child(div().w(px(84.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0xf43f5e)))
-                        .child(div().w(px(96.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0x475569))),
+                        .child(
+                            div()
+                                .w(px(88.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x1e293b)),
+                        )
+                        .child(
+                            div()
+                                .w(px(64.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x2563eb)),
+                        )
+                        .child(
+                            div()
+                                .w(px(108.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x94a3b8)),
+                        )
+                        .child(
+                            div()
+                                .w(px(74.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x10b981)),
+                        )
+                        .child(
+                            div()
+                                .w(px(84.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0xf43f5e)),
+                        )
+                        .child(
+                            div()
+                                .w(px(96.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x475569)),
+                        ),
                 )
                 .child(
                     div()
@@ -265,11 +301,41 @@ impl Render for Backdrop {
                         .items_center()
                         .justify_center()
                         .gap(px(10.0))
-                        .child(div().w(px(104.0)).h(px(11.0)).rounded(px(4.0)).bg(rgb(0x64748b)))
-                        .child(div().w(px(78.0)).h(px(11.0)).rounded(px(4.0)).bg(rgb(0xf59e0b)))
-                        .child(div().w(px(124.0)).h(px(11.0)).rounded(px(4.0)).bg(rgb(0x0f172a)))
-                        .child(div().w(px(68.0)).h(px(11.0)).rounded(px(4.0)).bg(rgb(0x8b5cf6)))
-                        .child(div().w(px(116.0)).h(px(11.0)).rounded(px(4.0)).bg(rgb(0x3b82f6))),
+                        .child(
+                            div()
+                                .w(px(104.0))
+                                .h(px(11.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x64748b)),
+                        )
+                        .child(
+                            div()
+                                .w(px(78.0))
+                                .h(px(11.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0xf59e0b)),
+                        )
+                        .child(
+                            div()
+                                .w(px(124.0))
+                                .h(px(11.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x0f172a)),
+                        )
+                        .child(
+                            div()
+                                .w(px(68.0))
+                                .h(px(11.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x8b5cf6)),
+                        )
+                        .child(
+                            div()
+                                .w(px(116.0))
+                                .h(px(11.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x3b82f6)),
+                        ),
                 ),
             "dark" | "busy-dark" => div()
                 .size_full()
@@ -285,12 +351,48 @@ impl Render for Backdrop {
                         .items_center()
                         .justify_center()
                         .gap(px(10.0))
-                        .child(div().w(px(84.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0xf43f5e)))
-                        .child(div().w(px(104.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0x38bdf8)))
-                        .child(div().w(px(72.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0xfbbf24)))
-                        .child(div().w(px(112.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0xe2e8f0)))
-                        .child(div().w(px(82.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0xa855f7)))
-                        .child(div().w(px(76.0)).h(px(12.0)).rounded(px(4.0)).bg(rgb(0x34d399))),
+                        .child(
+                            div()
+                                .w(px(84.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0xf43f5e)),
+                        )
+                        .child(
+                            div()
+                                .w(px(104.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x38bdf8)),
+                        )
+                        .child(
+                            div()
+                                .w(px(72.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0xfbbf24)),
+                        )
+                        .child(
+                            div()
+                                .w(px(112.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0xe2e8f0)),
+                        )
+                        .child(
+                            div()
+                                .w(px(82.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0xa855f7)),
+                        )
+                        .child(
+                            div()
+                                .w(px(76.0))
+                                .h(px(12.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x34d399)),
+                        ),
                 )
                 .child(
                     div()
@@ -298,11 +400,41 @@ impl Render for Backdrop {
                         .items_center()
                         .justify_center()
                         .gap(px(10.0))
-                        .child(div().w(px(96.0)).h(px(11.0)).rounded(px(4.0)).bg(rgb(0x34d399)))
-                        .child(div().w(px(84.0)).h(px(11.0)).rounded(px(4.0)).bg(rgb(0xf97316)))
-                        .child(div().w(px(128.0)).h(px(11.0)).rounded(px(4.0)).bg(rgb(0x60a5fa)))
-                        .child(div().w(px(72.0)).h(px(11.0)).rounded(px(4.0)).bg(rgb(0xf472b6)))
-                        .child(div().w(px(108.0)).h(px(11.0)).rounded(px(4.0)).bg(rgb(0xcbd5e1))),
+                        .child(
+                            div()
+                                .w(px(96.0))
+                                .h(px(11.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x34d399)),
+                        )
+                        .child(
+                            div()
+                                .w(px(84.0))
+                                .h(px(11.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0xf97316)),
+                        )
+                        .child(
+                            div()
+                                .w(px(128.0))
+                                .h(px(11.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0x60a5fa)),
+                        )
+                        .child(
+                            div()
+                                .w(px(72.0))
+                                .h(px(11.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0xf472b6)),
+                        )
+                        .child(
+                            div()
+                                .w(px(108.0))
+                                .h(px(11.0))
+                                .rounded(px(4.0))
+                                .bg(rgb(0xcbd5e1)),
+                        ),
                 ),
             _ => div().size_full().bg(rgb(0xd9d9de)),
         }

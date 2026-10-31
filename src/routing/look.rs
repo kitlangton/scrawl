@@ -835,10 +835,7 @@ pub fn read_candidates(
         }
     }
     let mut repos = HashMap::new();
-    Ok(raw
-        .into_iter()
-        .map(|s| candidate(s, &mut repos))
-        .collect())
+    Ok(raw.into_iter().map(|s| candidate(s, &mut repos)).collect())
 }
 
 // MARK: This Mac's own names

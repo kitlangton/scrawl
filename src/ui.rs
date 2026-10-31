@@ -1901,7 +1901,11 @@ impl ScrawlCoordinator {
         }
     }
 
-    fn apply_pill_action(&mut self, action: crate::native::pill::PillAction, cx: &mut Context<Self>) {
+    fn apply_pill_action(
+        &mut self,
+        action: crate::native::pill::PillAction,
+        cx: &mut Context<Self>,
+    ) {
         use crate::native::pill::PillAction;
         match action {
             PillAction::SelectMode(mode) => self.click_selection_mode(mode, cx),
@@ -2135,9 +2139,11 @@ impl ScrawlCoordinator {
         let spawned = std::thread::Builder::new()
             .name("scrawl-send".into())
             .spawn(move || {
-                if let Err(err) = crate::handoff::load_bundle(&send_dir).and_then(|(_, mut bundle)| {
-                    crate::routing::record_destination(&send_dir, &mut bundle, dest.clone())
-                }) {
+                if let Err(err) =
+                    crate::handoff::load_bundle(&send_dir).and_then(|(_, mut bundle)| {
+                        crate::routing::record_destination(&send_dir, &mut bundle, dest.clone())
+                    })
+                {
                     scrawl_log(format!("routing: couldn't record the destination: {err:#}"));
                 }
                 let _ = sender.send(crate::delivery::deliver(
@@ -2258,10 +2264,7 @@ impl ScrawlCoordinator {
                 .native_pill
                 .as_ref()
                 .map_or_else(pointer_on_hud_pill, |p| p.pointer_on_pill());
-            if self
-                .reveal
-                .tick(reveal_clock_ms(), on_pill, activity)
-            {
+            if self.reveal.tick(reveal_clock_ms(), on_pill, activity) {
                 self.play_fold();
             }
         }
@@ -2955,12 +2958,7 @@ impl ScrawlCoordinator {
 
     /// Acts on a local capture's route once it's worked out, unless ✕ or Paste on the Completed
     /// island kept the capture on the clipboard first.
-    fn route_arrived(
-        &mut self,
-        dir: PathBuf,
-        route: RouteOutcome,
-        cx: &mut Context<Self>,
-    ) {
+    fn route_arrived(&mut self, dir: PathBuf, route: RouteOutcome, cx: &mut Context<Self>) {
         if self.routing.as_deref() != Some(dir.as_path()) {
             if !matches!(route, RouteOutcome::None) {
                 scrawl_log(format!(
@@ -3369,21 +3367,18 @@ impl Render for HudPillWindow {
                         .map(|(i, key)| Some((key, alpha(i))))
                         .collect(),
                 )
-                .children(
-                    SelectionMode::available(has_iphone)
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &segment)| {
-                            let c_segment = self.coordinator.clone();
-                            mode_segment_level(segment, highlight(segment, mode))
-                                .opacity(alpha(i))
-                                .on_click(move |_, _, cx| {
-                                    c_segment.update(cx, |coord, cx| {
-                                        coord.click_selection_mode(segment, cx)
-                                    });
-                                })
-                        }),
-                )
+                .children(SelectionMode::available(has_iphone).iter().enumerate().map(
+                    |(i, &segment)| {
+                        let c_segment = self.coordinator.clone();
+                        mode_segment_level(segment, highlight(segment, mode))
+                            .opacity(alpha(i))
+                            .on_click(move |_, _, cx| {
+                                c_segment.update(cx, |coord, cx| {
+                                    coord.click_selection_mode(segment, cx)
+                                });
+                            })
+                    },
+                ))
                 .when(record, |row| {
                     row.child(
                         primary_chip("sel-record", "Record")
@@ -4029,7 +4024,12 @@ impl Render for TargetPickerWindow {
                 let w = (a[0] - b[0]).abs().max(1.0);
                 let h = (a[1] - b[1]).abs().max(1.0);
                 (
-                    [(a[0].min(b[0]) - origin[0]) * k, (a[1].min(b[1]) - origin[1]) * k, w * k, h * k],
+                    [
+                        (a[0].min(b[0]) - origin[0]) * k,
+                        (a[1].min(b[1]) - origin[1]) * k,
+                        w * k,
+                        h * k,
+                    ],
                     format!("{} × {}", w.round() as i32, h.round() as i32),
                 )
             }),
@@ -4051,7 +4051,10 @@ impl Render for TargetPickerWindow {
                     t.frame.width as f32,
                     t.frame.height as f32,
                 ]);
-                ([(rx - origin[0]) * k, (ry - origin[1]) * k, rw * k, rh * k], title)
+                (
+                    [(rx - origin[0]) * k, (ry - origin[1]) * k, rw * k, rh * k],
+                    title,
+                )
             }),
             SelectionMode::Screen => Some((
                 [0.0, 0.0, screen[0], screen[1]],
@@ -5342,7 +5345,8 @@ pub fn run_app(
         scrawl_log(format!("run_app started pid={}", std::process::id()));
         platform::keep_alive(cx);
         // ⌘W, Esc, the close button or Scrawl itself: every way a window closes ends up here.
-        cx.on_window_closed(|cx| cx.defer(platform::hand_back_keys)).detach();
+        cx.on_window_closed(|cx| cx.defer(platform::hand_back_keys))
+            .detach();
         let (ui_sender, ui_receiver) = flume::unbounded();
         crate::phone::start_ingest_server(ui_sender.clone());
         let telemetry = SharedCaptureTelemetry::new(ui_sender);
