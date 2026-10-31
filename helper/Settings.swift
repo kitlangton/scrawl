@@ -155,6 +155,7 @@ struct SettingsState: Decodable, Equatable {
     SettingsShortcut(),
     SettingsShortcut(kind: "paste", title: "Paste last capture", label: "⌥⇧V", key: "V", clearable: true),
   ]
+  var whatToRecord = "screen"
   var microphone = SettingsMicrophone()
   var transcriber = SettingsTranscriber()
   var videoExport = false
@@ -949,6 +950,15 @@ struct SettingsView: View {
     let chosenModel = t.models.first(where: \.chosen)
     let mic = state.microphone
     return VStack(spacing: 0) {
+      SettingsGroup {
+        SettingsRow(title: "What to record") {
+          SettingsPopup(value: ["screen": "Screen", "window": "Window", "area": "Area", "recent-area": "Recent Area"][state.whatToRecord] ?? "Screen",
+                        options: [("screen", "Screen", true), ("window", "Window", true), ("area", "Area", true), ("recent-area", "Recent Area", true)],
+                        selected: state.whatToRecord) { model.set("whatToRecord", $0) }
+        }
+      }
+      SettingsCaption(text: "Recent Area reuses the last recorded area. If it is unavailable, choose a new area.")
+      Color.clear.frame(height: 20)
       SettingsGroup {
         SettingsRow(title: "Microphone") {
           SettingsPopup(value: mic.value, options: mic.options.map { ($0.id, $0.title, $0.enabled) }, selected: mic.selected) {

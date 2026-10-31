@@ -487,9 +487,50 @@ fn start_video_export() {
     }
 }
 
+fn recent_area_store() -> &'static std::sync::Mutex<Option<[f32; 4]>> {
+    static AREA: std::sync::OnceLock<std::sync::Mutex<Option<[f32; 4]>>> = std::sync::OnceLock::new();
+    AREA.get_or_init(|| {
+        let area = if cfg!(test) { None } else {
+            crate::handoff::load_config_from(&crate::handoff::default_config_path())
+                .recent_area.and_then(|v| serde_json::from_value(v).ok())
+                .filter(valid_recent_area)
+        };
+        std::sync::Mutex::new(area)
+    })
+}
+
+fn valid_recent_area(r: &[f32; 4]) -> bool {
+    r.iter().all(|v| v.is_finite()) && r[2] >= 6.0 && r[3] >= 6.0
+}
+
+fn recent_area() -> Option<[f32; 4]> {
+    *recent_area_store().lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn usable_recent_area() -> Option<[f32; 4]> {
+    let r = recent_area()?;
+    // Never silently substitute a different region when a display disappears or shrinks.
+    crate::screens::current().iter().any(|s| area_fits_display(r, s.frame)).then_some(r)
+}
+
+fn area_fits_display(r: [f32; 4], display: [f64; 4]) -> bool {
+    let [x,y,w,h] = r.map(f64::from);
+    valid_recent_area(&r) && x >= display[0] && y >= display[1]
+        && x+w <= display[0]+display[2] && y+h <= display[1]+display[3]
+}
+
+fn save_recent_area(r: [f32; 4]) {
+    if !valid_recent_area(&r) { return; }
+    *recent_area_store().lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(r);
+    if let Err(e) = crate::handoff::set_config_value_in(&crate::handoff::default_config_path(), "recentArea", serde_json::json!(r)) {
+        scrawl_log(format!("Saving recent area failed: {e:#}"));
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SelectionMode {
     Area,
+    RecentArea,
     Window,
     /// The whole display the picker covers.
     Screen,
@@ -502,6 +543,7 @@ impl SelectionMode {
     fn key(self) -> &'static str {
         match self {
             Self::Area => "area",
+            Self::RecentArea => "recent-area",
             Self::Window => "window",
             Self::Screen => "screen",
             Self::Iphone => "iphone",
@@ -509,7 +551,7 @@ impl SelectionMode {
     }
 
     fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|mode| mode.key() == key.trim())
+        Self::ALL.into_iter().chain([Self::RecentArea]).find(|mode| mode.key() == key.trim())
     }
 
     fn last_used_path() -> Option<PathBuf> {
@@ -534,6 +576,13 @@ impl SelectionMode {
 
     /// Modes shown in the HUD, in order; iPhone only while one is cabled.
     pub(crate) fn available(has_iphone: bool) -> &'static [SelectionMode] {
+        if recent_area().is_some() {
+            return if has_iphone && cfg!(target_os = "macos") {
+                &[Self::Area, Self::Window, Self::Screen, Self::RecentArea, Self::Iphone]
+            } else {
+                &[Self::Area, Self::Window, Self::Screen, Self::RecentArea]
+            };
+        }
         // A cabled iPhone's screen is an AVFoundation capture device, which only macOS has.
         if has_iphone && cfg!(target_os = "macos") {
             &Self::ALL
@@ -545,6 +594,7 @@ impl SelectionMode {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Area => "Area",
+            Self::RecentArea => "Recent Area",
             Self::Window => "Window",
             Self::Screen => "Screen",
             Self::Iphone => "iPhone",
@@ -553,7 +603,7 @@ impl SelectionMode {
 
     pub(crate) fn icon(self) -> &'static str {
         match self {
-            Self::Area => crate::icons::AREA,
+            Self::Area | Self::RecentArea => crate::icons::AREA,
             Self::Window => crate::icons::WINDOW,
             Self::Screen => crate::icons::SCREEN,
             Self::Iphone => crate::icons::IPHONE,
@@ -563,6 +613,7 @@ impl SelectionMode {
     fn chip_id(self) -> &'static str {
         match self {
             Self::Area => "sel-area",
+            Self::RecentArea => "sel-recent-area",
             Self::Window => "sel-window",
             Self::Screen => "sel-screen",
             Self::Iphone => "sel-iphone",
@@ -571,7 +622,7 @@ impl SelectionMode {
 
     /// Screen and iPhone need no pointer gesture, so the HUD offers a Record chip for them.
     pub(crate) fn shows_record(self) -> bool {
-        matches!(self, Self::Screen | Self::Iphone)
+        matches!(self, Self::Screen | Self::Iphone | Self::RecentArea)
     }
 
     /// `1`–`4` pick a mode by its position in the HUD.
@@ -1225,7 +1276,7 @@ impl ScrawlCoordinator {
                 // Esc can cancel before the picker or a recording exists.
                 self.playback.take();
             }
-            Action::RecordScreen => self.record_screen_now(cx),
+            Action::RecordScreen => self.record_preferred(cx),
             Action::RecordSelected => self.record_selected_mode(cx),
             Action::Finish => self.finish_recording(cx),
         }
@@ -1238,7 +1289,30 @@ impl ScrawlCoordinator {
         } else if self.is_selecting() {
             self.record_selected_mode(cx);
         } else if !self.is_processing() {
-            self.record_screen_now(cx);
+            self.record_preferred(cx);
+        }
+    }
+
+    fn record_preferred(&mut self, cx: &mut Context<Self>) {
+        if !self.ready_to_record() { return; }
+        let config = crate::handoff::load_config_from(&crate::handoff::default_config_path());
+        match config.what_to_record.as_deref() {
+            Some("window") => self.open_picker(Some(SelectionMode::Window), cx),
+            Some("area") => self.open_picker(Some(SelectionMode::Area), cx),
+            Some("recent-area") => self.record_recent_area(cx),
+            _ => self.record_screen_now(cx),
+        }
+    }
+
+    fn record_recent_area(&mut self, cx: &mut Context<Self>) {
+        if let Some([x, y, w, h]) = usable_recent_area().map(|r| r.map(f64::from)) {
+            // Only the rectangle is reusable: the picker's window snapshot can be from
+            // a different app or an earlier recording. Resolve metadata again at start.
+            let windows = list_selectable_windows();
+            let target = region_target(x, y, w, h, &windows);
+            self.start_recording_with_target(target, cx);
+        } else {
+            self.open_picker(Some(SelectionMode::Area), cx);
         }
     }
 
@@ -1332,6 +1406,11 @@ impl ScrawlCoordinator {
         let Some((_, overlay)) = self.discard_recording() else {
             return;
         };
+        if mode == SelectionMode::RecentArea {
+            drop(overlay);
+            self.record_recent_area(cx);
+            return;
+        }
         if mode == SelectionMode::Iphone {
             // Recording → Recording: the chips fold into the pill as the phone starts.
             self.fold_reveal();
@@ -1394,6 +1473,7 @@ impl ScrawlCoordinator {
 
     fn sync_picker_overlay(&self) {
         let rect = match self.island_phase {
+            IslandPhase::Selecting { mode: SelectionMode::RecentArea } => usable_recent_area().map(|r| (r, 1)),
             IslandPhase::Selecting {
                 mode: SelectionMode::Area,
             } => self.selection_drag.and_then(|(a, b)| {
@@ -1430,7 +1510,19 @@ impl ScrawlCoordinator {
         self.telemetry.set_picker_rect(rect);
     }
 
+    fn place_recent_area_picker(&mut self, cx: &mut Context<Self>) {
+        let Some(r) = usable_recent_area() else { return; };
+        let screens = crate::screens::current();
+        let Some(i) = crate::screens::index_for_rect(&screens, r.map(f64::from)) else { return; };
+        let frame = screens[i].frame;
+        self.display_rect = frame.map(|v| v as f32);
+        if let Some(ref mut overlay) = self.picker_metal_overlay { overlay.move_to(frame); }
+        platform::move_picker_window(frame, cx);
+        self.place_capsule();
+    }
+
     pub fn set_selection_mode(&mut self, mode: SelectionMode, cx: &mut Context<Self>) {
+        if mode == SelectionMode::RecentArea { self.place_recent_area_picker(cx); }
         self.open_iphone_when_found = false;
         if let IslandPhase::Selecting { mode: prev_mode } = self.island_phase {
             if prev_mode != mode {
@@ -1506,7 +1598,7 @@ impl ScrawlCoordinator {
         if let IslandPhase::Selecting { mode } = self.island_phase {
             let next = match mode {
                 SelectionMode::Area => SelectionMode::Window,
-                SelectionMode::Window | SelectionMode::Screen | SelectionMode::Iphone => {
+                SelectionMode::RecentArea | SelectionMode::Window | SelectionMode::Screen | SelectionMode::Iphone => {
                     SelectionMode::Area
                 }
             };
@@ -1542,12 +1634,22 @@ impl ScrawlCoordinator {
         }
     }
 
-    /// Return, `s`, the capture shortcut, or Record: iPhone records the phone, anything else
-    /// records the full screen.
+    /// Return, `s`, the capture shortcut, or Record commits the selected target.
     pub fn record_selected_mode(&mut self, cx: &mut Context<Self>) {
         match self.selection_mode() {
+            Some(SelectionMode::RecentArea) => self.record_recent_area(cx),
             Some(SelectionMode::Iphone) => self.start_recording_iphone(cx),
-            Some(_) => self.start_recording_full_screen(cx),
+            Some(SelectionMode::Window) => {
+                if let Some(target) = self.hovered_window.clone() {
+                    self.start_recording_with_target(target, cx);
+                }
+            },
+            Some(SelectionMode::Area) => {
+                if let Some([x, y, w, h]) = self.selection_drag.and_then(|(a,b)| area_rect(a,b,self.display_rect)) {
+                    self.start_recording_with_target(region_target(x,y,w,h,&self.selectable_windows), cx);
+                }
+            }
+            Some(SelectionMode::Screen) => self.start_recording_full_screen(cx),
             None => {}
         }
     }
@@ -1793,7 +1895,7 @@ impl ScrawlCoordinator {
         // The iPhone's mirror window stays where it is, and so does the highlight around it.
         if self.selection_drag.is_some()
             || self.lab
-            || self.selection_mode() == Some(SelectionMode::Iphone)
+            || matches!(self.selection_mode(), Some(SelectionMode::Iphone | SelectionMode::RecentArea))
         {
             return;
         }
@@ -2427,9 +2529,12 @@ impl ScrawlCoordinator {
         // Open on the mode the last recording used. The phone needs a live preview, started once
         // the picker is up; Window starts on Area's crosshair until the window list arrives.
         let opening = match mode.unwrap_or(self.last_mode) {
+            SelectionMode::Area | SelectionMode::RecentArea if mode.is_none() && usable_recent_area().is_some() => SelectionMode::RecentArea,
+            SelectionMode::RecentArea if usable_recent_area().is_none() => SelectionMode::Area,
             SelectionMode::Iphone => SelectionMode::Area,
             mode => mode,
         };
+        if opening == SelectionMode::RecentArea { self.place_recent_area_picker(cx); }
         self.set_island_phase(IslandPhase::Selecting { mode: opening });
         self.open_iphone_when_found = false;
         if mode.is_none() && self.last_mode == SelectionMode::Iphone {
@@ -2511,6 +2616,11 @@ impl ScrawlCoordinator {
         );
         if let IslandPhase::Selecting { mode } = self.island_phase {
             self.remember_mode(mode);
+        }
+        if target.mode == CaptureMode::Region {
+            let f = target.frame;
+            save_recent_area([f.x as f32, f.y as f32, f.width as f32, f.height as f32]);
+            self.remember_mode(SelectionMode::RecentArea);
         }
         self.recording_shortcut_key = false;
         self.iphone_preview = None;
@@ -4023,6 +4133,7 @@ impl Render for TargetPickerWindow {
 
         // Selection rect in window-local coordinates, clipped to the screen, plus its badge.
         let highlight: Option<([f32; 4], String)> = match mode {
+            SelectionMode::RecentArea => usable_recent_area().map(|[x,y,w,h]| ([x-origin[0], y-origin[1], w,h], "Recent Area · Click to record".into())),
             SelectionMode::Area => drag.map(|(a, b)| {
                 let [a, b] = [a, b].map(|p| clamp_point(p, coord.display_rect));
                 let w = (a[0] - b[0]).abs().max(1.0);
@@ -4077,7 +4188,7 @@ impl Render for TargetPickerWindow {
             let size = [text_w + 2.0 * BADGE_PX + 2.0, BADGE_H];
             let anchor = match mode {
                 SelectionMode::Area | SelectionMode::Iphone => BadgeAnchor::BelowTrailing,
-                SelectionMode::Window | SelectionMode::Screen => BadgeAnchor::Center,
+                SelectionMode::RecentArea | SelectionMode::Window | SelectionMode::Screen => BadgeAnchor::Center,
             };
             (
                 place_badge(*rect, size, screen, anchor),
@@ -4196,6 +4307,7 @@ impl Render for TargetPickerWindow {
                                 coord.start_recording_full_screen(cx);
                             }
                         }
+                        SelectionMode::RecentArea => coord.record_recent_area(cx),
                         SelectionMode::Screen => coord.start_recording_full_screen(cx),
                     }
                 });
@@ -4221,7 +4333,7 @@ impl Render for TargetPickerWindow {
                     SelectionMode::Iphone => {
                         coord.sync_picker_overlay();
                     }
-                    SelectionMode::Screen => {}
+                    SelectionMode::Screen | SelectionMode::RecentArea => {}
                     SelectionMode::Window => {
                         let found = coord
                             .selectable_windows
@@ -5844,5 +5956,21 @@ mod tests {
             title: "SCRAWL".into(),
         };
         assert_eq!(completed_delivery_note(&sent, "SCRAWL"), "Sent to SCRAWL");
+    }
+}
+
+#[cfg(test)]
+mod recent_area_tests {
+    use super::*;
+    #[test]
+    fn recent_area_requires_the_entire_original_rectangle() {
+        let area = [-1800.0, 100.0, 800.0, 600.0];
+        assert!(area_fits_display(area, [-1920.0, 0.0, 1920.0, 1080.0]));
+        assert!(!area_fits_display(area, [0.0, 0.0, 1920.0, 1080.0]));
+        assert!(!area_fits_display(area, [-1920.0, 0.0, 1920.0, 500.0]));
+        assert!(!valid_recent_area(&[0.0, 0.0, -10.0, 100.0]));
+        assert!(!valid_recent_area(&[f32::NAN, 0.0, 100.0, 100.0]));
+        assert!(SelectionMode::RecentArea.shows_record());
+        assert_eq!(SelectionMode::from_key("recent-area"), Some(SelectionMode::RecentArea));
     }
 }
