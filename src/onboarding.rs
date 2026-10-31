@@ -1093,7 +1093,10 @@ pub fn relaunch() {
     };
     let _ = std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
-        .env(crate::win::shell::RELAUNCHED_BY, std::process::id().to_string())
+        .env(
+            crate::win::shell::RELAUNCHED_BY,
+            std::process::id().to_string(),
+        )
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -1293,7 +1296,8 @@ mod tests {
         let fresh = serde_json::to_value(Flow::tour(Step::Welcome, None).view()).unwrap();
         assert!(fresh["tutorial"].is_null());
         // An older config without the key loads as nothing yet.
-        let old: Progress = serde_json::from_str(r#"{"seen":false,"resume":"how-it-works"}"#).unwrap();
+        let old: Progress =
+            serde_json::from_str(r#"{"seen":false,"resume":"how-it-works"}"#).unwrap();
         assert_eq!(old.tutorial, None);
     }
 
@@ -1434,7 +1438,10 @@ mod tests {
         let relaunch = Effect::Relaunch {
             resume: Some(Step::Permissions),
         };
-        assert_eq!(tick(&mut flow, &granted, 1_000 + RELAUNCH_AFTER_MS), relaunch);
+        assert_eq!(
+            tick(&mut flow, &granted, 1_000 + RELAUNCH_AFTER_MS),
+            relaunch
+        );
         // Never twice from one window.
         assert_eq!(tick(&mut flow, &granted, 9_000), Effect::None);
         assert_eq!(flow.on(Input::Grant(ScreenRecording)), Effect::None);
@@ -1446,7 +1453,10 @@ mod tests {
             Effect::ConfirmScreen
         );
         for t in [5_000, 60_000] {
-            assert_eq!(tick(&mut flow, &grants(&[ScreenRecording]), t), Effect::None);
+            assert_eq!(
+                tick(&mut flow, &grants(&[ScreenRecording]), t),
+                Effect::None
+            );
         }
         assert!(!flow.view().rows[0].reopening);
     }
@@ -1554,7 +1564,10 @@ mod tests {
         assert!(!view.rows[0].reopening && !view.rows[0].relaunch);
         // The next row to do is Microphone.
         assert_eq!(
-            view.rows.iter().find(|r| r.status != Status::Granted).map(|r| r.permission),
+            view.rows
+                .iter()
+                .find(|r| r.status != Status::Granted)
+                .map(|r| r.permission),
             Some(Microphone)
         );
         // macOS's Quit & Reopen: Scrawl never noted a relaunch, but the step it saved while

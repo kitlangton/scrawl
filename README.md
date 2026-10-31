@@ -866,10 +866,10 @@ system owns differ:
   (Windows uses those), and `Alt+Tab`, `Alt+F4` and `Alt+Space`.
 - **Transcription:** Parakeet runs on device with measured word timings, so spoken cues ("look
   here") cut keyframes as on macOS. If [Hex](https://github.com/anomalyco/hex) has installed a
-  model (`%APPDATA%\voice-control\models`), Scrawl uses it. Otherwise the first launch downloads
-  Hex's Parakeet Unified English (730 MB, checked against its SHA-256) into
-  `%LOCALAPPDATA%\Scrawl\models` in the background; Settings › Recording shows the progress, and
-  captures made before it finishes get their transcript once it lands.
+  model (`%APPDATA%\hex\models`, or `%APPDATA%\voice-control\models` from older Hex), Scrawl
+  uses it. Otherwise the first launch downloads Hex's Parakeet Unified English (730 MB, checked
+  against its SHA-256) into `%LOCALAPPDATA%\Scrawl\models` in the background; Settings › Recording
+  shows the progress, and captures made before it finishes get their transcript once it lands.
 - **Command-line tool:** **Install** in Settings › Agents writes a `scrawl.cmd` shim into
   `%LOCALAPPDATA%\Microsoft\WindowsApps`, which is on every user's PATH, so agents and terminals
   can run `scrawl`.

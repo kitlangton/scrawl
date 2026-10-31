@@ -641,10 +641,7 @@ fn bin_segments(segments: &[PathSegment], cols: u32, rows: u32, size: f32) -> Ve
             seg.a[0].max(seg.b[0]) + reach,
             seg.a[1].max(seg.b[1]) + reach,
         ];
-        if hi[0] < 0.0
-            || hi[1] < 0.0
-            || lo[0] >= cols as f32 * size
-            || lo[1] >= rows as f32 * size
+        if hi[0] < 0.0 || hi[1] < 0.0 || lo[0] >= cols as f32 * size || lo[1] >= rows as f32 * size
         {
             return None;
         }
@@ -947,7 +944,11 @@ mod tests {
             [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
         };
         let [b, g, r, a] = bgra(32, 32);
-        assert!(a > 200 && r > 200 && g < 100 && b < 100, "stroke pixel {:?}", [b, g, r, a]);
+        assert!(
+            a > 200 && r > 200 && g < 100 && b < 100,
+            "stroke pixel {:?}",
+            [b, g, r, a]
+        );
         assert_eq!(bgra(32, 4)[3], 0, "nothing drawn away from the stroke");
     }
 
@@ -976,12 +977,9 @@ mod tests {
                 tile_size: TILE_PT,
                 ..Default::default()
             };
-            let Some(pixels) = render_offscreen(
-                Shader::Picked,
-                &uniforms,
-                &[PathSegment::default()],
-                &[pin],
-            ) else {
+            let Some(pixels) =
+                render_offscreen(Shader::Picked, &uniforms, &[PathSegment::default()], &[pin])
+            else {
                 return;
             };
             let max_alpha = pixels.chunks_exact(4).map(|p| p[3]).max().unwrap_or(0);
@@ -1073,7 +1071,11 @@ mod tests {
         )
         .unwrap();
         assert!(tiled.iter().any(|&b| b != 0), "the scene draws something");
-        let differ = tiled.chunks(4).zip(untiled.chunks(4)).filter(|(a, b)| a != b).count();
+        let differ = tiled
+            .chunks(4)
+            .zip(untiled.chunks(4))
+            .filter(|(a, b)| a != b)
+            .count();
         assert_eq!(differ, 0, "{differ} pixels differ from the untiled frame");
     }
 
@@ -1107,7 +1109,10 @@ mod tests {
         let scribble: Vec<[f32; 2]> = (0..2_400)
             .map(|i| {
                 let t = i as f32 * 0.05;
-                [1028.0 + 600.0 * (t * 1.3).sin(), 600.0 + 330.0 * (t * 1.7).cos()]
+                [
+                    1028.0 + 600.0 * (t * 1.3).sin(),
+                    600.0 + 330.0 * (t * 1.7).cos(),
+                ]
             })
             .collect();
         let queue = device.new_command_queue();
@@ -1441,7 +1446,11 @@ mod tests {
                 ..base
             };
             let pins = [pin.unwrap_or_default()];
-            (ShownFrame::new(uniforms, &[PathSegment::default()], &pins), uniforms, pins)
+            (
+                ShownFrame::new(uniforms, &[PathSegment::default()], &pins),
+                uniforms,
+                pins,
+            )
         };
         let refresh_ms = 8;
         let mut shown = frame_at(0).0;
@@ -1456,7 +1465,10 @@ mod tests {
         let pulse_frames = (crate::sketch::PIN_PULSE_MS - 1) / refresh_ms;
         let last = *drawn.last().expect("the pulse draws");
         assert_eq!(drawn.len() as u64, pulse_frames + 1, "drawn at {drawn:?}");
-        assert!(last >= crate::sketch::PIN_PULSE_MS, "the frame after the pulse is drawn");
+        assert!(
+            last >= crate::sketch::PIN_PULSE_MS,
+            "the frame after the pulse is drawn"
+        );
         assert!(
             last < crate::sketch::PIN_PULSE_MS + refresh_ms,
             "nothing drawn once it's cleared: {drawn:?}"
@@ -1468,7 +1480,10 @@ mod tests {
         else {
             return;
         };
-        assert!(pixels.iter().all(|&b| b == 0), "the frame after the pulse is clear");
+        assert!(
+            pixels.iter().all(|&b| b == 0),
+            "the frame after the pulse is clear"
+        );
     }
 
     /// GPU time per kind of frame on a 5120×2160 display, the general shader (every frame before
@@ -1557,6 +1572,9 @@ mod tests {
             .next()
             .and_then(|v| v.parse().ok())
             .expect("target has a major version");
-        assert!(major <= 15, "laser shader targets macOS {major}, newer than 15.0");
+        assert!(
+            major <= 15,
+            "laser shader targets macOS {major}, newer than 15.0"
+        );
     }
 }

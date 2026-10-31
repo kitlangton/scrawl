@@ -1,7 +1,7 @@
 //! On-device transcription on Windows, with measured word timings: Parakeet through
 //! `transcribe.cpp`, the engine Hex uses. It loads a model Hex has already installed
-//! (`%APPDATA%\voice-control\models`), else Scrawl's own copy of Hex's Parakeet Unified English
-//! (`%LOCALAPPDATA%\Scrawl\models`), which `install` downloads once in the background and checks
+//! (`%APPDATA%\hex\models`, else the older `%APPDATA%\voice-control\models`), else Scrawl's own
+//! copy of Hex's Parakeet Unified English (`%LOCALAPPDATA%\Scrawl\models`), which `install` downloads once in the background and checks
 //! against its SHA-256. Like the Hex client, it transcribes each speech island on its own; unlike
 //! it, every word keeps the time the model heard it (`estimated: false`), so spoken cues ("look
 //! here") can cut keyframes.
@@ -34,10 +34,6 @@ pub const PARAKEET: Artifact = Artifact {
     bytes: 731_357_568,
     sha256: "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795",
 };
-
-fn models_dir() -> PathBuf {
-    crate::hex::support_dir().join("models")
-}
 
 /// Where Scrawl keeps the model it downloaded (`SCRAWL_MODELS_DIR` for tests).
 pub fn own_models_dir() -> PathBuf {
@@ -75,8 +71,17 @@ pub fn installed_models() -> Vec<PathBuf> {
     models
 }
 
+/// Each of Hex's folders in `hex::support_dirs` order (`hex`, then `voice-control`), each ranked
+/// by that folder's own `settings.json`.
 fn hex_models() -> Vec<PathBuf> {
-    let chosen = std::fs::read(crate::hex::support_dir().join("settings.json"))
+    crate::hex::support_dirs()
+        .iter()
+        .flat_map(|dir| models_in(dir))
+        .collect()
+}
+
+fn models_in(support: &Path) -> Vec<PathBuf> {
+    let chosen = std::fs::read(support.join("settings.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|settings| {
@@ -85,7 +90,7 @@ fn hex_models() -> Vec<PathBuf> {
                 .map(str::to_owned)
         })
         .map(|id| id.replace('_', "-"));
-    let mut models = verified_in(&models_dir());
+    let mut models = verified_in(&support.join("models"));
     let rank = |path: &PathBuf| {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         let picked = chosen.as_deref().is_some_and(|id| name.starts_with(id));
