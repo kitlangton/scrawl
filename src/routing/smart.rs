@@ -324,8 +324,12 @@ pub enum Decision {
         instead: Vec<Scored>,
     },
     /// The suggestion first, then its runners-up. Nothing is sent until one is picked.
-    Offer { choices: Vec<Scored> },
-    Keep { reason: String },
+    Offer {
+        choices: Vec<Scored>,
+    },
+    Keep {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

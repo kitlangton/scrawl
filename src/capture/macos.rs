@@ -30,7 +30,8 @@ pub const MAX_CAPTURE_SCALE: f64 = 2.0;
 /// Where a session's clicks and keys come from, for the log.
 pub(super) const MOUSE_SOURCE: &str = "the mouse monitor";
 pub(super) const KEY_SOURCE: &str = "the key tap";
-pub(super) const NO_KEY_SOURCE: &str = "nowhere (Accessibility off; the record shortcut still works)";
+pub(super) const NO_KEY_SOURCE: &str =
+    "nowhere (Accessibility off; the record shortcut still works)";
 
 /// `~/Library/Logs/Scrawl`.
 pub fn log_dir() -> Option<PathBuf> {
@@ -1352,7 +1353,6 @@ fn sck_lists_windows(ids: &[u32]) -> Vec<u32> {
         .unwrap_or_default()
 }
 
-
 /// Keeps the key event tap in step with Accessibility, which macOS reports live: makes the tap
 /// once it's on (no relaunch), stops it if it's turned off (an active tap whose grant is gone can
 /// hold up input), and re-enables it if macOS turned it off. Returns whether it is delivering.
@@ -1476,8 +1476,8 @@ fn mouse_event(
     }
     let event_type = unsafe { CGEventGetType(event) };
     let flags = unsafe { CGEventGetFlags(event) };
-    let pure_shift = (flags & FLAG_SHIFT) != 0
-        && (flags & (FLAG_COMMAND | FLAG_CONTROL | FLAG_ALTERNATE)) == 0;
+    let pure_shift =
+        (flags & FLAG_SHIFT) != 0 && (flags & (FLAG_COMMAND | FLAG_CONTROL | FLAG_ALTERNATE)) == 0;
     let t_ms = telemetry.elapsed_ms();
     let loc = unsafe { CGEventGetLocation(event) };
     match event_type {
@@ -1918,7 +1918,10 @@ mod tests {
         let event = event.expect("an NSEvent");
         let back: *mut OpaqueCgEvent = unsafe { msg_send![&*event, CGEvent] };
         assert!(!back.is_null());
-        assert_eq!(unsafe { CGEventGetType(back.cast()) }, EVENT_LEFT_MOUSE_DOWN);
+        assert_eq!(
+            unsafe { CGEventGetType(back.cast()) },
+            EVENT_LEFT_MOUSE_DOWN
+        );
 
         let (sender, _receiver) = flume::unbounded();
         let telemetry = SharedCaptureTelemetry::new(sender);
@@ -1941,7 +1944,11 @@ mod tests {
             matches!(events[..], [InteractionEvent::Click { x, y, .. }] if (x - 0.1).abs() < 1e-3 && (y - 0.2).abs() < 1e-3),
             "{events:?}"
         );
-        assert_eq!(MOUSE_MONITOR_MASK & (1 << EVENT_KEY_DOWN), 0, "keys need Accessibility");
+        assert_eq!(
+            MOUSE_MONITOR_MASK & (1 << EVENT_KEY_DOWN),
+            0,
+            "keys need Accessibility"
+        );
     }
 
     /// A left click from the mouse monitor: down at `from` with `flags`, up at `to` with `up_flags`.

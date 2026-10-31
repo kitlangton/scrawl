@@ -141,11 +141,7 @@ impl MarkEntry<'_> {
     pub fn line(&self) -> String {
         let frame = self.keyframe.map_or("#-".to_owned(), |k| format!("#{k}"));
         let num = self.numbered.then_some(self.number);
-        format!(
-            "{frame} {} · {}",
-            mark_label(self.mark, num),
-            self.mark.id
-        )
+        format!("{frame} {} · {}", mark_label(self.mark, num), self.mark.id)
     }
 
     pub fn json(&self) -> serde_json::Value {
@@ -173,7 +169,9 @@ pub fn mark_entries(bundle: &ScrawlBundle) -> Vec<MarkEntry<'_>> {
         .iter()
         .map(|mark| {
             let frame = bundle.keyframes.iter().find(|k| mark_on_keyframe(mark, k));
-            let shown = frame.map(|k| marks_on(k, &bundle.marks)).unwrap_or_default();
+            let shown = frame
+                .map(|k| marks_on(k, &bundle.marks))
+                .unwrap_or_default();
             let pos = shown.iter().position(|m| std::ptr::eq(*m, mark));
             MarkEntry {
                 mark,

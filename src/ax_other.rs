@@ -32,7 +32,12 @@ impl Prober {
     }
 }
 
-pub fn apply(_hits: &HashMap<Target, Hit>, _events: &mut [InteractionEvent], _strokes: &mut [Stroke]) {}
+pub fn apply(
+    _hits: &HashMap<Target, Hit>,
+    _events: &mut [InteractionEvent],
+    _strokes: &mut [Stroke],
+) {
+}
 
 pub fn stroke_probe_point(_stroke: &Stroke, _frame: TargetFrame) -> Option<(f64, f64)> {
     None

@@ -83,7 +83,9 @@ pub(super) fn move_picker_window(frame: [f64; 4], _cx: &mut App) {
 }
 
 /// GPUI places windows relative to their display on macOS.
-pub(super) fn window_origin(_display: Option<&dyn gpui::PlatformDisplay>) -> gpui::Point<gpui::Pixels> {
+pub(super) fn window_origin(
+    _display: Option<&dyn gpui::PlatformDisplay>,
+) -> gpui::Point<gpui::Pixels> {
     gpui::Point::default()
 }
 
@@ -1021,7 +1023,6 @@ fn trace_capsule(
         clip: shell,
     }
 }
-
 
 pub(super) fn capture_own_window_screenshot(
     window_num: Option<isize>,

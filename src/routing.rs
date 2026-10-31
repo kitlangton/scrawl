@@ -455,13 +455,8 @@ pub fn look_capture(
     front_bundle_id: Option<&str>,
     target_bundle_id: Option<&str>,
 ) -> Option<look::Live> {
-    routing_enabled().then(|| {
-        look::look_live(
-            front_bundle_id,
-            target_bundle_id,
-            &look::Senses::default(),
-        )
-    })
+    routing_enabled()
+        .then(|| look::look_live(front_bundle_id, target_bundle_id, &look::Senses::default()))
 }
 
 /// Smart routing's second half, once the bundle is built: decides, saves the evidence beside
@@ -716,7 +711,10 @@ mod tests {
             (found, requests)
         };
         // Exact folder: one filtered request.
-        assert_eq!(pick(&sessions, "/p/app", false), (Some("ses_app".into()), 1));
+        assert_eq!(
+            pick(&sessions, "/p/app", false),
+            (Some("ses_app".into()), 1)
+        );
         // A subfolder needs a newest-first scan, which is capped: past it the exact match stands.
         let (found, requests) = pick(&sessions, "/p/app", true);
         assert_eq!(found.as_deref(), Some("ses_app"));

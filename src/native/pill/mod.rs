@@ -31,16 +31,14 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, NSObjectProtocol};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSColor, NSEvent, NSPanel, NSScreen, NSStatusWindowLevel,
-    NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSBackingStoreType, NSColor, NSEvent, NSPanel, NSScreen, NSStatusWindowLevel, NSView,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::{CALayer, CATransaction};
 
 use self::atlas::{GlyphAtlas, IconKind};
-use self::model::{
-    CHIP_H, CHIP_PX, ElemId, FrameState, PANEL_H, PANEL_W, PillModel, Pres,
-};
+use self::model::{CHIP_H, CHIP_PX, ElemId, FrameState, PANEL_H, PANEL_W, PillModel, Pres};
 use crate::ui::{SelectionMode, motion};
 
 const OFFSCREEN_W_PT: f32 = 960.0;
@@ -169,7 +167,11 @@ define_class!(
 );
 
 impl ScrawlPillView {
-    fn new(mtm: MainThreadMarker, frame: NSRect, action_tx: flume::Sender<PillAction>) -> Retained<Self> {
+    fn new(
+        mtm: MainThreadMarker,
+        frame: NSRect,
+        action_tx: flume::Sender<PillAction>,
+    ) -> Retained<Self> {
         let this = mtm.alloc::<Self>().set_ivars(PillViewIvars { action_tx });
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
@@ -198,7 +200,10 @@ impl MetalPipelines {
             .new_library_with_data(metallib_bytes)
             .map_err(|e| format!("Failed to load pill.metallib: {e}"))?;
 
-        let make_pipeline = |vs_name: &str, fs_name: &str, premul_blend: bool| -> Result<RenderPipelineState, String> {
+        let make_pipeline = |vs_name: &str,
+                             fs_name: &str,
+                             premul_blend: bool|
+         -> Result<RenderPipelineState, String> {
             let vs = library
                 .get_function(vs_name, None)
                 .map_err(|e| format!("Missing vertex shader {vs_name}: {e}"))?;
@@ -231,7 +236,8 @@ impl MetalPipelines {
 
         let tile_pipeline = make_pipeline("pill_tile_vertex", "pill_tile_fragment", true)?;
         let blur_h_pipeline = make_pipeline("pill_blur_h_vertex", "pill_blur_h_fragment", false)?;
-        let composite_pipeline = make_pipeline("pill_screen_vertex", "pill_composite_fragment", false)?;
+        let composite_pipeline =
+            make_pipeline("pill_screen_vertex", "pill_composite_fragment", false)?;
 
         let make_offscreen = || {
             let desc = TextureDescriptor::new();
@@ -414,10 +420,7 @@ impl NativePill {
         if let Ok(dl) = CVDisplayLink::from_active_cg_displays() {
             let ctx = Arc::into_raw(shared.clone());
             if unsafe {
-                dl.set_output_callback(
-                    pill_display_link_cb,
-                    ctx.cast_mut().cast::<c_void>(),
-                )
+                dl.set_output_callback(pill_display_link_cb, ctx.cast_mut().cast::<c_void>())
             }
             .is_ok()
             {
@@ -630,17 +633,12 @@ extern "C" fn pill_display_link_cb(
 ) -> CVReturn {
     if !context.is_null() {
         let shared = unsafe { &*context.cast::<SharedNativePill>() };
-        if shared.alive.load(Ordering::Relaxed)
-            && !shared.tick_queued.swap(true, Ordering::AcqRel)
+        if shared.alive.load(Ordering::Relaxed) && !shared.tick_queued.swap(true, Ordering::AcqRel)
         {
             // Retain an Arc reference for the main-queue callback.
             unsafe {
                 Arc::increment_strong_count(context.cast::<SharedNativePill>());
-                dispatch_async_f(
-                    &_dispatch_main_q,
-                    context,
-                    pill_main_queue_trampoline,
-                );
+                dispatch_async_f(&_dispatch_main_q, context, pill_main_queue_trampoline);
             }
         }
     }
@@ -685,8 +683,7 @@ impl SharedNativePill {
         st.last_tick_now = now;
         let dt = raw_dt.min(0.025 * motion::time_scale());
 
-        let animating = !st.model.is_at_rest()
-            || matches!(st.model.pres, Pres::Processing);
+        let animating = !st.model.is_at_rest() || matches!(st.model.pres, Pres::Processing);
         if !animating && !st.dirty {
             if motion::tracing() && !st.model.is_fully_hidden() {
                 let frame = st.model.frame();
@@ -848,12 +845,7 @@ impl PillRuntimeState {
             let screen_rect = if matches!(elem.id, ElemId::DividerLead | ElemId::DividerClose) {
                 let dw = 1.0 * elem.scale;
                 let dh = 16.0 * elem.scale;
-                [
-                    ox + ex + (ew - dw) * 0.5,
-                    oy + ey + (eh - dh) * 0.5,
-                    dw,
-                    dh,
-                ]
+                [ox + ex + (ew - dw) * 0.5, oy + ey + (eh - dh) * 0.5, dw, dh]
             } else {
                 [ox + ex, oy + ey, ew, eh]
             };
@@ -912,7 +904,6 @@ impl PillRuntimeState {
         drawable.present();
         CATransaction::commit();
     }
-
 }
 
 impl MetalPipelines {

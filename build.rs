@@ -129,13 +129,22 @@ fn compile_metal_shader(src_rel: &str, name: &str) {
     println!("cargo:rerun-if-changed={}", source.display());
 
     let metal = Command::new("xcrun")
-        .args(["--sdk", "macosx", "metal", "-c", "-mmacosx-version-min=15.0"])
+        .args([
+            "--sdk",
+            "macosx",
+            "metal",
+            "-c",
+            "-mmacosx-version-min=15.0",
+        ])
         .arg(&source)
         .arg("-o")
         .arg(&air)
         .status()
         .expect("xcrun metal is required to build Metal shaders");
-    assert!(metal.success(), "Metal shader compilation failed for {src_rel}");
+    assert!(
+        metal.success(),
+        "Metal shader compilation failed for {src_rel}"
+    );
 
     let metallib = Command::new("xcrun")
         .args(["--sdk", "macosx", "metallib"])
@@ -144,7 +153,10 @@ fn compile_metal_shader(src_rel: &str, name: &str) {
         .arg(&library)
         .status()
         .expect("xcrun metallib is required to build Metal shaders");
-    assert!(metallib.success(), "Metal library creation failed for {src_rel}");
+    assert!(
+        metallib.success(),
+        "Metal library creation failed for {src_rel}"
+    );
 }
 
 /// Builds `scrawl-helper` (Swift: SpeechAnalyzer, iPhone capture, movie decoding) beside the

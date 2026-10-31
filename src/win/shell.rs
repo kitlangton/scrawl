@@ -13,7 +13,9 @@ use windows::Win32::Storage::FileSystem::{
     GetFileInformationByHandleEx, GetFileVersionInfoSizeW, GetFileVersionInfoW, OPEN_EXISTING,
     VerQueryValueW,
 };
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx};
+use windows::Win32::System::Com::{
+    COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx,
+};
 use windows::Win32::System::Threading::{
     GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
 };
@@ -205,7 +207,10 @@ pub const RELAUNCHED_BY: &str = "SCRAWL_RELAUNCHED_BY";
 /// A copy started by `onboarding::relaunch` waits (at most 10 s) for the one that started it to
 /// quit, so there are never two running.
 pub fn wait_for_relauncher() {
-    if let Some(pid) = std::env::var(RELAUNCHED_BY).ok().and_then(|v| v.parse().ok()) {
+    if let Some(pid) = std::env::var(RELAUNCHED_BY)
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
         wait_for_exit(pid, Duration::from_secs(10));
     }
 }
@@ -213,7 +218,9 @@ pub fn wait_for_relauncher() {
 /// Waits for process `pid` to exit, at most `limit`. Returns whether it has (or never ran).
 fn wait_for_exit(pid: u32, limit: Duration) -> bool {
     use windows::Win32::Foundation::WAIT_TIMEOUT;
-    use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
     let Ok(process) = (unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }) else {
         return true;
     };

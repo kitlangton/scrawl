@@ -840,10 +840,7 @@ impl OnboardingWindow {
             )
         } else if state.fix && only(Permission::Accessibility) {
             (
-                format!(
-                    "Accessibility, for {}",
-                    crate::settings::paste_label()
-                ),
+                format!("Accessibility, for {}", crate::settings::paste_label()),
                 format!(
                     "{} pastes a capture into the app in front by pressing {} for you, and that needs Accessibility. Pressing {} yourself works without it.",
                     crate::settings::paste_label(),

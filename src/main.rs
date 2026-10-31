@@ -2,12 +2,12 @@ mod agent_context;
 mod audio;
 mod autocrop;
 // Windows looks elements up through UI Automation (`win/uia.rs`); other systems have no lookup.
+mod autocrop_lab;
 #[cfg_attr(
     not(any(target_os = "macos", target_os = "windows")),
     path = "ax_other.rs"
 )]
 mod ax;
-mod autocrop_lab;
 mod capture;
 #[cfg_attr(target_os = "windows", path = "win/command_line.rs")]
 mod command_line;
@@ -112,10 +112,20 @@ fn hex_status() {
         "Hex model setting: {}",
         configured.as_deref().unwrap_or("(automatic)")
     );
-    println!("Discovery file: {}", hex::discovery_path().display());
-    let status = match hex::status() {
-        Ok(status) => status,
+    let paths = hex::discovery_paths();
+    let status = match hex::Client::connect_any(&paths)
+        .and_then(|(client, path)| Ok((client.status()?, path)))
+    {
+        Ok((status, path)) => {
+            println!("Discovery file: {}", path.display());
+            status
+        }
         Err(error) => {
+            let tried: Vec<_> = paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect();
+            println!("Discovery files tried: {}", tried.join(", "));
             println!("Hex: not connected ({error:#})");
             println!("Next recording uses: {}", next(None));
             return;
@@ -1565,7 +1575,9 @@ fn main() -> Result<()> {
         // start a second menu-bar app. macOS opens the app with stdin on /dev/null.
         // On Windows `scrawl.exe` is a console program and Explorer gives it a console too, so a
         // bare launch always starts the app.
-        None if cfg!(target_os = "macos") && std::io::IsTerminal::is_terminal(&std::io::stdin()) => {
+        None if cfg!(target_os = "macos")
+            && std::io::IsTerminal::is_terminal(&std::io::stdin()) =>
+        {
             <Cli as clap::CommandFactory>::command().print_help()?;
             return Ok(());
         }
@@ -2030,7 +2042,8 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::SckProbe { watch } => {
-            let end = std::time::Instant::now() + std::time::Duration::from_secs(watch.unwrap_or(0));
+            let end =
+                std::time::Instant::now() + std::time::Duration::from_secs(watch.unwrap_or(0));
             loop {
                 let started = std::time::Instant::now();
                 let preflight = capture::screen_capture_granted();
