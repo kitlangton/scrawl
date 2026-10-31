@@ -680,10 +680,11 @@ fn find_hud_pill_ns_window() -> Option<Retained<NSWindow>> {
     let app = NSApplication::sharedApplication(mtm);
     for win in app.windows() {
         let size = win.frame().size;
-        if ((size.width - f64::from(PILL_WINDOW_W)).abs() < 8.0
-            || (size.width - f64::from(crate::native::pill::model::PANEL_W)).abs() < 8.0)
-            && (size.height - f64::from(PILL_WINDOW_H)).abs() < 8.0
-        {
+        let gpui = (size.width - f64::from(PILL_WINDOW_W)).abs() < 8.0
+            && (size.height - f64::from(PILL_WINDOW_H)).abs() < 8.0;
+        let native = (size.width - f64::from(crate::native::pill::model::PANEL_W)).abs() < 8.0
+            && (size.height - f64::from(crate::native::pill::model::PANEL_H)).abs() < 8.0;
+        if gpui || native {
             return Some(win);
         }
     }

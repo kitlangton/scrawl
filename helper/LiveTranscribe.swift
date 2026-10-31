@@ -6,25 +6,31 @@ import Speech
 /// hold), and writes JSON lines: `{"ready":true,"locale"}` once the model is loaded, one
 /// `{"segment":{t0,t1,text},"words":[…]}` per finalized result, and after stdin closes and the
 /// tail is finalized `{"done":true,"samples":N}`. Times are ms from the first sample, as
-/// `transcribe` gives them for the WAV. It never downloads a model: one that isn't installed
-/// fails at once, and Scrawl transcribes the finished recording instead.
+/// `transcribe` gives them for the WAV. With `--volatile` it also writes
+/// `{"volatile":{t0,t1,text}}` for each guess at the words still being said (each replaces the
+/// last, until a finalized result covers them), for showing the words live; the finalized results
+/// are the same either way. Guesses come about every 4 s of speech; `--fast` (SpeechTranscriber's
+/// `fastResults`) makes it about every second, at some cost to the finalized results, so only a
+/// stream whose transcript is thrown away asks for it. It never downloads a model: one that isn't
+/// installed fails at once, and Scrawl transcribes the finished recording instead.
 /// Before macOS 26 there is no SpeechAnalyzer to stream to, so it fails at once the same way.
 enum LiveTranscriber {
-  static func run(preferred: String? = nil) async throws {
+  static func run(preferred: String? = nil, volatile: Bool = false, fast: Bool = false) async throws {
     #if compiler(>=6.2)
-    if #available(macOS 26, *) { return try await stream(preferred: preferred) }
+    if #available(macOS 26, *) { return try await stream(preferred: preferred, volatile: volatile, fast: fast) }
     #endif
     throw HelperError("live transcription needs macOS 26's SpeechAnalyzer")
   }
 
   #if compiler(>=6.2)
   @available(macOS 26, *)
-  private static func stream(preferred: String?) async throws {
+  private static func stream(preferred: String?, volatile: Bool, fast: Bool) async throws {
     guard let choice = await SpeechModel.choose(preferred: preferred), choice.engine == .speech else {
       throw HelperError("SpeechTranscriber isn't available on this Mac")
     }
     let locale = choice.locale
-    let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
+    let reporting: Set<SpeechTranscriber.ReportingOption> = !volatile ? [] : fast ? [.volatileResults, .fastResults] : [.volatileResults]
+    let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: reporting, attributeOptions: [.audioTimeRange])
     guard await AssetInventory.status(forModules: [transcriber]) == .installed else {
       throw HelperError("the speech model for \(locale.identifier) isn't installed")
     }
@@ -39,6 +45,10 @@ enum LiveTranscriber {
     let results = Task {
       for try await result in transcriber.results {
         let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !result.isFinal {
+          emit(["volatile": ["t0": ms(result.range.start), "t1": ms(result.range.end), "text": text]])
+          continue
+        }
         guard !text.isEmpty else { continue }
         var words: [[String: Any]] = []
         for run in result.text.runs {

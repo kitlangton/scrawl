@@ -21,6 +21,10 @@ pub struct AudioRecorder {
     samples: Arc<Mutex<Vec<f32>>>,
     error: Arc<Mutex<Option<String>>>,
     live: Option<crate::live_transcribe::Live>,
+    /// A live transcription only for showing the words (`live_audio`), dropped at stop.
+    preview: Option<crate::live_transcribe::Live>,
+    /// The capsule's view of this recording (`live_audio::begin`).
+    shown: Option<u64>,
 }
 
 impl AudioRecorder {
@@ -45,20 +49,31 @@ impl AudioRecorder {
                 Ok(())
             })
             .context("Could not spawn microphone worker")?;
-        let live = crate::live_transcribe::wanted()
-            .then(|| crate::live_transcribe::Live::start(Arc::clone(&samples)))
-            .and_then(|live| {
-                live.inspect_err(|error| {
-                    crate::capture::scrawl_log(format!("Live transcription: {error:#}"));
-                })
-                .ok()
+        let show = crate::live_audio::wanted();
+        let caption = (show && crate::live_audio::captions_possible())
+            .then(|| Arc::new(Mutex::new(crate::live_audio::Caption::default())));
+        let log = |error: anyhow::Error| {
+            crate::capture::scrawl_log(format!("Live transcription: {error:#}"));
+        };
+        // The experiment's stream shows the words too; without it, one only for showing them.
+        let (live, preview) = if crate::live_transcribe::wanted() {
+            let live = crate::live_transcribe::Live::start(Arc::clone(&samples), caption.clone());
+            (live.map_err(log).ok(), None)
+        } else {
+            let preview = caption.clone().map(|caption| {
+                crate::live_transcribe::Live::preview(Arc::clone(&samples), caption)
             });
+            (None, preview.and_then(|p| p.map_err(log).ok()))
+        };
+        let shown = show.then(|| crate::live_audio::begin(Arc::clone(&samples), caption));
         Ok(Self {
             worker: Some(worker),
             stop_sender: Some(stop_sender),
             samples,
             error,
             live,
+            preview,
+            shown,
         })
     }
 
@@ -165,6 +180,7 @@ impl AudioRecorder {
     }
 
     pub fn stop(mut self) -> Result<RecordedAudio> {
+        self.stop_showing();
         // Joining drops the stream and stops its callback before taking the buffer,
         // including a stop requested while the device was still being initialized.
         self.join_worker()?;
@@ -198,8 +214,19 @@ impl AudioRecorder {
     }
 }
 
+impl AudioRecorder {
+    /// Takes the recording out of the capsule and stops the words' own transcription.
+    fn stop_showing(&mut self) {
+        if let Some(id) = self.shown.take() {
+            crate::live_audio::end(id);
+        }
+        self.preview.take();
+    }
+}
+
 impl Drop for AudioRecorder {
     fn drop(&mut self) {
+        self.stop_showing();
         let _ = self.join_worker();
     }
 }
@@ -412,6 +439,8 @@ mod tests {
             samples,
             error: Arc::new(Mutex::new(None)),
             live: None,
+            preview: None,
+            shown: None,
         }
         .stop()
         .unwrap();
@@ -432,6 +461,8 @@ mod tests {
             samples: Arc::new(Mutex::new(samples)),
             error: Arc::new(Mutex::new(Some("Device disconnected".into()))),
             live: None,
+            preview: None,
+            shown: None,
         };
         assert_eq!(recorder(vec![0.1; 160]).stop().unwrap().sample_count, 160);
         assert!(recorder(Vec::new()).stop().is_err());
@@ -445,6 +476,8 @@ mod tests {
             samples: Arc::new(Mutex::new(Vec::new())),
             error: Arc::new(Mutex::new(None)),
             live: None,
+            preview: None,
+            shown: None,
         };
         assert!(
             recorder
