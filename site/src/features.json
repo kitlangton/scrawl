@@ -420,6 +420,7 @@
       "note": "Windows keeps the local engine for now.",
       "config": [
         { "key": "transcribeCommand", "value": "[\"/abs/cmd\", \"{audio}\"]", "does": "Program to run" },
+        { "key": "transcribeCommandDisplayName", "value": "\"Whisper Large V3\"", "does": "Name Settings shows for it" },
         { "key": "transcribeTimeoutSeconds", "value": "600", "does": "Its time limit" }
       ],
       "docs": ["README.md#your-own-model-command"]
