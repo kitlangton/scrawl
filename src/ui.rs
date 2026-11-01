@@ -256,6 +256,33 @@ fn completed_delivery_note(delivery: &crate::delivery::Delivery, title: &str) ->
     }
 }
 
+/// A capture's `onCapture` command (`run_on_capture`): running until `outcome` is known.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OnCaptureRun {
+    dir: PathBuf,
+    outcome: Option<crate::on_capture::Outcome>,
+}
+
+/// The Completed island's lead for a capture's `onCapture` command: "Sending…" while it runs,
+/// then where it went.
+fn on_capture_note(run: &OnCaptureRun) -> String {
+    use crate::on_capture::Outcome;
+    match &run.outcome {
+        None => "Sending…".to_owned(),
+        Some(Outcome::Delivered { to: Some(to) }) => format!("Sent to {}", island_title(to)),
+        Some(Outcome::Delivered { to: None }) => "Sent".to_owned(),
+        Some(Outcome::Failed(_)) => "Copied · onCapture failed".to_owned(),
+    }
+}
+
+/// What leads for a local capture: a send to OpenCode ("Sending to …", "Sent to …") when there
+/// is one, else its `onCapture` command, else nothing ("Copied", `completed_label`). Cancelling
+/// a send or getting a routing offer clears the first, so the command's result shows again.
+fn completed_lead(send: Option<&str>, on_capture: Option<&OnCaptureRun>) -> Option<String> {
+    send.map(str::to_owned)
+        .or_else(|| on_capture.map(on_capture_note))
+}
+
 /// Inner width of the Selecting row: mode segments, an optional Record chip, divider, and ✕.
 fn selecting_row_width(label_widths: &[f32], record_width: Option<f32>) -> f32 {
     let segments: f32 = label_widths
@@ -732,6 +759,9 @@ pub struct ScrawlCoordinator {
     /// A smart-routed capture waiting out its undo window before it's sent; ✕ or Paste on the
     /// Completed island cancels it.
     pending_send: Option<PathBuf>,
+    /// The newest capture's `onCapture` command, while it runs and once it's done; the island and
+    /// the review window show it unless a send to OpenCode has them (`completed_lead`).
+    on_capture: Option<OnCaptureRun>,
     /// A local capture copied while its route is still being worked out; ✕ or Paste clears it,
     /// keeping the capture on the clipboard whatever the route says.
     routing: Option<PathBuf>,
@@ -824,6 +854,7 @@ impl ScrawlCoordinator {
             completed_dir: None,
             completed_note: None,
             pending_send: None,
+            on_capture: None,
             routing: None,
             route_chips: Vec::new(),
             last_local_capture_ms: 0,
@@ -1392,6 +1423,25 @@ impl ScrawlCoordinator {
         self.selected_keyframe = 0;
     }
 
+    /// The Completed island's lead: `completed_note`, else the shown capture's `onCapture`.
+    fn island_note(&self) -> Option<String> {
+        let run = self
+            .on_capture
+            .as_ref()
+            .filter(|run| self.completed_dir.as_deref() == Some(run.dir.as_path()));
+        completed_lead(self.completed_note.as_deref(), run)
+    }
+
+    /// The review window's status line: `review_status`, else the shown capture's `onCapture`.
+    fn review_lead(&self) -> Option<String> {
+        let run = self.on_capture.as_ref().filter(|run| {
+            self.review_bundle
+                .as_ref()
+                .is_some_and(|(shown, _)| *shown == run.dir)
+        });
+        completed_lead(self.review_status.as_deref(), run)
+    }
+
     fn sync_picker_overlay(&self) {
         let rect = match self.island_phase {
             IslandPhase::Selecting {
@@ -1879,7 +1929,7 @@ impl ScrawlCoordinator {
             },
             IslandPhase::Processing => Pres::Processing,
             IslandPhase::Completed { inbox_count, .. } => Pres::Completed {
-                label: completed_label(inbox_count, self.completed_note.as_deref()),
+                label: completed_label(inbox_count, self.island_note().as_deref()),
                 routes: self.route_chip_labels(),
             },
         };
@@ -2171,6 +2221,36 @@ impl ScrawlCoordinator {
                     .is_some_and(|(shown, _)| *shown == dir)
                 {
                     coord.review_status = Some(delivery.status("Copied to clipboard"));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Runs the user's `onCapture` command for a finished capture, if there is one, and keeps its
+    /// state in `on_capture` for the Completed island and the review window ("Sending…", then
+    /// "Sent to …"), which a send to OpenCode takes precedence over (`completed_lead`).
+    fn run_on_capture(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
+        let (sender, receiver) = flume::bounded(1);
+        if !crate::on_capture::spawn(&dir, move |outcome| {
+            let _ = sender.send(outcome);
+        }) {
+            return;
+        }
+        self.on_capture = Some(OnCaptureRun {
+            dir: dir.clone(),
+            outcome: None,
+        });
+        cx.spawn(async move |entity, cx| {
+            // No outcome means its thread died: drop "Sending…" rather than leave it up.
+            let outcome = receiver.recv_async().await.ok();
+            let _ = entity.update(cx, |coord, cx| {
+                if coord.on_capture.as_ref().is_some_and(|run| run.dir == dir) {
+                    coord.on_capture = outcome.map(|outcome| OnCaptureRun {
+                        dir,
+                        outcome: Some(outcome),
+                    });
                 }
                 cx.notify();
             });
@@ -2783,6 +2863,7 @@ impl ScrawlCoordinator {
         drop(rec._metal_overlay);
         self.set_island_phase(IslandPhase::Processing);
         self.completed_note = None;
+        self.on_capture = None;
         self.route_chips.clear();
         cx.notify();
         if matches!(source, CaptureSource::Lab) {
@@ -2912,6 +2993,7 @@ impl ScrawlCoordinator {
                             coord.routing = Some(dir.clone());
                             routed = Some((dir.clone(), look.is_some().then(|| bundle.clone())));
                         }
+                        coord.run_on_capture(dir.clone(), cx);
                         coord.set_review_bundle((dir, bundle), coord.completed_note.clone());
                     }
                     coord.set_island_phase(IslandPhase::Completed {
@@ -3102,7 +3184,7 @@ impl Render for HudPillWindow {
         let highlight_p = ease_out_cubic(motion::age(coord.highlight_since) / HIGHLIGHT_FADE_S);
         let clock = format_clock(elapsed_ms);
         let has_iphone = coord.iphone.is_some();
-        let completed_note = coord.completed_note.clone();
+        let completed_note = coord.island_note();
         let routes = coord.route_chip_labels();
         // The Recording capsule's trailing group: switch chips or controls, and the swap between.
         let chips = if matches!(phase, IslandPhase::Recording) {
@@ -4380,7 +4462,7 @@ impl Render for BundleReviewWindow {
         let stage_w = (f32::from(window.bounds().size.width) - 320.0 - 44.0).max(320.0);
         let coord_read = self.coordinator.read(cx);
         let state = coord_read.review_bundle.clone();
-        let status = coord_read.review_status.clone();
+        let status = coord_read.review_lead();
         let tab = coord_read.selected_tab;
         let selected_kf = coord_read.selected_keyframe;
         let shortcut_label = coord_read.shortcut_label();
@@ -5848,5 +5930,64 @@ mod tests {
             title: "SCRAWL".into(),
         };
         assert_eq!(completed_delivery_note(&sent, "SCRAWL"), "Sent to SCRAWL");
+    }
+
+    #[test]
+    fn on_capture_island_text() {
+        use crate::on_capture::Outcome;
+        let run = |outcome: Option<Outcome>| OnCaptureRun {
+            dir: PathBuf::from("/tmp/x.scrawl"),
+            outcome,
+        };
+        let to = |to: &str| {
+            run(Some(Outcome::Delivered {
+                to: Some(to.into()),
+            }))
+        };
+        assert_eq!(on_capture_note(&run(None)), "Sending…");
+        assert_eq!(on_capture_note(&to("Hermes")), "Sent to Hermes");
+        assert_eq!(
+            on_capture_note(&to("Make Mac captures route to the site session")),
+            "Sent to Make Mac captures route…"
+        );
+        assert_eq!(
+            on_capture_note(&run(Some(Outcome::Delivered { to: None }))),
+            "Sent"
+        );
+        assert_eq!(
+            on_capture_note(&run(Some(Outcome::Failed("exit status: 1".into())))),
+            "Copied · onCapture failed"
+        );
+    }
+
+    #[test]
+    fn a_send_to_opencode_leads_over_on_capture_until_its_cancelled() {
+        use crate::on_capture::Outcome;
+        let hermes = OnCaptureRun {
+            dir: PathBuf::from("/tmp/x.scrawl"),
+            outcome: Some(Outcome::Delivered {
+                to: Some("Hermes".into()),
+            }),
+        };
+        assert_eq!(completed_lead(None, None), None);
+        assert_eq!(
+            completed_lead(None, Some(&hermes)),
+            Some("Sent to Hermes".to_owned())
+        );
+        // A send to OpenCode, pending or done, has the island while it's there …
+        assert_eq!(
+            completed_lead(Some("Sending to SCRAWL…"), Some(&hermes)),
+            Some("Sending to SCRAWL…".to_owned())
+        );
+        assert_eq!(
+            completed_lead(Some("Sent to SCRAWL"), Some(&hermes)),
+            Some("Sent to SCRAWL".to_owned())
+        );
+        // … and cancelling it (`keep_pending_send` clears the note) brings the command's result
+        // back instead of wiping it.
+        assert_eq!(
+            completed_lead(None, Some(&hermes)),
+            Some("Sent to Hermes".to_owned())
+        );
     }
 }
