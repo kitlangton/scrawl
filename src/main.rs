@@ -2385,7 +2385,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let url = url.context("Pass --url or --browser")?;
-            match routing::route(&url, &routing::Hooks::default()) {
+            match routing::route_with_sites(&url, &handoff::routing_sites(), &routing::Hooks::default()) {
                 Ok(dest) => println!("{}", serde_json::to_string_pretty(&dest)?),
                 Err(reason) => println!("{url}: clipboard only ({reason})"),
             }
