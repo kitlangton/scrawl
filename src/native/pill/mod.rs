@@ -777,6 +777,10 @@ impl PillRuntimeState {
     fn dispatch_click(&self, elem: ElemId) {
         let is_selecting = matches!(self.model.pres, Pres::Selecting { .. });
         let action = match elem {
+            ElemId::ChipRecentArea => {
+                if is_selecting { PillAction::SelectMode(SelectionMode::RecentArea) }
+                else { PillAction::SwitchRecording(SelectionMode::RecentArea) }
+            }
             ElemId::ChipArea => {
                 if is_selecting {
                     PillAction::SelectMode(SelectionMode::Area)
@@ -1145,8 +1149,9 @@ fn emit_elem_prims(
     };
 
     match elem.id {
-        ElemId::ChipArea | ElemId::ChipWindow | ElemId::ChipScreen | ElemId::ChipIphone => {
+        ElemId::ChipRecentArea | ElemId::ChipArea | ElemId::ChipWindow | ElemId::ChipScreen | ElemId::ChipIphone => {
             let mode = match elem.id {
+                ElemId::ChipRecentArea => SelectionMode::RecentArea,
                 ElemId::ChipArea => SelectionMode::Area,
                 ElemId::ChipWindow => SelectionMode::Window,
                 ElemId::ChipScreen => SelectionMode::Screen,

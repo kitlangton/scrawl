@@ -457,6 +457,10 @@ pub struct Config {
     #[serde(default)]
     pub lower_playback: Option<bool>,
     #[serde(default)]
+    pub what_to_record: Option<String>,
+    #[serde(default)]
+    pub recent_area: Option<serde_json::Value>,
+    #[serde(default)]
     pub playback_level: Option<u8>,
     /// The Hex model to use when `transcriber` is `"hex"` (default: the first ready one of
     /// `hex::PREFERRED_MODELS`).
