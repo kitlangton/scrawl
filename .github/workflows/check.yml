@@ -11,6 +11,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-channel:
+    name: Release channel logic
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - run: python3 -m unittest discover -s scripts -p test_release_channel.py
+      - run: bun test site/tests/appcast.test.ts
+      - run: bash -n scripts/release-app.sh scripts/release-beta.sh scripts/promote.sh scripts/appcast-job.sh
+
   macos:
     name: macOS
     runs-on: macos-26

@@ -58,6 +58,8 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
   <string>0.1.0</string>
   <key>CFBundleVersion</key>
   <string>1</string>
+  <key>ScrawlDevBuild</key>
+  <true/>
   <key>LSMinimumSystemVersion</key>
   <string>15.0</string>
   <key>LSUIElement</key>

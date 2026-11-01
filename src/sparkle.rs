@@ -11,7 +11,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, NSObjectProtocol, ProtocolObject};
 use objc2::{AnyThread, DefinedClass, MainThreadMarker, msg_send};
 use objc2_app_kit::NSApplication;
-use objc2_foundation::{NSError, NSInteger, NSObject};
+use objc2_foundation::{NSError, NSInteger, NSObject, NSSet, NSString};
 
 use crate::capture::scrawl_log;
 
@@ -41,6 +41,17 @@ objc2::define_class!(
     unsafe impl NSObjectProtocol for SparkleDelegate {}
 
     unsafe impl SPUUpdaterDelegate for SparkleDelegate {
+        // Sparkle always includes unchannelled (stable) items. Read the config at each check
+        // so Settings takes effect without a restart. Sparkle only offers a CFBundleVersion
+        // newer than this one, so switching beta off never downgrades.
+        #[unsafe(method_id(allowedChannelsForUpdater:))]
+        fn allowed_channels(&self, _updater: &AnyObject) -> Retained<NSSet<NSString>> {
+            if crate::updates::beta_updates() {
+                NSSet::from_slice(&[&*NSString::from_str("beta")])
+            } else {
+                NSSet::new()
+            }
+        }
         #[unsafe(method(updater:didFindValidUpdate:))]
         fn did_find_update(&self, _updater: &AnyObject, _item: &AnyObject) {
             self.ivars()

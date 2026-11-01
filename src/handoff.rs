@@ -456,6 +456,9 @@ pub struct Config {
     /// Lower the output volume while recording (`playback`) to `playbackLevel` percent of it.
     #[serde(default)]
     pub lower_playback: Option<bool>,
+    /// Only "beta" opts in; absent or unknown channels receive stable releases.
+    #[serde(default)]
+    pub update_channel: Option<String>,
     #[serde(default)]
     pub playback_level: Option<u8>,
     /// The Hex model to use when `transcriber` is `"hex"` (default: the first ready one of
@@ -771,6 +774,12 @@ pub fn auto_send() -> bool {
 /// either way.
 pub fn video_export() -> bool {
     config().video_export.unwrap_or(false)
+}
+
+/// `updateChannel` as written; `updates::beta_updates` decides what it means.
+#[cfg(target_os = "macos")]
+pub fn update_channel() -> Option<String> {
+    config().update_channel
 }
 
 /// The configured transcriber name (`transcriber`) as written, unvalidated.

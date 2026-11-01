@@ -6,3 +6,4 @@
 /.swiftpm
 /artifacts
 /*.scrawl
+__pycache__/

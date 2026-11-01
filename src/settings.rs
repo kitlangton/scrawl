@@ -619,6 +619,7 @@ pub const SKILL_COMMAND: &str = "bunx skills add kitlangton/scrawl";
 #[serde(rename_all = "camelCase")]
 pub struct View {
     pub version: String,
+    pub beta_updates: bool,
     pub login: LoginView,
     pub auto_send: bool,
     pub shortcuts: Vec<ShortcutView>,
@@ -1185,6 +1186,16 @@ impl Panel {
             }
         };
         match (key, value) {
+            ("betaUpdates", serde_json::Value::Bool(on)) => {
+                write(
+                    "updateChannel",
+                    if *on {
+                        "beta".into()
+                    } else {
+                        serde_json::Value::Null
+                    },
+                );
+            }
             ("launchAtLogin", serde_json::Value::Bool(on)) => {
                 if let Err(error) = host.set_login_item(*on) {
                     crate::capture::scrawl_log(format!("Launch at login: {error:#}"));
@@ -1294,6 +1305,7 @@ impl Panel {
 
     pub fn view(&self, host: &dyn Host) -> View {
         let config = crate::handoff::load_config_from(&host.config_path());
+        let beta_updates = crate::updates::beta_enabled(config.update_channel.as_deref());
         let shortcuts = host.shortcuts();
         let hex = crate::hex::cached_status();
         let engine = config
@@ -1320,7 +1332,8 @@ impl Panel {
             ]
         };
         View {
-            version: env!("CARGO_PKG_VERSION").to_owned(),
+            version: crate::updates::display(beta_updates),
+            beta_updates,
             login: LoginView {
                 on: matches!(login, LoginItem::On | LoginItem::NeedsApproval),
                 available: login != LoginItem::Unavailable,
@@ -2303,6 +2316,21 @@ mod tests {
             )
         };
         assert!(panel.view(&host).auto_send);
+        assert!(!panel.view(&host).beta_updates);
+        set(&mut panel, &mut host, "betaUpdates", true.into());
+        assert!(Panel::default().view(&host).beta_updates);
+        assert_eq!(
+            crate::handoff::load_config_from(&host.path)
+                .update_channel
+                .as_deref(),
+            Some("beta")
+        );
+        set(&mut panel, &mut host, "betaUpdates", false.into());
+        assert!(!Panel::default().view(&host).beta_updates);
+        assert_eq!(
+            crate::handoff::load_config_from(&host.path).update_channel,
+            None
+        );
         assert!(!panel.view(&host).lower_playback);
         assert_eq!(panel.view(&host).playback_level, 20);
         set(&mut panel, &mut host, "lowerPlayback", true.into());
