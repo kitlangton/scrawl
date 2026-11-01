@@ -534,6 +534,8 @@ struct Pending {
 struct Trace {
     out: std::io::BufWriter<std::fs::File>,
     start: Instant,
+    /// One display frame: a line's `n` counts these, as motion-lint reads them at `hz`.
+    frame_ms: f64,
     last_t: Option<f64>,
     ids: HashMap<String, u32>,
     described: HashSet<u32>,
@@ -560,6 +562,19 @@ pub(crate) fn tracing() -> bool {
     trace_target().is_some()
 }
 
+/// The fastest display's refresh rate (120 on ProMotion), so a frame at 120 Hz counts as one
+/// and a missed one as two. Main thread; 60 when it can't tell.
+fn refresh_hz() -> f64 {
+    #[cfg(target_os = "macos")]
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        let fastest = objc2_app_kit::NSScreen::screens(mtm).iter().map(|s| s.maximumFramesPerSecond()).max();
+        if let Some(hz) = fastest.filter(|hz| *hz > 0) {
+            return hz as f64;
+        }
+    }
+    60.0
+}
+
 /// Opens the trace (once): a motion-lint header sized to the main display in points.
 pub(crate) fn trace_open(launch: &str, display: [f32; 2]) {
     let Some(path) = trace_target() else { return };
@@ -575,15 +590,17 @@ pub(crate) fn trace_open(launch: &str, display: [f32; 2]) {
             return;
         };
         let mut out = std::io::BufWriter::new(file);
+        let hz = refresh_hz();
         let header = serde_json::json!({
             "type": "header", "launch": launch, "width": display[0], "height": display[1],
-            "hz": 60, "scale": 2, "wall": crate::now_epoch_ms() as f64 / 1000.0,
+            "hz": hz, "scale": 2, "wall": crate::now_epoch_ms() as f64 / 1000.0,
             "platform": "gpui", "units": "pt", "clock": "wall",
         });
         let _ = writeln!(out, "{header}");
         *slot = Some(Trace {
             out,
             start: Instant::now(),
+            frame_ms: 1000.0 / hz,
             last_t: None,
             ids: HashMap::new(),
             described: HashSet::new(),
@@ -620,11 +637,17 @@ pub(crate) fn trace_skip_frame() {
 }
 
 pub(crate) fn trace_frame() {
+    trace_frame_at(|wall_ms| wall_ms);
+}
+
+/// Starts a frame stamped `stamp(wall_ms)`: a renderer whose values are sampled at its display
+/// link's target time stamps that, not the moment it finished drawing.
+pub(crate) fn trace_frame_at(stamp: impl FnOnce(f64) -> f64) {
     TRACE.with_borrow_mut(|slot| {
         let Some(trace) = slot.as_mut() else { return };
         trace.flush_pending();
         trace.pending = Some(Pending {
-            t_ms: trace.start.elapsed().as_secs_f64() * 1000.0,
+            t_ms: stamp(trace.start.elapsed().as_secs_f64() * 1000.0),
             events: std::mem::take(&mut trace.queued_events),
             ..Pending::default()
         });
@@ -702,7 +725,7 @@ impl Trace {
             return;
         };
         let n = self.last_t.map_or(1, |last| {
-            ((frame.t_ms - last) / (1000.0 / 60.0)).round().max(1.0) as u64
+            ((frame.t_ms - last) / self.frame_ms).round().max(1.0) as u64
         });
         self.last_t = Some(frame.t_ms);
         let mut metas = Vec::new();
@@ -767,6 +790,12 @@ impl Trace {
             }
         }
         let mut line = serde_json::json!({ "t": (frame.t_ms * 1000.0).round() / 1000.0, "n": n });
+        // In slow motion a display frame is a fraction of an animation frame; motion-lint
+        // counts `n × sc`, so a 0.25× run measures like a 1× one.
+        let scale = time_scale();
+        if (scale - 1.0).abs() > 1e-6 {
+            line["sc"] = f64::from(scale).into();
+        }
         if !frame.events.is_empty() {
             line["ev"] = frame.events.into();
         }

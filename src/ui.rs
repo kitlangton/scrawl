@@ -76,8 +76,16 @@ const PILL_WINDOW_H: f32 = 84.0;
 
 mod lab;
 pub(crate) mod motion;
+#[cfg(target_os = "macos")]
+pub(crate) mod rune_app;
+#[cfg(target_os = "macos")]
+pub(crate) mod rune_pill;
 
 pub use lab::{Options as LabOptions, Scene as LabScene, run as run_lab};
+#[cfg(target_os = "macos")]
+pub use rune_app::RuneAppOptions;
+#[cfg(target_os = "macos")]
+pub use rune_pill::{Options as RuneLabOptions, run as run_rune_lab};
 pub(crate) use motion::{TuneAction, tune_command};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -5331,14 +5339,26 @@ pub fn run_start_benchmark() {
     });
 }
 
-/// Runs the GPUI desktop app, optionally opening an initial `.scrawl` bundle in the Review window
-/// or starting recording immediately.
+/// Runs the desktop app (GPUI by default; Rune when `"ui": "rune"` or `SCRAWL_UI=rune` is set),
+/// optionally opening an initial `.scrawl` bundle in the Review window or starting recording
+/// immediately.
 pub fn run_app(
     initial_bundle: Option<(PathBuf, ScrawlBundle)>,
     start_recording_immediately: bool,
     start_iphone_immediately: bool,
     screenshot_out: Option<PathBuf>,
 ) {
+    #[cfg(target_os = "macos")]
+    if crate::handoff::rune_ui() {
+        rune_app::run_app(
+            initial_bundle,
+            start_recording_immediately,
+            start_iphone_immediately,
+            screenshot_out,
+            RuneAppOptions::default(),
+        );
+        return;
+    }
     let app = Application::new().with_assets(crate::icons::Assets);
     app.run(move |cx: &mut App| {
         scrawl_log(format!("run_app started pid={}", std::process::id()));
