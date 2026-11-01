@@ -13,100 +13,14 @@ use super::{ScrawlCoordinator, SelectionMode, motion};
 use crate::capture::SharedCaptureTelemetry;
 use crate::model::{CaptureMode, TargetFrame, TargetInfo};
 
-/// How long a pretend recording "processes" before it's done.
-pub(super) const PROCESSING_S: f32 = 0.8;
-/// Quiet time before a scene's first step, so motion-lint's launch settle passes and a screen
-/// recording starts on a still frame.
-const LEAD_IN_S: f32 = 0.85;
-/// Quiet time after the last step (and between repeats).
-const TAIL_S: f32 = 0.75;
 /// The backdrop: x offset from the display's centre line, top, width and height in points.
 /// The capsule window is 520 × 84 at y = 34, under the menu bar.
 pub const BACKDROP: [f32; 4] = [0.0, 38.0, 640.0, 76.0];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-pub enum Scene {
-    /// Tap: recording + chips, then the Area chip turns it into the picker.
-    TapThenArea,
-    /// Tap: recording + chips, then the Window chip turns it into the picker.
-    TapThenWindow,
-    /// Tap: recording + chips, then the Screen chip folds them back.
-    TapThenScreen,
-    /// The menu's picker opens on Screen, a click on Area, then Screen, then Screen again records.
-    Picker,
-    /// Tap, chips fold, finish: processing, then done, then dismissed.
-    Finish,
-    /// Tap: recording + chips, then cancel straight from the recording.
-    Cancel,
-    /// Open the picker, then dismiss it.
-    Dismiss,
-}
+mod scene;
 
-#[derive(Clone, Copy, Debug)]
-enum Step {
-    Tap,
-    Chip(SelectionMode),
-    Open,
-    Click(SelectionMode),
-    Cancel,
-    Finish,
-    Dismiss,
-}
-
-impl Scene {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::TapThenArea => "tap-then-area",
-            Self::TapThenWindow => "tap-then-window",
-            Self::TapThenScreen => "tap-then-screen",
-            Self::Picker => "picker",
-            Self::Finish => "finish",
-            Self::Cancel => "cancel",
-            Self::Dismiss => "dismiss",
-        }
-    }
-
-    /// Steps at animation seconds from the scene's start.
-    fn steps(self) -> Vec<(f32, Step)> {
-        use SelectionMode::{Area, Screen, Window};
-        match self {
-            Self::TapThenArea => vec![
-                (0.0, Step::Tap),
-                (1.2, Step::Chip(Area)),
-                (2.4, Step::Cancel),
-            ],
-            Self::TapThenWindow => {
-                vec![
-                    (0.0, Step::Tap),
-                    (1.2, Step::Chip(Window)),
-                    (2.4, Step::Cancel),
-                ]
-            }
-            Self::TapThenScreen => {
-                vec![
-                    (0.0, Step::Tap),
-                    (1.2, Step::Chip(Screen)),
-                    (2.4, Step::Cancel),
-                ]
-            }
-            Self::Picker => vec![
-                (0.0, Step::Open),
-                (0.9, Step::Click(Area)),
-                (1.8, Step::Click(Screen)),
-                (2.7, Step::Click(Screen)),
-                (3.9, Step::Cancel),
-            ],
-            Self::Finish => vec![
-                (0.0, Step::Tap),
-                (0.9, Step::Chip(Screen)),
-                (2.0, Step::Finish),
-                (2.0 + PROCESSING_S + 1.4, Step::Dismiss),
-            ],
-            Self::Cancel => vec![(0.0, Step::Tap), (1.2, Step::Cancel)],
-            Self::Dismiss => vec![(0.0, Step::Open), (1.2, Step::Dismiss)],
-        }
-    }
-}
+pub(super) use scene::{PROCESSING_S, Step, TAIL_S, Timeline};
+pub use scene::Scene;
 
 pub struct Options {
     pub scene: Scene,
@@ -148,11 +62,6 @@ fn apply(step: Step, coord: &mut ScrawlCoordinator, cx: &mut gpui::Context<Scraw
     }
 }
 
-/// Real seconds for `s` animation seconds at the current time scale.
-fn real(s: f32) -> Duration {
-    Duration::from_secs_f32((s / motion::time_scale()).max(0.0))
-}
-
 pub fn run(options: Options) {
     let app = Application::new().with_assets(crate::icons::Assets);
     app.run(move |cx: &mut App| {
@@ -182,40 +91,29 @@ pub fn run(options: Options) {
             BACKDROP[3]
         );
 
-        // The app's frame loop, minus everything that isn't the capsule.
-        let loop_coord = coordinator.clone();
+        // The app's frame loop, minus everything that isn't the capsule, stepping the scene's
+        // timeline on the animation clock (`--rune` steps the same `Timeline` the same way).
+        let mut timeline = Timeline::new(options.scene, options.repeat);
         cx.spawn(async move |cx| {
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(8))
                     .await;
-                let alive = cx.update(|cx| {
+                let done = cx.update(|cx| {
                     motion::poll_tune();
-                    loop_coord.update(cx, |coord, cx| coord.island_tick(cx));
+                    let due = timeline.advance(motion::now());
+                    coordinator.update(cx, |coord, cx| {
+                        for step in due.steps {
+                            apply(step, coord, cx);
+                        }
+                        coord.island_tick(cx);
+                    });
+                    due.done
                 });
-                if alive.is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
-
-        let scene = options.scene;
-        let repeat = options.repeat;
-        cx.spawn(async move |cx| {
-            let mut run = 0;
-            loop {
-                cx.background_executor().timer(real(LEAD_IN_S)).await;
-                let mut at = 0.0;
-                for (when, step) in scene.steps() {
-                    cx.background_executor().timer(real(when - at)).await;
-                    at = when;
-                    let _ = coordinator.update(cx, |coord, cx| apply(step, coord, cx));
-                }
-                cx.background_executor().timer(real(TAIL_S)).await;
-                run += 1;
-                if repeat != 0 && run >= repeat {
-                    break;
+                match done {
+                    Ok(false) => {}
+                    Ok(true) => break,
+                    Err(_) => return,
                 }
             }
             let _ = cx.update(|cx| {
