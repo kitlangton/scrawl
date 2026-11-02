@@ -1615,6 +1615,27 @@ pub fn hosted_transport_network_timeout_and_cancellation() {
 pub fn hosted_paths_symlinks_oversize_and_unknown_assets() {
     let f = Fixture::new();
     let bundle = f.bundle();
+    let publication_lock = bundle.join(".publication.lock");
+    OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .open(&publication_lock).unwrap();
+    let stage = Scratch::new(&f.client.state).unwrap();
+    let files = snapshot(&bundle, &stage.0).expect("completed publication lock is not evidence");
+    assert!(!files.iter().any(|file| file.path == ".publication.lock"));
+    assert!(!stage.0.join(".publication.lock").exists());
+    fs::write(&publication_lock, b"unexpected content").unwrap();
+    let stage = Scratch::new(&f.client.state).unwrap();
+    assert!(snapshot(&bundle, &stage.0).is_err());
+    fs::remove_file(&publication_lock).unwrap();
+    let outside_lock = f.root.join("outside-lock");
+    fs::write(&outside_lock, b"").unwrap();
+    std::os::unix::fs::symlink(&outside_lock, &publication_lock).unwrap();
+    let stage = Scratch::new(&f.client.state).unwrap();
+    assert!(snapshot(&bundle, &stage.0).is_err());
+    fs::remove_file(&publication_lock).unwrap();
+    fs::hard_link(&outside_lock, &publication_lock).unwrap();
+    let stage = Scratch::new(&f.client.state).unwrap();
+    assert!(snapshot(&bundle, &stage.0).is_err());
+    fs::remove_file(&publication_lock).unwrap();
     let stage = Scratch::new(&f.client.state).unwrap();
     fs::write(bundle.join("unexpected.svg"), b"asset").unwrap();
     assert!(

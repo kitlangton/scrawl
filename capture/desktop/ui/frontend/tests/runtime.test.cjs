@@ -19,7 +19,8 @@ async function fixture(t, reply, { mode = 0o700 } = {}) {
     socket.on('error', () => {});
     socket.once('data', (request) => {
       requests.push(request.toString());
-      if (reply !== null) socket.end(reply);
+      if (typeof reply === 'function') reply(socket,request);
+      else if (reply !== null) socket.end(reply);
     });
   });
   const address = path.join(directory, 'capture.sock');
@@ -185,4 +186,36 @@ for (const [reply, expected] of [
 ]) test(`storage validates response ${JSON.stringify(reply).slice(0, 60)}`, async (t) => {
   const f = await fixture(t, JSON.stringify(reply) + '\n');
   assert.deepEqual(await captureLocation(f.home), expected);
+});
+
+const {PublicShare} = require('../electron/public-share.cjs');
+test('public share requires observed selection, retains operation in main and delivers once',async t=>{
+ const operation='a'.repeat(32);
+ const f=await fixture(t,(socket,raw)=>{
+  const r=JSON.parse(raw);assert.ok(Number.isSafeInteger(r.deadline));
+  socket.end(JSON.stringify({publicShare:r.publicShare==='start'?{operation,state:'preparing'}:{state:r.publicShare==='read'?'prepared':r.publicShare==='deliver'?'copied':'cancelled'}})+'\n');
+ });
+ const owner=new PublicShare(f.home);
+ assert.equal((await owner.request('start',null)).code,'refresh_required');
+ assert.equal(f.requests.length,0);
+ assert.deepEqual(await owner.request('start','selected.apparent'),{status:'connected',state:'preparing'});
+ assert.deepEqual(await owner.request('read'),{status:'connected',state:'copied'});
+ assert.equal((await owner.request('read')).code,'no_operation');
+ const requests=f.requests.map(r=>JSON.parse(r));
+ assert.equal(requests[0].expected,'selected.apparent');assert.equal(requests[0].disclosed,true);
+ assert.equal(requests.filter(r=>r.publicShare==='deliver').length,1);
+ assert.equal(requests[1].operation,operation);
+});
+test('closing public-share window rejects late start receipt and never delivers',async t=>{
+ let started;
+ const arrived=new Promise(r=>started=r);
+ let release;
+ const f=await fixture(t,(socket,raw)=>{
+  if(JSON.parse(raw).publicShare==='start'){release=()=>socket.end(JSON.stringify({publicShare:{operation:'b'.repeat(32),state:'preparing'}})+'\n');started();}
+  else socket.end('{"publicShare":{"state":"cancelled"}}\n');
+ });
+ const owner=new PublicShare(f.home), pending=owner.request('start','selected.apparent');
+ await arrived;owner.close();release();
+ assert.deepEqual(await pending,{status:'cancelled'});
+ assert.ok(!f.requests.some(r=>JSON.parse(r).publicShare==='deliver'));
 });

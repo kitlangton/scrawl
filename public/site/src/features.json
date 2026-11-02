@@ -131,7 +131,7 @@
       "status": "experiment:hostedSharing",
       "added": "2026-10-31",
       "platforms": ["mac", "linux"],
-      "note": "Default off. Native candidate only: Linux GUI, macOS native pill/Swift Settings, onboarding cancellation, foreground clipboard gating and end-to-end real-feature walkthrough still require platform proof. A configured hosted API and explicit upload consent are required. Deployment also needs SHARING_ENABLED=true; it defaults off. No production deployment is implied.",
+      "note": "Default off. Native candidate only: Linux GUI, macOS native pill/Swift Settings, onboarding cancellation, foreground clipboard gating and end-to-end real-feature walkthrough still require platform proof. A configured hosted API and explicit upload consent are required. Deployment also needs SHARING_ENABLED=true; it defaults off. No production deployment is implied. The Electron selected-capture candidate adds explicit non-E2E public-copy confirmation with Rust-owned background preparation and foreground clipboard delivery; installed capsule routing and native acceptance remain unchanged.",
       "docs": ["capture/engine/docs/keyframes-and-text.md", "connect/docs/hosted-client.md", "connect/docs/hosted-api.md"]
     },
     {

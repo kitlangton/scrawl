@@ -2028,6 +2028,20 @@ fn snapshot(bundle: &Path, stage: &Path) -> Result<Vec<Asset>> {
             .file_name()
             .into_string()
             .map_err(|_| anyhow::anyhow!("Invalid asset name"))?;
+        if name == ".publication.lock" {
+            // Engine keeps this empty coordination inode after publication. It
+            // is local machinery, never capture evidence or a remotely served asset.
+            let metadata = fs::symlink_metadata(entry.path())?;
+            ensure!(
+                metadata.is_file()
+                    && metadata.uid() == unsafe { libc::geteuid() }
+                    && metadata.mode() & 0o022 == 0
+                    && metadata.nlink() == 1
+                    && metadata.len() == 0,
+                "Unsafe bundle publication lock"
+            );
+            continue;
+        }
         if matches!(name.as_str(), "frames" | "frames-full") {
             trusted_directory_tree(&entry.path(), false)?;
             ensure!(
