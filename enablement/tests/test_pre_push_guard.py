@@ -50,6 +50,9 @@ class PrePushGuardTests(unittest.TestCase):
         taskpolicy.chmod(0o755)
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
                         COMMAND_LOG=str(self.log), PYTHONDONTWRITEBYTECODE="1")
+        # Default-policy fixtures must not inherit the live build runner's
+        # allocation. Exercise explicit allocations separately below.
+        self.env.pop("T3_BUILD_JOBS", None)
 
     def push(self, oid=None, local="refs/heads/feature", remote="refs/heads/feature", env=None):
         line = f"{local} {oid or self.head} {remote} {'0' * 40}\n"
@@ -77,6 +80,16 @@ class PrePushGuardTests(unittest.TestCase):
         result = self.push(env=dict(self.env, MOCK_STATUS="1"))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("failed", result.stderr)
+
+    def test_explicit_build_allocation_reaches_all_cargo_commands(self):
+        result = self.push(env=dict(self.env, T3_BUILD_JOBS="7"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.log.read_text().splitlines(), [
+            "-c utility cargo build -j 7 --offline",
+            "-c utility cargo test -j 7 --offline -- --test-threads=2",
+            "-c utility cargo build --manifest-path capture/engine/Cargo.toml -j 7 --offline",
+            "-c utility cargo test --manifest-path capture/engine/Cargo.toml -j 7 --offline -- --test-threads=2",
+        ])
 
     def test_document_only_push_avoids_cargo(self):
         run("git", "update-ref", "refs/remotes/origin/main", self.head, cwd=self.repo)
