@@ -32,15 +32,15 @@ Admission pins the format. Toggling the experiment cannot turn a queued encrypte
 
 Discovery is rechecked at transfer boundaries and before plaintext publication. Revocation observed before a subsequent request stops remaining sends/publication. A request already in flight and ciphertext/plaintext/keys already obtained cannot be recalled. A spool addressed to a now-revoked recipient is not reused; it needs explicit fresh-ID upload from the local original. Revoking the sender also prevents new normal-client publication verified through that sender. There is no claim to erase authorized offline copies.
 
-## Bounded policy choices still requiring explicit confirmation
+## Accepted v1 scope
 
-The implementation isolates the following conservative v1 proposals; they are **not a claim of previously approved recovery/history policy**:
+Simon confirmed these limits on 2026-11-02:
 
-1. **New-device history:** newly approved agents receive future freshly staged captures only. Existing ciphertext is not automatically rewrapped or reuploaded. Confirm this default or require recorder-mediated historical regrant as separate scope.
-2. **Lost keys:** losing every endpoint key makes existing ciphertext unrecoverable through password reset. No server backup/escrow or recovery UI is added. Confirm endpoint-only loss semantics or choose an explicit backup/recovery trust model before general enablement.
-3. **Existing plaintext:** leave existing hosted plaintext untouched and clearly identified; no automatic migration, deletion or reupload. Encrypted-mode fetch refuses plaintext unless the operator deliberately leaves that mode to retrieve legacy data. Confirm preservation versus a separately consented migration before rollout.
+1. **New-device history:** newly approved agents receive future freshly staged captures only. Existing ciphertext is not automatically rewrapped or reuploaded; historical regrant is outside v1.
+2. **Lost keys:** losing every endpoint key makes existing ciphertext unrecoverable through password reset. No server backup/escrow or key-recovery UI is included.
+3. **Existing plaintext:** leave existing hosted plaintext untouched and clearly identified. No plaintext data migration, deletion or reupload is needed. Encrypted-mode fetch refuses plaintext unless the operator deliberately leaves that mode to retrieve legacy data.
 
-Independent implementation/testing can proceed behind the disabled experiment. These questions, independent security review and exact native/platform proof remain delivery/enablement gates; completing a thin slice is not closing #189 or enabling it for users.
+These scope decisions do not enable the disabled experiment or waive independent review and native/platform proof. The additive `0005.sql` schema change supports encrypted uploads; it is separate from migrating existing capture data and remains unapplied by this candidate.
 
 ## Verification and rollout gates
 

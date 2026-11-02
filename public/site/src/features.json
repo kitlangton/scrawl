@@ -72,7 +72,7 @@
       "status": "experiment:hostedEncryption",
       "added": "2026-11-01",
       "platforms": ["mac", "linux"],
-      "note": "Off by default and unshipped. Connect account authorization is trusted to authorize recipients: a compromised authorization service can add or substitute an attacker key. No independent pairing, plaintext fallback, server content keys or public rendering of encrypted captures. Missing recipient leaves the local recording pending. Historical regrant, all-key-loss recovery and plaintext migration remain explicit policy gates. Independent security review, adverse integration and exact native platform proof remain required; no deployment or permission change is implied.",
+      "note": "Off by default and unshipped. Connect account authorization is trusted to authorize recipients: a compromised authorization service can add or substitute an attacker key. No independent pairing, plaintext fallback, server content keys or public rendering of encrypted captures. Missing recipient leaves the local recording pending. V1 covers future freshly staged captures only, with no historical regrant or key-recovery UI; existing plaintext remains untouched without data migration. Independent security review, adverse integration and exact native platform proof remain required; no deployment or permission change is implied.",
       "docs": ["connect/docs/hosted-encryption.md", "connect/docs/hosted-client.md", "connect/docs/hosted-api.md"]
     },
     {
