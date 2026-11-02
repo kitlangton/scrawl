@@ -47,6 +47,7 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
         const end = bytes.indexOf('\n'), line = bytes.slice(0, end); bytes = bytes.slice(end + 1);
         if (line === 'state') { socket.end('{"state":{"phase":"idle"}}\n'); continue; }
         const request = JSON.parse(line);
+        if (request.microphone === 'read') { socket.end('{"microphone":{"enabled":true}}\n'); continue; }
         if (request.errorReporting === 'read') { socket.end('{"errorReporting":{"enabled":true}}\n'); continue; }
         if (request.storage || request.reference) { socket.end('{"error":"feature_disabled"}\n'); continue; }
         connect = true; requests.push(request);

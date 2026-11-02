@@ -214,3 +214,104 @@ fn publication_rejects_external_and_symlinked_movies_before_decoder_callback() {
     }
     std::fs::remove_dir_all(outside).unwrap();
 }
+
+#[test]
+fn publication_finalizes_durable_typed_notes_with_matching_recovery_journal() {
+    let root = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
+    publication::Directory::open(&root, true).unwrap();
+    publication::write(&root, "microphone-off", b"").unwrap();
+    let mut notes = crate::capture::engine::runtime::recording::notes::Store::new(&root);
+    notes.open(1, 250, 0.3, 0.4).unwrap();
+    notes.save(1, "Keep the original anchor".into()).unwrap();
+    let (_, bundle, summary) = finalize_capture_bundle(
+        &root,
+        target(),
+        capture::ScreenRecording {
+            frames: vec![RgbaFrame::new(0, 32, 32, vec![128; 32 * 32 * 4])],
+            video: None,
+            duration_ms: 1000,
+            video_offset_ms: 0,
+        },
+        vec![],
+        vec![],
+        None,
+        None,
+        windows::ActivityLog::default(),
+        None,
+    )
+    .unwrap();
+    assert!(
+        matches!(&bundle.events[..], [InteractionEvent::Note { pin: 1, t: 250, text, .. }] if text == "Keep the original anchor")
+    );
+    assert!(!root.join(recover::UNFINISHED).exists());
+    publication::checked(&root, &bundle, &summary).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn publication_recovery_reconciles_only_durable_typed_notes_before_journal_validation() {
+    fn frames(_: &Path, at: helper::FrameTimes, _: u32) -> Result<Vec<RgbaFrame>> {
+        let times = match at {
+            helper::FrameTimes::Every(_) => vec![0],
+            helper::FrameTimes::At(times) => times.to_vec(),
+        };
+        Ok(times
+            .into_iter()
+            .map(|t| RgbaFrame::new(t, 32, 32, vec![128; 32 * 32 * 4]))
+            .collect())
+    }
+    let root = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
+    publication::Directory::open(&root, true).unwrap();
+    publication::write(
+        &root,
+        "recording.mp4",
+        include_bytes!("publication/fixtures/tiny.mp4"),
+    )
+    .unwrap();
+    publication::write(&root, "microphone-off", b"").unwrap();
+    let click = InteractionEvent::Click {
+        t: 100,
+        x: 0.3,
+        y: 0.4,
+        label: None,
+        role: None,
+        button: None,
+    };
+    let old = recover::Unfinished {
+        target: target(),
+        duration_ms: 1000,
+        video: Some("recording.mp4".into()),
+        video_offset_ms: 0,
+        strokes: vec![],
+        events: vec![click.clone()],
+        interaction_telemetry: None,
+        note: Some("Unrelated capture note".into()),
+        windows: vec![],
+        cursor: vec![],
+    };
+    recover::write(&root, &old).unwrap();
+    let mut notes = crate::capture::engine::runtime::recording::notes::Store::new(&root);
+    notes.open(1, 250, 0.3, 0.4).unwrap();
+    notes.save(1, "Recovered typed note".into()).unwrap();
+    let summary = rebuild_screen_bundle_with(
+        &root,
+        old,
+        Some(None),
+        &recover::Media {
+            probe: helper::probe,
+            frames,
+            transcribe: |_, _| TranscriptData::default(),
+        },
+    )
+    .unwrap();
+    let bundle: ApparentBundle =
+        serde_json::from_slice(&std::fs::read(root.join("apparent.json")).unwrap()).unwrap();
+    assert_eq!(bundle.events[0], click);
+    assert!(
+        matches!(&bundle.events[1], InteractionEvent::Note { pin: 1, t: 250, text, .. } if text == "Recovered typed note")
+    );
+    assert_eq!(bundle.note.as_deref(), Some("Unrelated capture note"));
+    assert!(!root.join(recover::UNFINISHED).exists());
+    publication::checked(&root, &bundle, &summary).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

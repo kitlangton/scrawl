@@ -492,6 +492,7 @@ impl DragRun {
 /// A click, scroll, point or key press without coordinates; `None` for a point nothing names.
 fn event_text(event: &InteractionEvent) -> Option<String> {
     match event {
+        InteractionEvent::Note { .. } => None, // Typed notes have their own lossless summary section.
         InteractionEvent::Click {
             label,
             button,

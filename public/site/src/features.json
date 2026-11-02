@@ -47,6 +47,44 @@
       "docs": ["capture/desktop/docs/onboarding-and-settings.md#mac-menu-bar-icon"]
     },
     {
+      "id": "typed-capture-notes",
+      "group": "record",
+      "name": "Shift-click typed notes",
+      "says": "Shift-click opens a compact Electron note field. Enter or Attach saves text; empty Enter keeps the pin. Escape retains an in-capture draft. A saved-note counter offers editing and deletion. Typed notes retain click-time anchors in the bundle and handoff.",
+      "status": "main",
+      "added": "2026-11-02",
+      "platforms": [
+        "mac",
+        "linux"
+      ],
+      "shortcuts": [
+        {
+          "keys": "Shift-click",
+          "does": "Type a note at the clicked point"
+        },
+        {
+          "keys": "Enter",
+          "does": "Save a note or dismiss an empty field"
+        },
+        {
+          "keys": "Shift+Enter",
+          "does": "Insert a newline in a note"
+        }
+      ],
+      "config": [
+        {
+          "key": "microphoneEnabled",
+          "value": "true",
+          "does": "Set false for intentional silent captures; applies to the next screen capture without changing the selected microphone device"
+        }
+      ],
+      "note": "Enabled by default. Rust persists notes before acknowledgement. The notes-only Electron surface does not replace the picker, native drawing or the complete recording capsule. Linux display video includes the visible popup, including drafts; unsaved text is excluded from note metadata and summary. Native platform acceptance is required before release.",
+      "docs": [
+        "capture/engine/docs/keyframes-and-text.md",
+        "capture/desktop/ui/frontend/README.md"
+      ]
+    },
+    {
       "id": "desktop-error-reporting",
       "group": "settings",
       "name": "Technical error reports",

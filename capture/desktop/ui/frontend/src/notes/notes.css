@@ -1,0 +1,39 @@
+@font-face {
+  font-family: 'Host Grotesk';
+  src: url('../../../../../../shared/assets/fonts/HostGrotesk-Variable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+}
+body:has(.capture-notes), body:has(.notes-unavailable) { background: transparent; }
+.capture-notes {
+  min-height: 100vh; box-sizing: border-box;
+  color: var(--color-foreground); font-family: 'Host Grotesk', system-ui, sans-serif;
+  padding: 7px;
+}
+.note-popup, .note-list, .note-count {
+  background: var(--color-background); color: var(--color-foreground);
+  border-radius: 14px; box-shadow: 0 2px 9px color-mix(in srgb, var(--color-shadow) 20%, transparent);
+}
+.note-popup { padding: 15px; }
+.note-popup textarea {
+  display: block; width: 100%; min-height: 74px; max-height: 110px; resize: none;
+  border: 0; outline: none; background: transparent; color: inherit;
+  font: inherit; font-size: 14px; line-height: 1.5;
+}
+.note-popup textarea::placeholder { color: var(--color-muted-foreground); }
+.note-popup:focus-within { outline: 1px solid var(--color-ring); }
+.note-popup footer { display: flex; justify-content: flex-end; padding-top: 8px; }
+.note-popup footer button { border-radius: 20px; }
+.note-popup p, .note-list p { font-size: 12px; line-height: 1.4; }
+.note-popup [role=alert], .note-list [role=alert] { color: var(--color-foreground); }
+.note-count { width: 100%; height: 30px; font-size: 12px; border-radius: 20px; }
+.note-count svg { width: 14px; height: 14px; }
+.note-list { max-height: 332px; padding: 12px; overflow-y: auto; }
+.note-list header { display: flex; align-items: center; justify-content: space-between; }
+.note-list header strong { font-size: 14px; font-weight: 550; }
+.note-list article { display: flex; align-items: center; border-top: 1px solid var(--color-border); }
+.note-row { justify-content: flex-start; white-space: normal; padding: 10px 4px; height: auto; text-align: left; flex: 1; min-width: 0; }
+.note-row > span:nth-child(2) { overflow-wrap: anywhere; }
+.note-number { color: var(--color-muted-foreground); font-size: 11px; }
+.note-row small { color: var(--color-muted-foreground); font-size: 10px; }
+.notes-unavailable { font: 12px system-ui; padding: 12px; }
