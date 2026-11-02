@@ -582,10 +582,10 @@
       "id": "recover",
       "group": "finish",
       "name": "Recover unbuilt captures",
-      "says": "A capture whose bundle never got built (the app died first) is built at the next launch.",
-      "status": "stable@0.3.12",
+      "says": "Saved capture assets can be recovered after the app exits unexpectedly. An interrupted recording recovers saved narration only, without reconstructing privacy-excluded screenshots.",
+      "status": "main",
       "platforms": ["mac", "linux"],
-      "docs": ["README.md#usage"]
+      "docs": ["capture/engine/docs/capture.md"]
     },
     {
       "id": "capture-stack",

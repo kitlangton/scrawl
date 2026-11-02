@@ -10,6 +10,9 @@ struct RenewalServer {
 }
 impl RenewalServer {
     fn new(mode: &str) -> Self {
+        Self::with_accept_mode(mode, false)
+    }
+    fn with_accept_mode(mode: &str, nonblocking_accept: bool) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -30,6 +33,13 @@ impl RenewalServer {
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
                 };
+                if nonblocking_accept {
+                    stream.set_nonblocking(true).unwrap();
+                }
+                // Match the general fixture: accept's flag inheritance differs
+                // by platform, but these bounded request reads must block.
+                stream.set_nonblocking(false).unwrap();
+                barrier.transport_paused.store(true, Ordering::SeqCst);
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
@@ -131,6 +141,49 @@ impl Drop for RenewalServer {
         self.thread.take().unwrap().join().unwrap();
     }
 }
+#[test]
+fn hosted_renewal_fixture_reads_fragmented_nonblocking_accept() {
+    for split_body in [false, true] {
+        let server = RenewalServer::with_accept_mode("revoked", true);
+        let mut stream = TcpStream::connect(server.url.strip_prefix("http://").unwrap()).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !server.gate.transport_paused.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(server.gate.transport_paused.load(Ordering::SeqCst));
+        let body = json!({"refreshToken":"synthetic-refresh-old"}).to_string();
+        let head = format!(
+            "POST /v1/token/refresh HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let request = format!("{head}{body}");
+        let split = if split_body { head.len() + 5 } else { 12 };
+        let first = stream.write_all(&request.as_bytes()[..split]);
+        std::thread::sleep(Duration::from_millis(50));
+        let last = stream.write_all(&request.as_bytes()[split..]);
+        let _ = stream.shutdown(std::net::Shutdown::Write);
+        let mut response = String::new();
+        let read = stream.read_to_string(&mut response);
+        let body = json!({"error":{"code":"reauthorization_required"}}).to_string();
+        let expected = format!(
+            "HTTP/1.1 401 Result\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        assert_eq!(
+            response, expected,
+            "split_body={split_body}; first={first:?}; last={last:?}; read={read:?}"
+        );
+        assert!(first.is_ok() && last.is_ok() && read.is_ok());
+        assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
+        assert_eq!(server.requests.load(Ordering::SeqCst), 1);
+    }
+}
 fn reply(scope: &str, grant: &str) -> Value {
     json!({"accessToken":"synthetic-access-new","refreshToken":"synthetic-refresh-new","scope":scope,"expiresIn":3600,"refreshExpiresIn":86400,"grantId":grant})
 }
@@ -186,14 +239,14 @@ fn hosted_renewal_failures_keep_identity_and_classify_retry() {
         assert_eq!(job.generation, "a".repeat(32));
         assert!(!job.files.is_empty());
         if matches!(mode, "transient" | "rate" | "network") {
-            assert_eq!(job.status, "pending");
+            assert_eq!(job.status, "pending", "mode={mode}");
             assert_eq!(job.error.as_deref(), Some("upload_failed"));
             assert_eq!(
                 read_private(&f.client.state.join("upload.credential"), 32768).unwrap(),
                 before
             );
         } else {
-            assert_eq!(job.status, "failed");
+            assert_eq!(job.status, "failed", "mode={mode}");
             assert_eq!(job.error.as_deref(), Some("auth_required"));
             let c = f.client.credential("upload", &server.url).unwrap();
             assert!(c.auth_required);

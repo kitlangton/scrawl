@@ -275,13 +275,15 @@ pub fn plan(captures: &Path, policy: &Policy, now: SystemTime) -> Vec<Action> {
     };
     let mut bundles: Vec<PathBuf> = entries
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|ext| ext == "apparent") && p.is_dir())
+        .filter(|p| (p.extension().is_some_and(|ext| ext == "apparent")
+            || p.file_name().is_some_and(|name| name.to_string_lossy().starts_with(".cancelled-"))) && p.is_dir())
         .collect();
     bundles.sort();
     let mut actions = Vec::new();
     for dir in bundles {
         if dir.join(PINNED).exists()
             || is_claimed(&dir)
+            || crate::capture::engine::runtime::audio::persistence::live(&dir)
             || crate::capture::engine::bundle::recover::owed(&dir)
             || live_marker(&dir, crate::shared::handoff::MEDIA_PENDING, now)
             || live_marker(&dir, MEDIA_SENDING, now)

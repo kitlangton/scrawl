@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# pgrep/pkill fail under some locales (C.UTF-8), which left the old app running.
+# Keep process inspection independent of the caller's locale.
 export LC_ALL=C
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 # APPARENT_APP_DIR builds the signed bundle somewhere else (staging for remote installs, see
-# install-app-remote.sh); APPARENT_NO_LAUNCH=1 skips the ~/bin link and the restart.
+# install-app-remote.sh); APPARENT_NO_LAUNCH=1 skips the ~/bin link and launch,
+# but never permits replacement of a running app.
 APP_DIR="${APPARENT_APP_DIR:-${HOME}/Applications/Apparent.app}"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
@@ -18,6 +19,19 @@ cd "${REPO_DIR}"
 chmod +x "${REPO_DIR}/capture/desktop/scripts/release/setup-sparkle.sh" "${REPO_DIR}/capture/desktop/scripts/release/release-app.sh" 2>/dev/null || true
 SPARKLE_DIR="$("${REPO_DIR}/capture/desktop/scripts/release/setup-sparkle.sh" 2>/dev/null || true)"
 taskpolicy -c utility cargo build -j 3
+
+# Inspect executable paths, not argv: other installations and CLI commands that
+# merely mention this app are not ours. Helpers inside this bundle count too.
+if ! PROCESSES="$(ps -axww -o pid= -o comm=)"; then
+  echo "can't inspect running processes; destination app is untouched; retry when process inspection works" >&2
+  exit 1
+fi
+while read -r PID EXECUTABLE; do
+  if [[ "${EXECUTABLE}" == "${APP_DIR}/Contents/"* ]]; then
+    echo "${APP_DIR} is in use (pid ${PID}: ${EXECUTABLE}); finish any capture, quit the app and its helpers, then retry" >&2
+    exit 1
+  fi
+done <<< "${PROCESSES}"
 
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${FRAMEWORKS_DIR}" "${HOME}/bin"
 
@@ -125,27 +139,8 @@ if [[ -e "${HOME}/bin/apparent" || -L "${HOME}/bin/apparent" ]]; then
 fi
 ln -sfn "${MACOS_DIR}/apparent" "${HOME}/bin/apparent"
 
-apparent_running() {
-  local status=0
-  pgrep -f "Apparent.app/Contents/MacOS/apparent" >/dev/null || status=$?
-  case "${status}" in
-    0) return 0 ;;
-    1) return 1 ;;
-    *) echo "pgrep failed (exit ${status}); can't tell whether the old Apparent stopped" >&2; exit 1 ;;
-  esac
-}
-
-pkill -f "Apparent.app/Contents/MacOS/apparent" 2>/dev/null || true
-pkill -f "target/debug/apparent" 2>/dev/null || true
-for _ in {1..40}; do
-  apparent_running || break
-  sleep 0.05
-done
-if apparent_running; then
-  pgrep -fl "Apparent.app/Contents/MacOS/apparent" >&2 || true
-  echo "the old Apparent is still running; quit it and run this again" >&2
-  exit 1
-fi
 open -a "${APP_DIR}" || (sleep 0.3 && open -n -a "${APP_DIR}")
 sleep 0.3
-pgrep -fl "Apparent.app/Contents/MacOS/apparent"
+ps -axww -o pid= -o comm= | while read -r PID EXECUTABLE; do
+  [[ "${EXECUTABLE}" != "${MACOS_DIR}/apparent" ]] || echo "${PID} ${EXECUTABLE}"
+done

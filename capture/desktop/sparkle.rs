@@ -41,6 +41,14 @@ objc2::define_class!(
     unsafe impl NSObjectProtocol for SparkleDelegate {}
 
     unsafe impl SPUUpdaterDelegate for SparkleDelegate {
+        // Sparkle 2.9.4's SPUInstallerDriver checks this before starting the
+        // install/restart, including when relaunch is false. NO aborts the attempt;
+        // do not retain an installation block or stop a capture for an update.
+        #[unsafe(method(updaterShouldRelaunchApplication:))]
+        fn should_relaunch_application(&self, _updater: &AnyObject) -> Bool {
+            Bool::new(!crate::capture::desktop::workflow::shutdown::busy())
+        }
+
         #[unsafe(method(updater:didFindValidUpdate:))]
         fn did_find_update(&self, _updater: &AnyObject, _item: &AnyObject) {
             self.ivars()
