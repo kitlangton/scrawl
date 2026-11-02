@@ -178,7 +178,7 @@ jobs:
           TMPDIR="$storage_tmp" APPARENT_STORAGE_TEST_ELECTRON="$electron" \
             APPARENT_CONNECT_TEST_ELECTRON="$electron" \
             cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture
-      - name: Native Mac Storage controls against the installed Rust GUI
+      - name: Native Mac Storage and error-reporting controls against the installed Rust GUI
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
         timeout-minutes: 10
         shell: bash

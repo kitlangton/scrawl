@@ -9,6 +9,7 @@ const { createHash } = require('node:crypto');
 const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { _electron: electron, expect } = require('@playwright/test');
+const { readRuntimeState } = require('../electron/runtime.cjs');
 const run = promisify(execFile);
 const root = path.join(__dirname, '..');
 const permissionSource = 'https://github.com/actions/runner-images/blob/main/images/macos/scripts/build/configure-tccdb-macos.sh';
@@ -303,6 +304,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     logHandle = await fs.open(path.join(output, 'rust-storage-native.log'), 'wx', 0o600);
     const pidFile = path.join(home, 'rust.pid');
     await fs.writeFile(pidFile, '', { mode: 0o600, flag: 'wx' });
+    const startRust = async () => {
     backend = spawn('/bin/bash', ['-c', rustSupervisor, 'storage-native-supervisor', pidFile, executable, 'app'], {
       env, detached: true, stdio: ['pipe', logHandle.fd, logHandle.fd],
     });
@@ -332,6 +334,16 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       assert.ok(actual.includes(await fs.realpath(executable)), 'Owned Rust PID does not map the installed executable');
       Object.assign(report.rust, { pid, parentAndGroupVerified: true, mappedExecutableVerified: true });
     }, 'Installed Rust socket readiness', 15000);
+    // A killed backend can leave a socket inode behind. PID mapping and lstat
+    // alone do not prove the replacement has bound it or started its UI loop.
+    await poll(async () => {
+      assert.equal(backend.exitCode, null, 'Installed Rust GUI exited during control readiness');
+      const state = await readRuntimeState(home, budget(3000));
+      assert.deepEqual(state, { status: 'connected', phase: 'idle' });
+      report.rust.controlReadiness = state;
+    }, 'Installed Rust live control readiness', 15000);
+    };
+    await startRust();
     application = await electron.launch({ args: [root], env, timeout: budget(15000) });
     electronChild = application.process();
     // launch() attaches to the main process before app.whenReady() creates a window.
@@ -351,6 +363,49 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     const rendererErrors = [];
     page.on('pageerror', error => rendererErrors.push(error.message));
     await page.getByText('Connected · idle', { exact: true }).waitFor({ timeout: budget(10000) });
+    const reporting = page.getByRole('region', { name: 'Send technical error reports', exact: true });
+    const reportingToggle = reporting.getByRole('checkbox', { name: 'Send technical error reports', exact: true });
+    // Preserve the actual IPC result and rendered state if initial readback fails.
+    // The normal desktop viewport can end above this card after Storage expands.
+    try {
+    await expect(reportingToggle).toBeChecked({ timeout: budget() });
+    } catch (error) {
+      report.errorReportingInitialFailure = {
+        rendered: await reporting.innerText({ timeout: budget() }),
+        readback: await within(page.evaluate(() => window.apparent.readErrorReporting()), budget(), 'Failed initial reporting read'),
+      };
+      await page.screenshot({ path: path.join(output, 'error-reporting-initial-failure.png'), timeout: budget(), fullPage: true });
+      throw error;
+    }
+    report.errorReporting = { defaultOn: true, rustBeforeRestart: report.rust.pid };
+    await reportingToggle.click({ timeout: budget() });
+    await expect(reportingToggle).not.toBeChecked({ timeout: budget() });
+    await expect(reportingToggle).toBeEnabled({ timeout: budget() });
+    assert.equal(JSON.parse(await fs.readFile(config, 'utf8')).errorReporting, false);
+    assert.deepEqual(await within(page.evaluate(() => window.apparent.readErrorReporting()), budget(), 'Reporting read'),
+      { status: 'connected', enabled: false });
+    await page.screenshot({ path: path.join(output, 'error-reporting-off.png'), timeout: budget(), fullPage: true });
+    report.errorReporting.stoppedRust = await stopOwned(backend, 'rust reporting restart', true);
+    await startRust();
+    report.errorReporting.rustAfterRestart = report.rust.pid;
+    assert.notEqual(report.errorReporting.rustBeforeRestart, report.errorReporting.rustAfterRestart);
+    await page.reload({ timeout: budget() });
+    await expect(reportingToggle).not.toBeChecked({ timeout: budget() });
+    await expect(reportingToggle).toBeEnabled({ timeout: budget() });
+    assert.deepEqual(await within(page.evaluate(() => window.apparent.readErrorReporting()), budget(), 'Restarted reporting read'),
+      { status: 'connected', enabled: false });
+    report.errorReporting.reopenAndRustRestartPersisted = true;
+    await reportingToggle.click({ timeout: budget() });
+    await expect(reportingToggle).toBeChecked({ timeout: budget() });
+    await expect(reportingToggle).toBeEnabled({ timeout: budget() });
+    assert.equal(JSON.parse(await fs.readFile(config, 'utf8')).errorReporting, true);
+    await reportingToggle.click({ timeout: budget() });
+    await expect(reportingToggle).not.toBeChecked({ timeout: budget() });
+    await expect(reportingToggle).toBeEnabled({ timeout: budget() });
+    assert.equal(JSON.parse(await fs.readFile(config, 'utf8')).errorReporting, false);
+    assert.deepEqual(JSON.parse(await fs.readFile(config, 'utf8')).storageNativeFixture, unknown);
+    report.errorReporting.explicitOnOffAndUnknownKeysVerified = true;
+    await page.screenshot({ path: path.join(output, 'error-reporting-restarted.png'), timeout: budget(), fullPage: true });
     const card = page.getByRole('region', { name: 'Capture location', exact: true });
     // Usage repeats the effective path; location assertions must target the
     // location's own status, not any descendant text in the Storage card.
@@ -432,6 +487,15 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.error = { message: error.message, stack: error.stack,
       subprocess: error.cause && { code: error.cause.code, signal: error.cause.signal,
         killed: error.cause.killed, stderr: error.cause.stderr } };
+    if (page && Date.now() < deadline) {
+      try {
+        report.errorReportingFailure = {
+          rendered: await page.getByRole('region', { name: 'Send technical error reports', exact: true }).innerText({ timeout: budget(2000) }),
+          readback: await within(page.evaluate(() => window.apparent.readErrorReporting()), budget(), 'Failed reporting readback'),
+        };
+        await page.screenshot({ path: path.join(output, 'error-reporting-failure.png'), timeout: budget(), fullPage: true });
+      } catch (diagnosticError) { report.errorReportingFailureUnavailable = diagnosticError.message; }
+    }
     if (electronChild && Date.now() < deadline) {
       try { report.failureAX = await panel('diagnose'); } catch (axError) { report.failureAXError = axError.message; }
       // Read-only evidence from the exact live owned window, even when its native

@@ -173,6 +173,7 @@ struct SettingsState: Decodable, Equatable {
   var hosted: HostedAccountState?
   var version = "0.3.2"
   var login = SettingsLogin()
+  var errorReporting = true
   var agentDemoVideo = true
   var shortcuts: [SettingsShortcut] = [
     SettingsShortcut(),
@@ -995,6 +996,15 @@ struct SettingsView: View {
         Color.clear.frame(height: 14)
         ShortcutRecorder(model: model, clock: model.clock, shortcut: shortcut)
       }
+      Color.clear.frame(height: 14)
+      SettingsGroup {
+        SettingsRow(title: "Send technical error reports") {
+          SettingsSwitch(on: state.errorReporting) { model.set("errorReporting", $0) }
+            .accessibilityLabel("Send technical error reports")
+            .accessibilityValue(state.errorReporting ? "On" : "Off")
+        }
+      }
+      SettingsCaption(text: "No recordings, screenshots, transcripts or clipboard contents are sent.")
       if let hosted = state.hosted {
         SettingsHeader(state.connect == nil ? "Hosted account" : "Shared links")
         if state.connect == nil {

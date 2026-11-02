@@ -12,6 +12,11 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ui-'));
   const requests = [];
   let reply = '{"state":{"phase":"idle","capture_id":null}}\n';
+  let reportingEnabled = true;
+  let reportingReads = 0;
+  let reportingAlwaysBusy = false;
+  let reportingWrites = 0;
+  let rejectReportingWrite = true;
   let server;
   const application = await electron.launch({
     args: [path.join(__dirname, '..')],
@@ -29,7 +34,7 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   assert.deepEqual(await page.evaluate(() => ({
     keys: Object.keys(window.apparent), require: typeof window.require, process: typeof window.process,
   })), { keys: ['readRuntimeState', 'readCaptureReference', 'copyCaptureReference', 'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation',
-    'readConnectSettings', 'connectSettings', 'allowConnectUploads', 'cancelConnectSettings', 'checkConnectConnection',
+    'readErrorReporting', 'setErrorReporting', 'readConnectSettings', 'connectSettings', 'allowConnectUploads', 'cancelConnectSettings', 'checkConnectConnection',
     'disableConnectUploads', 'disconnectConnectSettings', 'openConnectBrowser', 'readRetention', 'saveRetention', 'resetRetention', 'readCaptureUsage'], require: 'undefined', process: 'undefined' });
   assert.equal(await application.evaluate(({ BrowserWindow }) => {
     const options = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();
@@ -55,8 +60,19 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await fs.chmod(directory, 0o700);
   server = net.createServer((socket) => socket.once('data', (data) => {
     requests.push(data.toString());
-    if (data.toString().startsWith('{') && JSON.parse(data.toString()).connect) return socket.end('{"error":"feature_disabled"}\n');
-    socket.end(reply);
+    const request = data.toString().startsWith('{') ? JSON.parse(data.toString()) : null;
+    if (request?.errorReporting) {
+      if (request.errorReporting === 'read' && (++reportingReads <= 3 || reportingAlwaysBusy)) {
+        socket.end('{"error":"app_busy"}\n');
+        return;
+      }
+      if (request.errorReporting === 'set') {
+        reportingWrites += 1;
+        if (rejectReportingWrite) return socket.end('{"error":"app_busy"}\n');
+        reportingEnabled = request.enabled;
+      }
+      socket.end(JSON.stringify({ errorReporting: { enabled: reportingEnabled } }) + '\n');
+    } else socket.end(reply);
   }));
   const address = path.join(directory, 'capture.sock');
   await new Promise((resolve) => server.listen(address, resolve));
@@ -65,6 +81,30 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await new Promise((resolve) => setTimeout(resolve, 1100));
   await page.getByRole('button', { name: 'Refresh state' }).click();
   await page.getByText('Connected · idle', { exact: true }).waitFor();
+  const reporting = page.getByRole('region', { name: 'Send technical error reports', exact: true });
+  await reporting.getByRole('button', { name: 'Refresh reporting setting' }).click();
+  const toggle = reporting.getByRole('checkbox', { name: 'Send technical error reports' });
+  await expect(toggle).toBeChecked();
+  assert.equal(reportingReads, 4, 'repeated busy reads recover without another human action');
+  await toggle.click();
+  await expect(reporting.getByText('Rust is handling another settings request. Refresh shortly.')).toBeVisible();
+  assert.equal(reportingWrites, 1, 'a rejected save must never be repeated');
+  rejectReportingWrite = false;
+  await reporting.getByRole('button', { name: 'Refresh reporting setting' }).click();
+  await expect(toggle).toBeChecked();
+  await toggle.click();
+  await expect(toggle).not.toBeChecked();
+  assert.equal(reportingEnabled, false);
+  const beforeBusy = reportingReads;
+  reportingAlwaysBusy = true;
+  await reporting.getByRole('button', { name: 'Refresh reporting setting' }).click();
+  await expect(reporting.getByText('Rust is handling another settings request. Refresh shortly.')).toBeVisible();
+  await expect(reporting.getByRole('button', { name: 'Refresh reporting setting' })).toBeEnabled();
+  assert.equal(reportingReads - beforeBusy, 6, 'persistent contention stops after the bounded read attempts');
+  reportingAlwaysBusy = false;
+  assert.equal(await page.evaluate(async () => {
+    try { await window.apparent.setErrorReporting('false'); return false; } catch { return true; }
+  }), true);
   reply = '{"error":"app_busy"}\n';
   await new Promise((resolve) => setTimeout(resolve, 1100));
   await page.getByRole('button', { name: 'Refresh state' }).click();
@@ -75,7 +115,8 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await page.getByText('Connected · processing', { exact: true }).waitFor();
   assert.equal(await page.getByText('private', { exact: true }).count(), 0);
   assert.ok(requests.length >= 3);
-  assert.ok(requests.every((request) => request === 'state\n' || JSON.parse(request).storage === 'read' || JSON.parse(request).reference === 'read' || JSON.parse(request).connect === 'settings'));
+  assert.ok(requests.every((request) => request === 'state\n' || JSON.parse(request).storage === 'read' || JSON.parse(request).reference === 'read' || JSON.parse(request).connect === 'settings' ||
+    ['read', 'set'].includes(JSON.parse(request).errorReporting)));
   assert.deepEqual(errors, []);
   const screenshot = path.join(os.tmpdir(), `apparent-foundation-${process.pid}.png`);
   await page.screenshot({ path: screenshot, fullPage: true });
