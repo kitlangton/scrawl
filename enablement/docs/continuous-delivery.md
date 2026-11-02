@@ -179,3 +179,42 @@ capabilities and the existing canonical repository/issue budget ledger plus
 allocation/cleanup receipts. Missing receipts are not zero spend. Follow the
 native owner's existing preflight and shared queue; this command grants no
 allocation authority and establishes no GUI acceptance.
+
+## Advisory owner lanes
+
+`python3 enablement/owner_lanes.py --base origin/main --head HEAD` prints a
+versioned JSON proposal over the complete merge-base delta. `--json <path>` saves
+it; `--summary <path>` appends an input/reason summary. Main CI retains this report
+as `owner-plan-<runner>` and in the selector job summary. Its `HEAD^` comparison is
+advisory only: cancelled-run coverage still comes from unchanged empty-tree full
+verification. `executed: false` means the report supplies no successful-test proof.
+
+Explicit manual entrypoints use `--lane <name> --run` (and `--online` for locked
+Cargo dependencies). Lanes are `capture` (whole root build/test), `engine-staged`
+(staged Engine package, not production Engine), `connect-client` (independent
+Cargo build/test), `connect-web` (existing package build/browser fixtures),
+`connect-service` (build and real synthetic workerd tests), `public-site`
+(standalone build/package and website/publication contracts), and `desktop-ui`
+(JS and synthetic Electron smoke). Use the existing web workflow for complete
+composed-site and cross-origin acceptance, and platform workflow for real Rust
+bridge/native checks. Entrypoints require the same toolchains, browser and system
+dependencies as those workflows; they do not install OS dependencies or grant
+native acceptance. Run heavy local commands through the existing build runner.
+
+Client edits also select Capture: root tests intentionally reuse client scenarios
+with the real AppConfig provider. Renderer edits select Capture for Rust bridge
+integration. Shared UI feeds Desktop and service recipient UI. Connect web feeds
+Public composition and consumes five explicit Public assets. Service API changes
+include root/browser consumers. Production Engine/Desktop/Agent remain root
+modules with reverse dependencies; no lane claims their isolation. Shared,
+unclassified, newly added, deleted, renamed or type-changed inputs and missing
+history select every lane. Manifests and lockfiles follow their owner's consumers;
+root build, packaging and verification inputs remain broad.
+
+No report output controls execution, hooks, release admission or publishers.
+Before enabling skipping in a separate issue, establish each suite's complete
+input closure including toolchain/platform, native/build/packaging contracts and
+verifier identity; compare against successful compatible proof covering the full
+candidate, including cancelled-run changes. Missing or incompatible proof must
+rerun. Validate shadow decisions against full execution and investigate omissions.
+Dependency caches are not test receipts; no speedup is claimed here.

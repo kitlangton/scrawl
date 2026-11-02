@@ -37,7 +37,7 @@ class PrePushGuardTests(unittest.TestCase):
         # copying the real hook tests here would recursively invoke itself.
         fixture_test = "import unittest\nclass Fixture(unittest.TestCase):\n    def test_fixture(self):\n        self.assertTrue(True)\n"
         for name in ("test_fixture_push.py", "test_verification.py", "test_release_gate.py",
-                     "test_temp_preflight.py"):
+                     "test_temp_preflight.py", "test_owner_lanes.py"):
             (self.repo / "enablement" / "tests" / name).write_text(fixture_test)
         shutil.copy2(SELECTOR, self.repo / "enablement" / "verification.py")
         run("git", "add", ".", cwd=self.repo)

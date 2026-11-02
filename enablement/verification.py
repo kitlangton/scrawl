@@ -195,7 +195,7 @@ def check_temp_environment():
 
 def run_pr_checks():
     for pattern in ("test_*push*.py", "test_verification.py", "test_release_gate.py",
-                    "test_temp_preflight.py"):
+                    "test_temp_preflight.py", "test_owner_lanes.py"):
         subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                         "-p", pattern], cwd=ROOT, check=True)
 

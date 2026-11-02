@@ -27,12 +27,21 @@ jobs:
           python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
           python3 -m unittest discover -s enablement/tests -p 'test_verification.py'
           python3 -m unittest discover -s enablement/tests -p 'test_temp_preflight.py'
+          python3 -m unittest discover -s enablement/tests -p 'test_owner_lanes.py'
       - name: Validate workflow syntax and job dependencies
         uses: docker://rhysd/actionlint:1.7.12
         with:
           args: -shellcheck= -pyflakes= .github/workflows/verification.yml .github/workflows/verification-mac.yml .github/workflows/verification-platform.yml .github/workflows/release-linux.yml .github/workflows/release-mac-preview.yml .github/workflows/web-delivery.yml
       - name: Release admission contracts
         run: python3 -m unittest discover -s enablement/tests -p 'test_release_gate.py'
+      - name: Advisory owner dependency report (does not select execution)
+        run: |
+          python3 enablement/owner_lanes.py --base HEAD^ --json "$RUNNER_TEMP/owner-plan.json" --summary "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owner-plan-${{ inputs.runner }}
+          path: ${{ runner.temp }}/owner-plan.json
+          if-no-files-found: error
       - id: plan
         run: |
           # Full tree: a cancelled earlier main run must not hide its delta.
