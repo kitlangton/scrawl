@@ -8,9 +8,9 @@ Shared macOS/Linux implementation, default-off `hostedSync` experiment. This is 
 
 ## Implementation ownership
 
-Optional desktop account controls live in **Settings → General**, behind the
-independent default-off `connectSettings` experiment (close/reopen Settings after
-editing config). They use the same client device flow, private credentials,
+Desktop account controls appear by default in **Settings → General**. The
+independent `connectSettings` flag supports an explicit false opt-out; close and
+reopen Settings after editing it. Visibility does not grant upload consent. They use the same client device flow, private credentials,
 renewal, queue cancellation and config writer as the CLI. There is no Connect
 onboarding step. The Settings controller is owned by Desktop; the client's
 secret-free presentation API supplies fresh local state, a validated public

@@ -837,6 +837,25 @@ mod tests {
     }
 
     #[test]
+    fn connect_settings_defaults_on_without_enabling_uploads_and_preserves_opt_out() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("config.json");
+        let missing = load_config_from(&path);
+        assert!(experiment_enabled_in(&missing, "connectSettings"));
+        assert!(!experiment_enabled_in(&missing, "hostedSync"));
+        assert!(!experiment_enabled_in(&missing, "hostedSharing"));
+        assert!(missing.cloud.is_none());
+        fs::write(&path, r#"{"autoSend":false,"experiments":{"other":true}}"#).unwrap();
+        assert!(experiment_enabled_in(&load_config_from(&path), "connectSettings"));
+        set_experiment_in(&path, "connectSettings", false).unwrap();
+        let opted_out = load_config_from(&path);
+        assert!(!experiment_enabled_in(&opted_out, "connectSettings"));
+        assert_eq!(opted_out.auto_send, Some(false));
+        assert_eq!(opted_out.experiments.get("other"), Some(&true));
+        assert!(opted_out.cloud.is_none());
+    }
+
+    #[test]
     fn copy_capture_id_defaults_on_and_preserves_explicit_opt_out() {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
