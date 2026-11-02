@@ -530,7 +530,6 @@ fn island_content_width(
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum MenuAction {
     ToggleCapture,
-    GiveFeedback,
     ChooseTarget,
     OpenLatest,
     OpenInbox(PathBuf),
@@ -538,11 +537,6 @@ enum MenuAction {
     Settings,
     CheckForUpdates,
     Quit,
-}
-
-/// A public issue form, never a URL containing a capture, transcript or local path.
-fn feedback_issue_url() -> String {
-    "https://github.com/tryapparent/apparent/issues/new?template=bug_report.yml".into()
 }
 
 /// Text beside the menu bar icon while a video export runs (`None` goes back to the inbox count).
@@ -924,8 +918,6 @@ pub struct ApparentCoordinator {
     /// Read the WAV once when selecting a bundle, never on the capsule's animation tick.
     review_audio_issue: Option<CompletedAudioIssue>,
     review_status: Option<String>,
-    feedback_capture: bool,
-    review_feedback: bool,
     selected_tab: ReviewTab,
     selected_keyframe: usize,
     /// A cabled iPhone, refreshed each time the picker opens.
@@ -1034,8 +1026,6 @@ impl ApparentCoordinator {
                 .and_then(|(dir, bundle)| bundle_audio_issue(dir, bundle)),
             review_bundle: initial_bundle,
             review_status: None,
-            feedback_capture: false,
-            review_feedback: false,
             selected_tab: ReviewTab::Keyframes,
             selected_keyframe: 0,
             iphone: None,
@@ -1800,18 +1790,8 @@ impl ApparentCoordinator {
         }
     }
 
-    /// The feedback entry point records immediately, then opens a local review.
-    pub fn record_feedback(&mut self, cx: &mut Context<Self>) {
-        if self.is_recording() || self.is_selecting() || self.is_processing() {
-            return;
-        }
-        self.record_screen_now(cx);
-        self.feedback_capture = self.is_recording();
-    }
-
     /// Records the display under the cursor straight away (no picker), auto-cropped.
     pub fn record_screen_now(&mut self, cx: &mut Context<Self>) {
-        self.feedback_capture = false;
         let target = if self.lab {
             lab::target()
         } else {
@@ -1974,7 +1954,6 @@ impl ApparentCoordinator {
         self.review_audio_issue = bundle_audio_issue(&bundle.0, &bundle.1);
         self.review_bundle = Some(bundle);
         self.review_status = status;
-        self.review_feedback = false;
         self.selected_tab = ReviewTab::Keyframes;
         self.selected_keyframe = 0;
     }
@@ -2941,7 +2920,6 @@ impl ApparentCoordinator {
     /// The menu bar's picker, opening on the mode the last recording used.
     pub fn begin_target_selection(&mut self, cx: &mut Context<Self>) {
         if self.ready_to_record() {
-            self.feedback_capture = false;
             self.open_picker(None, cx);
         }
     }
@@ -3493,7 +3471,6 @@ impl ApparentCoordinator {
         }
         self.playback.take();
         apparent_log("cancel_recording invoked");
-        self.feedback_capture = false;
         self.discard_recording();
     }
 
@@ -3509,14 +3486,12 @@ impl ApparentCoordinator {
         if let Some(id) = &finishing_id {
             self.agent_captures.set(id, "processing", None, None);
         }
-        let feedback_capture = std::mem::take(&mut self.feedback_capture);
         #[cfg(target_os = "linux")]
         let auto_active = !std::mem::take(&mut self.agent_finishing)
             && crate::shared::handoff::experiment(crate::capture::desktop::linux::auto_paste::EXPERIMENT)
             && crate::capture::desktop::linux::hyprland::running()
             && crate::capture::desktop::linux::wayland_session()
             && !self.lab
-            && !feedback_capture
             && matches!(&rec.source, CaptureSource::Screen { .. });
         #[cfg(not(target_os = "linux"))]
         let auto_active = false;
@@ -3584,12 +3559,11 @@ impl ApparentCoordinator {
                         generation,
                         #[cfg(any(target_os = "macos", target_os = "linux"))]
                         finishing_id.as_deref(),
-                        feedback_capture,
                         finalized,
                         desktop_completion::connect_completed,
                         |coord, finalized| {
                             coord.present_capture_result(
-                                finalized, duration_ms, feedback_capture, auto_active, &entity, cx,
+                                finalized, duration_ms, auto_active, cx,
                             );
                         },
                     );
@@ -5112,12 +5086,10 @@ fn capture_reference_response(
 fn review_notice(
     history_error: Option<&str>,
     status: Option<&str>,
-    feedback: bool,
 ) -> Option<String> {
     status
         .filter(|message| {
-            feedback
-                || message.starts_with("Could not open capture:")
+            message.starts_with("Could not open capture:")
                 || *message == "Capture ID copied"
                 || message.starts_with("Could not copy capture ID:")
         })
@@ -5287,7 +5259,6 @@ impl Render for BundleReviewWindow {
         let state = coord_read.review_bundle.clone();
         let audio_issue = coord_read.review_audio_issue;
         let status = coord_read.review_status.clone();
-        let feedback = coord_read.review_feedback;
         let tab = coord_read.selected_tab;
         let selected_kf = coord_read.selected_keyframe;
         let shortcut_label = coord_read.shortcut_label();
@@ -5414,7 +5385,7 @@ impl Render for BundleReviewWindow {
             .map(|kf| kf.said.as_deref())
             .collect::<Vec<_>>();
         let review_notice =
-            review_notice(self.history_error.as_deref(), status.as_deref(), feedback);
+            review_notice(self.history_error.as_deref(), status.as_deref());
         let no_words = audio_issue == Some(CompletedAudioIssue::NoWords);
         let no_audio = audio_issue == Some(CompletedAudioIssue::NoAudio);
         let missing_reason = if audio_issue == Some(CompletedAudioIssue::TranscriptionUnavailable) {
@@ -5450,7 +5421,6 @@ impl Render for BundleReviewWindow {
             crate::capture::desktop::settings::external_record_owned(crate::capture::engine::runtime::ShortcutKind::Record);
         let c_copy = self.coordinator.clone();
         let c_copy_id = self.coordinator.clone();
-        let c_feedback = self.coordinator.clone();
         let c_send = self.coordinator.clone();
         let c_tab_sheet = self.coordinator.clone();
         let c_tab_frames = self.coordinator.clone();
@@ -5649,20 +5619,7 @@ impl Render for BundleReviewWindow {
                                         cx.notify();
                                     });
                                 }),
-                            )
-                            .when(feedback, |actions| actions.child(
-                                action_button("btn-github-issue", "Open GitHub issue…", false)
-                                    .on_click(move |_, _, cx| {
-                                        let result = crate::shared::handoff::open_path(std::path::Path::new(&feedback_issue_url()));
-                                        c_feedback.update(cx, |coord, cx| {
-                                            coord.review_status = Some(match result {
-                                                Ok(()) => "Asked your browser to open GitHub. Attach only media you choose to share.".into(),
-                                                Err(error) => format!("Could not open GitHub: {error}"),
-                                            });
-                                            cx.notify();
-                                        });
-                                    }),
-                            )),
+                            ),
                     )
                     .children(platform::caption_buttons()),
             )
@@ -6687,12 +6644,6 @@ pub fn run_app(
                                 MenuAction::ToggleCapture => {
                                     loop_coord.update(cx, |coord, cx| coord.record_or_finish(cx));
                                 }
-                                MenuAction::GiveFeedback => {
-                                    if crate::shared::handoff::experiment("feedbackIssue") {
-                                        loop_coord
-                                            .update(cx, |coord, cx| coord.record_feedback(cx));
-                                    }
-                                }
                                 MenuAction::ChooseTarget => {
                                     loop_coord.update(cx, |coord, cx| {
                                         if !coord.is_recording()
@@ -6851,7 +6802,7 @@ mod tests {
             coord.capture_finalizer_finished();
             coord.receive_capture_result(generation,
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
-                None, false, Err(anyhow::anyhow!("deferred finalizer failed")),
+                None, Err(anyhow::anyhow!("deferred finalizer failed")),
                 |_| panic!("failed finalizer must not publish"),
                 |_, _| panic!("dismissed finalizer must not regain UI ownership"));
             assert_eq!(coord.pending_finalizers, remaining);
@@ -6879,7 +6830,7 @@ mod tests {
     #[test]
     fn deferred_finalizer_success_survives_dismissal_and_new_capture() {
         for processing_b in [false, true] {
-            deferred_finalizer_receipt_survives_dismissal_and_new_capture(true, processing_b, false);
+            deferred_finalizer_receipt_survives_dismissal_and_new_capture(true, processing_b);
         }
     }
 
@@ -6887,22 +6838,12 @@ mod tests {
     #[test]
     fn deferred_finalizer_failure_survives_dismissal_and_new_capture() {
         for processing_b in [false, true] {
-            deferred_finalizer_receipt_survives_dismissal_and_new_capture(false, processing_b, false);
+            deferred_finalizer_receipt_survives_dismissal_and_new_capture(false, processing_b);
         }
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[test]
-    fn deferred_feedback_finalizer_stays_local_after_dismissal() {
-        for succeeded in [false, true] {
-            for processing_b in [false, true] {
-                deferred_finalizer_receipt_survives_dismissal_and_new_capture(succeeded, processing_b, true);
-            }
-        }
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    fn deferred_finalizer_receipt_survives_dismissal_and_new_capture(succeeded: bool, processing_b: bool, feedback: bool) {
+    fn deferred_finalizer_receipt_survives_dismissal_and_new_capture(succeeded: bool, processing_b: bool) {
         use crate::capture::desktop::settings::onboarding::{Effect, Flow, Grants, Input, Permission, Session, Status, Step};
         let (sender, _receiver) = flume::unbounded();
         let mut coordinator = ApparentCoordinator::new(SharedCaptureTelemetry::new(sender), None);
@@ -6963,12 +6904,12 @@ mod tests {
         let review_b = coordinator.review_bundle.clone();
 
         let mut completed = Vec::new();
-        coordinator.receive_capture_result(generation_a, Some(&finishing_id), feedback, deferred, |dir| {
+        coordinator.receive_capture_result(generation_a, Some(&finishing_id), deferred, |dir| {
             completed.push(dir.to_path_buf());
         }, |_, _| {
             panic!("stale A must not enter UI/clipboard/onboarding effects");
         });
-        assert_eq!(completed, if succeeded && !feedback { vec![exact_path.clone()] } else { vec![] });
+        assert_eq!(completed, if succeeded { vec![exact_path.clone()] } else { vec![] });
         let receipt_a = coordinator.agent_captures.inspect("a");
         if succeeded {
             assert_eq!(receipt_a, serde_json::json!({
@@ -6992,36 +6933,34 @@ mod tests {
     #[test]
     fn current_finalizer_completes_once_before_ui_for_agent_and_manual_captures() {
         for owned in [false, true] {
-            for feedback in [false, true] {
-                let (sender, _receiver) = flume::unbounded();
-                let mut coordinator = ApparentCoordinator::new(SharedCaptureTelemetry::new(sender), None);
-                coordinator.set_island_phase(IslandPhase::Processing);
-                let generation = coordinator.capture_generation;
-                if owned {
-                    assert!(coordinator.agent_captures.admit("a", false, false));
-                    coordinator.agent_captures.set("a", "processing", None, None);
-                }
-                let bundle = serde_json::from_value(serde_json::json!({
-                    "version": 1, "id": "a", "createdAtMs": 0, "durationMs": 1000,
-                    "target": {"mode": "display", "displayId": 0,
-                        "frame": {"x": 0.0, "y": 0.0, "width": 640.0, "height": 480.0, "scale": 1.0}},
-                    "transcript": {"source": "test", "text": "", "segments": []},
-                    "strokes": [], "marks": [], "events": [], "keyframes": [], "contactSheet": "c.png"
-                })).unwrap();
-                let path = PathBuf::from("/synthetic/current-exact.apparent");
-                let effects = std::cell::RefCell::new(Vec::new());
-                coordinator.receive_capture_result(generation, owned.then_some("a"), feedback,
-                    Ok((path.clone(), bundle, String::new())),
-                    |dir| { assert_eq!(dir, path); effects.borrow_mut().push("completed"); },
-                    |coord, result| {
-                        assert_eq!(result.unwrap().0, path);
-                        if owned {
-                            assert_eq!(coord.agent_captures.inspect("a")["status"], "saved");
-                        }
-                        effects.borrow_mut().push("ui");
-                    });
-                assert_eq!(*effects.borrow(), if feedback { vec!["ui"] } else { vec!["completed", "ui"] });
+            let (sender, _receiver) = flume::unbounded();
+            let mut coordinator = ApparentCoordinator::new(SharedCaptureTelemetry::new(sender), None);
+            coordinator.set_island_phase(IslandPhase::Processing);
+            let generation = coordinator.capture_generation;
+            if owned {
+                assert!(coordinator.agent_captures.admit("a", false, false));
+                coordinator.agent_captures.set("a", "processing", None, None);
             }
+            let bundle = serde_json::from_value(serde_json::json!({
+                "version": 1, "id": "a", "createdAtMs": 0, "durationMs": 1000,
+                "target": {"mode": "display", "displayId": 0,
+                    "frame": {"x": 0.0, "y": 0.0, "width": 640.0, "height": 480.0, "scale": 1.0}},
+                "transcript": {"source": "test", "text": "", "segments": []},
+                "strokes": [], "marks": [], "events": [], "keyframes": [], "contactSheet": "c.png"
+            })).unwrap();
+            let path = PathBuf::from("/synthetic/current-exact.apparent");
+            let effects = std::cell::RefCell::new(Vec::new());
+            coordinator.receive_capture_result(generation, owned.then_some("a"),
+                Ok((path.clone(), bundle, String::new())),
+                |dir| { assert_eq!(dir, path); effects.borrow_mut().push("completed"); },
+                |coord, result| {
+                    assert_eq!(result.unwrap().0, path);
+                    if owned {
+                        assert_eq!(coord.agent_captures.inspect("a")["status"], "saved");
+                    }
+                    effects.borrow_mut().push("ui");
+                });
+            assert_eq!(*effects.borrow(), vec!["completed", "ui"]);
         }
     }
 
@@ -7134,13 +7073,6 @@ mod tests {
         assert_eq!(coordinator.agent_state().capture_id, None);
     }
 
-    #[test]
-    fn feedback_issue_url_opens_a_public_template_without_capture_data() {
-        assert_eq!(
-            feedback_issue_url(),
-            "https://github.com/tryapparent/apparent/issues/new?template=bug_report.yml"
-        );
-    }
 
     #[test]
     fn capture_failure_status_survives_inbox_changes() {
@@ -7285,10 +7217,10 @@ mod tests {
     }
 
     #[test]
-    fn review_copy_id_feedback_is_visible_without_feedback_mode() {
+    fn review_copy_id_status_is_visible() {
         for status in ["Capture ID copied", "Could not copy capture ID: clipboard unavailable"] {
-            assert_eq!(review_notice(None, Some(status), false).as_deref(), Some(status));
-            assert_eq!(review_notice(Some("scan failed"), Some(status), false).as_deref(), Some(status));
+            assert_eq!(review_notice(None, Some(status)).as_deref(), Some(status));
+            assert_eq!(review_notice(Some("scan failed"), Some(status)).as_deref(), Some(status));
         }
     }
 
@@ -7298,29 +7230,15 @@ mod tests {
             review_notice(
                 Some("scan failed"),
                 Some("Could not open capture: removed"),
-                false,
             ),
             Some("Could not open capture: removed".to_owned())
         );
         assert_eq!(
-            review_notice(Some("scan failed"), Some("Ready"), false),
+            review_notice(Some("scan failed"), Some("Ready")),
             Some("Could not read captures: scan failed".to_owned())
         );
     }
 
-    #[test]
-    fn feedback_review_displays_privacy_notice_and_browser_errors() {
-        let warning = "Review before sharing publicly. Nothing is uploaded automatically.";
-        assert_eq!(
-            review_notice(None, Some(warning), true).as_deref(),
-            Some(warning)
-        );
-        let error = "Could not open GitHub: browser unavailable";
-        assert_eq!(
-            review_notice(None, Some(error), true).as_deref(),
-            Some(error)
-        );
-    }
 
     #[test]
     fn review_workspace_gives_words_reading_room_without_cropping_the_stage() {
@@ -7697,13 +7615,6 @@ mod tests {
             "Sent to APPARENT · No words"
         );
         assert_eq!(completed_status_label(0, None, None), "Copied");
-        assert_eq!(
-            completed_status_label(
-                0,
-                Some("Saved · review"),
-                Some(CompletedAudioIssue::NoAudio)
-            ),
-            "Saved · review · No audio"
-        );
+
     }
 }
