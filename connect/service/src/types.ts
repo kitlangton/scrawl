@@ -45,4 +45,5 @@ export interface ShareModel {
  uploadedBytes: number; totalBytes: number; files: SharedFile[]; thumbnailUrl: string | null;
  retryAfterSeconds: number | null; retryGuidance: string; evidenceNotice: string;
  summary?: string; transcript?: string;
+ transcriptSegments?: Array<{startMs:number;endMs:number;text:string}>;
 }

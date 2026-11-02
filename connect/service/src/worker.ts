@@ -3,15 +3,20 @@ import {ApiError,fail,trustedSiteOrigin} from './common.ts';
 import {authRoutes} from './auth.ts';
 import {captureRoutes,cleanup} from './captures.ts';
 import {shareRoutes} from './shares.ts';
-import {renderShare,shareViewScript,shareViewStyles} from './share-view.ts';
+import {renderShare,shareViewScript,shareViewStyles,shareWordmark,shareFont} from './share-view.ts';
 
 export default {
  async fetch(request: Request,env: Env) {
   let response;
   try {
    const url=new URL(request.url);
-   if(['/share-view.js','/share-view.css'].includes(url.pathname)&&['GET','HEAD'].includes(request.method)) {
-    response=new Response(request.method==='HEAD'?null:url.pathname.endsWith('.js')?shareViewScript:shareViewStyles,{headers:{'Content-Type':url.pathname.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8'}});
+   if(['/share-view.js','/share-view.css','/share-wordmark.svg','/share-font.ttf'].includes(url.pathname)&&['GET','HEAD'].includes(request.method)) {
+    let body: BodyInit, type: string;
+    if(url.pathname==='/share-view.js'){body=shareViewScript;type='text/javascript; charset=utf-8';}
+    else if(url.pathname==='/share-view.css'){body=shareViewStyles;type='text/css; charset=utf-8';}
+    else if(url.pathname==='/share-wordmark.svg'){body=shareWordmark;type='image/svg+xml';}
+    else{body=Uint8Array.from(atob(shareFont),c=>c.charCodeAt(0));type='font/ttf';}
+    response=new Response(request.method==='HEAD'?null:body,{headers:{'Content-Type':type}});
    }else if(request.method==='OPTIONS') {
     if(!trustedSiteOrigin(request.headers.get('Origin'),env))fail('forbidden',403);
     response=new Response(null,{status:204,headers:{'Access-Control-Allow-Methods':'GET, POST, PUT, DELETE, OPTIONS','Access-Control-Allow-Headers':'Authorization, Content-Type, X-CSRF-Token','Access-Control-Max-Age':'600'}});

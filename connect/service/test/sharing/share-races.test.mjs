@@ -17,13 +17,13 @@ const instrumented=await build({stdin:{resolveDir:process.cwd(),contents:`
   const response=await worker.fetch(request,{...env,DB,BUCKET});response.headers.set('X-Metered',String(calls));return response;
  }};
 `},bundle:true,format:'esm',platform:'browser',conditions:['workerd'],external:['node:*'],write:false});
-async function setup(){
+async function setup(metadata=false){
  const f=await fixture({SHARING_ENABLED:'true'},{scriptPath:undefined,script:instrumented.outputFiles[0].text,instances:true});
  await f.db.exec((await readFile('migrations/0003.sql','utf8')).replaceAll('\n',' '));
  await f.db.exec('CREATE TABLE test_barrier(released INTEGER,entered INTEGER); INSERT INTO test_barrier VALUES(0,0)');
- const a=await f.identity('race'),p='/v1/captures/'+id(171);
- assert.equal((await f.call(p,{token:a.token,method:'POST',body:{files:[file()]}})).status,200);
- assert.equal((await f.call(p+'/files/summary.md',{token:a.token,method:'PUT',raw:'hello'})).status,200);
+ const a=await f.identity('race'),p='/v1/captures/'+id(171),asset=metadata?'apparent.json':'summary.md',text=metadata?JSON.stringify({transcript:{text:'hello'}}):'hello';
+ assert.equal((await f.call(p,{token:a.token,method:'POST',body:{files:[file(asset,text)]}})).status,200);
+ assert.equal((await f.call(p+'/files/'+asset,{token:a.token,method:'PUT',raw:text})).status,200);
  assert.equal((await f.call(p+'/complete',{token:a.token,method:'POST'})).status,200);
  const grants=await Promise.all(Array.from({length:5},()=>f.call(p+'/share',{token:a.token,method:'POST'})));
  const links=await Promise.all(grants.map(async r=>{assert.equal(r.status,200);return (await r.json()).url;}));assert.equal(new Set(links).size,1);
@@ -33,8 +33,9 @@ async function entered(f){for(let n=0;n<200;n++){if((await f.db.prepare('SELECT 
 const release=f=>f.db.exec('UPDATE test_barrier SET released=1');
 
 for(const [suffix,header] of [['/files/summary.md','X-Hold-R2'],['/thumbnail.png','X-Hold-R2'],['','X-Hold-R2'],['/manifest.json','X-Hold-Manifest']])test('revocation wins a blocked public read '+(suffix||'HTML'),async()=>{
- const f=await setup();let pending;
+ const f=await setup(suffix==='');let pending;
  try{
+  // HTML now reads transcript metadata rather than the omitted summary.
   // Give thumbnail its own real stored bytes without a second app fixture.
   if(suffix==='/thumbnail.png')await f.db.prepare("UPDATE files SET path='contact-sheet.png'").run();
   pending=f.call(f.path+suffix,{headers:{[header]:'1',...(suffix.startsWith('/files/')?{Range:'bytes=0-2'}:{})}});
