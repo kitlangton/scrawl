@@ -53,13 +53,17 @@ test('selected capture reference: real Rust selection and native clipboard', { t
   let rust;
   let application;
   let log;
-  async function stopRust() {
-    if (rust && rust.exitCode === null && rust.signalCode === null) {
-      const ended = new Promise((resolve) => rust.once('exit', resolve));
-      rust.kill('SIGTERM');
-      const timer = setTimeout(() => { if (rust.exitCode === null && rust.signalCode === null) rust.kill('SIGKILL'); }, 2500);
+  let seedOwner;
+  async function stopOwned(child) {
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const ended = new Promise((resolve) => child.once('exit', resolve));
+      child.kill('SIGTERM');
+      const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 2500);
       try { await ended; } finally { clearTimeout(timer); }
     }
+  }
+  async function stopRust() {
+    await stopOwned(rust);
     await log?.close(); log = undefined;
     rust = undefined;
   }
@@ -69,7 +73,9 @@ test('selected capture reference: real Rust selection and native clipboard', { t
         try { await (await application.firstWindow()).screenshot({ path: path.join(output, 'failure.png'), fullPage: true }); }
         catch { report.failureScreenshotUnavailable = true; }
       }
-      await application?.close(); await stopRust();
+      const stopped = await Promise.allSettled([application?.close(), stopRust(), stopOwned(seedOwner)]);
+      const failures = stopped.filter((result) => result.status === 'rejected');
+      if (failures.length) throw new AggregateError(failures.map((result) => result.reason), 'Owned cleanup failed');
       await fs.rm(home, { recursive: true, force: true });
       report.ownedCleanupVerified = true;
     } catch (error) { report.passed = false; report.cleanupError = error.message; throw error; }
@@ -95,6 +101,12 @@ test('selected capture reference: real Rust selection and native clipboard', { t
   await startRust(newer);
   application = await electron.launch({ args: [path.join(__dirname, '..')], env });
   const page = await application.firstWindow();
+  await expect.poll(() => application.evaluate(({ BrowserWindow }) => {
+    const windows = BrowserWindow.getAllWindows();
+    if (windows.length !== 1) return false;
+    windows[0].focus();
+    return windows[0].isFocused();
+  })).toBe(true);
   const card = page.locator('section[aria-labelledby="reference-title"]');
   const copy = card.getByRole('button', { name: 'Copy capture ID', exact: true });
   const refresh = card.getByRole('button', { name: 'Refresh capture reference' });
@@ -102,6 +114,19 @@ test('selected capture reference: real Rust selection and native clipboard', { t
   const image = path.join(captures, newer, 'contact-sheet.png');
   async function seed() {
     const png = (await fs.readFile(image)).toString('base64');
+    if (process.env.APPARENT_REFERENCE_VM === '1') {
+      // Publish into the compositor rather than trusting Electron's own offer.
+      await stopOwned(seedOwner);
+      seedOwner = spawn('wl-copy', ['--foreground', '--type', 'image/png'], { env, stdio: ['pipe', 'ignore', 'inherit'] });
+      seedOwner.once('error', (error) => { report.seedError = error.message; });
+      seedOwner.stdin.on('error', (error) => { report.seedError = error.message; });
+      seedOwner.stdin.end(Buffer.from(png, 'base64'));
+      const imageSHA256 = crypto.createHash('sha256').update(Buffer.from(png, 'base64')).digest('hex');
+      let seeded;
+      await expect.poll(async () => { seeded = await readClipboard(); return seeded.imageSHA256; }).toBe(imageSHA256);
+      report.nativeClipboardBoundary = 'Wayland PNG seed hash verified through wl-paste';
+      return seeded;
+    }
     await application.evaluate(async ({ clipboard, ClipboardItem }, png) => {
       await clipboard.write([new ClipboardItem({ 'text/plain': 'clipboard sentinel',
         'image/png': new Blob([Buffer.from(png, 'base64')], { type: 'image/png' }) })]);
@@ -109,15 +134,36 @@ test('selected capture reference: real Rust selection and native clipboard', { t
     const seeded = await readClipboard();
     assert.equal(seeded.text, 'clipboard sentinel');
     assert.ok(seeded.formats.includes('image/png'), 'PNG seed was actually published');
+    return seeded;
   }
   async function readClipboard() {
+    if (process.env.APPARENT_REFERENCE_VM === '1') {
+      // Read the compositor's actual selection, not an Electron/XWayland
+      // owner's cached offer. The PNG seed must reach this same boundary.
+      const unstable = { text: null, formats: [], imageSHA256: null, unstable: true };
+      const offered = async () => [...new Set((await run('wl-paste', ['--list-types'], { timeout: 3000 })).stdout.trim().split('\n').filter(Boolean))].sort();
+      try {
+        const types = await offered();
+        const text = types.some((type) => type.startsWith('text/'))
+          ? (await run('wl-paste', ['--no-newline', '--type', 'text'], { timeout: 3000 })).stdout : null;
+        const imageSHA256 = types.includes('image/png') ? crypto.createHash('sha256').update(
+          (await run('wl-paste', ['--type', 'image/png'], { timeout: 3000, encoding: null, maxBuffer: 16 * 1024 * 1024 })).stdout).digest('hex') : null;
+        if (JSON.stringify(types) !== JSON.stringify(await offered())) return unstable;
+        return { text, formats: types, imageSHA256 };
+      } catch (error) {
+        // Selection ownership can change between these read-only commands.
+        // Return an explicitly non-matching snapshot; never retry the copy.
+        if (/^(Nothing is copied|Clipboard content is not available as requested type)/.test(error.stderr ?? '')) return unstable;
+        throw error;
+      }
+    }
     return application.evaluate(async ({ clipboard }) => ({ text: await clipboard.readText(),
       formats: (await clipboard.read()).flatMap((item) => item.types) }));
   }
   async function copied(name, label) {
     await seed(); await copy.click();
-    await expect.poll(async () => (await readClipboard()).text).toBe(name);
-    const result = await readClipboard();
+    let result;
+    await expect.poll(async () => { result = await readClipboard(); return result.text; }).toBe(name);
     report.checks.push({ label, ...result });
     // Electron 45 exposes raw OS types as well as MIME types. TARGETS and
     // SAVE_TARGETS are X11 selection protocol metadata, not clipboard payloads.
@@ -133,9 +179,9 @@ test('selected capture reference: real Rust selection and native clipboard', { t
   await copied(newer, 'newer');
   await copied(newer, 'repeated-fresh-dispatch');
   await startRust(older); // Actual production preview selection, not a fake reply.
-  await seed(); await copy.click();
+  const staleSeed = await seed(); await copy.click();
   await card.getByText('The selected capture changed. Refresh before copying again.', { exact: true }).waitFor();
-  assert.equal((await readClipboard()).text, 'clipboard sentinel');
+  assert.deepEqual(await readClipboard(), staleSeed);
   report.checks.push({ label: 'stale selection refused without clipboard write' });
   await refresh.click(); await card.getByText(older, { exact: true }).waitFor();
   await copied(older, 'older');
