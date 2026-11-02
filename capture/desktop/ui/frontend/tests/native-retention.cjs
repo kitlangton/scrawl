@@ -13,6 +13,10 @@ module.exports = async function verifyRetention(page, { config, captures, output
   const usage = page.getByRole('button', { name: 'Refresh usage', exact: true });
   const save = page.getByRole('button', { name: 'Save retention', exact: true });
   const reset = page.getByRole('button', { name: 'Reset retention', exact: true });
+  // The native location probe can overlap the first retention read on Rust's
+  // single Storage worker. Exercise the visible Refresh recovery before edits.
+  await expect(refresh).toBeEnabled();
+  await refresh.click();
   await expect(usage).toBeEnabled();
   await usage.click();
   await expect(page.getByText(/1 MB in captures/)).toBeVisible();

@@ -722,6 +722,7 @@ pub const SKILL_COMMAND: &str = "bunx skills add https://github.com/tryapparent/
 #[serde(rename_all = "camelCase")]
 pub struct View {
     pub version: String,
+    pub connect: Option<super::connect::View>,
     pub hosted: Option<crate::connect::hosted::AccountView>,
     pub login: LoginView,
     pub agent_demo_video: bool,
@@ -1118,6 +1119,7 @@ pub(crate) fn external_record_owned(kind: ShortcutKind) -> bool {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum Action {
+    Connect { command: super::connect::Command },
     /// A settings control: `launchAtLogin`, `videoExport`, `lowerPlayback` (bool),
     /// `playbackLevel` (u8), `microphone` ("default" or a device id), `transcriber`
     /// ("apple"/"hex"/"command"), `hexModel` (an id), `hexLanguage` (a code), `appleLocale`
@@ -1205,6 +1207,7 @@ pub trait Host {
 /// The window's own state: what it's recording, what failed, what was asked for.
 #[derive(Debug, Default)]
 pub struct Panel {
+    connect: Option<super::connect::View>,
     recording: Option<ShortcutKind>,
     error: Option<(ShortcutKind, String)>,
     /// Why the last Install or Uninstall failed.
@@ -1273,6 +1276,8 @@ impl Panel {
 
     pub fn on(&mut self, action: Action, host: &mut dyn Host) -> Effect {
         match action {
+            // Session owns the asynchronous controller; forged actions cannot bypass it.
+            Action::Connect { .. } => Effect::None,
             Action::ConnectHosted => Effect::ConnectHosted,
             Action::ManageSharedLinks => Effect::ManageSharedLinks,
             Action::Set { key, value } => self.set(&key, &value, host),
@@ -1586,6 +1591,7 @@ impl Panel {
         };
         View {
             version: env!("APPARENT_VERSION_LABEL").to_owned(),
+            connect: self.connect.clone(),
             hosted: crate::shared::handoff::experiment_enabled_in(&config, crate::connect::hosted::HOSTED_SHARING)
                 .then(|| crate::connect::hosted::account_view_in(&host.config_path())),
             login: LoginView {
@@ -1742,6 +1748,7 @@ impl Host for AppHost<'_> {
 /// From the window's helper process and its pollers.
 #[derive(Clone, Debug)]
 pub enum Event {
+    Connect(super::connect::Event),
     Action(Action),
     Grants(Grants),
     CapturesSize(u64),
@@ -1766,6 +1773,7 @@ enum Transport {
 /// The open Settings window.
 pub struct Session {
     panel: Panel,
+    connect: Option<super::connect::Controller>,
     transport: Transport,
     polling: std::sync::Arc<std::sync::atomic::AtomicBool>,
     events: std::sync::Arc<dyn Fn(Event) + Send + Sync>,
@@ -1829,8 +1837,19 @@ impl Session {
         if let Some(grants) = grants {
             panel.set_grants(grants);
         }
+        let config_path = crate::shared::handoff::default_config_path();
+        let connect = crate::shared::handoff::experiment(super::connect::CONNECT_SETTINGS)
+            .then(|| {
+                let events = events.clone();
+                super::connect::Controller::new(
+                    crate::connect::hosted::settings_backend(&config_path),
+                    std::sync::Arc::new(move |event| events(Event::Connect(event))),
+                )
+            });
+        panel.connect = connect.as_ref().map(|controller| controller.view());
         Ok(Self {
             panel,
+            connect,
             transport,
             polling,
             events,
@@ -1887,6 +1906,20 @@ impl Session {
     /// `Close`); the rest is done here.
     pub fn event(&mut self, event: Event, host: &mut dyn Host) -> Effect {
         let effect = match event {
+            Event::Connect(event) => {
+                if self.connect.as_mut().is_some_and(|controller| controller.receive(event)) {
+                    crate::connect::hosted::start_worker();
+                }
+                Effect::None
+            }
+            Event::Action(Action::Connect { command }) => {
+                if let Some(controller) = &mut self.connect {
+                    if let Some(uri) = controller.command(command) {
+                        let _ = crate::shared::handoff::open_path(Path::new(&uri));
+                    }
+                }
+                Effect::None
+            }
             Event::Action(action) => {
                 crate::capture::engine::runtime::apparent_log(format!("settings: {action:?}"));
                 self.panel.on(action, host)
@@ -1910,10 +1943,16 @@ impl Session {
             }
             Event::Tick => Effect::None,
             Event::Exited => {
+                if let Some(controller) = &mut self.connect { controller.close(); }
                 self.panel.on(Action::Close, host);
                 return Effect::Close;
             }
         };
+        if let Some(controller) = &mut self.connect {
+            if effect == Effect::Close { controller.close(); }
+            controller.refresh();
+            self.panel.connect = Some(controller.view());
+        }
         let result = match effect {
             // Attributed to whichever process asks, so Apparent itself asks.
             Effect::Request(Permission::ScreenRecording) => {

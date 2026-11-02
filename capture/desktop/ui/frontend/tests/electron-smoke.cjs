@@ -29,7 +29,8 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   assert.deepEqual(await page.evaluate(() => ({
     keys: Object.keys(window.apparent), require: typeof window.require, process: typeof window.process,
   })), { keys: ['readRuntimeState', 'readCaptureReference', 'copyCaptureReference', 'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation',
-    'readRetention', 'saveRetention', 'resetRetention', 'readCaptureUsage'], require: 'undefined', process: 'undefined' });
+    'readConnectSettings', 'connectSettings', 'allowConnectUploads', 'cancelConnectSettings', 'checkConnectConnection',
+    'disableConnectUploads', 'disconnectConnectSettings', 'openConnectBrowser', 'readRetention', 'saveRetention', 'resetRetention', 'readCaptureUsage'], require: 'undefined', process: 'undefined' });
   assert.equal(await application.evaluate(({ BrowserWindow }) => {
     const options = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();
     return options.contextIsolation && options.sandbox && !options.nodeIntegration && options.webSecurity;
@@ -53,7 +54,9 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await fs.chmod(directory, 0o700);
   server = net.createServer((socket) => socket.once('data', (data) => {
-    requests.push(data.toString()); socket.end(reply);
+    requests.push(data.toString());
+    if (data.toString().startsWith('{') && JSON.parse(data.toString()).connect) return socket.end('{"error":"feature_disabled"}\n');
+    socket.end(reply);
   }));
   const address = path.join(directory, 'capture.sock');
   await new Promise((resolve) => server.listen(address, resolve));
@@ -72,7 +75,7 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await page.getByText('Connected · processing', { exact: true }).waitFor();
   assert.equal(await page.getByText('private', { exact: true }).count(), 0);
   assert.ok(requests.length >= 3);
-  assert.ok(requests.every((request) => request === 'state\n' || JSON.parse(request).storage === 'read' || JSON.parse(request).reference === 'read'));
+  assert.ok(requests.every((request) => request === 'state\n' || JSON.parse(request).storage === 'read' || JSON.parse(request).reference === 'read' || JSON.parse(request).connect === 'settings'));
   assert.deepEqual(errors, []);
   const screenshot = path.join(os.tmpdir(), `apparent-foundation-${process.pid}.png`);
   await page.screenshot({ path: screenshot, fullPage: true });

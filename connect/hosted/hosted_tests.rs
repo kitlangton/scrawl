@@ -22,6 +22,11 @@ impl TestHost for AppTestHost {
 fn setup() {
     test_support::install_host(Arc::new(AppTestHost));
 }
+#[test]
+fn hosted_settings_revocation_survives_real_config_wait() {
+    setup();
+    test_support::settings_revocation_survives_config_wait();
+}
 pub(crate) fn deferred_cancelled_settings_login(
     active: Arc<std::sync::atomic::AtomicBool>,
     cancel: impl FnOnce(),
