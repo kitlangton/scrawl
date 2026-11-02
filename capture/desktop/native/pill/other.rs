@@ -32,6 +32,8 @@ impl NativePill {
         true
     }
 
+    pub fn note_badge_anchor(&self) -> Option<[f64; 4]> { None }
+
     pub fn pointer_on_pill(&self) -> bool {
         false
     }

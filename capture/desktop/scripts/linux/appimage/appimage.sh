@@ -44,6 +44,7 @@ done
 
 cd "$out"
 install -Dm755 "$root/capture/desktop/scripts/support/apparent-restore-clipboard.py" "$appdir/usr/bin/apparent-restore-clipboard.py"
+node "$root/capture/desktop/ui/frontend/scripts/package-notes.mjs" "$appdir/usr/lib/apparent/note-ui"
 LDAI_OUTPUT="Apparent-$arch.AppImage" linuxdeploy \
   --appdir "$appdir" \
   --executable "$binary" \

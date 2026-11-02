@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // No generic invoke/send, paths, revisions or dialog options from the renderer.
 contextBridge.exposeInMainWorld('apparent', Object.freeze({
+  readMicrophoneEnabled: () => ipcRenderer.invoke('apparent:read-microphone-enabled'),
+  setMicrophoneEnabled: (enabled) => ipcRenderer.invoke('apparent:set-microphone-enabled', enabled),
   readRuntimeState: () => ipcRenderer.invoke('apparent:read-runtime-state'),
   readCaptureReference: () => ipcRenderer.invoke('apparent:read-capture-reference'),
   copyCaptureReference: () => ipcRenderer.invoke('apparent:copy-capture-reference'),
