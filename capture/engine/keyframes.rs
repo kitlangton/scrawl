@@ -497,8 +497,17 @@ pub fn select_keyframes(
         .into_iter()
         .map(|group| {
             let (first, last) = (&marks[group[0]], &marks[*group.last().unwrap()]);
+            // A typed note describes the screen at its click, before its editor covers it.
+            // Retain the normal post-action policy for other interaction keyframes.
+            let note_time = group.iter().filter_map(|&i| {
+                marks[i].pin.and_then(|pin| events.iter().find_map(|event| match event {
+                    InteractionEvent::Note { pin: p, t, .. } if *p == pin => Some(*t),
+                    _ => None,
+                }))
+            }).max();
             Candidate {
-                frame: nearest_frame(&frames, last.t1),
+                frame: note_time.map_or_else(|| nearest_frame(&frames, last.t1),
+                    |t| frames.partition_point(|frame| frame.t_ms <= t).saturating_sub(1)),
                 span: (first.t0, last.t1),
                 score: 100.0,
                 reason: KeyframeReason::Mark,
@@ -944,6 +953,20 @@ mod tests {
             role: None,
             button: None,
         }
+    }
+
+    #[test]
+    fn note_image_precedes_its_editor_and_keeps_original_click_anchor() {
+        let frames = vec![frame(0, 0), frame(900, 0), frame(1100, 255), frame(2000, 255)];
+        let mut pin = mark("pin-7", 1100);
+        pin.pin = Some(7);
+        pin.shape = Shape::Pin;
+        let mut marks = vec![pin];
+        let notes = vec![InteractionEvent::Note { pin: 7, t: 1000, x: 0.5, y: 0.5, text: "Original target".into() }];
+        let selected = select_keyframes(&frames, &[], &mut marks, &notes, &TranscriptData::default(), 1);
+        assert_eq!(selected[0].0.t, 900);
+        assert_eq!(marks[0].frame.as_deref(), Some(selected[0].0.file.as_str()));
+        assert_eq!(notes[0].timestamp_ms(), 1000);
     }
 
     #[test]

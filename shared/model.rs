@@ -124,7 +124,7 @@ pub enum InteractionTelemetry {
 impl ApparentBundle {
     /// A recorded click, not a spoken reference or a keyframe selected for another reason.
     pub fn has_screen_click(&self) -> bool {
-        self.events.iter().any(|event| matches!(event, InteractionEvent::Click { .. }))
+        self.events.iter().any(|event| matches!(event, InteractionEvent::Click { .. } | InteractionEvent::Note { .. }))
     }
 
     /// A local capture can write an empty WAV header before any microphone samples arrive.
@@ -480,6 +480,8 @@ pub struct Mark {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InteractionEvent {
+    /// Typed explanation, anchored to a Shift-click rather than transcription time.
+    Note { t: u64, pin: u32, x: f32, y: f32, text: String },
     Click {
         t: u64,
         x: f32,
@@ -558,6 +560,7 @@ impl InteractionEvent {
             | Self::Point { t, .. }
             | Self::Key { t, .. }
             | Self::AppChange { t, .. }
+            | Self::Note { t, .. }
             | Self::AppEvent { t, .. } => {
                 if *t < ms {
                     return false;
@@ -576,6 +579,7 @@ impl InteractionEvent {
             | Self::Point { t, .. }
             | Self::Key { t, .. }
             | Self::AppChange { t, .. }
+            | Self::Note { t, .. }
             | Self::AppEvent { t, .. } => *t,
         }
     }

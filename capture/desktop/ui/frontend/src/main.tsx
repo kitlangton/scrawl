@@ -8,6 +8,8 @@ import { ErrorReporting } from './error-reporting';
 import { ConnectSettingsCard } from './connect-settings';
 import { CaptureReference } from './reference';
 import './style.css';
+import { CaptureNotes } from './notes';
+import { RecordingMicrophone } from './notes/microphone';
 
 // Visual fixtures only. These do not model or control real recording state.
 const examples = [
@@ -57,6 +59,7 @@ function App() {
           </> : <><strong>Unable to read state</strong><p className="mt-1 text-muted-foreground">{runtime.message}</p></>}
         </div>
       </section>
+      <RecordingMicrophone />
       <CaptureReference />
       <Storage />
       <ErrorReporting />
@@ -86,4 +89,4 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);
+createRoot(document.getElementById('root')!).render(<StrictMode>{location.hash.startsWith('#notes-') ? <CaptureNotes /> : <App />}</StrictMode>);

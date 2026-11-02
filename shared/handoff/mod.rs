@@ -873,6 +873,9 @@ pub struct Config {
     /// The microphone Mac captures record from (`mic`); absent follows the macOS default.
     #[serde(default)]
     pub microphone: Option<crate::capture::engine::runtime::audio::mic::Choice>,
+    /// Explicit off allows typed captures without microphone access; applies at next start.
+    #[serde(default)]
+    pub microphone_enabled: Option<bool>,
     /// Smart routing's settings (`routing::look`).
     #[serde(default)]
     pub routing: Option<RoutingConfig>,
