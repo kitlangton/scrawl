@@ -11,6 +11,9 @@ declare global {
       readRuntimeState: () => Promise<RuntimeState>;
       readCaptureReference: () => Promise<CaptureReference>;
       copyCaptureReference: () => Promise<CaptureReference>;
+      startPublicShare: () => Promise<PublicShareResult>;
+      readPublicShare: () => Promise<PublicShareResult>;
+      cancelPublicShare: () => Promise<PublicShareResult>;
       readCaptureLocation: () => Promise<CaptureLocation>;
       changeCaptureLocation: () => Promise<CaptureLocation>;
       resetCaptureLocation: () => Promise<CaptureLocation>;
@@ -65,3 +68,5 @@ export type UsageResult = Unavailable | { status: 'connected';
   usage: { effectivePath: string; displayPath: string; formatted: string } };
 
 export type Drawing = { status: "connected"; active: boolean; strokes: number } | { status: "disconnected" | "cancelled" } | { status: "error"; code: string };
+
+export type PublicShareResult = { status:'connected'; state:'preparing'|'prepared'|'copied'|'failed'|'cancelled'|'expired' } | {status:'error';code:string} | {status:'cancelled'};

@@ -352,37 +352,59 @@ fn offer_image_handoff(
 }
 
 const AGENT_DEMO_VIDEO: &str = "agentDemoVideo";
-const DEMO_VIDEO_REQUEST: &str = "Use make-it-apparent for complex visible changes. Share verified video proof or explain why you can't.";
+const DEMO_VIDEO_REQUEST: &str = "Use make-it-apparent for complex visible changes; share verified video proof or explain the blocker.";
+const CLI_INSTALL: &str =
+    "If apparent is unavailable, install it: https://github.com/tryapparent/apparent#agents";
 
-/// The request belongs to copy/paste, not the archived summary or automatic session message.
-/// Read config on each handoff so file edits take effect without a restart.
+/// Clipboard-only instructions precede the timeline so the last pasted lines identify
+/// the user's request. A queued hosted identity, not sign-in alone, selects remote access.
 pub(crate) fn clipboard_summary(bundle: &ApparentBundle, directory: &Path) -> String {
-    let mut summary = clipboard_summary_with_demo_video(bundle, directory, experiment(AGENT_DEMO_VIDEO));
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    if let Some(pointer) = crate::connect::hosted::handoff_pointer(directory) {
-        summary.push_str(&pointer);
-    }
-    summary
-}
-
-fn clipboard_summary_with_demo_video(
-    bundle: &ApparentBundle,
-    directory: &Path,
-    request_video: bool,
-) -> String {
-    with_demo_video_request(
-        crate::capture::engine::sketch::summary_markdown(bundle, directory),
-        request_video,
+    let hosted = crate::connect::hosted::handoff_pointer(directory);
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let hosted: Option<String> = None;
+    clipboard_summary_with_access(
+        bundle,
+        directory,
+        experiment(AGENT_DEMO_VIDEO),
+        hosted.as_deref(),
     )
 }
 
-fn with_demo_video_request(mut summary: String, request_video: bool) -> String {
-    if request_video {
-        summary.push('\n');
-        summary.push_str(DEMO_VIDEO_REQUEST);
-        summary.push('\n');
+fn clipboard_summary_with_access(
+    bundle: &ApparentBundle,
+    directory: &Path,
+    request_video: bool,
+    hosted: Option<&str>,
+) -> String {
+    let mut out = hosted.map(str::to_owned).unwrap_or_else(|| {
+        format!(
+            "apparent inspect {}\n",
+            shell_quote(&directory.to_string_lossy())
+        )
+    });
+    out.push_str(&format!("\n{CLI_INSTALL}\n\n"));
+    if hosted.is_some() {
+        out.push_str("Inspect relevant images before making changes.");
+    } else {
+        out.push_str(
+            "Inspect contact-sheet.png and relevant frames/ in that folder before making changes.",
+        );
+        if let Some(crop) = &bundle.autocrop {
+            out.push_str(&format!(" Uncropped images are in {}/.", crop.full_frames));
+        }
     }
-    summary
+    if request_video {
+        out.push(' ');
+        out.push_str(DEMO_VIDEO_REQUEST);
+    }
+    out.push_str("\n\n");
+    out.push_str(&crate::capture::engine::sketch::clipboard_markdown(
+        bundle,
+        directory,
+        hosted.is_some(),
+    ));
+    out
 }
 
 /// Pastes both the contact-sheet image and the transcript/keyframe text into the active app

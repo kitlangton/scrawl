@@ -131,6 +131,11 @@ pub fn copy_link_handoff(bundle: &Path, allowed: &dyn Fn() -> bool) -> Result<Pr
     start_worker();
     Ok(link)
 }
+pub fn prepare_public_link_handoff(bundle: &Path, allowed: &dyn Fn() -> bool) -> Result<PreparedLink> {
+    let link = client().prepare_public_link(bundle, allowed)?;
+    start_worker();
+    Ok(link)
+}
 pub fn sharing_connected() -> bool {
     client().sharing_connected()
 }

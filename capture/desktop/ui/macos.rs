@@ -11,11 +11,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, NSObjectProtocol, Sel};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSCellImagePosition, NSColor, NSImage, NSMenu, NSMenuDelegate, NSMenuItem,
+    NSAppearanceCustomization, NSApplication, NSCellImagePosition, NSColor, NSImage, NSMenu,
+    NSMenuDelegate, NSMenuItem,
     NSStatusBar, NSStatusItem, NSStatusWindowLevel, NSWindow, NSWindowButton,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSData, NSObject, NSSize, NSString};
+use objc2_foundation::{MainThreadMarker, NSArray, NSData, NSObject, NSSize, NSString};
 use screencapturekit::prelude::*;
 use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 
@@ -535,6 +536,21 @@ objc2::define_class!(
     unsafe impl NSObjectProtocol for ApparentMenuTarget {}
 
     impl ApparentMenuTarget {
+        #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
+        fn menu_bar_appearance_changed(
+            &self,
+            _key_path: &NSString,
+            _object: &AnyObject,
+            _change: &AnyObject,
+            _context: *mut std::ffi::c_void,
+        ) {
+            STATUS_BAR.with(|slot| {
+                if let Some(controller) = slot.borrow().as_ref() {
+                    refresh_status_bar_icon(&controller._item, self.mtm());
+                }
+            });
+        }
+
         #[unsafe(method(toggleCapture:))]
         fn toggle_capture(&self, _sender: &AnyObject) {
             let _ = self.ivars().sender.try_send(MenuAction::ToggleCapture);
@@ -726,6 +742,48 @@ struct StatusBarController {
     _target: Retained<ApparentMenuTarget>,
 }
 
+impl Drop for StatusBarController {
+    fn drop(&mut self) {
+        if let Some(button) = self._item.button(self._target.mtm()) {
+            unsafe {
+                let _: () = msg_send![&*button, removeObserver: &*self._target,
+                    forKeyPath: &*NSString::from_str("effectiveAppearance")];
+            }
+        }
+    }
+}
+
+fn refresh_status_bar_icon(item: &NSStatusItem, mtm: MainThreadMarker) {
+    let Some(button) = item.button(mtm) else {
+        return;
+    };
+    // The status button's appearance can differ from the app's (for example
+    // with a wallpaper-tinted menu bar). Observe the actual surface, not a
+    // stored user preference or a one-time launch check.
+    let names = NSArray::from_retained_slice(&[
+        NSString::from_str("NSAppearanceNameAqua"),
+        NSString::from_str("NSAppearanceNameDarkAqua"),
+    ]);
+    let appearance = button.effectiveAppearance();
+    let best: Option<Retained<NSString>> = unsafe {
+        msg_send![&*appearance, bestMatchFromAppearancesWithNames: &*names]
+    };
+    let dark = best.is_some_and(|name| name.to_string() == "NSAppearanceNameDarkAqua");
+    let bytes: &[u8] = if dark {
+        include_bytes!("../../../capture/desktop/assets/menubar-icon@2x.png")
+    } else {
+        include_bytes!("../../../capture/desktop/assets/menubar-light@2x.png")
+    };
+    if let Some(image) = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(bytes)) {
+        image.setSize(NSSize::new(18.0, 18.0));
+        // Preserve the purple glyph and its contrasting background.
+        image.setTemplate(false);
+        button.setImage(Some(&image));
+    } else {
+        button.setTitle(&NSString::from_str("✎"));
+    }
+}
+
 thread_local! {
     static STATUS_BAR: RefCell<Option<StatusBarController>> = const { RefCell::new(None) };
 }
@@ -775,16 +833,12 @@ pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receive
     menu.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(&*target)));
 
     let item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
+    refresh_status_bar_icon(&item, mtm);
     if let Some(button) = item.button(mtm) {
-        let mb_bytes = include_bytes!("../../../capture/desktop/assets/menubar-icon@2x.png");
-        let mb_data = NSData::with_bytes(mb_bytes);
-        if let Some(img) = NSImage::initWithData(NSImage::alloc(), &mb_data) {
-            img.setSize(NSSize::new(18.0, 18.0));
-            // Keep both approved brand colors in the menu bar icon.
-            img.setTemplate(false);
-            button.setImage(Some(&img));
-        } else {
-            button.setTitle(&NSString::from_str("✎"));
+        unsafe {
+            let _: () = msg_send![&*button, addObserver: &*target,
+                forKeyPath: &*NSString::from_str("effectiveAppearance"),
+                options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
         }
     }
     let app_bytes = include_bytes!("../../../capture/desktop/assets/app-icon.png");

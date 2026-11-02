@@ -95,12 +95,18 @@ class PreviewReleaseTest(unittest.TestCase):
         self.assertEqual(hashlib.sha256((ROOT / "capture/desktop/assets/Apparent.icns").read_bytes()).hexdigest(),
                          "f3028c57a513957454d2bb7caf720fcf77358b47dcf1f1c7fc78a39c46e99153")
 
-    def test_mac_status_item_uses_boxed_brand_icon(self):
-        # The status item must preserve the approved Carbon/Lilac box; template
-        # mode would erase its two-color identity.
+    def test_mac_status_item_preserves_brand_colors_and_tracks_appearance(self):
         source = (ROOT / "capture/desktop/ui/macos.rs").read_text()
-        self.assertIn('include_bytes!("../../../capture/desktop/assets/menubar-icon@2x.png")', source)
-        self.assertIn('img.setTemplate(false)', source)
+        for asset in ('menubar-icon@2x.png', 'menubar-light@2x.png'):
+            self.assertIn(f'include_bytes!("../../../capture/desktop/assets/{asset}")', source)
+        self.assertIn('image.setTemplate(false)', source)
+        self.assertIn('button.effectiveAppearance()', source)
+        self.assertIn('bestMatchFromAppearancesWithNames:', source)
+        self.assertIn('addObserver:', source)
+        self.assertIn('removeObserver:', source)
+        self.assertIn('observeValueForKeyPath:ofObject:change:context:', source)
+        self.assertEqual(hashlib.sha256((ROOT / "capture/desktop/assets/menubar-light@2x.png").read_bytes()).hexdigest(),
+                         "4b83f745dde9a9de1af2dc439983afd14a93117278e686cea9cb52745e06e4a0")
         self.assertEqual(hashlib.sha256((ROOT / "capture/desktop/assets/menubar-icon@2x.png").read_bytes()).hexdigest(),
                          "4714f8ebbe8dd7816c7f7ab07ad98daa61fb4eee5fc3ed900af8f012b452dc07")
 
@@ -139,7 +145,7 @@ class PreviewReleaseTest(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertNotIn("  push:", workflow)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
-        self.assertIn("macos-26", workflow)
+        self.assertIn("runs-on: macos-latest", workflow)
         self.assertIn("github.run_number", workflow)
         self.assertIn("github.run_attempt", workflow)
         self.assertIn("--prerelease", workflow)

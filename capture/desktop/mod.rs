@@ -858,6 +858,8 @@ pub struct ApparentCoordinator {
     agent_capture_id: Option<String>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     agent_captures: crate::capture::desktop::workflow::agent_capture::Registry,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    public_share: crate::capture::desktop::workflow::public_sharing::Controller,
     #[cfg(target_os = "linux")]
     agent_finishing: bool,
     last_live_no_words: bool,
@@ -980,6 +982,8 @@ impl ApparentCoordinator {
             agent_capture_id: None,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             agent_captures: crate::capture::desktop::workflow::agent_capture::Registry::default(),
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            public_share: crate::capture::desktop::workflow::public_sharing::Controller::default(),
             #[cfg(target_os = "linux")]
             agent_finishing: false,
             last_live_no_words: false,
@@ -1224,6 +1228,44 @@ impl ApparentCoordinator {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn agent_request(&mut self, request: crate::capture::desktop::workflow::agent_capture::Request, cx: &mut Context<Self>) {
         use crate::capture::desktop::workflow::agent_capture::{Action, Outcome};
+        if let Some((action @ (Action::PublicShareStart | Action::PublicShareRead | Action::PublicShareDeliver | Action::PublicShareCancel), value)) = &request.action {
+            let selected = self.review_bundle.as_ref().and_then(|(path, _)| {
+                path.file_name().and_then(|name| name.to_str()).map(|name| (path, name.to_owned()))
+            });
+            let response = if request.expired() {
+                serde_json::json!({"error":"admission_expired"})
+            } else {
+                match action {
+                    Action::PublicShareStart => match selected {
+                        Some((path, name)) if name == *value && !self.is_recording() && !self.is_processing() && !self.is_selecting() => {
+                            match self.public_share.start(name, path.clone(), self.capture_generation) {
+                                Ok(operation) => serde_json::json!({"publicShare":{"operation":operation,"state":"preparing"}}),
+                                Err(code) => serde_json::json!({"error":code}),
+                            }
+                        }
+                        _ => serde_json::json!({"error":"conflict"}),
+                    },
+                    Action::PublicShareRead => match selected {
+                        Some((path, name)) => match self.public_share.read(value, &name, path, self.capture_generation) {
+                            Ok(state) => serde_json::json!({"publicShare":{"state":state}}),
+                            Err(code) => serde_json::json!({"error":code}),
+                        },
+                        None => { self.public_share.cancel(value); serde_json::json!({"error":"no_selection"}) }
+                    },
+                    Action::PublicShareDeliver => match selected {
+                        Some((path, name)) => match self.public_share.deliver(value, &name, path, self.capture_generation, crate::shared::handoff::copy_string_to_clipboard) {
+                            Ok(state) => serde_json::json!({"publicShare":{"state":state}}),
+                            Err(code) => serde_json::json!({"error":code}),
+                        },
+                        None => { self.public_share.cancel(value); serde_json::json!({"error":"no_selection"}) }
+                    },
+                    Action::PublicShareCancel => { self.public_share.cancel(value); serde_json::json!({"publicShare":{"state":"cancelled"}}) },
+                    _ => unreachable!(),
+                }
+            };
+            let _ = request.reply.send(response.to_string());
+            return;
+        }
         if let Some((action @ (Action::ReferenceRead | Action::ReferenceCopy), expected)) = &request.action {
             let enabled = crate::shared::handoff::experiment("copyCaptureId");
             let response = capture_reference_response(
@@ -1981,6 +2023,7 @@ impl ApparentCoordinator {
     }
 
     pub fn set_review_bundle(&mut self, bundle: (PathBuf, ApparentBundle), status: Option<String>) {
+        self.public_share.cancel_all();
         self.review_audio_issue = bundle_audio_issue(&bundle.0, &bundle.1);
         self.review_bundle = Some(bundle);
         self.review_status = status;
@@ -2280,6 +2323,9 @@ impl ApparentCoordinator {
     /// while the outer shell springs its width smoothly (`stiffness: 400, damping: 30` equivalent).
     fn set_island_phase(&mut self, phase: IslandPhase) {
         use crate::capture::desktop::settings::onboarding::Input;
+        if matches!(phase, IslandPhase::Selecting { .. } | IslandPhase::Processing | IslandPhase::Recording | IslandPhase::Hidden | IslandPhase::Dismissing) {
+            self.public_share.cancel_all();
+        }
         if matches!(phase, IslandPhase::Recording | IslandPhase::Hidden | IslandPhase::Dismissing) {
             if let Some((_, _, active)) = self.share_pending.take() {
                 active.store(false, std::sync::atomic::Ordering::SeqCst);

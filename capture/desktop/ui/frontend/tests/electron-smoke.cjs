@@ -17,13 +17,16 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   let reportingAlwaysBusy = false;
   let reportingWrites = 0;
   let rejectReportingWrite = true;
+  let publicFailure=false;
   let server;
   const application = await electron.launch({
     args: [path.join(__dirname, '..')],
+    ...(process.env.PUBLIC_SHARE_VIDEO ? {recordVideo:{dir:process.env.PUBLIC_SHARE_VIDEO,size:{width:920,height:760}}}:{}),
     env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') },
   });
   t.after(async () => {
     await application.close();
+    if(process.env.PUBLIC_SHARE_VIDEO && page.video()) await page.video().saveAs(path.join(process.env.PUBLIC_SHARE_VIDEO,'sender-electron.webm'));
     if (server) await new Promise((resolve) => server.close(resolve));
     await fs.rm(home, { recursive: true, force: true });
   });
@@ -33,7 +36,7 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await page.getByText('Not connected', { exact: true }).waitFor();
   assert.deepEqual(await page.evaluate(() => ({
     keys: Object.keys(window.apparent), require: typeof window.require, process: typeof window.process,
-  })), { keys: ['readDrawing', 'undoDrawing', 'readRuntimeState', 'readCaptureReference', 'copyCaptureReference', 'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation',
+  })), { keys: ['readDrawing', 'undoDrawing', 'readRuntimeState', 'readCaptureReference', 'copyCaptureReference', 'startPublicShare', 'readPublicShare', 'cancelPublicShare', 'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation',
     'readErrorReporting', 'setErrorReporting', 'readConnectSettings', 'connectSettings', 'allowConnectUploads', 'cancelConnectSettings', 'checkConnectConnection',
     'disableConnectUploads', 'disconnectConnectSettings', 'openConnectBrowser', 'readRetention', 'saveRetention', 'resetRetention', 'readCaptureUsage'], require: 'undefined', process: 'undefined' });
   assert.equal(await application.evaluate(({ BrowserWindow }) => {
@@ -64,6 +67,11 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
     if (request?.drawing) {
       if (request.drawing === 'undo') assert.equal(request.expected, '0123456789abcdef');
       socket.end(JSON.stringify({ drawing: { revision: '0123456789abcdef', strokes: request.drawing === 'undo' ? 0 : 1 } }) + '\n');
+    } else if (request?.reference) {
+      socket.end('{"reference":{"id":"synthetic.apparent","copied":false}}\n');
+    } else if(request?.publicShare) {
+      if(request.publicShare==='deliver' && publicFailure) socket.end('{"error":"clipboard_failed"}\n');
+      else socket.end(JSON.stringify({publicShare:request.publicShare==='start'?{operation:'a'.repeat(32),state:'preparing'}:{state:request.publicShare==='read'?'prepared':request.publicShare==='deliver'?'copied':'cancelled'}})+'\n');
     } else if (request?.errorReporting) {
       if (request.errorReporting === 'read' && (++reportingReads <= 3 || reportingAlwaysBusy)) {
         socket.end('{"error":"app_busy"}\n');
@@ -132,6 +140,22 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await page.screenshot({ path: screenshot, fullPage: true });
   console.log(`Synthetic Electron screenshot: ${screenshot}`);
 
+  await page.getByRole('button',{name:'Refresh capture reference',exact:true}).click();
+  await page.getByText('synthetic.apparent',{exact:true}).waitFor();
+  const beforeShare=requests.filter(r=>r.includes('"publicShare"')).length;
+  await page.getByRole('button',{name:'Copy public link',exact:true}).click();
+  await expect(page.getByText('Anyone with this link can view this capture. Shared captures are not end-to-end encrypted.',{exact:true})).toBeVisible();
+  assert.equal(requests.filter(r=>r.includes('"publicShare"')).length,beforeShare);
+  if(process.env.PUBLIC_SHARE_VIDEO) await page.waitForTimeout(1500);
+  await page.getByRole('button',{name:'Create and copy public link',exact:true}).click();
+  await page.getByText('Link copied · upload may still be preparing. Open the link to check readiness.',{exact:true}).waitFor();
+  if(process.env.PUBLIC_SHARE_VIDEO) {await page.screenshot({path:path.join(process.env.PUBLIC_SHARE_VIDEO,'sender-copied.png')});await page.waitForTimeout(1500);}
+  assert.equal(requests.filter(r=>r.includes('"publicShare":"deliver"')).length,1);
+  publicFailure=true;
+  await page.getByRole('button',{name:'Copy public link',exact:true}).click();
+  await page.getByRole('button',{name:'Create and copy public link',exact:true}).click();
+  await page.getByText('Public link was not confirmed copied. Check your clipboard and refresh before trying again. Local Paste remains available.',{exact:true}).waitFor();
+
   // Do this after interaction checks: Playwright tracks even a cancelled Electron
   // navigation as pending; the actual webContents URL remains authoritative.
   const originalUrl = page.url();
@@ -150,7 +174,7 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
     } });
     try {
       await other.loadFile(root + '/dist/index.html');
-      return await other.webContents.executeJavaScript(`Promise.all(['readRuntimeState', 'readCaptureReference', 'copyCaptureReference'].map(k => window.apparent[k]().then(() => false, () => true))).then(r => r.every(Boolean))`);
+      return await other.webContents.executeJavaScript(`Promise.all(['readRuntimeState', 'readCaptureReference', 'copyCaptureReference', 'startPublicShare', 'readPublicShare', 'cancelPublicShare'].map(k => window.apparent[k]().then(() => false, () => true))).then(r => r.every(Boolean))`);
     } finally { other.destroy(); }
   }, path.join(__dirname, '..')), true);
 });
