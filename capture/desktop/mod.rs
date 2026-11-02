@@ -1921,6 +1921,10 @@ impl ApparentCoordinator {
         // The recording's overlay becomes the picker's (moved if the picker opens on another
         // display), so the border never swaps windows (as the picker → recording path does).
         self.picker_metal_overlay = overlay;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(overlay) = self.picker_metal_overlay.as_mut() {
+            overlay.prepare_picker();
+        }
         self.open_picker(Some(mode), cx);
         if self.is_selecting() && chips_shown && !self.reduced_motion {
             // The chips showed Screen; the picker shows `mode`.

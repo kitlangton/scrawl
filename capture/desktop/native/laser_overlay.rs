@@ -235,6 +235,11 @@ impl MetalLaserOverlay {
         self.window.windowNumber().max(0) as u32
     }
 
+    /// The picker owns only the original panel; other displays need no ink layer.
+    pub fn prepare_picker(&mut self) {
+        self.desktop.clear();
+    }
+
     /// The screen it covers, global points.
     pub fn screen(&self) -> [f64; 4] {
         self.screen

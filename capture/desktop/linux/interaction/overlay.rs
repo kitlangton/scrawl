@@ -137,6 +137,12 @@ impl InkOverlay {
         self.id
     }
 
+    /// Return the primary surface to the movable picker after desktop recording.
+    pub fn prepare_picker(&mut self) {
+        self.additional.clear();
+        self.fixed = false;
+    }
+
     /// The display it covers, global pixels.
     pub fn screen(&self) -> [f64; 4] {
         self.placement
