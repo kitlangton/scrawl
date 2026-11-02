@@ -2,7 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain, session, shell } = require('electro
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { readRuntimeState, captureLocation, storagePreference } = require('./runtime.cjs');
+const { readRuntimeState, captureLocation, captureReference, storagePreference } = require('./runtime.cjs');
 const { ConnectSettings, actions } = require('./connect.cjs');
 
 // Deliberately separate from the installed application's profile and identity.
@@ -38,9 +38,11 @@ app.whenReady().then(() => {
   let storageVersion = 0;
   const connect = new ConnectSettings(os.homedir());
   let pendingConnect;
+  let reference;
+  let referencePending;
   let retentionRevision;
   let retentionRead;
-  const invalidate = () => { generation += 1; storageVersion += 1; retentionRevision = undefined; connect.close(); };
+  const invalidate = () => { generation += 1; storageVersion += 1; reference = undefined; retentionRevision = undefined; connect.close(); };
   window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) invalidate(); });
   window.webContents.on('will-navigate', invalidate);
   window.webContents.on('render-process-gone', invalidate);
@@ -115,6 +117,25 @@ app.whenReady().then(() => {
         storageVersion += 1;
         mutation = false;
       }
+    });
+  }
+  for (const operation of ['read', 'copy']) {
+    ipcMain.handle(`apparent:${operation}-capture-reference`, async (event, ...args) => {
+      validate(event, args);
+      // Coalesce StrictMode/read refreshes, but never repeat or overlap a copy.
+      if (referencePending) return operation === 'read' && referencePending.operation === 'read'
+        ? referencePending.promise : { status: 'error', code: 'app_busy' };
+      const expected = reference?.status === 'connected' ? reference.id : null;
+      if (operation === 'copy' && expected === null) return { status: 'error', code: 'refresh_required' };
+      const token = generation;
+      reference = undefined;
+      const promise = captureReference(os.homedir(), operation, expected).then((result) => {
+        if (token !== generation) return { status: 'cancelled' };
+        if (result.status === 'connected') reference = result;
+        return result;
+      }).catch(() => ({ status: 'error', code: 'bridge_failed' })).finally(() => { referencePending = undefined; });
+      referencePending = { operation, promise };
+      return promise;
     });
   }
   const projectRetention = (result) => {

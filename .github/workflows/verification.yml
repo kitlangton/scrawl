@@ -180,6 +180,56 @@ jobs:
           npm --prefix capture/desktop/ui/frontend run build
           APPARENT_STORAGE_NATIVE_APP_DIR="$APPARENT_APP_DIR" \
             node --test capture/desktop/ui/frontend/tests/mac-storage-native.cjs
+      - name: Native GPUI Copy capture ID against the same installed App
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        timeout-minutes: 4
+        shell: bash
+        env:
+          APPARENT_COPY_ID_NATIVE_CI: '1'
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          app="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
+          evidence="$RUNNER_TEMP/apparent-copy-id-native"
+          test ! -e "$evidence"
+          # Keep compiler diagnostics even when native compilation fails. The
+          # fixture itself creates its fresh private evidence subdirectory.
+          mkdir -m 700 "$evidence"
+          swiftc capture/desktop/scripts/native/copy-capture-id.swift \
+            -o "$evidence/copy-capture-id" > "$evidence/compile.log" 2>&1
+          "$evidence/copy-capture-id" "$app" "$evidence/run"
+      - name: Native Electron selected-reference control against the installed Rust App
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        timeout-minutes: 4
+        shell: bash
+        env:
+          APPARENT_REFERENCE_OUTPUT: ${{ runner.temp }}/apparent-reference-electron
+        run: |
+          export APPARENT_REFERENCE_BINARY="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app/Contents/MacOS/apparent"
+          node --test capture/desktop/ui/frontend/tests/reference-native.cjs
+      - name: Retain synthetic Electron reference evidence, including failures
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-reference-electron-native
+          path: |
+            ${{ runner.temp }}/apparent-reference-electron/*.json
+            ${{ runner.temp }}/apparent-reference-electron/*.png
+            ${{ runner.temp }}/apparent-reference-electron/*.log
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain synthetic native Copy capture ID evidence, including failures
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-copy-capture-id-native
+          path: |
+            ${{ runner.temp }}/apparent-copy-id-native/**/*.json
+            ${{ runner.temp }}/apparent-copy-id-native/**/*.png
+            ${{ runner.temp }}/apparent-copy-id-native/**/*.log
+            ${{ runner.temp }}/apparent-copy-id-native/compile.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain synthetic Mac Storage evidence, including failures
         if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
         uses: actions/upload-artifact@v4

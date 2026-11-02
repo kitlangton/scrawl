@@ -32,7 +32,7 @@ test('Connect shipped Electron IPC, consent presentation, browser action and lif
         const end = bytes.indexOf('\n'), line = bytes.slice(0, end); bytes = bytes.slice(end + 1);
         if (line === 'state') { socket.end('{"state":{"phase":"idle"}}\n'); continue; }
         const request = JSON.parse(line);
-        if (request.storage) { socket.end('{"error":"feature_disabled"}\n'); continue; }
+        if (request.storage || request.reference) { socket.end('{"error":"feature_disabled"}\n'); continue; }
         connect = true; requests.push(request);
         if (request.connect === 'settings') stage = 'initial';
         if (request.command === 'connect') stage = 'consent';
@@ -47,7 +47,7 @@ test('Connect shipped Electron IPC, consent presentation, browser action and lif
   });
   const address = path.join(directory, 'capture.sock');
   await new Promise(resolve => server.listen(address, resolve)); await fs.chmod(address, 0o600);
-  const application = await electron.launch({ args: [path.join(__dirname, '..')],
+  const application = await electron.launch({ args: [path.join(__dirname, '../..')],
     env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') } });
   t.after(async () => {
     await application.close(); for (const client of clients) client.destroy();
@@ -83,7 +83,7 @@ test('Connect shipped Electron IPC, consent presentation, browser action and lif
       await other.loadFile(root + '/dist/index.html');
       return await other.webContents.executeJavaScript(`Promise.all(['readConnectSettings','connectSettings','allowConnectUploads','cancelConnectSettings','checkConnectConnection','disableConnectUploads','disconnectConnectSettings','openConnectBrowser'].map(k => window.apparent[k]().then(() => false, () => true))).then(r => r.every(Boolean))`);
     } finally { other.destroy(); }
-  }, path.join(__dirname, '..')), true);
+  }, path.join(__dirname, '../..')), true);
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(640, 760));
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
   // A pending browser approval response cannot launch after renderer replacement.

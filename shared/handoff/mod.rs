@@ -965,7 +965,7 @@ fn experiment_overridden(name: &str) -> bool {
 }
 
 /// Whether an experiment is on: `"experiments": {"<name>": true}` in `config.json`, or
-/// `enable_experiment` in this process. Off by default; tests see only `enable_experiment`.
+/// `enable_experiment` in this process. Most are off by default; tests see only overrides.
 pub fn experiment(name: &str) -> bool {
     let overridden = experiment_overridden(name);
     if overridden || cfg!(test) {
@@ -974,9 +974,13 @@ pub fn experiment(name: &str) -> bool {
     experiment_enabled_in(&config(), name)
 }
 
-/// Most experiments are opt-in. This one is on unless explicitly disabled.
+/// Most experiments are opt-in; these features are on unless explicitly disabled.
 pub(crate) fn experiment_enabled_in(config: &Config, name: &str) -> bool {
-    config.experiments.get(name).copied().unwrap_or(name == AGENT_DEMO_VIDEO)
+    config
+        .experiments
+        .get(name)
+        .copied()
+        .unwrap_or(name == AGENT_DEMO_VIDEO || name == "copyCaptureId")
 }
 
 pub fn load_config_from(path: &Path) -> Config {

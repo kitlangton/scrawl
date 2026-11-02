@@ -28,7 +28,7 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await page.getByText('Not connected', { exact: true }).waitFor();
   assert.deepEqual(await page.evaluate(() => ({
     keys: Object.keys(window.apparent), require: typeof window.require, process: typeof window.process,
-  })), { keys: ['readRuntimeState', 'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation',
+  })), { keys: ['readRuntimeState', 'readCaptureReference', 'copyCaptureReference', 'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation',
     'readConnectSettings', 'connectSettings', 'allowConnectUploads', 'cancelConnectSettings', 'checkConnectConnection',
     'disableConnectUploads', 'disconnectConnectSettings', 'openConnectBrowser',
     'readRetention', 'saveRetention', 'resetRetention', 'readCaptureUsage'], require: 'undefined', process: 'undefined' });
@@ -76,7 +76,7 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await page.getByText('Connected · processing', { exact: true }).waitFor();
   assert.equal(await page.getByText('private', { exact: true }).count(), 0);
   assert.ok(requests.length >= 3);
-  assert.ok(requests.every((request) => request === 'state\n' || JSON.parse(request).storage === 'read' || JSON.parse(request).connect === 'settings'));
+  assert.ok(requests.every((request) => request === 'state\n' || JSON.parse(request).storage === 'read' || JSON.parse(request).connect === 'settings' || JSON.parse(request).reference === 'read'));
   assert.deepEqual(errors, []);
   const screenshot = path.join(os.tmpdir(), `apparent-foundation-${process.pid}.png`);
   await page.screenshot({ path: screenshot, fullPage: true });
@@ -100,7 +100,7 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
     } });
     try {
       await other.loadFile(root + '/dist/index.html');
-      return await other.webContents.executeJavaScript('window.apparent.readRuntimeState().then(() => false, () => true)');
+      return await other.webContents.executeJavaScript(`Promise.all(['readRuntimeState', 'readCaptureReference', 'copyCaptureReference'].map(k => window.apparent[k]().then(() => false, () => true))).then(r => r.every(Boolean))`);
     } finally { other.destroy(); }
   }, path.join(__dirname, '..')), true);
 });

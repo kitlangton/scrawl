@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@apparent/ui/tabs';
 import type { RuntimeState } from './bridge';
 import { Storage } from './storage';
 import { ConnectSettingsCard } from './connect-settings';
+import { CaptureReference } from './reference';
 import './style.css';
 
 // Visual fixtures only. These do not model or control real recording state.
@@ -55,6 +56,7 @@ function App() {
           </> : <><strong>Unable to read state</strong><p className="mt-1 text-muted-foreground">{runtime.message}</p></>}
         </div>
       </section>
+      <CaptureReference />
       <Storage />
       <ConnectSettingsCard />
       <section aria-labelledby="preview-title" className="space-y-4">
@@ -76,7 +78,7 @@ function App() {
         </Tabs>
       </section>
       <footer className="border-t border-border pt-4 text-xs leading-relaxed text-muted-foreground">
-        React + shadcn/ui + Tailwind, hosted by Electron. No capture commands or permission prompts. Opt-in Settings controls use the running Rust app’s policy.
+        React + shadcn/ui + Tailwind, hosted by Electron. No recording commands or permission prompts. Copy ID changes only the clipboard; opt-in Settings controls use the running Rust app’s policy.
       </footer>
     </main>
   );

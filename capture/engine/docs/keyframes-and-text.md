@@ -203,6 +203,18 @@ never automatically attaches or submits a bundle.
 
 On by default; set `"experiments": {"agentDemoVideo": false}` or switch it off in Settings › Agents to disable it. With it on, copies and manual or guarded draft pastes ask the agent to use the repository's `make-it-apparent` skill for a short video of a complex visible change, inspect the finished recording, and embed or link a playable file where the viewer can access it. A local path alone only works on a shared filesystem. The agent names the exact build/OS and what the video does not verify; if the skill, recording surface or delivery is unavailable, it reports the blocker rather than calling the walkthrough done. This does not change the saved `summary.md` or the capture; automatic OpenCode delivery has been removed. A config edit applies on the next copy/paste without a restart.
 
+## Experiment `copyCaptureId` (`capture/desktop/mod.rs`)
+
+On by default. To hide it, set `"experiments": {"copyCaptureId": false}` in
+`~/.config/apparent/config.json`, preserving other keys. Reopen the existing
+capture window after editing. **Copy capture ID** (**Copy ID** in compact windows)
+copies only the displayed bundle directory's exact name, including `.apparent`,
+as plain text. Browsing older/newer captures changes the copied ID. This is the
+local folder name, not a Connect identifier or share link. It does not copy a
+path, summary or image, upload, paste, or mark the capture handled. Clipboard
+failures are shown in the window. An explicit opt-out is preserved; unrelated
+experiments remain opt-in.
+
 ## Experiment `clipboardImage` (`shared/handoff/mod.rs`, `capture/engine/runtime/platform/legacy_windows/platform/clipboard.rs`, `capture/desktop/linux/clipboard.rs`)
 
 Off by default. A finished capture (and `apparent copy`) normally copies the summary text alone. With this experiment enabled, `copy_bundle_to_clipboard` offers `contact-sheet.png` and the summary as formats of one clipboard selection: PNG and string on macOS, and `image/png` plus UTF-8 plain text on KDE/Hyprland Wayland. X11 and other Linux sessions retain text-only copy. A missing contact sheet or unsupported image offer falls back to text. A failed offer after publication returns an error instead of overwriting a newer clipboard owner. The Paste chip and paste shortcut remain the explicit one-action, image-first **two-paste** handoff; this experiment does not enable automatic draft paste. Retained Windows code offers `PNG`/`CF_DIBV5` and Unicode text, but Windows is unsupported.

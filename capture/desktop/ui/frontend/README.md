@@ -25,8 +25,8 @@ The existing producer is `capture/desktop/workflow/agent_capture.rs` and the
 main process connects to `$HOME/.config/apparent/agent-control/capture.sock`,
 sends exactly `state\n`, reads a bounded newline-delimited JSON reply, validates
 `state.phase`, and returns only `{ status: 'connected', phase }`. Capture IDs
-and other backend fields never reach the renderer. This observes the **running
-Rust GUI**, not package metadata or a synthetic backend. It does not make Rust
+and other backend fields never reach the renderer through this state method.
+This observes the **running Rust GUI**, not package metadata or a synthetic backend. It does not make Rust
 independent of the current GUI lifecycle.
 
 Missing/stale sockets are disconnected; unsafe permissions, invalid replies,
@@ -36,12 +36,12 @@ changes the Rust config directory. One absolute 3.5-second deadline bounds a
 read. Reads occur only on open/renderer reload or manual refresh, with one
 in-flight read and a one-second cooldown. There is no background polling.
 
-The sandboxed, isolated preload exposes `readRuntimeState()`, the three
-zero-argument capture-location methods, the four retention/usage methods and
-the Connect methods below. The main process rejects other windows/frames,
-nonlocal URLs and unexpected arguments. There is no generic IPC, shell,
-filesystem or capture command API. Only the bounded Storage and Connect
-workflows described below may mutate state.
+The sandboxed, isolated preload exposes `readRuntimeState()`, two selected-reference
+methods, three zero-argument capture-location methods, four retention/usage methods
+and the Connect methods below. Main rejects other windows/frames, nonlocal URLs
+and unexpected arguments. There is no generic IPC, shell, filesystem or recording
+command API. Only the bounded Storage and Connect workflows may mutate their
+state; the selected-capture action only changes the clipboard.
 Navigation, popups, webviews, network connections and permission requests are
 blocked. Electron keeps its own Chromium profile in `apparent-ui-foundation`,
 separate from the installed application's identity/config. These constraints do
@@ -71,7 +71,7 @@ can open the current Rust-validated public verification URI; no arbitrary URL is
 accepted from the renderer. Ambiguous commands are never retried automatically.
 
 `tests/connect.test.cjs` exercises real Unix-stream transport and projection;
-`tests/connect-smoke.cjs` exercises shipped Electron main/preload/renderer against
+`tests/integration/connect-smoke.cjs` exercises shipped Electron main/preload/renderer against
 an explicitly synthetic socket. `tests/integration/rust-connect.cjs`, launched by the ignored
 Rust `connect_settings_electron_rust_roundtrip` test, exercises the actual Rust
 listener/controller/production client using Electron's real clock and a synthetic
@@ -94,6 +94,39 @@ client authorization-predicate check, and within half a second for an otherwise
 idle stream. Observing a disabled/unreadable flag closes that controller before
 worker authorization. This is not an atomic filesystem-edit/network-dispatch
 promise; durable upload withdrawal still uses Disable uploads/Disconnect.
+## Selected capture reference
+
+The **Selected capture** card ports only Copy capture ID, not capture review or history.
+It reads the saved capture already selected by the running Rust GUI; it never picks
+"latest", opens a capture or starts Rust. No selection disables Copy. Rust alone
+derives the exact directory basename and updates the system clipboard as plain text.
+The normal `copyCaptureId` default applies; an explicit config `false` hides both UIs.
+
+Main/preload expose only `readCaptureReference()` and `copyCaptureReference()` with
+no renderer arguments. The typed socket family is `{"reference":"read","deadline":N}`
+or `{"reference":"copy","expected":ID,"deadline":N}`. Main retains the read ID, not
+the renderer. Rust compares it to its live selection on the GUI thread, rejects stale
+IDs before writing, and checks a maximum three-second admission deadline using the
+same clock translation as Storage. Replies expose only a nullable basename, copied
+boolean or enumerated error—not paths, summaries, history, config or raw errors.
+There is no automatic retry, paste, upload or mark-handled effect. Refresh is explicit.
+
+Routing remains `npm start` opt-in; installed routing and the working GPUI action are
+unchanged. Close the foundation window to roll back to the existing presentation;
+`experiments.copyCaptureId: false` disables the action in both. Remove the GPUI donor
+only after the corresponding shared capture/handoff routing is separately accepted
+and its macOS/Linux native behavior is verified. This slice does not authorize that
+routing switch or a desktop review workspace.
+
+`tests/reference-native.cjs` exercises real Electron, Rust selection, native clipboard
+PNG replacement, repeat dispatch, stale-selection refusal, no-selection and opt-out.
+It refuses a personal desktop: macOS requires a disposable GitHub-hosted runner;
+Linux native mode requires the isolated VM, while its explicit Xvfb mode is integration
+proof only. Pass absolute `APPARENT_REFERENCE_BINARY` (installed App on Mac) and a fresh
+`APPARENT_REFERENCE_OUTPUT`; set `APPARENT_REFERENCE_VM=1` in the Linux guest, or
+`APPARENT_REFERENCE_XVFB=1` under `xvfb-run` for integration. Screenshots contain only
+the owned generated-fixture windows and stay outside git.
+
 ## Storage retention and usage (#291)
 
 The same **default-off** `electronCaptureLocation` boundary now includes the
@@ -163,6 +196,7 @@ Linux Settings proof only, not timed Trash/cleanup, capture permissions or Mac.
 No recording/bundle was produced; that guest reports a missing H.264 decoder,
 and its walkthrough capture/export path was not exercised. Private evidence is
 retained outside the repository; the PR records candidate identity and gates.
+
 
 ## Checks
 
