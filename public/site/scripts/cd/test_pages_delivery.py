@@ -87,6 +87,19 @@ class PagesDeliveryTests(unittest.TestCase):
                 pages.main()
                 current.assert_called_once_with('a' * 40)
                 upload.assert_called_once()
+                # Main can advance after admission while the package is built.
+                (root / 'website-receipt.json').unlink()
+                upload.reset_mock()
+                with patch.object(pages, 'current_main', side_effect=pages.SupersededMain('stale')), patch.object(pages, 'verify_ready') as readback:
+                    pages.main()
+                upload.assert_not_called()
+                readback.assert_not_called()
+                self.assertFalse((root / 'website-receipt.json').exists())
+                # Transport/auth errors must remain failures, not stale skips.
+                with patch.object(pages, 'current_main', side_effect=RuntimeError('git failed')):
+                    with self.assertRaisesRegex(RuntimeError, 'git failed'):
+                        pages.main()
+                upload.assert_not_called()
                 (root / 'public/site/dist-apparent/private-link').symlink_to(root, target_is_directory=True)
                 upload.reset_mock()
                 with self.assertRaisesRegex(ValueError, 'symlink'):

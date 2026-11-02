@@ -62,8 +62,10 @@ is saved **before** a separate loopback-configured browser build. The loopback
 package is never uploaded for deployment. Artifact download is scoped to the
 same workflow run and named with its event SHA. Production runs are serialized
 without canceling a deployment halfway through; each publisher also refuses a
-candidate that is no longer current `main`. A relevant later push supplies the
-replacement; otherwise dispatch the workflow on `main` after reviewing it.
+candidate that is no longer current `main`. Pages treats a revision superseded
+after admission as a successful skip, without uploading or issuing a deployment
+receipt; remote lookup, upload and readback errors still fail the job. A relevant
+later push supplies the replacement; otherwise dispatch the workflow on `main` after reviewing it.
 
 ## Website activation: Cloudflare Pages
 
