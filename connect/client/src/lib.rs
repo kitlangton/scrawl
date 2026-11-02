@@ -1091,14 +1091,12 @@ impl Client {
         if !self.enabled() || !self.state.is_dir() {
             return None;
         }
-        let job = self
-            .jobs()
-            .ok()?
-            .into_iter()
-            .find(|j| !j.public_copy && j.bundle == bundle && self.active(j) && j.status != "cancelled")?;
+        let job = self.jobs().ok()?.into_iter().find(|j| {
+            !j.public_copy && j.bundle == bundle && self.active(j) && j.status != "cancelled"
+        })?;
         Some(format!(
-            "\nHosted capture: {} ({}; local original remains available).\nOn the agent machine, sign in separately with `apparent connect login --server {} --scope read`, then run:\napparent fetch {} --out ./{}.apparent --wait 120\nNever paste account tokens. Fetch waits for the complete bundle.\n",
-            job.id, job.status, job.server, job.id, job.id
+            "apparent fetch {} --out ./{}.apparent --wait 120\napparent inspect ./{}.apparent\n",
+            job.id, job.id, job.id
         ))
     }
     fn raw_request(
@@ -2030,6 +2028,20 @@ fn snapshot(bundle: &Path, stage: &Path) -> Result<Vec<Asset>> {
             .file_name()
             .into_string()
             .map_err(|_| anyhow::anyhow!("Invalid asset name"))?;
+        if name == ".publication.lock" {
+            // Engine keeps this empty coordination inode after publication. It
+            // is local machinery, never capture evidence or a remotely served asset.
+            let metadata = fs::symlink_metadata(entry.path())?;
+            ensure!(
+                metadata.is_file()
+                    && metadata.uid() == unsafe { libc::geteuid() }
+                    && metadata.mode() & 0o022 == 0
+                    && metadata.nlink() == 1
+                    && metadata.len() == 0,
+                "Unsafe bundle publication lock"
+            );
+            continue;
+        }
         if matches!(name.as_str(), "frames" | "frames-full") {
             trusted_directory_tree(&entry.path(), false)?;
             ensure!(

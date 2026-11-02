@@ -22,6 +22,15 @@
   ],
   "features": [
     {
+      "id": "adaptive-mac-menu-bar-icon",
+      "group": "platforms",
+      "name": "Adaptive Mac menu bar icon",
+      "says": "The Mac menu bar keeps the Apparent a in purple: Lilac on Carbon in dark appearance, darker purple on Paper in light appearance. It follows live menu bar appearance changes without restarting. The app icon and Linux tray are unchanged.",
+      "status": "main",
+      "platforms": ["mac"],
+      "docs": ["capture/desktop/docs/onboarding-and-settings.md#mac-menu-bar-icon"]
+    },
+    {
       "id": "desktop-error-reporting",
       "group": "settings",
       "name": "Technical error reports",
@@ -65,7 +74,7 @@
       "id": "hosted-sync",
       "group": "delivery",
       "name": "Connect complete-bundle handoff",
-      "says": "Explicit upload login queues new GUI captures without waiting for the network. Clipboard text includes a non-secret ID and remote fetch instruction while pending. A separate read login retrieves and validates the complete bundle; failures preserve the local original.",
+      "says": "Explicit upload login queues new GUI captures without waiting for the network. Clipboard text starts with fetch and inspect commands plus a one-line CLI installation fallback, with timestamped words and marks last. Hosted prompts omit local paths and repeated login instructions; unavailable hosted admission keeps local inspection instructions. A separate read login retrieves and validates the complete bundle; failures preserve the local original.",
       "status": "experiment:hostedSync",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],
@@ -122,7 +131,7 @@
       "status": "experiment:hostedSharing",
       "added": "2026-10-31",
       "platforms": ["mac", "linux"],
-      "note": "Default off. Native candidate only: Linux GUI, macOS native pill/Swift Settings, onboarding cancellation, foreground clipboard gating and end-to-end real-feature walkthrough still require platform proof. A configured hosted API and explicit upload consent are required. Deployment also needs SHARING_ENABLED=true; it defaults off. No production deployment is implied.",
+      "note": "Default off. Native candidate only: Linux GUI, macOS native pill/Swift Settings, onboarding cancellation, foreground clipboard gating and end-to-end real-feature walkthrough still require platform proof. A configured hosted API and explicit upload consent are required. Deployment also needs SHARING_ENABLED=true; it defaults off. No production deployment is implied. The Electron selected-capture candidate adds explicit non-E2E public-copy confirmation with Rust-owned background preparation and foreground clipboard delivery; installed capsule routing and native acceptance remain unchanged.",
       "docs": ["capture/engine/docs/keyframes-and-text.md", "connect/docs/hosted-client.md", "connect/docs/hosted-api.md"]
     },
     {
