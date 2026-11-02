@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { readRuntimeState, captureLocation, storagePreference } = require('../electron/runtime.cjs');
+const { readRuntimeState, captureLocation, captureReference, storagePreference } = require('../electron/runtime.cjs');
 
 async function fixture(t, reply, { mode = 0o700 } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ui-'));
@@ -75,6 +75,41 @@ test('absolute deadline bounds an unresponsive server', async (t) => {
   assert.equal((await readRuntimeState(f.home, 50)).status, 'error');
   assert.ok(performance.now() - before < 1000);
   assert.deepEqual(f.requests, ['state\n']);
+});
+
+test('capture reference is a bounded ID-only read and exact conditional copy', async (t) => {
+  const id = 'older capture — selected.apparent';
+  const f = await fixture(t, JSON.stringify({ reference: { id, copied: false, path: '/private', token: 'hidden' } }) + '\n');
+  assert.deepEqual(await captureReference(f.home), { status: 'connected', id, copied: false });
+  const read = JSON.parse(f.requests[0]);
+  assert.deepEqual(Object.keys(read).sort(), ['deadline', 'reference']);
+  const copied = await fixture(t, JSON.stringify({ reference: { id, copied: true } }) + '\n');
+  assert.deepEqual(await captureReference(copied.home, 'copy', id), { status: 'connected', id, copied: true });
+  assert.equal(JSON.parse(copied.requests[0]).expected, id);
+  assert.throws(() => captureReference(f.home, 'copy', '/private/path'));
+  assert.throws(() => captureReference(f.home, 'copy', ''));
+  assert.throws(() => captureReference(f.home, 'upload', id));
+});
+
+for (const [reply, expected] of [
+  [{ reference: { id: null, copied: false } }, { status: 'connected', id: null, copied: false }],
+  [{ error: 'feature_disabled' }, { status: 'disabled' }],
+  [{ error: 'invalid_request' }, { status: 'incompatible' }],
+  [{ error: 'conflict', privatePath: '/private' }, { status: 'error', code: 'conflict' }],
+  [{ error: 'private backend detail' }, { status: 'error', code: 'invalid_response' }],
+  [{ reference: { id: '/private/path', copied: false } }, { status: 'error', code: 'invalid_response' }],
+  [{ reference: { id: 'capture.apparent', copied: true } }, { status: 'error', code: 'invalid_response' }],
+]) test(`capture reference projects only allowed outcomes ${JSON.stringify(reply)}`, async (t) => {
+  const f = await fixture(t, JSON.stringify(reply) + '\n');
+  assert.deepEqual(await captureReference(f.home), expected);
+});
+
+test('copy mismatch and timeout never become success or automatic retries', async (t) => {
+  const wrong = await fixture(t, '{"reference":{"id":"other.apparent","copied":true}}\n');
+  assert.deepEqual(await captureReference(wrong.home, 'copy', 'selected.apparent'), { status: 'error', code: 'invalid_response' });
+  const stalled = await fixture(t, null);
+  assert.deepEqual(await captureReference(stalled.home, 'copy', 'selected.apparent', 50), { status: 'error', code: 'outcome_unknown' });
+  assert.equal(stalled.requests.length, 1);
 });
 
 const snapshot = { savedPath: '/saved', effectivePath: '/override', displayPath: '/override',

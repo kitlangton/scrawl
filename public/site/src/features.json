@@ -65,6 +65,20 @@
 
     },
     {
+      "id": "copy-capture-id",
+      "group": "delivery",
+      "name": "Copy a local capture ID",
+      "says": "Copy capture ID in the existing capture window copies only the selected bundle directory name, including .apparent, as plain text. Older/newer navigation changes the selected ID; no upload or automatic paste occurs.",
+      "status": "experiment:copyCaptureId",
+      "added": "2026-11-02",
+      "platforms": ["mac", "linux"],
+      "note": "On by default; explicitly setting experiments.copyCaptureId to false hides the action. Compact native windows label it Copy ID. The opt-in Electron foundation also copies the saved capture selected in Rust, rejecting stale selections without silently choosing latest; installed routing is unchanged. This is a local folder name, not a Connect identifier or share link.",
+      "config": [
+        { "key": "copyCaptureId", "value": "boolean experiment; true by default", "does": "Under experiments, an explicit false hides the text-only capture ID action on the next capture-window render" }
+      ],
+      "docs": ["capture/engine/docs/keyframes-and-text.md", "capture/desktop/ui/frontend/README.md#selected-capture-reference"]
+    },
+    {
       "id": "hosted-sharing",
       "group": "delivery",
       "name": "Share one recording by link",

@@ -92,6 +92,25 @@ function captureLocation(home, operation = 'read', fields = {}, timeoutMs = 3500
     { status: 'error', code: operation === 'read' ? 'timeout' : 'outcome_unknown' });
 }
 
+const referenceCodes = new Set(['conflict', 'no_selection', 'admission_expired', 'feature_disabled',
+  'clipboard_failed', 'invalid_capture', 'app_unresponsive']);
+const referenceID = (value) => text(value) && value.length > 0 && !value.includes('/');
+function captureReference(home, operation = 'read', expected, timeoutMs = 3500) {
+  if (!['read', 'copy'].includes(operation)) throw new Error('Invalid reference operation');
+  if (operation === 'copy' && !referenceID(expected)) throw new Error('Invalid capture reference');
+  const request = { reference: operation, deadline: Number(process.hrtime.bigint() / 1000000n) + Math.min(timeoutMs, 3000) };
+  if (operation === 'copy') request.expected = expected;
+  return exchange(home, JSON.stringify(request) + '\n', (value) => {
+    if (value?.error === 'invalid_request') return { status: 'incompatible' };
+    if (value?.error === 'feature_disabled') return { status: 'disabled' };
+    if (referenceCodes.has(value?.error)) return { status: 'error', code: value.error };
+    const r = value?.reference;
+    if (!r || !(r.id === null || referenceID(r.id)) || r.copied !== (operation === 'copy') ||
+        (operation === 'copy' && r.id !== expected)) return { status: 'error', code: 'invalid_response' };
+    return { status: 'connected', id: r.id, copied: r.copied };
+  }, 16384, timeoutMs, { status: 'error', code: operation === 'copy' ? 'outcome_unknown' : 'timeout' });
+}
+
 function storagePreference(home, operation, fields = {}, timeoutMs = 3500) {
   if (!['retention', 'saveretention', 'resetretention', 'usage'].includes(operation)) throw new Error('Invalid preference operation');
   const mutation = ['saveretention', 'resetretention'].includes(operation);
@@ -122,4 +141,4 @@ function storagePreference(home, operation, fields = {}, timeoutMs = 3500) {
   }, 16384, timeoutMs, { status: 'error', code: mutation ? 'outcome_unknown' : 'timeout' });
 }
 
-module.exports = { readRuntimeState, captureLocation, storagePreference };
+module.exports = { readRuntimeState, captureLocation, captureReference, storagePreference };
