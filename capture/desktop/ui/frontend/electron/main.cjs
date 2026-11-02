@@ -242,7 +242,7 @@ app.whenReady().then(() => {
   let drawingPending = false;
   for (const operation of ['read', 'undo']) {
     ipcMain.handle(`apparent:${operation}-drawing`, async (event, ...args) => {
-      validate(event, args);
+      validateFoundation(event, args);
       if (drawingPending) return { status: 'error', code: 'app_busy' };
       if (operation === 'undo' && !drawingRevision) return { status: 'error', code: 'refresh_required' };
       const expected = drawingRevision;
