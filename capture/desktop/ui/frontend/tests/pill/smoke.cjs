@@ -27,7 +27,8 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  assert.equal(sent.find(message=>message.ready===true).windowId,nativeId);
  assert.equal(await page.evaluate(()=>typeof window.require),'undefined');
  assert.equal(await page.evaluate(()=>typeof window.process),'undefined');
- assert.deepEqual(await page.evaluate(()=>Object.keys(window.apparentPill)),['read','layout','beginPaste','cancelPaste','act','subscribe']);
+ assert.deepEqual(await page.evaluate(()=>Object.keys(window.apparentPill)),['read','layout','manualDrag','beginDrag','beginPaste','cancelPaste','act','subscribe']);
+ assert.equal(await page.evaluate(async()=>{try{await window.apparentPill.beginDrag(0);return false;}catch{return true;}}),true);
  if(evidence)await page.screenshot({path:path.join(evidence,'recording.png')});
  await page.getByRole('button',{name:'Finish',exact:true}).click();
  await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeDisabled();
@@ -101,4 +102,29 @@ test('startup placement preserves a fragmented next parent frame',async t=>{
  const page=await application.firstWindow();
  await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeVisible();
  assert.equal((await page.evaluate(()=>window.apparentPill.read())).revision,1);
+});
+
+// Synthetic OS cursor isolates the main-process DIP/physical boundary. Actual
+// compositor movement and held-button admission are covered by the native run.
+test('Linux native drag IPC checks its epoch and converts the OS press point', {skip:process.platform!=='linux'}, async t=>{
+ const home=await fs.mkdtemp(path.join(os.tmpdir(),'pill-drag-scale-'));
+ const application=await electron.launch({args:['--ozone-platform=x11','--force-device-scale-factor=2',path.resolve(__dirname,'host.cjs'),'--no-sandbox'],env:{...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,'config')}});
+ t.after(async()=>{await application.close().catch(()=>{});await fs.rm(home,{recursive:true,force:true});});
+ const page=await application.firstWindow(),sent=[];let buffer='';
+ application.process().stdout.on('data',chunk=>{buffer+=chunk;let end;while((end=buffer.indexOf('\n'))>=0){try{sent.push(JSON.parse(buffer.slice(0,end)));}catch{}buffer=buffer.slice(end+1);}});
+ await application.evaluate((_e,state)=>{process.stdin.emit('data',JSON.stringify({type:'state',view:state})+'\n'+JSON.stringify({type:'activate'})+'\n');},base);
+ await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeVisible();
+ const lead=await page.locator('.lead').boundingBox();assert.ok(lead);
+ const point=await application.evaluate(({BrowserWindow,screen},lead)=>{
+  const bounds=BrowserWindow.getAllWindows()[0].getBounds();
+  const dip={x:Math.round(bounds.x+lead.x+lead.width/2),y:Math.round(bounds.y+lead.y+lead.height/2)};
+  globalThis.pillTestCursor=screen.getCursorScreenPoint;screen.getCursorScreenPoint=()=>dip;
+  return {dip,physical:screen.dipToScreenPoint(dip)};
+ },lead);
+ assert.notDeepEqual(point.physical,point.dip);
+ await page.evaluate(()=>window.apparentPill.beginDrag(1));
+ await expect.poll(()=>sent.filter(message=>message.action==='drag').length).toBe(1);
+ assert.deepEqual(sent.find(message=>message.action==='drag'),{revision:1,action:'drag',target:[point.physical.x,point.physical.y]});
+ assert.equal(await page.evaluate(async()=>{try{await window.apparentPill.beginDrag(0);return false;}catch{return true;}}),true);
+ await application.evaluate(({screen})=>{screen.getCursorScreenPoint=globalThis.pillTestCursor;});
 });

@@ -17,6 +17,27 @@ fn command(revision: u64, action: &str) -> Command {
     }
 }
 #[test]
+#[cfg(target_os = "linux")]
+fn electron_pill_drag_admission_stays_with_current_recording() {
+    let mut view = View::new(&snapshot(Pres::Recording { chips: false, has_iphone: false }), 12, true);
+    let mut drag = command(12, "drag");
+    drag.target = Some([300.0, 60.0]);
+    assert_eq!(view.drag_point(&drag, true), drag.target);
+    assert_eq!(view.drag_point(&drag, false), None);
+    drag.revision = 11;
+    assert_eq!(view.drag_point(&drag, true), None);
+    drag.revision = 12;
+    drag.target = Some([f32::NAN, 60.0]);
+    assert_eq!(view.drag_point(&drag, true), None);
+    drag.target = Some([300.0, 60.0]);
+    view.draggable = false;
+    assert_eq!(view.drag_point(&drag, true), None);
+    view.draggable = true;
+    view.phase = "selecting";
+    assert_eq!(view.drag_point(&drag, true), None);
+    assert!(view.admit(drag).is_none(), "Geometry cannot dispatch a capture action");
+}
+#[test]
 fn electron_pill_refuses_stale_and_unavailable_mutations() {
     let view = View::new(
         &snapshot(Pres::Recording {

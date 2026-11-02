@@ -17,3 +17,7 @@ Pipes and queues are bounded; writes and process reaping run off the GUI thread.
 On Hyprland, show/move/resize notifications coalesce into bounded background
 pin attempts through the existing Linux adapter. It matches the owned Electron
 PID and XID-specific title; other Apparent windows keep their workspace behavior.
+Linux lead presses use the existing native drag adapter: Rust checks the current
+revision, drag policy, owned child/window and held OS button, then polls compositor
+coordinates, clamps and remaps as required. CSS caption dragging cannot move an
+override-redirect XWayland pill reliably. macOS retains native caption dragging.

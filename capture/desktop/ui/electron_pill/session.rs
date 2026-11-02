@@ -37,6 +37,10 @@ pub struct Session {
     generation: u64,
     selection: Selection,
     window_id: Arc<AtomicU32>,
+    #[cfg(target_os = "linux")]
+    child_pid: u32,
+    #[cfg(target_os = "linux")]
+    pin: Arc<AtomicBool>,
 }
 
 fn assets() -> Option<(PathBuf, PathBuf)> {
@@ -220,6 +224,10 @@ impl Session {
             generation,
             selection,
             window_id,
+            #[cfg(target_os = "linux")]
+            child_pid,
+            #[cfg(target_os = "linux")]
+            pin: pin_request.clone(),
         };
         #[cfg(target_os = "linux")]
         if crate::capture::desktop::linux::hyprland::running() {
@@ -335,6 +343,22 @@ impl Session {
         let mut admitted = vec![];
         let before = self.view.revision;
         while let Ok((received, command)) = self.actions.try_recv() {
+            // A drag changes only this owned window. Rust rechecks the current
+            // capture's revision/policy before the native adapter reads the OS
+            // button state and geometry. Main supplies the OS press point.
+            #[cfg(target_os = "linux")]
+            if command.action == "drag" {
+                if let (Some(id), Some(point)) = (
+                    self.window_number(),
+                    self.view.drag_point(&command, received.elapsed() < Duration::from_secs(1)),
+                )
+                {
+                    super::super::linux::begin_electron_pill_drag(
+                        id, self.child_pid, self.alive.clone(), self.pin.clone(), point.map(f64::from),
+                    );
+                }
+                continue;
+            }
             if let Some(action) = self
                 .view
                 .consume(command, received.elapsed() < Duration::from_secs(1))

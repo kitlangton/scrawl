@@ -324,6 +324,29 @@ struct PillDrag {
     panel: [f64; 4],
     pointer_down: [f64; 2],
     display: crate::capture::engine::runtime::screens::Screen,
+    owner: PillDragOwner,
+}
+
+enum PillDragOwner {
+    Native,
+    Electron { pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool> },
+}
+
+impl PillDragOwner {
+    fn current(&self, id: u32) -> bool {
+        match self {
+            Self::Native => own_window(&PILL_WINDOW) == Some(id),
+            Self::Electron { pid, alive, .. } => alive.load(Ordering::Acquire)
+                && crate::capture::ui_process::owns(*pid as i32)
+                && x11::window_info(id as isize).is_some_and(|window| window.pid == *pid),
+        }
+    }
+    fn needs_pin(&self) {
+        match self {
+            Self::Native => PILL_NEEDS_PIN.store(true, Ordering::Release),
+            Self::Electron { pin, .. } => pin.store(true, Ordering::Release),
+        }
+    }
 }
 
 static PILL_DRAG: std::sync::Mutex<Option<PillDrag>> = std::sync::Mutex::new(None);
@@ -333,11 +356,26 @@ static PILL_USER_MOVED: AtomicBool = AtomicBool::new(false);
 
 /// Only the recording status/clock starts a drag, not the actionable chips.
 pub(in crate::capture::desktop) fn begin_pill_drag() {
-    if !crate::shared::handoff::experiment("movableRecordingControls") { return; }
     let Some(id) = own_window(&PILL_WINDOW) else { return };
+    begin_owned_pill_drag(id, PillDragOwner::Native, None);
+}
+
+pub(in crate::capture::desktop) fn begin_electron_pill_drag(
+    id: u32, pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool>, point: [f64; 2],
+) {
+    begin_owned_pill_drag(id, PillDragOwner::Electron { pid, alive, pin }, Some(point));
+}
+
+fn begin_owned_pill_drag(id: u32, owner: PillDragOwner, point: Option<[f64; 2]>) {
+    if !crate::shared::handoff::experiment("movableRecordingControls") || !owner.current(id) { return; }
     let Some(pointer) = x11::pointer_state().filter(|p| p.left) else { return };
-    let (x, y) = linux::cursor_position().unwrap_or((pointer.x, pointer.y));
+    let [x, y] = point.unwrap_or_else(|| {
+        let (x, y) = linux::cursor_position().unwrap_or((pointer.x, pointer.y));
+        [x, y]
+    });
     let Some(panel) = x11::geometry(id) else { return };
+    if ![x, y].iter().all(|v| v.is_finite()) || x < panel[0] || y < panel[1]
+        || x >= panel[0] + panel[2] || y >= panel[1] + panel[3] { return; }
     let screens = crate::capture::engine::runtime::screens::displays();
     let centre = [panel[0] + panel[2] / 2.0, panel[1] + panel[3] / 2.0];
     let Some(display) = crate::capture::engine::runtime::screens::index_at(&screens, centre).map(|i| screens[i].clone()) else {
@@ -348,6 +386,7 @@ pub(in crate::capture::desktop) fn begin_pill_drag() {
         panel,
         pointer_down: [x, y],
         display,
+        owner,
     });
 }
 
@@ -355,7 +394,7 @@ pub(in crate::capture::desktop) fn tick_pill_drag() {
     let mut slot = PILL_DRAG.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(drag) = slot.as_ref() else { return };
     let Some(pointer) = x11::pointer_state() else { return };
-    if !pointer.left || own_window(&PILL_WINDOW) != Some(drag.id) {
+    if !pointer.left || !drag.owner.current(drag.id) {
         *slot = None;
         return;
     }
@@ -369,9 +408,15 @@ pub(in crate::capture::desktop) fn tick_pill_drag() {
         [px, py],
     );
     if (x - drag.panel[0]).abs() >= 1.0 || (y - drag.panel[1]).abs() >= 1.0 {
+        // The compositor pointer query may have waited while the child retired
+        // or the user released the button. Refuse a stale move after that wait.
+        if !drag.owner.current(drag.id) || !x11::pointer_state().is_some_and(|p| p.left) {
+            *slot = None;
+            return;
+        }
         PILL_USER_MOVED.store(true, Ordering::Release);
         x11::place(drag.id, [x, y, drag.panel[2], drag.panel[3]]);
-        PILL_NEEDS_PIN.store(true, Ordering::Release);
+        drag.owner.needs_pin();
     }
 }
 

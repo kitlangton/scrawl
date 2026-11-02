@@ -7,6 +7,7 @@ body { font-family:'Host Grotesk',system-ui,sans-serif; }
 .pill { box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-height:56px;width:max-content;max-width:var(--pill-limit,1200px);padding:6px 10px;border:1px solid var(--apparent-border);border-radius:28px;background:var(--apparent-background);color:var(--apparent-foreground);user-select:none;overflow:hidden; }
 .lead { display:flex;align-items:center;gap:8px;flex-shrink:0;padding-inline:6px; }
 .movable { -webkit-app-region:drag;cursor:grab; }
+.manual-drag { -webkit-app-region:no-drag; }
 .clock { font-size:18px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap; }
 .controls { display:flex;align-items:center;gap:4px;flex-shrink:0; }
 .controls button { -webkit-app-region:no-drag;min-height:44px;padding:8px 12px;border-radius:22px;font-size:18px;line-height:24px;font-weight:600; }

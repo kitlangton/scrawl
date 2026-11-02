@@ -19,7 +19,9 @@ function position(bounds){
 function applyPlacement(point){
   pendingPlace=point;
   if(!window)return;
-  const area=screen.getDisplayNearestPoint({x:Math.round(point[0]),y:Math.round(point[1])}).workArea;
+  const physical={x:Math.round(point[0]),y:Math.round(point[1])};
+  const anchor=process.platform==='linux'?screen.screenToDipPoint(physical):physical;
+  const area=screen.getDisplayNearestPoint(anchor).workArea;
   const bounds=window.getBounds();
   position({x:Math.round(area.x+(area.width-bounds.width)/2),y:area.y+34});placed=true;
 }
@@ -86,7 +88,9 @@ app.whenReady().then(()=>{
     const message=protocol.command(current,revision,action);
     if(drop){
       if(!pasteGesture || pasteGesture.revision!==revision || Date.now()>pasteGesture.until)throw Error('Paste gesture expired');
-      const point=screen.getCursorScreenPoint();message.target=[point.x,point.y];
+      const dip=screen.getCursorScreenPoint();
+      const point=process.platform==='linux'?screen.dipToScreenPoint(dip):dip;
+      message.target=[point.x,point.y];
     }
     pasteGesture=null;
     pending=true;emit(message);
@@ -144,6 +148,15 @@ app.whenReady().then(()=>{
     window.setIgnoreMouseEvents(false);
   });
   ipcMain.handle('pill:cancel-paste',(event,...args)=>{valid(event,args);pasteGesture=null;});
+  ipcMain.handle('pill:begin-drag',async(event,revision,...args)=>{
+    valid(event,args);
+    if(process.platform!=='linux' || revision!==current?.revision || current.phase!=='recording' || !current.draggable || pending)throw Error('Drag unavailable');
+    const point=screen.getCursorScreenPoint(),bounds=window.getBounds();
+    const lead=await window.webContents.executeJavaScript(`(() => {const r=document.querySelector('.lead')?.getBoundingClientRect();return r && {x:r.x,y:r.y,width:r.width,height:r.height};})()`);
+    if(revision!==current?.revision || !current.draggable || !lead || point.x<bounds.x+lead.x || point.y<bounds.y+lead.y || point.x>=bounds.x+lead.x+lead.width || point.y>=bounds.y+lead.y+lead.height)throw Error('Drag target changed');
+    const physical=screen.dipToScreenPoint(point);
+    emit({revision,action:'drag',target:[physical.x,physical.y]});
+  });
   const pointerTimer=setInterval(()=>{
     if(!loaded || window.isDestroyed())return;
     const inside=window.isVisible() && geometry.contains(screen.getCursorScreenPoint(),window.getBounds());

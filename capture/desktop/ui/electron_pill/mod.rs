@@ -166,6 +166,14 @@ impl View {
     }
 
     /// Admission is checked again against current coordinator state before dispatch.
+    #[cfg(target_os = "linux")]
+    pub fn drag_point(&self, command: &Command, timely: bool) -> Option<[f32; 2]> {
+        if !timely || command.action != "drag" || command.revision != self.revision
+            || self.phase != "recording" || !self.draggable { return None; }
+        command.target.filter(|point| point.iter().all(|v| v.is_finite()))
+    }
+
+    /// Admission is checked again against current coordinator state before dispatch.
     pub fn admit(&self, command: Command) -> Option<PillAction> {
         if command.revision != self.revision
             || !self

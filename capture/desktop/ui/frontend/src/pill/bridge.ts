@@ -6,6 +6,8 @@ export type PillView = {
 declare global { interface Window { apparentPill?: {
   read:()=>Promise<PillView|null>;
   layout:(revision:number)=>Promise<void>;
+  manualDrag:boolean;
+  beginDrag:(revision:number)=>Promise<void>;
   beginPaste:(revision:number)=>Promise<void>;
   cancelPaste:()=>Promise<void>;
   act:(revision:number,action:string,drop?:boolean)=>Promise<void>;

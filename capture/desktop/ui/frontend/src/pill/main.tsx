@@ -44,7 +44,8 @@ function Pill() {
   if(!view)return <div role="status" className="pill connection">{error?'Recording controls unavailable':'Connecting…'}</div>;
   if(view.phase==='hidden')return null;
   return <main data-revision={view.revision} className="pill settings-shell" data-phase={view.phase} data-reduced={view.reducedMotion} data-warning={view.warning!==null}>
-    <div className={`lead ${view.draggable?'movable':''}`} title={view.draggable?'Drag recording controls':undefined}>
+    <div className={`lead ${view.draggable?'movable':''} ${window.apparentPill?.manualDrag?'manual-drag':''}`} title={view.draggable?'Drag recording controls':undefined}
+      onPointerDown={event=>{if(view.draggable && window.apparentPill?.manualDrag && event.button===0 && event.isPrimary)void window.apparentPill.beginDrag(view.revision).catch(()=>{});}}>
       <span aria-hidden="true" className={`indicator ${view.phase}`}>{view.phase==='completed'?'✓':''}</span>
       <span className="clock" aria-label={view.phase==='recording'?`Recording ${view.clock}`:undefined}>
         {view.phase==='recording'?view.clock:view.label}
