@@ -112,7 +112,7 @@ fn read_script(path: &Path, duration: u64) -> Result<Script> {
 pub(super) fn render(path: &Path, duration: u64) -> Result<Rendered> {
     ensure!(
         crate::shared::handoff::experiment("exportNarration"),
-        "[NARRATION_DISABLED] Enable experiments.exportNarration=true in ~/.config/apparent/config.json to try local export narration (off by default)"
+        "[NARRATION_DISABLED] Local export narration is disabled by experiments.exportNarration=false in ~/.config/apparent/config.json"
     );
     let script = read_script(path, duration)?;
     let cache = dirs::home_dir()

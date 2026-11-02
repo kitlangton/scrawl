@@ -27,7 +27,7 @@ class ExportAudioProof(unittest.TestCase):
             root.mkdir(mode=0o700, parents=True, exist_ok=False)
         logs = []
         env = dict(os.environ, APPARENT_CONFIG=str(root / "config.json"))
-        (root / "config.json").write_text(json.dumps({"experiments": {"exportNarration": True}}))
+        (root / "config.json").write_text(json.dumps({}))
 
         def run(args, success=True):
             result = subprocess.run(list(map(str, args)), env=env, capture_output=True, timeout=180)
@@ -137,7 +137,7 @@ class ExportAudioProof(unittest.TestCase):
             self.assertIn("[NARRATION_DISABLED]", export("disabled/out.mp4", "--narration", script,
                                                         success=False).stderr.decode())
             self.assertFalse((root / "disabled").exists())
-            (root / "config.json").write_text('{"experiments":{"exportNarration":true}}')
+            (root / "config.json").write_text('{}')
             export("narrated.mp4", "--narration", script)
             metadata = probe(root / "narrated.mp4")
             self.assertEqual([s["codec_name"] for s in metadata["streams"]], ["h264", "aac"])

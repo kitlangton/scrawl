@@ -1,4 +1,4 @@
-# Native app launch (candidate experiment)
+# Native app launch
 
 The contract is the literal **`apparent://open`** on macOS and Linux. It opens the
 idle app's existing onboarding window, or General Settings if onboarding is not
@@ -15,8 +15,8 @@ permission change, localhost probe or installation-detection API is added.
 
 ## Enable and install
 
-This feature is **off by default**. Preserve other keys when adding
-`"experiments": {"nativeLaunch": true}` to `~/.config/apparent/config.json`.
+This feature is **on by default**. To disable URL launch, set
+`"experiments": {"nativeLaunch": false}` in `~/.config/apparent/config.json`, preserving other keys.
 The flag is read for each URL request, including requests sent to an already
 running app; direct file edits take effect on the next request. Disabling the
 flag rejects URLs but does not remove OS registration. Ordinary app launching
@@ -53,7 +53,7 @@ For an installed AppImage or a stable executable path, explicitly run:
 xdg-open 'apparent://open'
 ```
 
-The install command requires the experiment, writes
+The install command requires URL launch to be enabled, writes
 `$XDG_DATA_HOME/applications/apparent-launch.desktop` (normally
 `~/.local/share/applications/`), asks `xdg-mime` to select it, then reads the
 selection back. It uses `$APPIMAGE`, not an ephemeral AppImage mount path. It will
@@ -84,6 +84,6 @@ is defined here.
 Required native proof is separate on each OS: browser user gesture → actual OS
 handler → cold app; repeat with a running app and confirm one GUI owner; reject
 malformed URLs and flag-off requests; open during a real capture and confirm the
-same capture continues. Inspect the saved bundle and movie. Keep this candidate
-experimental and the PR draft until that proof exists on both platforms. Linux
-unit tests and packaging checks do not establish Mac parity.
+same capture continues. Inspect the saved bundle and movie. PR #162 records
+Mac and isolated Linux proof of that contract. Default promotion preserves the
+handler and OS-registration behavior; unit tests and packaging checks alone do not establish Mac parity.
