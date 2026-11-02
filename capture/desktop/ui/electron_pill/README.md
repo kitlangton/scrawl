@@ -21,6 +21,8 @@ Linux lead presses use the existing native drag adapter: Rust checks the current
 revision, drag policy, owned child/window and held OS button, then polls compositor
 coordinates, clamps and remaps as required. CSS caption dragging cannot move an
 override-redirect XWayland pill reliably. macOS retains native caption dragging.
+When available, the existing kernel input reader supplies the held button:
+XWayland's mask resets on remap. No new input access or collection is requested.
 Native Linux moves also reconcile Electron's cached origin through the bounded,
 revision-scoped parent pipe. The notes badge uses the actual pill frame on both
 platforms, so it follows the replacement rather than the retired GPUI window.

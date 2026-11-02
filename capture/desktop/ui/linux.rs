@@ -360,6 +360,23 @@ static PILL_DRAG: std::sync::Mutex<Option<PillDrag>> = std::sync::Mutex::new(Non
 // after the mouse button is released. The ink overlay may still follow the pointer.
 static PILL_USER_MOVED: AtomicBool = AtomicBool::new(false);
 
+fn drag_left_down(x11_left: bool, kernel: Option<&linux::input::Held>) -> bool {
+    // An XWayland unmap cancels its implicit grab and clears its button mask.
+    // The existing input reader retains the actual held/released device state.
+    kernel.map_or(x11_left, |held| held.left())
+}
+
+#[test]
+fn pill_drag_uses_kernel_button_across_xwayland_remaps() {
+    let mut held = linux::input::Held::default();
+    held.keys.insert(linux::input::code::BTN_LEFT);
+    assert!(drag_left_down(false, Some(&held)), "A remap is not a physical release");
+    held.keys.clear();
+    assert!(!drag_left_down(true, Some(&held)), "A stale X11 press must not prolong dragging");
+    assert!(drag_left_down(true, None));
+    assert!(!drag_left_down(false, None));
+}
+
 /// Only the recording status/clock starts a drag, not the actionable chips.
 pub(in crate::capture::desktop) fn begin_pill_drag() {
     let Some(id) = own_window(&PILL_WINDOW) else { return };
@@ -375,7 +392,8 @@ pub(in crate::capture::desktop) fn begin_electron_pill_drag(
 
 fn begin_owned_pill_drag(id: u32, owner: PillDragOwner, point: Option<[f64; 2]>) {
     if !crate::shared::handoff::experiment("movableRecordingControls") || !owner.current(id) { return; }
-    let Some(pointer) = x11::pointer_state().filter(|p| p.left) else { return };
+    let Some(pointer) = x11::pointer_state() else { return };
+    if !drag_left_down(pointer.left, linux::input::held().as_ref()) { return; }
     let [x, y] = point.unwrap_or_else(|| {
         let (x, y) = linux::cursor_position().unwrap_or((pointer.x, pointer.y));
         [x, y]
@@ -401,12 +419,12 @@ pub(in crate::capture::desktop) fn tick_pill_drag() {
     let mut slot = PILL_DRAG.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(drag) = slot.as_ref() else { return };
     let Some(pointer) = x11::pointer_state() else { return };
-    if !pointer.left || !drag.owner.current(drag.id) {
+    if !drag_left_down(pointer.left, linux::input::held().as_ref()) || !drag.owner.current(drag.id) {
         *slot = None;
         return;
     }
     // XWayland's root pointer freezes above native Wayland windows. Ask the
-    // compositor first; the button state still comes from the X11 press.
+    // compositor first; the existing kernel reader keeps the button state over remaps.
     let (px, py) = linux::cursor_position().unwrap_or((pointer.x, pointer.y));
     let Some(live) = x11::geometry(drag.id) else { *slot = None; return; };
     // Electron owns content size. Keep the original grab offset while clamping
@@ -421,7 +439,8 @@ pub(in crate::capture::desktop) fn tick_pill_drag() {
     if (x - drag.panel[0]).abs() >= 1.0 || (y - drag.panel[1]).abs() >= 1.0 {
         // The compositor pointer query may have waited while the child retired
         // or the user released the button. Refuse a stale move after that wait.
-        if !drag.owner.current(drag.id) || !x11::pointer_state().is_some_and(|p| p.left) {
+        if !drag.owner.current(drag.id) || !x11::pointer_state()
+            .is_some_and(|p| drag_left_down(p.left, linux::input::held().as_ref())) {
             *slot = None;
             return;
         }
