@@ -1,0 +1,20 @@
+name: Mac verification
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Coalesce only this platform; a queued Mac must not hold Linux publication.
+concurrency:
+  group: verification-macos-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    uses: ./.github/workflows/verification-platform.yml
+    with:
+      runner: macos-latest

@@ -1,0 +1,257 @@
+name: Platform verification
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-24.04
+    outputs:
+      root: ${{ steps.plan.outputs.root }}
+      engine: ${{ steps.plan.outputs.engine }}
+      browser: ${{ steps.plan.outputs.browser }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Selector and hook contracts (no native proof)
+        run: |
+          python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
+          python3 -m unittest discover -s enablement/tests -p 'test_verification.py'
+          python3 -m unittest discover -s enablement/tests -p 'test_temp_preflight.py'
+      - name: Validate workflow syntax and job dependencies
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -shellcheck= -pyflakes= .github/workflows/verification.yml .github/workflows/verification-mac.yml .github/workflows/verification-platform.yml .github/workflows/release-linux.yml .github/workflows/release-mac-preview.yml .github/workflows/web-delivery.yml
+      - name: Release admission contracts
+        run: python3 -m unittest discover -s enablement/tests -p 'test_release_gate.py'
+      - id: plan
+        run: |
+          # Full tree: a cancelled earlier main run must not hide its delta.
+          BASE=$(git hash-object -t tree /dev/null)
+          python3 enablement/verification.py --base "${BASE:-unknown}" --github-output "$GITHUB_OUTPUT"
+
+  desktop-ui:
+    needs: select
+    # Each caller verifies one platform independently.
+    if: github.ref == 'refs/heads/main'
+    name: desktop-ui (${{ inputs.runner }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: capture/desktop/ui/frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Linux Electron dependencies
+        if: runner.os == 'Linux'
+        run: npx --no-install playwright install-deps chromium
+      - run: npm test
+      - name: Electron bridge and renderer smoke (synthetic socket, not native acceptance)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a npm run test:electron
+          else
+            npm run test:electron
+          fi
+
+  rust:
+    needs: select
+    if: github.ref == 'refs/heads/main'
+    name: rust (${{ inputs.runner }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Linux application dependencies
+        if: runner.os == 'Linux' && needs.select.outputs.root == 'true'
+        run: ./capture/desktop/scripts/linux/appimage/dependencies.sh
+      - name: Select the macOS 26 SDK required by native helpers
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.0'
+      - name: Install CLI export speedup dependencies
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        run: command -v ffmpeg && command -v ffprobe || brew install ffmpeg
+      - name: Install the Metal toolchain
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
+        with:
+          workspaces: |
+            . -> target
+            capture/engine -> target
+            connect/client -> connect/client/target
+      - uses: actions/setup-node@v4
+        if: needs.select.outputs.root == 'true' || needs.select.outputs.browser == 'true'
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        if: needs.select.outputs.browser == 'true'
+        with:
+          bun-version: '1.3.10'
+      - uses: browser-actions/setup-chrome@v1
+        if: needs.select.outputs.browser == 'true'
+        id: chrome
+      - name: Verify the independent Connect client package
+        if: needs.select.outputs.root == 'true'
+        run: |
+          cargo build --manifest-path connect/client/Cargo.toml --locked
+          cargo test --manifest-path connect/client/Cargo.toml --locked -- --test-threads=2
+      - name: Execute the same changed-tree checks (not GUI acceptance)
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          # Engine finalizer proofs reject group-writable cache ancestors.
+          verification_tmp="$(mktemp -d "$HOME/.apparent-verification.XXXXXX")"
+          readonly verification_tmp
+          export TMPDIR="$verification_tmp"
+          cleanup() {
+            local status=$?
+            if ! rm -rf -- "$verification_tmp"; then
+              echo '::error::Could not remove the owned verification temporary tree' >&2
+              if [ "$status" -eq 0 ]; then status=1; fi
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          # Reproduce the CI-sensitive fixtures before the full affected suites.
+          if [ "${{ needs.select.outputs.root }}" = true ]; then
+            cargo test -j 3 --locked capture::desktop::settings::settings::tests::the_command_line_row_ -- --test-threads=2
+            cargo test -j 3 --locked capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket -- --exact
+            if [ "$RUNNER_OS" = macOS ]; then
+              cargo test -j 3 --locked connect::hosted::hosted_tests::hosted_security_darwin_acl_grants_fail_closed -- --exact
+            fi
+          fi
+          BASE=$(git hash-object -t tree /dev/null)
+          python3 enablement/verification.py --base "$BASE" --run --online
+      - name: Actual Electron to Rust Settings integration (not native GUI proof)
+        if: needs.select.outputs.root == 'true'
+        shell: bash
+        run: |
+          npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
+          # Electron 45 downloads lazily. Resolve it once before the test;
+          # do not capture its download log as part of an executable pathname.
+          node -e "require('./capture/desktop/ui/frontend/node_modules/electron')"
+          if [ "$RUNNER_OS" = macOS ]; then
+            electron="$PWD/capture/desktop/ui/frontend/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
+          else
+            electron="$PWD/capture/desktop/ui/frontend/node_modules/electron/dist/electron"
+          fi
+          test -x "$electron"
+          storage_tmp="$(mktemp -d "$HOME/.apparent-storage.XXXXXX")"
+          readonly storage_tmp
+          trap 'rm -rf -- "$storage_tmp"' EXIT
+          TMPDIR="$storage_tmp" APPARENT_STORAGE_TEST_ELECTRON="$electron" \
+            APPARENT_CONNECT_TEST_ELECTRON="$electron" \
+            cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture
+      - name: Native Mac Storage and error-reporting controls against the installed Rust GUI
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        timeout-minutes: 10
+        shell: bash
+        env:
+          APPARENT_STORAGE_NATIVE_CI: '1'
+          APPARENT_STORAGE_NATIVE_OUTPUT: ${{ runner.temp }}/apparent-storage-native
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          export APPARENT_APP_DIR="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
+          test ! -e "$APPARENT_APP_DIR"
+          APPARENT_NO_LAUNCH=1 bash capture/desktop/scripts/packaging/install-app.sh
+          codesign --verify --deep --strict "$APPARENT_APP_DIR"
+          npm --prefix capture/desktop/ui/frontend run build
+          APPARENT_STORAGE_NATIVE_APP_DIR="$APPARENT_APP_DIR" \
+            node --test capture/desktop/ui/frontend/tests/mac-storage-native.cjs
+      - name: Native GPUI Copy capture ID against the same installed App
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        timeout-minutes: 4
+        shell: bash
+        env:
+          APPARENT_COPY_ID_NATIVE_CI: '1'
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          app="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
+          evidence="$RUNNER_TEMP/apparent-copy-id-native"
+          test ! -e "$evidence"
+          # Keep compiler diagnostics even when native compilation fails. The
+          # fixture itself creates its fresh private evidence subdirectory.
+          mkdir -m 700 "$evidence"
+          swiftc capture/desktop/scripts/native/copy-capture-id.swift \
+            -o "$evidence/copy-capture-id" > "$evidence/compile.log" 2>&1
+          "$evidence/copy-capture-id" "$app" "$evidence/run"
+      - name: Native Electron selected-reference control against the installed Rust App
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        timeout-minutes: 4
+        shell: bash
+        env:
+          APPARENT_REFERENCE_OUTPUT: ${{ runner.temp }}/apparent-reference-electron
+        run: |
+          export APPARENT_REFERENCE_BINARY="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app/Contents/MacOS/apparent"
+          node --test capture/desktop/ui/frontend/tests/reference-native.cjs
+      - name: Retain synthetic Electron reference evidence, including failures
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-reference-electron-native
+          path: |
+            ${{ runner.temp }}/apparent-reference-electron/*.json
+            ${{ runner.temp }}/apparent-reference-electron/*.png
+            ${{ runner.temp }}/apparent-reference-electron/*.log
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain synthetic native Copy capture ID evidence, including failures
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-copy-capture-id-native
+          path: |
+            ${{ runner.temp }}/apparent-copy-id-native/**/*.json
+            ${{ runner.temp }}/apparent-copy-id-native/**/*.png
+            ${{ runner.temp }}/apparent-copy-id-native/**/*.log
+            ${{ runner.temp }}/apparent-copy-id-native/compile.log
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain synthetic Mac Storage evidence, including failures
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-storage-native
+          path: |
+            ${{ runner.temp }}/apparent-storage-native/*.json
+            ${{ runner.temp }}/apparent-storage-native/*.png
+            ${{ runner.temp }}/apparent-storage-native/*.log
+          if-no-files-found: error
+          retention-days: 7
+
+  release-ready:
+    name: Release verification
+    needs: [select, desktop-ui, rust]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "Platform checks passed for $GITHUB_SHA"

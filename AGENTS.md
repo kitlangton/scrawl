@@ -48,10 +48,11 @@ Verification is proportional to changed behavior, not commit IDs. For mechanical
 feature pushes while preserving exact-HEAD/clean-tree guards. Explicit local
 `enablement/verification.py --run` and direct main pushes retain conservative
 changed-tree build/tests. GitHub Actions do not run automatically on PRs or
-feature-branch pushes; full Linux/macOS verification runs on main, coalesced
-to the newest tree. CD requires the exact
-commit's successful full main verification, including every required platform
-job, before publication. Native/product acceptance still applies to changed
+feature-branch pushes; full Linux/macOS verification runs independently on main,
+coalesced to the newest tree per platform. Linux and web publication require the
+exact commit's successful Linux/shared verification; Mac publication additionally
+requires its successful Mac verification. A queued or failed Mac run does not block
+Linux publication, and Linux success never substitutes for Mac verification. Native/product acceptance still applies to changed
 behavior. Fetch main before publishing; feature planning compares the full delta
 from its merge-base. Details: `enablement/docs/continuous-delivery.md`.
 

@@ -4,9 +4,11 @@
 
 The fork's **Mac preview release** workflow
 (`.github/workflows/release-mac-preview.yml`) is the regular distribution path for Apple silicon.
-Publication first requires successful full main verification of the exact commit.
+Mac publication first requires successful Linux/shared and Mac main verification
+of the exact commit. Linux publication requires its Linux/shared receipt and does
+not wait for queued Mac runners.
 It is dispatched manually from `tryapparent/apparent`'s `main`: **Actions → Mac preview release →
-Run workflow → main**. It builds on `macos-26`, assigns version `0.<workflow run>.<attempt>` and
+Run workflow → main**. It builds on `macos-latest`, assigns version `0.<workflow run>.<attempt>` and
 tag `preview-mac-<run>-<attempt>`, and creates a GitHub prerelease with the DMG, its SHA-256 and
 a Sparkle ZIP. A re-run gets a new attempt number; existing tags are never overwritten. The
 first install uses the release DMG: drag `Apparent Preview.app` into `/Applications`
@@ -57,7 +59,7 @@ or publish a Windows zip.
 
 1. **Version:** bump `version` in `Cargo.toml` and `Cargo.lock` in a `release/<version>` PR, and in the
    same PR change every `"status": "main"` in `public/site/src/features.json` to `"stable@<version>"`.
-   PRs do not start Actions; full platform verification on main gates publication.
+   PRs do not start Actions; the exact commit’s platform-specific main verification gates publication (Linux/shared for Linux; Linux/shared plus Mac for Mac).
    Test changed behavior locally before merging.
 2. **Mac build** (Studio, from that commit): `APPARENT_BUILD_NUMBER=<n> APPARENT_SPARKLE_DIR=~/.local/share/apparent-release/sparkle-2.9.4 ./capture/desktop/scripts/release/release-app.sh`.
    The build number goes up by one every release (Sparkle compares it, not the version). The script

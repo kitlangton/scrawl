@@ -6,24 +6,36 @@ they do not rebuild the application.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
-`Changed-tree verification` runs the full Linux/macOS matrices on `main`, with one
-concurrency group that cancels superseded verification. It checks the entire tree,
-not just the latest push delta: changes from a cancelled earlier run cannot escape
-verification. Its final `Release verification` job is the publication receipt.
+`Linux verification` and `Mac verification` run independently on `main`, each
+coalescing superseded runs within its own platform. Both call the same reusable
+`verification-platform.yml`, preserving the full Rust, Engine/client, browser,
+Electron and applicable native checks. Each checks the entire tree, not just the
+latest push delta: changes from a cancelled earlier run cannot escape verification.
+Each caller's `verify / Release verification` job is its platform receipt.
+Mac verification and preview publication use `macos-latest`, following GitHub's
+stable Mac image. The required Xcode/macOS SDK remains selected explicitly; an
+image change must still pass the same checks before Mac publication.
 
-Linux and web delivery start after a successful main verification. Their admission
-job reads trusted-main code and checks the exact upstream run/attempt, repository,
-commit and every required matrix job through `enablement/release_gate.py`. A PR
-success, skipped native job, cancelled/failed run or historical selector-only run
-cannot authorize publication. Automatic stale candidates are skipped before builds.
-Every downstream checkout and website artifact uses the admitted SHA, including
-when `workflow_run`'s default SHA points at a newer main commit. Publication locks
-are separate from cancellable verification; a new push never cancels publication.
+Linux and web delivery trigger only after successful `Linux verification`.
+Their admission job reads trusted-main code and requires that exact commit's
+successful Linux/shared receipt. Mac preview publication requires both the
+Linux/shared and Mac receipts for the same commit. A queued/failed Mac run cannot
+hold Linux publication; Linux success cannot authorize a Mac release.
+`enablement/release_gate.py --platform linux|macos` validates the exact caller
+workflow, upstream run/attempt, repository, main push, SHA and every required job.
+PR/manual checks, skipped jobs, failed/cancelled runs, legacy combined receipts
+and another platform's receipt cannot substitute for the required proof.
 
-Manual/tag Linux and manual Mac preview publication require successful full main
-verification of their exact candidate too. Linux `verify_only` still permits
-isolated branch packaging without publication. Main verification failures leave the
-last published version available; fix or revert main and let the next run verify it.
+Automatic stale candidates are skipped before builds. Every downstream checkout
+and website artifact uses the admitted SHA, including when `workflow_run`'s default
+SHA points at a newer main commit. Publication locks are separate from cancellable
+verification; a new push never cancels publication. Existing service activation,
+schema, consent and native/product acceptance requirements are unchanged.
+
+Manual/tag Linux releases require the same exact Linux/shared receipt; manual Mac
+previews require both receipts. Linux `verify_only` still permits isolated branch
+packaging without publication. Failed required verification leaves that platform's
+last published version available; fix or revert main and verify the next candidate.
 CodeQL managed setup is disabled by Simon's explicit instruction; it is not a
 release gate.
 
