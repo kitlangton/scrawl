@@ -197,6 +197,26 @@ jobs:
           swiftc capture/desktop/scripts/native/copy-capture-id.swift \
             -o "$evidence/copy-capture-id" > "$evidence/compile.log" 2>&1
           "$evidence/copy-capture-id" "$app" "$evidence/run"
+      - name: Native Electron selected-reference control against the installed Rust App
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        timeout-minutes: 4
+        shell: bash
+        env:
+          APPARENT_REFERENCE_OUTPUT: ${{ runner.temp }}/apparent-reference-electron
+        run: |
+          export APPARENT_REFERENCE_BINARY="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app/Contents/MacOS/apparent"
+          node --test capture/desktop/ui/frontend/tests/reference-native.cjs
+      - name: Retain synthetic Electron reference evidence, including failures
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-reference-electron-native
+          path: |
+            ${{ runner.temp }}/apparent-reference-electron/*.json
+            ${{ runner.temp }}/apparent-reference-electron/*.png
+            ${{ runner.temp }}/apparent-reference-electron/*.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain synthetic native Copy capture ID evidence, including failures
         if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
         uses: actions/upload-artifact@v4

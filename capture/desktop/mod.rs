@@ -1233,6 +1233,18 @@ impl ApparentCoordinator {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn agent_request(&mut self, request: crate::capture::desktop::workflow::agent_capture::Request, cx: &mut Context<Self>) {
         use crate::capture::desktop::workflow::agent_capture::{Action, Outcome};
+        if let Some((action @ (Action::ReferenceRead | Action::ReferenceCopy), expected)) = &request.action {
+            let enabled = crate::shared::handoff::experiment("copyCaptureId");
+            let response = capture_reference_response(
+                self.review_bundle.as_ref().map(|(directory, _)| directory.as_path()),
+                (*action == Action::ReferenceCopy).then_some(expected.as_str()),
+                enabled,
+                request.expired(),
+                crate::shared::handoff::copy_string_to_clipboard,
+            );
+            let _ = request.reply.send(response.to_string());
+            return;
+        }
         // Report an ended sampler, but never discard another session as a side
         // effect of State, Inspect or a competing Start. Cancellation stays explicit.
         if matches!(self.active_recording.as_ref().map(|r| &r.source),
@@ -5069,6 +5081,27 @@ fn review_capture_id(directory: &std::path::Path) -> anyhow::Result<&str> {
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| anyhow::anyhow!("Capture directory has no UTF-8 name"))
+}
+
+fn capture_reference_response(
+    directory: Option<&std::path::Path>,
+    expected: Option<&str>,
+    enabled: bool,
+    expired: bool,
+    copy: impl FnOnce(&str) -> anyhow::Result<()>,
+) -> serde_json::Value {
+    if expired { return serde_json::json!({"error":"admission_expired"}); }
+    if !enabled { return serde_json::json!({"error":"feature_disabled"}); }
+    let Some(directory) = directory else {
+        return if expected.is_some() { serde_json::json!({"error":"no_selection"}) }
+            else { serde_json::json!({"reference":{"id":null,"copied":false}}) };
+    };
+    let Ok(id) = review_capture_id(directory) else { return serde_json::json!({"error":"invalid_capture"}); };
+    if let Some(expected) = expected {
+        if expected != id { return serde_json::json!({"error":"conflict"}); }
+        if copy(id).is_err() { return serde_json::json!({"error":"clipboard_failed"}); }
+    }
+    serde_json::json!({"reference":{"id":id,"copied":expected.is_some()}})
 }
 
 fn review_notice(

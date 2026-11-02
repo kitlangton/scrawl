@@ -4,6 +4,7 @@ import Foundation
 import AppKit
 import Vision
 import CoreGraphics
+import ApplicationServices
 import Darwin
 
 struct Failure: Error, CustomStringConvertible {
@@ -106,15 +107,36 @@ func postOwnedWindowClick(_ expected: OwnedWindow, at point: CGPoint) throws {
               let rect = CGRect(dictionaryRepresentation: dict as CFDictionary) else { return false }
         return rect.contains(point)
     }
-    try require((hit?[kCGWindowOwnerPID as String] as? Int32) == child.processIdentifier &&
-                (hit?[kCGWindowNumber as String] as? UInt32) == current.id,
-                "Another window covers the observed input point")
+    // CGWindowList is a visual stacking list, not an input hit-test: transparent
+    // or mouse-ignoring system surfaces can cover a window's rectangle. Ask AX
+    // for the actual element at the observed point and keep the exact PID gate.
+    let system = AXUIElementCreateSystemWide()
+    _ = AXUIElementSetMessagingTimeout(system, 1)
+    var element: AXUIElement?
+    let axError = AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &element)
+    var hitPID: pid_t = -1
+    if let element, axError == .success { _ = AXUIElementGetPid(element, &hitPID) }
+    let inputAllowed = CGPreflightPostEventAccess()
+    var inputs = report["inputTargets"] as? [[String: Any]] ?? []
+    inputs.append(["expectedPID": child.processIdentifier, "hitPID": hitPID,
+        "axError": axError.rawValue, "postEventAccess": inputAllowed,
+        "visualRectanglePID": hit?[kCGWindowOwnerPID as String] as? Int32 ?? -1,
+        "visualRectangleLayer": hit?[kCGWindowLayer as String] as? Int ?? -1])
+    report["inputTargets"] = inputs
+    try require(axError == .success && hitPID == child.processIdentifier,
+                "The observed input point does not hit the exact owned app")
+    try require(inputAllowed, "The fixture has no native event-posting permission; no input sent")
     for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
         guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
             throw Failure("Could not create owned-window mouse event")
         }
         event.post(tap: .cghidEventTap)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        if type == .mouseMoved {
+            guard let position = CGEvent(source: nil)?.location else { throw Failure("Could not read pointer position") }
+            try require(abs(position.x - point.x) <= 2 && abs(position.y - point.y) <= 2,
+                        "Pointer did not settle at the observed target")
+        }
     }
 }
 func focusAndSize(_ width: Int? = nil) throws {
@@ -131,6 +153,7 @@ func focusAndSize(_ width: Int? = nil) throws {
             if (count of windows) is not 1 then error "Expected one owned AX window"
             set frontmost to true
             \(size)
+            perform action "AXRaise" of window 1
             return frontmost
         end tell
     end tell
