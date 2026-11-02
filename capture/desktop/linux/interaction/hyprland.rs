@@ -406,13 +406,48 @@ pub fn pill_title(xid: u32) -> String {
     format!("Apparent Recording Controls {xid:x}")
 }
 
+pub fn note_title(xid: u32) -> String { format!("Apparent notes {xid:x}") }
+
+pub fn pin_note(xid: u32, pid: u32) -> Result<()> {
+    if let Some(command) = owned_pin_command(&request("j/clients")?, pid, &note_title(xid), syntax()?)? {
+        run(&command)?;
+    }
+    Ok(())
+}
+
+/// X11 geometry can diverge from Hyprland's scene for override-redirect Electron
+/// windows. Reconcile the exact registered child surface in the compositor too.
+pub fn place_note(xid: u32, pid: u32, rect: [i32; 4], focus: bool) -> Result<()> {
+    pin_note(xid, pid)?;
+    let clients: Vec<serde_json::Value> = serde_json::from_str(&request("j/clients")?)?;
+    let title = note_title(xid);
+    let mut owned = clients.iter().filter(|w| w["pid"].as_u64() == Some(u64::from(pid)) && w["title"].as_str() == Some(&title) && w["xwayland"].as_bool() == Some(true));
+    let window = owned.next().context("Notes surface not mapped")?;
+    anyhow::ensure!(owned.next().is_none(), "Ambiguous notes surface");
+    let address = window["address"].as_str().context("Notes surface has no address")?;
+    anyhow::ensure!(address.starts_with("0x") && address.len() > 2 && address[2..].bytes().all(|b| b.is_ascii_hexdigit()), "Invalid notes address");
+    let [x,y,width,height] = rect;
+    match syntax()? {
+        Syntax::Lua => run(&format!("eval local w = hl.get_windows({{ title = '{title}' }})[1]; assert(w and w.address == '{address}', 'Notes surface changed'); hl.dispatch(hl.dsp.window.resize({{ window = w, x = {width}, y = {height}, relative = false }})); hl.dispatch(hl.dsp.window.move({{ window = w, x = {x}, y = {y}, relative = false }})); {}", if focus { "hl.dispatch(hl.dsp.focus({ window = w }))" } else { "" })),
+        Syntax::Hyprlang => {
+            run(&format!("dispatch resizewindowpixel exact {width} {height},address:{address}"))?;
+            run(&format!("dispatch movewindowpixel exact {x} {y},address:{address}"))?;
+            if focus { run(&format!("dispatch focuswindow address:{address}"))?; }
+            Ok(())
+        }
+    }
+}
+
 fn pill_pin_command(clients: &str, pid: u32, xid: u32, syntax: Syntax) -> Result<Option<String>> {
+    owned_pin_command(clients, pid, &pill_title(xid), syntax)
+}
+
+fn owned_pin_command(clients: &str, pid: u32, title: &str, syntax: Syntax) -> Result<Option<String>> {
     let clients: Vec<serde_json::Value> = serde_json::from_str(clients)?;
-    let title = pill_title(xid);
     let mut matching = clients.iter().filter(|client| {
         client["pid"].as_u64() == Some(u64::from(pid))
             && client["xwayland"].as_bool() == Some(true)
-            && client["title"].as_str() == Some(title.as_str())
+            && client["title"].as_str() == Some(title)
     });
     let pill = matching.next().context("Recording pill not mapped in Hyprland yet")?;
     anyhow::ensure!(matching.next().is_none(), "Recording pill identity is ambiguous");
@@ -819,5 +854,16 @@ mod tests {
         assert!(!obsolete_default_in(
             r#"[{"description":"Other app","modmask":9,"key":"S"}]"#
         ));
+    }
+}
+
+/// Return to the exact window behind a note, only while its process still owns it.
+pub fn restore_note_focus(address: u64, pid: u32) -> Result<()> {
+    let target = format!("0x{address:x}");
+    let clients: Vec<serde_json::Value> = serde_json::from_str(&request("j/clients")?)?;
+    anyhow::ensure!(clients.iter().any(|w| w["address"].as_str() == Some(&target) && w["pid"].as_u64() == Some(u64::from(pid))), "Note target no longer exists");
+    match syntax()? {
+        Syntax::Lua => run(&format!("eval hl.dispatch(hl.dsp.focus({{ window = \"address:{target}\" }}))")),
+        Syntax::Hyprlang => run(&format!("dispatch focuswindow address:{target}")),
     }
 }

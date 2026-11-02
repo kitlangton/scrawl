@@ -385,3 +385,61 @@ native Copy link retains its refusal for encrypted captures. Close this window t
 roll back. Do not remove the legacy donor or switch installed capsule routing
 until this workflow passes real macOS/isolated Linux acceptance and the routing
 switch is authorized. Socket/controller/browser fixtures are not native proof.
+
+## Shift-click notes
+
+The default-available notes surface runs `electron/notes/main.cjs`, launched by
+Rust for a screen capture. It renders only the nearby text popup and a small
+saved-note badge/list beside the existing capture controls; picker, ink and
+capture lifecycle remain on their current native path. There is no competing
+Electron capture state machine. This is independent of the foundation Settings
+window and requires no experiment. Packagers ship its production assets and
+Electron runtime via `scripts/package-notes.mjs`; development must run `npm ci`
+and `npm run build` before starting the rebuilt Rust app.
+
+A private inherited pipe carries click-time anchors and bounded note commands.
+Only trusted local main frames can submit draft/save/edit/delete/dismiss/list;
+no renderer paths, window IDs, IPC names, shell or network commands are accepted.
+Rust writes saved notes to `notes.json` before acknowledging/counting them;
+unsent drafts stay in the capture's Rust session rather than note metadata/summary. Linux display video still includes the visible popup and its text. Enter with no text closes the
+field and retains the pin. Escape keeps the in-capture draft; Shift+Enter adds
+a newline. Capture completion closes this capture-local surface. Restarting or
+ending a capture does not promise recovery of unsubmitted drafts.
+
+The native menu and Electron Recording control share `microphoneEnabled` in
+`~/.config/apparent/config.json`. It defaults on, preserves device selection,
+and applies at the next capture. Off skips microphone admission/acquisition;
+the bundle records `context.microphoneCapture=off`, including local recovery,
+so intentional silence does not masquerade as an audio failure. Config writes
+use Rust's existing atomic writer and preserve unrelated keys. No setting edit
+interrupts active audio.
+
+On Linux, Electron uses X11/XWayland. Rust checks each XID against this capture's
+child PID and prepares it while hidden; Electron alone shows and hides it. The
+compositor's visible pinned order can diverge from X11's input stack after focus
+returns to the recorded app. The notes worker checks that stack at most every
+100 ms and raises its visible surfaces only when needed. Renderer commands cannot
+place windows. Counter/editor clicks are excluded from capture telemetry.
+
+Rust owns the private Chromium profile and removes it after reaping Electron,
+before the Finish receipt. Deleting it in Electron's `quit` event races Chromium's
+last writes and can open an error dialog. Notes use the shared system-appearance
+tokens while keeping the window background transparent.
+
+Notes route solely to this Electron surface. Closing it leaves capture and
+existing drawing running; a lost notes renderer must not claim a saved note.
+The old pin/drawing path is retained, while no legacy note editor exists to
+remove. A rollback reverts this slice and keeps already saved note events
+readable. Native focus, positioning, Shift input and real output acceptance on
+both platforms remain distinct from synthetic Electron/pipe tests.
+
+The shared Rust resolver is `capture::desktop::workflow::electron::resolve() -> Result<Resources>`;
+`Resources { executable, root }` supplies paths only. Surface owners launch their own
+entry and own protocol, child cleanup and native acceptance. Assets remain in
+`Contents/Resources/note-ui` on Mac and `usr/lib/apparent/note-ui` in Linux AppImages.
+The executable is the existing Settings runtime at `Contents/Resources/settings/runtime`
+or `usr/share/apparent/settings/runtime`; popup packaging adds no second runtime.
+`package-notes.mjs` stages the required `electron/notes/` and includes `electron/share/`
+when its `main.cjs` exists, alongside the same `dist/` and single `runtime/`. The absent
+share consumer adds no entry or routing. A share owner must verify its installed route
+on both platforms before enabling it; resolver availability alone is not that proof.

@@ -287,6 +287,24 @@ fn movie_frames_at_with(
     Ok(frames)
 }
 
+/// The durable notes file is authoritative; legacy events survive when it is absent.
+fn merge_capture_notes(directory: &Path, events: &mut Vec<InteractionEvent>) -> Result<()> {
+    if !directory.join("notes.json").try_exists()? {
+        return Ok(());
+    }
+    let notes = crate::capture::engine::runtime::recording::notes::read(directory)?;
+    events.retain(|e| !matches!(e, InteractionEvent::Note { .. }));
+    events.extend(notes.into_iter().map(|n| InteractionEvent::Note {
+        t: n.t,
+        pin: n.pin,
+        x: n.x,
+        y: n.y,
+        text: n.text,
+    }));
+    events.sort_by_key(InteractionEvent::timestamp_ms);
+    Ok(())
+}
+
 /// Core pipeline that turns raw frames, strokes, events, and audio/transcript into a complete `.apparent` bundle on disk.
 #[allow(clippy::too_many_arguments)]
 ///
@@ -304,6 +322,8 @@ pub fn finalize_capture_bundle(
     interaction_telemetry: Option<model::InteractionTelemetry>,
 ) -> Result<(PathBuf, ApparentBundle, String)> {
     publication::publish_after(bundle_dir, || {
+        let mut events = events;
+        merge_capture_notes(bundle_dir, &mut events)?;
         let started_at = activity
             .stop_started
             .unwrap_or_else(std::time::Instant::now);
@@ -469,6 +489,8 @@ pub fn rebuild_screen_bundle_with(
     media: &recover::Media,
 ) -> Result<String> {
     let _coordination = publication::coordinate(out)?;
+    let mut old = old;
+    merge_capture_notes(out, &mut old.events)?;
     let started_at = std::time::Instant::now();
     let video = old
         .video
@@ -557,6 +579,26 @@ pub fn build_bundle_from_parts(
     extras: SourceExtras,
 ) -> Result<(PathBuf, ApparentBundle, String)> {
     publication::publish_after(bundle_dir, || {
+        let mut events = events;
+        merge_capture_notes(bundle_dir, &mut events)?;
+        // Existing journals retain all unrelated fields and events. Only durable typed
+        // notes are reconciled, under the same publication writer lease.
+        if bundle_dir.join("notes.json").try_exists()?
+            && bundle_dir.join(recover::UNFINISHED).try_exists()?
+        {
+            let mut journal = recover::read(bundle_dir)?;
+            let original = journal.events.clone();
+            merge_capture_notes(bundle_dir, &mut journal.events)?;
+            if original != journal.events {
+                recover::write(bundle_dir, &journal)?;
+            }
+        }
+        let mut extras = extras;
+        if bundle_dir.join("microphone-off").is_file() {
+            extras
+                .context
+                .insert("microphoneCapture".into(), "off".into());
+        }
         let total_started = extras
             .timings
             .started_at
@@ -973,6 +1015,104 @@ mod tests {
                 &crate::capture::engine::bundle::recover::Media::SYSTEM
             )
             .is_err()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn typed_notes_survive_bundle_reload_and_reprocess_without_transcript_or_duplicates() {
+        let dir = std::env::temp_dir().join(make_bundle_id());
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("microphone-off"), b"").unwrap();
+        let mut notes = crate::capture::engine::runtime::recording::notes::Store::new(&dir);
+        notes.open(1, 250, 0.3, 0.4).unwrap();
+        notes
+            .save(1, "Smaller button\nKeep the label".into())
+            .unwrap();
+        let target = TargetInfo {
+            mode: CaptureMode::Display,
+            app: None,
+            bundle_id: None,
+            window_title: None,
+            window_id: None,
+            display_id: 1,
+            frame: TargetFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 32.0,
+                height: 32.0,
+                scale: 1.0,
+            },
+        };
+        let frames = || {
+            vec![
+                RgbaFrame::new(0, 32, 32, vec![128; 32 * 32 * 4]),
+                RgbaFrame::new(250, 32, 32, vec![128; 32 * 32 * 4]),
+            ]
+        };
+        let strokes = vec![Stroke {
+            t0: 250,
+            t1: 260,
+            fw: 32,
+            fh: 32,
+            on: None,
+            pin: Some(1),
+            laser: false,
+            pts: vec![3000, 4000, 0],
+        }];
+        let (_, bundle, summary) = build_bundle_from_parts(
+            &dir,
+            target.clone(),
+            1000,
+            frames(),
+            strokes.clone(),
+            vec![],
+            TranscriptData::default(),
+            None,
+            None,
+            SourceExtras {
+                autocrop: Some(None),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(summary.contains("Typed note · pin 1 · 0:00"));
+        assert!(summary.contains("    Smaller button\n    Keep the label"));
+        assert!(!summary.contains("No microphone audio"));
+        assert_eq!(bundle.context["microphoneCapture"], "off");
+        assert_eq!(
+            bundle
+                .events
+                .iter()
+                .filter(|e| matches!(e, InteractionEvent::Note { .. }))
+                .count(),
+            1
+        );
+        let loaded: ApparentBundle =
+            serde_json::from_slice(&std::fs::read(dir.join("apparent.json")).unwrap()).unwrap();
+        let (_, rebuilt, _) = build_bundle_from_parts(
+            &dir,
+            target,
+            1000,
+            frames(),
+            strokes,
+            loaded.events,
+            TranscriptData::default(),
+            None,
+            None,
+            SourceExtras {
+                autocrop: Some(None),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            rebuilt
+                .events
+                .iter()
+                .filter(|e| matches!(e, InteractionEvent::Note { t: 250, .. }))
+                .count(),
+            1
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

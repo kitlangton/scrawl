@@ -6,6 +6,8 @@ export type RuntimeState =
 declare global {
   interface Window {
     apparent?: {
+      readMicrophoneEnabled: () => Promise<ErrorReporting>;
+      setMicrophoneEnabled: (enabled: boolean) => Promise<ErrorReporting>;
       readRuntimeState: () => Promise<RuntimeState>;
       readCaptureReference: () => Promise<CaptureReference>;
       copyCaptureReference: () => Promise<CaptureReference>;

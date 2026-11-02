@@ -232,6 +232,7 @@ pub(crate) fn set_app_icon(window: &Window) {
 pub(in crate::capture::desktop) fn raise_window(window: &mut Window) {
     if let Some(id) = x11::window_id(window) {
         x11::raise(id);
+        raise_note_surfaces();
     }
 }
 
@@ -460,7 +461,7 @@ impl PillChrome {
                                 linux::hyprland::pin_pill(id)
                             }).await;
                             match result {
-                                Ok(()) => { last_error = None; break; }
+                                Ok(()) => { raise_note_surfaces(); last_error = None; break; }
                                 Err(error) => last_error = Some(error),
                             }
                             cx.background_executor().timer(Duration::from_millis(120)).await;
@@ -488,6 +489,7 @@ impl PillChrome {
     pub(in crate::capture::desktop) fn raise(&self) {
         if let Some(id) = self.id {
             x11::raise(id);
+            raise_note_surfaces();
         }
     }
 
@@ -673,6 +675,7 @@ impl ksni::Tray for ApparentTray {
         }
         items.push(self.item(record_title(), MenuAction::ToggleCapture));
         items.push(self.item("Choose What to Record…", MenuAction::ChooseTarget));
+        items.push(ksni::menu::CheckmarkItem { label: "Microphone for next screen capture".into(), checked: crate::capture::engine::runtime::audio::mic::enabled(), activate: Box::new(|tray: &mut Self| { let _ = tray.actions.try_send(MenuAction::ToggleMicrophone); }), ..Default::default() }.into());
         items.push(ksni::MenuItem::Separator);
         items.push(self.item("Open Latest Capture", MenuAction::OpenLatest));
         if crate::shared::handoff::video_export() {
@@ -876,4 +879,121 @@ mod export_menu_tests {
             );
         }
     }
+}
+
+/// High bit distinguishes a compositor address from an X11 ID; neither comes from JS.
+pub(in crate::capture::desktop) fn note_focus() -> (u64, u32) {
+    if crate::capture::desktop::linux::hyprland::running() {
+        if let Ok(window) = crate::capture::desktop::linux::hyprland::focused_window() {
+            if let Ok(address) = u64::from_str_radix(window.address.trim_start_matches("0x"), 16) {
+                if address > 0 && address < (1 << 63) { return (address | (1 << 63), window.pid); }
+            }
+        }
+    }
+    crate::capture::desktop::linux::x11::active_window().map_or((0, 0), |w| (w.hwnd as u64, w.pid))
+}
+pub(in crate::capture::desktop) fn restore_note_focus(token: u64, owner: u32) {
+    if token & (1 << 63) != 0 {
+        let _ = crate::capture::desktop::linux::hyprland::restore_note_focus(token & !(1 << 63), owner);
+    } else if token != 0 && crate::capture::desktop::linux::x11::window_info(token as isize).is_some_and(|w| w.pid == owner) {
+        crate::capture::desktop::linux::x11::activate(token as isize);
+    }
+    raise_note_surfaces();
+}
+
+/// The Electron counter follows the same native recording panel, including user drags.
+pub(in crate::capture::desktop) fn note_badge_anchor(width: f32, y: f32) -> Option<[f64; 4]> {
+    let rect = x11::geometry(own_window(&PILL_WINDOW)?)?;
+    Some([rect[0] + rect[2] / 2.0 - f64::from(width) / 2.0,
+        rect[1] + f64::from(y), f64::from(width), f64::from(super::super::ISLAND_H)])
+}
+
+#[derive(Clone, Copy, Default)]
+struct NoteSurface { id: u32, generation: u64, worker: bool, rect: [i32; 4], focus: bool }
+#[derive(Clone, Copy, Default)]
+struct NoteSurfaces { pid: u32, slots: [NoteSurface; 2] }
+static NOTE_SURFACES: std::sync::Mutex<NoteSurfaces> = std::sync::Mutex::new(NoteSurfaces {
+    pid: 0, slots: [NoteSurface { id: 0, generation: 0, worker: false, rect: [0; 4], focus: false }; 2],
+});
+
+pub(in crate::capture::desktop) fn register_note_surfaces(pid: u32) {
+    *NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = NoteSurfaces { pid, ..Default::default() };
+}
+pub(in crate::capture::desktop) fn clear_note_surfaces(pid: u32) {
+    let mut state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if state.pid == pid { *state = NoteSurfaces::default(); }
+}
+fn raise_note_surfaces() {
+    let state = *NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let ids: Vec<_> = state.slots.iter().filter(|surface| surface.id != 0 &&
+        x11::window_info(surface.id as isize).is_some_and(|w| w.pid == state.pid && w.on_screen()))
+        .map(|surface| surface.id).collect();
+    x11::raise_group(&ids);
+}
+
+pub(in crate::capture::desktop) fn maintain_note_surfaces(pid: u32) {
+    let owned = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pid == pid;
+    if owned { raise_note_surfaces(); }
+}
+
+fn pin_note_surface(id: u32, pid: u32, index: usize) {
+    let mut failures = 0;
+    loop {
+        let (generation, rect, focus) = {
+            let state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.pid != pid || state.slots[index].id != id { return; }
+            let slot = state.slots[index];
+            (slot.generation, slot.rect, slot.focus)
+        };
+        let visible = x11::window_info(id as isize).is_some_and(|w| w.pid == pid && w.on_screen());
+        let result = if visible { linux::hyprland::place_note(id, pid, rect, focus) } else { Ok(()) };
+        if visible && result.is_ok() { raise_note_surfaces(); } else { failures += 1; }
+        let retry = {
+            let mut state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.pid != pid || state.slots[index].id != id { return; }
+            let slot = &mut state.slots[index];
+            if slot.generation != generation { failures = 0; true }
+            else if (!visible || result.is_err()) && failures < 8 { true }
+            else { slot.worker = false; false }
+        };
+        if !retry {
+            if let Err(error) = result { crate::capture::engine::runtime::apparent_log(format!("Notes pinning failed: {error:#}")); }
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(120));
+    }
+}
+
+/// Native placement and pinning use only the active capture's child PID and registered XIDs.
+/// One worker per surface coalesces remaps: legacy Hyprland pin is a toggle, so two
+/// concurrent read-unpinned/dispatch-pin operations could otherwise undo each other.
+pub(in crate::capture::desktop) fn prepare_note_surface(id: u32, pid: u32) -> bool {
+    if !x11::window_info(id as isize).is_some_and(|window| window.pid == pid) { return false; }
+    x11::set_title(id, &linux::hyprland::note_title(id));
+    x11::accept_pointer(id);
+    x11::prepare_floating(id)
+}
+
+pub(in crate::capture::desktop) fn place_note_surface(id: u32, pid: u32, rect: [i32; 4], focus: bool, popup: bool) {
+    let index = usize::from(popup);
+    {
+        let state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.pid != pid { return; }
+    }
+    if !x11::window_info(id as isize).is_some_and(|window| window.pid == pid) { return; }
+    x11::set_title(id, &linux::hyprland::note_title(id));
+    x11::accept_pointer(id);
+    x11::place_without_remap(id, rect.map(f64::from));
+    let start_worker = {
+        let mut state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.pid != pid { return; }
+        let slot = &mut state.slots[index];
+        slot.id = id; slot.rect = rect; slot.focus = focus; slot.generation = slot.generation.wrapping_add(1);
+        let start = !slot.worker && linux::hyprland::running();
+        slot.worker |= start;
+        start
+    };
+    raise_note_surfaces();
+    if focus { x11::focus(id); }
+    if start_worker { std::thread::spawn(move || pin_note_surface(id, pid, index)); }
 }

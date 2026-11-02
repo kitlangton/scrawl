@@ -657,6 +657,7 @@ pub fn describe_event(event: &InteractionEvent) -> String {
             _ => format!("pointed at ({})", at([*x, *y])),
         },
         InteractionEvent::Key { shortcut, .. } => format!("pressed {shortcut}"),
+        InteractionEvent::Note { pin, text, .. } => format!("typed note on pin {pin}: {text}"),
         InteractionEvent::AppEvent { label, .. } => format!("app: {label}"),
         InteractionEvent::AppChange {
             app, window_title, ..
@@ -852,6 +853,13 @@ fn summary_markdown_formatted(
     {
         out.push_str(&format!("Note: {}\n", note.trim()));
     }
+    for event in &bundle.events {
+        if let InteractionEvent::Note { t, pin, text, .. } = event {
+            let frame = bundle.marks.iter().find(|m| m.pin == Some(*pin)).and_then(|m| m.frame.as_deref());
+            out.push_str(&format!("Typed note · pin {pin} · {}{}:\n", format_clock(*t), frame.map(|f| format!(" · {f}")).unwrap_or_default()));
+            for line in text.lines() { out.push_str(&format!("    {line}\n")); }
+        }
+    }
     if bundle.interaction_telemetry == Some(crate::shared::model::InteractionTelemetry::VideoOnly) {
         out.push_str("Interaction context: timed CLI video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes. Use the app's recording shortcut for interaction context.\n");
     }
@@ -866,7 +874,7 @@ fn summary_markdown_formatted(
             crop.label, crop.full_frames
         ));
     }
-    if bundle.source.as_deref() != Some("iphone") {
+    if bundle.source.as_deref() != Some("iphone") && !bundle.context.get("microphoneCapture").is_some_and(|v| v == "off") {
         if !bundle.has_microphone_samples(bundle_dir) {
             out.push_str("No microphone audio was saved. Check the microphone and try again.\n");
         } else if bundle.transcript.text.trim().is_empty()

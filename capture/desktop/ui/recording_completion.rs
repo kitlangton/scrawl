@@ -19,6 +19,7 @@ pub(in crate::capture::desktop) fn finalize(
     events: Vec<InteractionEvent>,
     strokes: Vec<Stroke>,
     final_whiteboard: whiteboard::Board,
+    notes_finished: Option<flume::Receiver<Result<(), String>>>,
 ) -> (CaptureResult, u64) {
     let (screen_session, audio_recorder, window_log) = match source {
         CaptureSource::Screen {
@@ -77,6 +78,34 @@ pub(in crate::capture::desktop) fn finalize(
         Err(error) => return (Err(error), duration_ms),
     };
     let finalized = complete_bundle(&bundle_dir, &final_whiteboard, || {
+        if let Some(receipt) = notes_finished {
+            if let Err(error) = receipt
+                .recv_timeout(std::time::Duration::from_secs(12))
+                .map_err(|_| "Notes finish receipt unavailable".to_owned())
+                .and_then(|r| r)
+            {
+                crate::capture::engine::bundle::recover::write(
+                    &bundle_dir,
+                    &crate::capture::engine::bundle::recover::Unfinished {
+                        target: target.clone(),
+                        duration_ms,
+                        video: recording
+                            .video
+                            .as_ref()
+                            .and_then(|p| p.file_name())
+                            .map(|p| p.to_string_lossy().into_owned()),
+                        video_offset_ms: recording.video_offset_ms,
+                        strokes,
+                        events,
+                        interaction_telemetry: None,
+                        note: None,
+                        windows: activity.windows,
+                        cursor: activity.cursor,
+                    },
+                )?;
+                return Err(anyhow::anyhow!(error));
+            }
+        }
         crate::capture::engine::bundle::bundle_processing::finalize_capture_bundle(
             &bundle_dir,
             target,

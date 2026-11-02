@@ -600,6 +600,13 @@ impl NativePill {
             .map_or(true, |st| st.model.is_fully_hidden())
     }
 
+    pub fn note_badge_anchor(&self) -> Option<[f64; 4]> {
+        let st = self.shared.state.lock().ok()?;
+        let body = st.model.silhouette();
+        Some([f64::from(st.screen_origin_top_left[0] + body.l),
+            f64::from(st.screen_origin_top_left[1] + body.t), f64::from(body.width()), f64::from(body.height())])
+    }
+
     pub fn pointer_on_pill(&self) -> bool {
         self.shared
             .state
