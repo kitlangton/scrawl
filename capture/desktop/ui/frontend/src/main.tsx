@@ -4,6 +4,7 @@ import { Button } from '@apparent/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@apparent/ui/tabs';
 import type { RuntimeState } from './bridge';
 import { Storage } from './storage';
+import { ConnectSettingsCard } from './connect-settings';
 import './style.css';
 
 // Visual fixtures only. These do not model or control real recording state.
@@ -55,6 +56,7 @@ function App() {
         </div>
       </section>
       <Storage />
+      <ConnectSettingsCard />
       <section aria-labelledby="preview-title" className="space-y-4">
         <div className="flex items-baseline justify-between gap-4">
           <h2 id="preview-title" className="text-lg font-semibold">State previews</h2>
@@ -74,7 +76,7 @@ function App() {
         </Tabs>
       </section>
       <footer className="border-t border-border pt-4 text-xs leading-relaxed text-muted-foreground">
-        React + shadcn/ui + Tailwind, hosted by Electron. No capture commands or permission prompts. Only the opt-in capture-location card can save a preference.
+        React + shadcn/ui + Tailwind, hosted by Electron. No capture commands or permission prompts. Opt-in Settings controls use the running Rust app’s policy.
       </footer>
     </main>
   );

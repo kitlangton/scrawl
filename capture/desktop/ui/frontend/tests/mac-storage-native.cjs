@@ -261,9 +261,15 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     return { runtime, location };
   };
   try {
+    // Apple's Git may cold-start its developer-tool shim on a fresh runner.
+    // Provenance is still required, within the existing overall test deadline;
+    // it should not spend the much shorter per-control interaction budget.
     report.source.commit = (await run('/usr/bin/git', ['rev-parse', 'HEAD'], {
-      cwd: root, timeout: budget(), maxBuffer: 4096,
+      cwd: root, timeout: budget(15000), killSignal: 'SIGKILL', maxBuffer: 4096,
+    }).catch(error => {
+      throw new Error('Required source provenance lookup failed', { cause: error });
     })).stdout.trim();
+    assert.match(report.source.commit, /^[0-9a-f]{40}$/);
     report.source.sha256 = {};
     for (const file of ['electron/main.cjs', 'electron/preload.cjs', 'electron/runtime.cjs', 'src/storage.tsx', 'dist/index.html']) {
       report.source.sha256[file] = createHash('sha256').update(await fs.readFile(path.join(root, file))).digest('hex');

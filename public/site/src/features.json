@@ -83,7 +83,7 @@
       "status": "experiment:connectSettings",
       "added": "2026-11-02",
       "platforms": ["mac", "linux"],
-      "note": "Default off, independent of hostedSharing; no onboarding step. Close/reopen Settings after changing the experiment. Uses the existing configured API or hosted.tryapparent.com, not a CLI setup prerequisite. Website approval alone is not local activation. Synthetic native platform proof and live account approval are separate release gates; this entry is not proof of either.",
+      "note": "Default off, independent of hostedSharing; no onboarding step. Native Settings reads the experiment on open. Reopen the Electron window to show a newly enabled card; an open Electron stream observes disabling at its next request or client predicate, or within 500 ms while idle, and cancels pending sign-in. The opt-in Electron General card reuses the Rust controller/client over a window-owned socket; reload/close also cancels pending sign-in. Installed native Settings remain the rollback; routing is unchanged. Uses the configured API or hosted.tryapparent.com, not a CLI setup prerequisite. Website approval alone is not local activation. Electron transport checks, actual-Rust integration, native platform proof and live account approval are distinct gates; this entry is not proof of them.",
       "docs": ["capture/desktop/docs/onboarding-and-settings.md", "connect/docs/hosted-client.md"]
     },
     {

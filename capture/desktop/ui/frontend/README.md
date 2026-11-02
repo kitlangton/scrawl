@@ -36,11 +36,11 @@ changes the Rust config directory. One absolute 3.5-second deadline bounds a
 read. Reads occur only on open/renderer reload or manual refresh, with one
 in-flight read and a one-second cooldown. There is no background polling.
 
-The sandboxed, isolated preload exposes `readRuntimeState()` and the three
-zero-argument capture-location methods below.
+The sandboxed, isolated preload exposes `readRuntimeState()`, the three
+zero-argument capture-location methods, and the Connect methods below.
 The main process rejects other windows/frames, nonlocal URLs and arguments.
-There is no generic IPC, shell, filesystem, Settings or capture command API.
-Only the captures-only requests described below may save a preference.
+There is no generic IPC, shell, filesystem or capture command API.
+Only the bounded Storage and Connect workflows described below may mutate state.
 Navigation, popups, webviews, network connections and permission requests are
 blocked. Electron keeps its own Chromium profile in `apparent-ui-foundation`,
 separate from the installed application's identity/config. These constraints do
@@ -49,8 +49,50 @@ not grant or reset OS permissions or change login/URL registration.
 Synthetic states cover idle, recording, processing, uploading, preparing,
 permission failure and error. They never drive the live state display. A copied
 link is explicitly not a ready-to-watch recording. Shared controls and light
-tokens live in `shared/ui`; Connect adoption is a later slice. After editing
+tokens live in `shared/ui`. After editing
 shared sources, rerun `npm ci`; builds reject a stale installed snapshot.
+
+## Experimental General → Apparent Connect
+
+The existing default-off `connectSettings` flag also gates this opt-in window's
+Connect card. Installed Settings still use their existing native presentation;
+this slice does not change routing or onboarding. See
+`../../docs/onboarding-and-settings.md` for consent and recovery behavior.
+
+Electron main owns one persistent, same-user Rust socket/controller. Opening and
+one-second local refreshes never initiate network access. Each bounded request
+uses Electron's monotonic clock; a ten-second idle lease, EOF, renderer reload,
+crash or window close drops the controller and cancels pending authorization.
+Rust owns all consent, credentials, health probes and durable revocation; JS does
+not read config or implement an auth client. Raw errors/config/device secrets do
+not enter the renderer. Only an explicit zero-argument **Open browser** command
+can open the current Rust-validated public verification URI; no arbitrary URL is
+accepted from the renderer. Ambiguous commands are never retried automatically.
+
+`tests/connect.test.cjs` exercises real Unix-stream transport and projection;
+`tests/connect-smoke.cjs` exercises shipped Electron main/preload/renderer against
+an explicitly synthetic socket. `tests/rust-connect.cjs`, launched by the ignored
+Rust `connect_settings_electron_rust_roundtrip` test, exercises the actual Rust
+listener/controller/production client using Electron's real clock and a synthetic
+loopback pending-device HTTP fixture. It verifies explicit consent admission,
+public-only projection, durable cancel/EOF revocation and preserved config;
+it does not approve a real account or upload media. Run it from the root with
+`APPARENT_CONNECT_TEST_ELECTRON` set to the absolute frontend Electron executable:
+`cargo test --offline connect_settings_electron_rust_roundtrip -- --ignored --nocapture`.
+On Clanker, wrap the command once with `t3-build` as documented in `AGENTS.md`.
+Neither check substitutes for native Linux/macOS acceptance. The earlier shell evidence below does not
+certify this new workflow. Roll back by disabling `connectSettings` or closing
+this opt-in window and using installed Settings; do not remove the legacy
+presentation until both platforms pass equivalent consent/cancel/recovery proof.
+
+Background completion receipts are consumed only on a valid window request,
+not while the stream is idle. Closing before the next read therefore retains
+pending-login cancellation even when the server has already completed a grant.
+File edits disabling `connectSettings` apply at the next command/receipt or
+client authorization-predicate check, and within half a second for an otherwise
+idle stream. Observing a disabled/unreadable flag closes that controller before
+worker authorization. This is not an atomic filesystem-edit/network-dispatch
+promise; durable upload withdrawal still uses Disable uploads/Disconnect.
 
 ## Checks
 

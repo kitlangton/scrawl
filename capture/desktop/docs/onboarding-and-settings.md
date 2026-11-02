@@ -81,6 +81,14 @@ presented as successful sign-out.
 Native renderers only display the shared controller's view and emit commands;
 raw errors, tokens and device secrets never enter its presentation contract.
 
+The opt-in Electron development window also presents this bounded workflow using
+the same Rust controller and client, not a second auth implementation. Launch
+and test instructions are in `../ui/frontend/README.md`. Its persistent socket
+belongs to that window: reload/close/crash or an expired idle lease cancels pending
+sign-in, including late authorization receipts. Local refreshes do not probe the
+server. This does not change installed Settings routing; legacy controls remain
+the rollback until equivalent native Linux and macOS acceptance is complete.
+
 The shared config writer serializes CLI and GUI processes with a private
 `config.json.lock` sidecar, held from before the file read until atomic publication.
 Experiment edits include the nested map read in that transaction. Each writer

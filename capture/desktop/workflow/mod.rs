@@ -1,4 +1,5 @@
 pub(crate) mod agent_capture;
+pub(crate) mod connect_settings;
 pub(crate) mod inbox;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) mod launch_instance;
