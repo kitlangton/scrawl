@@ -109,6 +109,28 @@ fn publish_produced(dir: &Path, produced: usize) {
     std::fs::rename(dir.join("produced.next"), dir.join("produced")).unwrap();
 }
 
+fn saved_prefix(dir: &Path, samples: usize) -> bool {
+    std::fs::metadata(dir.join("audio.wav"))
+        .ok()
+        .is_some_and(|metadata| metadata.len() >= 44 + samples as u64 * 2)
+}
+
+#[test]
+fn crash_prefix_admission_requires_complete_pcm_not_a_header_or_partial_sample() {
+    use std::io::Write;
+    let dir = Scratch::new("crash-prefix");
+    assert!(!saved_prefix(&dir.0, 16_001));
+    let mut file = std::fs::File::create(dir.0.join("audio.wav")).unwrap();
+    file.write_all(&header(0)).unwrap();
+    assert!(!saved_prefix(&dir.0, 16_001));
+    file.write_all(&vec![0; 16_000 * 2]).unwrap();
+    assert!(!saved_prefix(&dir.0, 16_001));
+    file.write_all(&[0]).unwrap();
+    assert!(!saved_prefix(&dir.0, 16_001));
+    file.write_all(&[0]).unwrap();
+    assert!(saved_prefix(&dir.0, 16_001));
+}
+
 #[test]
 #[ignore = "subprocess boundary; parent supplies a disposable synthetic directory"]
 fn synthetic_child() {
@@ -144,6 +166,13 @@ fn synthetic_child() {
         }
         samples.lock().unwrap().extend((at..at + 160).map(tone));
         produced = at + 160;
+        if mode.starts_with("crash") && produced == 17_600 {
+            // Admit the crash only after its asserted prefix exists. A loaded
+            // runner need not schedule the real writer at the source's rate.
+            // Keep producing afterwards: waiting at 20,000 would drain the tail
+            // whose actual loss this subprocess test is intended to measure.
+            wait_for(|| saved_prefix(&dir, 16_001));
+        }
         // Do not truncate/write a control file for every simulated callback.
         if produced == 4_000 || produced == 20_000 {
             publish_produced(&dir, produced);
@@ -224,7 +253,11 @@ fn abrupt_process_death_repairs_only_narration_and_measures_tail() {
         let wav = std::fs::read(dir.0.join("audio.wav")).unwrap();
         let decoded = super::super::audio::decode_wav_16k(&wav).unwrap();
         assert_eq!(decoded.len(), expected_samples);
-        assert!(decoded.len() > 16_000, "must retain more than a header");
+        assert!(
+            decoded.len() > 16_000,
+            "{mode}: produced={produced}, saved={}; must retain the admitted prefix",
+            decoded.len()
+        );
         for (at, sample) in decoded.iter().enumerate() {
             assert!((sample - tone(at)).abs() < 0.0001);
         }

@@ -1,5 +1,6 @@
 """Executable release-boundary tests; fake Mac tools do not prove Apple acceptance."""
 import base64
+import json
 import os
 from pathlib import Path
 import shutil
@@ -114,11 +115,19 @@ case "$1" in
   delete-keychain) rm -f "$2" ;;
   import) if [ "$FAIL_IMPORT" = 1 ]; then exit 1; fi ;;
   find-identity) echo '1) HASH "Developer ID Application: Test (TESTTEAM01)"' ;;
+  list-keychains)
+    if [ "$#" = 3 ]; then
+      printf '    "/Users/runner/Library/Keychains/login.keychain-db"\\n    "/Users/runner/Library/Keychains/existing custom.keychain-db"\\n'
+    else
+      shift 4
+      python3 -c 'import json, os, sys; from pathlib import Path; Path(os.environ["SEARCH_LIST"]).write_text(json.dumps(sys.argv[1:]))' "$@"
+    fi ;;
 esac
 ''')
                 security.chmod(0o755)
                 env = dict(os.environ, PATH=f'{root / "bin"}:{os.environ["PATH"]}',
                            RUNNER_TEMP=tmp, TRACE=str(root / "trace"), FAIL_IMPORT=str(int(fail)),
+                           SEARCH_LIST=str(root / "search-list.json"),
                            APPARENT_APPLE_SIGNING_IDENTITY="Developer ID Application: Test (TESTTEAM01)",
                            APPARENT_APPLE_TEAM_ID="TESTTEAM01", APPARENT_NOTARY_KEY_ID="TESTKEY001",
                            APPARENT_NOTARY_ISSUER="00000000-0000-0000-0000-000000000001",
@@ -139,6 +148,13 @@ esac
                     self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
                     self.assertEqual((directory / "notary.p8").stat().st_mode & 0o777, 0o600)
                     self.assertIn("set-key-partition-list", (root / "trace").read_text())
+                    self.assertTrue((root / "search-list.json").exists(),
+                                    "codesign cannot resolve a name from a keychain outside its search list")
+                    self.assertEqual(json.loads((root / "search-list.json").read_text()), [
+                        str(directory / "signing.keychain-db"),
+                        "/Users/runner/Library/Keychains/login.keychain-db",
+                        "/Users/runner/Library/Keychains/existing custom.keychain-db",
+                    ])
 
     def test_workflow_cleanup_removes_key_file_even_when_keychain_delete_fails(self):
         workflow = (ROOT / ".github/workflows/release-mac-preview.yml").read_text()
