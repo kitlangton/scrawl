@@ -535,13 +535,15 @@ shows **Command** once it is set; editing it stays in the file):
 { "experiments": { "liveTranscribe": true } }
 ```
 
-With this in `~/.config/apparent/config.json`, a Mac recording transcribed by Apple Speech streams the
-microphone to `apparent-helper transcribe-stream` as it records, so finishing only waits for the last
-words (tens of milliseconds) instead of transcribing the whole recording. The streamed samples are
-exactly the ones `audio.wav` holds, so word times are on the same clock. If the stream fails, the
-speech model isn't installed yet, or it takes too long, the recording is transcribed afterwards as
-usual; the log says which (`Live transcription: …`). Hex and iPhone recordings are unaffected.
+Off by default. When enabled, a Mac recording using Apple Speech streams the microphone to one
+continuous recognizer, using the preferred SpeechTranscriber or the existing DictationTranscriber
+fallback. Apple chooses when results become final and may defer them until EOF. Samples and word
+times use the saved WAV's source clock; batch word-for-word or timing identity is not promised.
+If live recognition fails, loses samples or exceeds its helper I/O deadline, Apparent transcribes
+the complete saved WAV. Hex and imported recordings keep their existing paths.
 `apparent reprocess <bundle> --out … --bench 1 --live-speed 1` replays a bundle's audio through it.
+See the [live transcription contract](capture/engine/docs/keyframes-and-text.md#experiment-livetranscribe-captureengineruntimeaudiotranscriptionlive_transcribers-captureenginenativelivetranscribeswift)
+for buffering, completion and deadline limits.
 
 ## Helper
 
