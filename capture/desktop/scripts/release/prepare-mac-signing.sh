@@ -52,5 +52,15 @@ security import "$directory/certificate.p12" -k "$keychain" \
   -P "$APPLE_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security >/dev/null
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
 security find-identity -v -p codesigning "$keychain" | grep -Fq -- "\"$APPARENT_APPLE_SIGNING_IDENTITY\""
+# codesign resolves identity names through the user's search list even with
+# --keychain. Preserve existing entries, including paths containing spaces.
+python3 - "$keychain" <<'PY'
+import shlex, subprocess, sys
+keychain = sys.argv[1]
+existing = shlex.split(subprocess.check_output(
+    ['security', 'list-keychains', '-d', 'user'], text=True))
+subprocess.run(['security', 'list-keychains', '-d', 'user', '-s', keychain,
+                *(path for path in existing if path != keychain)], check=True)
+PY
 rm -f "$directory/certificate.p12"
 printf 'Developer ID identity imported into the job-private keychain.\n'

@@ -46,7 +46,10 @@ This is a **public release and update-feed publication**, not a dry run. Obtain 
 release authorization before dispatching; preparing credentials does not authorize it.
 
 The runner validates inputs before building and imports the certificate into a private,
-job-only keychain, without modifying the login keychain or its search list. Nested code is
+job-only keychain, without importing keys into the login keychain. It adds the temporary
+keychain to the runner's user search list so `codesign` can resolve the identity name,
+preserving existing entries. The always-run cleanup deletes that temporary keychain.
+Nested code is
 signed with hardened runtime and secure timestamps. The packager verifies the actual team
 and authority, notarizes/staples the app before packaging, then signs/notarizes/staples the
 DMG. Signature, stapling and Gatekeeper checks must pass before publication. Missing
