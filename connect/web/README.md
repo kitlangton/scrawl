@@ -103,3 +103,12 @@ and receipts are synthetic evidence only.
 Production artifact inspection and cross-origin checks are separate gates.
 
 Independent review belongs to the coordinator: this worker does not nest delegates.
+## Shared appearance
+
+System light/dark appearance now comes from `shared/ui/src/tokens.css`, also
+used by Desktop, recording recipients and Public. Account-local colors map to
+semantic tokens; live system changes require no reload. This authorized theme
+adoption supersedes the historical behavior-identical CSS extraction note above;
+it does not change route composition, consent, API behavior or asset ownership.
+A standalone copy must include the `shared/ui` directory at the same relative
+path (including the theme guard and its baseline). The guard works without Git. See `shared/ui/README.md` for regression checks and native evidence limits.

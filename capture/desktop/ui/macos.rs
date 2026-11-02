@@ -561,6 +561,9 @@ objc2::define_class!(
             let _ = self.ivars().sender.try_send(MenuAction::ChooseTarget);
         }
 
+        #[unsafe(method(toggleMicrophone:))]
+        fn toggle_microphone(&self, _sender: &AnyObject) { let _ = self.ivars().sender.try_send(MenuAction::ToggleMicrophone); }
+
         #[unsafe(method(openLatest:))]
         fn open_latest(&self, _sender: &AnyObject) {
             let _ = self.ivars().sender.try_send(MenuAction::OpenLatest);
@@ -602,6 +605,7 @@ objc2::define_class!(
         #[unsafe(method(menuNeedsUpdate:))]
         fn menu_needs_update(&self, menu: &NSMenu) {
             rebuild_inbox_menu_items(menu, self);
+            if let Some(item) = menu.itemWithTag(MICROPHONE_MENU_TAG) { item.setState(if crate::capture::engine::runtime::audio::mic::enabled() { 1 } else { 0 }); }
             if let Some(item) = menu.itemWithTag(RECORD_MENU_TAG) {
                 item.setTitle(&NSString::from_str(&record_menu_title()));
             }
@@ -618,6 +622,7 @@ const INBOX_MENU_TAG: isize = 0x5c4a;
 const EXPORT_VIDEO_MENU_TAG: isize = 0x5c4e;
 /// Tag on **Record Screen**, whose title carries the record shortcut.
 const RECORD_MENU_TAG: isize = 0x5c4d;
+const MICROPHONE_MENU_TAG: isize = 0x5c50;
 
 /// "Record Screen" with the record shortcut as it is now (Settings can change it).
 fn record_menu_title() -> String {
@@ -812,6 +817,8 @@ pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receive
         item.setTag(RECORD_MENU_TAG);
     }
     add("Choose What to Record…", sel!(chooseTarget:));
+    add("Microphone for next screen capture", sel!(toggleMicrophone:));
+    if let Some(item) = menu.itemAtIndex(menu.numberOfItems() - 1) { item.setTag(MICROPHONE_MENU_TAG); }
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     add("Open Latest Capture", sel!(openLatest:));
     add("Export Last Capture as Video…", sel!(exportVideo:));
@@ -1431,5 +1438,19 @@ mod tests {
             content_layer.setFilters(None);
         }
         CATransaction::commit();
+    }
+}
+
+/// The app behind a note, retained before Electron takes keyboard focus.
+pub(in crate::capture::desktop) fn note_focus() -> (u64, u32) {
+    let pid = crate::capture::engine::runtime::frontmost_external_pid().unwrap_or(0).max(0) as u32;
+    (u64::from(pid), pid)
+}
+pub(in crate::capture::desktop) fn restore_note_focus(token: u64, owner: u32) {
+    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+    if token > 0 && token <= i32::MAX as u64 && token == u64::from(owner) {
+        if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(token as i32) {
+            let _ = app.activateWithOptions(NSApplicationActivationOptions::empty());
+        }
     }
 }

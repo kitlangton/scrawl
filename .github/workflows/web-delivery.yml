@@ -76,7 +76,7 @@ jobs:
         working-directory: public/site
         run: |
           bun install --frozen-lockfile
-          ./node_modules/.bin/playwright-core install --with-deps chromium
+          ./node_modules/.bin/playwright-core install --with-deps chromium firefox
           echo "CHROME_PATH=$(node --input-type=module -e 'import {chromium} from "playwright-core"; console.log(chromium.executablePath())')" >> "$GITHUB_ENV"
       - name: Independently build and verify Connect browser package
         working-directory: connect/web
@@ -102,6 +102,7 @@ jobs:
           node --test scripts/connect/test-compose-connect.mjs scripts/pages/test-pages-package.mjs scripts/pages/test-pages-video.mjs scripts/pages/test-pages-video-runtime.mjs
           node scripts/pages/prepare-pages.mjs
           node scripts/site-build/verify-composed.mjs
+          PUBLIC_THEME_ARTIFACT=public/site/dist-apparent THEME_SURFACES=public,connect,recipient node ../../shared/ui/test/appearance.mjs
           node scripts/pages/prepare-pages-video.mjs
       - uses: actions/upload-artifact@v4
         with:

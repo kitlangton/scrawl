@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { inventory, resourceGraph, routes, validateConnect, validatePreservedFiles } from '../connect/compose-connect.mjs'
+import { withAppearance } from '../pages/system-appearance.mjs'
 const site = resolve(import.meta.dirname, '../..')
 const root = resolve(process.env.SITE_ARTIFACT || join(site, 'dist-apparent'))
 const syntheticOrigin = process.env.COMPOSE_SYNTHETIC_ORIGIN
@@ -12,7 +13,13 @@ const files = inventory(root), connect = inventory(join(site, '../../connect/web
 validateConnect(connect, inventory(join(site, 'public')), { syntheticOrigin })
 validatePreservedFiles(files, connect) // No overlay may remove/change any Connect-owned byte.
 const expected = JSON.parse(readFileSync(join(site, 'published-homepage.sha256.json'), 'utf8'))
-for (const [path, digest] of Object.entries(expected)) assert.equal(createHash('sha256').update(files.get(path)).digest('hex'), digest, `accepted homepage ${path}`)
+for (const [path, digest] of Object.entries(expected)) {
+  if (path === 'index.html') {
+    const source = readFileSync(join(site, 'published-homepage/index.html'))
+    assert.equal(createHash('sha256').update(source).digest('hex'), digest, 'accepted homepage source')
+    assert.equal(files.get(path).toString(), withAppearance(source.toString()), 'exact approved theme transform')
+  } else assert.equal(createHash('sha256').update(files.get(path)).digest('hex'), digest, `accepted homepage ${path}`)
+}
 const landing = resourceGraph(files, ['index.html'])
 const browser = resourceGraph(files, routes.map(route => `${route}/index.html`), true)
 for (const path of browser) if (landing.has(path) && /\.(?:js|css)$/.test(path)) {

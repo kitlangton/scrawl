@@ -25,6 +25,7 @@ jobs:
       - name: Selector and hook contracts (no native proof)
         run: |
           python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
+          python3 -m unittest discover -s enablement/tests -p 'test_commit_push_checkpoint.py'
           python3 -m unittest discover -s enablement/tests -p 'test_verification.py'
           python3 -m unittest discover -s enablement/tests -p 'test_temp_preflight.py'
           python3 -m unittest discover -s enablement/tests -p 'test_owner_lanes.py'

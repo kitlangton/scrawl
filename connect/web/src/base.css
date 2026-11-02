@@ -1,3 +1,4 @@
+@import "../../../shared/ui/src/tokens.css";
 /* Minimum inherited presentation from site styles.css / pond-hero.css.
    Owner-local: no marketing stylesheet, overflow hiding, or demo font requests. */
 @font-face {
@@ -5,9 +6,9 @@
   src: url("/HostGrotesk-Variable.ttf") format("truetype");
   font-display: swap;
 }
-html, body { margin: 0; background: #f5f0e8; -webkit-font-smoothing: antialiased; }
-.pond-page { --brand-lilac: #b7a5d8; --brand-carbon: #020102; background: #f5f0e8; color: #020102; font-family: "Host Grotesk", Arial, sans-serif; }
+html, body { margin: 0; background: var(--color-background); -webkit-font-smoothing: antialiased; }
+.pond-page { --brand-lilac: var(--color-brand); --brand-carbon: var(--color-foreground); background: var(--color-background); color: var(--color-foreground); font-family: "Host Grotesk", Arial, sans-serif; }
 .pond-page, .pond-page * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-.pond-page ::selection { background: var(--brand-lilac); color: var(--brand-carbon); }
+.pond-page ::selection { background: var(--color-selection); color: var(--color-selection-foreground); }
 .pond-page a { color: inherit; text-decoration: none; }
 .pond-page button { cursor: pointer; }
