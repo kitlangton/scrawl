@@ -1,29 +1,34 @@
-const { app, BrowserWindow, dialog, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell } = require('electron');
 const os = require('node:os');
 const {PublicShare} = require('./public-share.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { drawing, readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference } = require('./runtime.cjs');
 const { ConnectSettings, actions } = require('./connect.cjs');
+const settings = process.argv.includes('--settings-storage');
 
 // Deliberately separate from the installed application's profile and identity.
-app.setName('Apparent UI Foundation');
-app.setPath('userData', path.join(app.getPath('appData'), 'apparent-ui-foundation'));
+app.setName(settings ? 'Apparent Settings' : 'Apparent UI Foundation');
+app.setPath('userData', path.join(app.getPath('appData'), settings ? 'apparent-settings' : 'apparent-ui-foundation'));
 
 app.whenReady().then(() => {
+  if (settings) {
+    Menu.setApplicationMenu(null);
+    if (process.platform === 'darwin') app.setActivationPolicy('accessory');
+  }
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, reply) => reply(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   const window = new BrowserWindow({
     width: 920, height: 760, minWidth: 640, minHeight: 620,
-    title: 'Apparent — UI foundation', backgroundColor: '#faf9f6',
+    title: settings ? 'Apparent Settings — Storage' : 'Apparent — UI foundation', backgroundColor: settings ? '#201b24' : '#faf9f6',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
+      preload: path.join(__dirname, settings ? 'storage-preload.cjs' : 'preload.cjs'),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
       webSecurity: true, spellcheck: false,
     },
   });
   window.removeMenu();
-  const page = pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
+  const page = pathToFileURL(path.join(__dirname, settings ? '../dist/settings.html' : '../dist/index.html')).href;
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   window.webContents.on('will-attach-webview', (event) => event.preventDefault());
@@ -35,6 +40,37 @@ app.whenReady().then(() => {
         event.senderFrame.url !== page || args.length !== 0) throw new Error('Forbidden bridge request');
   };
   let drawingRevision;
+  const validateFoundation = (event, args) => {
+    if (settings) throw new Error('Unavailable in Storage Settings');
+    validate(event, args);
+  };
+  ipcMain.handle('apparent:navigate-settings', (event, ...args) => {
+    validate(event, []);
+    if (!settings || args.length !== 1 || !['general', 'recording', 'permissions', 'agents', 'about'].includes(args[0])) throw new Error('Forbidden Settings page');
+    process.stdout.write(`${JSON.stringify({ action: 'navigate', pane: args[0] })}\n`);
+  });
+  ipcMain.handle('apparent:show-capture-folder', (event, ...args) => {
+    validate(event, args);
+    if (!settings) throw new Error('Unavailable outside Settings');
+    process.stdout.write(`${JSON.stringify({ action: 'show-captures' })}\n`);
+  });
+  if (settings) {
+    // Only the Rust Settings owner supplies this private pipe. EOF closes its child.
+    if (process.argv.includes('--settings-parent')) {
+    const lines = require('node:readline').createInterface({ input: process.stdin });
+    lines.on('line', line => {
+      try {
+        const command = JSON.parse(line);
+        if (command.type === 'close') app.quit();
+        if (command.type === 'show') { window.show(); window.focus(); }
+      } catch { /* malformed parent message has no effect */ }
+    });
+    lines.on('close', () => app.quit());
+    }
+    window.on('close', () => process.stdout.write(`${JSON.stringify({ action: 'close' })}\n`));
+    window.webContents.on('did-fail-load', () => app.exit(1));
+    window.webContents.on('render-process-gone', () => app.exit(1));
+  }
   let generation = 0;
   let mutation = false;
   let storageVersion = 0;
@@ -69,12 +105,12 @@ app.whenReady().then(() => {
     return request;
   };
   ipcMain.handle('apparent:read-connect-settings', (event, ...args) => {
-    validate(event, args);
+    validateFoundation(event, args);
     return requestConnect();
   });
   for (const action of actions) {
     ipcMain.handle(`apparent:connect-${action}`, (event, ...args) => {
-      validate(event, args);
+      validateFoundation(event, args);
       return requestConnect(action);
     });
   }
@@ -85,11 +121,11 @@ app.whenReady().then(() => {
   };
   let reportingMutation = false;
   ipcMain.handle('apparent:read-error-reporting', async (event, ...args) => {
-    validate(event, args);
+    validateFoundation(event, args);
     return errorReporting(os.homedir());
   });
   ipcMain.handle('apparent:set-error-reporting', async (event, enabled, ...args) => {
-    validate(event, args);
+    validateFoundation(event, args);
     if (args.length || typeof enabled !== 'boolean') throw new Error('Forbidden bridge request');
     if (reportingMutation) return { status: 'error', code: 'app_busy' };
     reportingMutation = true;
@@ -137,7 +173,7 @@ app.whenReady().then(() => {
   }
   for (const operation of ['read', 'copy']) {
     ipcMain.handle(`apparent:${operation}-capture-reference`, async (event, ...args) => {
-      validate(event, args);
+      validateFoundation(event, args);
       // Coalesce StrictMode/read refreshes, but never repeat or overlap a copy.
       if (referencePending) return operation === 'read' && referencePending.operation === 'read'
         ? referencePending.promise : { status: 'error', code: 'app_busy' };
@@ -156,7 +192,7 @@ app.whenReady().then(() => {
   }
   for (const action of ['start','read','cancel']) {
     ipcMain.handle(`apparent:${action}-public-share`, async (event,...args) => {
-      validate(event,args);
+      validateFoundation(event,args);
       return publicShare.request(action, reference?.status==='connected'?reference.id:null);
     });
   }
@@ -223,7 +259,7 @@ app.whenReady().then(() => {
     });
   }
   ipcMain.handle('apparent:read-runtime-state', (event, ...args) => {
-    validate(event, args);
+    validateFoundation(event, args);
     // One bounded request, only on load or manual refresh; no recording-time polling.
     if (pending) return pending;
     if (Date.now() - lastRead < 1000) return lastResult;

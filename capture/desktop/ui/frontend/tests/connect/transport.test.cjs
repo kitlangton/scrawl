@@ -116,3 +116,21 @@ test('Connect oversized/compound frame closes before exposing a response', async
   assert.deepEqual(await f.client.request(), { status: 'error' });
   assert.equal(f.client.socket, undefined);
 });
+
+test('typed presentation is bounded, strips unknown data and admits only the explicit shared-links URI action', async t => {
+  const presentation = { tone:'success', headline:'Connected', detail:'Private uploads', note:'', artwork:true,
+    compact:true, accountMenu:true, buttons:[{command:'open-shared-links',title:'Manage shared links',enabled:true}],
+    menuActions:['open-shared-links'], sharedLinksUrl:'https://example.com/hosted/shares' };
+  const f = await fixture(t, request => ({ connect:{...view,presentation:{...presentation,secret:'hidden'}},
+    ...(request.command === 'open-shared-links' ? { openUri:presentation.sharedLinksUrl } : {}) }));
+  assert.deepEqual((await f.client.request()).view.presentation, presentation);
+  assert.equal((await f.client.request('open-shared-links')).openUri, presentation.sharedLinksUrl);
+});
+for (const invalid of [{tone:'purple'}, {menuActions:['disconnect']}, {sharedLinksUrl:'https://example.com/unrelated'}]) {
+  test('rejects malformed semantic presentation '+JSON.stringify(invalid), async t => {
+    const presentation = {tone:'neutral',headline:'Connect',detail:'Local',note:'',artwork:false,compact:false,accountMenu:false,
+      buttons:[],menuActions:[],sharedLinksUrl:null,...invalid};
+    const f = await fixture(t, () => ({connect:{...view,presentation}}));
+    assert.equal((await f.client.request()).status,'error');
+  });
+}

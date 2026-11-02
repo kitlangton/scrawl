@@ -1,0 +1,40 @@
+/* Apparent functional roles; warning uses Carbon on gold, never Paper on gold. */
+.apparent-status-card {
+  --status-paper:#f5f0e8; --status-carbon:#020102; --status-rule:#cbc4bc;
+  --status-success:#146b43; --status-progress:#7a58c7; --status-warning:#ffbe2e;
+  --status-failure:#b42318; --status-destructive:#b42318;
+  --status-color:var(--status-rule);
+  display:flex; align-items:center; gap:24px; padding:24px;
+  border:1px solid var(--status-rule); border-inline-start:4px solid var(--status-color);
+  border-radius:8px; background:var(--status-paper); color:var(--status-carbon);
+  font-size:1.125rem; line-height:1.5;
+}
+.apparent-status-card[data-tone=success]{--status-color:var(--status-success)}
+.apparent-status-card[data-tone=progress]{--status-color:var(--status-progress)}
+.apparent-status-card[data-tone=warning]{--status-color:var(--status-warning)}
+.apparent-status-card[data-tone=failure]{--status-color:var(--status-failure)}
+.apparent-status-card .status-content{flex:1;min-width:0}
+.apparent-status-card h2{font-size:2.25rem;font-weight:700;line-height:1.1;margin:0 0 16px;overflow-wrap:anywhere}
+.apparent-status-card.compact h2{font-size:1.125rem;margin-bottom:8px}
+.status-heading{display:block}.status-icon{display:inline-flex;margin-inline-end:8px;vertical-align:baseline;color:var(--status-color)}
+.status-icon svg{width:20px;height:20px}
+.apparent-status-card[data-tone=warning] .status-icon{color:var(--status-carbon);background:var(--status-warning);padding:3px}
+.apparent-status-card p{margin:0 0 16px;overflow-wrap:anywhere}
+.apparent-status-card .status-note{font-size:1.125rem}
+.apparent-status-card.compact p:last-child{margin-bottom:0}
+.apparent-status-card .status-artwork{flex:0 0 32%;max-width:184px}
+.apparent-status-card.compact .status-artwork{flex-basis:100px}
+.status-artwork img{width:100%;height:auto;display:block}
+.status-actions{display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-top:16px}
+.apparent-status-card button{font-size:1.125rem;line-height:1.5;min-height:44px;height:auto;padding:8px 16px;border-radius:0;white-space:normal;text-align:left}
+.apparent-status-card .primary-action{background:var(--status-progress);color:var(--status-paper);border:1px solid var(--status-progress)}
+.apparent-status-card .destructive-action{background:var(--status-destructive);color:var(--status-paper);border:1px solid var(--status-destructive)}
+.apparent-status-card .secondary-action{background:transparent;color:var(--status-carbon);border:1px solid var(--status-rule)}
+.apparent-status-card button:disabled{opacity:1;background:transparent;border-color:rgb(2 1 2 / .45);color:rgb(2 1 2 / .45)}
+.apparent-disclosure{position:relative;display:inline-block}
+.apparent-disclosure>button{font-size:1.125rem;min-height:44px;height:auto}
+.disclosure-panel{position:absolute;z-index:10;inset-inline-end:0;top:calc(100% + 8px);width:280px;max-width:calc(100vw - 40px);padding:8px;background:var(--popover,var(--background));color:var(--foreground);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px #0003}
+.disclosure-panel button{width:100%;height:auto;min-height:44px;justify-content:flex-start;white-space:normal;text-align:left;font-size:1.125rem;padding:8px}
+.disclosure-panel .disconnect-action{background:#b42318;color:#f5f0e8}
+.disclosure-panel .menu-context{font-size:1rem;line-height:1.5;padding:8px;overflow-wrap:anywhere}
+@media(max-width:560px){.apparent-status-card{flex-wrap:wrap}.apparent-status-card .status-artwork{flex-basis:120px;margin-inline-start:auto}.apparent-status-card .status-content{flex-basis:100%}.apparent-status-card.compact .status-content{flex-basis:65%}.apparent-status-card.compact .status-artwork{flex-basis:64px}}

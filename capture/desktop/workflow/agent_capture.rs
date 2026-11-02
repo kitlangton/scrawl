@@ -1103,6 +1103,8 @@ mod tests {
             request.execute(&config, storage_clock_ms() + 3000)
         };
         let read = || call(serde_json::json!({"storage":"retention","deadline":storage_clock_ms()+3000}));
+        assert!(read().get("error").is_none(), "Storage is available by default");
+        std::fs::write(&config, r#"{"experiments":{"electronCaptureLocation":false}}"#).unwrap();
         assert_eq!(read()["error"], "feature_disabled");
         std::fs::write(&config, serde_json::json!({"experiments":{"electronCaptureLocation":true}, "capturesDir":captures,
             "secret":"keep", "unknown":{"nested":true}, "retention":{"mediaDays":2,"bundleDays":null,"future":"keep"}}).to_string()).unwrap();
@@ -1160,6 +1162,8 @@ mod tests {
         let config = path.parent().unwrap().join("config.json");
         let request = Storage::Read { deadline: storage_clock_ms() + 3000 };
         let read = || request.execute(&config, storage_clock_ms() + 3000);
+        assert!(read().get("error").is_none(), "Storage is available by default");
+        std::fs::write(&config, r#"{"experiments":{"electronCaptureLocation":false}}"#).unwrap();
         assert_eq!(read()["error"], "feature_disabled");
         std::fs::write(&config, r#"{"experiments":{"electronCaptureLocation":true}}"#).unwrap();
         assert!(read().get("storage").is_some());

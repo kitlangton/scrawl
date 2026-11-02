@@ -938,7 +938,8 @@ mod tests {
         descriptor.set_width(w);
         descriptor.set_height(h);
         descriptor.set_usage(metal::MTLTextureUsage::RenderTarget);
-        descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
+        // Keep the device default: Shared textures are unavailable on Intel GPUs.
+        // Managed textures need an explicit GPU-to-CPU copy before readback.
         let texture = device.new_texture(&descriptor);
         let pass = RenderPassDescriptor::new();
         let attachment = pass.color_attachments().object_at(0).unwrap();
@@ -949,8 +950,18 @@ mod tests {
         let queue = device.new_command_queue();
         let cmd = queue.new_command_buffer();
         encode_overlay(cmd, pass, &device, pipeline, uniforms, segments, pins);
+        if texture.storage_mode() == metal::MTLStorageMode::Managed {
+            let blit = cmd.new_blit_command_encoder();
+            blit.synchronize_resource(&texture);
+            blit.end_encoding();
+        }
         cmd.commit();
         cmd.wait_until_completed();
+        assert_eq!(
+            cmd.status(),
+            metal::MTLCommandBufferStatus::Completed,
+            "offscreen rendering command failed before pixel readback"
+        );
         let mut pixels = vec![0u8; (w * h * 4) as usize];
         texture.get_bytes(
             pixels.as_mut_ptr().cast(),

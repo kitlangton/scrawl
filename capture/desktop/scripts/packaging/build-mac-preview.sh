@@ -55,6 +55,7 @@ cp capture/desktop/assets/Apparent.icns "$app/Contents/Resources/Apparent.icns"
 cp shared/assets/fonts/HostGrotesk-Variable.ttf "$app/Contents/Resources/HostGrotesk-Variable.ttf"
 cp shared/assets/brand/apparent-wordmark.png "$app/Contents/Resources/apparent-wordmark.png"
 cp shared/assets/brand/apparent-a.png "$app/Contents/Resources/apparent-a.png"
+cp shared/assets/brand/connect-frogs.png "$app/Contents/Resources/connect-frogs.png"
 ditto "$SPARKLE_DIR/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
 
 cat > "$app/Contents/Info.plist" <<PLIST
@@ -94,6 +95,13 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+if [[ "$NOTARIZE" == true ]]; then
+  python3 "$ROOT/capture/desktop/scripts/packaging/stage-settings.py" "$app/Contents/Resources/settings" \
+    --sign "$APPARENT_APPLE_SIGNING_IDENTITY" --keychain "$APPARENT_APPLE_SIGNING_DIR/signing.keychain-db"
+else
+  python3 "$ROOT/capture/desktop/scripts/packaging/stage-settings.py" "$app/Contents/Resources/settings" --sign -
+fi
 
 plutil -lint "$app/Contents/Info.plist"
 sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"

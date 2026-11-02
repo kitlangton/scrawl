@@ -102,7 +102,7 @@
       "id": "connect-settings",
       "group": "delivery",
       "name": "Connect account controls in General Settings",
-      "says": "Optional General Settings sign-in explains upload consent, opens browser device approval and verifies local activation. Cancel, disable uploads and disconnect preserve local capture; account connection does not create public links.",
+      "says": "General Settings uses a benefit-led Connect card above Launch at login, with explicit upload consent, browser approval and verified local activation. Account controls include upload disable/re-enable, connection checks and confirmed disconnect; functional colors distinguish success, progress, caution and failure. Cancel, disable uploads and disconnect preserve local capture; account connection does not create public links.",
       "status": "experiment:connectSettings",
       "added": "2026-11-02",
       "platforms": ["mac", "linux"],
@@ -1018,13 +1018,24 @@
     {
       "id": "electron-capture-location",
       "group": "storage",
-      "name": "Experimental Electron capture location",
-      "says": "An opt-in development window shows effective and saved capture locations, with a parented folder picker and Reset. It also presents Rust-owned retention preferences and on-demand logical capture-folder usage. Rust validates and saves preferences; existing recordings are not moved by this migration.",
-      "status": "experiment:electronCaptureLocation",
-      "platforms": ["mac", "linux"],
-      "note": "Off by default; not the installed Settings replacement. Earlier location-only proof: disposable Linux verified actual controls, pointer selection/Cancel, Rust persistence and visible readback at 1920×1080 with matching GTK/display scale. The GTK chooser can still overflow a 1280×800 desktop; the app does not change global GTK settings. GitHub-hosted macos-26/arm64 CI run 41354248911 verified real parented Choose/Cancel/Reset against the installed Rust GUI, visible readback, config/sentinel preservation and cleanup; images were inspected. Explicit Electron-to-Rust integration passed on both platforms. Those prior results do not cover the added retention/usage controls; their exact-candidate proof and remaining gates belong to #291. This is Settings-only proof, not capture, permission or performance acceptance.",
-      "config": [{ "key": "electronCaptureLocation", "value": "experiment; false by default", "does": "Enable the location, retention and usage Storage bridge in the running Rust app" }],
-      "docs": ["capture/desktop/ui/frontend/README.md"]
+      "name": "Storage Settings in Electron",
+      "says": "Storage Settings uses shared React controls for capture location, retention and on-demand folder usage. Rust validates and saves preferences; existing captures are not moved.",
+      "status": "main",
+      "platforms": [
+        "mac",
+        "linux"
+      ],
+      "note": "Default on; experiments.electronCaptureLocation=false restores native Storage on reopen. Missing packaged assets or an Electron crash also use native Storage. Other Settings pages retain native presentation. Existing worker timing and usage-scan limits are unchanged. Candidate installed routing and platform acceptance are tracked in #291; prior foundation evidence does not prove this routing change.",
+      "config": [
+        {
+          "key": "experiments.electronCaptureLocation",
+          "value": "true by default; false opts out",
+          "does": "Use Electron Storage Settings and admit its Rust bridge; false restores native Storage"
+        }
+      ],
+      "docs": [
+        "capture/desktop/ui/frontend/README.md"
+      ]
     },
 
     {

@@ -1,15 +1,17 @@
 # Developer ID setup for the fork's Mac releases
 
-The `Mac preview release` workflow supports opt-in Developer ID signing and Apple
-notarization. Credentials are pending: native signing, notarization and the first signed
-Sparkle update must still be tested with a real Apple account. This is preparation, not
-proof of a notarized release.
+The `Mac preview release` workflow published
+[0.11.1](https://github.com/tryapparent/apparent/releases/tag/preview-mac-11-1) signed with
+Developer ID and notarized by Apple. Keep `MAC_APPLE_SIGNING_ENABLED=true` for later releases.
+The first older ad-hoc preview → notarized Sparkle upgrade remains unverified; release
+publication does not prove that transition. User update steps are in
+[Releasing Apparent](release.md#updating-an-older-preview).
 
 It keeps `Apparent Preview.app`, bundle ID `dev.simonvanlaak.apparent.preview`, the existing
 preview Sparkle key/feed and version ordering. It does not change Kit's production app,
 register at login, install the CLI, enable silent updates or move to a stable channel.
 
-## What Simon supplies
+## Credential setup and maintenance
 
 1. Enroll in the paid Apple Developer Program. Create a **Developer ID Application**
    certificate under your team, not Apple Development, Apple Distribution or Developer ID
@@ -32,16 +34,16 @@ register at login, install the CLI, enable silent updates or move to a stable ch
    | Variable | `APPLE_TEAM_ID` | Your 10-character team ID |
    | Variable | `APPLE_NOTARY_KEY_ID` | API key's 10-character ID |
    | Variable | `APPLE_NOTARY_ISSUER` | API issuer UUID |
-   | Variable | `MAC_APPLE_SIGNING_ENABLED` | Leave unset/`false` until ready; then `true` |
+   | Variable | `MAC_APPLE_SIGNING_ENABLED` | Keep `true` for notarized releases |
 
    Use GitHub's private secret fields or secure local CLI/file input. Never paste credentials
    into chat, git, issue/PR text, logs, NoMac drives or shell command arguments. Do not create
    placeholder secrets. Existing `SPARKLE_PREVIEW_PUBLIC_KEY` and `SPARKLE_PREVIEW_PRIVATE_KEY`
    **stay unchanged**: they authenticate updates independently of Apple's certificate.
 
-## First signed release
+## Signed releases
 
-Enable `MAC_APPLE_SIGNING_ENABLED=true`, then dispatch **Mac preview release** from `main`.
+With `MAC_APPLE_SIGNING_ENABLED=true`, dispatch **Mac preview release** from `main`.
 This is a **public release and update-feed publication**, not a dry run. Obtain explicit
 release authorization before dispatching; preparing credentials does not authorize it.
 
@@ -57,7 +59,10 @@ credentials or rejection never fall back to ad-hoc signing when the switch is tr
 Checksums and Sparkle signatures are computed after stapling. The temporary keychain and
 `.p8` are deleted in an always-run cleanup step; neither is cached or uploaded as an artifact.
 
-After publication:
+## Release verification
+
+For each published candidate, retain the applicable evidence below. This checklist is not
+a receipt of completed native testing.
 
 - Verify the tag's source SHA, downloaded DMG checksum, release assets and signed appcast.
 - On an owned disposable Mac **with Gatekeeper enabled**, download through Safari, confirm
@@ -88,7 +93,7 @@ Run `python3 -m unittest discover -s scripts/tests -p 'test_preview_*.py'` and
 `bash -n capture/desktop/scripts/release/prepare-mac-signing.sh capture/desktop/scripts/packaging/build-mac-preview.sh`.
 The tests use synthetic credentials and fake Mac tools to exercise failure/ordering/layout.
 They do not establish certificate validity, native tool compatibility, Apple acceptance,
-Gatekeeper behavior or a successful live update. Those gates remain open until credentials exist.
+Gatekeeper behavior or a successful live update. Record native acceptance separately; these local checks cannot close those gates.
 
 References: [Developer ID](https://developer.apple.com/developer-id/),
 [Apple notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution),

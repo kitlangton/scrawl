@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, ClickEvent, Context, Div, FocusHandle, FontWeight, Hsla,
-    Image, ImageFormat, InteractiveElement, IntoElement, KeyDownEvent, ModifiersChangedEvent,
+    Image, ImageFormat, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent,
     MouseButton, ParentElement, Pixels, Point, Render, Rgba, SharedString, Stateful,
     StatefulInteractiveElement, Styled, Window, WindowBackgroundAppearance, WindowBounds,
     WindowControlArea, WindowKind, WindowOptions, div, img, linear_color_stop, linear_gradient,
@@ -377,6 +377,8 @@ pub struct SettingsWindow {
     update_later_focus: FocusHandle,
     update_now_focus: FocusHandle,
     update_dismiss_focus: FocusHandle,
+    connect_focus: FocusHandle,
+    connect_action_focus: [FocusHandle; 10],
     /// Modifiers held while a recorder listens, so their keycaps light as they go down.
     live: gpui::Modifiers,
     menu: Option<Menu>,
@@ -500,6 +502,8 @@ fn open(request: Request, cx: &mut App) {
                     update_later_focus: cx.focus_handle(),
                     update_now_focus: cx.focus_handle(),
                     update_dismiss_focus: cx.focus_handle(),
+                    connect_focus: cx.focus_handle().tab_stop(true),
+                    connect_action_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
                     live: gpui::Modifiers::default(),
                     menu: None,
                     meter: None,
@@ -1008,15 +1012,19 @@ impl SettingsWindow {
                     view.act(Action::CancelShortcut);
                 }
                 view.menu = None;
+                if pane == Pane::Storage {
+                    view.act(Action::Navigate { pane });
+                    return;
+                }
                 view.pane = pane;
                 view.sync_meter();
                 cx.notify();
             }))
     }
 
-    fn content(&self, theme: Theme, state: &ViewState, width: f32, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn content(&self, theme: Theme, state: &ViewState, width: f32, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let body = match self.pane {
-            Pane::General => self.general(theme, state, cx),
+            Pane::General => self.general(theme, state, window, cx),
             Pane::Recording => self.recording_pane(theme, state, cx),
             Pane::Storage => self.storage(theme, state, cx),
             Pane::Permissions => self.permissions(theme, state, cx),
@@ -1052,6 +1060,23 @@ impl SettingsWindow {
                             .text_color(theme.text())
                             .child(pane_title(self.pane)),
                     )
+                    .child(div().flex_1())
+                    .children(state.connect.as_ref().filter(|connect| connect.presentation.account_menu).map(|connect| {
+                        let options = connect.presentation.buttons.iter()
+                            .filter(|b| connect.presentation.menu_actions.contains(&b.command))
+                            .map(|b| (serde_json::to_value(b.command).unwrap().as_str().unwrap().to_owned(), b.title.clone(), b.enabled))
+                            .collect::<Vec<_>>();
+                        div().id("settings-connect-account").track_focus(&self.connect_focus).tab_index(0).size(px(44.0)).rounded_full()
+                            .bg(theme.selection()).text_size(px(18.0)).cursor_pointer()
+                            .when(self.connect_focus.is_focused(window), |d| d.border_2().border_color(theme.text()))
+                            .flex().items_center().justify_center().child("A")
+                            .on_click(cx.listener(move |view, event, window, cx| {
+                                cx.stop_propagation();
+                                window.focus(&view.connect_focus);
+                                view.open_menu("connect", options.clone(), None, event);
+                                cx.notify();
+                            }))
+                    }))
                     .child(drag_strip("settings-drag-title").absolute().top_0().left_0()),
             )
             .child(div().w_full().h(px(1.0)).bg(theme.group_line()))
@@ -1070,9 +1095,95 @@ impl SettingsWindow {
             )
     }
 
-    fn general(&self, theme: Theme, state: &ViewState, cx: &mut Context<Self>) -> Div {
+    fn connect_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if let Some(menu) = self.menu.as_mut().filter(|m| m.key == "connect") {
+            match key {
+                "escape" => { self.menu = None; window.focus(&self.connect_focus); }
+                "down" | "up" => {
+                    let enabled = menu.options.iter().filter(|o| o.2).map(|o| o.0.clone()).collect::<Vec<_>>();
+                    if !enabled.is_empty() {
+                        let index = menu.selected.as_ref().and_then(|id| enabled.iter().position(|x| x == id));
+                        let next = match (key, index) {
+                            ("down", Some(i)) => (i + 1) % enabled.len(),
+                            ("up", Some(i)) => (i + enabled.len() - 1) % enabled.len(),
+                            ("up", None) => enabled.len() - 1,
+                            _ => 0,
+                        };
+                        menu.selected = Some(enabled[next].clone());
+                    }
+                }
+                "enter" | "space" => {
+                    let command = menu.selected.as_ref().or_else(|| menu.options.iter().find(|o| o.2).map(|o| &o.0))
+                        .and_then(|id| serde_json::from_value(serde_json::Value::String(id.clone())).ok());
+                    self.menu = None;
+                    if let Some(command) = command { self.act(Action::Connect { command }); }
+                    window.focus(&self.connect_focus);
+                }
+                _ => return false,
+            }
+            cx.notify(); return true;
+        }
+        false
+    }
+
+    fn connect_card(&self, connect: &super::connect::View, window: &Window, cx: &mut Context<Self>) -> Div {
+        use super::connect::{Command, Tone};
+        let p = &connect.presentation;
+        let mut content = div().flex_1().min_w_0().flex().flex_col().gap(px(16.0));
+        let mut headline = div().flex().items_start().gap(px(8.0));
+        if p.tone != Tone::Neutral {
+            headline = headline.child(div().size(px(24.0)).flex_none()
+                .text_size(px(20.0)).text_color(rgb(if p.tone == Tone::Warning { 0x020102 } else { p.tone.color() }))
+                .when(p.tone == Tone::Warning, |d| d.bg(rgb(0xffbe2e)))
+                .flex().items_center().justify_center().child(p.tone.symbol()));
+        }
+        content = content.child(headline.child(div().flex_1()
+            .text_size(px(if p.compact { 18.0 } else { 36.0 }))
+            .line_height(px(if p.compact { 27.0 } else { 40.0 }))
+            .font_weight(FontWeight::BOLD).child(p.headline.clone())))
+            .child(div().text_size(px(18.0)).line_height(px(27.0)).child(p.detail.clone()));
+        if !p.note.is_empty() {
+            content = content.child(div().text_size(px(18.0)).line_height(px(27.0)).child(p.note.clone()));
+        }
+        let mut actions = div().flex().flex_wrap().gap(px(16.0));
+        for (index, item) in p.buttons.iter().filter(|b| !p.menu_actions.contains(&b.command)).enumerate() {
+            let command = item.command;
+            let secondary = command == Command::Cancel;
+            let destructive = command == Command::Disconnect;
+            actions = actions.child(div().id(("connect-action", index)).track_focus(&self.connect_action_focus[index].clone().tab_stop(item.enabled))
+                .h(px(44.0)).px(px(16.0)).flex_none().flex().items_center()
+                .bg(rgb(if secondary || !item.enabled { 0xf5f0e8 } else if destructive { 0xb42318 } else { 0x7a58c7 }))
+                .border_1().border_color(rgb(if secondary || !item.enabled { 0xcbc4bc } else if destructive { 0xb42318 } else { 0x7a58c7 }))
+                .text_size(px(18.0)).text_color(if !item.enabled { rgba(0x02010273) } else { rgb(if secondary { 0x020102 } else { 0xf5f0e8 }) })
+                .when(self.connect_action_focus[index].is_focused(window), |d| d.border_2().border_color(rgb(0x020102)))
+                .child(item.title.clone())
+                .when(item.enabled, |d| d.tab_index(0).cursor_pointer()
+                    .on_click(cx.listener(move |view, _, window, _| {
+                        window.focus(&view.connect_action_focus[index]); view.act(Action::Connect { command });
+                    }))));
+        }
+        content = content.child(actions);
+        div().w_full().mb(px(24.0)).p(px(24.0))
+            .rounded(px(8.0)).bg(rgb(0xf5f0e8)).text_color(rgb(0x020102))
+            .border_1().border_color(rgb(0xcbc4bc))
+            .when(p.tone != Tone::Neutral, |d| d.border_l_4().border_color(rgb(p.tone.color())))
+            .flex().items_center().gap(px(24.0)).child(content)
+            .when(p.artwork, |d| {
+                static FROGS: std::sync::OnceLock<Arc<Image>> = std::sync::OnceLock::new();
+                let image = FROGS.get_or_init(|| Arc::new(Image::from_bytes(ImageFormat::Png,
+                    include_bytes!("../../../shared/assets/brand/connect-frogs.png").to_vec()))).clone();
+                let width = if p.compact { 100.0 } else { 144.0 };
+                d.child(img(image).w(px(width)).h(px(width * 406.0 / 758.0)).flex_none().object_fit(gpui::ObjectFit::Contain))
+            })
+    }
+
+    fn general(&self, theme: Theme, state: &ViewState, window: &Window, cx: &mut Context<Self>) -> Div {
         let login_on = state.login.on;
-        let mut column = div().flex().flex_col().child(group(
+        let mut column = div().flex().flex_col();
+        if let Some(connect) = &state.connect {
+            column = column.child(self.connect_card(connect, window, cx));
+        }
+        column = column.child(group(
             theme,
             vec![
                 row(
@@ -1110,27 +1221,6 @@ impl SettingsWindow {
                 false,
             ));
         }
-        if let Some(connect) = &state.connect {
-            column = column
-                .child(div().mt(px(20.0)).child(connect.title.clone()))
-                .child(div().mt(px(8.0)).child(connect.status.clone()))
-                .child(caption(theme, &connect.detail, false));
-            if let Some(code) = &connect.user_code {
-                column = column.child(caption(theme, &format!("Verification code: {code}"), false));
-            }
-            for (index, item) in connect.buttons.iter().enumerate() {
-                let command = item.command;
-                column = column.child(
-                    button(theme, format!("connect-action-{index}"), &item.title, item.enabled)
-                        .when(item.enabled, |button| button.on_click(cx.listener(move |view, _, _, _| {
-                            view.act(Action::Connect { command });
-                        }))),
-                );
-            }
-            if connect.status != "Not connected" {
-                column = column.child(caption(theme, &connect.note, false));
-            }
-        }
         for shortcut in &state.shortcuts {
             column = column.child(self.recorder(theme, shortcut, cx));
         }
@@ -1148,7 +1238,7 @@ impl SettingsWindow {
                 ).into_any_element(),
             ])))
             .child(caption(theme, "No recordings, screenshots, transcripts or clipboard contents are sent.", false));
-        if let Some(account) = &state.hosted {
+        if let Some(account) = state.hosted.as_ref().filter(|_| state.connect.is_none()) {
             let available = account.server.is_some();
             if state.connect.is_none() {
             column = column.child(div().mt(px(20.0)).child("Hosted account"))
@@ -2066,8 +2156,8 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> Option<Stateful<Div>> {
         let menu = self.menu.as_ref()?;
-        let item_h = 26.0;
-        let w = 220.0;
+        let item_h = if menu.key == "connect" { 44.0 } else { 26.0 };
+        let w = if menu.key == "connect" { 300.0 } else { 220.0 };
         let h = menu.options.len() as f32 * item_h + 10.0;
         let x = f32::from(menu.at.x).min(f32::from(viewport.width) - w - 8.0).max(8.0);
         let y = (f32::from(menu.at.y) - item_h * 0.5)
@@ -2108,8 +2198,9 @@ impl SettingsWindow {
                     .flex()
                     .items_center()
                     .gap(px(6.0))
-                    .text_size(px(13.0))
-                    .text_color(theme.text())
+                    .text_size(px(if key == "connect" { 18.0 } else { 13.0 }))
+                    .text_color(if key == "connect" && matches!(id.as_str(), "request-disconnect" | "disconnect") { rgb(0xf5f0e8) } else { theme.text() })
+                    .when(key == "connect" && matches!(id.as_str(), "request-disconnect" | "disconnect"), |d| d.bg(rgb(0xb42318)))
                     .when(!enabled, |d| d.opacity(0.4))
                     .when(enabled, |d| {
                         d.cursor_pointer()
@@ -2117,7 +2208,11 @@ impl SettingsWindow {
                             .on_click(cx.listener(move |view, _, _, cx| {
                                 cx.stop_propagation();
                                 view.menu = None;
-                                if let Some(value) = menu_setting_value(key, &id) {
+                                if key == "connect" {
+                                    if let Ok(command) = serde_json::from_value(serde_json::Value::String(id.clone())) {
+                                        view.act(Action::Connect { command });
+                                    }
+                                } else if let Some(value) = menu_setting_value(key, &id) {
                                     view.set(key, value);
                                 }
                                 cx.notify();
@@ -2241,10 +2336,30 @@ impl Render for SettingsWindow {
             .id("settings-root")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "tab" && view.recording().is_none() {
+                    if event.keystroke.modifiers.shift { window.focus_prev(); } else { window.focus_next(); }
+                    cx.stop_propagation(); return;
+                }
+                // GPUI clicks focused controls on key-up. Preserve the menu until
+                // then so its account trigger cannot reopen it after activation.
+                if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    && view.menu.as_ref().is_some_and(|menu| menu.key == "connect") {
+                    cx.stop_propagation(); return;
+                }
+                if !matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    && view.connect_key(event.keystroke.key.as_str(), window, cx) { cx.stop_propagation(); return; }
                 if view.menu.take().is_some() {
                     cx.notify();
                 }
                 view.key_down(event, window, cx);
+            }))
+            .capture_key_up(cx.listener(|view, event: &KeyUpEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    && view.menu.as_ref().is_some_and(|menu| menu.key == "connect")
+                    && view.connect_key(event.keystroke.key.as_str(), window, cx) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
             }))
             .on_modifiers_changed(cx.listener(|view, event: &ModifiersChangedEvent, _, cx| {
                 if view.recording().is_some() {
@@ -2265,7 +2380,7 @@ impl Render for SettingsWindow {
         let (sidebar, content) = column_widths(f32::from(viewport.width));
         root.child(self.sidebar(theme, sidebar, cx))
             .child(div().w(px(1.0)).h_full().flex_none().bg(theme.separator()))
-            .child(self.content(theme, &state, content, cx))
+            .child(self.content(theme, &state, content, window, cx))
             .children(caption_buttons(theme))
             .children(self.menu_layer(theme, viewport, cx))
             .children(self.update_result_layer(theme, &state, window, cx))
@@ -2307,6 +2422,7 @@ mod tests {
             user_code: Some("TEST-CODE".into()),
             buttons: vec![Button { command: Command::OpenBrowser, title: "Open browser".into(), enabled: true }],
             note: "Synthetic transport contract.".into(),
+            presentation: Default::default(),
         };
         let state: ViewState = serde_json::from_value(serde_json::json!({"type":"state", "connect":connect})).unwrap();
         assert_eq!(state.connect.as_ref(), Some(&connect));
