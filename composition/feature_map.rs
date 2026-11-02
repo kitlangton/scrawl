@@ -228,7 +228,11 @@ fn feature_map() -> Map {
         }
         for config in feature["config"].as_array().into_iter().flatten() {
             let key = config["key"].as_str().unwrap_or("");
-            map.keys.insert(key.split('.').next().unwrap_or(key).to_owned());
+            if let Some(flag) = key.strip_prefix("experiments.") {
+                map.flags.insert(flag.to_owned());
+            } else {
+                map.keys.insert(key.split('.').next().unwrap_or(key).to_owned());
+            }
         }
         for doc in feature["docs"].as_array().into_iter().flatten() {
             let doc = doc.as_str().unwrap_or("");
@@ -340,7 +344,7 @@ fn the_feature_map_covers_every_config_key_and_experiment() {
         }
     }
     for flag in flags.difference(&map.flags) {
-        problems.push(format!("experiment \"{flag}\" has no feature with status experiment:{flag}"));
+        problems.push(format!("experiment \"{flag}\" has no feature listing experiments.{flag} or status experiment:{flag}"));
     }
     for flag in &map.flags {
         if !flags.contains(flag) && !keys.contains(flag) {

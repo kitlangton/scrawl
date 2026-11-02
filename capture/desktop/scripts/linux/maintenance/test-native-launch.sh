@@ -27,7 +27,7 @@ export LD_LIBRARY_PATH="$(dirname "$bin")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 mkdir -p "$out/captures" "$out/page"
 printf '#!/usr/bin/env sh\nprintf '\''{"version":1,"text":"Disposable native launch capture."}\\n'\''\n' > "$out/transcriber.sh"
 chmod 700 "$out/transcriber.sh"
-jq -n --arg captures "$out/captures" --arg transcriber "$out/transcriber.sh" '{onboarding:{seen:true},experiments:{nativeLaunch:true},capturesDir:$captures,transcriber:"command",transcribeCommand:[$transcriber]}' > "$APPARENT_CONFIG"
+jq -n --arg captures "$out/captures" --arg transcriber "$out/transcriber.sh" '{onboarding:{seen:true},capturesDir:$captures,transcriber:"command",transcribeCommand:[$transcriber]}' > "$APPARENT_CONFIG"
 cleanup() {
   cp "$APPARENT_CONFIG" "$out/config.json"
   for pid in ${video_pid:-} ${browser_pid:-} ${server_pid:-} ${app_pid:-}; do kill "$pid" 2>/dev/null || true; done
@@ -78,7 +78,7 @@ done
 jq '.experiments.nativeLaunch=false' "$APPARENT_CONFIG" > "$out/config-next.json"
 mv "$out/config-next.json" "$APPARENT_CONFIG"
 if "$bin" launch 'apparent://open' >> "$out/rejected.log" 2>&1; then echo 'Accepted disabled experiment' >&2; exit 1; fi
-jq '.experiments.nativeLaunch=true' "$APPARENT_CONFIG" > "$out/config-next.json"
+jq 'del(.experiments.nativeLaunch)' "$APPARENT_CONFIG" > "$out/config-next.json"
 mv "$out/config-next.json" "$APPARENT_CONFIG"
 kill "$app_pid"
 for _ in $(seq 1 40); do kill -0 "$app_pid" 2>/dev/null || break; sleep .1; done

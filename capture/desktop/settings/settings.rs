@@ -1648,7 +1648,7 @@ impl Panel {
                     .collect(),
                 command,
             },
-            video_export: config.video_export.unwrap_or(false),
+            video_export: config.video_export_enabled(),
             retention: retention_view(&policy),
             captures_size: self.captures_size.map(crate::capture::engine::bundle::retention::format_bytes),
             captures_dir: CapturesDirView::new(&config),
@@ -2872,6 +2872,9 @@ mod tests {
         set(&mut panel, &mut host, "playbackLevel", 0.5.into());
         assert!(Panel::default().view(&host).lower_playback);
         assert_eq!(Panel::default().view(&host).playback_level, 35);
+        assert!(panel.view(&host).video_export);
+        set(&mut panel, &mut host, "videoExport", false.into());
+        assert!(!Panel::default().view(&host).video_export);
         set(&mut panel, &mut host, "videoExport", true.into());
         set(&mut panel, &mut host, "transcriber", "hex".into());
         assert_eq!(

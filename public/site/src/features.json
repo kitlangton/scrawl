@@ -130,10 +130,11 @@
       "group": "install",
       "name": "Open the installed app by URL",
       "says": "The exact apparent://open URL opens the idle app without recording or sending. Active selection, recording and processing are left untouched. OS registration requires an updated app.",
-      "status": "experiment:nativeLaunch",
+      "status": "main",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],
-      "note": "Default off. Candidate implementation: native browser-to-app proof is required separately on each OS; no website integration or installation detection is supplied.",
+      "note": "On by default; experiments.nativeLaunch=false opts out. Mac and isolated Linux browser-to-app proof is recorded in PR #162. OS registration still requires an updated installed app; no installation detection is supplied.",
+      "config": [{ "key": "experiments.nativeLaunch", "value": "boolean; true by default", "does": "An explicit false disables this feature" }],
       "docs": ["capture/desktop/docs/native-launch.md"]
     },
     {
@@ -411,9 +412,11 @@
       "group": "record",
       "name": "Move recording controls while recording",
       "says": "Drag the recording capsule by its clock to expose the screen beneath it. The capsule stays visible in the captured movie and delivered full-quality keyframes.",
-      "status": "experiment:movableRecordingControls",
+      "status": "main",
       "added": "2026-10-29",
       "platforms": ["mac", "linux"],
+      "note": "On by default; experiments.movableRecordingControls=false restores fixed controls and Mac capsule exclusion on the next capture. Mac and isolated Linux drag/reset and captured-output proof is recorded in PR #118.",
+      "config": [{ "key": "experiments.movableRecordingControls", "value": "boolean; true by default", "does": "An explicit false disables this feature" }],
       "docs": ["capture/desktop/docs/recording-capsule-drag.md", "capture/engine/docs/capture.md"]
     },
     {
@@ -1146,11 +1149,12 @@
       "group": "export",
       "name": "Local timed export narration",
       "says": "Explicit --narration script generates Kokoro bm_fable speech locally for the export only; --no-audio deliberately exports silence. Sources stay unchanged.",
-      "status": "experiment:exportNarration",
+      "status": "main",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],
-      "note": "Requires separate verified worker/model provisioning. Native platform proof remains required before release.",
+      "note": "Available by default through explicit --narration; experiments.exportNarration=false opts out. Requires separate verified worker/model provisioning. Real native Mac and isolated Linux export proof is recorded in PR #167; ordinary exports never synthesize narration automatically.",
 
+      "config": [{ "key": "experiments.exportNarration", "value": "boolean; true by default", "does": "An explicit false disables this feature" }],
       "docs": ["capture/engine/docs/export-and-retention.md#explicit-export-audio", "capture/engine/docs/keyframes-and-text.md"]
     },
     {
@@ -1158,10 +1162,10 @@
       "group": "export",
       "name": "Export from the menu",
       "says": "Export Last Capture as Video… saves to ~/Movies/Apparent on Mac or a native Save dialog destination on Linux, with visible progress and failure feedback.",
-      "status": "experiment:videoExport",
+      "status": "main",
       "platforms": ["mac", "linux"],
       "added": "2026-10-18",
-      "config": [{ "key": "videoExport", "value": "true", "does": "Show Export Last Capture as Video… (Settings › Recording › Experimental)" }],
+      "config": [{ "key": "videoExport", "value": "boolean; true by default", "does": "Show Export Last Capture as Video…; on by default (the existing Recording section is still labelled Experimental)" }],
       "docs": ["README.md#export-as-video", "capture/engine/docs/export-and-retention.md#linux-tray-export", "capture/desktop/docs/linux/linux.md"]
     },
 

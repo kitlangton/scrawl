@@ -4,7 +4,7 @@
 
 During a screen capture of Apparent itself, Simon needs to show an agent both the recording controls and the screen beneath their previous position. The capsule must move without stopping the recording or obscuring Finish. The previous exclusion request (#34) is closed and is not this feature.
 
-At current main, the recording capsule is centred near the top of the selected display. Linux uses a GPUI capsule in a 640 × 84 override-redirect XWayland window; placement uses `x11::place`, which remaps on Hyprland. The macOS default is a 640 × 84 AppKit/Metal panel with pointer-polled hit testing, while the optional GPUI renderer has a native window-move region in its leading status cluster. The Linux status cluster has no drag mechanic. Mac ScreenCaptureKit excludes Apparent's own floating windows from both the movie and screenshot samples; Linux captures them in the composited movie but masks the pill only in small candidate images used to choose moments. Full-quality keyframes decode from the movie. These are source observations, not GUI proof.
+Before this feature, the recording capsule is centred near the top of the selected display. Linux uses a GPUI capsule in a 640 × 84 override-redirect XWayland window; placement uses `x11::place`, which remaps on Hyprland. The macOS default is a 640 × 84 AppKit/Metal panel with pointer-polled hit testing, while the optional GPUI renderer has a native window-move region in its leading status cluster. The Linux status cluster has no drag mechanic. Mac ScreenCaptureKit excludes Apparent's own floating windows from both the movie and screenshot samples; Linux captures them in the composited movie but masks the pill only in small candidate images used to choose moments. Full-quality keyframes decode from the movie. These are source observations, not GUI proof.
 
 ## Interaction choice
 
@@ -24,4 +24,4 @@ The Mac native renderer and GPUI renderer use the same recording-only drag polic
 
 A VM missing the H.264 decoder cannot establish full-quality keyframe acceptance; a Mac build without a real GUI capture cannot establish native-panel acceptance. Do not describe the PR as mergeable if either platform lacks the stated proof. No merge, deployment or release is part of this issue.
 
-This change is off by default. Enable it for a local trial with `"experiments": {"movableRecordingControls": true}` in `~/.config/apparent/config.json`. Mac capture filtering and the drag handle both follow that switch on the next capture; Linux's candidate-only activity mask is unchanged.
+This behavior is on by default. Opt out with `"experiments": {"movableRecordingControls": false}` in `~/.config/apparent/config.json`. Mac capture filtering and the drag handle both follow that switch on the next capture; Linux's candidate-only activity mask is unchanged.
