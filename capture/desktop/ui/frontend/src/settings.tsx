@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Storage } from './storage';
 import { ConnectSettingsCard } from './connect-settings';
@@ -9,6 +9,7 @@ const panes = ['General', 'Recording', 'Storage', 'Permissions', 'Agents', 'Abou
 
 function Settings() {
   const connect = new URLSearchParams(location.search).get('surface') === 'connect';
+  useEffect(() => { document.title = `Apparent Settings — ${connect ? 'Connect' : 'Storage'}`; }, [connect]);
   const [error, setError] = useState('');
   const [navigating, setNavigating] = useState(false);
   async function navigate(pane: string) {

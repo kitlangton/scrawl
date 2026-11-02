@@ -75,6 +75,7 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
   const page = await application.firstWindow();
   const card = page.getByRole('region', { name: 'Apparent Connect' });
   if (installed) {
+    await expect(page).toHaveTitle('Apparent Settings — Connect');
     assert.equal(await page.evaluate(() => typeof window.apparent.readCaptureUsage), 'undefined');
     assert.equal(await application.evaluate(async ({ ipcMain, BrowserWindow }) => {
       const sender = BrowserWindow.getAllWindows()[0].webContents;

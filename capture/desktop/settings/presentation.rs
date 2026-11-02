@@ -100,18 +100,20 @@ mod tests {
         let output = child.output().unwrap();
         assert!(output.status.success());
         assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+        println!("display-fixture-asserted");
     }
 
     #[test]
     fn electron_child_restores_saved_wayland_display_and_preserves_x11() {
         for display in [Some("wayland-synthetic"), None] {
             let mut child = Command::new(std::env::current_exe().unwrap());
-            child.args(["--exact", "capture::desktop::settings::presentation::tests::electron_environment_subprocess", "--test-threads=1"])
+            child.args(["--exact", "capture::desktop::settings::presentation::tests::electron_environment_subprocess", "--nocapture", "--test-threads=1"])
                 .env_remove("WAYLAND_DISPLAY").env_remove("APPARENT_WAYLAND_DISPLAY")
                 .env("APPARENT_PRESENTATION_DISPLAY_TEST", display.unwrap_or("unset"));
             if let Some(display) = display { child.env("APPARENT_WAYLAND_DISPLAY", display); }
             let result = child.output().unwrap();
             assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stdout));
+            assert!(String::from_utf8_lossy(&result.stdout).contains("display-fixture-asserted"), "subprocess did not execute the display assertion");
         }
     }
 }
