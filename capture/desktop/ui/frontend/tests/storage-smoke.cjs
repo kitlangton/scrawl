@@ -23,6 +23,7 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
   const server = net.createServer((socket) => socket.once('data', (data) => {
     if (data.toString() === 'state\n') return socket.end('{"state":{"phase":"idle"}}\n');
     const request = JSON.parse(data.toString());
+    if (!['read', 'set', 'reset'].includes(request.storage)) return socket.end('{"error":"invalid_request"}\n');
     requests.push(request);
     if (request.storage === 'read' && holdRead) {
       holdRead = false;

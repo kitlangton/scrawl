@@ -956,11 +956,11 @@
       "id": "electron-capture-location",
       "group": "storage",
       "name": "Experimental Electron capture location",
-      "says": "An opt-in development window shows effective and saved capture locations, with a parented folder picker and Reset. Rust validates and saves the preference; existing recordings are not moved.",
+      "says": "An opt-in development window shows effective and saved capture locations, with a parented folder picker and Reset. It also presents Rust-owned retention preferences and on-demand logical capture-folder usage. Rust validates and saves preferences; existing recordings are not moved by this migration.",
       "status": "experiment:electronCaptureLocation",
       "platforms": ["mac", "linux"],
-      "note": "Off by default; not the installed Settings replacement. Disposable Linux proof verified actual controls, pointer selection/Cancel, Rust persistence and visible readback at 1920×1080 with matching GTK/display scale. The GTK chooser can still overflow a 1280×800 desktop; the app does not change global GTK settings. GitHub-hosted macos-26/arm64 CI run 41354248911 verified real parented Choose/Cancel/Reset against the installed Rust GUI, visible readback, config/sentinel preservation and cleanup; images were inspected. Explicit Electron-to-Rust integration passed on both platforms. This is Settings-only proof, not capture, permission or performance acceptance, and is separate from earlier foundation evidence.",
-      "config": [{ "key": "electronCaptureLocation", "value": "experiment; false by default", "does": "Enable the captures-only Storage bridge in the running Rust app" }],
+      "note": "Off by default; not the installed Settings replacement. Earlier location-only proof: disposable Linux verified actual controls, pointer selection/Cancel, Rust persistence and visible readback at 1920×1080 with matching GTK/display scale. The GTK chooser can still overflow a 1280×800 desktop; the app does not change global GTK settings. GitHub-hosted macos-26/arm64 CI run 41354248911 verified real parented Choose/Cancel/Reset against the installed Rust GUI, visible readback, config/sentinel preservation and cleanup; images were inspected. Explicit Electron-to-Rust integration passed on both platforms. Those prior results do not cover the added retention/usage controls; their exact-candidate proof and remaining gates belong to #291. This is Settings-only proof, not capture, permission or performance acceptance.",
+      "config": [{ "key": "electronCaptureLocation", "value": "experiment; false by default", "does": "Enable the location, retention and usage Storage bridge in the running Rust app" }],
       "docs": ["capture/desktop/ui/frontend/README.md"]
     },
 

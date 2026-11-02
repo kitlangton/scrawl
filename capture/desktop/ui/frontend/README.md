@@ -36,11 +36,11 @@ changes the Rust config directory. One absolute 3.5-second deadline bounds a
 read. Reads occur only on open/renderer reload or manual refresh, with one
 in-flight read and a one-second cooldown. There is no background polling.
 
-The sandboxed, isolated preload exposes `readRuntimeState()` and the three
-zero-argument capture-location methods below.
-The main process rejects other windows/frames, nonlocal URLs and arguments.
+The sandboxed, isolated preload exposes `readRuntimeState()`, the three
+zero-argument capture-location methods and the four retention/usage methods below.
+The main process rejects other windows/frames, nonlocal URLs and unexpected arguments.
 There is no generic IPC, shell, filesystem, Settings or capture command API.
-Only the captures-only requests described below may save a preference.
+Only the Storage requests described below may save a preference.
 Navigation, popups, webviews, network connections and permission requests are
 blocked. Electron keeps its own Chromium profile in `apparent-ui-foundation`,
 separate from the installed application's identity/config. These constraints do
@@ -51,6 +51,76 @@ permission failure and error. They never drive the live state display. A copied
 link is explicitly not a ready-to-watch recording. Shared controls and light
 tokens live in `shared/ui`; Connect adoption is a later slice. After editing
 shared sources, rerun `npm ci`; builds reject a stale installed snapshot.
+
+## Storage retention and usage (#291)
+
+The same **default-off** `electronCaptureLocation` boundary now includes the
+remaining Storage presentation; there is no second experiment or new policy.
+`readRetention()`, `saveRetention(preset)`, `resetRetention()` and
+`readCaptureUsage()` are the only additional preload methods. Only Save takes
+an argument: a validated `week`, `month` or `forever` identifier. Rust supplies
+the option labels, current/custom policy, policy note, effective path and
+formatted logical-byte usage. No renderer-provided path, config, revision,
+deadline, filesystem, shell or arbitrary IPC operation is accepted.
+
+The existing bounded socket worker admits `retention`, `saveretention`,
+`resetretention` and `usage` through its unchanged activation/expiry gate.
+Main retains the last authoritative retention revision; a concurrent edit
+conflicts rather than silently overwriting it. The existing config transaction
+preserves unrelated top-level and nested policy keys and secrets; Reset removes
+only the recognized retention fields, restoring `Policy::default()` (7-day
+media/30-day bundle policy). A custom hand-edited policy remains visible until
+explicitly replaced. Writes fail closed, including malformed/unsafe config;
+failed or outcome-unknown saves require a refresh and are never retried.
+
+Saving/resetting nudges the **existing** Rust cleanup worker, as native Settings
+does: it schedules a pass about five seconds later, deferring while recording.
+The worker reloads policy on each pass; manual config edits apply on the next
+pass (normally hourly; first launch pass after about 90 seconds). It retains
+its startup capture folder until app restart. Nothing in the bridge runs a
+cleanup pass or moves a capture; normal policy cleanup remains unchanged.
+
+Usage scans the freshly resolved Rust effective location, not a cached renderer
+path, on open and manual refresh only. It counts logical file bytes (not free
+space or physical allocation), does not follow symlink entries, and returns
+an error rather than a partial total on I/O failure, expiry, its 100,000-entry
+limit or a directory nesting depth of 256. A missing root is empty.
+Main and React discard old replies after a
+location mutation, save, reload or unmount; the renderer also checks the returned
+effective path. Loading/error states hide old totals, and Retry never starts
+Rust. A slow filesystem syscall can outlive client expiry; the existing single
+Storage worker stays busy rather than spawning unbounded scans.
+
+Routing/rollback is unchanged: only the separate `npm start` development window
+uses React Storage, and only an explicitly enabled running Rust backend admits
+it. Closing it or removing the experiment flag restores the old-only path;
+saved preferences remain readable by native Settings. The old retention and
+usage presentation is deliberately retained. Remove it **only after** the React
+replacement is explicitly accepted with exact-candidate Mac and isolated Linux
+Settings proof, installed launch/routing and packaging consumers verified, and
+an authorized routing switch; then remove its unused callers/tests together.
+This PR does not switch routing, activate the experiment, merge or release.
+
+`tests/retention-smoke.cjs` exercises production Electron with a **synthetic**
+socket (save/reset/readback/write error/loading/usage error/stale results,
+keyboard/responsive layout and bridge rejection). `tests/rust-storage.cjs`
+extends the real Rust/Electron contract regression. The shared native assertion
+helper `tests/native-retention.cjs` exercises production Electron against a real
+Rust GUI in an exclusively owned disposable desktop, including genuine private
+directory write/usage failures and file preservation. The existing Mac CI probe
+calls it; only an executed, inspected run proves the Mac gate. Prior #277
+native evidence does not cover these additional controls.
+
+An isolated Omarchy run on `29cf0819` passed the unchanged native retention
+helper against the frozen Rust GUI and shipped Electron 45.2.1. Inspected images
+showed Month (30-day media/90-day bundles), reset to Week, genuine private-config
+write refusal, usage failure without a stale total, and recovery to the measured
+1 MB synthetic folder. Unrelated config and the synthetic file survived; Rust,
+Electron, owned VM/overlay/firmware/sockets and expiry were cleaned up. This is
+Linux Settings proof only, not timed Trash/cleanup, capture permissions or Mac.
+No recording/bundle was produced; that guest reports a missing H.264 decoder,
+and its walkthrough capture/export path was not exercised. Private evidence is
+retained outside the repository; the PR records candidate identity and gates.
 
 ## Checks
 

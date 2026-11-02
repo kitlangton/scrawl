@@ -22,7 +22,7 @@ fn revision(raw: &serde_json::Value) -> String {
     format!("{:016x}", hash.finish())
 }
 
-fn read_raw(path: &Path) -> Result<serde_json::Value> {
+pub(crate) fn read_raw(path: &Path) -> Result<serde_json::Value> {
     use std::io::Read;
     let file = match fs::OpenOptions::new().read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path) {

@@ -240,11 +240,19 @@ enum Storage {
     Read { deadline: u64 },
     Set { path: String, expected: String, deadline: u64 },
     Reset { expected: String, deadline: u64 },
+    Retention { deadline: u64 },
+    SaveRetention { preset: String, expected: String, deadline: u64 },
+    ResetRetention { expected: String, deadline: u64 },
+    Usage { deadline: u64 },
 }
 
 impl Storage {
     fn deadline(&self) -> u64 {
-        match self { Self::Read { deadline } | Self::Set { deadline, .. } | Self::Reset { deadline, .. } => *deadline }
+        match self {
+            Self::Read { deadline } | Self::Set { deadline, .. } | Self::Reset { deadline, .. }
+            | Self::Retention { deadline } | Self::SaveRetention { deadline, .. }
+            | Self::ResetRetention { deadline, .. } | Self::Usage { deadline } => *deadline,
+        }
     }
 
     fn execute(&self, config: &std::path::Path, deadline: u64) -> serde_json::Value {
@@ -256,10 +264,21 @@ impl Storage {
             Ok(false) => return serde_json::json!({"error":"feature_disabled"}),
             Err(_) => return serde_json::json!({"error":"config_read_failed"}),
         }
+        let preferences = match self {
+            Self::Retention { .. } => Some(super::storage_preferences::read(config)),
+            Self::SaveRetention { preset, expected, .. } => Some(super::storage_preferences::save(config, Some(preset), expected, || storage_clock_ms() < deadline)),
+            Self::ResetRetention { expected, .. } => Some(super::storage_preferences::save(config, None, expected, || storage_clock_ms() < deadline)),
+            Self::Usage { .. } => Some(super::storage_preferences::usage(config, || storage_clock_ms() < deadline)),
+            _ => None,
+        };
+        if let Some(result) = preferences {
+            return result.unwrap_or_else(|code| serde_json::json!({"error":code}));
+        }
         let mutation = match self {
             Self::Read { .. } => Ok(()),
             Self::Set { path, expected, .. } => capture_location::set_in(config, Some(path), Some(expected), || storage_clock_ms() < deadline),
             Self::Reset { expected, .. } => capture_location::set_in(config, None, Some(expected), || storage_clock_ms() < deadline),
+            _ => unreachable!(),
         };
         if let Err(code) = mutation { return serde_json::json!({"error":code}); }
         match capture_location::read_in(config) {
@@ -280,6 +299,8 @@ fn parse_request(line: &str) -> Option<Wire> {
         match &storage {
             Storage::Set { path, expected, .. } if path.is_empty() || path.len() > 4096 || path.contains('\0') || !std::path::Path::new(path).is_absolute() || !valid_revision(expected) => return None,
             Storage::Reset { expected, .. } if !valid_revision(expected) => return None,
+            Storage::SaveRetention { preset, expected, .. } if !["week", "month", "forever"].contains(&preset.as_str()) || !valid_revision(expected) => return None,
+            Storage::ResetRetention { expected, .. } if !valid_revision(expected) => return None,
             _ => {}
         }
         Some(Wire::Storage(storage))
@@ -808,6 +829,57 @@ fn execute_with(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn storage_retention_contract_preserves_unknowns_and_captures() {
+        let (path, listener) = transport_fixture();
+        drop(listener);
+        let dir = path.parent().unwrap();
+        let config = dir.join("config.json");
+        let captures = dir.join("captures");
+        std::fs::create_dir(&captures).unwrap();
+        std::fs::write(captures.join("keep"), vec![42; 1_000_000]).unwrap();
+        let call = |value: serde_json::Value| {
+            let Some(Wire::Storage(request)) = parse_request(&value.to_string()) else { panic!("invalid request") };
+            request.execute(&config, storage_clock_ms() + 3000)
+        };
+        let read = || call(serde_json::json!({"storage":"retention","deadline":storage_clock_ms()+3000}));
+        assert_eq!(read()["error"], "feature_disabled");
+        std::fs::write(&config, serde_json::json!({"experiments":{"electronCaptureLocation":true}, "capturesDir":captures,
+            "secret":"keep", "unknown":{"nested":true}, "retention":{"mediaDays":2,"bundleDays":null,"future":"keep"}}).to_string()).unwrap();
+        let initial = read();
+        assert!(initial["retention"]["preset"].is_null());
+        assert_eq!(initial["retention"]["options"].as_array().unwrap().len(), 3);
+        let save = |preset: &str, expected: &serde_json::Value| call(serde_json::json!({"storage":"saveretention", "preset":preset,"expected":expected,"deadline":storage_clock_ms()+3000}));
+        let saved = save("month", &initial["revision"]);
+        assert_eq!(saved["retention"]["preset"], "month");
+        assert_eq!(read(), saved);
+        assert_eq!(save("forever", &initial["revision"])["error"], "conflict");
+        let reset = call(serde_json::json!({"storage":"resetretention","expected":saved["revision"],"deadline":storage_clock_ms()+3000}));
+        assert_eq!(reset["retention"]["preset"], "week");
+        assert_eq!(reset["custom"], false);
+        let raw = crate::shared::handoff::capture_location::read_raw(&config).unwrap();
+        assert_eq!(raw["secret"], "keep");
+        assert_eq!(raw["unknown"]["nested"], true);
+        assert_eq!(raw["retention"]["future"], "keep");
+        assert_eq!(raw["capturesDir"], captures.to_str().unwrap());
+        assert_eq!(call(serde_json::json!({"storage":"usage","deadline":storage_clock_ms()+3000}))["usage"]["formatted"], "1 MB");
+        assert_eq!(super::super::storage_preferences::usage(&config, || false), Err("usage_unavailable"));
+        let bytes = std::fs::read(&config).unwrap();
+        assert_eq!(super::super::storage_preferences::save(&config, Some("month"), reset["revision"].as_str().unwrap(), || false), Err("admission_expired"));
+        assert_eq!(std::fs::read(&config).unwrap(), bytes);
+        // Fail an actual config commit (owned malformed file), not an optimistic UI mock.
+        std::fs::write(&config, "malformed").unwrap();
+        assert_eq!(super::super::storage_preferences::save(&config, Some("month"), reset["revision"].as_str().unwrap(), || true), Err("config_write_failed"));
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), "malformed");
+        assert_eq!(std::fs::read(captures.join("keep")).unwrap(), vec![42; 1_000_000]);
+        for value in [
+            serde_json::json!({"storage":"saveretention","preset":"arbitrary","expected":"aaaaaaaaaaaaaaaa","deadline":1}),
+            serde_json::json!({"storage":"usage","path":"/forbidden","deadline":1}),
+            serde_json::json!({"storage":"resetretention","expected":"invalid","deadline":1}),
+        ] { assert!(parse_request(&value.to_string()).is_none()); }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn storage_read_is_admitted_without_removing_legacy_state() {
         assert!(super::parse_request(r#"{"storage":"read","deadline":999999999999}"#).is_some());
