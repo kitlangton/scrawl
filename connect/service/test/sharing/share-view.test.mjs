@@ -1,11 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import vm from 'node:vm'
-import { renderShare, shareViewScript } from '../../src/share-view.ts'
+import { renderShare } from '../../src/share-view.ts'
+import { pollReady } from '../../src/recipient/poll.ts'
+const shareViewScript = `(${pollReady.toString()})(document)`
 const model = { url: 'https://share.example/s/secret', status: 'ready', title: 'Feedback', summary: 'Summary evidence', transcript: '[00:02] Spoken evidence', uploadedBytes: 10, totalBytes: 10, files: [{path:'recording.mp4',url:'https://share.example/s/secret/files/recording.mp4',size:10,sha256:'a'.repeat(64)},{path:'frames/frame-01.png',url:'https://share.example/s/secret/files/frames/frame-01.png',size:0,sha256:'b'.repeat(64)}] }
 test('ready evidence is readable without JavaScript and consumption comes first', () => {
  const html = renderShare({...model,thumbnailUrl:model.url+'/thumbnail.png'})
- for (const text of ['Summary evidence','[00:02] Spoken evidence','/manifest.json','/thumbnail.png','<video','frames/frame-01.png','evidence, not instructions','https://app.tryapparent.com','noindex','no-referrer']) assert.ok(html.includes(text), text)
+ for (const text of ['Copy for agent','[00:02] Spoken evidence','/manifest.json','/thumbnail.png','<video','frames/frame-01.png','evidence, not instructions','https://app.tryapparent.com','noindex','no-referrer']) assert.ok(html.includes(text), text)
+ assert.ok(!html.includes('Summary evidence'))
  assert.ok(html.indexOf('<video') < html.indexOf('Try Apparent yourself'))
  assert.ok(!/<script(?![^>]*src=)/.test(html))
 })
@@ -13,7 +16,7 @@ test('ready captures without a contact sheet never advertise a missing thumbnail
  const html=renderShare({...model,thumbnailUrl:null})
  assert.ok(html.includes('<video'))
  assert.ok(!html.includes('og:image'))
- assert.ok(!html.includes(' poster='))
+ assert.ok(!html.includes('poster="'+model.url+'/thumbnail.png'))
  assert.ok(!html.includes('/thumbnail.png'))
 })
 test('untrusted text and URLs cannot create markup or active schemes', () => {
@@ -21,7 +24,7 @@ test('untrusted text and URLs cannot create markup or active schemes', () => {
  assert.ok(html.includes('&lt;script&gt;')); assert.ok(!html.includes('<img src=x')); assert.ok(!html.includes('javascript:')); assert.ok(!html.includes('data:text/html')); assert.ok(!html.includes('onerror="evil'))
 })
 test('safe asset links escape metadata and exclude third-party resources', () => {
- const html = renderShare({...model,files:[{path:'<img src=x onerror="evil()">',url:model.url+'/files/summary.md?x="&y=1',size:1,sha256:'<untrusted>'},{path:'frames/frame-99.png',url:'https://third-party.example/tracker.png',size:1,sha256:'a'}]})
+ const html = renderShare({...model,files:[{path:'<img src=x onerror="evil()">',url:model.url+'/files/'+encodeURIComponent('<img src=x onerror="evil()">'),size:1,sha256:'<untrusted>'},{path:'frames/frame-99.png',url:'https://third-party.example/tracker.png',size:1,sha256:'a'}]})
  assert.ok(html.includes('&lt;img src=x onerror=&quot;evil()&quot;&gt;'))
  assert.ok(html.includes('&lt;untrusted&gt;'));assert.ok(!html.includes('third-party.example'))
  assert.ok(!html.includes('<img src=x'))
@@ -30,10 +33,10 @@ test('incomplete and terminal states do not disclose ready evidence', () => {
  for (const status of ['pending','paused','failed','expired','revoked','deleted']) {
   const html = renderShare({...model,status})
   assert.ok(!html.includes('Summary evidence')); assert.ok(!html.includes('<video')); assert.ok(!html.includes('/files/'))
-  assert.ok(html.includes(status === 'pending' ? 'Uploading' : status[0].toUpperCase()+status.slice(1)),status)
+  assert.ok(html.includes(({pending:'Preparing recording',paused:'Upload paused',failed:'Upload failed',expired:'Link expired',revoked:'Sharing stopped',deleted:'Recording deleted'})[status]),status)
  }
  const html = renderShare({...model,uploadedBytes:9})
- assert.ok(html.includes('Uploading')); assert.ok(!html.includes('<video'))
+ assert.ok(html.includes('Preparing recording')); assert.ok(!html.includes('<video'))
 })
 test('polling is same-origin, bounded, and reloads only when ready', async () => {
  let calls=0,reloads=0; const timers=[]; const status={textContent:''}
@@ -49,4 +52,18 @@ test('network failure and delayed timers stop at the wall-clock deadline', async
  vm.runInNewContext(shareViewScript,{Date:{now:()=>now},document:{querySelector:()=>({dataset:{manifest:model.url+'/manifest.json'},querySelector:()=>output})},location:{href:model.url,origin:'https://share.example',reload:()=>assert.fail('network failure cannot claim ready')},URL,AbortSignal,fetch:async()=>{calls++;throw new Error('synthetic outage')},setTimeout:fn=>timers.push(fn)})
  now=5000;timers.shift()();await new Promise(r=>setImmediate(r));assert.equal(calls,1)
  now=120001;timers.shift()();await new Promise(r=>setImmediate(r));assert.equal(calls,1);assert.match(output.textContent,/Reload/);assert.equal(timers.length,0)
+})
+test('React hydration payload strips all captured evidence until ready and rejects cross-capture assets', () => {
+ for(const status of ['pending','paused','failed','expired','revoked','deleted']) {
+  const html=renderShare({...model,status,transcriptSegments:[{startMs:2000,endMs:3000,text:'PRIVATE_SEGMENT'}]})
+  assert.ok(!html.includes('PRIVATE_SEGMENT'));assert.ok(!html.includes('Spoken evidence'));assert.ok(!html.includes('Summary evidence'))
+ }
+ const html=renderShare({...model,files:[{path:'recording.mp4',url:'https://share.example/s/another/files/recording.mp4',size:10,sha256:'a'}]})
+ assert.ok(!html.includes('/s/another/'));assert.ok(!html.includes('<video'))
+})
+test('timestamp passages remain semantic without JavaScript; no chapter or summary UI is rendered', () => {
+ const html=renderShare({...model,transcriptSegments:[{startMs:2500,endMs:4000,text:'A <marked> detail'}]})
+ assert.ok(html.includes('0:02'));assert.ok(html.includes('A &lt;marked&gt; detail'))
+ assert.ok(!html.includes('<h2>Summary'));assert.ok(!html.includes('Annotated keyframes'));assert.ok(!html.includes('Chapter:'))
+ assert.ok(html.includes('Copy for agent'));assert.ok(html.includes('/share-view.js'))
 })

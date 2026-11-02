@@ -6,7 +6,7 @@ import { readFile, mkdir, access } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { resolve, extname } from 'node:path'
 import { chromium } from 'playwright-core'
-import { renderShare, shareViewScript, shareViewStyles } from '../../../../connect/service/src/share-view.ts'
+import { renderShare, shareViewScript, shareViewStyles, shareWordmark, shareFont } from '../../../../connect/service/src/share-view.ts'
 const root = resolve(process.env.SITE_ARTIFACT || 'dist-apparent')
 const evidence = resolve(process.env.SITE_EVIDENCE || `${process.env.TMPDIR}/hosted-web-evidence`)
 await mkdir(evidence, { recursive: true })
@@ -76,10 +76,12 @@ let uiOrigin = ''
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
   if (url.pathname === '/share-view.js') { res.setHeader('Content-Type','text/javascript'); return res.end(shareViewScript) }
+  if (url.pathname === '/share-wordmark.svg') { res.setHeader('Content-Type','image/svg+xml'); return res.end(shareWordmark) }
+  if (url.pathname === '/share-font.ttf') { res.setHeader('Content-Type','font/ttf'); return res.end(Buffer.from(shareFont,'base64')) }
   if (url.pathname === '/share-view.css') { res.setHeader('Content-Type','text/css'); return res.end(shareViewStyles) }
   if (url.pathname === '/s/synthetic/manifest.json') { res.setHeader('Content-Type','application/json'); return res.end(JSON.stringify({status:recipientStatus,uploadedBytes:recipientUploadedBytes,totalBytes:10})) }
   if (url.pathname === '/s/synthetic') {
-    res.setHeader('Content-Type','text/html');res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+    res.setHeader('Content-Type','text/html');res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; media-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
     return res.end(renderShare({url:`http://127.0.0.1:${server.address().port}/s/synthetic`,status:recipientStatus,title:'Feedback <script>window.injected=true</script>',summary:'Synthetic summary <img src=x onerror=evil()>',transcript:'[00:02] Move this button.',uploadedBytes:recipientStatus==='ready'?10:5,totalBytes:10,files:[{path:'recording.mp4',size:10,sha256:'a'.repeat(64),url:`http://127.0.0.1:${server.address().port}/s/synthetic/files/recording.mp4`}]}))
   }
   if (url.pathname.startsWith('/v1/') || url.pathname === '/auth/logout') {
@@ -380,7 +382,7 @@ try {
     const page=await context.newPage()
     await page.goto(`http://127.0.0.1:${server.address().port}/s/synthetic`)
     const text=await page.locator('main').innerText()
-    if(status==='ready') {assert.match(text,/Synthetic summary <img/);assert.match(text,/\[00:02\] Move this button/);assert.equal(await page.locator('video').count(),1);assert.equal(await page.getByRole('link',{name:'Machine-readable manifest'}).count(),1)}
+    if(status==='ready') {assert.ok(!text.includes('Synthetic summary'));assert.match(text,/\[00:02\] Move this button/);assert.equal(await page.locator('video').count(),1);assert.equal(await page.locator('a').filter({hasText:'Machine-readable manifest'}).count(),1)}
     else {assert.ok(!text.includes('Synthetic summary'));assert.equal(await page.locator('video').count(),0)}
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
     await page.screenshot({path:`${evidence}/recipient-${status}.png`,fullPage:true});await context.close();results.push(`recipient-${status}-no-js`)
@@ -389,7 +391,7 @@ try {
   const page=await browser.newPage()
   const errors=[];page.on('pageerror',e=>errors.push(String(e)))
   await page.goto(`http://127.0.0.1:${server.address().port}/s/synthetic`)
-  await page.getByRole('heading',{name:'Uploading',exact:true}).first().waitFor()
+  await page.getByRole('heading',{name:'Preparing recording',exact:true}).first().waitFor()
   recipientUploadedBytes=8
   await page.getByText('8 of 10 bytes uploaded.',{exact:true}).waitFor({timeout:10000})
   recipientUploadedBytes=11
@@ -397,7 +399,7 @@ try {
   await page.waitForTimeout(100)
   assert.equal(await page.getByText('8 of 10 bytes uploaded.',{exact:true}).count(),1,'invalid counters must not replace confirmed progress')
   recipientStatus='ready'
-  await page.getByRole('heading',{name:'Summary',exact:true}).waitFor({timeout:10000})
+  await page.getByRole('heading',{name:'Transcript',exact:true}).waitFor({timeout:10000})
   assert.equal(await page.evaluate(()=>window.injected),undefined);assert.deepEqual(errors,[])
   await page.close();results.push('recipient-progress-validation-pending-ready-csp')
   const receipt = { synthetic: true, artifact: root, apiOrigin: apiOrigin || 'same-origin', passed: results, count: results.length, screenshots: evidence, assets: Object.fromEntries(await Promise.all(['hosted/source-pond-v4.png', 'hosted/agent-pond-v4.png', 'hosted/agent-reading-v4.png', 'HostGrotesk-Variable.ttf', 'apparent-wordmark.svg'].map(async name => [name, createHash('sha256').update(await readFile(`${root}/${name}`)).digest('hex')]))), limits: 'Controlled synthetic API only; not live OAuth, service, native, or deployment proof. 640×450 CSS pixels is a 200%-equivalent layout, not browser zoom.' }

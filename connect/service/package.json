@@ -4,22 +4,32 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck && esbuild src/worker.ts --bundle --format=esm --platform=browser --conditions=workerd --external:node:* --outfile=dist/worker.js",
+    "build": "npm run build:recipient && npm run typecheck && esbuild src/worker.ts --bundle --format=esm --platform=browser --conditions=workerd --external:node:* --outfile=dist/worker.js",
     "test": "npm run build && node --test --test-concurrency=1 test/*/*.test.mjs",
     "dev": "npm run build && wrangler dev",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "build:recipient": "node scripts/build-recipient.mjs",
+    "test:recipient": "node test/sharing/recipient-browser.mjs"
   },
   "dependencies": {
     "@better-auth/oauth-provider": "1.7.15",
     "better-auth": "1.7.15",
-    "jose": "6.1.3"
+    "jose": "6.1.3",
+    "@apparent/ui": "file:../../shared/ui",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261031.1",
     "esbuild": "0.28.2",
     "miniflare": "4.20260730.0",
     "typescript": "5.9.3",
-    "wrangler": "4.156.0"
+    "wrangler": "4.156.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "tailwindcss": "^4.1.17",
+    "@tailwindcss/cli": "^4.1.17",
+    "playwright-core": "1.63.0"
   },
   "overrides": {
     "miniflare": {

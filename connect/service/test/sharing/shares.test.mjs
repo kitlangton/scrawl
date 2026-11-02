@@ -32,7 +32,7 @@ test('explicit capability reservation is pending, stable, single-capture and rea
   await ready(f,a,p);
   assert.equal(await (await f.call(path+'/files/summary.md')).text(),'hello');
   const m=await (await f.call(path+'/manifest.json')).json();assert.equal(m.status,'ready');assert.equal(m.files.length,1);assert.equal(m.files[0].url,s.url+'/files/summary.md');assert.ok(!JSON.stringify(m).includes('alice'));
-  const html=await (await f.call(path)).text();assert.ok(html.includes('hello'));assert.ok(html.includes('manifest.json'));
+  const html=await (await f.call(path)).text();assert.ok(html.includes('summary.md'));assert.ok(html.includes('manifest.json'));
   const list=await (await f.call('/v1/shares',{token:a.read})).json();assert.equal(list.shares.length,1);assert.equal(list.shares[0].url,s.url);
   assert.deepEqual((await (await f.call('/v1/shares',{token:b.read})).json()).shares,[]);
  }finally{await f.close();}
@@ -101,7 +101,7 @@ test('deleted ready captures report deletion after their obsolete upload deadlin
   const s=await (await f.call(p+'/share',{token:a.token,method:'POST'})).json(),path=new URL(s.url).pathname;
   await f.db.prepare('UPDATE captures SET pending_until=? WHERE id=?').bind(Date.now()-1,id(171)).run();
   assert.equal((await f.call(p,{token:a.token,method:'DELETE'})).status,200);
-  const response=await f.call(path);assert.equal(response.status,410);assert.match(await response.text(),/<h1>Deleted<\/h1>/);
+  const response=await f.call(path);assert.equal(response.status,410);assert.match(await response.text(),/<h1[^>]*>Recording deleted<\/h1>/);
   const list=await (await f.call('/v1/shares',{cookie:a.cookie})).json();assert.equal(list.shares[0].status,'deleted');
  }finally{await f.close();}
 });
@@ -114,7 +114,7 @@ test('pending progress reflects confirmed files, failed state is not ready, defa
   }
   await f.call(p+'/files/summary.md',{token:a.token,method:'PUT',raw:'hello'});
   const m=await (await f.call(path+'/manifest.json')).json();assert.equal(m.uploadedBytes,5);assert.equal(m.status,'pending');
-  const html=await (await f.call(path)).text();assert.ok(!html.includes('og:image'));assert.ok(html.includes('Uploading'));assert.ok(!html.includes('<video'));
+  const html=await (await f.call(path)).text();assert.ok(!html.includes('og:image'));assert.ok(html.includes('Preparing recording'));assert.ok(!html.includes('<video'));
  }finally{await f.close();}
  const disabled=await fixture();try{const a=await disabled.identity('off'),p=await reserve(disabled,a);const r=await disabled.call(p+'/share',{token:a.token,method:'POST'});assert.equal(r.status,403);assert.equal((await r.json()).error.code,'sharing_disabled');}finally{await disabled.close();}
 });

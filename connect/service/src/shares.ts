@@ -78,14 +78,13 @@ export async function shareRoutes(request: Request,env: Env,url: URL,render: (mo
  if(!action) {
   const model=await descriptor(env,row,base);
   if(status==='ready'&&request.method!=='HEAD') {
-   model.summary=await evidenceText(env,row,'summary.md',131072,secret);
    const metadata=await evidenceText(env,row,'apparent.json',1048576,secret);
-   try{const parsed: unknown=JSON.parse(metadata),transcript=isRecord(parsed)&&isRecord(parsed.transcript)?parsed.transcript:null;model.transcript=Array.isArray(transcript?.segments)&&transcript.segments.length?transcript.segments.map((value: unknown)=>{const s=isRecord(value)?value:{};return `[${Number.isSafeInteger(s.t0)?s.t0:0}ms–${Number.isSafeInteger(s.t1)?s.t1:0}ms] ${typeof s.text==='string'?s.text:''}`;}).join('\n'):typeof transcript?.text==='string'?transcript.text:'';}catch{model.transcript='Transcript preview unavailable. Download apparent.json for the original evidence.';}
+   try{const parsed: unknown=JSON.parse(metadata),transcript=isRecord(parsed)&&isRecord(parsed.transcript)?parsed.transcript:null;const segments=Array.isArray(transcript?.segments)?transcript.segments:[];if(segments.length&&segments.every((value: unknown)=>isRecord(value)&&Number.isSafeInteger(value.t0)&&Number.isSafeInteger(value.t1)&&(value.t0 as number)>=0&&(value.t1 as number)>=(value.t0 as number)&&typeof value.text==='string'))model.transcriptSegments=segments.map((value: unknown)=>{const p=value as {t0:number;t1:number;text:string};return {startMs:p.t0,endMs:p.t1,text:p.text};});model.transcript=Array.isArray(transcript?.segments)&&transcript.segments.length?transcript.segments.map((value: unknown)=>{const s=isRecord(value)?value:{};return `[${Number.isSafeInteger(s.t0)?s.t0:0}ms–${Number.isSafeInteger(s.t1)?s.t1:0}ms] ${typeof s.text==='string'?s.text:''}`;}).join('\n'):typeof transcript?.text==='string'?transcript.text:'';}catch{model.transcript='Transcript preview unavailable. Download apparent.json for the original evidence.';}
   }
   // Terminal pages contain no evidence, assets, title or preview metadata.
   const current=await bySecret(env,secret);if(state(current)!==status)fail('share_changed',409);
   const code=['revoked','expired','deleted'].includes(status)?410:200;
-  return new Response(request.method==='HEAD'?null:render(model),{status:code,headers:{'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; img-src 'self'; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}});
+  return new Response(request.method==='HEAD'?null:render(model),{status:code,headers:{'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'none'; img-src 'self'; media-src 'self'; style-src 'self'; font-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}});
  }
  available(row);
  if(action==='manifest.json') {
