@@ -9,6 +9,8 @@ const [home, config] = process.argv.slice(2);
 async function main() {
   const selected = path.join(home, 'selected é captures');
   const enabled = { experiments: { electronCaptureLocation: true }, privateFixture: 'keep' };
+  assert.equal((await captureLocation(home)).status, 'connected'); // Installed Storage defaults on.
+  await fs.writeFile(config, JSON.stringify({ experiments: { electronCaptureLocation: false } }));
   assert.deepEqual(await captureLocation(home), { status: 'disabled' });
   await fs.writeFile(config, JSON.stringify(enabled));
   assert.deepEqual(await errorReporting(home), { status: 'connected', enabled: true });
