@@ -354,3 +354,35 @@ remains until replacement Settings acceptance; rollback is to close this opt-in
 window, not change the saved consent. Remove the old presentation only with the
 future Settings routing switch. The reporting preference itself is not an
 off-by-default experiment. A packaged PostHog token is required to send reports.
+
+## Drawing controls (#355)
+
+The development window's **Draw across displays** section reads active screen
+recording status and mark count, and **Undo last mark** invokes the same Rust
+undo operation as the native shortcut (desktop ink or a newer pin). Hold Shift
+and move over the desktop to draw; Electron does not intercept pointer events.
+Refresh explicitly after drawing. No recording is started, target changed or
+permission granted by this section. Phone and lab sessions are unavailable.
+
+Routing: `npm start` opens the development controls; the separately running Rust
+GUI owns admission, capture, input and overlays. This adds no feature flag and
+does not activate any existing experiment or switch installed launchers. Linux
+continues to render one spanning GPUI ink layer; macOS uses per-display native
+panels. These are OS adapters, not competing React ink canvases. The native
+shortcut remains usable alongside this control, as keyboard access to the same
+operation. Closing Electron rolls back to the installed native controls without
+changing config or active capture state. Remove the legacy control surface only
+after the shared shell is routed and accepted on both platforms and all its
+callers/build/package inputs are verified; this slice does not authorize that
+routing change or removal.
+
+The same-user private socket accepts typed `drawing: read|undo` JSON with a
+monotonic deadline. Main holds the observed recording revision; the renderer
+cannot supply it. Rust validates the deadline and exact recording identity on
+the GUI thread before mutation. Navigation invalidates the receipt. Requests
+are serialized, never retried automatically; after an ambiguous timeout refresh
+before another undo. No paths, capture contents or raw errors reach React.
+
+Transport and renderer fixtures are synthetic checks, not native drawing proof.
+Exact-candidate isolated Linux and macOS cross-display proof, bundle text/image
+inspection and a verified playable video remain required before acceptance.

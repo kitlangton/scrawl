@@ -33,7 +33,7 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await page.getByText('Not connected', { exact: true }).waitFor();
   assert.deepEqual(await page.evaluate(() => ({
     keys: Object.keys(window.apparent), require: typeof window.require, process: typeof window.process,
-  })), { keys: ['readRuntimeState', 'readCaptureReference', 'copyCaptureReference', 'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation',
+  })), { keys: ['readDrawing', 'undoDrawing', 'readRuntimeState', 'readCaptureReference', 'copyCaptureReference', 'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation',
     'readErrorReporting', 'setErrorReporting', 'readConnectSettings', 'connectSettings', 'allowConnectUploads', 'cancelConnectSettings', 'checkConnectConnection',
     'disableConnectUploads', 'disconnectConnectSettings', 'openConnectBrowser', 'readRetention', 'saveRetention', 'resetRetention', 'readCaptureUsage'], require: 'undefined', process: 'undefined' });
   assert.equal(await application.evaluate(({ BrowserWindow }) => {
@@ -61,7 +61,10 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   server = net.createServer((socket) => socket.once('data', (data) => {
     requests.push(data.toString());
     const request = data.toString().startsWith('{') ? JSON.parse(data.toString()) : null;
-    if (request?.errorReporting) {
+    if (request?.drawing) {
+      if (request.drawing === 'undo') assert.equal(request.expected, '0123456789abcdef');
+      socket.end(JSON.stringify({ drawing: { revision: '0123456789abcdef', strokes: request.drawing === 'undo' ? 0 : 1 } }) + '\n');
+    } else if (request?.errorReporting) {
       if (request.errorReporting === 'read' && (++reportingReads <= 3 || reportingAlwaysBusy)) {
         socket.end('{"error":"app_busy"}\n');
         return;
@@ -81,6 +84,13 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await new Promise((resolve) => setTimeout(resolve, 1100));
   await page.getByRole('button', { name: 'Refresh state' }).click();
   await page.getByText('Connected · idle', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Refresh drawing', exact: true }).click();
+  await page.getByText('1 marks · screen recording active', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Undo last mark', exact: true }).click();
+  await page.getByText('0 marks · screen recording active', { exact: true }).waitFor();
+  await expect(page.getByRole('button', { name: 'Undo last mark', exact: true })).toBeDisabled();
+  assert.equal(requests.filter(r => r.includes('"drawing":"undo"')).length, 1);
+
   const reporting = page.getByRole('region', { name: 'Send technical error reports', exact: true });
   await reporting.getByRole('button', { name: 'Refresh reporting setting' }).click();
   const toggle = reporting.getByRole('checkbox', { name: 'Send technical error reports' });
@@ -115,7 +125,7 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await page.getByText('Connected · processing', { exact: true }).waitFor();
   assert.equal(await page.getByText('private', { exact: true }).count(), 0);
   assert.ok(requests.length >= 3);
-  assert.ok(requests.every((request) => request === 'state\n' || JSON.parse(request).storage === 'read' || JSON.parse(request).reference === 'read' || JSON.parse(request).connect === 'settings' ||
+  assert.ok(requests.every((request) => request === 'state\n' || ['read', 'undo'].includes(JSON.parse(request).drawing) || JSON.parse(request).storage === 'read' || JSON.parse(request).reference === 'read' || JSON.parse(request).connect === 'settings' ||
     ['read', 'set'].includes(JSON.parse(request).errorReporting)));
   assert.deepEqual(errors, []);
   const screenshot = path.join(os.tmpdir(), `apparent-foundation-${process.pid}.png`);

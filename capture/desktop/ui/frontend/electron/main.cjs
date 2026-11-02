@@ -2,7 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain, session, shell } = require('electro
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference } = require('./runtime.cjs');
+const { drawing, readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference } = require('./runtime.cjs');
 const { ConnectSettings, actions } = require('./connect.cjs');
 
 // Deliberately separate from the installed application's profile and identity.
@@ -33,6 +33,7 @@ app.whenReady().then(() => {
     if (window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame ||
         event.senderFrame.url !== page || args.length !== 0) throw new Error('Forbidden bridge request');
   };
+  let drawingRevision;
   let generation = 0;
   let mutation = false;
   let storageVersion = 0;
@@ -42,7 +43,7 @@ app.whenReady().then(() => {
   let referencePending;
   let retentionRevision;
   let retentionRead;
-  const invalidate = () => { generation += 1; storageVersion += 1; reference = undefined; retentionRevision = undefined; connect.close(); };
+  const invalidate = () => { generation += 1; drawingRevision = undefined; storageVersion += 1; reference = undefined; retentionRevision = undefined; connect.close(); };
   window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) invalidate(); });
   window.webContents.on('will-navigate', invalidate);
   window.webContents.on('render-process-gone', invalidate);
@@ -192,6 +193,25 @@ app.whenReady().then(() => {
         const result = await storagePreference(os.homedir(), `${operation}retention`, { expected, preset });
         return token === generation ? projectRetention(result) : { status: 'cancelled' };
       } finally { storageVersion += 1; mutation = false; }
+    });
+  }
+  let drawingPending = false;
+  for (const operation of ['read', 'undo']) {
+    ipcMain.handle(`apparent:${operation}-drawing`, async (event, ...args) => {
+      validate(event, args);
+      if (drawingPending) return { status: 'error', code: 'app_busy' };
+      if (operation === 'undo' && !drawingRevision) return { status: 'error', code: 'refresh_required' };
+      const expected = drawingRevision;
+      drawingRevision = undefined;
+      drawingPending = true;
+      const token = generation;
+      try {
+        const result = await drawing(os.homedir(), operation, expected);
+        if (token !== generation) return { status: 'cancelled' };
+        if (result.status !== 'connected') return result;
+        drawingRevision = result.revision;
+        return { status: 'connected', active: result.revision !== null, strokes: result.strokes };
+      } finally { drawingPending = false; }
     });
   }
   ipcMain.handle('apparent:read-runtime-state', (event, ...args) => {

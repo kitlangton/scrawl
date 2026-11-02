@@ -1246,6 +1246,32 @@ impl ApparentCoordinator {
             let _ = request.reply.send(response.to_string());
             return;
         }
+        if let Some((action @ (Action::DrawingRead | Action::DrawingUndo), expected)) = &request.action {
+            use std::hash::{Hash, Hasher};
+            let revision = self.active_recording.as_ref().filter(|r|
+                matches!(&r.source, CaptureSource::Screen { session, .. } if session.has_frames())
+            ).map(|r| {
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                r.started.hash(&mut hash);
+                format!("{:016x}", hash.finish())
+            });
+            if let Err(error) = crate::capture::desktop::workflow::agent_capture::drawing_admission(
+                revision.as_deref(), (*action == Action::DrawingUndo).then_some(expected.as_str()), request.expired(),
+            ) {
+                let _ = request.reply.send(serde_json::json!({"error":error}).to_string());
+                return;
+            }
+            if *action == Action::DrawingUndo { self.undo_stroke(cx); }
+            let count = {
+                let strokes = self.telemetry.strokes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let desktop = self.telemetry.desktop_ink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                desktop.len() + strokes.iter().filter(|s| !s.laser && s.pin.is_some()).count()
+            };
+            let _ = request.reply.send(serde_json::json!({"drawing":{
+                "revision":revision, "strokes":if revision.is_some() { count } else { 0 }
+            }}).to_string());
+            return;
+        }
         // Report an ended sampler, but never discard another session as a side
         // effect of State, Inspect or a competing Start. Cancellation stays explicit.
         if matches!(self.active_recording.as_ref().map(|r| &r.source),

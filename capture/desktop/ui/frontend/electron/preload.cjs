@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // No generic invoke/send, paths, revisions or dialog options from the renderer.
 contextBridge.exposeInMainWorld('apparent', Object.freeze({
+  readDrawing: () => ipcRenderer.invoke('apparent:read-drawing'),
+  undoDrawing: () => ipcRenderer.invoke('apparent:undo-drawing'),
   readRuntimeState: () => ipcRenderer.invoke('apparent:read-runtime-state'),
   readCaptureReference: () => ipcRenderer.invoke('apparent:read-capture-reference'),
   copyCaptureReference: () => ipcRenderer.invoke('apparent:copy-capture-reference'),

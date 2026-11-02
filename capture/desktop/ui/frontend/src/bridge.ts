@@ -6,6 +6,8 @@ export type RuntimeState =
 declare global {
   interface Window {
     apparent?: {
+      readDrawing: () => Promise<Drawing>;
+      undoDrawing: () => Promise<Drawing>;
       readRuntimeState: () => Promise<RuntimeState>;
       readCaptureReference: () => Promise<CaptureReference>;
       copyCaptureReference: () => Promise<CaptureReference>;
@@ -61,3 +63,5 @@ export type RetentionResult = Unavailable | { status: 'connected'; custom: boole
   retention: { preset: string | null; options: { id: string; label: string }[]; note: string } };
 export type UsageResult = Unavailable | { status: 'connected';
   usage: { effectivePath: string; displayPath: string; formatted: string } };
+
+export type Drawing = { status: "connected"; active: boolean; strokes: number } | { status: "disconnected" | "cancelled" } | { status: "error"; code: string };
