@@ -3,6 +3,8 @@
 use super::*;
 #[cfg(test)]
 mod renewal_tests;
+#[cfg(test)]
+mod settings_tests;
 use std::sync::OnceLock;
 
 pub type ConfigWriteHook = Box<dyn FnMut(&str, &Path)>;
@@ -16,6 +18,96 @@ pub trait TestHost: Send + Sync {
 static HOST: OnceLock<Arc<dyn TestHost>> = OnceLock::new();
 pub fn fixture_id() -> String {
     random_id().unwrap()
+}
+
+/// Same stalled cloud publication exercised by package and real AppConfig tests.
+#[cfg_attr(test, test)]
+pub fn settings_revocation_survives_config_wait() {
+    use std::sync::mpsc::channel;
+    for cancel_callback in [false, true] {
+        let f = Fixture::new();
+        let server = Server::new("upload");
+        f.authorize(&server.url);
+        let bundle = f.bundle();
+        let id = f.client.enqueue(&bundle).unwrap();
+        let credential_before = fs::read(f.client.state.join("upload.credential")).unwrap();
+        let mut disabled = f.client.settings();
+        disabled.enabled = false;
+        disabled.upload_consent = false;
+        f.client.provider.set_cloud(&disabled).unwrap();
+        let active = Arc::new(AtomicBool::new(true));
+        let login_active = active.clone();
+        let client = f.client.clone();
+        let url = server.url.clone();
+        let (snapshot_tx, snapshot_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let login = std::thread::spawn(move || {
+            let mut snapshots = 0;
+            config::set_config_write_hook(Some(Box::new(move |point, _| {
+                if point == "snapshot" {
+                    snapshots += 1;
+                    // Upload publication writes the experiment, then cloud config.
+                    if snapshots == 2 {
+                        snapshot_tx.send(()).unwrap();
+                        release_rx.recv_timeout(Duration::from_secs(12)).unwrap();
+                    }
+                }
+            })));
+            let result = client.login_with_approval(
+                &url,
+                "upload",
+                true,
+                &|| login_active.load(Ordering::SeqCst),
+                &|_| (),
+            );
+            config::set_config_write_hook(None);
+            result
+        });
+        snapshot_rx.recv_timeout(Duration::from_secs(8)).unwrap();
+        // Closing/cancelling invalidates the UI callback while its config writer is stalled.
+        active.store(!cancel_callback, Ordering::SeqCst);
+        let started = Instant::now();
+        assert_eq!(
+            f.client.settings_disable(false),
+            Err(settings::SafeError::LocalState)
+        );
+        assert!(started.elapsed() >= Duration::from_secs(3));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let fresh = Client::new(provider(f.client.config.clone()));
+        assert!(fresh.revocation_pending());
+        assert!(!fresh.enabled());
+        assert_eq!(
+            fresh.settings_snapshot(),
+            Err(settings::SafeError::LocalState)
+        );
+        assert!(fresh.enqueue(&bundle).is_err());
+        let requests = server.state.lock().unwrap().requests;
+        fresh.process_once().unwrap();
+        assert_eq!(server.state.lock().unwrap().requests, requests);
+        release_tx.send(()).unwrap();
+        assert_eq!(login.join().unwrap(), Err(settings::SafeError::Cancelled));
+        assert!(!fresh.settings().enabled && !fresh.settings().upload_consent);
+        assert_eq!(
+            fs::read(f.client.state.join("upload.credential")).unwrap(),
+            credential_before
+        );
+        assert!(fresh.revocation_pending());
+        fresh.settings_disable(false).unwrap();
+        assert!(!fresh.revocation_pending());
+        assert!(!fresh.settings().enabled && !fresh.settings().upload_consent);
+        assert_eq!(
+            fresh
+                .jobs()
+                .unwrap()
+                .iter()
+                .find(|job| job.id == id)
+                .unwrap()
+                .status,
+            "cancelled"
+        );
+        assert!(fresh.enqueue(&bundle).is_err());
+        assert!(server.state.lock().unwrap().data.is_empty());
+    }
 }
 pub fn install_host(host: Arc<dyn TestHost>) {
     let _ = HOST.set(host);
@@ -43,13 +135,45 @@ impl ConfigProvider for FixtureConfig {
         matches!(name, HOSTED_SYNC | HOSTED_SHARING)
     }
     fn set_cloud(&self, value: &CloudConfig) -> Result<()> {
-        set_value(&self.0, "cloud", serde_json::to_value(value)?)
+        self.set_cloud_allowed(value, &|| true)
+    }
+    fn set_cloud_allowed(&self, value: &CloudConfig, allowed: &dyn Fn() -> bool) -> Result<()> {
+        fixture_update(&self.0, allowed, |config| {
+            config["cloud"] = serde_json::to_value(value)?;
+            Ok(())
+        })
     }
     fn set_experiment(&self, name: &str, enabled: bool) -> Result<()> {
-        let mut value = read_config(&self.0);
-        value["experiments"][name] = enabled.into();
-        atomic_json(&self.0, &value)
+        fixture_update(&self.0, &|| true, |value| {
+            value["experiments"][name] = enabled.into();
+            Ok(())
+        })
     }
+}
+// The package fixture uses a real sidecar lock and final guarded publication;
+// root reuse replaces this with AppConfig's actual shared config transaction.
+fn fixture_update(
+    path: &Path,
+    allowed: &dyn Fn() -> bool,
+    edit: impl FnOnce(&mut Value) -> Result<()>,
+) -> Result<()> {
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    let _writer = Lock::acquire_until(
+        Path::new(&lock_path),
+        false,
+        Some(Instant::now() + Duration::from_secs(3)),
+    )?;
+    let mut value = read_config(path);
+    CONFIG_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().as_mut() {
+            hook("snapshot", path);
+        }
+    });
+    ensure!(allowed(), "cancelled");
+    edit(&mut value)?;
+    ensure!(allowed(), "cancelled");
+    atomic_json(path, &value)
 }
 fn read_config(path: &Path) -> Value {
     fs::read(path)
@@ -90,7 +214,11 @@ mod config {
         }
     }
     pub fn set_config_write_hook(hook: Option<ConfigWriteHook>) {
-        host().set_config_write_hook(hook);
+        if let Some(host) = HOST.get() {
+            host.set_config_write_hook(hook);
+        } else {
+            CONFIG_HOOK.with(|slot| *slot.borrow_mut() = hook);
+        }
     }
 }
 
@@ -382,6 +510,7 @@ pub fn hosted_config_pins_parent_through_publication() {
 type Hook = Box<dyn FnMut(&str, &Path)>;
 thread_local! {
     static HOOK: std::cell::RefCell<Option<Hook>> = const { std::cell::RefCell::new(None) };
+    static CONFIG_HOOK: std::cell::RefCell<Option<ConfigWriteHook>> = const { std::cell::RefCell::new(None) };
 }
 pub(super) fn run_hook(point: &str, path: &Path) {
     HOOK.with(|hook| {
@@ -734,7 +863,28 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
     s.request_routes.push(format!("{method} {route}"));
     let mut status = 200;
     let result: Vec<u8> = if route == "/v1/device/start" {
-        json!({"deviceCode":"synthetic-device-secret", "userCode":"TEST-CODE", "verificationUri":format!("{origin}/hosted/device?code=TEST-CODE"), "expiresIn":5,"interval":1}).to_string().into_bytes()
+        let uri = match s.mode.as_str() {
+            "approval-userinfo" => {
+                "https://user:synthetic-secret@example.com/connect/device".into()
+            }
+            "approval-http" => "http://example.com/connect/device".into(),
+            "approval-secret" => {
+                format!("{origin}/connect/device?deviceCode=synthetic-device-secret")
+            }
+            "approval-encoded-secret" => {
+                format!("{origin}/connect/device?deviceCode=%73ynthetic-device-secret")
+            }
+            "approval-control" => format!("{origin}/connect/device\n"),
+            "approval-secret-substring" => format!("{origin}/connect/device"),
+            _ => format!("{origin}/hosted/device?code=TEST-CODE"),
+        };
+        json!({"deviceCode":"synthetic-device-secret", "userCode":match s.mode.as_str() {
+            "approval-secret-code" => "synthetic-device-secret",
+            "approval-secret-substring" => "ABC-synthetic-device-secret-XYZ",
+            _ => "TEST-CODE"
+        }, "verificationUri":uri, "expiresIn":5,"interval":1})
+        .to_string()
+        .into_bytes()
     } else if route == "/v1/device/poll" {
         s.polls += 1;
         if s.mode == "reject" {
@@ -767,6 +917,12 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
         let request: Value = serde_json::from_slice(&body).unwrap();
         assert!(head.contains("Authorization:") || request["refreshToken"].is_string());
         json!({"ok":true}).to_string().into_bytes()
+    } else if route == "/v1/account" && s.mode == "auth-required" {
+        assert!(head.contains("Authorization: Bearer synthetic-"));
+        status = 401;
+        json!({"error":{"code":"unauthorized","message":"synthetic-secret"}})
+            .to_string()
+            .into_bytes()
     } else if s.mode == "slow" {
         drop(s);
         std::thread::sleep(Duration::from_millis(400));
@@ -1236,7 +1392,9 @@ fn login_snapshot_then_disable(scope: &'static str, logout: bool) {
     disable_done_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    login.join().unwrap().unwrap();
+    // Durable intent is visible before disable obtains queue.lock, so even the
+    // earlier login must now refuse publication rather than briefly succeeding.
+    assert_eq!(login.join().unwrap().unwrap_err().to_string(), "cancelled");
     disable.join().unwrap().unwrap();
 
     let settings = f.client.settings();
@@ -1982,8 +2140,17 @@ pub fn hosted_provider_write_failure_never_reports_disabled_or_login_success() {
     assert_eq!(fs::read(&client.config).unwrap(), before);
     assert_eq!(client.jobs().unwrap()[0].status, "pending");
     assert!(
-        link.authorized(),
-        "failed disable must not pretend durable revocation"
+        !link.authorized(),
+        "failed settlement must retain revocation intent"
+    );
+    config::set_config_value_in(&client.config, "lowerPlayback", true.into()).unwrap();
+    let fresh = Client::new(provider.inner.clone());
+    assert!(fresh.revocation_pending());
+    assert!(!fresh.enabled());
+    assert!(fresh.enqueue(&bundle).is_err());
+    assert_eq!(
+        fresh.settings_snapshot(),
+        Err(settings::SafeError::LocalState)
     );
     provider.fail_write.store(false, Ordering::SeqCst);
     client.disable(false).unwrap();

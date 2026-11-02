@@ -14,6 +14,7 @@ use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 mod renewal;
+pub mod settings;
 
 /// Application-owned preferences and browser mechanics. Implementations must
 /// perform fresh reads, preserve unrelated config, and serialize each write.
@@ -23,6 +24,11 @@ pub trait ConfigProvider: Send + Sync {
     fn cloud(&self) -> CloudConfig;
     fn experiment(&self, name: &str) -> bool;
     fn set_cloud(&self, value: &CloudConfig) -> Result<()>;
+    /// Blocking writers must override this and recheck inside their transaction.
+    fn set_cloud_allowed(&self, value: &CloudConfig, allowed: &dyn Fn() -> bool) -> Result<()> {
+        ensure!(allowed(), "cancelled");
+        self.set_cloud(value)
+    }
     fn set_experiment(&self, name: &str, enabled: bool) -> Result<()>;
     fn open_browser(&self, _uri: &Path) {}
 }
@@ -473,6 +479,9 @@ fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
 struct Lock(File);
 impl Lock {
     fn acquire(path: &Path, nonblocking: bool) -> Result<Self> {
+        Self::acquire_until(path, nonblocking, None)
+    }
+    fn acquire_until(path: &Path, nonblocking: bool, deadline: Option<Instant>) -> Result<Self> {
         let f = OpenOptions::new()
             .read(true)
             .write(true)
@@ -481,7 +490,7 @@ impl Lock {
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
             .open(path)?;
-        let op = libc::LOCK_EX | if nonblocking { libc::LOCK_NB } else { 0 };
+        let op = libc::LOCK_EX | libc::LOCK_NB;
         let before = f.metadata()?;
         ensure!(
             before.is_file()
@@ -490,10 +499,20 @@ impl Lock {
                 && before.nlink() == 1,
             "Unsafe hosted lock"
         );
-        ensure!(
-            unsafe { libc::flock(f.as_raw_fd(), op) } == 0,
-            "Hosted worker already running"
-        );
+
+        loop {
+            if unsafe { libc::flock(f.as_raw_fd(), op) } == 0 {
+                break;
+            }
+            let error = std::io::Error::last_os_error();
+            ensure!(
+                !nonblocking
+                    && error.kind() == std::io::ErrorKind::WouldBlock
+                    && deadline.is_none_or(|deadline| Instant::now() < deadline),
+                "Hosted worker already running"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
         let after = fs::symlink_metadata(path)?;
         ensure!(
             after.dev() == before.dev()
@@ -747,7 +766,41 @@ impl Client {
     fn settings(&self) -> CloudConfig {
         self.provider.cloud()
     }
+    fn revocation_intents(&self) -> Result<Vec<(PathBuf, bool)>> {
+        match fs::symlink_metadata(&self.state) {
+            Ok(_) => private_dir(&self.state)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        }
+        let entries = match fs::read_dir(&self.state) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut intents = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            if path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.starts_with("revocation-") && s.ends_with(".intent"))
+            {
+                let logout = serde_json::from_slice(&read_private(&path, 128)?)?;
+                intents.push((path, logout));
+            }
+        }
+        Ok(intents)
+    }
+    /// Pending or unreadable durable revocation always blocks new authorization.
+    pub fn revocation_pending(&self) -> bool {
+        !self
+            .revocation_intents()
+            .is_ok_and(|intents| intents.is_empty())
+    }
     pub fn enabled(&self) -> bool {
+        if self.revocation_pending() {
+            return false;
+        }
         let cloud = self.provider.cloud();
         let experiment = self.provider.experiment(HOSTED_SYNC);
         experiment && cloud.enabled && cloud.upload_consent && server_url(&cloud.server).is_ok()
@@ -782,6 +835,9 @@ impl Client {
         Ok(credential)
     }
     fn active(&self, job: &Job) -> bool {
+        if !self.enabled() {
+            return false;
+        }
         let Ok(_lock) = Lock::acquire(&self.state.join("queue.lock"), false) else {
             return false;
         };
@@ -793,6 +849,9 @@ impl Client {
             .is_some_and(|current| current.status == job.status && current.status != "cancelled")
     }
     fn share_active(&self, job: &Job) -> bool {
+        if !self.enabled() {
+            return false;
+        }
         let Ok(_lock) = Lock::acquire(&self.state.join("queue.lock"), false) else {
             return false;
         };
@@ -1043,7 +1102,8 @@ impl Client {
             if !allowed() || Instant::now() > deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                bail!("Hosted request cancelled or timed out");
+                ensure!(allowed(), "cancelled");
+                bail!("Hosted request timed out");
             }
             if let Some(status) = child.try_wait()? {
                 break status;
@@ -1127,13 +1187,26 @@ impl Client {
         timeout: Duration,
         allowed: &dyn Fn() -> bool,
     ) -> Result<Value> {
+        self.json_request_until(server, token, method, route, body, timeout, allowed, None)
+    }
+    fn json_request_until(
+        &self,
+        server: &str,
+        token: Option<&Credential>,
+        method: &str,
+        route: &str,
+        body: Option<Value>,
+        timeout: Duration,
+        allowed: &dyn Fn() -> bool,
+        queue_deadline: Option<Instant>,
+    ) -> Result<Value> {
         let scratch = Scratch::new(&self.state)?;
         let body_path = scratch.0.join("body");
         if let Some(body) = &body {
             atomic_json(&body_path, body)?;
         }
         let response = scratch.0.join("response");
-        self.request(
+        self.request_with_queue_deadline(
             server,
             token,
             method,
@@ -1143,6 +1216,7 @@ impl Client {
             JSON_LIMIT,
             timeout,
             allowed,
+            queue_deadline,
         )?;
         serde_json::from_slice(&fs::read(response)?).context("Invalid hosted JSON response")
     }
@@ -1157,6 +1231,33 @@ impl Client {
         browser: bool,
         allowed: &dyn Fn() -> bool,
     ) -> Result<()> {
+        self.login_presented(
+            server,
+            scope,
+            consent,
+            allowed,
+            &|approval| {
+                println!(
+                    "Open {}\nVerification code: {}\nRequested scope: {scope}",
+                    approval.verification_uri, approval.user_code
+                );
+                if browser {
+                    self.provider
+                        .open_browser(Path::new(&approval.verification_uri));
+                }
+            },
+            true,
+        )
+    }
+    fn login_presented(
+        &self,
+        server: &str,
+        scope: &str,
+        consent: bool,
+        allowed: &dyn Fn() -> bool,
+        on_approval: &dyn Fn(settings::Approval),
+        cli: bool,
+    ) -> Result<()> {
         ensure!(allowed(), "cancelled");
         let server = server_url(server)?;
         ensure!(matches!(scope, "upload" | "read"), "Invalid scope");
@@ -1165,16 +1266,27 @@ impl Client {
             "Upload shares screen, voice, transcript and all bundle media with the hosted service. Repeat with --consent-upload to explicitly agree"
         );
         private_dir(&self.state)?;
+        ensure!(!self.revocation_pending(), "cancelled: revocation pending");
+        let cancellation = self.cancellation()?;
         let login_id = random_id()?;
         let login_path = self.state.join(format!("{scope}.login"));
         {
-            let _queue = Lock::acquire(&self.state.join("queue.lock"), false)?;
-            ensure!(allowed(), "cancelled");
+            let _queue = Lock::acquire_until(
+                &self.state.join("queue.lock"),
+                false,
+                (!cli).then(|| Instant::now() + Duration::from_secs(3)),
+            )?;
+            ensure!(
+                allowed() && !self.revocation_pending() && self.cancellation()? == cancellation,
+                "cancelled"
+            );
             atomic_json(&login_path, &login_id)?;
         }
         let caller_allowed = allowed;
         let still_current = || {
             caller_allowed()
+                && !self.revocation_pending()
+                && self.cancellation().is_ok_and(|epoch| epoch == cancellation)
                 && read_private(&login_path, 128)
                     .ok()
                     .and_then(|b| serde_json::from_slice::<String>(&b).ok())
@@ -1199,8 +1311,14 @@ impl Client {
             .as_str()
             .context("Missing verification URI")?;
         ensure!(
-            device_code.len() <= 8192
+            !device_code.is_empty()
+                && device_code.len() <= 8192
+                && !user_code.is_empty()
                 && user_code.len() <= 128
+                && !user_code.contains(device_code)
+                && user_code
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
                 && !user_code.chars().any(char::is_control),
             "Invalid device response"
         );
@@ -1215,14 +1333,23 @@ impl Client {
             .context("Invalid verification URI")?;
         server_url(&origin)?;
         ensure!(
-            !uri.bytes()
-                .any(|b| b.is_ascii_control() || b.is_ascii_whitespace() || b"\\\"'".contains(&b)),
+            uri.len() <= 4096
+                && !uri.contains(device_code)
+                && !uri.contains(['#', '%'])
+                && uri
+                    .split_once('?')
+                    .is_none_or(|(_, query)| query == format!("code={user_code}"))
+                && !uri.bytes().any(|b| b.is_ascii_control()
+                    || b.is_ascii_whitespace()
+                    || b"\\\"'".contains(&b)),
             "Invalid verification URI"
         );
-        println!("Open {uri}\nVerification code: {user_code}\nRequested scope: {scope}");
-        if browser {
-            self.provider.open_browser(Path::new(uri));
-        }
+        ensure!(allowed(), "cancelled");
+        on_approval(settings::Approval {
+            verification_uri: uri.into(),
+            user_code: user_code.into(),
+        });
+        ensure!(allowed(), "cancelled");
         let deadline = Instant::now()
             + Duration::from_secs(start["expiresIn"].as_u64().unwrap_or(300).min(900));
         let interval = Duration::from_secs(start["interval"].as_u64().unwrap_or(5).clamp(1, 30));
@@ -1278,7 +1405,11 @@ impl Client {
             }
         };
         private_dir(&self.state)?;
-        let _lock = Lock::acquire(&self.state.join("queue.lock"), false)?;
+        let _lock = Lock::acquire_until(
+            &self.state.join("queue.lock"),
+            false,
+            (!cli).then(|| Instant::now() + Duration::from_secs(3)),
+        )?;
         // Read-only login must not silently enable upload or switch an active uploader's server.
         ensure!(allowed(), "cancelled");
         let mut settings = self.settings();
@@ -1288,8 +1419,6 @@ impl Client {
             scope == "upload" || !settings.enabled || settings.server == server,
             "Disable uploads before switching servers"
         );
-        self.clear_renewal(scope)?;
-        atomic_json(&self.state.join(format!("{scope}.credential")), &credential)?;
         if scope == "upload" {
             settings = CloudConfig {
                 enabled: true,
@@ -1300,23 +1429,40 @@ impl Client {
         } else {
             settings.server = server;
         }
-        self.provider.set_cloud(&settings)?;
+        self.provider.set_cloud_allowed(&settings, allowed)?;
+        ensure!(allowed(), "cancelled");
+        self.clear_renewal(scope)?;
+        atomic_json(&self.state.join(format!("{scope}.credential")), &credential)?;
         fs::remove_file(login_path)?;
-        println!("Signed in for {scope}; tokens remain private on this machine.");
+        if cli {
+            println!("Signed in for {scope}; tokens remain private on this machine.");
+        }
         Ok(())
     }
     pub fn disable(&self, logout: bool) -> Result<()> {
+        self.disable_until(logout, None)
+    }
+    fn disable_until(&self, logout: bool, deadline: Option<Instant>) -> Result<()> {
         private_dir(&self.state)?;
+        // Immutable intents survive queue contention and cannot overwrite one another.
+        let intent = self
+            .state
+            .join(format!("revocation-{}.intent", random_id()?));
+        atomic_json(&intent, &logout)?;
         #[cfg(any(test, feature = "test-support"))]
         test_support::run_hook("disable_before_lock", &self.config);
-        let _lock = Lock::acquire(&self.state.join("queue.lock"), false)?;
+        let _lock = Lock::acquire_until(&self.state.join("queue.lock"), false, deadline)?;
+        let intents = self.revocation_intents()?;
+        #[cfg(any(test, feature = "test-support"))]
+        test_support::run_hook("disable_intents_snapshot", &self.config);
+        let logout = logout || intents.iter().any(|(_, logout)| *logout);
+        atomic_json(&self.state.join("cancellation"), &random_id()?)?;
         // Serialize the snapshot and gate write with login's settings/credential
         // commit. No network or staging holds this lock, only brief state work.
         let mut settings = self.settings();
         settings.enabled = false;
         settings.upload_consent = false;
         self.provider.set_cloud(&settings)?;
-        atomic_json(&self.state.join("cancellation"), &random_id()?)?;
         let mut stopped = Vec::new();
         let mut revoke = Vec::new();
         for scope in ["upload", "read"] {
@@ -1352,6 +1498,11 @@ impl Client {
                     Err(e) => return Err(e.into()),
                 }
             }
+        }
+        File::open(&self.state)?.sync_all()?;
+        // Remove only the intents covered by these committed durable effects.
+        for (path, _) in intents {
+            fs::remove_file(path)?;
         }
         File::open(&self.state)?.sync_all()?;
         drop(_lock);

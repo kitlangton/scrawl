@@ -33,11 +33,29 @@ pub(crate) fn update_config_in(
     path: &Path,
     edit: impl FnOnce(&mut serde_json::Value) -> Result<()>,
 ) -> Result<()> {
+    update_config_checked_in(path, None, edit)
+}
+
+/// Connect's background authorization writes must recheck cancellation after
+/// acquiring the shared writer lock. Other settings keep their existing wait policy.
+pub(crate) fn update_config_allowed_in(
+    path: &Path,
+    allowed: &dyn Fn() -> bool,
+    edit: impl FnOnce(&mut serde_json::Value) -> Result<()>,
+) -> Result<()> {
+    update_config_checked_in(path, Some(allowed), edit)
+}
+
+fn update_config_checked_in(
+    path: &Path,
+    allowed: Option<&dyn Fn() -> bool>,
+    edit: impl FnOnce(&mut serde_json::Value) -> Result<()>,
+) -> Result<()> {
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     #[cfg(test)]
     config_write_hook("before_lock", path);
-    let writer = ConfigWriter::acquire(path)?;
+    let writer = ConfigWriter::acquire(path, allowed)?;
     let mut config: serde_json::Value =
         match writer.open(&writer.name, libc::O_RDONLY | libc::O_NONBLOCK) {
             Ok(mut file) => {
@@ -60,6 +78,7 @@ pub(crate) fn update_config_in(
         };
     #[cfg(test)]
     config_write_hook("snapshot", path);
+    ensure!(allowed.is_none_or(|check| check()), "cancelled");
     edit(&mut config)?;
     let tmp = std::ffi::CString::new(format!(".config-{}.tmp", crate::shared::ids::make_bundle_id()))?;
     let mut body = serde_json::to_vec_pretty(&config)?;
@@ -68,10 +87,22 @@ pub(crate) fn update_config_in(
         let mut file = writer.open(&tmp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
         file.write_all(&body)?;
         file.sync_all()?;
+        ensure!(allowed.is_none_or(|check| check()), "cancelled");
         let fd = writer.directory.as_raw_fd();
         if unsafe { libc::renameat(fd, tmp.as_ptr(), fd, writer.name.as_ptr()) } != 0 {
             return Err(std::io::Error::last_os_error()).context("Could not publish config");
         }
+        #[cfg(test)]
+        {
+            config_write_hook("before_directory_sync", path);
+            anyhow::ensure!(
+                !CONFIG_DIRECTORY_SYNC_FAILURE.with(|failure| failure.replace(false)),
+                "Injected config directory sync failure"
+            );
+        }
+        // A revocation intent may be removed only after this directory entry is
+        // durable, not merely after the new JSON file is visible to this process.
+        writer.directory.sync_all().context("Could not persist config directory")?;
         Ok(())
     })();
     if result.is_err() {
@@ -90,7 +121,7 @@ struct ConfigWriter {
 }
 
 impl ConfigWriter {
-    fn acquire(path: &Path) -> Result<Self> {
+    fn acquire(path: &Path, allowed: Option<&dyn Fn() -> bool>) -> Result<Self> {
         use std::os::fd::AsRawFd;
         use std::os::unix::ffi::OsStrExt;
         use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
@@ -143,11 +174,19 @@ impl ConfigWriter {
                 && meta.nlink() == 1,
             "Config lock must be an owned private regular file"
         );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
-            if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            ensure!(allowed.is_none_or(|check| check()), "cancelled");
+            let flags = libc::LOCK_EX | if allowed.is_some() { libc::LOCK_NB } else { 0 };
+            if unsafe { libc::flock(lock.as_raw_fd(), flags) } == 0 {
                 break;
             }
             let error = std::io::Error::last_os_error();
+            if allowed.is_some() && error.kind() == std::io::ErrorKind::WouldBlock {
+                ensure!(std::time::Instant::now() < deadline, "Config lock wait timed out");
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
+            }
             if error.kind() != std::io::ErrorKind::Interrupted {
                 return Err(error.into());
             }
@@ -197,6 +236,12 @@ impl ConfigWriter {
 thread_local! {
     static CONFIG_WRITE_HOOK: std::cell::RefCell<Option<Box<dyn FnMut(&str, &Path)>>> =
         const { std::cell::RefCell::new(None) };
+    static CONFIG_DIRECTORY_SYNC_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_config_directory_sync_failure(fail: bool) {
+    CONFIG_DIRECTORY_SYNC_FAILURE.with(|failure| failure.set(fail));
 }
 
 #[cfg(test)]

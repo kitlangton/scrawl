@@ -4,6 +4,17 @@ Shared macOS/Linux implementation, default-off `hostedSync` experiment. This is 
 
 ## Implementation ownership
 
+Optional desktop account controls live in **Settings → General**, behind the
+independent default-off `connectSettings` experiment (close/reopen Settings after
+editing config). They use the same client device flow, private credentials,
+renewal, queue cancellation and config writer as the CLI. There is no Connect
+onboarding step. The Settings controller is owned by Desktop; the client's
+secret-free presentation API supplies fresh local state, a validated public
+verification URL/code and explicit bounded health checks, never raw responses.
+See [Settings](../../capture/desktop/docs/onboarding-and-settings.md#apparent-connect-experiment)
+for consent, cancellation, disable/disconnect and recovery behavior. This candidate
+does not claim live account approval, deployment or platform proof from compilation.
+
 `connect/client` is the production `apparent-connect-client` library, not a
 protocol-only staging package. It owns transfer, device auth, credentials, queue
 and worker locking, generation/cancellation checks, sharing identity/reservation/
@@ -28,6 +39,23 @@ the real locked setters from #221; the package has no production config writer
 or constructor snapshot. Lock order stays **worker → queue → config**. A provider
 must not acquire the queue lock while publishing config. Provider write errors
 propagate; they are not successful disable/login results.
+
+Device login uses the provider's guarded cloud writer: cancellation is checked
+again after the actual config lock wait and before atomic publication. The
+application merges only the three owned cloud fields, preserving unknown nested
+cloud keys, unrelated experiments and other secret-bearing config. Connect's
+guarded writer wait is cancellable and bounded; other Settings writers retain
+their existing policy. Settings queue waits are bounded without changing the
+CLI/worker wait policy.
+
+Disable/disconnect first publishes a private immutable `revocation-<id>.intent`
+in the client's state directory, before waiting for the queue lock. Pending or
+unreadable intents block new uploads, sharing, renewal and sign-in, including
+after restart. A queue/config failure retains this fail-closed intent; retry
+Disable uploads or Disconnect from Settings to finish the durable transaction.
+Settlement removes only the intents covered by its committed effects, retaining
+newer concurrent requests and honoring any pending disconnect. No network call
+holds the queue/config locks. Do not manually delete an intent to recover.
 
 Independent checks (run once through `t3-build` on Clanker):
 

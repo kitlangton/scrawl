@@ -112,7 +112,7 @@ impl Client {
         self.credential(&credential.scope, &credential.server)
             .is_ok_and(|current| current.generation == credential.generation)
     }
-    fn cancellation(&self) -> Result<Option<String>> {
+    pub(super) fn cancellation(&self) -> Result<Option<String>> {
         let path = self.state.join("cancellation");
         match fs::symlink_metadata(&path) {
             Ok(_) => Ok(Some(serde_json::from_slice(&read_private(&path, 128)?)?)),
@@ -120,11 +120,17 @@ impl Client {
             Err(e) => Err(e.into()),
         }
     }
-    fn renewal_reply(&self, path: &Path, expected: &Credential) -> Result<Value> {
+    fn renewal_reply(
+        &self,
+        path: &Path,
+        expected: &Credential,
+        allowed: &dyn Fn() -> bool,
+        queue_deadline: Option<Instant>,
+    ) -> Result<Value> {
         match read_private(path, JSON_LIMIT).and_then(|b| Ok(serde_json::from_slice(&b)?)) {
             Ok(reply) => Ok(reply),
             Err(_) => {
-                self.mark_auth_required(expected)?;
+                self.mark_auth_required(expected, allowed, queue_deadline)?;
                 bail!("{AUTH_REQUIRED}: invalid renewal response");
             }
         }
@@ -140,8 +146,38 @@ impl Client {
         ensure!(!current.auth_required, "{AUTH_REQUIRED}");
         Ok(current)
     }
-    fn mark_auth_required(&self, expected: &Credential) -> Result<()> {
-        let _queue = Lock::acquire(&self.state.join("queue.lock"), false)?;
+    // Settings opts into cancellable queue waits; CLI/worker retain blocking waits.
+    fn renewal_queue(&self, allowed: &dyn Fn() -> bool, deadline: Option<Instant>) -> Result<Lock> {
+        let check = || -> Result<()> {
+            if let Some(end) = deadline {
+                ensure!(allowed(), "cancelled");
+                ensure!(Instant::now() < end, "Hosted request deadline exceeded");
+            }
+            Ok(())
+        };
+        let lock = if deadline.is_some() {
+            loop {
+                check()?;
+                match Lock::acquire(&self.state.join("queue.lock"), true) {
+                    Ok(lock) => break lock,
+                    Err(_) => std::thread::sleep(Duration::from_millis(20)),
+                }
+            }
+        } else {
+            Lock::acquire(&self.state.join("queue.lock"), false)?
+        };
+        check()?;
+        Ok(lock)
+    }
+    fn mark_auth_required(
+        &self,
+        expected: &Credential,
+        allowed: &dyn Fn() -> bool,
+        queue_deadline: Option<Instant>,
+    ) -> Result<()> {
+        #[cfg(any(test, feature = "test-support"))]
+        test_support::run_hook("renewal_auth_required", &self.state);
+        let _queue = self.renewal_queue(allowed, queue_deadline)?;
         if let Ok(mut current) = self.credential(&expected.scope, &expected.server) {
             if current == *expected {
                 current.auth_required = true;
@@ -170,6 +206,7 @@ impl Client {
         force: bool,
         allowed: &dyn Fn() -> bool,
         deadline: Instant,
+        queue_deadline: Option<Instant>,
     ) -> Result<Credential> {
         // Poll a nonblocking flock so cancellation also bounds a competing process's wait.
         let _renewal = loop {
@@ -188,6 +225,10 @@ impl Client {
             }
         };
         let mut current = self.current_credential(expected)?;
+        ensure!(
+            allowed() && queue_deadline.is_none_or(|end| Instant::now() < end),
+            "cancelled"
+        );
         // A different process has already renewed this exact access incarnation.
         let cancellation = self.cancellation()?;
         if current != *expected
@@ -199,7 +240,7 @@ impl Client {
             return Ok(current);
         }
         if current.refresh_token.is_none() {
-            self.mark_auth_required(&current)?;
+            self.mark_auth_required(&current, allowed, queue_deadline)?;
             bail!("{AUTH_REQUIRED}");
         }
         let journal = self.state.join(format!("{}.renewal", current.scope));
@@ -211,7 +252,9 @@ impl Client {
         let mut record = if let Some(record) = recovered {
             record
         } else {
-            let _queue = Lock::acquire(&self.state.join("queue.lock"), false)?;
+            #[cfg(any(test, feature = "test-support"))]
+            test_support::run_hook("renewal_preparation", &self.state);
+            let _queue = self.renewal_queue(allowed, queue_deadline)?;
             ensure!(
                 self.credential(&current.scope, &current.server)? == current,
                 "cancelled"
@@ -226,18 +269,18 @@ impl Client {
             record
         };
         let mut reply = if record.completed {
-            Some(self.renewal_reply(&response, &current)?)
+            Some(self.renewal_reply(&response, &current, allowed, queue_deadline)?)
         } else {
             None
         };
         if reply.is_none() {
             ensure!(allowed(), "cancelled");
             if current.refresh_expires_at.is_some_and(|t| t <= now()) {
-                self.mark_auth_required(&current)?;
+                self.mark_auth_required(&current, allowed, queue_deadline)?;
                 bail!("{AUTH_REQUIRED}");
             }
             {
-                let _queue = Lock::acquire(&self.state.join("queue.lock"), false)?;
+                let _queue = self.renewal_queue(allowed, queue_deadline)?;
                 ensure!(
                     self.credential(&current.scope, &current.server)? == current,
                     "cancelled"
@@ -267,14 +310,18 @@ impl Client {
                 deadline
                     .saturating_duration_since(Instant::now())
                     .min(Duration::from_secs(30)),
-                &|| self.same_login(&current) && Instant::now() < deadline,
+                &|| {
+                    self.same_login(&current)
+                        && Instant::now() < deadline
+                        && (queue_deadline.is_none() || allowed())
+                },
             );
             if let Err(error) = result {
                 if error.to_string().contains("auth_required") {
-                    self.mark_auth_required(&current)?;
+                    self.mark_auth_required(&current, allowed, queue_deadline)?;
                 }
                 if !self.same_login(&current) {
-                    let _queue = Lock::acquire(&self.state.join("queue.lock"), false)?;
+                    let _queue = self.renewal_queue(allowed, queue_deadline)?;
                     self.clear_renewal(&current.scope)?;
                 }
                 return Err(error);
@@ -283,14 +330,16 @@ impl Client {
             File::open(&self.state)?.sync_all()?;
             record.completed = true;
             {
-                let _queue = Lock::acquire(&self.state.join("queue.lock"), false)?;
+                #[cfg(any(test, feature = "test-support"))]
+                test_support::run_hook("renewal_completion", &self.state);
+                let _queue = self.renewal_queue(allowed, queue_deadline)?;
                 ensure!(
                     self.credential(&current.scope, &current.server)? == current,
                     "cancelled"
                 );
                 atomic_json(&journal, &record)?;
             }
-            reply = Some(self.renewal_reply(&response, &current)?);
+            reply = Some(self.renewal_reply(&response, &current, allowed, queue_deadline)?);
         }
         #[cfg(any(test, feature = "test-support"))]
         test_support::run_hook("renewal_response_persisted", &response);
@@ -300,15 +349,18 @@ impl Client {
             true,
         );
         if applied.is_err() {
-            self.mark_auth_required(&record.base)?;
+            self.mark_auth_required(&record.base, allowed, queue_deadline)?;
             bail!("{AUTH_REQUIRED}: invalid renewal response");
         }
         ensure!(allowed(), "cancelled");
         #[cfg(any(test, feature = "test-support"))]
         test_support::run_hook("renewal_before_publication", &response);
-        let _queue = Lock::acquire(&self.state.join("queue.lock"), false)?;
+        let _queue = self.renewal_queue(allowed, queue_deadline)?;
         // A late response is not a login and cannot restore credentials or config.
-        ensure!(self.cancellation()? == cancellation, "cancelled");
+        ensure!(
+            !self.revocation_pending() && self.cancellation()? == cancellation,
+            "cancelled"
+        );
         ensure!(
             self.credential(&current.scope, &current.server)? == record.base,
             "cancelled: device login changed"
@@ -356,13 +408,34 @@ impl Client {
         timeout: Duration,
         allowed: &dyn Fn() -> bool,
     ) -> Result<()> {
+        self.request_with_queue_deadline(
+            server, credential, method, route, body, output, limit, timeout, allowed, None,
+        )
+    }
+    pub(super) fn request_with_queue_deadline(
+        &self,
+        server: &str,
+        credential: Option<&Credential>,
+        method: &str,
+        route: &str,
+        body: Option<&Path>,
+        output: &Path,
+        limit: u64,
+        timeout: Duration,
+        allowed: &dyn Fn() -> bool,
+        queue_deadline: Option<Instant>,
+    ) -> Result<()> {
         let Some(expected) = credential else {
             return self.raw_request(
                 server, None, method, route, body, output, limit, timeout, allowed,
             );
         };
         ensure!(expected.server == server, "Credential server mismatch");
-        let deadline = Instant::now() + timeout;
+        let caller_allowed = allowed;
+        let current_allowed = || caller_allowed() && !self.revocation_pending();
+        let allowed: &dyn Fn() -> bool = &current_allowed;
+        ensure!(allowed(), "cancelled");
+        let deadline = queue_deadline.unwrap_or_else(|| Instant::now() + timeout);
         let mut current = self.current_credential(expected)?;
         let refresh_expired = current.refresh_expires_at.is_some_and(|t| t <= now());
         if refresh_expired
@@ -370,7 +443,7 @@ impl Client {
                 .expires_at
                 .is_some_and(|t| t <= now().saturating_add(30))
         {
-            current = self.renew(&current, refresh_expired, allowed, deadline)?;
+            current = self.renew(&current, refresh_expired, allowed, deadline, queue_deadline)?;
         }
         let active = || allowed() && self.same_login(expected);
         let result = self.raw_request(
@@ -389,7 +462,7 @@ impl Client {
             .err()
             .is_some_and(|e| e.to_string().contains("auth_required"))
         {
-            let renewed = self.renew(&current, true, allowed, deadline)?;
+            let renewed = self.renew(&current, true, allowed, deadline, queue_deadline)?;
             ensure!(active(), "cancelled");
             fs::remove_file(output)?;
             let retry = self.raw_request(
@@ -408,7 +481,7 @@ impl Client {
                 .err()
                 .is_some_and(|e| e.to_string().contains("auth_required"))
             {
-                self.mark_auth_required(&renewed)?;
+                self.mark_auth_required(&renewed, allowed, queue_deadline)?;
             }
             retry
         } else {
