@@ -8,21 +8,26 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::capture::engine::runtime::audio::audio::RecordedAudio;
-use crate::capture::engine::runtime::write_bundle_artifacts;
-use crate::capture::engine::keyframes::select_keyframes;
-use crate::shared::model::{
-    ApparentBundle, CaptureMode, DeviceInfo, InteractionEvent, Mark, RgbaFrame, Shape,
-    Stroke, TargetInfo, TranscriptData, keyframe_budget,
-};
-use crate::capture::engine::sketch::{marks_of, summary_markdown};
-use crate::capture::engine::runtime::audio;
+pub mod publication;
 use crate::capture::desktop::helper;
-use crate::shared::{model, windows};
-use crate::capture::engine::autocrop::autocrop as autocrop;
-use crate::capture::engine::{ render};
+use crate::capture::engine::autocrop::autocrop;
 use crate::capture::engine::bundle::recover;
-use crate::capture::engine::runtime::audio::transcription::{speech_model, transcribe};
+use crate::capture::engine::keyframes::select_keyframes;
+use crate::capture::engine::render;
+use crate::capture::engine::runtime as capture;
+use crate::capture::engine::runtime::audio::audio;
+use crate::capture::engine::runtime::audio::transcription::speech_model;
+use crate::capture::engine::runtime::audio::transcription::transcribe;
+#[cfg(test)]
+use crate::capture::engine::runtime::write_bundle_artifacts;
+use crate::capture::engine::sketch::{marks_of, summary_markdown};
 use crate::shared::clock::now_epoch_ms;
+use crate::shared::model;
+use crate::shared::model::{
+    ApparentBundle, CaptureMode, DeviceInfo, InteractionEvent, Mark, RgbaFrame, Shape, Stroke,
+    TargetInfo, TranscriptData, keyframe_budget,
+};
+use crate::shared::windows;
 
 /// Matches full-resolution decoded frames back to selected keyframes by timestamp (within 250ms),
 /// so a single frame decode failure only leaves that one keyframe at candidate resolution.
@@ -86,9 +91,10 @@ struct FinishTrace {
 }
 
 fn save_finish_trace(bundle_dir: &Path, trace: &FinishTrace) -> Result<()> {
-    std::fs::write(
-        bundle_dir.join("finish-trace.json"),
-        serde_json::to_vec_pretty(trace)?,
+    publication::write(
+        bundle_dir,
+        "finish-trace.json",
+        &serde_json::to_vec_pretty(trace)?,
     )?;
     Ok(())
 }
@@ -289,7 +295,7 @@ fn movie_frames_at_with(
 pub fn finalize_capture_bundle(
     bundle_dir: &Path,
     target: TargetInfo,
-    recording: crate::capture::engine::runtime::ScreenRecording,
+    recording: capture::ScreenRecording,
     strokes: Vec<Stroke>,
     events: Vec<InteractionEvent>,
     recorded_audio: Option<RecordedAudio>,
@@ -297,148 +303,156 @@ pub fn finalize_capture_bundle(
     activity: windows::ActivityLog,
     interaction_telemetry: Option<model::InteractionTelemetry>,
 ) -> Result<(PathBuf, ApparentBundle, String)> {
-    let started_at = activity
-        .stop_started
-        .unwrap_or_else(std::time::Instant::now);
-    let stop_ms = activity.stop_ms;
-    let crate::capture::engine::runtime::ScreenRecording {
-        frames,
-        video: video_path,
-        duration_ms,
-        video_offset_ms,
-    } = recording;
-    if frames.is_empty() {
-        // The MP4 stream can succeed even when every screenshot fails. Do not turn
-        // it into keyframes here: the sampler drops screenshots while a system
-        // permission prompt is visible, but the movie may still contain it.
-        recover::mark_unsafe_video(bundle_dir)?;
-        let message = "No screen frames were captured. Choose a screen in the sharing dialog and try again.";
-        if let Some(ref video) = video_path {
-            anyhow::bail!("{message} The raw video was kept at {}.", video.display());
-        }
-        anyhow::bail!("{message}");
-    }
-    if let Some(ref audio) = recorded_audio {
-        let wav_path = bundle_dir.join("audio.wav");
-        // The incremental recorder already saved this file. Never truncate its saved prefix.
-        if !wav_path.exists() {
-            use std::io::Write;
-            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&wav_path)?;
-            file.write_all(&audio.wav_bytes)?;
-            file.sync_all()?;
-        }
-    }
-    let wav_path = bundle_dir.join("audio.wav");
-    let has_wav = wav_path.exists();
-    recover::write(
-        bundle_dir,
-        &recover::Unfinished {
-            target: target.clone(),
+    publication::publish_after(bundle_dir, || {
+        let started_at = activity
+            .stop_started
+            .unwrap_or_else(std::time::Instant::now);
+        let stop_ms = activity.stop_ms;
+        let capture::ScreenRecording {
+            frames,
+            video: video_path,
             duration_ms,
-            video: video_path
-                .as_ref()
-                .and_then(|v| v.file_name())
-                .map(|name| name.to_string_lossy().into_owned()),
             video_offset_ms,
-            strokes: strokes.clone(),
-            events: events.clone(),
-            interaction_telemetry,
-            note: note.clone(),
-            windows: activity.windows.clone(),
-            cursor: activity.cursor.clone(),
-        },
-    );
-    let crop_settings = (target.mode == CaptureMode::Display)
-        .then(autocrop::Settings::configured)
-        .flatten();
-    let ((transcript, transcribe_ms), (predecoded, prepared)) = std::thread::scope(|scope| {
-        let transcribe_handle = scope.spawn(|| {
-            let t0 = std::time::Instant::now();
-            let tr = transcribe::transcribe(
-                has_wav.then_some(wav_path.as_path()),
-                recorded_audio.as_ref(),
-            );
-            (tr, t0.elapsed().as_millis() as u64)
-        });
-        let pre = if let Some(ref movie) = video_path
-            && !frames.is_empty()
-        {
-            let mut preview_marks = marks_of(&strokes);
-            let budget = keyframe_budget(duration_ms);
-            let preview = select_keyframes(
-                &frames,
-                &strokes,
-                &mut preview_marks,
-                &events,
-                &TranscriptData::default(),
-                budget,
-            );
-            // Marks alone filled the budget, so speech can't change the selection.
-            let marks_fill = preview.len() == budget
-                && preview
-                    .iter()
-                    .all(|(k, _)| k.reason == model::KeyframeReason::Mark);
-            let times: Vec<u64> = preview.iter().map(|(k, _)| k.t).collect();
-            let decoded = movie_frames_at(movie, &times, video_offset_ms, 0).unwrap_or_default();
-            if duration_ms >= 20_000 {
-                let cache = if marks_fill {
-                    Vec::new()
-                } else {
-                    decoded.clone()
-                };
-                let (merged, matched) = merge_full_keyframes(preview, decoded);
-                let vis = (matched == merged.len()).then(|| prepare_visuals(
-                    merged,
-                    frames.first(),
-                    crop_settings.as_ref(),
-                    &target,
-                    duration_ms,
-                    &strokes,
-                    &preview_marks,
-                    &events,
-                    &activity,
-                )).flatten();
-                (cache, vis)
-            } else {
-                (decoded, None)
+        } = recording;
+        if frames.is_empty() {
+            // The MP4 stream can succeed even when every screenshot fails. Do not turn
+            // it into keyframes here: the sampler drops screenshots while a system
+            // permission prompt is visible, but the movie may still contain it.
+            recover::mark_unsafe_video(bundle_dir)?;
+            let message = "No screen frames were captured. Choose a screen in the sharing dialog and try again.";
+            if let Some(ref video) = video_path {
+                anyhow::bail!("{message} The raw video was kept at {}.", video.display());
             }
-        } else {
-            (Vec::new(), None)
-        };
-        (transcribe_handle.join().unwrap(), pre)
-    });
-
-    let built = build_bundle_from_parts(
-        bundle_dir,
-        target,
-        duration_ms,
-        frames,
-        strokes,
-        events,
-        transcript,
-        video_path.clone(),
-        note,
-        SourceExtras {
-            activity,
-            interaction_telemetry,
-            video_offset_ms,
-            autocrop: Some(crop_settings),
-            full_frames: video_path
-                .map(|movie| movie_keyframes_with_cache(movie, video_offset_ms, predecoded)),
-            prepared,
-            timings: StageTimings {
-                started_at: Some(started_at),
-                stop_ms,
-                transcribe_ms: Some(transcribe_ms),
-                ..StageTimings::default()
+            anyhow::bail!("{message}");
+        }
+        if let Some(ref audio) = recorded_audio {
+            // The incremental recorder owns any persisted prefix; never replace it.
+            if !bundle_dir.join("audio.wav").exists() {
+                publication::write(bundle_dir, "audio.wav", &audio.wav_bytes)
+                    .context("Could not persist captured audio")?;
+            }
+        }
+        let wav_path = bundle_dir.join("audio.wav");
+        let has_wav = wav_path.exists();
+        let wav_required = recorded_audio.is_some() || has_wav;
+        publication::preflight_sources(bundle_dir, video_path.as_deref())?;
+        recover::write(
+            bundle_dir,
+            &recover::Unfinished {
+                target: target.clone(),
+                duration_ms,
+                video: video_path
+                    .as_ref()
+                    .and_then(|v| v.file_name())
+                    .map(|name| name.to_string_lossy().into_owned()),
+                video_offset_ms,
+                strokes: strokes.clone(),
+                events: events.clone(),
+                interaction_telemetry,
+                note: note.clone(),
+                windows: activity.windows.clone(),
+                cursor: activity.cursor.clone(),
             },
-            ..SourceExtras::default()
-        },
-    );
-    if built.is_ok() {
-        recover::finished(bundle_dir);
-    }
-    built
+        )?;
+        let crop_settings = (target.mode == CaptureMode::Display)
+            .then(autocrop::Settings::configured)
+            .flatten();
+        let ((transcript, transcribe_ms), (predecoded, prepared)) = std::thread::scope(|scope| {
+            let transcribe_handle = scope.spawn(|| {
+                let t0 = std::time::Instant::now();
+                let tr = transcribe::transcribe(
+                    has_wav.then_some(wav_path.as_path()),
+                    recorded_audio.as_ref(),
+                );
+                (tr, t0.elapsed().as_millis() as u64)
+            });
+            let pre = if let Some(ref movie) = video_path
+                && !frames.is_empty()
+            {
+                let mut preview_marks = marks_of(&strokes);
+                let budget = keyframe_budget(duration_ms);
+                let preview = select_keyframes(
+                    &frames,
+                    &strokes,
+                    &mut preview_marks,
+                    &events,
+                    &TranscriptData::default(),
+                    budget,
+                );
+                // Marks alone filled the budget, so speech can't change the selection.
+                let marks_fill = preview.len() == budget
+                    && preview
+                        .iter()
+                        .all(|(k, _)| k.reason == model::KeyframeReason::Mark);
+                let times: Vec<u64> = preview.iter().map(|(k, _)| k.t).collect();
+                let decoded =
+                    movie_frames_at(movie, &times, video_offset_ms, 0).unwrap_or_default();
+                if duration_ms >= 20_000 {
+                    let cache = if marks_fill {
+                        Vec::new()
+                    } else {
+                        decoded.clone()
+                    };
+                    let (merged, matched) = merge_full_keyframes(preview, decoded);
+                    let vis = (matched == merged.len())
+                        .then(|| {
+                            prepare_visuals(
+                                merged,
+                                frames.first(),
+                                crop_settings.as_ref(),
+                                &target,
+                                duration_ms,
+                                &strokes,
+                                &preview_marks,
+                                &events,
+                                &activity,
+                            )
+                        })
+                        .flatten();
+                    (cache, vis)
+                } else {
+                    (decoded, None)
+                }
+            } else {
+                (Vec::new(), None)
+            };
+            (transcribe_handle.join().unwrap(), pre)
+        });
+
+        let built = build_bundle_from_parts(
+            bundle_dir,
+            target,
+            duration_ms,
+            frames,
+            strokes,
+            events,
+            transcript,
+            video_path.clone(),
+            note,
+            SourceExtras {
+                activity,
+                interaction_telemetry,
+                video_offset_ms,
+                autocrop: Some(crop_settings),
+                full_frames: video_path
+                    .map(|movie| movie_keyframes_with_cache(movie, video_offset_ms, predecoded)),
+                prepared,
+                timings: StageTimings {
+                    started_at: Some(started_at),
+                    stop_ms,
+                    transcribe_ms: Some(transcribe_ms),
+                    ..StageTimings::default()
+                },
+                ..SourceExtras::default()
+            },
+        );
+        let built = built?;
+        anyhow::ensure!(
+            !wav_required || built.1.audio.as_deref() == Some("audio.wav"),
+            "captured audio disappeared during bundle construction"
+        );
+        Ok(built)
+    })
 }
 
 /// Builds a Screen capture's bundle in `out`, which holds its video and `audio.wav`, from them
@@ -454,6 +468,7 @@ pub fn rebuild_screen_bundle_with(
     autocrop: Option<Option<autocrop::Settings>>,
     media: &recover::Media,
 ) -> Result<String> {
+    let _coordination = publication::coordinate(out)?;
     let started_at = std::time::Instant::now();
     let video = old
         .video
@@ -461,9 +476,10 @@ pub fn rebuild_screen_bundle_with(
         .map(|name| out.join(name))
         .filter(|p| p.is_file())
         .context("The bundle has no video")?;
+    publication::preflight_sources(out, Some(&video))?;
     let wav = out.join("audio.wav");
     let recorded = if wav.is_file() {
-        Some(audio::audio::recorded_audio_from_wav(std::fs::read(&wav)?)?)
+        Some(audio::recorded_audio_from_wav(std::fs::read(&wav)?)?)
     } else {
         None
     };
@@ -520,10 +536,11 @@ pub fn rebuild_screen_bundle_with(
 }
 
 /// A bundle without its transcript yet (the speech model was still downloading) gets it later.
-fn mark_transcript_pending(bundle_dir: &Path, bundle: &ApparentBundle) {
+fn mark_transcript_pending(bundle_dir: &Path, bundle: &ApparentBundle) -> Result<()> {
     if bundle.transcript.missing.as_ref().is_some_and(|m| m.retry) {
-        speech_model::mark_pending(bundle_dir);
+        speech_model::mark_pending(bundle_dir)?;
     }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -539,336 +556,370 @@ pub fn build_bundle_from_parts(
     note: Option<String>,
     extras: SourceExtras,
 ) -> Result<(PathBuf, ApparentBundle, String)> {
-    let total_started = extras
-        .timings
-        .started_at
-        .unwrap_or_else(std::time::Instant::now);
-    let mut marks = marks_of(&strokes);
-    for (i, &t) in extras.flags.iter().enumerate() {
-        marks.push(Mark {
-            id: format!("f{}", i + 1),
-            strokes: Vec::new(),
-            t0: t,
-            t1: t,
-            box_norm: [0.0, 0.0, 1.0, 1.0],
-            shape: Shape::Flag,
-            from: None,
-            to: None,
-            pin: None,
-            on: None,
-            description: "flagged this moment".into(),
-            frame: None,
+    publication::publish_after(bundle_dir, || {
+        let total_started = extras
+            .timings
+            .started_at
+            .unwrap_or_else(std::time::Instant::now);
+        publication::preflight_sources(bundle_dir, video_path.as_deref())?;
+        let mut marks = marks_of(&strokes);
+        for (i, &t) in extras.flags.iter().enumerate() {
+            marks.push(Mark {
+                id: format!("f{}", i + 1),
+                strokes: Vec::new(),
+                t0: t,
+                t1: t,
+                box_norm: [0.0, 0.0, 1.0, 1.0],
+                shape: Shape::Flag,
+                from: None,
+                to: None,
+                pin: None,
+                on: None,
+                description: "flagged this moment".into(),
+                frame: None,
+            });
+        }
+        let bench = std::env::var_os("APPARENT_BENCH").is_some();
+        let started = std::time::Instant::now();
+        let selected = select_keyframes(
+            &frames,
+            &strokes,
+            &mut marks,
+            &events,
+            &transcript,
+            keyframe_budget(duration_ms),
+        );
+        let select_only_at = std::time::Instant::now();
+        let matches_prepared = extras.prepared.as_ref().is_some_and(|prep| {
+            prep.keyframes.len() == selected.len()
+                && prep.keyframes.iter().zip(&selected).all(|(a, (b, _))| {
+                    a.index == b.index
+                        && a.t == b.t
+                        && a.mark_id == b.mark_id
+                        && a.cursor == b.cursor
+                        && a.file == b.file
+                })
         });
-    }
-    let bench = std::env::var_os("APPARENT_BENCH").is_some();
-    let started = std::time::Instant::now();
-    let selected = select_keyframes(
-        &frames,
-        &strokes,
-        &mut marks,
-        &events,
-        &transcript,
-        keyframe_budget(duration_ms),
-    );
-    let select_only_at = std::time::Instant::now();
-    let matches_prepared = extras.prepared.as_ref().is_some_and(|prep| {
-        prep.keyframes.len() == selected.len()
-            && prep.keyframes.iter().zip(&selected).all(|(a, (b, _))| {
-                a.index == b.index
-                    && a.t == b.t
-                    && a.mark_id == b.mark_id
-                    && a.cursor == b.cursor
-                    && a.file == b.file
-            })
-    });
-    enum BundleOutput {
-        Prepared(PreparedVisuals),
-        Rendered {
-            annotated: Vec<(model::Keyframe, RgbaFrame)>,
-            cropped: Option<(model::AutocropInfo, Vec<(model::Keyframe, RgbaFrame)>)>,
-            full_sheet: Option<RgbaFrame>,
-            contact_sheet: RgbaFrame,
-        },
-    }
+        enum BundleOutput {
+            Prepared(PreparedVisuals),
+            Rendered {
+                annotated: Vec<(model::Keyframe, RgbaFrame)>,
+                cropped: Option<(model::AutocropInfo, Vec<(model::Keyframe, RgbaFrame)>)>,
+                full_sheet: Option<RgbaFrame>,
+                contact_sheet: RgbaFrame,
+            },
+        }
 
-    let mut extras = extras;
-    let mut keyframe_warning = None;
-    let (keyframes, autocrop, selected_at, annotated_at, rendered_at, output) = if matches_prepared
-    {
-        drop(frames);
-        let mut prep = extras.prepared.take().unwrap();
-        let keyframes: Vec<model::Keyframe> = selected.into_iter().map(|(kf, _)| kf).collect();
-        let selected_at = std::time::Instant::now();
-        let autocrop = prep.autocrop.take();
-        (
-            keyframes,
-            autocrop,
-            selected_at,
-            selected_at,
-            selected_at,
-            BundleOutput::Prepared(prep),
-        )
-    } else {
-        // Only the first candidate is needed from here on (auto-crop's baseline); free the rest
-        // before the full-size keyframes arrive.
-        let baseline = {
-            let mut frames = frames;
-            frames.truncate(1);
-            frames.pop()
-        };
-        let selected = match &extras.full_frames {
-            Some(decode) if !selected.is_empty() => {
-                let times: Vec<u64> = selected.iter().map(|(k, _)| k.t).collect();
-                match decode(&times) {
-                    Ok(full) => {
-                        let total = selected.len();
-                        let (merged, matched) = merge_full_keyframes(selected, full);
-                        if matched < total {
-                            crate::capture::engine::runtime::apparent_log(format!(
-                                "Full-quality keyframes: decoded {matched} of {total}"
-                            ));
-                            keyframe_warning = Some(format!("Only {matched} of {total} keyframes could be decoded at full quality; the rest use smaller candidate frames."));
+        let mut extras = extras;
+        let mut keyframe_warning = None;
+        let (keyframes, autocrop, selected_at, annotated_at, rendered_at, output) =
+            if matches_prepared {
+                drop(frames);
+                let mut prep = extras.prepared.take().unwrap();
+                let keyframes: Vec<model::Keyframe> =
+                    selected.into_iter().map(|(kf, _)| kf).collect();
+                let selected_at = std::time::Instant::now();
+                let autocrop = prep.autocrop.take();
+                (
+                    keyframes,
+                    autocrop,
+                    selected_at,
+                    selected_at,
+                    selected_at,
+                    BundleOutput::Prepared(prep),
+                )
+            } else {
+                // Only the first candidate is needed from here on (auto-crop's baseline); free the rest
+                // before the full-size keyframes arrive.
+                let baseline = {
+                    let mut frames = frames;
+                    frames.truncate(1);
+                    frames.pop()
+                };
+                let selected = match &extras.full_frames {
+                    Some(decode) if !selected.is_empty() => {
+                        let times: Vec<u64> = selected.iter().map(|(k, _)| k.t).collect();
+                        match decode(&times) {
+                            Ok(full) => {
+                                let total = selected.len();
+                                let (merged, matched) = merge_full_keyframes(selected, full);
+                                if matched < total {
+                                    capture::apparent_log(format!(
+                                        "Full-quality keyframes: decoded {matched} of {total}"
+                                    ));
+                                    keyframe_warning = Some(format!(
+                                        "Only {matched} of {total} keyframes could be decoded at full quality; the rest use smaller candidate frames."
+                                    ));
+                                }
+                                merged
+                            }
+                            Err(error) => {
+                                capture::apparent_log(format!(
+                                    "Full-quality keyframes failed: {error:#}"
+                                ));
+                                keyframe_warning = Some(format!(
+                                    "Full-quality keyframes could not be decoded from the MP4. This capture uses smaller candidate frames.{}",
+                                    if cfg!(target_os = "linux") {
+                                        " Check Settings › Recording for an H.264 decoder repair instruction."
+                                    } else {
+                                        ""
+                                    }
+                                ));
+                                selected
+                            }
                         }
-                        merged
                     }
-                    Err(error) => {
-                        crate::capture::engine::runtime::apparent_log(format!("Full-quality keyframes failed: {error:#}"));
-                        keyframe_warning = Some(format!("Full-quality keyframes could not be decoded from the MP4. This capture uses smaller candidate frames.{}", if cfg!(target_os = "linux") { " Check Settings › Recording for an H.264 decoder repair instruction." } else { "" }));
-                        selected
+                    _ => selected,
+                };
+                let selected_at = std::time::Instant::now();
+
+                // A failed or partial MP4 decode leaves only small candidates. Their coarse change
+                // regions can miss the actual activity and make an idle cursor look like the target.
+                // Keep the whole candidate in the agent-facing images until full decode succeeds.
+                let crop_settings = if keyframe_warning.is_some() {
+                    None
+                } else {
+                    match extras.autocrop {
+                        Some(settings) => settings,
+                        None if target.mode == CaptureMode::Display => {
+                            autocrop::Settings::configured()
+                        }
+                        None => None,
+                    }
+                };
+                let (mut annotated_frames, mut cropped) = autocrop::annotate_and_crop(
+                    selected,
+                    baseline.as_ref(),
+                    crop_settings.as_ref(),
+                    &target,
+                    duration_ms,
+                    &strokes,
+                    &marks,
+                    &events,
+                    &extras.activity.windows,
+                    &extras.activity.cursor,
+                );
+                let keyframes: Vec<model::Keyframe> =
+                    annotated_frames.iter().map(|(kf, _)| kf.clone()).collect();
+                let annotated_at = std::time::Instant::now();
+
+                let (full_sheet, contact_sheet) = std::thread::scope(|scope| {
+                    let full_handle = cropped.as_ref().map(|(_, full)| {
+                        scope.spawn(|| render::render_contact_sheet_for_duration(duration_ms, full))
+                    });
+                    let sheet =
+                        render::render_contact_sheet_for_duration(duration_ms, &annotated_frames);
+                    (full_handle.map(|h| h.join().unwrap()), sheet)
+                });
+                render::stamp_keyframe_badges(&mut annotated_frames);
+                if let Some((_, full)) = &mut cropped {
+                    render::stamp_keyframe_badges(full);
+                }
+                let rendered_at = std::time::Instant::now();
+                let autocrop = cropped.as_ref().map(|(info, _)| info.clone());
+                (
+                    keyframes,
+                    autocrop,
+                    selected_at,
+                    annotated_at,
+                    rendered_at,
+                    BundleOutput::Rendered {
+                        annotated: annotated_frames,
+                        cropped,
+                        full_sheet,
+                        contact_sheet,
+                    },
+                )
+            };
+
+        let id = bundle_dir
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("apparent-bundle")
+            .to_string();
+        let video_rel = video_path
+            .map(|p| -> Result<String> {
+                anyhow::ensure!(
+                    p.parent() == Some(bundle_dir),
+                    "movie is outside its bundle"
+                );
+                Ok(p.file_name()
+                    .and_then(|n| n.to_str())
+                    .context("invalid movie name")?
+                    .to_owned())
+            })
+            .transpose()?;
+        let audio_rel = bundle_dir
+            .join("audio.wav")
+            .exists()
+            .then(|| "audio.wav".to_string());
+
+        let bundle = ApparentBundle {
+            version: 1,
+            id,
+            created_at_ms: now_epoch_ms(),
+            duration_ms,
+            target,
+            transcript,
+            note,
+            strokes,
+            marks,
+            events,
+            interaction_telemetry: extras.interaction_telemetry,
+            keyframes,
+            contact_sheet: "contact-sheet.png".into(),
+            image_quality_warning: keyframe_warning,
+            video: video_rel,
+            video_offset_ms: extras.video_offset_ms,
+            audio: audio_rel,
+            source: extras.source,
+            device: extras.device,
+            context: extras.context,
+            context_changes: extras.context_changes,
+            screens: extras.screens,
+            windows: extras.activity.windows,
+            cursor: extras.activity.cursor,
+            autocrop,
+            destination: None,
+        };
+        let summary = summary_markdown(&bundle, bundle_dir);
+
+        match output {
+            BundleOutput::Prepared(prep) => {
+                let root = publication::Directory::open(bundle_dir, true)?;
+                root.write(&bundle.contact_sheet, &prep.contact_sheet_png)?;
+                for (rel, bytes) in &prep.frame_pngs {
+                    root.write(rel, bytes)?;
+                }
+                if let (Some(info), Some(full_sheet_png)) = (&bundle.autocrop, &prep.full_sheet_png)
+                {
+                    root.write(&info.full_contact_sheet, full_sheet_png)?;
+                    for (name, bytes) in &prep.full_frame_pngs {
+                        root.write(&format!("{}/{name}", info.full_frames), bytes)?;
                     }
                 }
+                let manifest_bytes = serde_json::to_vec_pretty(&bundle)?;
+                root.write("apparent.json", &manifest_bytes)?;
+                root.write("summary.md", summary.as_bytes())?;
             }
-            _ => selected,
-        };
-        let selected_at = std::time::Instant::now();
-
-        // A failed or partial MP4 decode leaves only small candidates. Their coarse change
-        // regions can miss the actual activity and make an idle cursor look like the target.
-        // Keep the whole candidate in the agent-facing images until full decode succeeds.
-        let crop_settings = if keyframe_warning.is_some() {
-            None
-        } else {
-            match extras.autocrop {
-                Some(settings) => settings,
-                None if target.mode == CaptureMode::Display => autocrop::Settings::configured(),
-                None => None,
-            }
-        };
-        let (mut annotated_frames, mut cropped) = autocrop::annotate_and_crop(
-            selected,
-            baseline.as_ref(),
-            crop_settings.as_ref(),
-            &target,
-            duration_ms,
-            &strokes,
-            &marks,
-            &events,
-            &extras.activity.windows,
-            &extras.activity.cursor,
-        );
-        let keyframes: Vec<model::Keyframe> =
-            annotated_frames.iter().map(|(kf, _)| kf.clone()).collect();
-        let annotated_at = std::time::Instant::now();
-
-        let (full_sheet, contact_sheet) = std::thread::scope(|scope| {
-            let full_handle = cropped.as_ref().map(|(_, full)| {
-                scope.spawn(|| render::render_contact_sheet_for_duration(duration_ms, full))
-            });
-            let sheet = render::render_contact_sheet_for_duration(duration_ms, &annotated_frames);
-            (full_handle.map(|h| h.join().unwrap()), sheet)
-        });
-        render::stamp_keyframe_badges(&mut annotated_frames);
-        if let Some((_, full)) = &mut cropped {
-            render::stamp_keyframe_badges(full);
-        }
-        let rendered_at = std::time::Instant::now();
-        let autocrop = cropped.as_ref().map(|(info, _)| info.clone());
-        (
-            keyframes,
-            autocrop,
-            selected_at,
-            annotated_at,
-            rendered_at,
             BundleOutput::Rendered {
-                annotated: annotated_frames,
+                annotated,
                 cropped,
                 full_sheet,
                 contact_sheet,
-            },
-        )
-    };
-
-    let id = bundle_dir
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("apparent-bundle")
-        .to_string();
-    let video_rel = video_path.and_then(|p| {
-        p.exists()
-            .then(|| p.file_name()?.to_str().map(str::to_owned))
-            .flatten()
-    });
-    let audio_rel = bundle_dir
-        .join("audio.wav")
-        .exists()
-        .then(|| "audio.wav".to_string());
-
-    let bundle = ApparentBundle {
-        version: 1,
-        id,
-        created_at_ms: now_epoch_ms(),
-        duration_ms,
-        target,
-        transcript,
-        note,
-        strokes,
-        marks,
-        events,
-        interaction_telemetry: extras.interaction_telemetry,
-        keyframes,
-        contact_sheet: "contact-sheet.png".into(),
-        image_quality_warning: keyframe_warning,
-        video: video_rel,
-        video_offset_ms: extras.video_offset_ms,
-        audio: audio_rel,
-        source: extras.source,
-        device: extras.device,
-        context: extras.context,
-        context_changes: extras.context_changes,
-        screens: extras.screens,
-        windows: extras.activity.windows,
-        cursor: extras.activity.cursor,
-        autocrop,
-        destination: None,
-    };
-    let summary = summary_markdown(&bundle, bundle_dir);
-
-    match output {
-        BundleOutput::Prepared(prep) => {
-            std::fs::create_dir_all(bundle_dir.join("frames"))
-                .with_context(|| format!("could not create {}", bundle_dir.display()))?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ =
-                    std::fs::set_permissions(bundle_dir, std::fs::Permissions::from_mode(0o700));
+            } => {
+                std::thread::scope(|scope| -> Result<()> {
+                    let full_write = match (&cropped, &full_sheet) {
+                        (Some((info, full)), Some(sheet)) => Some(
+                            scope.spawn(|| publication::write_full(bundle_dir, info, full, sheet)),
+                        ),
+                        _ => None,
+                    };
+                    publication::write_artifacts(
+                        bundle_dir,
+                        &bundle,
+                        &annotated,
+                        &contact_sheet,
+                        &summary,
+                    )?;
+                    if let Some(handle) = full_write {
+                        handle
+                            .join()
+                            .map_err(|_| anyhow::anyhow!("Full-frame writer panicked"))??;
+                    }
+                    Ok(())
+                })?;
             }
-            std::fs::write(
-                bundle_dir.join(&bundle.contact_sheet),
-                &prep.contact_sheet_png,
-            )?;
-            for (rel, bytes) in &prep.frame_pngs {
-                std::fs::write(bundle_dir.join(rel), bytes)?;
-            }
-            if let (Some(info), Some(full_sheet_png)) = (&bundle.autocrop, &prep.full_sheet_png) {
-                let full_dir = bundle_dir.join(&info.full_frames);
-                std::fs::create_dir_all(&full_dir)?;
-                std::fs::write(bundle_dir.join(&info.full_contact_sheet), full_sheet_png)?;
-                for (name, bytes) in &prep.full_frame_pngs {
-                    std::fs::write(full_dir.join(name), bytes)?;
-                }
-            }
-            let manifest_bytes = serde_json::to_vec_pretty(&bundle)?;
-            std::fs::write(bundle_dir.join("apparent.json"), manifest_bytes)?;
-            std::fs::write(bundle_dir.join("summary.md"), summary.as_bytes())?;
         }
-        BundleOutput::Rendered {
-            annotated,
-            cropped,
-            full_sheet,
-            contact_sheet,
-        } => {
-            std::thread::scope(|scope| -> Result<()> {
-                let full_write = match (&cropped, &full_sheet) {
-                    (Some((info, full)), Some(sheet)) => Some(
-                        scope.spawn(|| autocrop::write_full_frames(bundle_dir, info, full, sheet)),
-                    ),
-                    _ => None,
-                };
-                write_bundle_artifacts(bundle_dir, &bundle, &annotated, &contact_sheet, &summary)?;
-                if let Some(handle) = full_write {
-                    handle
-                        .join()
-                        .map_err(|_| anyhow::anyhow!("Full-frame writer panicked"))??;
-                }
-                Ok(())
-            })?;
-        }
-    }
 
-    let finished = std::time::Instant::now();
-    let select_ms = (select_only_at - started).as_millis() as u64;
-    let decode_ms = (selected_at - select_only_at).as_millis() as u64;
-    let autocrop_ms = (annotated_at - selected_at).as_millis() as u64;
-    let sheet_ms = (rendered_at - annotated_at).as_millis() as u64;
-    let write_ms = (finished - rendered_at).as_millis() as u64;
-    let total_ms = (finished - total_started).as_millis() as u64;
-    let mut parts = Vec::with_capacity(10);
-    if let Some(ms) = extras.timings.stop_ms {
-        parts.push(format!("stop {ms}ms"));
-    }
-    if let Some(ms) = extras.timings.audio_ms {
-        parts.push(format!("audio {ms}ms"));
-    }
-    if let Some(ms) = extras.timings.candidates_ms {
-        parts.push(format!("candidates {ms}ms"));
-    }
-    if let Some(ms) = extras.timings.transcribe_ms {
-        parts.push(format!("transcribe {ms}ms"));
-    }
-    parts.extend([
-        format!("select {select_ms}ms"),
-        format!("decode {decode_ms}ms"),
-        format!("autocrop {autocrop_ms}ms"),
-        format!("sheet {sheet_ms}ms"),
-        format!("write {write_ms}ms"),
-        format!("total {total_ms}ms"),
-    ]);
-    crate::capture::engine::runtime::apparent_log(format!("finish timings: {} · {}", bundle.id, parts.join(" · ")));
-    let trace = FinishTrace {
-        version: 1,
-        stop_ms: extras.timings.stop_ms,
-        audio_ms: extras.timings.audio_ms,
-        candidates_ms: extras.timings.candidates_ms,
-        transcribe_ms: extras.timings.transcribe_ms,
-        select_ms,
-        decode_ms,
-        autocrop_ms,
-        sheet_ms,
-        write_ms,
-        total_ms,
-        prepared_visuals: matches_prepared,
-    };
-    if let Err(error) = save_finish_trace(bundle_dir, &trace) {
-        crate::capture::engine::runtime::apparent_log(format!("Could not save finish trace: {error:#}"));
-    }
-    if bench && !matches_prepared {
-        for (name, elapsed) in [
-            ("selection_ms", selected_at - started),
-            ("annotation_ms", annotated_at - selected_at),
-            ("contact_sheet_ms", rendered_at - annotated_at),
-            ("artifacts_ms", finished - rendered_at),
-            ("pipeline_ms", finished - started),
-        ] {
-            eprintln!("BENCH {name}={:.3}", elapsed.as_secs_f64() * 1000.0);
+        let finished = std::time::Instant::now();
+        let select_ms = (select_only_at - started).as_millis() as u64;
+        let decode_ms = (selected_at - select_only_at).as_millis() as u64;
+        let autocrop_ms = (annotated_at - selected_at).as_millis() as u64;
+        let sheet_ms = (rendered_at - annotated_at).as_millis() as u64;
+        let write_ms = (finished - rendered_at).as_millis() as u64;
+        let total_ms = (finished - total_started).as_millis() as u64;
+        let mut parts = Vec::with_capacity(10);
+        if let Some(ms) = extras.timings.stop_ms {
+            parts.push(format!("stop {ms}ms"));
         }
-    }
+        if let Some(ms) = extras.timings.audio_ms {
+            parts.push(format!("audio {ms}ms"));
+        }
+        if let Some(ms) = extras.timings.candidates_ms {
+            parts.push(format!("candidates {ms}ms"));
+        }
+        if let Some(ms) = extras.timings.transcribe_ms {
+            parts.push(format!("transcribe {ms}ms"));
+        }
+        parts.extend([
+            format!("select {select_ms}ms"),
+            format!("decode {decode_ms}ms"),
+            format!("autocrop {autocrop_ms}ms"),
+            format!("sheet {sheet_ms}ms"),
+            format!("write {write_ms}ms"),
+            format!("total {total_ms}ms"),
+        ]);
+        capture::apparent_log(format!(
+            "finish timings: {} · {}",
+            bundle.id,
+            parts.join(" · ")
+        ));
+        let trace = FinishTrace {
+            version: 1,
+            stop_ms: extras.timings.stop_ms,
+            audio_ms: extras.timings.audio_ms,
+            candidates_ms: extras.timings.candidates_ms,
+            transcribe_ms: extras.timings.transcribe_ms,
+            select_ms,
+            decode_ms,
+            autocrop_ms,
+            sheet_ms,
+            write_ms,
+            total_ms,
+            prepared_visuals: matches_prepared,
+        };
+        if let Err(error) = save_finish_trace(bundle_dir, &trace) {
+            capture::apparent_log(format!("Could not save finish trace: {error:#}"));
+        }
+        if bench && !matches_prepared {
+            for (name, elapsed) in [
+                ("selection_ms", selected_at - started),
+                ("annotation_ms", annotated_at - selected_at),
+                ("contact_sheet_ms", rendered_at - annotated_at),
+                ("artifacts_ms", finished - rendered_at),
+                ("pipeline_ms", finished - started),
+            ] {
+                eprintln!("BENCH {name}={:.3}", elapsed.as_secs_f64() * 1000.0);
+            }
+        }
 
-    mark_transcript_pending(bundle_dir, &bundle);
-    Ok((bundle_dir.to_path_buf(), bundle, summary))
+        mark_transcript_pending(bundle_dir, &bundle)?;
+        Ok((bundle_dir.to_path_buf(), bundle, summary))
+    })
 }
+
+#[cfg(test)]
+#[path = "bundle_processing/publication_tests.rs"]
+mod publication_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capture::desktop::demo::generate_demo_bundle;
+    use crate::capture::engine::sketch;
+    use crate::shared::handoff;
+    use crate::shared::ids::make_bundle_id;
     use crate::shared::model::TargetFrame;
-    use crate::capture::{desktop::demo::generate_demo_bundle, engine::sketch};
-    use crate::shared::{handoff, ids::make_bundle_id};
 
     #[test]
     fn movie_without_safe_screenshots_is_not_a_bundle() {
         let dir = std::env::temp_dir().join(make_bundle_id());
         std::fs::create_dir(&dir).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let movie = dir.join("recording.mp4");
         std::fs::write(&movie, b"untrusted movie bytes").unwrap();
         std::fs::write(dir.join("audio.wav"), b"audio bytes").unwrap();
@@ -879,12 +930,18 @@ mod tests {
             window_title: None,
             window_id: None,
             display_id: 1,
-            frame: TargetFrame { x: 0.0, y: 0.0, width: 32.0, height: 32.0, scale: 1.0 },
+            frame: TargetFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 32.0,
+                height: 32.0,
+                scale: 1.0,
+            },
         };
         let error = finalize_capture_bundle(
             &dir,
             target,
-            crate::capture::engine::runtime::ScreenRecording {
+            capture::ScreenRecording {
                 frames: Vec::new(),
                 video: Some(movie.clone()),
                 duration_ms: 1_000,
@@ -902,9 +959,21 @@ mod tests {
         assert!(error.to_string().contains(&movie.display().to_string()));
         assert!(movie.exists());
         assert!(!dir.join("apparent.json").exists());
-        assert!(dir.join(crate::capture::engine::bundle::recover::UNSAFE_VIDEO).exists());
-        assert!(!crate::capture::engine::bundle::recover::owed(&dir), "a later recovery must not decode unsafe movie frames");
-        assert!(crate::capture::engine::bundle::recover::rebuild(&dir, &crate::capture::engine::bundle::recover::Media::SYSTEM).is_err());
+        assert!(
+            dir.join(crate::capture::engine::bundle::recover::UNSAFE_VIDEO)
+                .exists()
+        );
+        assert!(
+            !crate::capture::engine::bundle::recover::owed(&dir),
+            "a later recovery must not decode unsafe movie frames"
+        );
+        assert!(
+            crate::capture::engine::bundle::recover::rebuild(
+                &dir,
+                &crate::capture::engine::bundle::recover::Media::SYSTEM
+            )
+            .is_err()
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -919,32 +988,56 @@ mod tests {
             window_title: None,
             window_id: None,
             display_id: 1,
-            frame: TargetFrame { x: 0.0, y: 0.0, width: 32.0, height: 32.0, scale: 1.0 },
+            frame: TargetFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 32.0,
+                height: 32.0,
+                scale: 1.0,
+            },
         };
         let (_, bundle, summary) = build_bundle_from_parts(
-            &dir, target, 1000,
+            &dir,
+            target,
+            1000,
             vec![RgbaFrame::new(0, 32, 32, vec![128; 32 * 32 * 4])],
-            vec![], vec![], TranscriptData::default(), None, None,
+            vec![],
+            vec![],
+            TranscriptData::default(),
+            None,
+            None,
             SourceExtras {
                 interaction_telemetry: Some(model::InteractionTelemetry::VideoOnly),
                 autocrop: Some(None),
                 ..Default::default()
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert!(bundle.events.is_empty());
         assert!(bundle.marks.is_empty());
         assert!(summary.contains("clicks and Shift ink were not collected"));
-        assert_eq!(std::fs::read_to_string(dir.join("summary.md")).unwrap(), summary);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("summary.md")).unwrap(),
+            summary
+        );
         let (_, loaded) = handoff::load_bundle(&dir).unwrap();
-        assert_eq!(loaded.interaction_telemetry, Some(model::InteractionTelemetry::VideoOnly));
-        assert!(sketch::summary_markdown_with(&loaded, &dir, true).contains("clicks and Shift ink were not collected"));
-        let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("apparent.json")).unwrap()).unwrap();
+        assert_eq!(
+            loaded.interaction_telemetry,
+            Some(model::InteractionTelemetry::VideoOnly)
+        );
+        assert!(
+            sketch::summary_markdown_with(&loaded, &dir, true)
+                .contains("clicks and Shift ink were not collected")
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("apparent.json")).unwrap()).unwrap();
         assert_eq!(manifest["interactionTelemetry"], "videoOnly");
         let old: model::ApparentBundle = serde_json::from_value({
             let mut old = manifest;
             old.as_object_mut().unwrap().remove("interactionTelemetry");
             old
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(old.interaction_telemetry, None);
         assert!(!sketch::summary_markdown_with(&old, &dir, false).contains("timed CLI video only"));
         std::fs::remove_dir_all(root).unwrap();
@@ -967,6 +1060,10 @@ mod tests {
     fn finish_trace_contains_only_timings() {
         let dir = std::env::temp_dir().join(make_bundle_id());
         std::fs::create_dir_all(&dir).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let trace = FinishTrace {
             version: 1,
             stop_ms: Some(8),
@@ -983,7 +1080,8 @@ mod tests {
         };
         let path = dir.join("finish-trace.json");
         save_finish_trace(&dir, &trace).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(json["transcribeMs"], 40);
         assert_eq!(json["totalMs"], 50);
         assert_eq!(json["preparedVisuals"], false);
@@ -1062,24 +1160,44 @@ mod tests {
         let bundle_dir = dir.join("fallback.apparent");
         let target = TargetInfo {
             mode: CaptureMode::Window,
-            app: None, bundle_id: None, window_title: None, window_id: None,
+            app: None,
+            bundle_id: None,
+            window_title: None,
+            window_id: None,
             display_id: 1,
-            frame: TargetFrame { x: 0.0, y: 0.0, width: 32.0, height: 32.0, scale: 1.0 },
+            frame: TargetFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 32.0,
+                height: 32.0,
+                scale: 1.0,
+            },
         };
         let frames = vec![RgbaFrame::new(0, 32, 32, vec![128; 32 * 32 * 4])];
         let (_, bundle, summary) = build_bundle_from_parts(
-            &bundle_dir, target, 1000, frames, vec![], vec![],
-            TranscriptData::default(), None, None,
+            &bundle_dir,
+            target,
+            1000,
+            frames,
+            vec![],
+            vec![],
+            TranscriptData::default(),
+            None,
+            None,
             SourceExtras {
                 full_frames: Some(Box::new(|_| anyhow::bail!("decoder missing"))),
                 autocrop: Some(None),
                 ..SourceExtras::default()
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(bundle.keyframes.len(), 1);
         assert!(summary.contains("Image quality: Full-quality keyframes could not be decoded"));
         assert!(summary.contains("smaller candidate frames"));
-        assert_eq!(std::fs::read_to_string(bundle_dir.join("summary.md")).unwrap(), summary);
+        assert_eq!(
+            std::fs::read_to_string(bundle_dir.join("summary.md")).unwrap(),
+            summary
+        );
         let (directory, mut loaded) = handoff::load_bundle(&bundle_dir).unwrap();
         // macOS may canonicalize /var to /private/var when loading the bundle.
         // Regenerating for the original path must preserve the written summary.
@@ -1098,9 +1216,18 @@ mod tests {
         let bundle_dir = root.join("fallback.apparent");
         let target = TargetInfo {
             mode: CaptureMode::Display,
-            app: None, bundle_id: None, window_title: None, window_id: None,
+            app: None,
+            bundle_id: None,
+            window_title: None,
+            window_id: None,
             display_id: 1,
-            frame: TargetFrame { x: 0.0, y: 0.0, width: 480.0, height: 300.0, scale: 1.0 },
+            frame: TargetFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 480.0,
+                height: 300.0,
+                scale: 1.0,
+            },
         };
         let frame = |t, x: usize| {
             let mut rgba = vec![255; 480 * 300 * 4];
@@ -1114,21 +1241,35 @@ mod tests {
         };
         let frames = vec![frame(0, 20), frame(1_000, 40)];
         let (_, bundle, summary) = build_bundle_from_parts(
-            &bundle_dir, target, 1_100, frames, vec![], vec![],
-            TranscriptData::default(), None, None,
+            &bundle_dir,
+            target,
+            1_100,
+            frames,
+            vec![],
+            vec![],
+            TranscriptData::default(),
+            None,
+            None,
             SourceExtras {
                 full_frames: Some(Box::new(|_| anyhow::bail!("decoder missing"))),
                 autocrop: Some(Some(autocrop::Settings::default())),
                 activity: windows::ActivityLog {
-                    cursor: vec![windows::CursorSample(0, 0.9, 0.85), windows::CursorSample(1_100, 0.9, 0.85)],
+                    cursor: vec![
+                        windows::CursorSample(0, 0.9, 0.85),
+                        windows::CursorSample(1_100, 0.9, 0.85),
+                    ],
                     ..Default::default()
                 },
                 ..SourceExtras::default()
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert!(summary.contains("Image quality:"));
         assert!(!bundle.keyframes.is_empty());
-        assert!(bundle.autocrop.is_none(), "fallback frames must not be cursor-cropped");
+        assert!(
+            bundle.autocrop.is_none(),
+            "fallback frames must not be cursor-cropped"
+        );
         // The idle pointer is at bottom-right; the moving target is at top-left.
         for key in &bundle.keyframes {
             let bytes = std::fs::read(bundle_dir.join(&key.file)).unwrap();
@@ -1137,13 +1278,23 @@ mod tests {
             let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
             let info = reader.next_frame(&mut pixels).unwrap();
             assert_eq!((info.width, info.height), (480, 300));
-            assert!(pixels[..info.buffer_size()].chunks_exact(4).any(|p| p[0] > 150 && p[1] < 40 && p[2] < 40));
+            assert!(
+                pixels[..info.buffer_size()]
+                    .chunks_exact(4)
+                    .any(|p| p[0] > 150 && p[1] < 40 && p[2] < 40)
+            );
         }
         let sheet = std::fs::read(bundle_dir.join("contact-sheet.png")).unwrap();
-        let mut reader = png::Decoder::new(std::io::Cursor::new(sheet)).read_info().unwrap();
+        let mut reader = png::Decoder::new(std::io::Cursor::new(sheet))
+            .read_info()
+            .unwrap();
         let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut pixels).unwrap();
-        assert!(pixels[..info.buffer_size()].chunks_exact(4).any(|p| p[0] > 150 && p[1] < 40 && p[2] < 40));
+        assert!(
+            pixels[..info.buffer_size()]
+                .chunks_exact(4)
+                .any(|p| p[0] > 150 && p[1] < 40 && p[2] < 40)
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1152,23 +1303,45 @@ mod tests {
         let root = std::env::temp_dir().join(make_bundle_id());
         let target = TargetInfo {
             mode: CaptureMode::Display,
-            app: None, bundle_id: None, window_title: None, window_id: None,
+            app: None,
+            bundle_id: None,
+            window_title: None,
+            window_id: None,
             display_id: 1,
-            frame: TargetFrame { x: 0.0, y: 0.0, width: 1280.0, height: 800.0, scale: 1.0 },
+            frame: TargetFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 800.0,
+                scale: 1.0,
+            },
         };
         let candidate = RgbaFrame::new(0, 320, 200, vec![128; 320 * 200 * 4]);
-        // Successful decode still permits tight crops for deliberate input.
-        // A resting cursor alone, without window metadata, must retain the screen.
-        let click = model::InteractionEvent::Click {
-            t: 0, x: 0.5, y: 0.5, button: None, label: None, role: None,
-        };
         let (_, bundle, _) = build_bundle_from_parts(
-            &root, target, 1_000, vec![candidate], vec![], vec![click],
-            TranscriptData::default(), None, None,
+            &root,
+            target,
+            1_000,
+            vec![candidate],
+            vec![],
+            // A stationary cursor alone intentionally cannot trigger a tight crop.
+            vec![InteractionEvent::Click {
+                t: 0,
+                x: 0.5,
+                y: 0.5,
+                button: None,
+                label: None,
+                role: None,
+            }],
+            TranscriptData::default(),
+            None,
+            None,
             SourceExtras {
-                full_frames: Some(Box::new(|times| Ok(times.iter().map(|&t| {
-                    RgbaFrame::new(t, 1280, 800, vec![128; 1280 * 800 * 4])
-                }).collect()))),
+                full_frames: Some(Box::new(|times| {
+                    Ok(times
+                        .iter()
+                        .map(|&t| RgbaFrame::new(t, 1280, 800, vec![128; 1280 * 800 * 4]))
+                        .collect())
+                })),
                 autocrop: Some(Some(autocrop::Settings::default())),
                 activity: windows::ActivityLog {
                     cursor: vec![windows::CursorSample(0, 0.5, 0.5)],
@@ -1176,9 +1349,13 @@ mod tests {
                 },
                 ..SourceExtras::default()
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert!(bundle.image_quality_warning.is_none());
-        assert!(bundle.autocrop.is_some(), "normal decode should still autocrop");
+        assert!(
+            bundle.autocrop.is_some(),
+            "normal decode should still autocrop"
+        );
         assert!(root.join("frames-full/frame-01.png").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1188,35 +1365,78 @@ mod tests {
         let root = std::env::temp_dir().join(make_bundle_id());
         let target = TargetInfo {
             mode: CaptureMode::Display,
-            app: None, bundle_id: None, window_title: None, window_id: None,
+            app: None,
+            bundle_id: None,
+            window_title: None,
+            window_id: None,
             display_id: 1,
-            frame: TargetFrame { x: 0.0, y: 0.0, width: 1280.0, height: 800.0, scale: 1.0 },
+            frame: TargetFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 800.0,
+                scale: 1.0,
+            },
         };
         let candidate = |t| RgbaFrame::new(t, 480, 300, vec![180; 480 * 300 * 4]);
         let click = |t| model::InteractionEvent::Click {
-            t, x: 0.1, y: 0.1, button: None, label: None, role: None,
+            t,
+            x: 0.1,
+            y: 0.1,
+            button: None,
+            label: None,
+            role: None,
         };
         let (_, bundle, summary) = build_bundle_from_parts(
-            &root, target, 10_000, vec![candidate(0), candidate(5_000)],
-            vec![], vec![click(0), click(5_000)], TranscriptData::default(), None, None,
+            &root,
+            target,
+            10_000,
+            vec![candidate(0), candidate(5_000)],
+            vec![],
+            vec![click(0), click(5_000)],
+            TranscriptData::default(),
+            None,
+            None,
             SourceExtras {
-                full_frames: Some(Box::new(|times| Ok(vec![RgbaFrame::new(
-                    times[0], 1280, 800, vec![180; 1280 * 800 * 4],
-                )]))),
+                full_frames: Some(Box::new(|times| {
+                    Ok(vec![RgbaFrame::new(
+                        times[0],
+                        1280,
+                        800,
+                        vec![180; 1280 * 800 * 4],
+                    )])
+                })),
                 autocrop: Some(Some(autocrop::Settings::default())),
                 ..SourceExtras::default()
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert!(summary.contains("Image quality:"));
-        assert_eq!(bundle.keyframes.len(), 2, "one decoded and one candidate keyframe");
+        assert_eq!(
+            bundle.keyframes.len(),
+            2,
+            "one decoded and one candidate keyframe"
+        );
         assert!(bundle.autocrop.is_none());
-        let sizes: Vec<_> = bundle.keyframes.iter().map(|key| {
-            let bytes = std::fs::read(root.join(&key.file)).unwrap();
-            let reader = png::Decoder::new(std::io::Cursor::new(bytes)).read_info().unwrap();
-            (reader.info().width, reader.info().height)
-        }).collect();
-        assert!(sizes.contains(&(1280, 800)), "decoded full frame must survive: {sizes:?}");
-        assert!(sizes.contains(&(480, 300)), "fallback candidate must survive: {sizes:?}");
+        let sizes: Vec<_> = bundle
+            .keyframes
+            .iter()
+            .map(|key| {
+                let bytes = std::fs::read(root.join(&key.file)).unwrap();
+                let reader = png::Decoder::new(std::io::Cursor::new(bytes))
+                    .read_info()
+                    .unwrap();
+                (reader.info().width, reader.info().height)
+            })
+            .collect();
+        assert!(
+            sizes.contains(&(1280, 800)),
+            "decoded full frame must survive: {sizes:?}"
+        );
+        assert!(
+            sizes.contains(&(480, 300)),
+            "fallback candidate must survive: {sizes:?}"
+        );
         assert!(root.join("contact-sheet.png").exists());
         std::fs::remove_dir_all(root).unwrap();
     }

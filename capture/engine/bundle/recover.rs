@@ -8,9 +8,8 @@
 //! Captures from before the journal (0.3.10 on Windows crashed the same way) left only
 //! `recording.mp4` and `audio.wav`. Once those have sat untouched for `ORPHAN_SETTLE` they are
 //! rebuilt too, from the video and audio alone: the whole frame, no ink or clicks, keyframes from
-//! scene changes and the transcript. New captures write narration continuously. Their kernel
-//! lease excludes live writers; a dead writer's narration can be repaired without ever decoding
-//! a privacy-excluded movie. Recording-time recovery is audio-only, not a Screen bundle.
+//! scene changes and the transcript. Continuous narration holds a kernel lease excluding live
+//! writers; dead-writer audio recovery never decodes privacy-excluded video.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -29,43 +28,68 @@ pub const UNFINISHED: &str = "unfinished.json";
 pub const RECOVERING: &str = ".recovering";
 /// A live capture without safe screenshots must not be rebuilt from its potentially private movie.
 pub const UNSAFE_VIDEO: &str = ".unsafe-video";
+
 pub const CANCELLED: &str = ".cancelled";
 
 fn cancelled(dir: &Path) -> bool {
     dir.join(CANCELLED).exists()
-        || dir.file_name().is_some_and(|name| name.to_string_lossy().starts_with(".cancelled-"))
+        || dir
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(".cancelled-"))
 }
 
 /// Replace metadata atomically rather than following an existing symlink or hard link.
 fn write_metadata(dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
-    let temporary = dir.join(format!(".metadata-{}", crate::shared::ids::make_bundle_id()));
+    let temporary = dir.join(format!(
+        ".metadata-{}",
+        crate::shared::ids::make_bundle_id()
+    ));
     let result = (|| -> Result<()> {
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
-            .mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&temporary)?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         std::fs::rename(&temporary, dir.join(name))?;
         std::fs::File::open(dir)?.sync_all()?;
         Ok(())
     })();
-    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
     result
 }
 
 /// Persist cancellation before stopping the writer: a crash or failed deletion must not revive it.
 pub fn cancel(dir: &Path) -> Result<()> {
-    write_metadata(dir, CANCELLED, b"Cancelled by the recording owner; do not recover\n")
+    write_metadata(
+        dir,
+        CANCELLED,
+        b"Cancelled by the recording owner; do not recover\n",
+    )
 }
 
 /// Call after all capture writers stop. Move outside the capture namespace before recursive
 /// deletion, so removal of the internal tombstone cannot resurrect partially deleted media.
 pub fn quarantine_cancelled(dir: &Path) -> Result<PathBuf> {
-    anyhow::ensure!(cancelled(dir), "Cancellation must be durable before cleanup");
+    anyhow::ensure!(
+        cancelled(dir),
+        "Cancellation must be durable before cleanup"
+    );
     let parent = dir.parent().context("Cancelled capture has no parent")?;
-    let destination = parent.join(format!(".cancelled-{}", crate::shared::ids::make_bundle_id()));
-    anyhow::ensure!(!destination.exists(), "Cancelled capture destination already exists");
+    let destination = parent.join(format!(
+        ".cancelled-{}",
+        crate::shared::ids::make_bundle_id()
+    ));
+    anyhow::ensure!(
+        !destination.exists(),
+        "Cancelled capture destination already exists"
+    );
     std::fs::rename(dir, &destination)?;
     std::fs::File::open(parent)?.sync_all()?;
     Ok(destination)
@@ -73,8 +97,12 @@ pub fn quarantine_cancelled(dir: &Path) -> Result<PathBuf> {
 
 pub fn delete_cancelled(dir: &Path) -> Result<()> {
     let destination = quarantine_cancelled(dir)?;
-    std::fs::remove_dir_all(&destination)
-        .with_context(|| format!("Cancelled assets remain at {}; recovery is forbidden", destination.display()))?;
+    std::fs::remove_dir_all(&destination).with_context(|| {
+        format!(
+            "Cancelled assets remain at {}; recovery is forbidden",
+            destination.display()
+        )
+    })?;
     std::fs::File::open(dir.parent().context("Missing capture parent")?)?.sync_all()?;
     Ok(())
 }
@@ -120,13 +148,13 @@ pub struct Unfinished {
     pub cursor: Vec<CursorSample>,
 }
 
-pub fn write(bundle_dir: &Path, unfinished: &Unfinished) {
-    let written = serde_json::to_vec(unfinished)
-        .map_err(anyhow::Error::from)
-        .and_then(|bytes| Ok(std::fs::write(bundle_dir.join(UNFINISHED), bytes)?));
-    if let Err(error) = written {
-        apparent_log(format!("recover: could not write {UNFINISHED}: {error:#}"));
-    }
+pub fn write(bundle_dir: &Path, unfinished: &Unfinished) -> Result<()> {
+    crate::capture::engine::bundle::bundle_processing::publication::write(
+        bundle_dir,
+        UNFINISHED,
+        &serde_json::to_vec(unfinished)?,
+    )
+    .context("Could not persist recovery journal")
 }
 
 pub fn finished(bundle_dir: &Path) {
@@ -139,7 +167,10 @@ pub fn finished(bundle_dir: &Path) {
 /// Protect a new screen recording before its movie can be written. Refuse occupied directories:
 /// an old orphan's recovery could already be in flight and must not decode the new movie.
 pub fn begin_screen_capture(bundle_dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(bundle_dir)?;
+    // Create private capture state; reject unsafe existing directories rather than repairing them.
+    let _root = crate::capture::engine::bundle::bundle_processing::publication::Directory::open(
+        bundle_dir, true,
+    )?;
     anyhow::ensure!(
         std::fs::read_dir(bundle_dir)?.next().is_none(),
         "{} is not empty; use a new output directory for a screen capture",
@@ -167,8 +198,10 @@ pub fn mark_unsafe_video(bundle_dir: &Path) -> Result<()> {
 
 pub fn read(bundle_dir: &Path) -> Result<Unfinished> {
     let path = bundle_dir.join(UNFINISHED);
-    serde_json::from_slice(
-        &std::fs::read(&path).with_context(|| format!("Could not read {}", path.display()))?,
+    serde_json::from_str(
+        &crate::capture::engine::bundle::bundle_processing::publication::read_text(
+            bundle_dir, UNFINISHED,
+        )?,
     )
     .with_context(|| format!("Invalid {}", path.display()))
 }
@@ -184,7 +217,10 @@ fn orphaned(dir: &Path) -> bool {
 
 /// Whether a build is still owed to `dir`: nothing built it and it hasn't been tried.
 pub fn owed(dir: &Path) -> bool {
-    !dir.join("apparent.json").exists()
+    (!dir.join("apparent.json").exists()
+        || dir
+            .join(crate::capture::engine::bundle::bundle_processing::publication::IN_PROGRESS)
+            .exists())
         && !cancelled(dir)
         && !dir.join(RECOVERING).exists()
         && !persistence::live(dir)
@@ -225,7 +261,10 @@ pub fn pending(captures: &Path, now: SystemTime) -> Vec<PathBuf> {
 }
 
 /// What an orphaned bundle's build would have been given: its whole video as a Screen capture.
-pub fn orphan_recipe(video: &crate::capture::desktop::helper::Probe, audio_ms: Option<u64>) -> Unfinished {
+pub fn orphan_recipe(
+    video: &crate::capture::desktop::helper::Probe,
+    audio_ms: Option<u64>,
+) -> Unfinished {
     // The audio runs from the start of the capture, the movie from its first frame.
     let offset = audio_ms
         .map_or(0, |audio| audio.saturating_sub(video.duration_ms))
@@ -262,8 +301,12 @@ pub fn orphan_recipe(video: &crate::capture::desktop::helper::Probe, audio_ms: O
 #[derive(Clone, Copy)]
 pub struct Media {
     pub probe: fn(&Path) -> Result<crate::capture::desktop::helper::Probe>,
-    pub frames: fn(&Path, crate::capture::desktop::helper::FrameTimes, u32) -> Result<Vec<RgbaFrame>>,
-    pub transcribe: fn(Option<&Path>, Option<&crate::capture::engine::runtime::audio::audio::RecordedAudio>) -> TranscriptData,
+    pub frames:
+        fn(&Path, crate::capture::desktop::helper::FrameTimes, u32) -> Result<Vec<RgbaFrame>>,
+    pub transcribe: fn(
+        Option<&Path>,
+        Option<&crate::capture::engine::runtime::audio::audio::RecordedAudio>,
+    ) -> TranscriptData,
 }
 
 impl Media {
@@ -277,19 +320,32 @@ impl Media {
 /// Builds one bundle in place from its journal, or from its video and audio alone, and marks it
 /// tried first so a crash here isn't repeated at every launch.
 pub fn rebuild(dir: &Path, media: &Media) -> Result<String> {
-    anyhow::ensure!(!cancelled(dir), "Recording was cancelled; recovery is forbidden");
-    anyhow::ensure!(!dir.join("apparent.json").exists(), "Bundle is already built; use apparent reprocess");
-    let lease = dir.join(persistence::RECORDING).exists()
-        .then(|| persistence::Lease::acquire(dir)).transpose()?;
+    anyhow::ensure!(
+        !cancelled(dir),
+        "Recording was cancelled; recovery is forbidden"
+    );
+    let _publication =
+        crate::capture::engine::bundle::bundle_processing::publication::coordinate(dir)?;
+    let lease = dir
+        .join(persistence::RECORDING)
+        .exists()
+        .then(|| persistence::Lease::acquire(dir))
+        .transpose()?;
     if let Some(ref lease) = lease {
         // One automatic attempt even when the file is empty/corrupt or the disk is still full.
         write_metadata(dir, RECOVERING, b"")?;
         let count = persistence::repair(dir, lease)?;
         if dir.join(UNSAFE_VIDEO).exists() {
-            anyhow::ensure!(count > 0, "No narration samples reached disk in {}", dir.display());
+            anyhow::ensure!(
+                count > 0,
+                "No narration samples reached disk in {}",
+                dir.display()
+            );
             let message = format!(
                 "Recovered narration only: {} ({} samples, {} ms). No screen bundle was rebuilt: privacy-filtered screenshots and recording-time interactions did not survive. Raw video remains excluded. The unsaved tail is unknown.\n",
-                dir.join(AUDIO).display(), count, count as u64 * 1_000 / 16_000,
+                dir.join(AUDIO).display(),
+                count,
+                count as u64 * 1_000 / 16_000,
             );
             // A separate receipt is not a handoff or a claim that a Screen bundle exists.
             write_metadata(dir, "narration-recovered.txt", message.as_bytes())?;
@@ -304,20 +360,33 @@ pub fn rebuild(dir: &Path, media: &Media) -> Result<String> {
         dir.display()
     );
     anyhow::ensure!(
-        !dir.join("apparent.json").exists(),
+        !dir.join("apparent.json").exists()
+            || (dir
+                .join(crate::capture::engine::bundle::bundle_processing::publication::IN_PROGRESS)
+                .exists()
+                && dir.join(UNFINISHED).is_file()),
         "{} is already built; `apparent reprocess` rebuilds it into a new bundle",
         dir.display()
     );
-    write_metadata(dir, RECOVERING, b"")?;
+    crate::capture::engine::bundle::bundle_processing::publication::write(dir, RECOVERING, b"")?;
     apparent_log(format!("recover: rebuilding {}", dir.display()));
     let result = if dir.join(UNFINISHED).is_file() {
-        read(dir)
-            .and_then(|unfinished| crate::capture::engine::bundle::bundle_processing::rebuild_screen_bundle_with(dir, unfinished, None, media))
+        read(dir).and_then(|unfinished| {
+            crate::capture::engine::bundle::bundle_processing::rebuild_screen_bundle_with(
+                dir, unfinished, None, media,
+            )
+        })
     } else if orphaned(dir) {
+        crate::capture::engine::bundle::bundle_processing::publication::preflight_sources(
+            dir,
+            Some(&dir.join(VIDEO)),
+        )?;
         let probe = (media.probe)(&dir.join(VIDEO));
         let audio_ms = std::fs::read(dir.join(AUDIO))
             .ok()
-            .and_then(|wav| crate::capture::engine::runtime::audio::audio::recorded_audio_from_wav(wav).ok())
+            .and_then(|wav| {
+                crate::capture::engine::runtime::audio::audio::recorded_audio_from_wav(wav).ok()
+            })
             .map(|audio| audio.duration_ms);
         probe.and_then(|probe| {
             crate::capture::engine::bundle::bundle_processing::rebuild_screen_bundle_with(
@@ -335,7 +404,6 @@ pub fn rebuild(dir: &Path, media: &Media) -> Result<String> {
     };
     match &result {
         Ok(_) => {
-            finished(dir);
             apparent_log(format!("recover: rebuilt {}", dir.display()));
         }
         Err(error) => apparent_log(format!(
@@ -399,6 +467,10 @@ mod tests {
             std::env::temp_dir().join(format!("apparent-recover-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         dir
     }
 
@@ -421,7 +493,11 @@ mod tests {
         let bundle = |name: &str| {
             let dir = captures.join(name);
             std::fs::create_dir_all(&dir).unwrap();
-            write(&dir, &unfinished());
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            write(&dir, &unfinished()).unwrap();
             dir
         };
         let crashed = bundle("a.apparent");
@@ -458,12 +534,25 @@ mod tests {
     fn orphan(captures: &Path, name: &str) -> PathBuf {
         let dir = captures.join(name);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(VIDEO), b"movie").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        crate::capture::engine::bundle::bundle_processing::publication::write(
+            &dir,
+            VIDEO,
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/capture/engine/bundle/bundle_processing/publication/fixtures/tiny.mp4"
+            )),
+        )
+        .unwrap();
         let tone: Vec<f32> = (0..16_000 * 3 + 1_600)
             .map(|i| (i as f32 * 0.05).sin() * 0.2)
             .collect();
         let wav = crate::capture::engine::runtime::audio::audio::encode_wav_16k(&tone).unwrap();
-        std::fs::write(dir.join(AUDIO), wav).unwrap();
+        crate::capture::engine::bundle::bundle_processing::publication::write(&dir, AUDIO, &wav)
+            .unwrap();
         dir
     }
 
@@ -564,7 +653,7 @@ mod tests {
         std::fs::write(tried.join(RECOVERING), "").unwrap();
         // Since 0.3.11 the journal follows the audio, and the journal decides.
         let journaled = orphan(&captures, "e.apparent");
-        write(&journaled, &unfinished());
+        write(&journaled, &unfinished()).unwrap();
         let phone = orphan(&captures, "f.apparent");
         std::fs::write(phone.join("timeline.json"), "{}").unwrap();
 
@@ -673,7 +762,7 @@ mod tests {
         let video = dir.join(VIDEO);
         let _ = std::fs::remove_file(&video);
         #[cfg(target_os = "windows")]
-        crate::capture::engine::runtime::platform::legacy_windows::capture::media::write_test_movie(&video, W, H, &frames).unwrap();
+        crate::win::media::write_test_movie(&video, W, H, &frames).unwrap();
         #[cfg(not(target_os = "windows"))]
         {
             let _ = &frames;
