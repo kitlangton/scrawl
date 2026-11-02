@@ -1,8 +1,10 @@
 name: Release (Linux)
 
 on:
-  push:
+  workflow_run:
+    workflows: [Changed-tree verification]
     branches: [main]
+    types: [completed]
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
@@ -32,7 +34,50 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  admit:
+    if: github.repository == 'tryapparent/apparent' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository))
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.gate.outputs.sha }}
+    steps:
+      # Admission code comes from trusted main, never an unchecked event SHA.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          VERIFY_RUN_ID: ${{ github.event.workflow_run.id }}
+          TAG: ${{ inputs.tag }}
+          VERIFY_ONLY: ${{ inputs.verify_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$VERIFY_ONLY" == true ]]; then
+            echo "sha=$REQUEST_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -n "$TAG" ]]; then
+            REQUEST_SHA=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
+          fi
+          # Superseded automatic candidates need no more runner time.
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$(git rev-parse origin/main)" != "$REQUEST_SHA" ]]; then
+            echo 'Skipping superseded main candidate'
+            exit 0
+          fi
+          args=(--sha "$REQUEST_SHA")
+          if [[ -n "$VERIFY_RUN_ID" ]]; then args+=(--run-id "$VERIFY_RUN_ID"); fi
+          python3 enablement/release_gate.py "${args[@]}"
+
   preview-needed:
+    needs: admit
+    if: needs.admit.outputs.sha != ''
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -42,20 +87,21 @@ jobs:
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          PUBLISH_MAIN: ${{ github.event_name == 'push' || github.event_name == 'schedule' || inputs.publish_main }}
+          CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
+          PUBLISH_MAIN: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main }}
           TAG: ${{ inputs.tag }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
         run: |
           if [[ "$VERIFY_ONLY" == "true" ]]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           elif [[ "$PUBLISH_MAIN" == "true" && -z "$TAG" ]] && \
-             [[ "$(gh release view "linux-main-$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)" == "false" ]]; then
+             [[ "$(gh release view "linux-main-$CANDIDATE_SHA" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)" == "false" ]]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
   linux:
-    needs: preview-needed
+    needs: [admit, preview-needed]
     if: needs.preview-needed.outputs.build == 'true'
     name: Linux ${{ matrix.arch }}
     strategy:
@@ -71,8 +117,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
+      CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
       TAG: ${{ inputs.tag }}
-      PUBLISH_MAIN: ${{ github.event_name == 'push' || github.event_name == 'schedule' || inputs.publish_main }}
+      PUBLISH_MAIN: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main }}
       VERIFY_ONLY: ${{ inputs.verify_only }}
     steps:
       - name: Validate release request
@@ -88,10 +135,10 @@ jobs:
           fi
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.tag || github.sha }}
+          ref: ${{ needs.admit.outputs.sha }}
       - name: Confirm build identity
         if: env.TAG == ''
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
       - name: Install build and packaging dependencies
         run: ./capture/desktop/scripts/linux/appimage/dependencies.sh
       - uses: dtolnay/rust-toolchain@stable
@@ -161,7 +208,7 @@ jobs:
 
   attach-release:
     if: needs.linux.result == 'success' && inputs.tag != '' && inputs.verify_only != true
-    needs: linux
+    needs: [admit, linux]
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -173,26 +220,29 @@ jobs:
           merge-multiple: true
       - name: Attach to the release
         env:
+          CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
           TAG: ${{ inputs.tag }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The Mac/Windows job may create it concurrently. Re-read on a create conflict.
+          # A moved tag must not label artifacts built from another commit.
+          test "$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)" = "$CANDIDATE_SHA"
+          # Another publisher may create it concurrently. Re-read on a create conflict.
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" --verify-tag --title "Apparent ${TAG#v}" --notes "Release notes to follow." || \
             gh release view "$TAG" >/dev/null
           gh release upload "$TAG" dist/* --clobber
 
   main-preview:
-    if: needs.linux.result == 'success' && (github.event_name == 'push' || github.event_name == 'schedule' || inputs.publish_main) && inputs.tag == '' && github.ref == 'refs/heads/main' && inputs.verify_only != true
-    needs: linux
+    if: needs.linux.result == 'success' && (github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main) && inputs.tag == '' && github.ref == 'refs/heads/main' && inputs.verify_only != true
+    needs: [admit, linux]
     permissions:
       contents: write
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.admit.outputs.sha }}
       - uses: actions/download-artifact@v5
         with:
           pattern: Apparent-*.AppImage
@@ -200,7 +250,8 @@ jobs:
           merge-multiple: true
       - name: Publish both checked AppImages
         env:
+          CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          APPARENT_VERSION="$version" python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py
+          GITHUB_SHA="$CANDIDATE_SHA" APPARENT_VERSION="$version" python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py

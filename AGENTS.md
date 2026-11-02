@@ -44,7 +44,15 @@ Read the relevant owner docs before changing a subsystem. Keep `Cargo.toml` and 
 
 Verification is proportional to changed behavior, not commit IDs. For mechanical moves verify preserved content/build inputs, imports/visibility, affected compilation on macOS/Linux and focused existing tests. Reuse evidence only for unchanged inputs and state its source. Broad suites are for shared/build/security/lifecycle changes, integration checkpoints or uncertain impact. New native proof is for changed native behavior. Never turn an unrun check into a pass or waive unresolved failures/platform gates; investigate red tests, fix the underlying issue and rerun focused then full affected-platform tests.
 
-`.githooks/pre-push` and `.github/workflows/verification.yml` use `enablement/verification.py`; selector tests are in `enablement/tests/`. Its reviewed document and Engine-test-only rules may narrow checks; unknown paths, shared inputs and selector/hook/CI changes broaden to root plus Engine build/tests. It does not assume an arbitrary Rust diff is mechanical. Preserve existing website/Connect, updater and release gates; never bypass hooks/protection. Feature pushes compare the full delta from local `origin/main` merge-base (fetch main before publishing); CI uses PR base or main push before-SHA, and missing history broadens. Details: `enablement/docs/continuous-delivery.md`.
+`.githooks/pre-push` runs cheap selector, hook and release-admission contracts for
+feature pushes while preserving exact-HEAD/clean-tree guards. Explicit local
+`enablement/verification.py --run` and direct main pushes retain conservative
+changed-tree build/tests. GitHub PRs run cheap contracts; full Linux/macOS
+verification runs on main, coalesced to the newest tree. CD requires the exact
+commit's successful full main verification, including every required platform
+job, before publication. Native/product acceptance still applies to changed
+behavior. Fetch main before publishing; feature planning compares the full delta
+from its merge-base. Details: `enablement/docs/continuous-delivery.md`.
 
 When output/UX changes or a capture test affects output, inspect the relevant real bundle's text and images; for mechanical moves reuse relevant evidence after checking source/import/build-input preservation. Report unavailable evidence and concrete output/UX issues; do not make a capture solely because files moved. Documentation/tooling-only changes need no bundle inspection.
 
