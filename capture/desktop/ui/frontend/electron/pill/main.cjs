@@ -10,7 +10,7 @@ app.setPath('userData',path.join(app.getPath('appData'),'apparent-pill'));
 nativeTheme.themeSource='system';
 const page=pathToFileURL(path.join(__dirname,'../../dist/pill.html')).href;
 let window,current=null,buffer='',pending=false,loaded=false,placed=false,activated=false,pendingPlace=null;
-let lastInput=Date.now(),hovered=false,expected=null,rendererReady=false,readySent=false,renderDeadline=Date.now()+5000,pasteGesture=null;
+let lastInput=Date.now(),hovered=false,expected=null,rendererReady=false,readySent=false,renderDeadline=Date.now()+5000,pasteGesture=null,lastFrame='';
 function position(bounds){
  const next={...window.getBounds(),...bounds};
  const area=screen.getDisplayMatching(next).workArea;
@@ -26,6 +26,11 @@ function applyPlacement(point){
   position({x:Math.round(area.x+(area.width-bounds.width)/2),y:area.y+34});placed=true;
 }
 function emit(message){process.stdout.write(JSON.stringify(message)+'\n');}
+function reportFrame(){
+  if(process.platform!=='darwin' || !rendererReady || current?.phase!=='recording' || !window.isVisible())return;
+  const b=window.getBounds(),frame=[b.x,b.y,b.width,b.height],revision=current.revision,key=JSON.stringify({revision,frame});
+  if(key!==lastFrame){lastFrame=key;emit({revision,frame});}
+}
 function publish(value){
   const next=protocol.view(value);
   if(current && next.revision<current.revision)throw Error('Old pill state');
@@ -55,6 +60,11 @@ process.stdin.on('data',chunk=>{
       else if(message.type==='activate'){activated=true;if(loaded)visibility();emit({activated:true});}
       else if(message.type==='place' && Array.isArray(message.point) && message.point.length===2 && message.point.every(Number.isFinite)){
         applyPlacement(message.point);
+      }else if(message.type==='position' && process.platform==='linux' && Array.isArray(message.point) && message.point.length===2 && message.point.every(Number.isFinite)){
+        if(window && message.revision===current?.revision && current.phase==='recording' && current.draggable){
+          const point=screen.screenToDipPoint({x:Math.round(message.point[0]),y:Math.round(message.point[1])});
+          position(point);
+        }
       }else throw Error('Invalid parent message');
     }catch{app.exit(1);}
   }
@@ -123,6 +133,7 @@ app.whenReady().then(()=>{
   const sizing=setInterval(()=>{
     if(!rendererReady && Date.now()>renderDeadline){app.exit(1);return;}
     void measure();
+    reportFrame();
   },250);
   ipcMain.handle('pill:layout',async(event,revision,...args)=>{
     valid(event,args);

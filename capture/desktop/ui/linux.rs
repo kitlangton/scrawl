@@ -330,7 +330,7 @@ struct PillDrag {
 
 enum PillDragOwner {
     Native,
-    Electron { pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool> },
+    Electron { pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool>, position: Arc<Mutex<Option<[f64; 4]>>> },
 }
 
 impl PillDragOwner {
@@ -348,6 +348,11 @@ impl PillDragOwner {
             Self::Electron { pin, .. } => pin.store(true, Ordering::Release),
         }
     }
+    fn moved(&self, rect: [f64; 4]) {
+        if let Self::Electron { position, .. } = self {
+            *position.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(rect);
+        }
+    }
 }
 
 static PILL_DRAG: std::sync::Mutex<Option<PillDrag>> = std::sync::Mutex::new(None);
@@ -362,9 +367,10 @@ pub(in crate::capture::desktop) fn begin_pill_drag() {
 }
 
 pub(in crate::capture::desktop) fn begin_electron_pill_drag(
-    id: u32, pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool>, point: [f64; 2],
+    id: u32, pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool>,
+    position: Arc<Mutex<Option<[f64; 4]>>>, point: [f64; 2],
 ) {
-    begin_owned_pill_drag(id, PillDragOwner::Electron { pid, alive, pin }, Some(point));
+    begin_owned_pill_drag(id, PillDragOwner::Electron { pid, alive, pin, position }, Some(point));
 }
 
 fn begin_owned_pill_drag(id: u32, owner: PillDragOwner, point: Option<[f64; 2]>) {
@@ -402,9 +408,13 @@ pub(in crate::capture::desktop) fn tick_pill_drag() {
     // XWayland's root pointer freezes above native Wayland windows. Ask the
     // compositor first; the button state still comes from the X11 press.
     let (px, py) = linux::cursor_position().unwrap_or((pointer.x, pointer.y));
+    let Some(live) = x11::geometry(drag.id) else { *slot = None; return; };
+    // Electron owns content size. Keep the original grab offset while clamping
+    // against its live dimensions, without restoring a stale warning/reveal size.
+    let panel = [drag.panel[0], drag.panel[1], live[2], live[3]];
     let [x, y] = crate::capture::engine::runtime::screens::drag_pill_origin(
         &drag.display,
-        drag.panel,
+        panel,
         drag.pointer_down,
         [px, py],
     );
@@ -416,7 +426,9 @@ pub(in crate::capture::desktop) fn tick_pill_drag() {
             return;
         }
         PILL_USER_MOVED.store(true, Ordering::Release);
-        x11::place(drag.id, [x, y, drag.panel[2], drag.panel[3]]);
+        let rect = [x, y, live[2], live[3]];
+        x11::move_origin(drag.id, [x, y]);
+        drag.owner.moved(rect);
         drag.owner.needs_pin();
     }
 }

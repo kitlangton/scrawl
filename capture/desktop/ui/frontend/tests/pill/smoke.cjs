@@ -126,5 +126,10 @@ test('Linux native drag IPC checks its epoch and converts the OS press point', {
  await expect.poll(()=>sent.filter(message=>message.action==='drag').length).toBe(1);
  assert.deepEqual(sent.find(message=>message.action==='drag'),{revision:1,action:'drag',target:[point.physical.x,point.physical.y]});
  assert.equal(await page.evaluate(async()=>{try{await window.apparentPill.beginDrag(0);return false;}catch{return true;}}),true);
+ const destination=await application.evaluate(({screen})=>screen.screenToDipPoint({x:100,y:150}));
+ await application.evaluate(()=>process.stdin.emit('data',JSON.stringify({type:'position',revision:1,point:[100,150]})+'\n'));
+ await expect.poll(()=>application.evaluate(({BrowserWindow})=>{const b=BrowserWindow.getAllWindows()[0].getBounds();return {x:b.x,y:b.y};})).toEqual(destination);
+ await application.evaluate(()=>process.stdin.emit('data',JSON.stringify({type:'position',revision:0,point:[140,180]})+'\n'));
+ assert.deepEqual(await application.evaluate(({BrowserWindow})=>{const b=BrowserWindow.getAllWindows()[0].getBounds();return {x:b.x,y:b.y};}),destination);
  await application.evaluate(({screen})=>{screen.getCursorScreenPoint=globalThis.pillTestCursor;});
 });

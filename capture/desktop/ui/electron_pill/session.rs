@@ -15,6 +15,7 @@ use std::{
 struct Mailbox {
     state: Option<serde_json::Value>,
     place: Option<[f64; 2]>,
+    position: Option<(u64, [f64; 2])>,
     activate: bool,
     closed: bool,
 }
@@ -41,6 +42,9 @@ pub struct Session {
     child_pid: u32,
     #[cfg(target_os = "linux")]
     pin: Arc<AtomicBool>,
+    #[cfg(target_os = "linux")]
+    drag_position: Arc<Mutex<Option<[f64; 4]>>>,
+    frame: Arc<Mutex<Option<(u64, [f64; 4])>>>,
 }
 
 fn assets() -> Option<(PathBuf, PathBuf)> {
@@ -105,6 +109,8 @@ impl Session {
         let ready = Arc::new(AtomicBool::new(false));
         let window_id = Arc::new(AtomicU32::new(0));
         let identified = window_id.clone();
+        let frame = Arc::new(Mutex::new(None));
+        let frame_readback = frame.clone();
         let mailbox = Arc::new((Mutex::new(Mailbox::default()), Condvar::new()));
         let outgoing = mailbox.clone();
         let writing = alive.clone();
@@ -115,6 +121,7 @@ impl Session {
                 while !pending.closed
                     && pending.state.is_none()
                     && pending.place.is_none()
+                    && pending.position.is_none()
                     && !pending.activate
                 {
                     pending = wake.wait(pending).unwrap();
@@ -124,11 +131,15 @@ impl Session {
                 }
                 let state = pending.state.take();
                 let place = pending.place.take();
+                let position = pending.position.take();
                 let activate = std::mem::take(&mut pending.activate);
                 drop(pending);
-                let messages = place
-                    .map(|point| serde_json::json!({"type":"place","point":point}))
+                let messages = position
+                    .map(|(revision, point)| serde_json::json!({"type":"position","revision":revision,"point":point}))
                     .into_iter()
+                    .chain(place
+                    .map(|point| serde_json::json!({"type":"place","point":point}))
+                    .into_iter())
                     .chain(state)
                     .chain(activate.then(|| serde_json::json!({"type":"activate"})));
                 let mut failed = false;
@@ -173,6 +184,13 @@ impl Session {
                     continue;
                 }
                 if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&line) {
+                    if let Some(frame_value) = value.get("frame") {
+                        let Some(revision) = value.get("revision").and_then(|v| v.as_u64()) else { break; };
+                        let Ok(rect) = serde_json::from_value::<[f64; 4]>(frame_value.clone()) else { break; };
+                        if !rect.iter().all(|v| v.is_finite()) || rect[2] <= 0.0 || rect[3] <= 0.0 { break; }
+                        *frame_readback.lock().unwrap() = Some((revision, rect));
+                        continue;
+                    }
                     if value.get("pin").and_then(|v| v.as_bool()) == Some(true) {
                         pin_needed.store(true, Ordering::Release);
                         continue;
@@ -228,6 +246,9 @@ impl Session {
             child_pid,
             #[cfg(target_os = "linux")]
             pin: pin_request.clone(),
+            #[cfg(target_os = "linux")]
+            drag_position: Arc::new(Mutex::new(None)),
+            frame,
         };
         #[cfg(target_os = "linux")]
         if crate::capture::desktop::linux::hyprland::running() {
@@ -279,6 +300,16 @@ impl Session {
             id => Some(id),
         }
     }
+    pub fn note_badge_anchor(&self) -> Option<[f64; 4]> {
+        if !self.healthy() || !self.ready() { return None; }
+        #[cfg(target_os = "linux")]
+        return crate::capture::desktop::linux::x11::geometry(self.window_number()?);
+        #[cfg(target_os = "macos")]
+        {
+            let (revision, rect) = (*self.frame.lock().ok()?)?;
+            (revision == self.view.revision).then_some(rect)
+        }
+    }
     pub fn healthy(&self) -> bool {
         self.alive.load(Ordering::Acquire)
             && (self.ready() || self.opened.elapsed() < Duration::from_secs(5))
@@ -296,6 +327,16 @@ impl Session {
         self.hovered.load(Ordering::Acquire)
     }
     pub fn update(&mut self, mut view: View, generation: u64, selection: Selection) {
+        #[cfg(target_os = "linux")]
+        {
+            let position = self.drag_position.lock().unwrap().take();
+            if let Some(rect) = position.filter(|_| generation == self.generation) {
+                self.moved.store(true, Ordering::Release);
+                let (lock, wake) = &*self.mailbox;
+                lock.lock().unwrap().position = Some((self.view.revision, [rect[0], rect[1]]));
+                wake.notify_one();
+            }
+        }
         view.revision = self.view.revision;
         if view.phase == self.view.phase
             && generation == self.generation
@@ -335,8 +376,14 @@ impl Session {
     }
     pub fn place(&self, point: [f64; 2]) {
         self.moved.store(false, Ordering::Release);
+        self.frame.lock().unwrap().take();
+        #[cfg(target_os = "linux")]
+        self.drag_position.lock().unwrap().take();
         let (lock, wake) = &*self.mailbox;
-        lock.lock().unwrap().place = Some(point);
+        let mut pending = lock.lock().unwrap();
+        pending.position = None;
+        pending.place = Some(point);
+        drop(pending);
         wake.notify_one();
     }
     pub fn actions(&mut self) -> Vec<crate::capture::desktop::native::pill::PillAction> {
@@ -354,7 +401,7 @@ impl Session {
                 )
                 {
                     super::super::linux::begin_electron_pill_drag(
-                        id, self.child_pid, self.alive.clone(), self.pin.clone(), point.map(f64::from),
+                        id, self.child_pid, self.alive.clone(), self.pin.clone(), self.drag_position.clone(), point.map(f64::from),
                     );
                 }
                 continue;
