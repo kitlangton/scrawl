@@ -1,0 +1,9 @@
+@import 'tailwindcss';
+@import '@apparent/ui/theme.css';
+@source '../node_modules/@apparent/ui/src';
+
+@layer base {
+  body { @apply m-0 bg-background font-sans text-foreground antialiased; }
+  button { cursor: pointer; }
+  button:disabled { cursor: default; }
+}

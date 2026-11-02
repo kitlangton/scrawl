@@ -1,0 +1,19 @@
+/* Canonical light tokens for Desktop and future Connect adoption. */
+@theme {
+  --font-sans: system-ui, sans-serif;
+  --color-background: #faf9f6;
+  --color-foreground: #27252a;
+  --color-primary: #514372;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #eae4f4;
+  --color-secondary-foreground: #3d3352;
+  --color-muted: #efede8;
+  --color-muted-foreground: #635e69;
+  --color-accent: #eae4f4;
+  --color-accent-foreground: #3d3352;
+  --color-destructive: #b42b35;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #dedbd4;
+  --color-input: #dedbd4;
+  --color-ring: #786096;
+}

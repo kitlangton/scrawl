@@ -829,6 +829,16 @@
       "docs": ["README.md#iphone", "capture/engine/docs/iphone-and-routing.md"]
     },
     {
+      "id": "electron-ui-foundation",
+      "group": "settings",
+      "name": "Opt-in Electron UI foundation",
+      "says": "Development-only React/shadcn/Tailwind window with synthetic previews and read-only state from the running Rust app. Does not replace the installed app or recording controls.",
+      "status": "branch:t3/review-ui-refactor-scope",
+      "platforms": ["mac", "linux"],
+      "note": "Linux isolated-desktop run connected to a frozen Rust baseline. macOS NoMac checks include native window/bridge security plus a live connection to the Rust GUI built and installed from published head ff420b5d. These checks do not establish capture, permission, overlay or performance acceptance. No Settings or default-launch changes.",
+      "docs": ["capture/desktop/ui/frontend/README.md"]
+    },
+    {
       "id": "settings-window",
       "group": "settings",
       "name": "Settings window",

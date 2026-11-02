@@ -30,6 +30,42 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python3 enablement/verification.py --base "${BASE:-unknown}" --github-output "$GITHUB_OUTPUT"
 
+  desktop-ui:
+    needs: select
+    # Frontend/shared UI changes currently select the conservative root gate.
+    if: needs.select.outputs.root == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: capture/desktop/ui/frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Linux Electron dependencies
+        if: runner.os == 'Linux'
+        run: npx --no-install playwright install-deps chromium
+      - run: npm test
+      - name: Electron bridge and renderer smoke (synthetic socket, not native acceptance)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a npm run test:electron
+          else
+            npm run test:electron
+          fi
+
   rust:
     needs: select
     if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true' || needs.select.outputs.browser == 'true'
