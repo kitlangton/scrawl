@@ -36,7 +36,7 @@ class PrePushGuardTests(unittest.TestCase):
         # The driver runs tests as well as Cargo. Keep this fixture finite:
         # copying the real hook tests here would recursively invoke itself.
         fixture_test = "import unittest\nclass Fixture(unittest.TestCase):\n    def test_fixture(self):\n        self.assertTrue(True)\n"
-        for name in ("test_fixture_push.py", "test_verification.py"):
+        for name in ("test_fixture_push.py", "test_verification.py", "test_release_gate.py"):
             (self.repo / "enablement" / "tests" / name).write_text(fixture_test)
         shutil.copy2(SELECTOR, self.repo / "enablement" / "verification.py")
         run("git", "add", ".", cwd=self.repo)
@@ -54,7 +54,7 @@ class PrePushGuardTests(unittest.TestCase):
         # allocation. Exercise explicit allocations separately below.
         self.env.pop("T3_BUILD_JOBS", None)
 
-    def push(self, oid=None, local="refs/heads/feature", remote="refs/heads/feature", env=None):
+    def push(self, oid=None, local="refs/heads/feature", remote="refs/heads/main", env=None):
         line = f"{local} {oid or self.head} {remote} {'0' * 40}\n"
         return run("sh", str(HOOK), "origin", "example.invalid:repo", cwd=self.repo,
                    env=env or self.env, input=line)
@@ -65,6 +65,11 @@ class PrePushGuardTests(unittest.TestCase):
         result = run("git", "rev-parse", "--show-toplevel", cwd=self.repo, env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), str(self.repo))
+
+    def test_feature_push_runs_contracts_without_cargo(self):
+        result = self.push(remote="refs/heads/feature")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.log.exists())
 
     def test_clean_head_requires_build_and_tests(self):
         result = self.push()
@@ -223,17 +228,17 @@ class PrePushGuardTests(unittest.TestCase):
         run("git", "config", "core.hooksPath", str(hooks), cwd=self.repo)
         run("git", "remote", "add", "origin", str(remote), cwd=self.repo)
 
-        failed = run("git", "push", "origin", "HEAD:refs/heads/test", cwd=self.repo,
+        failed = run("git", "push", "origin", "HEAD:refs/heads/main", cwd=self.repo,
                      env=dict(self.env, MOCK_STATUS="1"))
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn("verification failed", failed.stderr)
-        self.assertNotEqual(run("git", "show-ref", "--verify", "refs/heads/test",
+        self.assertNotEqual(run("git", "show-ref", "--verify", "refs/heads/main",
                                 cwd=remote).returncode, 0)
 
-        passed = run("git", "push", "origin", "HEAD:refs/heads/test", cwd=self.repo,
+        passed = run("git", "push", "origin", "HEAD:refs/heads/main", cwd=self.repo,
                      env=self.env)
         self.assertEqual(passed.returncode, 0, passed.stderr)
-        self.assertEqual(run("git", "rev-parse", "refs/heads/test", cwd=remote).stdout.strip(),
+        self.assertEqual(run("git", "rev-parse", "refs/heads/main", cwd=remote).stdout.strip(),
                          self.head)
 
         (self.repo / "file").write_text("hidden change\n")

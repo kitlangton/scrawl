@@ -4,6 +4,7 @@
 
 The fork's **Mac preview release** workflow
 (`.github/workflows/release-mac-preview.yml`) is the regular distribution path for Apple silicon.
+Publication first requires successful full main verification of the exact commit.
 It is dispatched manually from `tryapparent/apparent`'s `main`: **Actions → Mac preview release →
 Run workflow → main**. It builds on `macos-26`, assigns version `0.<workflow run>.<attempt>` and
 tag `preview-mac-<run>-<attempt>`, and creates a GitHub prerelease with the DMG, its SHA-256 and
@@ -56,7 +57,8 @@ or publish a Windows zip.
 
 1. **Version:** bump `version` in `Cargo.toml` and `Cargo.lock` in a `release/<version>` PR, and in the
    same PR change every `"status": "main"` in `public/site/src/features.json` to `"stable@<version>"`.
-   No push or PR runs CI automatically. Test the change locally before merging.
+   PRs run cheap contracts; full platform verification on main gates publication.
+   Test changed behavior locally before merging.
 2. **Mac build** (Studio, from that commit): `APPARENT_BUILD_NUMBER=<n> APPARENT_SPARKLE_DIR=~/.local/share/apparent-release/sparkle-2.9.4 ./capture/desktop/scripts/release/release-app.sh`.
    The build number goes up by one every release (Sparkle compares it, not the version). The script
    builds, signs, notarizes and staples `dist/Apparent-<version>-arm64.dmg` and `.zip`. Its own

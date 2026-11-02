@@ -1,11 +1,10 @@
 name: Website and Connect — checks & deploy
 
 on:
-  pull_request:
-    paths: ['public/site/**', 'connect/web/**', 'connect/service/**', 'shared/assets/brand/**', 'public/site/scripts/cd/**', '.github/workflows/web-delivery.yml']
-  push:
+  workflow_run:
+    workflows: [Changed-tree verification]
     branches: [main]
-    paths: ['public/site/**', 'connect/web/**', 'connect/service/**', 'shared/assets/brand/**', 'public/site/scripts/cd/**', '.github/workflows/web-delivery.yml']
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -14,17 +13,52 @@ permissions:
 # Never cancel a deployment halfway through publication. Every publisher also
 # checks current main; Actions concurrency is not a FIFO queue.
 concurrency:
-  group: web-delivery-${{ github.event_name == 'pull_request' && github.ref || 'production' }}
+  group: web-delivery-production
   cancel-in-progress: false
 
 jobs:
+  admit:
+    if: github.repository == 'tryapparent/apparent' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository))
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.gate.outputs.sha }}
+    steps:
+      # Admission code comes from trusted main, never an unchecked event SHA.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          VERIFY_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Superseded automatic candidates need no more runner time.
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$(git rev-parse origin/main)" != "$REQUEST_SHA" ]]; then
+            echo 'Skipping superseded main candidate'
+            exit 0
+          fi
+          args=(--sha "$REQUEST_SHA")
+          if [[ -n "$VERIFY_RUN_ID" ]]; then args+=(--run-id "$VERIFY_RUN_ID"); fi
+          python3 enablement/release_gate.py "${args[@]}"
+
   verify:
+    needs: admit
+    if: needs.admit.outputs.sha != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ needs.admit.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.0'
@@ -71,7 +105,7 @@ jobs:
           node scripts/pages/prepare-pages-video.mjs
       - uses: actions/upload-artifact@v4
         with:
-          name: website-${{ github.sha }}
+          name: website-${{ needs.admit.outputs.sha }}
           path: public/site/dist-apparent/
           if-no-files-found: error
           # The checked public demos use .local-media; do not drop their assets.
@@ -103,7 +137,7 @@ jobs:
           if-no-files-found: ignore
 
   website:
-    needs: verify
+    needs: [admit, verify]
     if: github.repository == 'tryapparent/apparent' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.WEBSITE_CD_ENABLED == 'true'
     environment:
       name: website-production
@@ -114,9 +148,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ needs.admit.outputs.sha }}
       - uses: actions/download-artifact@v4
         with:
-          name: website-${{ github.sha }}
+          name: website-${{ needs.admit.outputs.sha }}
           path: public/site/dist-apparent
       - uses: actions/setup-node@v4
         with:
@@ -128,7 +163,7 @@ jobs:
       - name: Publish checked main to Cloudflare Pages (never Clanker or the Worker)
         env:
           WEBSITE_PAGES_API_TOKEN: ${{ secrets.WEBSITE_PAGES_API_TOKEN }}
-        run: python3 public/site/scripts/cd/publish_pages.py
+        run: GITHUB_SHA="${{ needs.admit.outputs.sha }}" python3 public/site/scripts/cd/publish_pages.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -137,7 +172,7 @@ jobs:
           if-no-files-found: ignore
 
   hosted:
-    needs: verify
+    needs: [admit, verify]
     if: github.repository == 'tryapparent/apparent' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.HOSTED_CD_ENABLED == 'true'
     environment:
       name: hosted-production
@@ -154,6 +189,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ needs.admit.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.0'
@@ -168,6 +204,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
+          export GITHUB_SHA="${{ needs.admit.outputs.sha }}"
           test -n "$CLOUDFLARE_API_TOKEN"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
           cd connect/service
