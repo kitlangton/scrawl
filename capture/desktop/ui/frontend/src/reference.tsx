@@ -32,7 +32,7 @@ export function CaptureReference() {
   useEffect(() => { void request('read'); return () => { order.current += 1; }; }, []);
   if (result.status === 'disabled') return null;
   const id = result.status === 'connected' ? result.id : null;
-  return <section aria-labelledby="reference-title" className="space-y-4 rounded-xl border border-border bg-white p-6">
+  return <section aria-labelledby="reference-title" className="space-y-4 rounded-xl border border-border bg-surface p-6">
     <div className="flex flex-wrap items-center justify-between gap-4">
       <h2 id="reference-title" className="text-lg font-semibold">Selected capture</h2>
       <Button variant="outline" disabled={busy} onClick={() => void request('read')}>Refresh capture reference</Button>

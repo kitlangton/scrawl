@@ -8,8 +8,8 @@
   gap: 9px;
   border: 0;
   border-radius: 8px;
-  background: #19161d;
-  color: #f5f0e8;
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
   box-shadow: none;
   padding: 15px 22px;
   min-height: 53px;
@@ -22,6 +22,6 @@
   transform: none;
 }
 .pond-download a.btn-primary:hover,
-.frog-footer .footer-try:hover { background: #39313f; transform: none; }
+.frog-footer .footer-try:hover { background: var(--color-primary); transform: none; }
 .pond-download a.btn-primary:focus-visible,
-.frog-footer .footer-try:focus-visible { outline: 2px solid #6c4a8c; outline-offset: 4px; }
+.frog-footer .footer-try:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 4px; }

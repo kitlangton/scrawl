@@ -8,6 +8,8 @@ import { ErrorReporting } from './error-reporting';
 import { ConnectSettingsCard } from './connect-settings';
 import { CaptureReference } from './reference';
 import './style.css';
+import { CaptureNotes } from './notes';
+import { RecordingMicrophone } from './notes/microphone';
 
 // Visual fixtures only. These do not model or control real recording state.
 const examples = [
@@ -29,7 +31,7 @@ function DrawingControls() {
     catch { setState({ status: 'error', code: 'bridge_failed' }); }
     finally { setBusy(false); }
   }
-  return <section aria-labelledby="drawing-title" className="rounded-xl border border-border bg-white p-6 space-y-3">
+  return <section aria-labelledby="drawing-title" className="rounded-xl border border-border bg-surface p-6 space-y-3">
     <h2 id="drawing-title" className="text-lg font-semibold">Draw across displays</h2>
     <p>During a screen recording, hold Shift and move to draw on any display. Only marks inside the selected capture are saved.</p>
     <div role="status" aria-live="polite">{state.status === 'connected'
@@ -61,7 +63,7 @@ function App() {
         <h1 className="text-3xl font-semibold tracking-tight">A small window into what’s next.</h1>
         <p className="max-w-2xl text-muted-foreground">An opt-in development surface. Recording and handoff stay in the current app; experimental Settings controls appear only when enabled.</p>
       </header>
-      <section aria-labelledby="runtime-title" className="rounded-xl border border-border bg-white p-6">
+      <section aria-labelledby="runtime-title" className="rounded-xl border border-border bg-surface p-6">
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-1">
             <h2 id="runtime-title" className="text-lg font-semibold">Live Rust state</h2>
@@ -80,6 +82,7 @@ function App() {
         </div>
       </section>
       <DrawingControls />
+      <RecordingMicrophone />
       <CaptureReference />
       <Storage />
       <ErrorReporting />
@@ -94,7 +97,7 @@ function App() {
             {examples.map(({ id }) => <TabsTrigger key={id} value={id}>{id[0].toUpperCase() + id.slice(1)}</TabsTrigger>)}
           </TabsList>
           {examples.map(({ id, title, detail }) => <TabsContent key={id} value={id}>
-            <div className="min-h-40 space-y-3 rounded-xl border border-border bg-white p-6">
+            <div className="min-h-40 space-y-3 rounded-xl border border-border bg-surface p-6">
               <p className="text-xs font-medium text-primary">SYNTHETIC EXAMPLE</p>
               <h3 className="text-xl font-semibold">{title}</h3>
               <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{detail}</p>
@@ -109,4 +112,4 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);
+createRoot(document.getElementById('root')!).render(<StrictMode>{location.hash.startsWith('#notes-') ? <CaptureNotes /> : <App />}</StrictMode>);

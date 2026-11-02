@@ -470,10 +470,14 @@ pub fn top_level_windows() -> Vec<WindowInfo> {
 /// Apparent's own floating windows (override-redirect, so not in the window manager's list),
 /// front to back.
 pub fn own_floating_windows() -> Vec<WindowInfo> {
+    floating_windows_for_pid(std::process::id())
+}
+
+/// Visible override-redirect surfaces belonging to one explicitly owned process.
+pub fn floating_windows_for_pid(pid: u32) -> Vec<WindowInfo> {
     let Some(x) = x() else {
         return Vec::new();
     };
-    let pid = std::process::id();
     let Some(tree) = x
         .conn
         .query_tree(x.root)
@@ -539,6 +543,30 @@ pub fn activate(id: isize) {
 }
 
 // MARK: Apparent's own windows
+
+/// Prepare an Electron surface before its first show. Its owner alone maps/hides
+/// it; unmapping a newly shown XWayland surface can lose its compositor mapping.
+pub fn prepare_floating(id: u32) -> bool {
+    let Some(x) = x() else { return false; };
+    let Ok(cookie) = x.conn.change_window_attributes(
+        id, &ChangeWindowAttributesAux::new().override_redirect(1),
+    ) else { return false; };
+    if cookie.check().is_err() { return false; }
+    let _ = x.conn.change_property32(PropMode::REPLACE, id,
+        x.atom("_NET_WM_BYPASS_COMPOSITOR"), AtomEnum::CARDINAL, &[2]);
+    x.flush();
+    true
+}
+
+/// Notes reconcile Hyprland's scene explicitly, so geometry changes must not
+/// unmap/remap the Electron-owned surface.
+pub fn place_without_remap(id: u32, rect: [f64; 4]) {
+    if let Some(x) = x() {
+        configure(x, id, rect);
+        raise_on(x, id);
+        x.flush();
+    }
+}
 
 /// Takes one of Apparent's GPUI windows out of the window manager's hands (no frame, no
 /// placement, above ordinary windows, not in the taskbar), places it over `rect` (global
@@ -655,6 +683,17 @@ pub fn raise(id: u32) {
         raise_on(x, id);
         x.flush();
     }
+}
+
+/// Keep X input stacking aligned with the compositor's visible floating surfaces.
+/// Focusing a recorded app can otherwise raise it above an override-redirect UI.
+pub fn raise_group(ids: &[u32]) {
+    if ids.is_empty() { return; }
+    let Some(x) = x() else { return; };
+    if x.conn.query_tree(x.root).ok().and_then(|c| c.reply().ok())
+        .is_some_and(|tree| tree.children.ends_with(ids)) { return; }
+    for &id in ids { raise_on(x, id); }
+    x.flush();
 }
 
 pub fn set_visible(id: u32, visible: bool) {
@@ -896,6 +935,47 @@ pub fn capture_rect(rect: [f64; 4]) -> anyhow::Result<crate::shared::model::Rgba
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires an isolated X server; run under xvfb-run"]
+    fn electron_surface_setup_preserves_owner_visibility() {
+        use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
+        let x = x().expect("isolated X server");
+        let id = x.conn.generate_id().unwrap();
+        x.conn.create_window(x11rb::COPY_DEPTH_FROM_PARENT, id, x.root,
+            0, 0, 332, 220, 0, WindowClass::INPUT_OUTPUT, x11rb::COPY_FROM_PARENT,
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY)).unwrap().check().unwrap();
+        assert!(prepare_floating(id));
+        place_without_remap(id, [150.0, 300.0, 332.0, 220.0]);
+        let attributes = x.conn.get_window_attributes(id).unwrap().reply().unwrap();
+        assert!(attributes.override_redirect);
+        assert_eq!(attributes.map_state, MapState::UNMAPPED, "native preparation must not show a hidden editor");
+        x.conn.map_window(id).unwrap().check().unwrap();
+        assert_eq!(x.conn.get_window_attributes(id).unwrap().reply().unwrap().map_state, MapState::VIEWABLE);
+        while x.conn.poll_for_event().unwrap().is_some() {}
+        place_without_remap(id, [200.0, 350.0, 350.0, 250.0]);
+        x.conn.get_input_focus().unwrap().reply().unwrap();
+        while let Some(event) = x.conn.poll_for_event().unwrap() {
+            assert!(!matches!(event, x11rb::protocol::Event::UnmapNotify(_)), "moving must not unmap the compositor surface");
+        }
+        assert_eq!(geometry(id), Some([200.0, 350.0, 350.0, 250.0]));
+        let ordinary = x.conn.generate_id().unwrap();
+        x.conn.create_window(x11rb::COPY_DEPTH_FROM_PARENT, ordinary, x.root,
+            0, 0, 800, 700, 0, WindowClass::INPUT_OUTPUT, x11rb::COPY_FROM_PARENT,
+            &CreateWindowAux::new()).unwrap().check().unwrap();
+        x.conn.map_window(ordinary).unwrap().check().unwrap();
+        x.conn.warp_pointer(x11rb::NONE, x.root, 0, 0, 0, 0, 250, 370).unwrap().check().unwrap();
+        assert_eq!(x.conn.query_pointer(x.root).unwrap().reply().unwrap().child, ordinary,
+            "a newly focused app intercepts input when X stacking is stale");
+        raise_group(&[id]);
+        assert_eq!(x.conn.query_pointer(x.root).unwrap().reply().unwrap().child, id,
+            "reconciliation restores native pointer delivery to the visible note");
+        x.conn.destroy_window(ordinary).unwrap().check().unwrap();
+        x.conn.unmap_window(id).unwrap().check().unwrap();
+        place_without_remap(id, [100.0, 200.0, 332.0, 220.0]);
+        assert_eq!(x.conn.get_window_attributes(id).unwrap().reply().unwrap().map_state, MapState::UNMAPPED, "native placement must not reopen a dismissed editor");
+        x.conn.destroy_window(id).unwrap().check().unwrap();
+    }
 
     #[test]
     fn work_areas_are_clipped_to_their_display() {

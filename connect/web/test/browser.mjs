@@ -211,7 +211,7 @@ try {
       })
       assert.equal(geometry.width, test.width >= 760 ? 720 : (test.width || 1100) > 550 ? Math.min(720, (test.width || 1100) - 40) : test.width - 24)
       assert.equal(geometry.radius, '0px'); assert.equal(geometry.ctaRadius, '0px'); assert.equal(geometry.ctaColor, 'rgb(25, 22, 29)')
-      assert.equal(geometry.color, 'rgb(2, 1, 2)', 'retain inherited pond text color, not the hosted variable fallback')
+      assert.equal(geometry.color, 'rgb(25, 22, 29)', 'use the canonical shared light foreground')
       assert.equal(geometry.title, test.width <= 550 ? '32px' : '36px'); assert.match(geometry.font, /Host Grotesk/)
       await page.screenshot({ path: `${evidence}/${test.name}-computer.png`, fullPage: true })
       await computer.focus(); await page.keyboard.press('ArrowRight')

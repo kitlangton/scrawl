@@ -340,6 +340,7 @@ enum Wire {
     PublicShare(Action, String, u64),
     Storage(Storage),
     ErrorReporting(ErrorReportingRequest),
+    Microphone(super::notes::audio::Request),
     Connect(u64),
 }
 
@@ -348,6 +349,7 @@ enum Wire {
 enum SettingsRequest {
     Storage(Storage),
     ErrorReporting(ErrorReportingRequest),
+    Microphone(super::notes::audio::Request),
 }
 
 impl SettingsRequest {
@@ -355,6 +357,7 @@ impl SettingsRequest {
         match self {
             Self::Storage(request) => request.execute(config, deadline),
             Self::ErrorReporting(request) => request.execute(config, deadline),
+            Self::Microphone(request) => request.execute(config, deadline),
         }
     }
 }
@@ -401,6 +404,8 @@ fn parse_request(line: &str) -> Option<Wire> {
         if let Ok(request) = serde_json::from_str::<PublicShareRequest>(line) {
             return request.admission();
         }
+
+        if let Ok(request) = serde_json::from_str::<super::notes::audio::Request>(line) { return Some(Wire::Microphone(request)); }
         if let Ok(request) = serde_json::from_str::<ErrorReportingRequest>(line) {
             return Some(Wire::ErrorReporting(request));
         }
@@ -587,6 +592,14 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
                             Wire::Storage(request) => {
                                 let deadline = request.deadline().min(storage_clock_ms() + 3000);
                                 match storage_tx.try_send((SettingsRequest::Storage(request), deadline, stream)) {
+                                    Ok(()) => {},
+                                    Err(std::sync::mpsc::TrySendError::Full((_, _, mut stream)) | std::sync::mpsc::TrySendError::Disconnected((_, _, mut stream))) => { let _ = writeln!(stream, "{{\"error\":\"app_busy\"}}"); }
+                                }
+                                continue;
+                            }
+                            Wire::Microphone(request) => {
+                                let deadline = request.deadline().min(storage_clock_ms() + 3000);
+                                match storage_tx.try_send((SettingsRequest::Microphone(request), deadline, stream)) {
                                     Ok(()) => {},
                                     Err(std::sync::mpsc::TrySendError::Full((_, _, mut stream)) | std::sync::mpsc::TrySendError::Disconnected((_, _, mut stream))) => { let _ = writeln!(stream, "{{\"error\":\"app_busy\"}}"); }
                                 }

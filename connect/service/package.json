@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "npm run build:recipient && npm run typecheck && esbuild src/worker.ts --bundle --format=esm --platform=browser --conditions=workerd --external:node:* --outfile=dist/worker.js",
+    "build": "python3 ../../shared/ui/scripts/check-theme.py && npm run build:recipient && npm run typecheck && esbuild src/worker.ts --bundle --format=esm --platform=browser --conditions=workerd --external:node:* --outfile=dist/worker.js",
     "test": "npm run build && node --test --test-concurrency=1 test/*/*.test.mjs",
     "dev": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy",

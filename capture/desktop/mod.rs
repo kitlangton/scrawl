@@ -304,6 +304,7 @@ fn bundle_audio_issue(
     dir: &std::path::Path,
     bundle: &ApparentBundle,
 ) -> Option<CompletedAudioIssue> {
+    if bundle.context.get("microphoneCapture").is_some_and(|v| v == "off") { return None; }
     completed_audio_issue(
         bundle.source.as_deref(),
         &bundle.transcript,
@@ -530,6 +531,7 @@ fn island_content_width(
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum MenuAction {
     ToggleCapture,
+    ToggleMicrophone,
     ChooseTarget,
     OpenLatest,
     OpenInbox(PathBuf),
@@ -823,10 +825,12 @@ struct ActiveRecording {
     bundle_dir: PathBuf,
     source: CaptureSource,
     _metal_overlay: Option<LaserOverlay>,
+    microphone_enabled: bool,
 }
 
 impl ActiveRecording {
     fn mic_warning(&self) -> Option<InputWarning> {
+        if !self.microphone_enabled { return None; }
         match &self.source {
             CaptureSource::Screen {
                 audio: Some(audio), ..
@@ -848,6 +852,8 @@ impl ActiveRecording {
 /// Shared coordinator owned by the GPUI app.
 pub struct ApparentCoordinator {
     telemetry: Arc<SharedCaptureTelemetry>,
+    note_ui: Option<workflow::notes::Session>,
+    admitted_microphone: Option<bool>,
     whiteboard: Rc<RefCell<whiteboard::Board>>,
     active_recording: Option<ActiveRecording>,
     /// Identifies the recording whose finalization may update the current UI.
@@ -974,6 +980,8 @@ impl ApparentCoordinator {
         crate::capture::desktop::playback::warm_up();
         Self {
             telemetry,
+            note_ui: None,
+            admitted_microphone: None,
             whiteboard: Rc::new(RefCell::new(whiteboard::Board::default())),
             active_recording: None,
             capture_generation: 0,
@@ -1536,11 +1544,12 @@ impl ApparentCoordinator {
     }
 
     /// Required permissions that keep a capture from starting now.
-    fn missing_to_record(&mut self) -> Vec<crate::capture::desktop::settings::onboarding::Permission> {
+    fn missing_to_record(&mut self, microphone: bool) -> Vec<crate::capture::desktop::settings::onboarding::Permission> {
         use crate::capture::desktop::settings::onboarding::{Permission, missing_to_record};
         let screen = crate::capture::engine::runtime::screen_capture_usable(false);
         let accessibility = crate::capture::engine::runtime::accessibility_granted();
-        let missing = missing_to_record(self.grants.as_ref(), screen, accessibility);
+        let mut missing = missing_to_record(self.grants.as_ref(), screen, accessibility);
+        if !microphone { missing.retain(|p| *p != Permission::Microphone); }
         // The last read may be old; read again before standing in the way.
         if missing.contains(&Permission::Microphone)
             && let Some(fresh) = crate::capture::desktop::settings::onboarding::read_grants()
@@ -1557,8 +1566,10 @@ impl ApparentCoordinator {
         if self.lab {
             return true;
         }
-        let missing = self.missing_to_record();
+        let microphone = crate::capture::engine::runtime::audio::mic::enabled();
+        let missing = self.missing_to_record(microphone);
         if missing.is_empty() {
+            self.admitted_microphone = Some(microphone);
             return true;
         }
         apparent_log(format!(
@@ -1790,7 +1801,7 @@ impl ApparentCoordinator {
         if !self.shortcut.is_pending() && activity == crate::capture::desktop::settings::shortcut::Activity::Free {
             // No picker or overlay before the permissions are on: they sit above
             // macOS's permission prompts and take the clicks meant for them.
-            let missing = self.missing_to_record();
+            let missing = self.missing_to_record(crate::capture::engine::runtime::audio::mic::enabled());
             if !self.gate.press(missing) {
                 apparent_log("Shortcut held back: a required permission is off");
                 return;
@@ -1995,6 +2006,7 @@ impl ApparentCoordinator {
             self.agent_captures.set(&id, "cancelled", None, None);
         }
         let rec = self.active_recording.take()?;
+        self.note_ui = None;
         let _ = self.telemetry.finish_session();
         match rec.source {
             CaptureSource::Screen { session, audio, .. } => {
@@ -2306,7 +2318,13 @@ impl ApparentCoordinator {
             let ink = desktop.pop().unwrap();
             strokes.retain(|s| s.laser || s.pin.is_some() || !(ink.t0..=ink.t1).contains(&s.t0));
         } else if let Some(idx) = latest {
-            strokes.remove(idx);
+            if let Some(ui) = &self.note_ui {
+                // Remove the mark only after durable note deletion. A failed or
+                // timed-out receipt leaves its anchor available for recovery.
+                if ui.undo(strokes[idx].pin.unwrap()) { strokes.remove(idx); }
+            } else {
+                strokes.remove(idx);
+            }
         }
         drop(strokes);
         cx.notify();
@@ -2836,6 +2854,12 @@ impl ApparentCoordinator {
         if matches!(self.island_phase, IslandPhase::Recording) {
             platform::tick_pill_drag();
         }
+        if self.note_ui.is_some() {
+            let anchor = self.native_pill.as_ref().and_then(|p| p.note_badge_anchor());
+            #[cfg(target_os = "linux")]
+            let anchor = anchor.or_else(|| platform::note_badge_anchor(self.island_width * self.island_scale, self.island_y + (PILL_WINDOW_H - ISLAND_H * self.island_scale) / 2.0));
+            if let (Some(ui), Some(point)) = (self.note_ui.as_mut(), anchor) { ui.position_badge(point); }
+        }
         let live_no_words = self.recording_has_no_words();
         if live_no_words != self.last_live_no_words {
             self.last_live_no_words = live_no_words;
@@ -3325,7 +3349,15 @@ impl ApparentCoordinator {
         start_metric("metal_open_ms", stage);
         let stage = Instant::now();
         self.publish_capture_busy();
-        let audio_recorder = match AudioRecorder::start(&bundle_dir) {
+        let microphone_enabled = self.admitted_microphone.take().unwrap_or_else(crate::capture::engine::runtime::audio::mic::enabled);
+        if !microphone_enabled {
+            // Durable admission intent survives orphan recovery; it is not inferred from an empty WAV.
+            if let Err(error) = std::fs::write(bundle_dir.join("microphone-off"), b"") {
+                apparent_log(format!("Could not preserve silent capture intent: {error}"));
+                self.cancel_recording(cx); return;
+            }
+        }
+        let audio_recorder = if !microphone_enabled { None } else { match AudioRecorder::start(&bundle_dir) {
             Ok(recorder) => Some(recorder),
             Err(error) => {
                 let message = format!("Capture refused: narration could not be saved: {error:#}");
@@ -3335,7 +3367,7 @@ impl ApparentCoordinator {
                 if let Ok(mut status) = CAPTURE_STATUS.lock() { *status = Some(message); }
                 return;
             }
-        };
+        }};
         start_metric("audio_start_ms", stage);
         let stage = Instant::now();
         let screen_session = match ScreenCaptureSession::start(
@@ -3377,7 +3409,15 @@ impl ApparentCoordinator {
                 windows: window_log,
             },
             _metal_overlay: metal_overlay,
+            microphone_enabled,
         });
+        match workflow::notes::Session::start(&self.active_recording.as_ref().unwrap().bundle_dir, Arc::clone(&self.telemetry), self.active_recording.as_ref().unwrap().target.frame) {
+            Ok(session) => self.note_ui = Some(session),
+            Err(error) => {
+                apparent_log(format!("Notes UI unavailable: {error:#}"));
+                if let Ok(mut status) = CAPTURE_STATUS.lock() { *status = Some("Typed notes unavailable · recording continues".into()); }
+            },
+        }
         self.present_recording_island(cx);
         start_metric("recording_start_ms", started);
     }
@@ -3418,6 +3458,7 @@ impl ApparentCoordinator {
             started: Instant::now(),
             target,
             bundle_dir: PathBuf::new(),
+            microphone_enabled: false,
             source: CaptureSource::Lab,
             _metal_overlay: None,
         });
@@ -3540,6 +3581,7 @@ impl ApparentCoordinator {
             bundle_dir,
             source: CaptureSource::Phone(session),
             _metal_overlay: metal_overlay,
+            microphone_enabled: true,
         });
         self.present_recording_island(cx);
     }
@@ -3605,6 +3647,7 @@ impl ApparentCoordinator {
             && matches!(&rec.source, CaptureSource::Screen { .. });
         #[cfg(not(target_os = "linux"))]
         let auto_active = false;
+        let notes_finished = self.note_ui.take().map(workflow::notes::Session::finish);
         let (events, strokes) = self.telemetry.finish_session();
         let bundle_dir = rec.bundle_dir;
         let target = rec.target;
@@ -3650,7 +3693,7 @@ impl ApparentCoordinator {
                 .spawn(async move {
 
                     recording_completion::finalize(
-                        source, target, bundle_dir, events, strokes, final_whiteboard,
+                        source, target, bundle_dir, events, strokes, final_whiteboard, notes_finished,
                     )
                 })
                 .await;
@@ -6751,6 +6794,12 @@ pub fn run_app(
                     if let Some(ref rx) = menu_rx {
                         while let Ok(action) = rx.try_recv() {
                             match action {
+                                MenuAction::ToggleMicrophone => {
+                                    let enabled = !crate::capture::engine::runtime::audio::mic::enabled();
+                                    if let Err(error) = crate::shared::handoff::set_config_value_in(&crate::shared::handoff::default_config_path(), "microphoneEnabled", serde_json::json!(enabled)) {
+                                        apparent_log(format!("Microphone preference was not saved: {error:#}"));
+                                    }
+                                }
                                 MenuAction::ToggleCapture => {
                                     loop_coord.update(cx, |coord, cx| coord.record_or_finish(cx));
                                 }
@@ -6814,6 +6863,17 @@ pub fn run_app(
                             }
                             LiveOverlayEvent::UndoStroke => {
                                 coord.undo_stroke(cx);
+                            }
+                            LiveOverlayEvent::NotesUnavailable => {
+                                apparent_log("Typed notes UI exited; recording continues. See this capture's notes-ui.log.");
+                                if let Ok(mut status) = CAPTURE_STATUS.lock() { *status = Some("Typed notes unavailable · recording continues".into()); }
+                            }
+                            LiveOverlayEvent::NoteClosed { focus, owner } => platform::restore_note_focus(focus, owner),
+                            LiveOverlayEvent::NoteOutside => { if let Some(ui) = coord.note_ui.as_ref() { ui.outside(); } },
+                            LiveOverlayEvent::Note { pin, t, x, y, screen_x, screen_y } => {
+                                coord.request_immediate_frame();
+                                let (focus, owner) = platform::note_focus();
+                                if let Some(ui) = &coord.note_ui { ui.open(workflow::notes::Anchor { pin, t, x, y, screen_x, screen_y, focus, owner }); }
                             }
                             LiveOverlayEvent::RequestSnapshot => {
                                 coord.request_immediate_frame();

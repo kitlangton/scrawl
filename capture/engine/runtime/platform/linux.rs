@@ -475,6 +475,19 @@ pub(crate) fn raw_windows_now() -> Vec<crate::shared::windows::RawWindow> {
     crate::shared::windows::raw_windows()
 }
 
+/// X11 omits override-redirect surfaces from the managed list, including the
+/// separate Electron child. Include only that active capture-owned PID.
+pub(crate) fn input_windows(child: u32) -> Vec<crate::shared::windows::RawWindow> {
+    let mut windows = raw_windows_now();
+    if child > 0 {
+        windows.extend(crate::capture::desktop::linux::x11::floating_windows_for_pid(child).into_iter().map(|w| crate::shared::windows::RawWindow {
+            id: w.hwnd as u32, pid: w.pid as i32, owner: String::new(), title: w.title,
+            bounds: w.rect, layer: 3, alpha: 1.0,
+        }));
+    }
+    windows
+}
+
 /// Linux has no `apparent-helper`: every Apparent window is in its own process.
 pub(crate) fn is_helper_process(_pid: i32) -> bool {
     false
@@ -1107,7 +1120,7 @@ fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
                     continue;
                 }
             }
-            if !active {
+            if !active || telemetry.notes_editing.load(Ordering::Acquire) {
                 continue;
             }
             if vk == KEY_Z && mods.ctrl && !mods.alt && !mods.shift && !mods.super_key {
@@ -1132,6 +1145,7 @@ fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
             mods.shift && !mods.super_key && !mods.ctrl && !mods.alt && !await_shift_release;
         // Wayland: XWayland only sees the pointer over X11 windows, so the overlay takes it
         // while ⇧ is held (`linux::overlay::take_pointer`).
+        pure_shift &= !telemetry.notes_editing.load(Ordering::Acquire);
         if from_devices() && pure_shift != pointer_taken {
             linux::overlay::take_pointer(pure_shift);
             pointer_taken = pure_shift;
@@ -1158,7 +1172,7 @@ fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
             buttons,
             (x, y),
             mods.shift && !mods.super_key && !mods.ctrl && !mods.alt,
-            |x, y| telemetry.on_apparent_window(x, y),
+            |x, y| telemetry.on_capture_input_ui(x, y),
         );
 
         // Hold Shift + move the pointer inside the capture target = draw a persistent stroke.

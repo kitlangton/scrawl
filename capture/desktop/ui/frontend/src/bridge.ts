@@ -8,6 +8,8 @@ declare global {
     apparent?: {
       readDrawing: () => Promise<Drawing>;
       undoDrawing: () => Promise<Drawing>;
+      readMicrophoneEnabled: () => Promise<ErrorReporting>;
+      setMicrophoneEnabled: (enabled: boolean) => Promise<ErrorReporting>;
       readRuntimeState: () => Promise<RuntimeState>;
       readCaptureReference: () => Promise<CaptureReference>;
       copyCaptureReference: () => Promise<CaptureReference>;
