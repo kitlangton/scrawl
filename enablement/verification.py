@@ -9,6 +9,8 @@ import argparse
 import json
 import os
 import re
+import stat
+import sys
 from pathlib import Path
 import subprocess
 
@@ -152,17 +154,61 @@ def tree_entry(revision, path):
     return (mode, oid) if kind == "blob" else (mode, kind)
 
 
+def check_temp_environment():
+    # Rust uses TMPDIR on Unix, falling back to /tmp. Do not use Python's
+    # tempfile fallback search: it can silently discard an invalid caller value.
+    raw = os.environ.get("TMPDIR", "/tmp")
+    root = Path(raw)
+    remedy = "Set TMPDIR explicitly to a short, owned mode-0700 directory under trusted ancestors; no paths were changed."
+    def reject(reason):
+        raise RuntimeError(f"verification TMPDIR preflight: {reason}. {remedy}")
+    if not raw or not root.is_absolute() or ".." in root.parts:
+        reject("expected an absolute path without parent traversal")
+    # Open each component relative to the checked parent; never follow symlinks.
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for index, part in enumerate(("", *root.parts[1:])):
+            if part:
+                try:
+                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                except OSError as error:
+                    reject(f"component {index} is missing, inaccessible, or a symlink ({error.strerror})")
+                os.close(fd)
+                fd = child
+            info = os.fstat(fd)
+            sticky_root = info.st_uid == 0 and info.st_mode & stat.S_ISVTX
+            if info.st_uid not in (0, os.geteuid()) or (info.st_mode & 0o022 and not sticky_root):
+                reject(f"component {index} has untrusted ownership or writable permissions")
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            reject("temporary root must be owned by this user with mode 0700")
+    finally:
+        os.close(fd)
+    # agent_capture::running_owner fixture: apparent-owner- + 32 hex ID,
+    # then capture.sock. Include separator and terminating NUL headroom.
+    suffix = ("/ac-" + "0" * 32 + "/s" if sys.platform == "darwin"
+              else "/apparent-owner-" + "0" * 32 + "/capture.sock")
+    limit = 103 if sys.platform == "darwin" else 107
+    size = len(os.fsencode(raw.rstrip("/") + suffix))
+    if size > limit:
+        reject(f"socket fixture needs {size} pathname bytes; platform permits {limit}")
+
+
 def run_pr_checks():
-    for pattern in ("test_*push*.py", "test_verification.py", "test_release_gate.py"):
+    for pattern in ("test_*push*.py", "test_verification.py", "test_release_gate.py",
+                    "test_temp_preflight.py"):
         subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                         "-p", pattern], cwd=ROOT, check=True)
 
 
 def run_checks(selection, offline=True):
+    if selection["root"] or selection["engine"]:
+        check_temp_environment()
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_*push*.py"], cwd=ROOT, check=True)
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_verification.py"], cwd=ROOT, check=True)
+    subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                    "-p", "test_temp_preflight.py"], cwd=ROOT, check=True)
     cargo = ["cargo"]
     if subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
         cargo = ["taskpolicy", "-c", "utility", "cargo"]
@@ -199,12 +245,17 @@ def run_checks(selection, offline=True):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
+    parser.add_argument("--preflight", action="store_true", help="Check temporary environment only; no builds or mutations")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--pr", action="store_true", help="Hook/CI: cheap PR contract checks")
     parser.add_argument("--online", action="store_true", help="CI: use locked graph instead of offline cache")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
+    if args.preflight:
+        check_temp_environment()
+        print("Temporary environment prerequisites passed; not native proof.")
+        return
     selection = plan(args.base, args.head)
     print(json.dumps(selection, sort_keys=True), flush=True)
     if args.github_output:

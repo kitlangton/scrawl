@@ -1,7 +1,8 @@
 name: Linux updater harness
 
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - '.github/workflows/linux-updater-harness.yml'
       - 'capture/desktop/scripts/linux/gui/**'
@@ -10,13 +11,6 @@ on:
       - 'capture/desktop/linux/update.rs'
       - 'capture/desktop/settings/settings.rs'
       - 'capture/desktop/settings/settings_window.rs'
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/linux-updater-harness.yml'
-      - 'capture/desktop/scripts/linux/gui/**'
-      - 'capture/desktop/scripts/linux/updater/**'
-      - 'capture/desktop/scripts/linux/updater/updater-fixture.py'
 
 permissions:
   contents: read

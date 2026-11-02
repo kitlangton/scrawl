@@ -18,6 +18,30 @@ The Linux flow was exercised in an isolated Omarchy/Hyprland guest with the real
 
 Smooth activity zoom is enabled in both CLI and menu exports. The default crop is `full`: show the whole recorded screen, window, region or phone for the first 500 ms, then ease toward activity. Even activity at time zero cannot skip this opening. Explicit `--crop auto` or a rectangle still bounds the entire camera path, including the opening. `--no-zoom` disables camera motion but keeps the chosen crop, ink, click ripples and audio; with the default crop it gives fixed full-frame output. The old opt-in `--zoom` flag has been replaced. Original bundle recordings remain unprocessed evidence; export makes the share copy. Zoom needs saved interaction telemetry: with no clicks, drags or marks, the camera stays still. Use the app's recording shortcut for demos; timed `record --duration` does not collect those events. These default changes are explicitly requested, not gated behind a new experiment.
 
+## CLI quiet-stretch speedup
+
+CLI exports automatically speed up confirmed long quiet holds at 4×. Use
+`--no-speedup` to keep recorded timing. Menu export timing is unchanged.
+Speedup requires FFmpeg on PATH on both macOS and Linux (H.264/AAC encoders;
+HEVC needs libx265); the Mac base renderer continues to use AVFoundation.
+The source movie, audio and bundle metadata are never changed.
+
+Detection decodes full source frames with FFmpeg freezedetect at -60 dB,
+intersects stable spans with audio below -55 dB, and requires at least a
+ten-second accelerated interior after retaining five seconds at each boundary.
+Silent exports use visual stability without an audio requirement. Interactions,
+cursor movement, ink and transcript segments protect nearby intervals.
+This conservatively retains short pauses, reading time and audible speech;
+quiet background audio can prevent compression. Pixel stability cannot determine
+whether a long result is important to a viewer; use --no-speedup for timing proof.
+
+The completed render is retimed as one movie, keeping burned-in annotations,
+camera motion and audio together. Source intervals/rates are printed on stderr
+and stored in the MP4 comment metadata when acceleration occurs. Accelerated
+spans show a small 4× indicator. No new caption
+track is generated. Detection or encoding failure fails the export, with no
+completed movie published.
+
 ## Explicit export audio
 
 Plain `apparent export <bundle>` preserves usable recorded audio. Saved iPhone bundles
