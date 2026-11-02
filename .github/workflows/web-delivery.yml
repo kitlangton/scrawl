@@ -2,7 +2,7 @@ name: Website and Connect — checks & deploy
 
 on:
   workflow_run:
-    workflows: [Changed-tree verification]
+    workflows: [Linux verification]
     branches: [main]
     types: [completed]
   workflow_dispatch:
@@ -45,7 +45,7 @@ jobs:
             echo 'Skipping superseded main candidate'
             exit 0
           fi
-          args=(--sha "$REQUEST_SHA")
+          args=(--platform linux --sha "$REQUEST_SHA")
           if [[ -n "$VERIFY_RUN_ID" ]]; then args+=(--run-id "$VERIFY_RUN_ID"); fi
           python3 enablement/release_gate.py "${args[@]}"
 

@@ -16,7 +16,7 @@ concurrency:
 jobs:
   preview:
     if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
-    runs-on: macos-26
+    runs-on: macos-latest
     timeout-minutes: 90
     env:
       APPARENT_PREVIEW_NOTARIZE: ${{ vars.MAC_APPLE_SIGNING_ENABLED || 'false' }}
@@ -26,10 +26,10 @@ jobs:
       APPARENT_NOTARY_ISSUER: ${{ vars.APPLE_NOTARY_ISSUER }}
     steps:
       - uses: actions/checkout@v5
-      - name: Require full verification of this exact main commit
+      - name: Require Linux/shared and Mac verification of this exact main commit
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 enablement/release_gate.py --sha "$GITHUB_SHA"
+        run: python3 enablement/release_gate.py --platform macos --sha "$GITHUB_SHA"
       - name: Prepare Developer ID credentials
         if: env.APPARENT_PREVIEW_NOTARIZE == 'true'
         env:
