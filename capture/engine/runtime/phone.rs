@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
-use crate::capture::engine::runtime::{LiveOverlayEvent, SharedCaptureTelemetry, apparent_log};
 use crate::capture::desktop::helper::{self, FrameTimes, PhoneDevice};
+use crate::capture::engine::runtime::{LiveOverlayEvent, SharedCaptureTelemetry, apparent_log};
 use crate::shared::model::{
-    CaptureMode, ContextChange, DeviceInfo, InteractionEvent, RgbaFrame, ApparentBundle, ScreenSpan,
-    Stroke, TargetFrame, TargetInfo,
+    ApparentBundle, CaptureMode, ContextChange, DeviceInfo, InteractionEvent, RgbaFrame,
+    ScreenSpan, Stroke, TargetFrame, TargetInfo,
 };
 
 /// Keyframes are decoded from the native video and fit to this long edge (736×1600 for a
@@ -120,7 +120,8 @@ impl PhoneSession {
         telemetry: Option<Arc<SharedCaptureTelemetry>>,
     ) -> Result<Self> {
         let session_epoch_ms = crate::shared::clock::now_epoch_ms();
-        let recording = movie.map(|_| crate::capture::engine::bundle::retention::Recording::start());
+        let recording =
+            movie.map(|_| crate::capture::engine::bundle::retention::Recording::start());
         let mut command = Command::new(helper::path()?);
         command.arg("mirror");
         if let Some(movie) = movie {
@@ -138,7 +139,12 @@ impl PhoneSession {
         }
         // Narration comes from the Mac's microphone: the chosen one, if any.
         if let Some(choice) = crate::capture::engine::runtime::audio::mic::choice() {
-            command.args(["--microphone", &choice.id, "--microphone-name", &choice.name]);
+            command.args([
+                "--microphone",
+                &choice.id,
+                "--microphone-name",
+                &choice.name,
+            ]);
         }
         let mut child = command
             .stdin(Stdio::piped())
@@ -464,67 +470,64 @@ pub fn build_movie_bundle(
         .collect();
     mark_times.sort_unstable();
     mark_times.dedup();
-    let ((transcript, audio_ms, transcribe_ms, audio_err), joined) =
-        std::thread::scope(|scope| {
-            let base_target = capture.target.clone();
-            let strokes_ref = &capture.strokes;
-            let events_ref = &capture.events;
-            let flags_ref = &capture.flags;
-            let movie_ref = &capture.movie;
-            let frames = scope.spawn(move || -> Result<_> {
-                let probe = helper::probe(movie_ref)?;
-                ensure!(probe.duration_ms > 0, "The recording is empty");
-                let mut target = base_target;
-                if probe.width > 0 && probe.height > 0 {
-                    target.frame.width = f64::from(probe.width);
-                    target.frame.height = f64::from(probe.height);
-                }
-                let every = (probe.duration_ms / MAX_CANDIDATES).max(250);
-                let t0 = Instant::now();
-                let budget = crate::shared::model::keyframe_budget(probe.duration_ms);
-                // With a mark for every slot, only the frames under the marks are needed, unless
-                // marks on one screen share a keyframe and leave slots for other moments.
-                if mark_times.len() >= budget {
-                    let direct = helper::frames(
-                        movie_ref,
-                        FrameTimes::At(&mark_times),
-                        PHONE_FRAME_EDGE,
+    let ((transcript, audio_ms, transcribe_ms, audio_err), joined) = std::thread::scope(|scope| {
+        let base_target = capture.target.clone();
+        let strokes_ref = &capture.strokes;
+        let events_ref = &capture.events;
+        let flags_ref = &capture.flags;
+        let movie_ref = &capture.movie;
+        let frames = scope.spawn(move || -> Result<_> {
+            let probe = helper::probe(movie_ref)?;
+            ensure!(probe.duration_ms > 0, "The recording is empty");
+            let mut target = base_target;
+            if probe.width > 0 && probe.height > 0 {
+                target.frame.width = f64::from(probe.width);
+                target.frame.height = f64::from(probe.height);
+            }
+            let every = (probe.duration_ms / MAX_CANDIDATES).max(250);
+            let t0 = Instant::now();
+            let budget = crate::shared::model::keyframe_budget(probe.duration_ms);
+            // With a mark for every slot, only the frames under the marks are needed, unless
+            // marks on one screen share a keyframe and leave slots for other moments.
+            if mark_times.len() >= budget {
+                let direct =
+                    helper::frames(movie_ref, FrameTimes::At(&mark_times), PHONE_FRAME_EDGE);
+                let decode_ms = t0.elapsed().as_millis() as u64;
+                if let Ok(raw_frames) = direct
+                    && !raw_frames.is_empty()
+                {
+                    let mut preview_marks = crate::capture::engine::sketch::marks_of(strokes_ref);
+                    for (i, &t) in flags_ref.iter().enumerate() {
+                        preview_marks.push(crate::shared::model::Mark {
+                            id: format!("f{}", i + 1),
+                            strokes: Vec::new(),
+                            t0: t,
+                            t1: t,
+                            box_norm: [0.0, 0.0, 1.0, 1.0],
+                            shape: crate::shared::model::Shape::Flag,
+                            from: None,
+                            to: None,
+                            pin: None,
+                            on: None,
+                            description: "flagged this moment".into(),
+                            frame: None,
+                        });
+                    }
+                    let preview = crate::capture::engine::keyframes::select_keyframes(
+                        &raw_frames,
+                        strokes_ref,
+                        &mut preview_marks,
+                        events_ref,
+                        &crate::shared::model::TranscriptData::default(),
+                        budget,
                     );
-                    let decode_ms = t0.elapsed().as_millis() as u64;
-                    if let Ok(raw_frames) = direct
-                        && !raw_frames.is_empty()
+                    if preview.len() == budget
+                        && preview
+                            .iter()
+                            .all(|(k, _)| k.reason == crate::shared::model::KeyframeReason::Mark)
                     {
-                        let mut preview_marks = crate::capture::engine::sketch::marks_of(strokes_ref);
-                        for (i, &t) in flags_ref.iter().enumerate() {
-                            preview_marks.push(crate::shared::model::Mark {
-                                id: format!("f{}", i + 1),
-                                strokes: Vec::new(),
-                                t0: t,
-                                t1: t,
-                                box_norm: [0.0, 0.0, 1.0, 1.0],
-                                shape: crate::shared::model::Shape::Flag,
-                                from: None,
-                                to: None,
-                                pin: None,
-                                on: None,
-                                description: "flagged this moment".into(),
-                                frame: None,
-                            });
-                        }
-                        let preview = crate::capture::engine::keyframes::select_keyframes(
-                            &raw_frames,
-                            strokes_ref,
-                            &mut preview_marks,
-                            events_ref,
-                            &crate::shared::model::TranscriptData::default(),
-                            budget,
-                        );
-                        if preview.len() == budget
-                            && preview
-                                .iter()
-                                .all(|(k, _)| k.reason == crate::shared::model::KeyframeReason::Mark)
-                        {
-                            let prep = crate::capture::engine::bundle::bundle_processing::prepare_visuals(
+                        let prep =
+                            crate::capture::engine::bundle::bundle_processing::prepare_visuals(
                                 preview,
                                 raw_frames.first(),
                                 None,
@@ -535,34 +538,38 @@ pub fn build_movie_bundle(
                                 events_ref,
                                 &crate::shared::windows::ActivityLog::default(),
                             );
-                            return Ok((probe, raw_frames, decode_ms, true, prep));
-                        }
+                        return Ok((probe, raw_frames, decode_ms, true, prep));
                     }
                 }
-                let res = helper::frames(movie_ref, FrameTimes::Every(every), CANDIDATE_EDGE)?;
-                Ok((probe, res, t0.elapsed().as_millis() as u64, false, None))
-            });
-            let audio_started = Instant::now();
-            let exported = helper::export_audio(&capture.movie, &wav)
-                .and_then(|()| crate::capture::engine::runtime::audio::audio::recorded_audio_from_wav(std::fs::read(&wav)?));
-            let audio_ms = audio_started.elapsed().as_millis() as u64;
-            let (audio, audio_err) = match exported {
-                Ok(a) => (Some(a), None),
-                Err(e) => (None, Some(e)),
-            };
-            let t0 = Instant::now();
-            let transcript = crate::capture::engine::runtime::audio::transcription::transcribe::transcribe(
+            }
+            let res = helper::frames(movie_ref, FrameTimes::Every(every), CANDIDATE_EDGE)?;
+            Ok((probe, res, t0.elapsed().as_millis() as u64, false, None))
+        });
+        let audio_started = Instant::now();
+        let exported = helper::export_audio(&capture.movie, &wav).and_then(|()| {
+            crate::capture::engine::runtime::audio::audio::recorded_audio_from_wav(std::fs::read(
+                &wav,
+            )?)
+        });
+        let audio_ms = audio_started.elapsed().as_millis() as u64;
+        let (audio, audio_err) = match exported {
+            Ok(a) => (Some(a), None),
+            Err(e) => (None, Some(e)),
+        };
+        let t0 = Instant::now();
+        let transcript =
+            crate::capture::engine::runtime::audio::transcription::transcribe::transcribe(
                 audio.as_ref().map(|_| wav.as_path()),
                 audio.as_ref(),
             );
-            let transcribe_ms = t0.elapsed().as_millis() as u64;
-            (
-                (transcript, audio_ms, transcribe_ms, audio_err),
-                frames.join(),
-            )
-        });
-    let (probe, frames, candidates_ms, already_full, prepared) = joined
-        .map_err(|_| anyhow::anyhow!("Frame decoding panicked"))??;
+        let transcribe_ms = t0.elapsed().as_millis() as u64;
+        (
+            (transcript, audio_ms, transcribe_ms, audio_err),
+            frames.join(),
+        )
+    });
+    let (probe, frames, candidates_ms, already_full, prepared) =
+        joined.map_err(|_| anyhow::anyhow!("Frame decoding panicked"))??;
     if probe.audio_tracks > 0
         && let Some(error) = audio_err
     {
@@ -583,11 +590,13 @@ pub fn build_movie_bundle(
         context_changes: capture.context_changes,
         screens: capture.screens,
         flags: capture.flags,
-        full_frames: (!already_full).then(|| -> crate::capture::engine::bundle::bundle_processing::FullFrames {
-            Box::new(move |times: &[u64]| -> Result<Vec<RgbaFrame>> {
-                helper::frames(&movie, FrameTimes::At(times), PHONE_FRAME_EDGE)
-            })
-        }),
+        full_frames: (!already_full).then(
+            || -> crate::capture::engine::bundle::bundle_processing::FullFrames {
+                Box::new(move |times: &[u64]| -> Result<Vec<RgbaFrame>> {
+                    helper::frames(&movie, FrameTimes::At(times), PHONE_FRAME_EDGE)
+                })
+            },
+        ),
         prepared,
         timings: crate::capture::engine::bundle::bundle_processing::StageTimings {
             started_at: Some(started_at),
@@ -648,8 +657,6 @@ pub fn finalize_live_capture(
             screens: Vec::new(),
         },
     )?;
-    // The native video is ~18 Mbps; re-encode it a minute from now (in the app).
-    crate::capture::engine::bundle::retention::after_phone_capture(&built.0);
     Ok(built)
 }
 

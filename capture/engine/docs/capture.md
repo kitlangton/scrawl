@@ -1,9 +1,5 @@
 # Capture: shortcuts, Mac recording, displays
 
-## Give Feedback (experiment)
-
-Set `"experiments": {"feedbackIssue": true}` in `~/.config/apparent/config.json` and restart Apparent. The menu's **Give Feedback…** starts a screen capture on the pointer's display. Finish it normally; Apparent opens the local capture review. **Open GitHub issue…** opens the public feedback form in your browser. It does not create or submit an issue. Describe the problem there; optionally attach only screenshots or video that you have reviewed for private information. No transcript, recording, or local path goes into the browser URL or gets uploaded by Apparent. The regular **Copy** button copies the local handoff to your clipboard; review its contents before pasting them into a public issue.
-
 Read this before changing `capture/desktop/settings/shortcut.rs`, `capture/engine/runtime/mod.rs`, `capture/engine/runtime/screens.rs` or the picker and capsule placement in `capture/desktop/mod.rs`.
 
 ## Shortcuts (`capture/desktop/settings/shortcut.rs`, `is_capture_shortcut` in `capture/engine/runtime/mod.rs`)
