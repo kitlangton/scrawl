@@ -18,8 +18,12 @@ def sign_runtime(runtime, sign, entitlements):
     for bundle in bundles:
         info = bundle / ("Contents/Info.plist" if bundle.suffix == ".app" else "Resources/Info.plist")
         with info.open("rb") as stream:
-            name = plistlib.load(stream)["CFBundleExecutable"]
+            metadata = plistlib.load(stream)
+        # Electron helper bundles omit this optional key; macOS uses the bundle name.
+        name = metadata.get("CFBundleExecutable", bundle.stem)
         executable = bundle / ("Contents/MacOS" if bundle.suffix == ".app" else "") / name
+        if not executable.is_file():
+            raise ValueError(f"Missing bundle executable: {executable}")
         executables.add(executable.resolve())
     magic = {b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
     # Signing a bundle's principal executable can sign/validate the whole bundle.
