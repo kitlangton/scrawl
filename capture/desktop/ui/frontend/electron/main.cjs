@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain, session, shell } = require('electron');
 const os = require('node:os');
+const {PublicShare} = require('./public-share.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference } = require('./runtime.cjs');
@@ -38,11 +39,12 @@ app.whenReady().then(() => {
   let storageVersion = 0;
   const connect = new ConnectSettings(os.homedir());
   let pendingConnect;
+  const publicShare = new PublicShare(os.homedir());
   let reference;
   let referencePending;
   let retentionRevision;
   let retentionRead;
-  const invalidate = () => { generation += 1; storageVersion += 1; reference = undefined; retentionRevision = undefined; connect.close(); };
+  const invalidate = () => { generation += 1; storageVersion += 1; reference = undefined; retentionRevision = undefined; connect.close(); publicShare.close(); };
   window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) invalidate(); });
   window.webContents.on('will-navigate', invalidate);
   window.webContents.on('render-process-gone', invalidate);
@@ -149,6 +151,12 @@ app.whenReady().then(() => {
       }).catch(() => ({ status: 'error', code: 'bridge_failed' })).finally(() => { referencePending = undefined; });
       referencePending = { operation, promise };
       return promise;
+    });
+  }
+  for (const action of ['start','read','cancel']) {
+    ipcMain.handle(`apparent:${action}-public-share`, async (event,...args) => {
+      validate(event,args);
+      return publicShare.request(action, reference?.status==='connected'?reference.id:null);
     });
   }
   const projectRetention = (result) => {

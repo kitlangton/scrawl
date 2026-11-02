@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import {PublicShare} from './public-share';
 import { Button } from '@apparent/ui/button';
 import type { CaptureReference as Result } from './bridge';
 
@@ -36,7 +37,7 @@ export function CaptureReference() {
       <h2 id="reference-title" className="text-lg font-semibold">Selected capture</h2>
       <Button variant="outline" disabled={busy} onClick={() => void request('read')}>Refresh capture reference</Button>
     </div>
-    <p className="text-sm text-muted-foreground">The saved capture selected in the current Rust app. This window does not select, open or upload recordings.</p>
+    <p className="text-sm text-muted-foreground">The saved capture selected in the current Rust app. Public sharing applies only to this selected capture after confirmation.</p>
     <div role="status" aria-live="polite" className="space-y-2 text-sm">
       {busy && <p>Waiting for the selected capture…</p>}
       {!busy && id && <p className="break-all font-medium">{id}</p>}
@@ -47,6 +48,7 @@ export function CaptureReference() {
       {result.status === 'incompatible' && <p>This Rust backend cannot provide a selected capture reference. Update it before copying.</p>}
       {result.status === 'error' && <p>{errors[result.code] ?? 'Unable to read the capture reference. Refresh when the Rust app is responsive.'}</p>}
     </div>
+    {id && <PublicShare capture={id}/>}
     <Button disabled={busy || !id} onClick={() => void request('copy')}>Copy capture ID</Button>
   </section>;
 }

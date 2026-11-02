@@ -354,3 +354,27 @@ remains until replacement Settings acceptance; rollback is to close this opt-in
 window, not change the saved consent. Remove the old presentation only with the
 future Settings routing switch. The reporting preference itself is not an
 off-by-default experiment. A packaged PostHog token is required to send reports.
+
+## Explicit public link from the selected capture (#171)
+
+The Selected capture card includes Copy public link, followed by an explicit
+anyone-with-link/non-E2E confirmation. Rust pins the selected completed bundle
+path, filesystem identity and capture generation. Preparation runs off the GUI
+thread; short `publicShare` start/read/deliver/cancel requests never carry a
+renderer path or URL. Electron main retains the operation ID and expected capture
+reference, rejects foreign frames/arguments and cancels on reload/close. Rust
+checks current operation, selection, expiry and client authorization before its
+single foreground clipboard write. Failed/ambiguous writes are never retried.
+Cancellation stops future work; data already transmitted cannot be recalled.
+
+This shares exactly one separate service-readable copy through #346, without
+changing private encrypted transfers or local Paste. A copied link may still show
+Preparing recording; the UI directs the recipient to the link for readiness.
+Disconnected devices use existing Connect Settings; signing in does not create a
+public link. No automatic-sharing preference or historical scan is introduced.
+
+Routing remains the existing Electron development window (`npm start`); installed
+native Copy link retains its refusal for encrypted captures. Close this window to
+roll back. Do not remove the legacy donor or switch installed capsule routing
+until this workflow passes real macOS/isolated Linux acceptance and the routing
+switch is authorized. Socket/controller/browser fixtures are not native proof.
