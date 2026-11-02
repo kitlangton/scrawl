@@ -14,6 +14,23 @@ live effectiveness indicator or automatic installer. See [setup and limits](../.
 - **Images (`frames/*.png` and `contact-sheet.png`)**: Keep images purely visual. Each keyframe shows the screenshot, active red tldraw stroke(s) for that moment, a subtle click mark (thin translucent ring and small dot, no fill, so the clicked thing stays readable; phone swipes are a thin translucent trail), and the keyframe's number alone (no `#`, no time; `summary.md` pairs each `[#N · M:SS]` with its words) in bold black on a small white rounded square with a thin dark ring, inset 5 px from the top-left corner and dodging to bottom-left when top-left has ink, a click or the cursor. The chip never moves over the top-right action controls in a captured app. The chip is drawn at one size on every contact-sheet tile, about 24 px with its ring: blind reading tests found 20 px failed when the sheet was shown at half size, a bare digit was read as screenshot text, and `#6` was read as `8`. `contact-sheet.png` packs frames in time order (left→right, top→bottom) into aspect-ratio-justified rows separated by tight 6 px gutters on a dark canvas (no card borders or rounded frame masks, capped at 1600 px long edge / ~1.56 MP) with no rasterized transcript headers or caption boxes.
 - **Text (`summary.md` & Clipboard)**: Put the transcript, `[#N · M:SS]` keyframe index, and absolute file paths (`Contact sheet:`, `frames/frame-XX.png`, `Video:`, `Bundle:`) in plain text (`NSPasteboardTypeString`) without repeating the transcript multiple times, so `⌘V` pastes cleanly into any terminal (Ghostty / OpenCode TUI) or GUI composer (OpenCode Desktop).
 
+## Checked completion
+
+Screen and phone completion keep construction and the optional final whiteboard append
+under one Engine publication lease. Desktop admits Saved, clipboard handoff, Connect
+and phone retention only after the outer result validates the persisted manifest,
+summary and surviving media and completes the durability barrier. An append failure
+may use the intact original bundle only after revalidation; an unfinished whiteboard
+stage blocks admission. Failed publication retains recovery and pending-transcription
+work. A later transcript update restores the previous manifest and summary on failure.
+Existing incremental WAV files remain authoritative and are never replaced by the
+in-memory recording at Stop.
+
+This changes the shared completion contract without changing installed Desktop routing
+or introducing another completion surface. The existing UI receives only the checked
+outer result. Publication checks structure and sample extents for MP4/MOV; native
+capture and playback verification remain separate requirements.
+
 ## Transcription (`capture/engine/runtime/audio/transcription/transcribe.rs`, `shared/hex.rs`, `capture/engine/runtime/audio/transcription/command_transcriber.rs`)
 
 Apple SpeechAnalyzer by default (measured word times). `"transcriber": "hex"` + `"hexModel"` in `~/.config/apparent/config.json` (Settings › Recording, `apparent hex status`, `--transcriber` on `reprocess`/`import`) uses Hex's local API v2 (discovery file `local-api.json`, bearer token, never logged) only when Hex answers `/health` and has a ready model (`installed && verified`; Apparent never downloads). Hex gives text only, so each speech island (`audio::speech_islands`, clips merged to ≤ 24) is transcribed on its own and its words are spread over it by length: `source: "hex:<model>"`, `estimated: true`, which `keyframes.rs` reads to skip spoken cues. Any Hex failure falls back to Apple for that recording; Hex absent falls back silently (logged once). `"transcriber": "command"` (`capture/engine/runtime/audio/transcription/command_transcriber.rs`) runs the argv in `"transcribeCommand"` (no shell, own process group, wall-clock limit, 8 MiB stdout cap) and reads one versioned JSON transcript: `source: "command:<name>"`; any failure means Apple for that recording (Hex never tried; a missing or malformed command is logged once, like Hex being away), and nothing the program says or is given reaches the log. It gets no language from Apparent: `appleLocale` is Apple's, and the user's argv carries the model's. Its keys are read on their own (`Program::load_from`), never through `handoff::Config`. Settings reads `hex::cached_status` (a background poller), never the network.

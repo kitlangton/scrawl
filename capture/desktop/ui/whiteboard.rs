@@ -6,15 +6,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, Bounds, Context, Entity, FocusHandle, FontWeight, Image, ImageFormat, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Render, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, canvas, div, point,
-    img, prelude::*, px, rgb, size, svg,
+    App, Bounds, Context, Entity, FocusHandle, FontWeight, Image, ImageFormat, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
+    Point, Render, Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
+    canvas, div, img, point, prelude::*, px, rgb, size, svg,
 };
 
-use super::super::ApparentCoordinator;
+use super::super::{ApparentCoordinator, platform};
 use super::pill_theme::{CARBON, PAPER};
-use super::super::platform;
 
 pub(in crate::capture::desktop) const PAPER_WIDTH: f32 = 1600.0;
 pub(in crate::capture::desktop) const PAPER_HEIGHT: f32 = 1100.0;
@@ -32,7 +31,9 @@ fn toolbar_button(id: &'static str, label: &'static str, close: bool) -> gpui::S
         .justify_center()
         .border_1()
         .border_color(rgb(if close { LILAC } else { 0x645a69 }))
-        .when(close, |button| button.bg(rgb(LILAC)).text_color(rgb(CARBON)))
+        .when(close, |button| {
+            button.bg(rgb(LILAC)).text_color(rgb(CARBON))
+        })
         .rounded(px(2.0))
         .cursor_pointer()
         .hover(move |style| {
@@ -42,9 +43,14 @@ fn toolbar_button(id: &'static str, label: &'static str, close: bool) -> gpui::S
         })
         .when_else(
             close,
-            |button| button.w(px(36.0)).px(px(0.0)).child(
-                svg().path(crate::capture::desktop::icons::X).size(px(16.0)).text_color(rgb(CARBON)),
-            ),
+            |button| {
+                button.w(px(36.0)).px(px(0.0)).child(
+                    svg()
+                        .path(crate::capture::desktop::icons::X)
+                        .size(px(16.0))
+                        .text_color(rgb(CARBON)),
+                )
+            },
             |button| button.child(label),
         )
 }
@@ -64,7 +70,10 @@ impl Board {
 
     pub fn extend(&mut self, point: [f32; 2]) {
         if let Some(stroke) = self.active.as_mut() {
-            stroke.push([point[0].clamp(0.0, PAPER_WIDTH), point[1].clamp(0.0, PAPER_HEIGHT)]);
+            stroke.push([
+                point[0].clamp(0.0, PAPER_WIDTH),
+                point[1].clamp(0.0, PAPER_HEIGHT),
+            ]);
         }
     }
 
@@ -97,7 +106,10 @@ fn on_paper([x, y]: [f32; 2]) -> bool {
 /// The canvas starts immediately beneath the toolbar. GPUI pointer positions are window-local;
 /// paper coordinates do not depend on the current window width or height.
 fn paper_point(position: Point<Pixels>) -> [f32; 2] {
-    [f32::from(position.x), f32::from(position.y) - TOOLBAR_HEIGHT]
+    [
+        f32::from(position.x),
+        f32::from(position.y) - TOOLBAR_HEIGHT,
+    ]
 }
 
 pub(in crate::capture::desktop) struct WhiteboardWindow {
@@ -111,7 +123,9 @@ impl WhiteboardWindow {
     fn snapshot_soon(&self, cx: &mut Context<Self>) {
         let coordinator = self.coordinator.clone();
         cx.spawn(async move |_, cx| {
-            cx.background_executor().timer(Duration::from_millis(120)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
             let _ = coordinator.update(cx, |coord, _| coord.request_immediate_frame());
         })
         .detach();
@@ -182,29 +196,30 @@ impl Render for WhiteboardWindow {
                             .flex()
                             .items_center()
                             .gap(px(10.0))
+                            .child(img(self.mark.clone()).size(px(28.0)).flex_none())
                             .child(
-                                img(self.mark.clone())
-                                .size(px(28.0))
-                                .flex_none(),
-                            )
-                            .child(div().text_size(px(16.0)).font_weight(FontWeight::MEDIUM).child("Whiteboard")),
+                                div()
+                                    .text_size(px(16.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Whiteboard"),
+                            ),
                     )
                     .child(
-                        toolbar_button("whiteboard-undo", "Undo", false)
-                            .on_click(cx.listener(|view, _, _, cx| {
+                        toolbar_button("whiteboard-undo", "Undo", false).on_click(cx.listener(
+                            |view, _, _, cx| {
                                 view.board.borrow_mut().undo();
                                 view.snapshot_soon(cx);
                                 cx.notify();
-                            })),
+                            },
+                        )),
                     )
-                    .child(
-                        toolbar_button("whiteboard-clear", "Clear", false)
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.board.borrow_mut().clear();
-                                view.snapshot_soon(cx);
-                                cx.notify();
-                            })),
-                    )
+                    .child(toolbar_button("whiteboard-clear", "Clear", false).on_click(
+                        cx.listener(|view, _, _, cx| {
+                            view.board.borrow_mut().clear();
+                            view.snapshot_soon(cx);
+                            cx.notify();
+                        }),
+                    ))
                     .child(
                         toolbar_button("whiteboard-close", "Close", true)
                             .on_click(cx.listener(|_, _, window, _| window.remove_window())),
@@ -217,35 +232,47 @@ impl Render for WhiteboardWindow {
                     .w_full()
                     .overflow_hidden()
                     .cursor_crosshair()
-                    .on_mouse_down(MouseButton::Left, cx.listener(|view, event: &MouseDownEvent, _, cx| {
-                        view.board.borrow_mut().start(paper_point(event.position));
-                        cx.notify();
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|view, event: &MouseDownEvent, _, cx| {
+                            view.board.borrow_mut().start(paper_point(event.position));
+                            cx.notify();
+                        }),
+                    )
                     .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
                         if view.board.borrow().active.is_some() {
                             view.board.borrow_mut().extend(paper_point(event.position));
                             cx.notify();
                         }
                     }))
-                    .on_mouse_up(MouseButton::Left, cx.listener(|view, _: &MouseUpEvent, _, cx| {
-                        view.board.borrow_mut().finish();
-                        view.snapshot_soon(cx);
-                        cx.notify();
-                    }))
-                    .on_mouse_up_out(MouseButton::Left, cx.listener(|view, _: &MouseUpEvent, _, cx| {
-                        view.board.borrow_mut().finish();
-                        view.snapshot_soon(cx);
-                        cx.notify();
-                    }))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|view, _: &MouseUpEvent, _, cx| {
+                            view.board.borrow_mut().finish();
+                            view.snapshot_soon(cx);
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(|view, _: &MouseUpEvent, _, cx| {
+                            view.board.borrow_mut().finish();
+                            view.snapshot_soon(cx);
+                            cx.notify();
+                        }),
+                    )
                     .child(
-                        canvas(|_, _, _| {}, move |bounds: Bounds<Pixels>, (), window: &mut Window, _: &mut App| {
-                            for stroke in &board.strokes {
-                                paint_stroke(window, stroke, bounds.origin);
-                            }
-                            if let Some(active) = &board.active {
-                                paint_stroke(window, active, bounds.origin);
-                            }
-                        })
+                        canvas(
+                            |_, _, _| {},
+                            move |bounds: Bounds<Pixels>, (), window: &mut Window, _: &mut App| {
+                                for stroke in &board.strokes {
+                                    paint_stroke(window, stroke, bounds.origin);
+                                }
+                                if let Some(active) = &board.active {
+                                    paint_stroke(window, active, bounds.origin);
+                                }
+                            },
+                        )
                         .size_full(),
                     ),
             )
@@ -290,7 +317,11 @@ pub(in crate::capture::desktop) fn open(coord: &Entity<ApparentCoordinator>, cx:
                 focus,
                 mark: Arc::new(Image::from_bytes(
                     ImageFormat::Png,
-                    include_bytes!("../../../shared/assets/brand/apparent-a.png").to_vec(),
+                    include_bytes!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/shared/assets/brand/apparent-a.png"
+                    ))
+                    .to_vec(),
                 )),
             })
         },
@@ -302,7 +333,10 @@ pub(in crate::capture::desktop) fn open(coord: &Entity<ApparentCoordinator>, cx:
 }
 
 /// Snapshot the paper at Stop before the UI is dismissed; the bundle worker uses this copy.
-pub(in crate::capture::desktop) fn finish_snapshot(board: &Rc<RefCell<Board>>, close: impl FnOnce()) -> Board {
+pub(in crate::capture::desktop) fn finish_snapshot(
+    board: &Rc<RefCell<Board>>,
+    close: impl FnOnce(),
+) -> Board {
     let snapshot = board.borrow().clone();
     close();
     snapshot
@@ -326,7 +360,7 @@ pub(in crate::capture::desktop) fn finish_handoff(
     finish_handoff_with(dir, bundle, summary, board, |_| Ok(()))
 }
 
-fn finish_handoff_with(
+pub(in crate::capture::desktop) fn finish_handoff_with(
     dir: &std::path::Path,
     mut bundle: crate::shared::model::ApparentBundle,
     summary: String,
@@ -334,7 +368,9 @@ fn finish_handoff_with(
     before_publish: impl FnMut(usize) -> anyhow::Result<()>,
 ) -> (crate::shared::model::ApparentBundle, String) {
     if let Err(error) = append_to_bundle_with(dir, &mut bundle, board, before_publish) {
-        crate::capture::engine::runtime::apparent_log(format!("Whiteboard handoff skipped: {error:#}"));
+        crate::capture::engine::runtime::apparent_log(format!(
+            "Whiteboard handoff skipped: {error:#}"
+        ));
         return (bundle, summary);
     }
     let summary = crate::capture::engine::sketch::summary_markdown(&bundle, dir);
@@ -354,13 +390,16 @@ fn append_to_bundle_with(
     if board.strokes.is_empty() {
         return Ok(());
     }
-    let read = |path: &std::path::Path| -> anyhow::Result<crate::shared::model::RgbaFrame> {
-        crate::capture::engine::render::decode_png(BufReader::new(std::fs::File::open(path)?))
+    let root = crate::capture::engine::bundle::bundle_processing::publication::Directory::open(
+        dir, false,
+    )?;
+    let read = |path: &str| -> anyhow::Result<crate::shared::model::RgbaFrame> {
+        crate::capture::engine::render::decode_png(BufReader::new(root.file(path)?))
     };
     let mut frames: Vec<_> = bundle
         .keyframes
         .iter()
-        .map(|key| Ok((key.clone(), read(&dir.join(&key.file))?)))
+        .map(|key| Ok((key.clone(), read(&key.file)?)))
         .collect::<anyhow::Result<_>>()?;
     let index = frames.len() + 1;
     let count = board.strokes.len();
@@ -382,7 +421,10 @@ fn append_to_bundle_with(
     // Contact sheets are rendered before the small number chip is stamped on the frame.
     // Existing PNGs already have their chips; reusing them does not hide any sketch content.
     frames.push((key.clone(), paper.clone()));
-    let sheet = crate::capture::engine::render::render_contact_sheet_for_duration(bundle.duration_ms, &frames);
+    let sheet = crate::capture::engine::render::render_contact_sheet_for_duration(
+        bundle.duration_ms,
+        &frames,
+    );
     let mut stamped = vec![(key.clone(), paper)];
     crate::capture::engine::render::stamp_keyframe_badges(&mut stamped);
     let png = crate::capture::engine::render::encode_png(&stamped[0].1)?;
@@ -392,24 +434,39 @@ fn append_to_bundle_with(
             .iter()
             .map(|key| {
                 let name = std::path::Path::new(&key.file).file_name().unwrap();
-                Ok((key.clone(), read(&dir.join(&crop.full_frames).join(name))?))
+                let path = format!("{}/{}", crop.full_frames, name.to_string_lossy());
+                Ok((key.clone(), read(&path)?))
             })
             .collect::<anyhow::Result<_>>()?;
         full.push((key.clone(), stamped[0].1.clone()));
-        Some(crate::capture::engine::render::render_contact_sheet_for_duration(bundle.duration_ms, &full))
+        Some(
+            crate::capture::engine::render::render_contact_sheet_for_duration(
+                bundle.duration_ms,
+                &full,
+            ),
+        )
     } else {
         None
     };
 
     let mut next = bundle.clone();
     let mut writes = vec![
-        (dir.join(&key.file), png.clone()),
-        (dir.join(&bundle.contact_sheet), crate::capture::engine::render::encode_png(&sheet)?),
+        (key.file.clone(), png.clone()),
+        (
+            bundle.contact_sheet.clone(),
+            crate::capture::engine::render::encode_png(&sheet)?,
+        ),
     ];
     if let (Some(crop), Some(full)) = (&mut next.autocrop, full_sheet) {
         let name = std::path::Path::new(&key.file).file_name().unwrap();
-        writes.push((dir.join(&crop.full_frames).join(name), png));
-        writes.push((dir.join(&crop.full_contact_sheet), crate::capture::engine::render::encode_png(&full)?));
+        writes.push((
+            format!("{}/{}", crop.full_frames, name.to_string_lossy()),
+            png,
+        ));
+        writes.push((
+            crop.full_contact_sheet.clone(),
+            crate::capture::engine::render::encode_png(&full)?,
+        ));
         crop.crops.push(KeyframeCrop {
             index,
             x: 0.0,
@@ -423,49 +480,64 @@ fn append_to_bundle_with(
         crop.changes.push(Vec::new());
     }
     next.keyframes.push(key);
-    writes.push((dir.join("apparent.json"), serde_json::to_vec_pretty(&next)?));
-    writes.push((dir.join("summary.md"), crate::capture::engine::sketch::summary_markdown(&next, dir).into_bytes()));
+    writes.push(("apparent.json".into(), serde_json::to_vec_pretty(&next)?));
+    writes.push((
+        "summary.md".into(),
+        crate::capture::engine::sketch::summary_markdown(&next, dir).into_bytes(),
+    ));
     publish_artifacts(dir, &writes, before_publish)?;
     *bundle = next;
     Ok(())
 }
 
-/// Stage everything before replacing any base capture artifact. Hard-linked backups let a
-/// failed publish restore originals with renames, even when the disk is out of space.
+/// Stage replacements and independent backups before replacing anything. Rollback
+/// renames allocate no payload bytes; a staging failure leaves originals intact.
 fn publish_artifacts(
     dir: &std::path::Path,
-    writes: &[(std::path::PathBuf, Vec<u8>)],
+    writes: &[(String, Vec<u8>)],
     mut before_publish: impl FnMut(usize) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     use anyhow::Context;
 
-    let stage = dir.join(format!(".whiteboard-{}", crate::shared::ids::make_bundle_id()));
-    std::fs::create_dir(&stage)?;
+    let root = crate::capture::engine::bundle::bundle_processing::publication::Directory::open(
+        dir, false,
+    )?;
+    let stage_name = format!(".whiteboard-{}", crate::shared::ids::make_bundle_id());
+    let stage = root.child(&stage_name, true)?;
     let mut rollback_failed = false;
+    let mut originals = vec![false; writes.len()];
     let result = (|| -> anyhow::Result<()> {
         for (index, (path, bytes)) in writes.iter().enumerate() {
-            std::fs::write(stage.join(format!("new-{index}")), bytes)?;
-            if path.exists() {
-                std::fs::hard_link(path, stage.join(format!("old-{index}")))
-                    .with_context(|| format!("backing up {}", path.display()))?;
+            stage.write(&format!("new-{index}"), bytes)?;
+            match root.file(path) {
+                Ok(_) => {
+                    root.copy_to(path, &stage, &format!("old-{index}"))
+                        .with_context(|| format!("backing up {path}"))?;
+                    originals[index] = true;
+                }
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => {}
+                Err(error) => return Err(error),
             }
         }
         let mut published = 0;
         for (index, (path, _)) in writes.iter().enumerate() {
             if let Err(error) = before_publish(index)
-                .and_then(|()| std::fs::rename(stage.join(format!("new-{index}")), path).map_err(Into::into))
+                .and_then(|()| stage.rename_to(&format!("new-{index}"), &root, path))
             {
                 for (prior, (path, _)) in writes[..published].iter().enumerate().rev() {
-                    let backup = stage.join(format!("old-{prior}"));
-                    let restored = if backup.exists() {
-                        std::fs::rename(backup, path)
+                    let backup = format!("old-{prior}");
+                    let restored = if originals[prior] {
+                        stage.rename_to(&backup, &root, path)
                     } else {
-                        std::fs::remove_file(path)
+                        root.remove_path(path)
                     };
                     if let Err(restore_error) = restored {
                         rollback_failed = true;
                         crate::capture::engine::runtime::apparent_log(format!(
-                            "Whiteboard rollback failed for {}: {restore_error}", path.display()
+                            "Whiteboard rollback failed for {path}: {restore_error}"
                         ));
                     }
                 }
@@ -477,10 +549,18 @@ fn publish_artifacts(
     })();
     if rollback_failed {
         crate::capture::engine::runtime::apparent_log(format!(
-            "Whiteboard backups left at {} for recovery", stage.display()
+            "Whiteboard backups left at {} for recovery",
+            dir.join(&stage_name).display()
         ));
-    } else if let Err(error) = std::fs::remove_dir_all(&stage) {
-        crate::capture::engine::runtime::apparent_log(format!("Whiteboard stage cleanup failed: {error}"));
+    } else {
+        before_publish(writes.len()).context("Whiteboard stage cleanup failed")?;
+        for leaf in stage.names()? {
+            stage
+                .remove(&leaf)
+                .context("Whiteboard stage cleanup failed")?;
+        }
+        root.remove_directory(&stage_name)
+            .context("Whiteboard stage cleanup failed")?;
     }
     result
 }
@@ -505,7 +585,9 @@ fn render_paper(strokes: &[Vec<[f32; 2]>], t_ms: u64) -> crate::shared::model::R
         let (x, y) = (x.round() as i32, y.round() as i32);
         for dy in -2..=2 {
             for dx in -2..=2 {
-                if dx * dx + dy * dy > 5 { continue; }
+                if dx * dx + dy * dy > 5 {
+                    continue;
+                }
                 let (px, py) = (x + dx, y + dy);
                 if px >= 0 && py >= 0 && px < image.width as i32 && py < image.height as i32 {
                     let at = (py as usize * image.width as usize + px as usize) * 4;
@@ -523,7 +605,11 @@ fn render_paper(strokes: &[Vec<[f32; 2]>], t_ms: u64) -> crate::shared::model::R
             let steps = ((b[0] - a[0]).hypot(b[1] - a[1]) * 2.0).ceil() as usize;
             for i in 0..=steps.max(1) {
                 let f = i as f32 / steps.max(1) as f32;
-                dot(&mut image, a[0] + (b[0] - a[0]) * f - left, a[1] + (b[1] - a[1]) * f - top);
+                dot(
+                    &mut image,
+                    a[0] + (b[0] - a[0]) * f - left,
+                    a[1] + (b[1] - a[1]) * f - top,
+                );
             }
         }
     }
@@ -549,7 +635,10 @@ mod tests {
     fn branded_toolbar_keeps_pointer_coordinates_on_the_paper() {
         let mut board = Board::default();
         board.start(paper_point(point(px(20.0), px(TOOLBAR_HEIGHT - 1.0))));
-        assert!(board.active.is_none(), "toolbar clicks must never become ink");
+        assert!(
+            board.active.is_none(),
+            "toolbar clicks must never become ink"
+        );
         board.start(paper_point(point(px(20.0), px(TOOLBAR_HEIGHT))));
         board.extend(paper_point(point(px(80.0), px(TOOLBAR_HEIGHT + 60.0))));
         board.finish();
@@ -567,7 +656,11 @@ mod tests {
         assert!(closed.get(), "Stop must dismiss the visible whiteboard");
         assert_eq!(snapshot.strokes, board.borrow().strokes);
         board.borrow_mut().clear();
-        assert_eq!(snapshot.strokes.len(), 1, "export must survive the next session");
+        assert_eq!(
+            snapshot.strokes.len(),
+            1,
+            "export must survive the next session"
+        );
     }
 
     #[test]
@@ -579,7 +672,10 @@ mod tests {
         reset_for_capture(&board);
         let next = finish_snapshot(&board, || {});
         assert_eq!(first.strokes.len(), 1);
-        assert!(next.strokes.is_empty(), "the previous recording must not leak into the next");
+        assert!(
+            next.strokes.is_empty(),
+            "the previous recording must not leak into the next"
+        );
     }
 
     use crate::shared::model::KeyframeReason;
@@ -592,7 +688,10 @@ mod tests {
         board.finish();
         board.start([100.0, 120.0]);
         board.finish();
-        assert_eq!(board.strokes, vec![vec![[20.0, 40.0], [40.0, 60.0]], vec![[100.0, 120.0]]]);
+        assert_eq!(
+            board.strokes,
+            vec![vec![[20.0, 40.0], [40.0, 60.0]], vec![[100.0, 120.0]]]
+        );
         board.undo();
         assert_eq!(board.strokes.len(), 1);
         board.clear();
@@ -603,23 +702,46 @@ mod tests {
     #[test]
     fn finished_whiteboard_is_a_legible_handoff_frame_and_text() {
         let root = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
-        let (dir, mut bundle, _) = crate::capture::desktop::demo::generate_demo_bundle(Some(root.join("demo.apparent"))).unwrap();
+        let (dir, mut bundle, _) =
+            crate::capture::desktop::demo::generate_demo_bundle(Some(root.join("demo.apparent")))
+                .unwrap();
         let sheet_before = std::fs::read(dir.join("contact-sheet.png")).unwrap();
         let full_dir = dir.join("frames-full");
         std::fs::create_dir(&full_dir).unwrap();
-        for frame in &bundle.keyframes {
-            std::fs::copy(&dir.join(&frame.file), full_dir.join(std::path::Path::new(&frame.file).file_name().unwrap())).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&full_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        std::fs::copy(dir.join("contact-sheet.png"), dir.join("contact-sheet-full.png")).unwrap();
+        for frame in &bundle.keyframes {
+            std::fs::copy(
+                &dir.join(&frame.file),
+                full_dir.join(std::path::Path::new(&frame.file).file_name().unwrap()),
+            )
+            .unwrap();
+        }
+        std::fs::copy(
+            dir.join("contact-sheet.png"),
+            dir.join("contact-sheet-full.png"),
+        )
+        .unwrap();
         bundle.autocrop = Some(crate::shared::model::AutocropInfo {
             label: "the activity".into(),
             full_frames: "frames-full".into(),
             full_contact_sheet: "contact-sheet-full.png".into(),
-            crops: bundle.keyframes.iter().map(|frame| crate::shared::model::KeyframeCrop {
-                index: frame.index, x: 0.0, y: 0.0,
-                width: bundle.target.frame.width, height: bundle.target.frame.height,
-                kind: crate::capture::engine::autocrop::autocrop::CropKind::Full, reason: "test".into(), apps: vec![],
-            }).collect(),
+            crops: bundle
+                .keyframes
+                .iter()
+                .map(|frame| crate::shared::model::KeyframeCrop {
+                    index: frame.index,
+                    x: 0.0,
+                    y: 0.0,
+                    width: bundle.target.frame.width,
+                    height: bundle.target.frame.height,
+                    kind: crate::capture::engine::autocrop::autocrop::CropKind::Full,
+                    reason: "test".into(),
+                    apps: vec![],
+                })
+                .collect(),
             changes: vec![vec![]; bundle.keyframes.len()],
         });
         let mut board = Board::default();
@@ -629,27 +751,53 @@ mod tests {
         append_to_bundle_with(&dir, &mut bundle, &board, |_| Ok(())).unwrap();
         let frame = bundle.keyframes.last().unwrap();
         assert_eq!(frame.reason, KeyframeReason::Whiteboard);
-        assert!(crate::capture::engine::sketch::summary_markdown_with(&bundle, &dir, false)
-            .contains("whiteboard drawing (1 stroke; final state)"));
-        assert!(crate::capture::engine::sketch::summary_markdown_with(&bundle, &dir, true)
-            .contains("whiteboard drawing (1 stroke; final state)"));
+        assert!(
+            crate::capture::engine::sketch::summary_markdown_with(&bundle, &dir, false)
+                .contains("whiteboard drawing (1 stroke; final state)")
+        );
+        assert!(
+            crate::capture::engine::sketch::summary_markdown_with(&bundle, &dir, true)
+                .contains("whiteboard drawing (1 stroke; final state)")
+        );
         assert!(dir.join(&frame.file).is_file());
-        let image = crate::capture::engine::render::decode_png(std::io::BufReader::new(std::fs::File::open(dir.join(&frame.file)).unwrap())).unwrap();
+        let image = crate::capture::engine::render::decode_png(std::io::BufReader::new(
+            std::fs::File::open(dir.join(&frame.file)).unwrap(),
+        ))
+        .unwrap();
         assert!(image.rgba.chunks_exact(4).any(|p| p[0] < 100 && p[1] < 100));
-        assert_ne!(std::fs::read(dir.join("contact-sheet.png")).unwrap(), sheet_before);
-        assert_eq!(bundle.autocrop.as_ref().unwrap().crops.len(), bundle.keyframes.len());
-        assert!(full_dir.join(std::path::Path::new(&frame.file).file_name().unwrap()).exists());
-        assert_ne!(std::fs::read(dir.join("contact-sheet-full.png")).unwrap(), sheet_before);
-        let saved: crate::shared::model::ApparentBundle = serde_json::from_slice(&std::fs::read(dir.join("apparent.json")).unwrap()).unwrap();
+        assert_ne!(
+            std::fs::read(dir.join("contact-sheet.png")).unwrap(),
+            sheet_before
+        );
+        assert_eq!(
+            bundle.autocrop.as_ref().unwrap().crops.len(),
+            bundle.keyframes.len()
+        );
+        assert!(
+            full_dir
+                .join(std::path::Path::new(&frame.file).file_name().unwrap())
+                .exists()
+        );
+        assert_ne!(
+            std::fs::read(dir.join("contact-sheet-full.png")).unwrap(),
+            sheet_before
+        );
+        let saved: crate::shared::model::ApparentBundle =
+            serde_json::from_slice(&std::fs::read(dir.join("apparent.json")).unwrap()).unwrap();
         assert_eq!(saved.keyframes, bundle.keyframes);
-        assert_eq!(std::fs::read_to_string(dir.join("summary.md")).unwrap(), crate::capture::engine::sketch::summary_markdown(&bundle, &dir));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("summary.md")).unwrap(),
+            crate::capture::engine::sketch::summary_markdown(&bundle, &dir)
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn empty_or_cleared_paper_does_not_add_a_handoff_tile() {
         let root = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
-        let (dir, mut bundle, _) = crate::capture::desktop::demo::generate_demo_bundle(Some(root.join("demo.apparent"))).unwrap();
+        let (dir, mut bundle, _) =
+            crate::capture::desktop::demo::generate_demo_bundle(Some(root.join("demo.apparent")))
+                .unwrap();
         let before = std::fs::read(dir.join("contact-sheet.png")).unwrap();
         let keys = bundle.keyframes.len();
         let mut board = Board::default();
@@ -658,7 +806,10 @@ mod tests {
         board.clear();
         append_to_bundle_with(&dir, &mut bundle, &board, |_| Ok(())).unwrap();
         assert_eq!(bundle.keyframes.len(), keys);
-        assert_eq!(std::fs::read(dir.join("contact-sheet.png")).unwrap(), before);
+        assert_eq!(
+            std::fs::read(dir.join("contact-sheet.png")).unwrap(),
+            before
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -666,11 +817,15 @@ mod tests {
     fn failed_paper_publish_keeps_the_original_capture_and_clipboard_text() {
         let root = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
         let (dir, bundle, summary) =
-            crate::capture::desktop::demo::generate_demo_bundle(Some(root.join("demo.apparent"))).unwrap();
+            crate::capture::desktop::demo::generate_demo_bundle(Some(root.join("demo.apparent")))
+                .unwrap();
         let manifest = std::fs::read(dir.join("apparent.json")).unwrap();
         let sheet = std::fs::read(dir.join("contact-sheet.png")).unwrap();
         let text = std::fs::read(dir.join("summary.md")).unwrap();
-        let next_frame = dir.join(format!("frames/frame-{:02}.png", bundle.keyframes.len() + 1));
+        let next_frame = dir.join(format!(
+            "frames/frame-{:02}.png",
+            bundle.keyframes.len() + 1
+        ));
         let mut board = Board::default();
         board.start([40.0, 40.0]);
         board.extend([420.0, 310.0]);
@@ -680,7 +835,9 @@ mod tests {
         for fail_at in [2, 3] {
             let (returned, returned_summary) =
                 finish_handoff_with(&dir, bundle.clone(), summary.clone(), &board, |index| {
-                    if index == fail_at { anyhow::bail!("injected paper publish failure") }
+                    if index == fail_at {
+                        anyhow::bail!("injected paper publish failure")
+                    }
                     Ok(())
                 });
             assert_eq!(returned.keyframes, bundle.keyframes);
@@ -689,9 +846,49 @@ mod tests {
             assert_eq!(std::fs::read(dir.join("contact-sheet.png")).unwrap(), sheet);
             assert_eq!(std::fs::read(dir.join("summary.md")).unwrap(), text);
             assert!(!next_frame.exists());
-            assert!(!std::fs::read_dir(&dir).unwrap()
-                .any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with(".whiteboard-")));
+            assert!(!std::fs::read_dir(&dir).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".whiteboard-")
+            }));
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn cleanup_failure_retains_stage_and_blocks_fallback_publication() {
+        use crate::capture::engine::bundle::bundle_processing::publication;
+        let root = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
+        let (dir, bundle, summary) =
+            crate::capture::desktop::demo::generate_demo_bundle(Some(root.join("demo.apparent")))
+                .unwrap();
+        let mut board = Board::default();
+        board.start([40.0, 40.0]);
+        board.extend([420.0, 310.0]);
+        board.finish();
+        let result = publication::publish_after(&dir, || {
+            let (fallback, text) =
+                finish_handoff_with(&dir, bundle.clone(), summary.clone(), &board, |index| {
+                    if index == 4 {
+                        anyhow::bail!("injected stage cleanup failure")
+                    }
+                    Ok(())
+                });
+            assert_eq!(fallback.keyframes, bundle.keyframes);
+            assert_eq!(text, summary);
+            Ok((dir.clone(), fallback, text))
+        });
+        assert!(result.is_err());
+        assert!(dir.join(publication::IN_PROGRESS).exists());
+        assert!(std::fs::read_dir(&dir).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".whiteboard-")
+        }));
+        assert!(publication::checked(&dir, &bundle, &summary).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 }
