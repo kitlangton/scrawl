@@ -8,7 +8,8 @@ use super::whiteboard;
 use crate::capture::engine::runtime::apparent_log;
 use crate::shared::model::{ApparentBundle, InteractionEvent, Stroke, TargetInfo};
 
-pub(in crate::capture::desktop) type CaptureResult = anyhow::Result<(PathBuf, ApparentBundle, String)>;
+pub(in crate::capture::desktop) type CaptureResult =
+    anyhow::Result<(PathBuf, ApparentBundle, String)>;
 
 /// The GUI has already stopped telemetry, closed the overlay and snapshotted the paper.
 pub(in crate::capture::desktop) fn finalize(
@@ -26,9 +27,9 @@ pub(in crate::capture::desktop) fn finalize(
             windows,
         } => (session, audio, windows),
         CaptureSource::Phone(session) => {
-            let finalized = session
-                .stop()
-                .and_then(|recording| {
+            // Stop the producer before waiting for a possibly contended writer lease.
+            let finalized = session.stop().and_then(|recording| {
+                complete_bundle(&bundle_dir, &final_whiteboard, || {
                     crate::capture::engine::runtime::phone::finalize_live_capture(
                         &bundle_dir,
                         recording,
@@ -37,11 +38,12 @@ pub(in crate::capture::desktop) fn finalize(
                         None,
                     )
                 })
-                .map(|(dir, bundle, summary)| {
-                    let (bundle, summary) =
-                        whiteboard::finish_handoff(&dir, bundle, summary, &final_whiteboard);
-                    (dir, bundle, summary)
-                });
+            });
+            // Only the outer publication result may enqueue native movie shrinking.
+            let finalized = after_publication(
+                finalized,
+                crate::capture::engine::bundle::retention::after_phone_capture,
+            );
             if let Err(error) = &finalized {
                 apparent_log(format!("iPhone capture failed: {error:#}"));
             }
@@ -72,23 +74,58 @@ pub(in crate::capture::desktop) fn finalize(
     let duration_ms = recording.duration_ms;
     let recorded_audio = match recorded_audio {
         Ok(audio) => audio,
-        Err(error) => return (Err(error.context(format!("Narration save failed; saved assets remain in {}", bundle_dir.display()))), duration_ms),
+        Err(error) => return (Err(error), duration_ms),
     };
-    let finalized = crate::capture::engine::bundle::bundle_processing::finalize_capture_bundle(
-        &bundle_dir,
-        target,
-        recording,
-        strokes,
-        events,
-        recorded_audio,
-        None,
-        activity,
-        None,
-    )
-    .map(|(dir, bundle, summary)| {
-        let (bundle, summary) =
-            whiteboard::finish_handoff(&dir, bundle, summary, &final_whiteboard);
-        (dir, bundle, summary)
+    let finalized = complete_bundle(&bundle_dir, &final_whiteboard, || {
+        crate::capture::engine::bundle::bundle_processing::finalize_capture_bundle(
+            &bundle_dir,
+            target,
+            recording,
+            strokes,
+            events,
+            recorded_audio,
+            None,
+            activity,
+            None,
+        )
     });
     (finalized, duration_ms)
 }
+
+fn after_publication(
+    result: CaptureResult,
+    on_success: impl FnOnce(&std::path::Path),
+) -> CaptureResult {
+    if let Ok((dir, _, _)) = &result {
+        on_success(dir);
+    }
+    result
+}
+
+/// Both recording sources must finish optional drawing mutations and validate
+/// the surviving capture before Desktop can see any successful result.
+fn complete_bundle(
+    path: &std::path::Path,
+    board: &whiteboard::Board,
+    build: impl FnOnce() -> CaptureResult,
+) -> CaptureResult {
+    complete_bundle_with(path, build, |dir, bundle, summary| {
+        whiteboard::finish_handoff(dir, bundle, summary, board)
+    })
+}
+
+fn complete_bundle_with(
+    path: &std::path::Path,
+    build: impl FnOnce() -> CaptureResult,
+    finish: impl FnOnce(&std::path::Path, ApparentBundle, String) -> (ApparentBundle, String),
+) -> CaptureResult {
+    crate::capture::engine::bundle::bundle_processing::publication::publish_after(path, || {
+        let (dir, bundle, summary) = build()?;
+        let (bundle, summary) = finish(&dir, bundle, summary);
+        Ok((dir, bundle, summary))
+    })
+}
+
+#[cfg(test)]
+#[path = "../../engine/bundle/bundle_processing/publication/completion_tests.rs"]
+mod publication_tests;

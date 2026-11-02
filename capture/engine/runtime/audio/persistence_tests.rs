@@ -9,6 +9,10 @@ impl Scratch {
         let path =
             std::env::temp_dir().join(format!("apparent-narration-{name}-{}", std::process::id()));
         std::fs::create_dir(&path).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         Self(path)
     }
 }
@@ -528,15 +532,30 @@ fn failed_screen_start_cancels_local_narration_before_it_can_become_an_orphan() 
     let root = Scratch::new("screen-start-failed");
     let dir = root.0.join("capture.apparent");
     recover::begin_screen_capture(&dir).unwrap();
-    let writer = Writer::start(&dir, Arc::new(Mutex::new(Samples::from(vec![0.2; 160]))), Arc::default()).unwrap();
+    let writer = Writer::start(
+        &dir,
+        Arc::new(Mutex::new(Samples::from(vec![0.2; 160]))),
+        Arc::default(),
+    )
+    .unwrap();
     wait_for(|| std::fs::metadata(dir.join("audio.wav")).unwrap().len() > 44);
     // Same error-path owner used when screen startup returns Err after mic start.
     recover::abandon_start(&dir, || {
-        assert!(dir.join(recover::CANCELLED).is_file(), "cancellation must precede producer teardown");
+        assert!(
+            dir.join(recover::CANCELLED).is_file(),
+            "cancellation must precede producer teardown"
+        );
         drop(writer);
-    }).unwrap();
+    })
+    .unwrap();
     assert!(!dir.exists());
-    assert!(recover::pending(&root.0, std::time::SystemTime::now() + Duration::from_secs(3600)).is_empty());
+    assert!(
+        recover::pending(
+            &root.0,
+            std::time::SystemTime::now() + Duration::from_secs(3600)
+        )
+        .is_empty()
+    );
     assert_eq!(std::fs::read_dir(&root.0).unwrap().count(), 0);
 }
 

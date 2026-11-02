@@ -26,10 +26,14 @@ def api(path):
     return value['result']
 
 
+class SupersededMain(ValueError):
+    pass
+
+
 def current_main(sha):
     tip = subprocess.check_output(['git', 'ls-remote', 'origin', 'refs/heads/main'], cwd=ROOT, text=True).split()[0]
     if tip != sha:
-        raise ValueError('Refusing stale main revision')
+        raise SupersededMain('Refusing stale main revision')
 
 
 def verify(sha, package):
@@ -98,7 +102,11 @@ def main():
         shutil.copytree(ROOT / 'public/site/functions', stage / 'functions')
         shutil.copytree(ROOT / 'public/site/lib', stage / 'lib')
         shutil.copyfile(ROOT / 'public/site/wrangler.pages.jsonc', stage / 'wrangler.jsonc')
-        current_main(sha)
+        try:
+            current_main(sha)
+        except SupersededMain:
+            print('Skipping superseded main candidate; no website published')
+            return
         subprocess.run([str(ROOT / 'connect/service/node_modules/.bin/wrangler'), 'pages', 'deploy',
                         '--project-name', PROJECT, '--branch', 'main', '--commit-hash', sha,
                         '--commit-dirty=false'], cwd=stage, env=env, check=True)

@@ -5,37 +5,39 @@ use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 
 use crate::capture::agent::context as agent_context;
-use crate::capture::engine::runtime::phone;
-use crate::capture::engine::runtime::audio::{self, mic};
-use crate::capture::desktop::helper;
-use crate::capture::desktop::workflow::{agent_capture, launch_instance};
+use crate::capture::agent::zoom;
 use crate::capture::desktop as ui;
-#[cfg(target_os = "linux")]
-use crate::capture::desktop::{linux, playback};
+use crate::capture::desktop::helper;
 #[cfg(target_os = "macos")]
 use crate::capture::desktop::playback;
-use crate::shared::{handoff, hex, model, windows};
-use crate::capture::engine::autocrop::autocrop as autocrop;
-use crate::capture::engine::{ export};
+use crate::capture::desktop::workflow::{agent_capture, launch_instance};
+#[cfg(target_os = "linux")]
+use crate::capture::desktop::{linux, playback};
+use crate::capture::engine::autocrop::autocrop;
 use crate::capture::engine::autocrop::autocrop_lab;
 use crate::capture::engine::bundle::{recover, retention};
-use crate::capture::engine::runtime::audio::transcription::{speech_model, transcribe};
-#[cfg(target_os = "linux")]
-use crate::capture::engine::runtime::audio::transcription::pause_transcribe;
-use crate::capture::agent::zoom;
+use crate::capture::engine::export;
 #[cfg(not(target_os = "linux"))]
 use crate::capture::engine::runtime::audio::transcription::live_transcribe;
+#[cfg(target_os = "linux")]
+use crate::capture::engine::runtime::audio::transcription::pause_transcribe;
+use crate::capture::engine::runtime::audio::transcription::{speech_model, transcribe};
+use crate::capture::engine::runtime::audio::{self, mic};
+use crate::capture::engine::runtime::phone;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::connect::hosted;
+use crate::shared::{handoff, hex, model, windows};
 
+use crate::capture::desktop::demo::generate_demo_bundle;
+use crate::capture::engine::bundle::bundle_processing::{
+    finalize_capture_bundle, rebuild_screen_bundle,
+};
 use crate::capture::engine::runtime::audio::audio::AudioRecorder;
 use crate::capture::engine::runtime::{ScreenCaptureSession, discover_target, record_target};
-use crate::shared::model::{CaptureMode, InteractionEvent, Shape, parse_clock_ms};
 use crate::capture::engine::sketch::summary_markdown;
 use crate::shared::clock::now_epoch_ms;
 use crate::shared::ids::make_bundle_id;
-use crate::capture::desktop::demo::generate_demo_bundle;
-use crate::capture::engine::bundle::bundle_processing::{finalize_capture_bundle, rebuild_screen_bundle};
+use crate::shared::model::{CaptureMode, InteractionEvent, Shape, parse_clock_ms};
 
 #[derive(Parser)]
 #[command(
@@ -48,7 +50,9 @@ struct Cli {
     command: Option<Command>,
 }
 
-fn parse_engine(name: &str) -> Result<crate::capture::engine::runtime::audio::transcription::transcribe::Engine, String> {
+fn parse_engine(
+    name: &str,
+) -> Result<crate::capture::engine::runtime::audio::transcription::transcribe::Engine, String> {
     crate::capture::engine::runtime::audio::transcription::transcribe::Engine::parse(name)
         .ok_or_else(|| "expected `apple`, `hex` or `command`".to_owned())
 }
@@ -143,7 +147,10 @@ enum UpdateCommand {
     /// Show the selected channel, live process version, and installed update as JSON.
     Status,
     /// Select stable releases or builds from main (does not download anything).
-    Channel { #[arg(value_parser = ["stable", "main"])] channel: String },
+    Channel {
+        #[arg(value_parser = ["stable", "main"])]
+        channel: String,
+    },
     /// Check the chosen channel now and install an update for the next launch.
     Check,
 }
@@ -191,13 +198,18 @@ enum Command {
     /// Opt-in hosted account and upload queue management.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[command(alias = "cloud")]
-    Connect { #[command(subcommand)] command: hosted::ConnectCommand },
+    Connect {
+        #[command(subcommand)]
+        command: hosted::ConnectCommand,
+    },
     /// Retrieve and validate a complete hosted capture using a separate read credential.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     Fetch {
         id: String,
-        #[arg(long)] out: PathBuf,
-        #[arg(long, default_value_t = 0)] wait: u64,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value_t = 0)]
+        wait: u64,
     },
     /// Open Apparent without recording. Only apparent://open is accepted.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -210,7 +222,10 @@ enum Command {
     },
     /// Inspect or explicitly end a GUI capture. Same user and machine only; never toggles or sends.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    Capture { #[command(subcommand)] command: CaptureCommand },
+    Capture {
+        #[command(subcommand)]
+        command: CaptureCommand,
+    },
     /// Launch the GPUI menu-bar and review application.
     App {
         /// Start a capture session immediately on launch.
@@ -222,7 +237,10 @@ enum Command {
     },
     /// Inspect or manage Linux AppImage updates.
     #[cfg(target_os = "linux")]
-    Update { #[command(subcommand)] command: UpdateCommand },
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommand,
+    },
     /// Hand a shortcut press to the running app (Linux: GNOME's custom keybindings run this
     /// where there's no GlobalShortcuts portal).
     #[cfg(target_os = "linux")]
@@ -302,7 +320,8 @@ enum Command {
         live_speed: Option<f64>,
         /// Transcribe with `apple`, `hex` or `command` instead of the configured transcriber.
         #[arg(long, value_parser = parse_engine)]
-        transcriber: Option<crate::capture::engine::runtime::audio::transcription::transcribe::Engine>,
+        transcriber:
+            Option<crate::capture::engine::runtime::audio::transcription::transcribe::Engine>,
         /// Turn an experiment on for this run, as `"experiments"` in `config.json` would
         /// (e.g. `agentContext`). Repeatable.
         #[arg(long = "experiment", value_name = "NAME")]
@@ -683,16 +702,45 @@ pub(crate) fn run() -> Result<()> {
             use crate::capture::desktop::workflow::agent_capture::Action;
             let (action, id, wait, timeout) = match command {
                 CaptureCommand::State => (None, None, false, 4),
-                CaptureCommand::Start { wait, timeout, request_id } =>
-                    (Some(Action::Start), Some(match request_id { Some(id) => id, None => agent_capture::new_id()? }), wait, timeout),
-                CaptureCommand::Stop { capture_id, wait, timeout } => (Some(Action::Stop), Some(capture_id), wait, timeout),
-                CaptureCommand::Cancel { capture_id } => (Some(Action::Cancel), Some(capture_id), false, 4),
-                CaptureCommand::Inspect { capture_id } => (Some(Action::Inspect), Some(capture_id), false, 4),
+                CaptureCommand::Start {
+                    wait,
+                    timeout,
+                    request_id,
+                } => (
+                    Some(Action::Start),
+                    Some(match request_id {
+                        Some(id) => id,
+                        None => agent_capture::new_id()?,
+                    }),
+                    wait,
+                    timeout,
+                ),
+                CaptureCommand::Stop {
+                    capture_id,
+                    wait,
+                    timeout,
+                } => (Some(Action::Stop), Some(capture_id), wait, timeout),
+                CaptureCommand::Cancel { capture_id } => {
+                    (Some(Action::Cancel), Some(capture_id), false, 4)
+                }
+                CaptureCommand::Inspect { capture_id } => {
+                    (Some(Action::Inspect), Some(capture_id), false, 4)
+                }
             };
-            let value = agent_capture::execute(action.zip(id.as_deref()), wait, Duration::from_secs(timeout));
+            let value = agent_capture::execute(
+                action.zip(id.as_deref()),
+                wait,
+                Duration::from_secs(timeout),
+            );
             println!("{value}");
             ensure!(!value["error"].is_string(), "GUI capture control: {value}");
-            ensure!(!matches!(value["outcome"].as_str(), Some("wrong_capture" | "not_ready")), "GUI capture control: {value}");
+            ensure!(
+                !matches!(
+                    value["outcome"].as_str(),
+                    Some("wrong_capture" | "not_ready")
+                ),
+                "GUI capture control: {value}"
+            );
             Ok(())
         }
         Command::App { record, iphone } => {
@@ -719,10 +767,18 @@ pub(crate) fn run() -> Result<()> {
         #[cfg(target_os = "linux")]
         Command::Update { command } => {
             match command {
-                UpdateCommand::Status => println!("{}", serde_json::to_string_pretty(&linux::update::status()?)?),
+                UpdateCommand::Status => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&linux::update::status()?)?
+                ),
                 UpdateCommand::Channel { channel } => {
                     linux::update::set_channel_in(&handoff::default_config_path(), &channel)?;
-                    println!("Update channel: {}", linux::update::status()?["channel"].as_str().unwrap_or("unknown"));
+                    println!(
+                        "Update channel: {}",
+                        linux::update::status()?["channel"]
+                            .as_str()
+                            .unwrap_or("unknown")
+                    );
                 }
                 UpdateCommand::Check => println!("{}", linux::update::check_cli()?),
             }
@@ -826,7 +882,10 @@ pub(crate) fn run() -> Result<()> {
                 Ok(session) => session,
                 Err(error) => {
                     if let Err(cleanup) = recover::abandon_start(&bundle_dir, || drop(audio)) {
-                        crate::capture::engine::runtime::apparent_log(format!("Failed capture startup cleanup at {}: {cleanup:#}", bundle_dir.display()));
+                        crate::capture::engine::runtime::apparent_log(format!(
+                            "Failed capture startup cleanup at {}: {cleanup:#}",
+                            bundle_dir.display()
+                        ));
                     }
                     return Err(error);
                 }
@@ -839,7 +898,9 @@ pub(crate) fn run() -> Result<()> {
                 )
             });
             let deadline = std::time::Instant::now() + Duration::from_secs(duration.max(1));
-            while std::time::Instant::now() < deadline && !crate::capture::desktop::workflow::shutdown::requested() {
+            while std::time::Instant::now() < deadline
+                && !crate::capture::desktop::workflow::shutdown::requested()
+            {
                 std::thread::sleep(Duration::from_millis(20));
             }
             drop(playback);
@@ -903,19 +964,15 @@ pub(crate) fn run() -> Result<()> {
                 .collect();
             if let Some(iters) = bench {
                 let iters = iters.max(1);
-                let video_name = video.file_name().context("Bad video name")?.to_owned();
                 let prep_iter = |i: u32| -> Result<(PathBuf, PathBuf)> {
                     let iter_out = if i + 1 == iters {
                         out.clone()
                     } else {
                         out.with_file_name(format!("bench-{i}.apparent"))
                     };
-                    let _ = std::fs::remove_dir_all(&iter_out);
-                    std::fs::create_dir_all(&iter_out)?;
-                    let linked = iter_out.join(&video_name);
-                    std::fs::hard_link(&video, &linked)
-                        .or_else(|_| std::fs::copy(&video, &linked).map(|_| ()))?;
-                    Ok((iter_out, linked))
+                    crate::capture::engine::bundle::bundle_processing::publication::benchmark::stage(
+                        &dir, &video, &iter_out,
+                    )
                 };
                 let mut runs_ms = Vec::with_capacity(iters as usize);
                 if let Some(device) = old.device.clone() {
@@ -950,8 +1007,9 @@ pub(crate) fn run() -> Result<()> {
                         helper::FrameTimes::Every(220),
                         crate::capture::engine::runtime::CANDIDATE_EDGE as u32,
                     )?;
-                    let mut candidate_buf =
-                        crate::capture::engine::runtime::CandidateBuffer::new(crate::capture::engine::runtime::CANDIDATE_BUDGET_BYTES);
+                    let mut candidate_buf = crate::capture::engine::runtime::CandidateBuffer::new(
+                        crate::capture::engine::runtime::CANDIDATE_BUDGET_BYTES,
+                    );
                     for mut frame in raw_candidates {
                         frame.t_ms += offset;
                         let urgent = old.strokes.iter().any(|s| s.t1.abs_diff(frame.t_ms) <= 150)
@@ -988,7 +1046,9 @@ pub(crate) fn run() -> Result<()> {
                         let iter_wav = wav_bytes.clone();
                         #[cfg(target_os = "linux")]
                         let pause = match (live_speed, &iter_wav) {
-                            (Some(speed), Some(wav)) if pause_transcribe::wanted() => Some(pause_transcribe::simulate(wav, speed)?),
+                            (Some(speed), Some(wav)) if pause_transcribe::wanted() => {
+                                Some(pause_transcribe::simulate(wav, speed)?)
+                            }
                             _ => None,
                         };
                         #[cfg(not(target_os = "linux"))]
@@ -1004,9 +1064,13 @@ pub(crate) fn run() -> Result<()> {
                             .transpose()?
                             .map(|mut recorded| {
                                 #[cfg(not(target_os = "linux"))]
-                                { recorded.live = live_transcribe::Slot::new(live); }
+                                {
+                                    recorded.live = live_transcribe::Slot::new(live);
+                                }
                                 #[cfg(target_os = "linux")]
-                                { recorded.pause = pause_transcribe::Slot::new(pause); }
+                                {
+                                    recorded.pause = pause_transcribe::Slot::new(pause);
+                                }
                                 recorded
                             });
                         iter_activity.stop_started = Some(t0);
@@ -1118,7 +1182,9 @@ pub(crate) fn run() -> Result<()> {
             let failed = results.iter().filter(|(_, r)| r.is_err()).count();
             for (dir, result) in results {
                 match result {
-                    Ok(summary) if dir.join("narration-recovered.txt").exists() => print!("{summary}"),
+                    Ok(summary) if dir.join("narration-recovered.txt").exists() => {
+                        print!("{summary}")
+                    }
                     Ok(_) => println!("rebuilt {}", dir.display()),
                     Err(error) => println!("failed  {}: {error:#}", dir.display()),
                 }
@@ -1201,11 +1267,23 @@ pub(crate) fn run() -> Result<()> {
         }
         #[cfg(target_os = "linux")]
         Command::DecoderCheck { movie } => {
-            anyhow::ensure!(linux::media::h264_decoder_available(), "{}", linux::media::decoder_warning().unwrap_or_default());
+            anyhow::ensure!(
+                linux::media::h264_decoder_available(),
+                "{}",
+                linux::media::decoder_warning().unwrap_or_default()
+            );
             let frames = linux::media::frames(&movie, helper::FrameTimes::At(&[0]), 0)?;
             let frame = &frames[0];
-            anyhow::ensure!(frame.width > 0 && frame.height > 0, "Decoded frame has no dimensions");
-            println!("Decoded {} full-quality H.264 keyframe(s) ({}x{})", frames.len(), frame.width, frame.height);
+            anyhow::ensure!(
+                frame.width > 0 && frame.height > 0,
+                "Decoded frame has no dimensions"
+            );
+            println!(
+                "Decoded {} full-quality H.264 keyframe(s) ({}x{})",
+                frames.len(),
+                frame.width,
+                frame.height
+            );
             Ok(())
         }
         #[cfg(target_os = "linux")]
@@ -1215,7 +1293,8 @@ pub(crate) fn run() -> Result<()> {
             Ok(())
         }
         Command::SckProbe { watch } => {
-            let end = std::time::Instant::now() + std::time::Duration::from_secs(watch.unwrap_or(0));
+            let end =
+                std::time::Instant::now() + std::time::Duration::from_secs(watch.unwrap_or(0));
             loop {
                 let started = std::time::Instant::now();
                 let preflight = crate::capture::engine::runtime::screen_capture_granted();
@@ -1582,11 +1661,27 @@ mod tests {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn hosted_connect_is_canonical_in_help_and_usage() {
-        let help = Cli::try_parse_from(["apparent", "--help"]).err().unwrap().to_string();
-        assert!(help.lines().any(|line| line.trim_start().starts_with("connect ")), "{help}");
-        assert!(!help.lines().any(|line| line.trim_start().starts_with("cloud ")), "{help}");
+        let help = Cli::try_parse_from(["apparent", "--help"])
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            help.lines()
+                .any(|line| line.trim_start().starts_with("connect ")),
+            "{help}"
+        );
+        assert!(
+            !help
+                .lines()
+                .any(|line| line.trim_start().starts_with("cloud ")),
+            "{help}"
+        );
         for name in ["connect", "cloud"] {
-            for tail in [vec!["--help"], vec!["login", "--help"], vec!["upload", "--help"]] {
+            for tail in [
+                vec!["--help"],
+                vec!["login", "--help"],
+                vec!["upload", "--help"],
+            ] {
                 let mut args = vec!["apparent", name];
                 args.extend(tail);
                 let error = Cli::try_parse_from(args).err().unwrap();
@@ -1596,8 +1691,14 @@ mod tests {
                 assert!(text.contains("apparent connect"), "{text}");
                 assert!(!text.contains("apparent cloud"), "{text}");
             }
-            let error = Cli::try_parse_from(["apparent", name, "login"]).err().unwrap().to_string();
-            assert!(error.contains("apparent connect login --server <SERVER>"), "{error}");
+            let error = Cli::try_parse_from(["apparent", name, "login"])
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(
+                error.contains("apparent connect login --server <SERVER>"),
+                "{error}"
+            );
         }
     }
 
@@ -1607,16 +1708,39 @@ mod tests {
         use clap::CommandFactory;
         for tail in [
             vec!["login", "--server", "https://hosted.tryapparent.com"],
-            vec!["login", "--server", "https://hosted.tryapparent.com", "--scope", "read", "--no-browser"],
-            vec!["login", "--server", "https://hosted.tryapparent.com", "--scope", "upload", "--consent-upload", "--no-browser"],
-            vec!["status"], vec!["status", "--account"], vec!["logout"],
-            vec!["disable"], vec!["retry"], vec!["upload", "./synthetic capture.apparent"],
-            vec!["shares", "list"], vec!["shares", "revoke", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+            vec![
+                "login",
+                "--server",
+                "https://hosted.tryapparent.com",
+                "--scope",
+                "read",
+                "--no-browser",
+            ],
+            vec![
+                "login",
+                "--server",
+                "https://hosted.tryapparent.com",
+                "--scope",
+                "upload",
+                "--consent-upload",
+                "--no-browser",
+            ],
+            vec!["status"],
+            vec!["status", "--account"],
+            vec!["logout"],
+            vec!["disable"],
+            vec!["retry"],
+            vec!["upload", "./synthetic capture.apparent"],
+            vec!["shares", "list"],
+            vec!["shares", "revoke", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
         ] {
             let parse = |name| {
                 let mut args = vec!["apparent", name];
                 args.extend(tail.iter().copied());
-                assert!(matches!(Cli::try_parse_from(&args).unwrap().command, Some(Command::Connect { .. })));
+                assert!(matches!(
+                    Cli::try_parse_from(&args).unwrap().command,
+                    Some(Command::Connect { .. })
+                ));
                 let matches = Cli::command().try_get_matches_from(args).unwrap();
                 assert_eq!(matches.subcommand_name(), Some("connect"));
                 matches.subcommand().unwrap().1.clone()
@@ -1624,7 +1748,18 @@ mod tests {
             assert_eq!(parse("connect"), parse("cloud"), "{tail:?}");
         }
         for name in ["connect", "cloud"] {
-            for tail in [vec!["login"], vec!["login", "--server", "https://hosted.tryapparent.com", "--scope", "admin"], vec!["status", "--consent-upload"], vec!["upload"]] {
+            for tail in [
+                vec!["login"],
+                vec![
+                    "login",
+                    "--server",
+                    "https://hosted.tryapparent.com",
+                    "--scope",
+                    "admin",
+                ],
+                vec!["status", "--consent-upload"],
+                vec!["upload"],
+            ] {
                 let mut args = vec!["apparent", name];
                 args.extend(tail);
                 assert!(Cli::try_parse_from(args).is_err());
@@ -1637,17 +1772,45 @@ mod tests {
     fn capture_owned_start_and_wait_parser() {
         for args in [
             vec!["apparent", "capture", "start", "--wait", "--timeout", "30"],
-            vec!["apparent", "capture", "stop", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--wait", "--timeout", "60"],
-            vec!["apparent", "capture", "inspect", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+            vec![
+                "apparent",
+                "capture",
+                "stop",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--wait",
+                "--timeout",
+                "60",
+            ],
+            vec![
+                "apparent",
+                "capture",
+                "inspect",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ],
         ] {
             assert!(Cli::try_parse_from(&args).is_ok(), "{args:?}");
         }
         for timeout in ["0", "3601", "bad"] {
-            assert!(Cli::try_parse_from(["apparent", "capture", "start", "--timeout", timeout]).is_err());
-            assert!(Cli::try_parse_from(["apparent", "capture", "stop", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--timeout", timeout]).is_err());
+            assert!(
+                Cli::try_parse_from(["apparent", "capture", "start", "--timeout", timeout])
+                    .is_err()
+            );
+            assert!(
+                Cli::try_parse_from([
+                    "apparent",
+                    "capture",
+                    "stop",
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "--timeout",
+                    timeout
+                ])
+                .is_err()
+            );
         }
         for command in ["start", "stop", "inspect"] {
-            let error = Cli::try_parse_from(["apparent", "capture", command, "--help"]).err().unwrap();
+            let error = Cli::try_parse_from(["apparent", "capture", command, "--help"])
+                .err()
+                .unwrap();
             assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
             assert!(!error.use_stderr());
         }
@@ -1663,20 +1826,35 @@ mod tests {
 
     #[test]
     fn cli_identifies_as_apparent() {
-        assert_eq!(<Cli as clap::CommandFactory>::command().get_name(), "apparent");
+        assert_eq!(
+            <Cli as clap::CommandFactory>::command().get_name(),
+            "apparent"
+        );
     }
 
     #[test]
     fn export_cli_requires_explicit_audio_choices_to_be_unambiguous() {
         for args in [
             vec!["apparent", "export", "capture.apparent", "--no-audio"],
-            vec!["apparent", "export", "capture.apparent", "--narration", "cues.json"],
+            vec![
+                "apparent",
+                "export",
+                "capture.apparent",
+                "--narration",
+                "cues.json",
+            ],
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
         }
         for args in [
             vec!["apparent", "export", "--narration"],
-            vec!["apparent", "export", "--no-audio", "--narration", "cues.json"],
+            vec![
+                "apparent",
+                "export",
+                "--no-audio",
+                "--narration",
+                "cues.json",
+            ],
             vec!["apparent", "export", "--no-audio=false"],
         ] {
             assert!(Cli::try_parse_from(args).is_err());
@@ -1699,7 +1877,10 @@ mod tests {
     fn export_cli_zooms_by_default_and_no_zoom_opts_out() {
         for (args, expected) in [
             (vec!["apparent", "export", "capture.apparent"], true),
-            (vec!["apparent", "export", "capture.apparent", "--no-zoom"], false),
+            (
+                vec!["apparent", "export", "capture.apparent", "--no-zoom"],
+                false,
+            ),
         ] {
             let cli = Cli::try_parse_from(args).unwrap();
             let Some(Command::Export { zoom, crop, .. }) = cli.command else {
@@ -1711,9 +1892,16 @@ mod tests {
         assert!(Cli::try_parse_from(["apparent", "export", "capture.apparent", "--zoom"]).is_err());
         use clap::CommandFactory;
         let mut command = Cli::command();
-        let help = command.find_subcommand_mut("export").unwrap().render_long_help().to_string();
+        let help = command
+            .find_subcommand_mut("export")
+            .unwrap()
+            .render_long_help()
+            .to_string();
         assert!(help.contains("--no-zoom"));
-        assert!(!help.contains("--zoom"), "retired flag must not appear in help: {help}");
+        assert!(
+            !help.contains("--zoom"),
+            "retired flag must not appear in help: {help}"
+        );
     }
 
     #[test]
@@ -1721,10 +1909,16 @@ mod tests {
         use clap::CommandFactory;
         let mut command = Cli::command();
         let mut help = Vec::new();
-        command.find_subcommand_mut("record").unwrap().write_long_help(&mut help).unwrap();
+        command
+            .find_subcommand_mut("record")
+            .unwrap()
+            .write_long_help(&mut help)
+            .unwrap();
         let help = String::from_utf8(help).unwrap();
-        assert!(help.contains("does not collect clicks or Shift ink"), "{help}");
+        assert!(
+            help.contains("does not collect clicks or Shift ink"),
+            "{help}"
+        );
         assert!(help.contains("app's recording shortcut"), "{help}");
     }
-
 }

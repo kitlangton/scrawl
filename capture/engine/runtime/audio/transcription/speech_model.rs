@@ -113,7 +113,11 @@ impl Worker {
         Some(self.generation)
     }
 
-    fn apply(&mut self, generation: u64, line: &crate::capture::desktop::helper::SpeechModelLine) -> bool {
+    fn apply(
+        &mut self,
+        generation: u64,
+        line: &crate::capture::desktop::helper::SpeechModelLine,
+    ) -> bool {
         if self.stale(generation) {
             return false;
         }
@@ -184,7 +188,9 @@ pub fn restart() {
 }
 
 fn start(restart: bool) {
-    let enabled = crate::capture::engine::runtime::audio::transcription::transcribe::Engine::configured() != crate::capture::engine::runtime::audio::transcription::transcribe::Engine::Hex;
+    let enabled =
+        crate::capture::engine::runtime::audio::transcription::transcribe::Engine::configured()
+            != crate::capture::engine::runtime::audio::transcription::transcribe::Engine::Hex;
     if !restart && !enabled {
         return;
     }
@@ -219,9 +225,12 @@ fn work(generation: u64) {
                 worker.status.state = State::Checking;
             }
         }
-        let result = crate::capture::desktop::helper::install_speech_model(&|| lock().stale(generation), |line| {
-            lock().apply(generation, &line);
-        });
+        let result = crate::capture::desktop::helper::install_speech_model(
+            &|| lock().stale(generation),
+            |line| {
+                lock().apply(generation, &line);
+            },
+        );
         let status = {
             let mut worker = lock();
             if worker.stale(generation) {
@@ -269,7 +278,8 @@ fn work(generation: u64) {
 /// Speech Recognition was just allowed (macOS 15): check the model again now.
 pub fn note_grants(grants: &crate::capture::desktop::settings::onboarding::Grants) {
     if current().state == State::NeedsPermission
-        && grants.granted(crate::capture::desktop::settings::onboarding::Permission::SpeechRecognition)
+        && grants
+            .granted(crate::capture::desktop::settings::onboarding::Permission::SpeechRecognition)
     {
         ensure();
     }
@@ -324,9 +334,12 @@ pub fn missing(why: &str, locale: &str, error: Option<&str>) -> MissingTranscrip
 
 /// Marks a freshly written bundle whose transcript can come later; if the model has arrived
 /// meanwhile, transcribes it now.
-pub fn mark_pending(bundle_dir: &Path) {
-    let _ = std::fs::write(bundle_dir.join(PENDING), b"");
-    if current().state == State::Ready {
+pub fn mark_pending(bundle_dir: &Path) -> Result<()> {
+    crate::capture::engine::bundle::bundle_processing::publication::write(bundle_dir, PENDING, b"")
+}
+
+pub(crate) fn resume_pending(bundle_dir: &Path) {
+    if current().state == State::Ready && bundle_dir.join(PENDING).is_file() {
         let dir = bundle_dir.to_path_buf();
         std::thread::spawn(move || transcribe_one(&dir));
     }
@@ -348,7 +361,15 @@ pub fn transcribe_pending(captures: &Path) {
 }
 
 fn transcribe_one(dir: &Path) {
-    match transcribe_again(dir) {
+    let result = (|| {
+        let _guard =
+            crate::capture::engine::bundle::bundle_processing::publication::coordinate(dir)?;
+        if !dir.join(PENDING).is_file() {
+            return Ok(false);
+        }
+        transcribe_again(dir)
+    })();
+    match result {
         Ok(done) => crate::capture::engine::runtime::apparent_log(format!(
             "transcribed again {}: {}",
             dir.display(),
@@ -359,7 +380,7 @@ fn transcribe_one(dir: &Path) {
                 "transcribing {} again failed: {error:#}",
                 dir.display()
             ));
-            let _ = std::fs::remove_file(dir.join(PENDING));
+            // Preserve retryable work on transcription, validation or I/O failure.
         }
     }
 }
@@ -368,10 +389,45 @@ fn transcribe_one(dir: &Path) {
 /// keyframe's words, `apparent.json` and `summary.md`. Returns `false` (and keeps the marker)
 /// while there's still no model.
 pub fn transcribe_again(dir: &Path) -> Result<bool> {
-    let (dir, mut bundle) = crate::shared::handoff::load_bundle(dir)?;
+    transcribe_again_with(dir, crate::capture::desktop::helper::transcribe)
+}
+
+fn transcribe_again_with(
+    dir: &Path,
+    transcribe: impl FnOnce(&Path) -> Result<crate::shared::model::TranscriptData>,
+) -> Result<bool> {
+    transcribe_again_with_publication(dir, transcribe, |_| Ok(()))
+}
+
+fn transcribe_again_with_publication(
+    dir: &Path,
+    transcribe: impl FnOnce(&Path) -> Result<crate::shared::model::TranscriptData>,
+    mut before_step: impl FnMut(usize) -> Result<()>,
+) -> Result<bool> {
+    use crate::capture::engine::bundle::bundle_processing::publication;
+    let _publication = publication::coordinate(dir)?;
+    let root = publication::Directory::open(dir, false)?;
+    let names = root.names()?;
+    if [
+        publication::IN_PROGRESS,
+        crate::capture::engine::bundle::recover::UNFINISHED,
+        crate::capture::engine::bundle::recover::UNSAFE_VIDEO,
+    ]
+    .iter()
+    .any(|name| names.iter().any(|n| n == name))
+    {
+        return Ok(false);
+    }
+    let dir = dir.to_path_buf();
+    let old_manifest = publication::read_text(&dir, "apparent.json")?;
+    let mut bundle: crate::shared::model::ApparentBundle = serde_json::from_str(&old_manifest)?;
+    let original = bundle.clone();
+    let old_summary = publication::read_text(&dir, "summary.md")?;
+    publication::checked(&dir, &bundle, &old_summary)?;
     let wav = dir.join(bundle.audio.as_deref().unwrap_or("audio.wav"));
     anyhow::ensure!(wav.is_file(), "the bundle has no audio.wav any more");
-    let transcript = crate::capture::desktop::helper::transcribe(&wav)?;
+    publication::preflight_sources(&dir, None)?;
+    let transcript = transcribe(&wav)?;
     if transcript
         .missing
         .as_ref()
@@ -385,17 +441,33 @@ pub fn transcribe_again(dir: &Path) -> Result<bool> {
         frame.said = said;
     }
     bundle.transcript = transcript;
-    std::fs::write(
-        dir.join("apparent.json"),
-        serde_json::to_vec_pretty(&bundle).context("Could not encode apparent.json")?,
-    )?;
-    std::fs::write(
-        dir.join("summary.md"),
-        crate::capture::engine::sketch::summary_markdown(&bundle, &dir),
-    )?;
-    let _ = std::fs::remove_file(dir.join(PENDING));
+    let summary = crate::capture::engine::sketch::summary_markdown(&bundle, &dir);
+    let updated = publication::publish_after(&dir, || {
+        publication::write(
+            &dir,
+            "apparent.json",
+            &serde_json::to_vec_pretty(&bundle).context("Could not encode apparent.json")?,
+        )?;
+        before_step(0)?;
+        publication::write(&dir, "summary.md", summary.as_bytes())?;
+        before_step(1)?;
+        Ok((dir.clone(), bundle, summary))
+    });
+    if let Err(error) = updated {
+        publication::write(&dir, "apparent.json", old_manifest.as_bytes())?;
+        publication::write(&dir, "summary.md", old_summary.as_bytes())?;
+        publication::checked(&dir, &original, &old_summary)
+            .with_context(|| format!("{error:#}; could not restore original transcript bundle"))?;
+        return Err(error);
+    }
+    root.remove(PENDING)?;
+    root.0.sync_all()?;
     Ok(true)
 }
+
+#[cfg(test)]
+#[path = "../../../bundle/bundle_processing/publication/transcription_tests.rs"]
+mod publication_tests;
 
 #[cfg(test)]
 mod tests {

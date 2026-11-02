@@ -169,16 +169,6 @@
       "docs": ["public/site/docs/belief-release.md"]
     },
     {
-      "id": "feedback-issue",
-      "group": "delivery",
-      "name": "Give Feedback…",
-      "says": "Start a capture from the menu, review it locally, then open a GitHub feedback form. No capture data is added to the URL or uploaded automatically.",
-      "status": "experiment:feedbackIssue",
-      "added": "2026-10-29",
-      "platforms": ["mac", "linux"],
-      "docs": ["capture/engine/docs/capture.md"]
-    },
-    {
       "id": "linux-h264-decoder-check",
       "group": "settings",
       "name": "H.264 decoder setup warning",
