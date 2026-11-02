@@ -12,6 +12,8 @@ declare global {
       readCaptureLocation: () => Promise<CaptureLocation>;
       changeCaptureLocation: () => Promise<CaptureLocation>;
       resetCaptureLocation: () => Promise<CaptureLocation>;
+      readErrorReporting: () => Promise<ErrorReporting>;
+      setErrorReporting: (enabled: boolean) => Promise<ErrorReporting>;
       readConnectSettings: () => Promise<ConnectSettings>;
       connectSettings: () => Promise<ConnectSettings>;
       allowConnectUploads: () => Promise<ConnectSettings>;
@@ -42,6 +44,8 @@ export type CaptureLocation =
   | { status: 'disabled' | 'disconnected' | 'incompatible' | 'cancelled' }
   | { status: 'error'; code: string };
 
+export type ErrorReporting = { status: 'connected'; enabled: boolean } |
+  { status: 'disconnected' | 'incompatible' } | { status: 'error'; code: string };
 export type ConnectAction = 'connect' | 'allow' | 'cancel' | 'check' | 'disable' | 'disconnect' | 'open-browser';
 export type ConnectView = {
   title: string; status: string; detail: string; server: string | null;

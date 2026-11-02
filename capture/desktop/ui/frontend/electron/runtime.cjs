@@ -4,6 +4,7 @@ const net = require('node:net');
 const path = require('node:path');
 
 const phases = new Set(['idle', 'selecting', 'starting', 'recording', 'processing', 'completed']);
+const reportingCodes = new Set(['invalid_request', 'config_read_failed', 'config_write_failed', 'app_busy', 'admission_expired']);
 const failure = { status: 'error', message: 'The Rust app did not return a valid state. Retry when it is responsive.' };
 const codes = new Set(['invalid_request', 'invalid_path', 'conflict', 'admission_expired', 'config_write_failed',
   'config_read_failed', 'app_busy', 'app_unresponsive', 'feature_disabled', 'usage_unavailable']);
@@ -92,6 +93,18 @@ function captureLocation(home, operation = 'read', fields = {}, timeoutMs = 3500
     { status: 'error', code: operation === 'read' ? 'timeout' : 'outcome_unknown' });
 }
 
+function errorReporting(home, enabled, timeoutMs = 3500) {
+  if (enabled !== undefined && typeof enabled !== 'boolean') throw new Error('Invalid reporting preference');
+  const request = { errorReporting: enabled === undefined ? 'read' : 'set', deadline: Number(process.hrtime.bigint() / 1000000n) + Math.min(timeoutMs, 3000) };
+  if (enabled !== undefined) request.enabled = enabled;
+  return exchange(home, JSON.stringify(request) + '\n', (value) => {
+    if (reportingCodes.has(value?.error)) return value.error === 'invalid_request' ? { status: 'incompatible' } : { status: 'error', code: value.error };
+    return typeof value?.errorReporting?.enabled === 'boolean'
+      ? { status: 'connected', enabled: value.errorReporting.enabled }
+      : { status: 'error', code: 'invalid_response' };
+  }, 4096, timeoutMs, { status: 'error', code: enabled === undefined ? 'timeout' : 'outcome_unknown' });
+}
+
 const referenceCodes = new Set(['conflict', 'no_selection', 'admission_expired', 'feature_disabled',
   'clipboard_failed', 'invalid_capture', 'app_unresponsive']);
 const referenceID = (value) => text(value) && value.length > 0 && !value.includes('/');
@@ -141,4 +154,4 @@ function storagePreference(home, operation, fields = {}, timeoutMs = 3500) {
   }, 16384, timeoutMs, { status: 'error', code: mutation ? 'outcome_unknown' : 'timeout' });
 }
 
-module.exports = { readRuntimeState, captureLocation, captureReference, storagePreference };
+module.exports = { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference };

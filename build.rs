@@ -5,6 +5,7 @@ mod build_version { include!("enablement/build_version.rs"); }
 
 fn main() {
     build_version::emit();
+    println!("cargo:rerun-if-env-changed=APPARENT_POSTHOG_TOKEN");
     watch_desktop_tooling();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         stage_transcribe_shared_objects();

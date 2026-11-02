@@ -2,6 +2,48 @@
 
 Read this before changing `capture/desktop/settings/onboarding.rs`, `capture/desktop/settings/settings.rs`, `composition/command_line.rs` or the helper's `Onboarding.swift`, `PermissionPanel.swift` and `Settings.swift`.
 
+## Technical error reporting
+
+General has one small **Send technical error reports** switch, on by default.
+The opt-in Electron Settings surface mirrors its readback and toggle through the
+same-user control socket; Rust remains authoritative. The existing native Settings
+presentations and installed routing remain in place until the Electron slice is
+accepted. Rollback is simply to stop opening the development Electron window;
+remove the old native presentation only with the accepted Settings routing switch.
+`errorReporting: false` in `~/.config/apparent/config.json` disables it without a
+restart. Corrupt/unreadable config fails closed for reporting. The shared config
+writer preserves unrelated keys and rotates private `errorReportingGeneration`
+on every toggle, invalidating queued reports across off/on cycles. That generation
+is never sent. Direct file edits apply at the next report admission; edit the
+generation too when disabling/re-enabling between admissions. An already admitted
+HTTP request can finish after opt-out. No disk spool or retries exist.
+
+Desktop startup installs reporting only when packaging supplies the publishable
+`APPARENT_POSTHOG_TOKEN` (`phc_…`) for the intended EU project. Without it, builds
+never send. The fixed destination is `https://eu.i.posthog.com/i/v0/e/`; `curl`
+must be available. CLI commands/tests never install the global reporter.
+Live ingestion, grouping and alerts require bounded synthetic verification in an
+isolated project before release; local HTTP tests are not that proof.
+
+The payload allows only a static failure category, version/build, OS/architecture
+and repo-relative source call site. No raw error/panic text, logs, recordings,
+screenshots, transcripts, clipboard contents, window/device names, capture IDs,
+share URLs or user paths. Each event gets a random identity; person profiles and
+geolocation are disabled. No session replay/usage tracking. The receiving service
+still sees the connection's IP address; transport is not anonymous.
+
+Coverage: desktop recording storage/audio/screen/phone startup, capture finalization,
+video export and Rust panics after startup. This is a synthetic call-site frame,
+**not a full unwound stack or native crash dump**. Segfaults, forced exits,
+Swift/Objective-C crashes and failures before startup are not captured. The queue
+holds at most 16 events, with 20 attempts/minute and a two-second HTTP timeout.
+Ordinary failures only enqueue; a panic waits at most two seconds for best-effort
+flush before chaining the previous hook. Full queues, exhausted rate allowance
+or slow earlier reports can drop a panic report too; this is not complete crash
+coverage. The narrow direct-HTTP adapter avoids
+SDK autocapture/raw messages and independent retry queues; its exception schema
+follows PostHog's Rust wire contract. Connect logging is unchanged.
+
 ## Onboarding (`capture/desktop/settings/onboarding.rs`, `capture/desktop/native/Onboarding.swift`)
 
 Rust decides what shows (`Flow`, `launch_plan`, `Gate`, tested) and stores progress under `"onboarding"` in `~/.config/apparent/config.json`, including the tour's current step (`resume`), so any quit (macOS's "Quit & Reopen" too) picks up there; the SwiftUI window in `apparent-helper onboarding` only renders the state it's sent and reports buttons (`grant:<permission>` for a row).

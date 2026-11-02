@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { readRuntimeState, captureLocation, captureReference, storagePreference } = require('../electron/runtime.cjs');
+const { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference } = require('../electron/runtime.cjs');
 
 async function fixture(t, reply, { mode = 0o700 } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ui-'));
@@ -144,6 +144,27 @@ test('storage uses typed requests and projects only permitted snapshot fields', 
   await captureLocation(f.home, 'reset', { expected: snapshot.revision });
   assert.equal(JSON.parse(f.requests[2]).storage, 'reset');
 });
+test('error reporting bridge projects only boolean state and accepts only typed toggles', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ui-'));
+  const directory = path.join(home, '.config/apparent/agent-control');
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const requests = [];
+  let enabled = true;
+  const server = net.createServer((socket) => socket.once('data', (bytes) => {
+    const request = JSON.parse(bytes.toString()); requests.push(request);
+    if (request.errorReporting === 'set') enabled = request.enabled;
+    socket.end(JSON.stringify({ errorReporting: { enabled, secret: 'private' }, secret: 'private' }) + '\n');
+  }));
+  const address = path.join(directory, 'capture.sock');
+  await new Promise((resolve) => server.listen(address, resolve)); await fs.chmod(address, 0o600);
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); await fs.rm(home, { recursive: true, force: true }); });
+  assert.deepEqual(await errorReporting(home), { status: 'connected', enabled: true });
+  assert.deepEqual(await errorReporting(home, false), { status: 'connected', enabled: false });
+  assert.deepEqual(await errorReporting(home), { status: 'connected', enabled: false });
+  assert.deepEqual(requests.map(({ errorReporting: op, enabled: value }) => [op, value]), [['read', undefined], ['set', false], ['read', undefined]]);
+  assert.throws(() => errorReporting(home, 'false'), /Invalid reporting preference/);
+});
+
 test('storage refuses unsafe permissions and times out mutations without retry', async (t) => {
   const unsafe = await fixture(t, '{}\n', { mode: 0o755 });
   assert.equal((await captureLocation(unsafe.home)).status, 'error');

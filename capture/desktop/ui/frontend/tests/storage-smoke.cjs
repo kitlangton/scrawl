@@ -23,6 +23,7 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
   const server = net.createServer((socket) => socket.once('data', (data) => {
     if (data.toString() === 'state\n') return socket.end('{"state":{"phase":"idle"}}\n');
     const request = JSON.parse(data.toString());
+    if (request.errorReporting === 'read') return socket.end('{"errorReporting":{"enabled":true}}\n');
     if (request.connect) return socket.end('{"error":"feature_disabled"}\n');
     if (request.reference) return socket.end('{"error":"feature_disabled"}\n');
     if (!['read', 'set', 'reset'].includes(request.storage)) return socket.end('{"error":"invalid_request"}\n');
@@ -108,7 +109,7 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
     } });
     try {
       await other.loadFile(root + '/dist/index.html');
-      return await other.webContents.executeJavaScript(`Promise.all(['readCaptureLocation','changeCaptureLocation','resetCaptureLocation'].map(k => window.apparent[k]().then(() => false, () => true))).then(r => r.every(Boolean))`);
+      return await other.webContents.executeJavaScript(`Promise.all(['readCaptureLocation','changeCaptureLocation','resetCaptureLocation','readErrorReporting','setErrorReporting'].map(k => (k === 'setErrorReporting' ? window.apparent[k](false) : window.apparent[k]()).then(() => false, () => true))).then(r => r.every(Boolean))`);
     } finally { other.destroy(); }
   }, path.join(__dirname, '..')), true);
   // Invoke shipped handlers with an owned sender but extra args / non-main frame.

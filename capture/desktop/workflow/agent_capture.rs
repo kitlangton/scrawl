@@ -316,7 +316,49 @@ impl Reference {
 enum Wire {
     Capture(Option<(Action, String)>, u64),
     Storage(Storage),
+    ErrorReporting(ErrorReportingRequest),
     Connect(u64),
+}
+
+// A single rendezvous worker handles the two bounded Settings contracts. A
+// contended config flock must not stall capture-control socket acceptance.
+enum SettingsRequest {
+    Storage(Storage),
+    ErrorReporting(ErrorReportingRequest),
+}
+
+impl SettingsRequest {
+    fn execute(&self, config: &std::path::Path, deadline: u64) -> serde_json::Value {
+        match self {
+            Self::Storage(request) => request.execute(config, deadline),
+            Self::ErrorReporting(request) => request.execute(config, deadline),
+        }
+    }
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(tag = "errorReporting", rename_all = "lowercase", deny_unknown_fields)]
+enum ErrorReportingRequest {
+    Read { deadline: u64 },
+    Set { enabled: bool, deadline: u64 },
+}
+
+impl ErrorReportingRequest {
+    fn deadline(&self) -> u64 {
+        match self { Self::Read { deadline } | Self::Set { deadline, .. } => *deadline }
+    }
+
+    fn execute(&self, config: &std::path::Path, deadline: u64) -> serde_json::Value {
+        if storage_clock_ms() >= deadline { return serde_json::json!({"error":"admission_expired"}); }
+        let (operation, enabled) = match self {
+            Self::Read { .. } => ("read", None),
+            Self::Set { enabled, .. } => ("set", Some(*enabled)),
+        };
+        match crate::capture::desktop::workflow::error_reporting::error_reporting_bridge_in(config, operation, enabled, || storage_clock_ms() < deadline) {
+            Ok(enabled) => serde_json::json!({"errorReporting":{"enabled":enabled}}),
+            Err(code) => serde_json::json!({"error":code}),
+        }
+    }
 }
 
 fn parse_request(line: &str) -> Option<Wire> {
@@ -324,6 +366,9 @@ fn parse_request(line: &str) -> Option<Wire> {
         return Some(Wire::Connect(deadline.min(storage_clock_ms() + 3000)));
     }
     if line.starts_with('{') {
+        if let Ok(request) = serde_json::from_str::<ErrorReportingRequest>(line) {
+            return Some(Wire::ErrorReporting(request));
+        }
         if let Ok(reference) = serde_json::from_str::<Reference>(line) {
             let (action, deadline) = reference.admission()?;
             return Some(Wire::Capture(action, deadline));
@@ -418,7 +463,7 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
     let (tx, rx) = flume::bounded(16);
     // Rendezvous channel: one persistent worker, no queued/accumulating blocked writers.
     // The listener and GUI remain free while this worker waits on the existing flock.
-    let (storage_tx, storage_rx) = std::sync::mpsc::sync_channel::<(Storage, u64, UnixStream)>(0);
+    let (storage_tx, storage_rx) = std::sync::mpsc::sync_channel::<(SettingsRequest, u64, UnixStream)>(0);
     let (connect_tx, connect_rx) = std::sync::mpsc::sync_channel::<(u64, UnixStream)>(0);
     let connect_config = config_path.clone();
     std::thread::Builder::new()
@@ -478,7 +523,15 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
                             Wire::Capture(action, deadline) => (action, deadline),
                             Wire::Storage(request) => {
                                 let deadline = request.deadline().min(storage_clock_ms() + 3000);
-                                match storage_tx.try_send((request, deadline, stream)) {
+                                match storage_tx.try_send((SettingsRequest::Storage(request), deadline, stream)) {
+                                    Ok(()) => {},
+                                    Err(std::sync::mpsc::TrySendError::Full((_, _, mut stream)) | std::sync::mpsc::TrySendError::Disconnected((_, _, mut stream))) => { let _ = writeln!(stream, "{{\"error\":\"app_busy\"}}"); }
+                                }
+                                continue;
+                            }
+                            Wire::ErrorReporting(request) => {
+                                let deadline = request.deadline().min(storage_clock_ms() + 3000);
+                                match storage_tx.try_send((SettingsRequest::ErrorReporting(request), deadline, stream)) {
                                     Ok(()) => {},
                                     Err(std::sync::mpsc::TrySendError::Full((_, _, mut stream)) | std::sync::mpsc::TrySendError::Disconnected((_, _, mut stream))) => { let _ = writeln!(stream, "{{\"error\":\"app_busy\"}}"); }
                                 }
@@ -1083,6 +1136,69 @@ mod tests {
         assert!(!path.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn reporting_socket_is_typed_private_and_rechecks_admission_after_config_lock() {
+        let (path, stale) = transport_fixture();
+        drop(stale);
+        let dir = path.parent().unwrap().to_owned();
+        let config = dir.join("config.json");
+        std::fs::write(&config, r#"{"privateToken":"synthetic-keep","unknown":{"keep":true}}"#).unwrap();
+        let receiver = listen_at_config(path.clone(), config.clone()).unwrap();
+        let call = |value: serde_json::Value| {
+            let mut stream = UnixStream::connect(&path).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+            writeln!(stream, "{value}").unwrap();
+            let mut response = String::new();
+            BufReader::new(stream).read_line(&mut response).unwrap();
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()
+        };
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(call(serde_json::json!({"errorReporting":"read","deadline":storage_clock_ms()+3000})), serde_json::json!({"errorReporting":{"enabled":true}}));
+        for invalid in [
+            serde_json::json!({"errorReporting":"set","deadline":1}),
+            serde_json::json!({"errorReporting":"set","enabled":"false","deadline":1}),
+            serde_json::json!({"errorReporting":"set","enabled":null,"deadline":1}),
+            serde_json::json!({"errorReporting":"read","enabled":false,"deadline":1}),
+            serde_json::json!({"errorReporting":"read","path":"/private","deadline":1}),
+            serde_json::json!({"errorReporting":"other","deadline":1}),
+            serde_json::json!({"errorReporting":"read","deadline":-1}),
+        ] { assert_eq!(call(invalid)["error"], "invalid_request"); }
+        assert_eq!(call(serde_json::json!({"errorReporting":"set","enabled":false,"deadline":storage_clock_ms()+3000}))["errorReporting"]["enabled"], false);
+        assert_eq!(call(serde_json::json!({"errorReporting":"read","deadline":storage_clock_ms()+3000}))["errorReporting"]["enabled"], false);
+        assert_eq!(call(serde_json::json!({"errorReporting":"set","enabled":true,"deadline":storage_clock_ms()+3000}))["errorReporting"]["enabled"], true);
+        let before = std::fs::read(&config).unwrap();
+        let lock = std::fs::OpenOptions::new().read(true).write(true).open(config.with_extension("json.lock")).unwrap();
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+        let mut blocked = UnixStream::connect(&path).unwrap();
+        blocked.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+        let deadline = storage_clock_ms()+3000;
+        writeln!(blocked, "{}", serde_json::json!({"errorReporting":"set","enabled":false,"deadline":deadline})).unwrap();
+        assert_eq!(call(serde_json::json!({"errorReporting":"read","deadline":storage_clock_ms()+3000}))["error"], "app_busy");
+        let mut state = UnixStream::connect(&path).unwrap();
+        writeln!(state, "state").unwrap();
+        let request = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(request.action.is_none());
+        request.reply.send("{\"state\":{\"phase\":\"idle\"}}".into()).unwrap();
+        let mut response = String::new();
+        BufReader::new(state).read_line(&mut response).unwrap();
+        assert!(response.contains("idle"));
+        std::thread::sleep(Duration::from_millis(deadline.saturating_sub(storage_clock_ms())+1));
+        drop(lock);
+        response.clear();
+        BufReader::new(blocked).read_line(&mut response).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&response).unwrap()["error"], "admission_expired");
+        assert_eq!(std::fs::read(&config).unwrap(), before);
+        let raw: serde_json::Value = serde_json::from_slice(&before).unwrap();
+        assert_eq!(raw["privateToken"], "synthetic-keep");
+        assert_eq!(raw["unknown"]["keep"], true);
+        std::fs::write(&config, "malformed").unwrap();
+        assert_eq!(call(serde_json::json!({"errorReporting":"read","deadline":storage_clock_ms()+3000}))["error"], "config_read_failed");
+        drop(receiver);
+        for _ in 0..50 { if !path.exists() { break; } std::thread::sleep(Duration::from_millis(20)); }
+        assert!(!path.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     use super::*;
 
     #[test]
@@ -1121,6 +1237,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("se-{}", &new_id().unwrap()[..8]));
         let directory = home.join(".config/apparent/agent-control");
         std::fs::create_dir_all(&directory).unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
         let config = home.join("config.json");
         let path = directory.join("capture.sock");

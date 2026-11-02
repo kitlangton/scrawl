@@ -725,6 +725,7 @@ pub struct View {
     pub connect: Option<super::connect::View>,
     pub hosted: Option<crate::connect::hosted::AccountView>,
     pub login: LoginView,
+    pub error_reporting: bool,
     pub agent_demo_video: bool,
     pub shortcuts: Vec<ShortcutView>,
     pub microphone: MicrophoneView,
@@ -1120,7 +1121,7 @@ pub(crate) fn external_record_owned(kind: ShortcutKind) -> bool {
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum Action {
     Connect { command: super::connect::Command },
-    /// A settings control: `launchAtLogin`, `videoExport`, `lowerPlayback` (bool),
+    /// A settings control: `launchAtLogin`, `errorReporting`, `videoExport`, `lowerPlayback` (bool),
     /// `playbackLevel` (u8), `microphone` ("default" or a device id), `transcriber`
     /// ("apple"/"hex"/"command"), `hexModel` (an id), `hexLanguage` (a code), `appleLocale`
     /// (a locale id or "auto"), `retention` (a preset id).
@@ -1433,6 +1434,11 @@ impl Panel {
             }
         };
         match (key, value) {
+            ("errorReporting", serde_json::Value::Bool(on)) => {
+                if let Err(error) = crate::capture::desktop::workflow::error_reporting::set_enabled_in(&path, *on) {
+                    crate::capture::engine::runtime::apparent_log(format!("Saving {key} failed: {error:#}"));
+                }
+            }
             ("agentDemoVideo", serde_json::Value::Bool(on)) => {
                 if let Err(error) = crate::shared::handoff::set_experiment_in(&path, "agentDemoVideo", *on) {
                     crate::capture::engine::runtime::apparent_log(format!("Saving {key} failed: {error:#}"));
@@ -1599,6 +1605,7 @@ impl Panel {
                 available: login != LoginItem::Unavailable,
                 needs_approval: login == LoginItem::NeedsApproval,
             },
+            error_reporting: crate::capture::desktop::workflow::error_reporting::enabled_in(&host.config_path()),
             agent_demo_video: crate::shared::handoff::experiment_enabled_in(&config, "agentDemoVideo"),
             shortcuts: ShortcutKind::ALL
                 .into_iter()
@@ -2278,6 +2285,48 @@ mod tests {
         panel.on(Action::Set { key: "agentDemoVideo".into(), value: false.into() }, &mut host);
         assert!(!panel.view(&host).agent_demo_video);
         assert_eq!(read_json(&host.path)["experiments"]["agentDemoVideo"], false);
+    }
+
+    #[test]
+    fn error_reporting_switch_round_trips_without_losing_config() {
+        let dir = TempDir::new("error-reporting");
+        let mut host = fake(&dir);
+        let mut panel = Panel::default();
+        assert!(panel.view(&host).error_reporting, "missing config defaults on");
+        let unrelated = serde_json::json!({
+            "ingestToken": "synthetic-private-token",
+            "experiments": {"other": true},
+            "lowerPlayback": true
+        });
+        std::fs::write(&host.path, serde_json::to_vec(&unrelated).unwrap()).unwrap();
+        assert!(panel.view(&host).error_reporting, "missing preference defaults on");
+        for on in [false, true, false] {
+            let action = serde_json::from_value::<Action>(serde_json::json!({
+                "action": "set", "key": "errorReporting", "value": on
+            })).unwrap();
+            assert_eq!(panel.on(action, &mut host), Effect::None);
+            let reopened = Panel::default().view(&host);
+            assert_eq!(reopened.error_reporting, on);
+            let serialized = serde_json::to_value(reopened).unwrap();
+            assert_eq!(serialized["errorReporting"], on);
+            assert!(serialized.get("error_reporting").is_none());
+            let saved = read_json(&host.path);
+            for (key, value) in unrelated.as_object().unwrap() {
+                assert_eq!(&saved[key], value, "unrelated config key {key} must survive");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_config_keeps_error_reporting_off_and_is_not_replaced() {
+        let dir = TempDir::new("invalid-error-reporting-config");
+        let mut host = fake(&dir);
+        let mut panel = Panel::default();
+        std::fs::write(&host.path, b"{").unwrap();
+        assert!(!panel.view(&host).error_reporting);
+        panel.on(Action::Set { key: "errorReporting".into(), value: true.into() }, &mut host);
+        assert_eq!(std::fs::read(&host.path).unwrap(), b"{");
+        assert!(!panel.view(&host).error_reporting);
     }
 
     #[test]

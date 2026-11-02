@@ -2,7 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain, session, shell } = require('electro
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { readRuntimeState, captureLocation, captureReference, storagePreference } = require('./runtime.cjs');
+const { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference } = require('./runtime.cjs');
 const { ConnectSettings, actions } = require('./connect.cjs');
 
 // Deliberately separate from the installed application's profile and identity.
@@ -80,6 +80,19 @@ app.whenReady().then(() => {
     const { revision: _revision, ...storage } = result.storage;
     return { status: 'connected', storage };
   };
+  let reportingMutation = false;
+  ipcMain.handle('apparent:read-error-reporting', async (event, ...args) => {
+    validate(event, args);
+    return errorReporting(os.homedir());
+  });
+  ipcMain.handle('apparent:set-error-reporting', async (event, enabled, ...args) => {
+    validate(event, args);
+    if (args.length || typeof enabled !== 'boolean') throw new Error('Forbidden bridge request');
+    if (reportingMutation) return { status: 'error', code: 'app_busy' };
+    reportingMutation = true;
+    try { return await errorReporting(os.homedir(), enabled); }
+    finally { reportingMutation = false; }
+  });
   ipcMain.handle('apparent:read-capture-location', async (event, ...args) => {
     validate(event, args);
     const version = storageVersion;

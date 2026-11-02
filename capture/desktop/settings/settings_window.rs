@@ -201,6 +201,7 @@ struct ViewState {
     connect: Option<super::connect::View>,
     hosted: Option<crate::connect::hosted::AccountView>,
     login: Login,
+    error_reporting: bool,
     agent_demo_video: bool,
     shortcuts: Vec<Shortcut>,
     transcriber: Transcriber,
@@ -1133,6 +1134,20 @@ impl SettingsWindow {
         for shortcut in &state.shortcuts {
             column = column.child(self.recorder(theme, shortcut, cx));
         }
+        let error_reporting = state.error_reporting;
+        column = column
+            .child(div().mt(px(14.0)).child(group(theme, vec![
+                row(
+                    theme,
+                    "Send technical error reports",
+                    true,
+                    switch(theme, "settings-error-reporting", error_reporting, true)
+                        .on_click(cx.listener(move |view, _, _, _| {
+                            view.set("errorReporting", (!error_reporting).into());
+                        })),
+                ).into_any_element(),
+            ])))
+            .child(caption(theme, "No recordings, screenshots, transcripts or clipboard contents are sent.", false));
         if let Some(account) = &state.hosted {
             let available = account.server.is_some();
             if state.connect.is_none() {
@@ -2268,6 +2283,16 @@ fn menu_setting_value(key: &str, id: &str) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_reporting_preference_reaches_the_gpui_window() {
+        for on in [true, false] {
+            let state: ViewState = serde_json::from_value(serde_json::json!({
+                "errorReporting": on
+            })).unwrap();
+            assert_eq!(state.error_reporting, on);
+        }
+    }
 
     #[test]
     fn shared_connect_view_and_commands_reach_the_gpui_transport() {
