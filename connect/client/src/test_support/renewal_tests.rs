@@ -1,5 +1,24 @@
 use super::*;
 
+#[test]
+fn renewal_pending_revocation_blocks_fresh_read_and_upload_admission() {
+    let f = Fixture::new();
+    let server = RenewalServer::new("rotate");
+    f.authorize(&server.url);
+    let bundle = f.bundle();
+    expire_fixture(&f, &server.url, "upload");
+    expire_fixture(&f, &server.url, "read");
+    atomic_json(&f.client.state.join("revocation-synthetic.intent"), &true).unwrap();
+    let fresh = Client::new(provider(f.client.config.clone()));
+    assert!(fresh.enqueue(&bundle).is_err());
+    assert!(fresh.prepare_link(&bundle, &|| true).is_err());
+    assert!(fresh.shares().is_err());
+    assert!(fresh.status(true).is_err());
+    fresh.process_once().unwrap();
+    assert_eq!(server.refreshes.load(Ordering::SeqCst), 0);
+    assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+}
+
 struct RenewalServer {
     url: String,
     refreshes: Arc<std::sync::atomic::AtomicUsize>,
@@ -191,6 +210,102 @@ fn renewable(f: &Fixture, server: &str) {
     f.authorize(server);
     atomic_json(&f.client.state.join("upload.credential"), &json!({"server":server,"scope":"upload","token":"synthetic-access-old","generation":"a".repeat(32),"refreshToken":"synthetic-refresh-old","expiresAt":now()-1,"refreshExpiresAt":now()+86400,"grantId":"server-grant:not-local-hex"})).unwrap();
 }
+fn settings_health_contended_renewal(cancel: bool) {
+    use crate::settings::Health;
+    use std::sync::mpsc::channel;
+    for phase in [
+        "renewal_preparation",
+        "renewal_completion",
+        "renewal_before_publication",
+        "renewal_auth_required",
+    ] {
+        let f = Fixture::new();
+        let server = RenewalServer::new(if phase == "renewal_auth_required" {
+            "revoked"
+        } else {
+            "rotate"
+        });
+        renewable(&f, &server.url);
+        let credential = fs::read(f.client.state.join("upload.credential")).unwrap();
+        let config = fs::read(&f.client.config).unwrap();
+        let active = Arc::new(AtomicBool::new(true));
+        let running = active.clone();
+        let client = f.client.clone();
+        let (held_tx, held_rx) = channel();
+        let (done_tx, done_rx) = channel();
+        let worker = std::thread::spawn(move || {
+            let state = client.state.clone();
+            set_hook(move |point, _| {
+                if point == phase {
+                    held_tx
+                        .send(Lock::acquire(&state.join("queue.lock"), true).unwrap())
+                        .unwrap();
+                }
+            });
+            let result = client.settings_health(&|| running.load(Ordering::SeqCst));
+            clear_hook();
+            done_tx.send(result).unwrap();
+        });
+        let held = held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        if cancel {
+            active.store(false, Ordering::SeqCst);
+        }
+        let completed = done_rx.recv_timeout(if cancel {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_secs(4)
+        });
+        // Release and join before asserting, including on broken behavior.
+        drop(held);
+        worker.join().unwrap();
+        assert_eq!(
+            completed.unwrap_or_else(|_| panic!(
+                "health worker remained blocked at {phase}; cancel={cancel}"
+            )),
+            Health::Offline
+        );
+        assert_eq!(
+            fs::read(f.client.state.join("upload.credential")).unwrap(),
+            credential,
+            "late credential write at {phase}"
+        );
+        assert_eq!(fs::read(&f.client.config).unwrap(), config);
+        assert_eq!(
+            server.refreshes.load(Ordering::SeqCst),
+            usize::from(phase != "renewal_preparation")
+        );
+    }
+}
+
+#[test]
+fn settings_health_renewal_queue_deadline_bounds_complete_call() {
+    settings_health_contended_renewal(false);
+}
+
+#[test]
+fn settings_health_renewal_queue_cancel_exits_without_late_writes() {
+    settings_health_contended_renewal(true);
+}
+
+#[test]
+fn settings_health_renews_without_fabricating_local_expiry_success() {
+    let f = Fixture::new();
+    let server = RenewalServer::new("");
+    renewable(&f, &server.url);
+    let local = f.client.settings_snapshot().unwrap();
+    assert!(local.reauthorization_required);
+    assert!(!local.uploads_enabled);
+    assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        f.client.settings_health(&|| true),
+        crate::settings::Health::Online
+    );
+    let renewed = f.client.settings_snapshot().unwrap();
+    assert!(renewed.connected && renewed.uploads_enabled);
+    assert!(!renewed.reauthorization_required);
+    assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
+}
+
 #[test]
 fn hosted_renewal_expired_account_renews_and_persists() {
     let f = Fixture::new();

@@ -49,6 +49,46 @@ and permission-repair windows retain their existing behavior.
 
 ## Settings (`capture/desktop/settings/settings.rs`, `capture/desktop/native/Settings.swift`)
 
+### Apparent Connect (experiment)
+
+Set `"experiments": {"connectSettings": true}` in
+`~/.config/apparent/config.json` before opening Settings (close/reopen an already
+open window). This default-off experiment adds **General → Apparent Connect**
+below Launch at login, on macOS and Linux. It adds no onboarding step and does
+not require `hostedSharing`. Without a configured `cloud.server`, sign-in uses
+`https://hosted.tryapparent.com`; an existing valid custom origin is preserved.
+
+**Sign in to Connect… → Allow and continue → Open browser** explains the full
+upload scope before starting device authorization. Match the public code and
+approve in the browser, then return to Settings. Website sign-in/approval is not
+local success: **Uploads on** requires fresh local credentials, upload consent,
+and enabled upload gates. Read-only credentials remain **uploads off**. New
+captures may upload privately; existing captures are not scanned, and account
+connection creates no public links. Sharing remains a separate experiment.
+
+Cancel sign-in or close Settings to cancel authorization and durably turn uploads
+off, including when cancellation races a late successful browser response.
+**Disable uploads** cancels unfinished jobs but retains sign-in;
+**Disconnect** additionally removes this computer's credentials. Neither deletes
+already uploaded data. Cancelled jobs cannot silently resume after a later login.
+**Check connection** performs a bounded authenticated background probe; ordinary
+Settings refresh reads local state only. Offline, reauthorization, denied/expired
+approval and local storage failures retain local capture and offer recovery.
+If a disable/disconnect could not finish because local state was busy, uploads
+remain blocked across restart. Use Disable uploads or Disconnect again to finish;
+do not delete the client's pending revocation files. Failed state writes are not
+presented as successful sign-out.
+Native renderers only display the shared controller's view and emit commands;
+raw errors, tokens and device secrets never enter its presentation contract.
+
+The opt-in Electron development window also presents this bounded workflow using
+the same Rust controller and client, not a second auth implementation. Launch
+and test instructions are in `../ui/frontend/README.md`. Its persistent socket
+belongs to that window: reload/close/crash or an expired idle lease cancels pending
+sign-in, including late authorization receipts. Local refreshes do not probe the
+server. This does not change installed Settings routing; legacy controls remain
+the rollback until equivalent native Linux and macOS acceptance is complete.
+
 The shared config writer serializes CLI and GUI processes with a private
 `config.json.lock` sidecar, held from before the file read until atomic publication.
 Experiment edits include the nested map read in that transaction. Each writer

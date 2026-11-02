@@ -1,7 +1,6 @@
 name: Changed-tree verification
 
 on:
-  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
@@ -11,7 +10,7 @@ permissions:
 
 # Coalesce main verification to the newest tree. Publication has separate locks.
 concurrency:
-  group: changed-tree-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: changed-tree-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -30,6 +29,7 @@ jobs:
         run: |
           python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
           python3 -m unittest discover -s enablement/tests -p 'test_verification.py'
+          python3 -m unittest discover -s enablement/tests -p 'test_temp_preflight.py'
       - name: Validate workflow syntax and job dependencies
         uses: docker://rhysd/actionlint:1.7.12
         with:
@@ -37,19 +37,15 @@ jobs:
       - name: Release admission contracts
         run: python3 -m unittest discover -s enablement/tests -p 'test_release_gate.py'
       - id: plan
-        env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
-            # Full tree: a cancelled earlier main run must not hide its delta.
-            BASE=$(git hash-object -t tree /dev/null)
-          fi
+          # Full tree: a cancelled earlier main run must not hide its delta.
+          BASE=$(git hash-object -t tree /dev/null)
           python3 enablement/verification.py --base "${BASE:-unknown}" --github-output "$GITHUB_OUTPUT"
 
   desktop-ui:
     needs: select
-    # Every main candidate runs both matrices; PRs run only select.
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    # Every main candidate runs both matrices.
+    if: github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       matrix:
@@ -84,7 +80,7 @@ jobs:
 
   rust:
     needs: select
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       matrix:
@@ -104,6 +100,9 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '26.0'
+      - name: Install CLI export speedup dependencies
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        run: command -v ffmpeg && command -v ffprobe || brew install ffmpeg
       - name: Install the Metal toolchain
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
@@ -134,7 +133,6 @@ jobs:
           cargo test --manifest-path connect/client/Cargo.toml --locked -- --test-threads=2
       - name: Execute the same changed-tree checks (not GUI acceptance)
         env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           # Engine finalizer proofs reject group-writable cache ancestors.
@@ -160,7 +158,7 @@ jobs:
           fi
           BASE=$(git hash-object -t tree /dev/null)
           python3 enablement/verification.py --base "$BASE" --run --online
-      - name: Actual Electron to Rust Storage integration (not native GUI proof)
+      - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash
         run: |
@@ -178,7 +176,8 @@ jobs:
           readonly storage_tmp
           trap 'rm -rf -- "$storage_tmp"' EXIT
           TMPDIR="$storage_tmp" APPARENT_STORAGE_TEST_ELECTRON="$electron" \
-            cargo test -j 3 --locked storage_electron_rust_roundtrip -- --ignored --nocapture
+            APPARENT_CONNECT_TEST_ELECTRON="$electron" \
+            cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture
       - name: Native Mac Storage controls against the installed Rust GUI
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
         timeout-minutes: 10
@@ -261,7 +260,7 @@ jobs:
   release-ready:
     name: Release verification
     needs: [select, desktop-ui, rust]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
       - run: echo "Both platform matrices passed for $GITHUB_SHA"

@@ -47,8 +47,9 @@ Verification is proportional to changed behavior, not commit IDs. For mechanical
 `.githooks/pre-push` runs cheap selector, hook and release-admission contracts for
 feature pushes while preserving exact-HEAD/clean-tree guards. Explicit local
 `enablement/verification.py --run` and direct main pushes retain conservative
-changed-tree build/tests. GitHub PRs run cheap contracts; full Linux/macOS
-verification runs on main, coalesced to the newest tree. CD requires the exact
+changed-tree build/tests. GitHub Actions do not run automatically on PRs or
+feature-branch pushes; full Linux/macOS verification runs on main, coalesced
+to the newest tree. CD requires the exact
 commit's successful full main verification, including every required platform
 job, before publication. Native/product acceptance still applies to changed
 behavior. Fetch main before publishing; feature planning compares the full delta

@@ -1,8 +1,9 @@
-const { app, BrowserWindow, dialog, ipcMain, session } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, session, shell } = require('electron');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readRuntimeState, captureLocation, captureReference, storagePreference } = require('./runtime.cjs');
+const { ConnectSettings, actions } = require('./connect.cjs');
 
 // Deliberately separate from the installed application's profile and identity.
 app.setName('Apparent UI Foundation');
@@ -35,15 +36,45 @@ app.whenReady().then(() => {
   let generation = 0;
   let mutation = false;
   let storageVersion = 0;
+  const connect = new ConnectSettings(os.homedir());
+  let pendingConnect;
   let reference;
   let referencePending;
   let retentionRevision;
   let retentionRead;
-  const invalidate = () => { generation += 1; storageVersion += 1; reference = undefined; retentionRevision = undefined; };
+  const invalidate = () => { generation += 1; storageVersion += 1; reference = undefined; retentionRevision = undefined; connect.close(); };
   window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) invalidate(); });
   window.webContents.on('will-navigate', invalidate);
   window.webContents.on('render-process-gone', invalidate);
   window.on('closed', invalidate);
+  const requestConnect = (action) => {
+    if (pendingConnect) return action === undefined ? pendingConnect : Promise.resolve({ status: 'error' });
+    const token = generation;
+    const request = connect.request(action).then(result => {
+      if (token !== generation || window.isDestroyed()) return { status: 'cancelled' };
+      // Only this explicit zero-argument action may open the URI just authorized
+      // by the current Rust controller. Never accept a renderer-supplied URL.
+      if (result.openUri !== undefined) {
+        void shell.openExternal(result.openUri).catch(() => {});
+      }
+      const { openUri: _openUri, ...projected } = result;
+      return projected;
+    }).catch(() => ({ status: 'error' })).finally(() => {
+      if (pendingConnect === request) pendingConnect = undefined;
+    });
+    pendingConnect = request;
+    return request;
+  };
+  ipcMain.handle('apparent:read-connect-settings', (event, ...args) => {
+    validate(event, args);
+    return requestConnect();
+  });
+  for (const action of actions) {
+    ipcMain.handle(`apparent:connect-${action}`, (event, ...args) => {
+      validate(event, args);
+      return requestConnect(action);
+    });
+  }
   const project = (result) => {
     if (result.status !== 'connected') return result;
     const { revision: _revision, ...storage } = result.storage;

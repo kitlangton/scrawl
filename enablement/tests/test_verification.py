@@ -15,6 +15,11 @@ spec.loader.exec_module(verification)
 
 
 class SelectionTests(unittest.TestCase):
+    def setUp(self):
+        guard = patch.object(verification, "check_temp_environment")
+        guard.start()
+        self.addCleanup(guard.stop)
+
     def test_documents_do_not_compile_app(self):
         result = verification.select(["enablement/refactor.md", "AGENTS.md", "docs/capture.md"])
         self.assertFalse(result["root"])

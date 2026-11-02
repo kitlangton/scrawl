@@ -153,7 +153,23 @@ struct HostedAccountState: Decodable, Equatable {
   var connected: Bool
 }
 
+struct ConnectButton: Decodable, Equatable {
+  var command: String
+  var title: String
+  var enabled: Bool
+}
+
+struct ConnectState: Decodable, Equatable {
+  var title: String
+  var status: String
+  var detail: String
+  var userCode: String?
+  var buttons: [ConnectButton]
+  var note: String
+}
+
 struct SettingsState: Decodable, Equatable {
+  var connect: ConnectState?
   var hosted: HostedAccountState?
   var version = "0.3.2"
   var login = SettingsLogin()
@@ -952,22 +968,49 @@ struct SettingsView: View {
       } else if !state.login.available {
         SettingsCaption(text: "Launch at login works in the installed Apparent.app.")
       }
+      if let connect = state.connect {
+        SettingsHeader(connect.title)
+        SettingsGroup {
+          VStack(alignment: .leading, spacing: 10) {
+            Text(connect.status).font(.system(size: 14, weight: .semibold))
+            Text(connect.detail).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+            if let code = connect.userCode {
+              Text("Verification code: \(code)").font(.system(size: 14, weight: .medium, design: .monospaced))
+                .textSelection(.enabled)
+            }
+            ForEach(connect.buttons, id: \.command) { button in
+              SettingsButton(title: button.title, enabled: button.enabled) {
+                model.act("connect", ["command": button.command])
+              }
+            }
+          }
+          .padding(14)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        if connect.status != "Not connected" {
+          SettingsCaption(text: connect.note)
+        }
+      }
       ForEach(state.shortcuts) { shortcut in
         Color.clear.frame(height: 14)
         ShortcutRecorder(model: model, clock: model.clock, shortcut: shortcut)
       }
       if let hosted = state.hosted {
-        SettingsHeader("Hosted account")
+        SettingsHeader(state.connect == nil ? "Hosted account" : "Shared links")
+        if state.connect == nil {
         SettingsCaption(text: hosted.connected
           ? "Connected. Captures stay private until you click Copy link."
           : "Connect to upload screen, voice, transcript and bundle media. New captures upload privately; only the selected capture is shared.")
+        }
         SettingsGroup {
+          if state.connect == nil {
           SettingsRow(title: "Hosted account") {
             SettingsButton(title: "Connect and allow uploads", enabled: hosted.server != nil && !hosted.connected) {
               model.act("connect-hosted")
             }
           }
           SettingsSeparator()
+          }
           SettingsRow(title: "Shared captures") {
             SettingsButton(title: "Manage shared links", enabled: hosted.server != nil) {
               model.act("manage-shared-links")
@@ -975,7 +1018,7 @@ struct SettingsView: View {
           }
         }
         SettingsCaption(text: "Anyone with a link can view and download that capture. Stopping sharing cannot recall downloads or cached previews.")
-        if hosted.server == nil {
+        if hosted.server == nil && state.connect == nil {
           SettingsCaption(text: "Set the API server first with apparent cloud login --server <API origin> --scope read.")
         }
       }

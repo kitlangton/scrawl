@@ -419,6 +419,9 @@ enum Command {
         /// Disable the default smooth camera zoom toward clicks, drags and marks.
         #[arg(long = "no-zoom", action = clap::ArgAction::SetFalse, default_value_t = true)]
         zoom: bool,
+        /// Preserve recorded timing instead of speeding up long quiet holds (needs FFmpeg).
+        #[arg(long)]
+        no_speedup: bool,
         /// Leave out the red ink, pins and laser.
         #[arg(long)]
         no_ink: bool,
@@ -1330,6 +1333,7 @@ pub(crate) fn run() -> Result<()> {
             crop,
             size,
             zoom,
+            no_speedup,
             no_ink,
             no_clicks,
             hevc,
@@ -1343,6 +1347,7 @@ pub(crate) fn run() -> Result<()> {
                 crop,
                 size,
                 zoom,
+                speedup: !no_speedup,
                 ink: !no_ink,
                 clicks: !no_clicks,
                 hevc,
@@ -1675,6 +1680,18 @@ mod tests {
             vec!["apparent", "export", "--no-audio=false"],
         ] {
             assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn export_cli_speedup_defaults_on_and_can_be_disabled() {
+        for (args, expected) in [
+            (vec!["apparent", "export", "capture.apparent"], false),
+            (vec!["apparent", "export", "capture.apparent", "--no-speedup"], true),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Some(Command::Export { no_speedup, .. }) = cli.command else { panic!("export"); };
+            assert_eq!(no_speedup, expected);
         }
     }
 

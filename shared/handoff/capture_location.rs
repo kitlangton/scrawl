@@ -44,9 +44,16 @@ pub fn read_in(path: &Path) -> Result<Snapshot> {
 }
 
 pub fn enabled_in(path: &Path) -> Result<bool> {
-    // A failed read is not a successful read of a disabled flag.
+    // Keep this concrete read visible to the feature-map scanner. The generic
+    // helper below serves callers whose flag is declared at their own boundary.
     let config = config_from_value(read_raw(path)?);
     Ok(experiment_overridden("electronCaptureLocation") || experiment_enabled_in(&config, "electronCaptureLocation"))
+}
+
+pub(crate) fn experiment_in(path: &Path, name: &str) -> Result<bool> {
+    // A failed read is not a successful read of a disabled flag.
+    let config = config_from_value(read_raw(path)?);
+    Ok(experiment_overridden(name) || experiment_enabled_in(&config, name))
 }
 
 fn snapshot(raw: &serde_json::Value, environment: Option<PathBuf>) -> Result<Snapshot> {

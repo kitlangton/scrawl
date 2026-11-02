@@ -55,7 +55,7 @@
       "status": "experiment:hostedSync",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],
-      "note": "Default off; CLI sign-in only. Update Apparent for apparent connect; older apps use apparent cloud, retained as a compatibility alias. Connect browser routes at app.tryapparent.com/connect and /connect/device retain /hosted aliases; API, Google callback, host-only sessions and device credentials stay at hosted.tryapparent.com. The V4 web UI provides account sign-in, independent scope review and verified device approval; website approval does not prove local upload settings or CLI credentials. Native capsule, connection and recovery UI remain deferred. Candidate requires native capture/paste proof on each OS and deployed account approval. V1 rejects files above 90,000,000 bytes rather than omitting media. No automatic historical uploads. Explicit apparent connect upload creates a fresh ID; apparent connect retry keeps existing IDs. Better Auth migration candidate renews device credentials while renewal remains valid, preserving queued IDs and consent; revoked or expired renewal needs approval again. Existing credentials require one new login after updating. Service login does not establish encryption trust. Migration, live OAuth and both native platform gates remain required before release.",
+      "note": "Default off; CLI sign-in or optional General Settings through the separate connectSettings experiment. Update Apparent for apparent connect; older apps use apparent cloud, retained as a compatibility alias. Connect browser routes at app.tryapparent.com/connect and /connect/device retain /hosted aliases; API, Google callback, host-only sessions and device credentials stay at hosted.tryapparent.com. The V4 web UI provides account sign-in, independent scope review and verified device approval; website approval does not prove local upload settings or CLI credentials. Native capsule proof remains deferred; optional Settings connection and recovery controls are a separate default-off candidate. Candidate requires native capture/paste proof on each OS and deployed account approval. V1 rejects files above 90,000,000 bytes rather than omitting media. No automatic historical uploads. Explicit apparent connect upload creates a fresh ID; apparent connect retry keeps existing IDs. Better Auth migration candidate renews device credentials while renewal remains valid, preserving queued IDs and consent; revoked or expired renewal needs approval again. Existing credentials require one new login after updating. Service login does not establish encryption trust. Migration, live OAuth and both native platform gates remain required before release.",
       "config": [
         { "key": "cloud.enabled", "value": "boolean; false by default", "does": "Enable the automatic upload queue only with experiment and consent" },
         { "key": "cloud.uploadConsent", "value": "boolean; false by default", "does": "Record explicit permission to share capture contents" },
@@ -63,6 +63,17 @@
       ],
       "docs": ["connect/docs/hosted-client.md", "connect/docs/hosted-api.md", "public/site/docs/hosted-design.md"]
 
+    },
+    {
+      "id": "connect-settings",
+      "group": "delivery",
+      "name": "Connect account controls in General Settings",
+      "says": "Optional General Settings sign-in explains upload consent, opens browser device approval and verifies local activation. Cancel, disable uploads and disconnect preserve local capture; account connection does not create public links.",
+      "status": "experiment:connectSettings",
+      "added": "2026-11-02",
+      "platforms": ["mac", "linux"],
+      "note": "Default off, independent of hostedSharing; no onboarding step. Close/reopen Settings after changing the experiment. The opt-in Electron General card reuses the Rust controller/client over a window-owned socket; reload/close cancels pending sign-in. Installed native Settings remain the rollback; routing is unchanged. Uses the configured API or hosted.tryapparent.com, not a CLI setup prerequisite. Website approval alone is not local activation. Electron transport checks, actual-Rust integration, native platform proof and live account approval are distinct gates; this entry is not proof of them.",
+      "docs": ["capture/desktop/docs/onboarding-and-settings.md", "connect/docs/hosted-client.md"]
     },
     {
       "id": "copy-capture-id",
@@ -1076,7 +1087,7 @@
       "id": "export-cli",
       "group": "export",
       "name": "apparent export",
-      "says": "One .mp4 with ink, pins, clicks and aligned recorded audio. Missing audio requires an explicit --narration script or --no-audio choice. Opens on the whole capture for 0.5 s, then smoothly zooms toward activity; --no-zoom opts out.",
+      "says": "One .mp4 with ink, pins, clicks and aligned recorded audio. Missing audio requires an explicit --narration script or --no-audio choice. Opens on the whole capture for 0.5 s, then smoothly zooms toward activity; --no-zoom opts out. CLI exports speed up long visually stable, silent holds at 4× by default; --no-speedup preserves timing. Speedup requires FFmpeg.",
       "status": "main",
       "added": "2026-10-29",
       "platforms": ["mac"],
@@ -1087,7 +1098,7 @@
       "id": "export-cli-linux",
       "group": "export",
       "name": "apparent export on Linux",
-      "says": "The CLI burns ink, pins and click ripples into an MP4 with aligned WAV audio, using FFmpeg and ffprobe. Missing audio requires an explicit --narration script or --no-audio choice. Opens on the whole capture for 0.5 s before smooth activity zoom; --no-zoom opts out.",
+      "says": "The CLI burns ink, pins and click ripples into an MP4 with aligned WAV audio, using FFmpeg and ffprobe. Missing audio requires an explicit --narration script or --no-audio choice. Opens on the whole capture for 0.5 s before smooth activity zoom; --no-zoom opts out. CLI exports speed up long visually stable, silent holds at 4× by default; --no-speedup preserves timing.",
       "status": "main",
       "added": "2026-10-29",
       "platforms": ["linux"],
