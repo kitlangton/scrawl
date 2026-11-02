@@ -1163,6 +1163,37 @@ impl ApparentCoordinator {
         matches!(self.island_phase, IslandPhase::Processing)
     }
 
+    fn refuse_capture_restart(&self) -> bool {
+        if self.capture_busy() {
+            let message = "Finish or cancel the capture before restarting Apparent.";
+            apparent_log(message);
+            if let Ok(mut status) = CAPTURE_STATUS.lock() { *status = Some(message.into()); }
+            true
+        } else { false }
+    }
+
+    fn request_quit(&mut self, cx: &mut Context<Self>) {
+        crate::capture::desktop::workflow::shutdown::request();
+        self.lab = false;
+        self.recording_shortcut_key = false;
+        self.iphone_preview.take();
+        if self.is_recording() {
+            self.finish_recording(cx);
+        } else if !self.is_processing() {
+            self.cancel_recording(cx);
+        }
+        self.publish_capture_busy();
+        if !self.capture_busy() {
+            cx.quit();
+        }
+    }
+
+    /// Native callbacks cannot borrow the GPUI entity. This is only a copy of the
+    /// coordinator-owned admission decision, never separate lifecycle accounting.
+    fn publish_capture_busy(&self) {
+        crate::capture::desktop::workflow::shutdown::set_phase_busy(self.capture_busy());
+    }
+
     pub fn is_selecting(&self) -> bool {
         matches!(self.island_phase, IslandPhase::Selecting { .. })
     }
@@ -1219,9 +1250,10 @@ impl ApparentCoordinator {
             let occupied = self.lab || self.active_recording.is_some()
                 || self.is_selecting() || self.is_processing()
                 || self.iphone_preview.is_some() || self.agent_capture_id.is_some()
-                || self.recording_shortcut_key;
+                || self.recording_shortcut_key || crate::capture::desktop::workflow::shutdown::requested();
             if self.agent_captures.admit(id, occupied, request.expired()) {
                 self.agent_capture_id = Some(id.clone());
+                self.publish_capture_busy();
                 self.record_screen_now(cx);
                 if self.active_recording.is_none() {
                     self.agent_capture_id = None;
@@ -1365,6 +1397,7 @@ impl ApparentCoordinator {
                 self.grants.clone(),
             )),
             Effect::Relaunch => {
+                if self.refuse_capture_restart() { return; }
                 self.settings = None;
                 crate::capture::desktop::settings::onboarding::relaunch();
                 cx.quit();
@@ -1611,6 +1644,7 @@ impl ApparentCoordinator {
                 self.onboarding = None;
             }
             Effect::Relaunch { resume } => {
+                if self.refuse_capture_restart() { return; }
                 self.cancel_onboarding_editor();
                 apparent_log(format!(
                     "Screen Recording granted but not usable here; relaunching (resume {resume:?})"
@@ -1881,6 +1915,13 @@ impl ApparentCoordinator {
     /// Stops the active recording and deletes its bundle, leaving the island as it is. Returns
     /// its target and overlay.
     fn discard_recording(&mut self) -> Option<(TargetInfo, Option<LaserOverlay>)> {
+        if let Some(rec) = &self.active_recording
+            && !matches!(rec.source, CaptureSource::Lab)
+            && let Err(error) = crate::capture::engine::bundle::recover::cancel(&rec.bundle_dir)
+        {
+            apparent_log(format!("Could not persist cancellation; capture is still active: {error:#}"));
+            return None;
+        }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some(id) = self.agent_capture_id.take() {
             self.agent_captures.set(&id, "cancelled", None, None);
@@ -1897,7 +1938,9 @@ impl ApparentCoordinator {
             CaptureSource::Phone(session) => session.cancel(),
             CaptureSource::Lab => return Some((rec.target, rec._metal_overlay)),
         }
-        let _ = std::fs::remove_dir_all(rec.bundle_dir);
+        if let Err(error) = crate::capture::engine::bundle::recover::delete_cancelled(&rec.bundle_dir) {
+            apparent_log(format!("Cancelled assets could not be deleted at {}: {error:#}; recovery remains forbidden", rec.bundle_dir.display()));
+        }
         Some((rec.target, rec._metal_overlay))
     }
 
@@ -2107,7 +2150,7 @@ impl ApparentCoordinator {
             return false;
         }
         match keystroke.key.as_str() {
-            "q" => cx.quit(),
+            "q" => self.request_quit(cx),
             "," => {
                 if self.is_selecting() {
                     self.cancel_recording(cx);
@@ -2269,6 +2312,7 @@ impl ApparentCoordinator {
             IslandPhase::Hidden | IslandPhase::Dismissing
         );
         self.island_phase = phase;
+        self.publish_capture_busy();
         let place = changed
             && (appearing
                 || matches!(
@@ -3040,6 +3084,7 @@ impl ApparentCoordinator {
     }
 
     pub fn start_recording_with_target(&mut self, target: TargetInfo, cx: &mut Context<Self>) {
+        if crate::capture::desktop::workflow::shutdown::requested() { return; }
         if crate::capture::engine::runtime::ensure_recording_mode(target.mode).is_err() {
             self.report_window_recording_disabled(cx);
             return;
@@ -3177,7 +3222,17 @@ impl ApparentCoordinator {
         });
         start_metric("metal_open_ms", stage);
         let stage = Instant::now();
-        let audio_recorder = AudioRecorder::start().ok();
+        self.publish_capture_busy();
+        let audio_recorder = match AudioRecorder::start(&bundle_dir) {
+            Ok(recorder) => Some(recorder),
+            Err(error) => {
+                let message = format!("Capture refused: narration could not be saved: {error:#}");
+                apparent_log(&message);
+                self.cancel_recording(cx);
+                if let Ok(mut status) = CAPTURE_STATUS.lock() { *status = Some(message); }
+                return;
+            }
+        };
         start_metric("audio_start_ms", stage);
         let stage = Instant::now();
         let screen_session = match ScreenCaptureSession::start(
@@ -3188,6 +3243,9 @@ impl ApparentCoordinator {
             Ok(session) => session,
             Err(error) => {
                 apparent_log(format!("Capture refused: {error:#}"));
+                if let Err(cleanup) = crate::capture::engine::bundle::recover::abandon_start(&bundle_dir, || drop(audio_recorder)) {
+                    apparent_log(format!("Failed capture startup cleanup at {}: {cleanup:#}", bundle_dir.display()));
+                }
                 self.cancel_recording(cx);
                 return;
             }
@@ -3404,6 +3462,7 @@ impl ApparentCoordinator {
 
     pub fn cancel_recording(&mut self, cx: &mut Context<Self>) {
         self.cancel_capture_attempt();
+        if self.is_recording() { return; }
         cx.defer(whiteboard::close);
         self.dismiss_island(cx);
     }
@@ -3482,10 +3541,12 @@ impl ApparentCoordinator {
         let final_whiteboard = whiteboard::finish_snapshot(&self.whiteboard, || whiteboard::close(cx));
 
         self.capture_finalizer_started();
+        self.publish_capture_busy();
         cx.spawn(async move |entity, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
+
                     recording_completion::finalize(
                         source, target, bundle_dir, events, strokes, final_whiteboard,
                     )
@@ -3495,9 +3556,13 @@ impl ApparentCoordinator {
             let _ = entity
                 .update(cx, |coord, cx| {
                     let (finalized, duration_ms) = result;
+                    if finalized.is_err() {
+                        crate::capture::desktop::workflow::shutdown::clear_request();
+                    }
                     // Release the worker even when its capsule was dismissed or
                     // a newer capture owns the UI. A completion never auto-quits.
                     coord.capture_finalizer_finished();
+                    coord.publish_capture_busy();
                     coord.receive_capture_result(
                         generation,
                         #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -6374,6 +6439,8 @@ pub fn run_app(
     start_iphone_immediately: bool,
     screenshot_out: Option<PathBuf>,
 ) {
+    let _signals = crate::capture::desktop::workflow::shutdown::Signals::install()
+        .inspect_err(|error| apparent_log(format!("Graceful signal handling unavailable: {error:#}"))).ok();
     let app = Application::new().with_assets(crate::capture::desktop::icons::Assets);
     #[cfg(target_os = "macos")]
     app.on_open_urls(|urls| {
@@ -6505,7 +6572,6 @@ pub fn run_app(
                 cx.background_executor()
                     .timer(Duration::from_millis(8))
                     .await;
-                let mut should_quit = false;
                 let _ = cx.update(|cx| {
                     if last_login_check.elapsed() >= Duration::from_secs(2) {
                         crate::capture::desktop::settings::reconcile_login_item();
@@ -6520,6 +6586,7 @@ pub fn run_app(
                         shown_status = status;
                         shown_export_busy = export_busy;
                     }
+                    loop_coord.read(cx).publish_capture_busy();
                     platform::poll_status_bar();
                     crate::capture::desktop::settings::onboarding_window::poll(cx);
                     crate::capture::desktop::settings::settings_window::poll(cx);
@@ -6601,7 +6668,7 @@ pub fn run_app(
                                     platform::check_for_updates();
                                 }
                                 MenuAction::Quit => {
-                                    should_quit = true;
+                                    loop_coord.update(cx, |coord, cx| coord.request_quit(cx));
                                 }
                             }
                         }
@@ -6634,6 +6701,9 @@ pub fn run_app(
                     }
 
                     motion::poll_tune();
+                    if crate::capture::desktop::workflow::shutdown::requested() {
+                        loop_coord.update(cx, |coord, cx| coord.request_quit(cx));
+                    }
                     if loop_coord.read(cx).shortcut.is_pending() {
                         loop_coord.update(cx, |coord, cx| coord.tick_shortcut(cx));
                     } else if loop_coord.read(cx).telemetry.take_escape()
@@ -6651,10 +6721,7 @@ pub fn run_app(
                         loop_coord.update(cx, |coord, cx| coord.island_tick(cx));
                     }
                 });
-                if should_quit {
-                    let _ = cx.update(|cx| cx.quit());
-                    break;
-                }
+
             }
         })
         .detach();
@@ -6725,6 +6792,18 @@ mod tests {
         #[cfg(target_os = "linux")]
         assert!(!coord.defer_update_restart(&crate::capture::desktop::settings::Event::Action(
             crate::capture::desktop::settings::Action::UpdateNow)));
+    }
+
+
+    #[test]
+    fn broader_restart_gate_waits_for_dismissed_finalizers_too() {
+        let (sender, _receiver) = flume::unbounded();
+        let mut coord = ApparentCoordinator::new(SharedCaptureTelemetry::new(sender), None);
+        coord.capture_finalizer_started();
+        coord.set_island_phase(IslandPhase::Hidden);
+        assert!(coord.refuse_capture_restart());
+        coord.capture_finalizer_finished();
+        assert!(!coord.refuse_capture_restart());
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

@@ -36,6 +36,46 @@ Before a screen movie starts, `.unsafe-video` marks its empty output directory a
 
 On a disposable Mac, a debug build launched with `APPARENT_TEST_DROP_SCK_FRAMES=1` can exercise this failure path without changing the movie recorder or revoking TCC permissions. The flag affects only `capture_sck_frame`; remove it from the launch environment and restart the installed app before a healthy-capture check. Do not use it on Kit's Mac.
 
+### Narration durability and recovery
+
+The microphone writes 16 kHz mono PCM16 to `audio.wav` while recording. Its background writer
+reads absolute sample indices; it neither shifts timestamps nor inserts/removes silence. The input
+callback does no file I/O. Its fixed mirrored history holds the last 60 seconds (7,680,000 bytes),
+also used by live transcription. Readers that fall behind fail explicitly and final recognition
+falls back to the saved WAV. Stop joins the input first, drains the writer, updates the WAV header,
+flushes and calls `sync_all` before normal bundle processing. It does not overwrite a saved WAV.
+
+The intended healthy-writer process-crash tail is one 100 ms polling interval plus one input
+callback and scheduling/I/O latency. Two seconds of writer backlog is the failure threshold, not
+a promise that a stalled disk loses at most two seconds: a write/sync failure stops persistence,
+keeps its saved prefix, logs the error and makes Stop report failure instead of a successful
+silent recording. Recording-time memory stays bounded even after that failure. A slow or hung
+filesystem can exceed the intended tail; the actual lost tail is unknown without a separate
+source sample count. Synthetic subprocess tests measure produced samples against recovered PCM.
+
+Every batch uses unbuffered file writes; every second the writer updates the header, explicitly
+flushes and calls `sync_all`. The initial header, recording journal and directory entries are
+synced before input opens. This protects against process death, not guaranteed power-loss
+durability. Kernel/device caches, filesystem behavior and Mac hardware cache flushing remain
+separate limits; this code does not issue `F_FULLFSYNC`. No sudden-power-loss test is implied.
+
+`.audio-recording` identifies this writer's PCM format and holds a kernel advisory lock, through
+Stop and bundle finalization. Recovery and retention leave a live owner alone, even if no audio
+is currently growing. After a crash, recovery holds the same lock, accepts only the journalled
+PCM format, repairs RIFF/data lengths from the actual complete samples and truncates only an
+incomplete final sample. Healthy bytes are not rewritten; unknown files are refused.
+
+If `.unsafe-video` remains, `apparent recover <directory>` and next-launch recovery repair
+**narration only**. They leave `audio.wav` and `narration-recovered.txt`, not a fabricated Screen
+bundle, transcript or keyframes. The raw video stays excluded. The receipt states the recovered
+sample count and that the lost tail is unknown. There is no clipboard copy or external delivery.
+Cancel syncs `.cancelled` before stopping the writers, then atomically renames the stopped
+directory to a sibling `.cancelled-*` outside the capture namespace before recursive deletion.
+Recovery refuses both names, even if deletion failed after removing the internal marker.
+Failed cleanup is logged; those quarantined assets still follow the configured retention policy.
+Retention still follows the configured policy;
+durability does not grant consent to retain, upload or reconstruct excluded media.
+
 ## More than one display (`capture/engine/runtime/screens.rs`)
 
 Every rect and point is global top-left points (`CGEvent`, `CGDisplayBounds`, `SCWindow` frames, `TargetFrame`); displays left of or above the primary one are negative. `screens::flip` converts AppKit frames, `screens::current()` lists displays with menu bar, notch and `backingScaleFactor` (main thread), `screens::displays()` the CoreGraphics view (any thread).

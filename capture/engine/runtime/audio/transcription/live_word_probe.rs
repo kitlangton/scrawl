@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::capture::engine::runtime::audio::persistence::Samples;
 use crate::capture::engine::runtime::audio::transcription::live_word_warning::{LiveWordWarning, State};
 
 const RATE: usize = 16_000;
@@ -16,7 +17,7 @@ pub struct Probe {
 }
 
 impl Probe {
-    pub fn start(samples: Arc<Mutex<Vec<f32>>>) -> Self {
+    pub fn start(samples: Arc<Mutex<Samples>>) -> Self {
         let state = Arc::new(Mutex::new(LiveWordWarning::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let worker_state = Arc::clone(&state);
@@ -42,14 +43,16 @@ impl Drop for Probe {
     }
 }
 
-fn run(samples: Arc<Mutex<Vec<f32>>>, state: Arc<Mutex<LiveWordWarning>>, stop: Arc<AtomicBool>) {
+fn run(samples: Arc<Mutex<Samples>>, state: Arc<Mutex<LiveWordWarning>>, stop: Arc<AtomicBool>) {
     #[cfg(not(target_os = "macos"))]
     let mut recognizer: Option<crate::capture::engine::runtime::audio::transcription::speech::Incremental> = None;
     let mut processed = 0;
     while !stop.load(Ordering::Acquire) {
         let chunk = {
             let Ok(samples) = samples.lock() else { return };
-            if samples.len().saturating_sub(processed) > 3 * CHUNK {
+            if samples.len().saturating_sub(processed) > 3 * CHUNK
+                || (!samples.is_empty() && samples.get(processed..).is_none())
+            {
                 // A slow recognizer cannot make a timely claim about the current recording.
                 if let Ok(mut state) = state.lock() { state.unavailable(); }
                 return;
@@ -85,6 +88,25 @@ fn run(samples: Arc<Mutex<Vec<f32>>>, state: Arc<Mutex<LiveWordWarning>>, stop: 
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overwritten_audio_makes_the_probe_unavailable() {
+        let mut samples = Samples::default();
+        samples.extend(std::iter::repeat_n(0.0, 61 * RATE));
+        assert!(samples.get(0..).is_none());
+        let state = Arc::new(Mutex::new(LiveWordWarning::new()));
+        run(
+            Arc::new(Mutex::new(samples)),
+            Arc::clone(&state),
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert_eq!(state.lock().unwrap().state(), State::Unavailable);
     }
 }
 

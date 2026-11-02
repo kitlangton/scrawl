@@ -8,8 +8,9 @@
 //! Captures from before the journal (0.3.10 on Windows crashed the same way) left only
 //! `recording.mp4` and `audio.wav`. Once those have sat untouched for `ORPHAN_SETTLE` they are
 //! rebuilt too, from the video and audio alone: the whole frame, no ink or clicks, keyframes from
-//! scene changes and the transcript. A live capture never looks like that: `audio.wav` is written
-//! only when the recording has stopped, just before `unfinished.json`.
+//! scene changes and the transcript. New captures write narration continuously. Their kernel
+//! lease excludes live writers; a dead writer's narration can be repaired without ever decoding
+//! a privacy-excluded movie. Recording-time recovery is audio-only, not a Screen bundle.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -18,6 +19,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::capture::engine::runtime::apparent_log;
+use crate::capture::engine::runtime::audio::persistence;
 use crate::shared::model::{
     CaptureMode, InteractionEvent, RgbaFrame, Stroke, TargetFrame, TargetInfo, TranscriptData,
 };
@@ -27,6 +29,63 @@ pub const UNFINISHED: &str = "unfinished.json";
 pub const RECOVERING: &str = ".recovering";
 /// A live capture without safe screenshots must not be rebuilt from its potentially private movie.
 pub const UNSAFE_VIDEO: &str = ".unsafe-video";
+pub const CANCELLED: &str = ".cancelled";
+
+fn cancelled(dir: &Path) -> bool {
+    dir.join(CANCELLED).exists()
+        || dir.file_name().is_some_and(|name| name.to_string_lossy().starts_with(".cancelled-"))
+}
+
+/// Replace metadata atomically rather than following an existing symlink or hard link.
+fn write_metadata(dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let temporary = dir.join(format!(".metadata-{}", crate::shared::ids::make_bundle_id()));
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+            .mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, dir.join(name))?;
+        std::fs::File::open(dir)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result
+}
+
+/// Persist cancellation before stopping the writer: a crash or failed deletion must not revive it.
+pub fn cancel(dir: &Path) -> Result<()> {
+    write_metadata(dir, CANCELLED, b"Cancelled by the recording owner; do not recover\n")
+}
+
+/// Call after all capture writers stop. Move outside the capture namespace before recursive
+/// deletion, so removal of the internal tombstone cannot resurrect partially deleted media.
+pub fn quarantine_cancelled(dir: &Path) -> Result<PathBuf> {
+    anyhow::ensure!(cancelled(dir), "Cancellation must be durable before cleanup");
+    let parent = dir.parent().context("Cancelled capture has no parent")?;
+    let destination = parent.join(format!(".cancelled-{}", crate::shared::ids::make_bundle_id()));
+    anyhow::ensure!(!destination.exists(), "Cancelled capture destination already exists");
+    std::fs::rename(dir, &destination)?;
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(destination)
+}
+
+pub fn delete_cancelled(dir: &Path) -> Result<()> {
+    let destination = quarantine_cancelled(dir)?;
+    std::fs::remove_dir_all(&destination)
+        .with_context(|| format!("Cancelled assets remain at {}; recovery is forbidden", destination.display()))?;
+    std::fs::File::open(dir.parent().context("Missing capture parent")?)?.sync_all()?;
+    Ok(())
+}
+
+/// Startup has local producers but no ActiveRecording yet. Cancellation owns that directory too.
+pub fn abandon_start(dir: &Path, stop_producers: impl FnOnce()) -> Result<()> {
+    let cancelled = cancel(dir);
+    stop_producers();
+    cancelled?;
+    delete_cancelled(dir)
+}
 
 /// A journal younger than this may belong to a build still running in another process.
 const SETTLE: Duration = Duration::from_secs(15);
@@ -74,6 +133,7 @@ pub fn finished(bundle_dir: &Path) {
     let _ = std::fs::remove_file(bundle_dir.join(UNFINISHED));
     let _ = std::fs::remove_file(bundle_dir.join(RECOVERING));
     let _ = std::fs::remove_file(bundle_dir.join(UNSAFE_VIDEO));
+    let _ = std::fs::remove_file(bundle_dir.join(persistence::RECORDING));
 }
 
 /// Protect a new screen recording before its movie can be written. Refuse occupied directories:
@@ -92,6 +152,8 @@ pub fn begin_screen_capture(bundle_dir: &Path) -> Result<()> {
         .open(bundle_dir.join(UNSAFE_VIDEO))
         .with_context(|| format!("Could not protect raw video in {}", bundle_dir.display()))?;
     marker.write_all(b"No safe screenshots; do not recover movie frames\n")?;
+    marker.sync_all()?;
+    std::fs::File::open(bundle_dir)?.sync_all()?;
     Ok(())
 }
 
@@ -123,9 +185,12 @@ fn orphaned(dir: &Path) -> bool {
 /// Whether a build is still owed to `dir`: nothing built it and it hasn't been tried.
 pub fn owed(dir: &Path) -> bool {
     !dir.join("apparent.json").exists()
+        && !cancelled(dir)
         && !dir.join(RECOVERING).exists()
-        && !dir.join(UNSAFE_VIDEO).exists()
-        && (dir.join(UNFINISHED).is_file() || orphaned(dir))
+        && !persistence::live(dir)
+        && ((dir.join(persistence::RECORDING).is_file() && dir.join(AUDIO).is_file())
+            || (!dir.join(UNSAFE_VIDEO).exists()
+                && (dir.join(UNFINISHED).is_file() || orphaned(dir))))
 }
 
 fn untouched_for(path: &Path, now: SystemTime, age: Duration) -> bool {
@@ -144,7 +209,9 @@ pub fn pending(captures: &Path, now: SystemTime) -> Vec<PathBuf> {
         .filter(|dir| {
             dir.extension().is_some_and(|ext| ext == "apparent")
                 && owed(dir)
-                && if orphaned(dir) {
+                && if dir.join(persistence::RECORDING).exists() {
+                    untouched_for(&dir.join(AUDIO), now, SETTLE)
+                } else if orphaned(dir) {
                     [dir.clone(), dir.join(VIDEO), dir.join(AUDIO)]
                         .iter()
                         .all(|path| untouched_for(path, now, ORPHAN_SETTLE))
@@ -210,6 +277,27 @@ impl Media {
 /// Builds one bundle in place from its journal, or from its video and audio alone, and marks it
 /// tried first so a crash here isn't repeated at every launch.
 pub fn rebuild(dir: &Path, media: &Media) -> Result<String> {
+    anyhow::ensure!(!cancelled(dir), "Recording was cancelled; recovery is forbidden");
+    anyhow::ensure!(!dir.join("apparent.json").exists(), "Bundle is already built; use apparent reprocess");
+    let lease = dir.join(persistence::RECORDING).exists()
+        .then(|| persistence::Lease::acquire(dir)).transpose()?;
+    if let Some(ref lease) = lease {
+        // One automatic attempt even when the file is empty/corrupt or the disk is still full.
+        write_metadata(dir, RECOVERING, b"")?;
+        let count = persistence::repair(dir, lease)?;
+        if dir.join(UNSAFE_VIDEO).exists() {
+            anyhow::ensure!(count > 0, "No narration samples reached disk in {}", dir.display());
+            let message = format!(
+                "Recovered narration only: {} ({} samples, {} ms). No screen bundle was rebuilt: privacy-filtered screenshots and recording-time interactions did not survive. Raw video remains excluded. The unsaved tail is unknown.\n",
+                dir.join(AUDIO).display(), count, count as u64 * 1_000 / 16_000,
+            );
+            // A separate receipt is not a handoff or a claim that a Screen bundle exists.
+            write_metadata(dir, "narration-recovered.txt", message.as_bytes())?;
+            lease.remove()?;
+            let _ = std::fs::remove_file(dir.join(RECOVERING));
+            return Ok(message);
+        }
+    }
     anyhow::ensure!(
         !dir.join(UNSAFE_VIDEO).exists(),
         "{} has no privacy-filtered screenshots; raw movie recovery is unsafe",
@@ -220,7 +308,7 @@ pub fn rebuild(dir: &Path, media: &Media) -> Result<String> {
         "{} is already built; `apparent reprocess` rebuilds it into a new bundle",
         dir.display()
     );
-    let _ = std::fs::write(dir.join(RECOVERING), "");
+    write_metadata(dir, RECOVERING, b"")?;
     apparent_log(format!("recover: rebuilding {}", dir.display()));
     let result = if dir.join(UNFINISHED).is_file() {
         read(dir)

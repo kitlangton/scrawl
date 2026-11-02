@@ -60,7 +60,7 @@ pub(in crate::capture::desktop) fn finalize(
                 .map(crate::shared::windows::WindowLogger::stop)
                 .unwrap_or_default()
         });
-        let audio = audio_recorder.and_then(|r| r.stop().ok());
+        let audio = crate::capture::engine::runtime::audio::audio::stop_optional(audio_recorder);
         (
             screen_handle.join().unwrap(),
             audio,
@@ -70,6 +70,10 @@ pub(in crate::capture::desktop) fn finalize(
     activity.stop_started = Some(stop_started);
     activity.stop_ms = Some(stop_started.elapsed().as_millis() as u64);
     let duration_ms = recording.duration_ms;
+    let recorded_audio = match recorded_audio {
+        Ok(audio) => audio,
+        Err(error) => return (Err(error.context(format!("Narration save failed; saved assets remain in {}", bundle_dir.display()))), duration_ms),
+    };
     let finalized = crate::capture::engine::bundle::bundle_processing::finalize_capture_bundle(
         &bundle_dir,
         target,

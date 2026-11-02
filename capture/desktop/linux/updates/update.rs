@@ -199,7 +199,14 @@ while [ "$i" -lt 150 ]; do
     if ! kill -0 "$child" 2>/dev/null; then break; fi
     sleep 0.1; i=$((i+1))
 done
-if kill -0 "$child" 2>/dev/null; then kill "$child" 2>/dev/null; fi
+if kill -0 "$child" 2>/dev/null; then
+    kill "$child" 2>/dev/null
+    i=0
+    while kill -0 "$child" 2>/dev/null && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i+1)); done
+    # SIGTERM may only queue cooperative Stop. Do not hold the transaction
+    # forever, force-kill a possibly busy app, or replace an image still live.
+    kill -0 "$child" 2>/dev/null && exit 1
+fi
 wait "$child" 2>/dev/null
 rm -f "$ready"
 # A non-cooperating writer must not make us roll back or blacklist its image.
@@ -870,6 +877,66 @@ mod tests {
             }
             fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    #[test]
+    fn startup_timeout_releases_lock_without_killing_a_live_term_handler() {
+        let dir = std::env::temp_dir().join(format!("apparent-startup-term-{}", crate::shared::ids::make_bundle_id()));
+        fs::create_dir(&dir).unwrap();
+        let tools = dir.join("tools");
+        fs::create_dir(&tools).unwrap();
+        // Execute the production helper verbatim. Accelerate only its sleep
+        // utility, not its readiness/termination policy or real signal effects.
+        let sleep = tools.join("sleep");
+        fs::write(&sleep, b"#!/bin/sh\nexec /bin/sleep 0.001\n").unwrap();
+        fs::set_permissions(&sleep, fs::Permissions::from_mode(0o700)).unwrap();
+        let image = dir.join("Apparent.AppImage");
+        let backup = dir.join(".Apparent.AppImage.previous");
+        let marker = image.with_extension("AppImage.apparent-update.json");
+        let previous_marker = dir.join(".Apparent.AppImage.previous.apparent-update.json");
+        let failed_marker = dir.join(".Apparent.AppImage.failed-update.json");
+        let started = dir.join("started");
+        let term = dir.join("term-requested");
+        let recovered = dir.join("recovered");
+        fs::write(&image, b"#!/bin/sh\ntrap 'touch \"$TEST_TERM\"' TERM\nprintf '%s' \"$$\" > \"$TEST_STARTED\"\nwhile :; do /bin/sleep 0.02; done\n").unwrap();
+        fs::write(&backup, b"#!/bin/sh\ntouch \"$TEST_RECOVERED\"\n").unwrap();
+        for path in [&image, &backup] { fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap(); }
+        let next = br#"{"channel":"main","id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}"#;
+        let previous = br#"{"channel":"main","id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+        fs::write(&marker, next).unwrap();
+        fs::write(&previous_marker, previous).unwrap();
+        let backup_bytes = fs::read(&backup).unwrap();
+        let mut command = relaunch_command(&image, &backup, u32::MAX).unwrap();
+        let mut helper = command.env("PATH", format!("{}:/usr/bin:/bin", tools.display()))
+            .env("TEST_STARTED", &started).env("TEST_TERM", &term).env("TEST_RECOVERED", &recovered)
+            .spawn().unwrap();
+        drop(command);
+        let deadline = Instant::now() + Duration::from_secs(12);
+        let mut result = None;
+        while Instant::now() < deadline {
+            if let Some(status) = helper.try_wait().unwrap() { result = Some(status); break; }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let fixture_pid: i32 = fs::read_to_string(&started).unwrap().parse().unwrap();
+        let fixture_cmd = fs::read(format!("/proc/{fixture_pid}/cmdline")).unwrap();
+        assert!(fixture_cmd.split(|b| *b == 0).any(|arg| arg == image.as_os_str().as_encoded_bytes()), "cleanup must own this exact fixture");
+        let terminated_cooperatively = term.exists();
+        let still_alive = unsafe { libc::kill(fixture_pid, 0) } == 0;
+        let lock_released = transaction_lock(&image).is_ok();
+        let left_images_untouched = fs::read(&marker).unwrap() == next
+            && fs::read(&previous_marker).unwrap() == previous
+            && fs::read(&backup).unwrap() == backup_bytes
+            && !recovered.exists() && !failed_marker.exists();
+        // Only this synthetic fixture is killed for test cleanup. Production
+        // must not turn a startup timeout into SIGKILL of a possibly busy app.
+        unsafe { libc::kill(fixture_pid, libc::SIGKILL); }
+        if result.is_none() { let _ = helper.wait(); }
+        fs::remove_dir_all(dir).unwrap();
+        assert!(result.is_some(), "readiness timeout must not wait forever or retain its transaction lock");
+        assert!(!result.unwrap().success(), "unresolved startup is not successful recovery");
+        assert!(terminated_cooperatively && still_alive, "SIGTERM must be observed without forcing exit");
+        assert!(lock_released, "later updates must remain possible");
+        assert!(left_images_untouched, "a live child forbids rollback or blacklisting");
     }
 
     #[test]
