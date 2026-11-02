@@ -1205,7 +1205,7 @@ impl SharedCaptureTelemetry {
             self.strokes
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .extend(clip_recording_ink(&ink));
+                .extend(recording_ink(self, &ink));
         }
         self.desktop_ink
             .lock()
@@ -1318,6 +1318,40 @@ fn same_target_frame(a: TargetFrame, b: TargetFrame) -> bool {
         && (a.y - b.y).abs() <= 0.5
         && (a.width - b.width).abs() <= 0.5
         && (a.height - b.height).abs() <= 0.5
+}
+
+/// XWayland output order need not match the compositor layout. Never interpolate
+/// between samples on different outputs: that can invent a desktop-wide segment.
+/// Retain one desktop gesture for Undo; only its painted/recorded parts are split.
+pub(crate) fn ink_output_parts(stroke: &Stroke, frame: TargetFrame, outputs: &[[f64; 4]]) -> Vec<Stroke> {
+    let output = |p: &[i32]| {
+        let x = frame.x + p[0] as f64 / SCALE as f64 * frame.width;
+        let y = frame.y + p[1] as f64 / SCALE as f64 * frame.height;
+        outputs.iter().position(|r| screens::contains(*r, [x, y]))
+    };
+    let mut result = Vec::new();
+    let mut start = 0;
+    let points: Vec<_> = stroke.pts.chunks_exact(3).collect();
+    for i in 1..=points.len() {
+        if i == points.len() || output(points[i - 1]) != output(points[i]) {
+            let mut part = stroke.clone();
+            part.pts = stroke.pts[start * 3..i * 3].to_vec();
+            result.push(part);
+            start = i;
+        }
+    }
+    result
+}
+
+fn recording_ink(telemetry: &SharedCaptureTelemetry, stroke: &Stroke) -> Vec<Stroke> {
+    #[cfg(target_os = "linux")]
+    {
+        let frame = *telemetry.target_frame.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let outputs: Vec<_> = screens::current().iter().map(|s| s.frame).collect();
+        return ink_output_parts(stroke, frame, &outputs).iter().flat_map(clip_recording_ink).collect();
+    }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = telemetry; clip_recording_ink(stroke) }
 }
 
 /// Clip each segment to the recording rectangle. Split on excursions so an outside
@@ -1435,7 +1469,7 @@ fn track_shift_ink(
             // Ignore stationary Shift taps (e.g. typing a capital letter without moving the mouse).
             && is_real_ink(&stroke)
         {
-            let recorded = clip_recording_ink(&stroke);
+            let recorded = recording_ink(telemetry, &stroke);
             if telemetry.probing() && recorded.len() == 1 {
                 let stroke = &recorded[0];
                 let frame = *telemetry
@@ -1556,6 +1590,21 @@ mod tests {
 
     /// Clicks on `apparent-helper`'s windows (the SwiftUI capsule, Settings, onboarding) are
     /// Apparent's own, except on the iPhone mirror, which is what's being recorded.
+    #[test]
+    fn inverted_mixed_scale_outputs_never_bridge_x_space_jump() {
+        let frame = TargetFrame { x: 0.0, y: 0.0, width: 1280.0, height: 800.0, scale: 1.0 };
+        // Hyprland left output -1280..0 maps to X 1280..2560; the right
+        // output 0..1024 at scale 1.25 maps to X 0..1280.
+        let stroke = Stroke { t0: 10, t1: 50, fw: 1280, fh: 800, on: None, pin: None, laser: false,
+            pts: [ [2500.0,420.0], [2550.0,420.0], [10.0,525.0], [50.0,525.0] ].into_iter().enumerate().flat_map(|(i,p)|
+                [(p[0] / 1280.0 * SCALE as f64) as i32, (p[1] / 800.0 * SCALE as f64) as i32, i as i32 * 10]).collect() };
+        let parts = ink_output_parts(&stroke, frame, &[[0.0,0.0,1280.0,800.0],[1280.0,0.0,1280.0,800.0]]);
+        assert_eq!(parts.len(), 2);
+        let saved: Vec<_> = parts.iter().flat_map(clip_recording_ink).collect();
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0].normalized_points().iter().all(|p| p[0] < 0.05), "no phantom full-width crossing");
+    }
+
     #[test]
     fn helper_windows_are_apparent_s_except_the_capture_source() {
         let (sender, _receiver) = flume::unbounded();

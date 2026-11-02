@@ -3280,7 +3280,16 @@ impl ApparentCoordinator {
         }
         #[cfg(target_os = "linux")]
         if target.mode != CaptureMode::Device {
-            if let Some(overlay) = metal_overlay.as_mut() { overlay.move_to(target_rect); }
+            if let Some(overlay) = metal_overlay.as_mut() {
+                overlay.move_to(target_rect);
+                match overlay.cover_desktop(cx) {
+                    Ok(ids) => {
+                        self.telemetry.excluded_window_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(ids.iter().copied());
+                        self.telemetry.passthrough_window_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(ids);
+                    }
+                    Err(error) => apparent_log(format!("Desktop ink overlays failed: {error}")),
+                }
+            }
         }
         start_metric("metal_open_ms", stage);
         let stage = Instant::now();
