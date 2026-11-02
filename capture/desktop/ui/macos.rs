@@ -545,11 +545,6 @@ objc2::define_class!(
             let _ = self.ivars().sender.try_send(MenuAction::ChooseTarget);
         }
 
-        #[unsafe(method(giveFeedback:))]
-        fn give_feedback(&self, _sender: &AnyObject) {
-            let _ = self.ivars().sender.try_send(MenuAction::GiveFeedback);
-        }
-
         #[unsafe(method(openLatest:))]
         fn open_latest(&self, _sender: &AnyObject) {
             let _ = self.ivars().sender.try_send(MenuAction::OpenLatest);
@@ -597,9 +592,6 @@ objc2::define_class!(
             if let Some(item) = menu.itemWithTag(EXPORT_VIDEO_MENU_TAG) {
                 item.setHidden(!crate::shared::handoff::video_export());
             }
-            if let Some(item) = menu.itemWithTag(FEEDBACK_MENU_TAG) {
-                item.setHidden(!crate::shared::handoff::experiment("feedbackIssue"));
-            }
         }
     }
 );
@@ -610,7 +602,6 @@ const INBOX_MENU_TAG: isize = 0x5c4a;
 const EXPORT_VIDEO_MENU_TAG: isize = 0x5c4e;
 /// Tag on **Record Screen**, whose title carries the record shortcut.
 const RECORD_MENU_TAG: isize = 0x5c4d;
-const FEEDBACK_MENU_TAG: isize = 0x5c4f;
 
 /// "Record Screen" with the record shortcut as it is now (Settings can change it).
 fn record_menu_title() -> String {
@@ -763,11 +754,6 @@ pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receive
         item.setTag(RECORD_MENU_TAG);
     }
     add("Choose What to Record…", sel!(chooseTarget:));
-    add("Give Feedback…", sel!(giveFeedback:));
-    if let Some(item) = menu.itemAtIndex(menu.numberOfItems() - 1) {
-        item.setTag(FEEDBACK_MENU_TAG);
-        item.setHidden(!crate::shared::handoff::experiment("feedbackIssue"));
-    }
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     add("Open Latest Capture", sel!(openLatest:));
     add("Export Last Capture as Video…", sel!(exportVideo:));

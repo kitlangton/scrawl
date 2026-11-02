@@ -1,13 +1,11 @@
-//! Desktop completion policy: Connect admission, clipboard and the current capture's feedback.
+//! Desktop completion policy: Connect admission, clipboard and the current capture UI.
 //! Receipts and Connect completion precede the stale-UI gate; presentation never does.
 
 use std::time::Instant;
 
-use gpui::{Context, WeakEntity};
+use gpui::Context;
 
-use super::super::{
-    ApparentCoordinator, CAPTURE_STATUS, IslandPhase, close_capture_windows, open_review_window,
-};
+use super::super::{ApparentCoordinator, CAPTURE_STATUS, IslandPhase};
 use super::recording_completion::CaptureResult;
 use crate::capture::engine::runtime::apparent_log;
 
@@ -22,7 +20,6 @@ impl ApparentCoordinator {
         &mut self,
         generation: u64,
         #[cfg(any(target_os = "macos", target_os = "linux"))] finishing_id: Option<&str>,
-        feedback_capture: bool,
         finalized: CaptureResult,
         on_completed: impl FnOnce(&std::path::Path),
         on_current: impl FnOnce(&mut Self, CaptureResult),
@@ -44,12 +41,10 @@ impl ApparentCoordinator {
                     .map_err(|error| format!("{error:#}")),
             );
         }
-        // A saved ordinary capture completes independently of its pill. Hosted
-        // admission rechecks current consent; feedback and failed takes stay local.
-        if !feedback_capture {
-            if let Ok((dir, _, _)) = &finalized {
-                on_completed(dir);
-            }
+        // A saved capture completes independently of its pill. Hosted
+        // admission rechecks current consent; failed takes stay local.
+        if let Ok((dir, _, _)) = &finalized {
+            on_completed(dir);
         }
         if !self.accepts_capture_result(generation) {
             return;
@@ -61,9 +56,7 @@ impl ApparentCoordinator {
         &mut self,
         finalized: CaptureResult,
         duration_ms: u64,
-        feedback_capture: bool,
         auto_active: bool,
-        entity: &WeakEntity<Self>,
         cx: &mut Context<Self>,
     ) {
         self.completed_dir = None;
@@ -103,29 +96,29 @@ impl ApparentCoordinator {
                 );
             }
         }
-        // Feedback stays local until the user explicitly copies or attaches it.
         // For the blocked automatic trial, leave only text on Ctrl+V even if
         // the independent clipboardImage experiment is enabled.
-        let clipboard_ready = !feedback_capture
-            && (if auto_active {
-                #[cfg(target_os = "linux")]
-                {
-                    crate::shared::handoff::copy_bundle_text_to_clipboard(&dir)
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    crate::shared::handoff::copy_bundle_to_clipboard(&dir)
-                }
-            } else {
+        let clipboard_ready = (if auto_active {
+            #[cfg(target_os = "linux")]
+            {
+                crate::shared::handoff::copy_bundle_text_to_clipboard(&dir)
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
                 crate::shared::handoff::copy_bundle_to_clipboard(&dir)
-            })
-            .map_err(|error| apparent_log(format!("Copy handoff failed: {error:#}")))
-            .is_ok();
+            }
+        } else {
+            crate::shared::handoff::copy_bundle_to_clipboard(&dir)
+        })
+        .map_err(|error| apparent_log(format!("Copy handoff failed: {error:#}")))
+        .is_ok();
         #[cfg(target_os = "linux")]
         if auto_active && clipboard_ready {
             // Do not dispatch a paste until the receiver can prove its
             // draft identity and acknowledge the image attachment.
-            if let Err(error) = crate::capture::desktop::linux::auto_paste::auto_receiver_preflight() {
+            if let Err(error) =
+                crate::capture::desktop::linux::auto_paste::auto_receiver_preflight()
+            {
                 apparent_log(format!("Automatic draft paste skipped: {error:#}"));
                 crate::capture::desktop::linux::shell::notify(
                     "Draft paste skipped",
@@ -143,30 +136,14 @@ impl ApparentCoordinator {
         }
         self.completed_dir = Some(dir.clone());
         self.last_local_capture_ms = crate::shared::clock::now_epoch_ms();
-        if feedback_capture {
-            // No automatic clipboard write: the completed pill must not claim
-            // that this private capture was copied.
-            self.completed_note = Some("Saved · review".into());
-        }
         #[cfg(target_os = "linux")]
         if auto_active {
             // No receiver receipt: keep the manual handoff visible.
-            self.completed_note =
-                Some(crate::capture::desktop::linux::auto_paste::completion_note(clipboard_ready).into());
+            self.completed_note = Some(
+                crate::capture::desktop::linux::auto_paste::completion_note(clipboard_ready).into(),
+            );
         }
         self.set_review_bundle((dir, bundle), self.completed_note.clone());
-        if feedback_capture {
-            self.review_feedback = true;
-            self.review_status =
-                Some("Review before sharing publicly. Nothing is uploaded automatically.".into());
-            let entity = entity.clone();
-            cx.defer(move |cx| {
-                close_capture_windows(cx);
-                if let Some(entity) = entity.upgrade() {
-                    open_review_window(&entity, cx);
-                }
-            });
-        }
         self.set_island_phase(IslandPhase::Completed {
             finished_at: Instant::now(),
             frame_count,
