@@ -17,4 +17,5 @@ jobs:
   verify:
     uses: ./.github/workflows/verification-platform.yml
     with:
-      runner: macos-latest
+      # General Mac CI can use Intel capacity; arm64 packaging stays on Apple Silicon.
+      runner: macos-15-intel

@@ -52,6 +52,18 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(self.admit(platform, number), self.sha)
             self.assertEqual(self.admit(platform), self.sha)
 
+    def test_intel_mac_receipt_matches_workflow_and_is_required(self):
+        workflow = Path(__file__).resolve().parents[2] / gate.WORKFLOWS['macos']
+        self.assertIn('runner: macos-15-intel', workflow.read_text())
+        names = ['verify / select', 'verify / desktop-ui (macos-15-intel)',
+                 'verify / rust (macos-15-intel)', 'verify / Release verification']
+        self.jobs['macos'] = [dict(name=name, status='completed', conclusion='success')
+                              for name in names]
+        self.assertEqual(self.admit('macos'), self.sha)
+        for job in self.jobs['macos']:
+            job['name'] = job['name'].replace('macos-15-intel', 'macos-latest')
+        with self.assertRaises(ValueError): self.admit('macos')
+
     def test_linux_checks_can_publish_without_a_mac_receipt(self):
         self.runs['macos'].update(status='queued', conclusion=None)
         self.jobs['macos'] = []
