@@ -858,6 +858,7 @@ pub struct ApparentCoordinator {
     active_recording: Option<ActiveRecording>,
     /// Identifies the recording whose finalization may update the current UI.
     capture_generation: u64,
+    capture_local_practice: bool,
     /// Media workers outlive their capsule and still own unfinished bundles.
     pending_finalizers: usize,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -985,6 +986,7 @@ impl ApparentCoordinator {
             whiteboard: Rc::new(RefCell::new(whiteboard::Board::default())),
             active_recording: None,
             capture_generation: 0,
+            capture_local_practice: false,
             pending_finalizers: 0,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             agent_capture_id: None,
@@ -1626,9 +1628,12 @@ impl ApparentCoordinator {
                     .as_mut()
                     .map_or(Effect::None, |session| session.grants(grants))
             }
-            Event::Action(action) if action == "use-desktop-shortcut" => {
+            Event::Action(action) if matches!(action.as_str(), "use-desktop-shortcut" | "use-current-shortcut") => {
                 let host = crate::capture::desktop::settings::AppHost { telemetry: &self.telemetry };
-                if self.onboarding_editor.record_shortcut(&host).externally_managed
+                let editor = self.onboarding_editor.record_shortcut(&host);
+                let accepted = !editor.recording && editor.error.is_none()
+                    && (action == "use-current-shortcut" || editor.externally_managed);
+                if accepted
                     && let Some(session) = self.onboarding.as_mut()
                 {
                     session.input(crate::capture::desktop::settings::onboarding::Input::ShortcutChosen);
@@ -1643,7 +1648,8 @@ impl ApparentCoordinator {
                 if self
                     .onboarding
                     .as_ref()
-                    .is_some_and(|session| session.editing_shortcut())
+                    .is_some_and(|session| session.editing_shortcut() ||
+                        (session.choosing_shortcut() && matches!(action, crate::capture::desktop::settings::Action::ResetShortcut { .. })))
                     && matches!(
                         action,
                         crate::capture::desktop::settings::Action::Shortcut {
@@ -1671,6 +1677,10 @@ impl ApparentCoordinator {
                 Effect::None
             }
             Event::Exited => {
+                if self.onboarding.as_mut().is_some_and(|session| session.restore_native()) {
+                    self.sync_onboarding_editor();
+                    return;
+                }
                 if let Some(session) = self.onboarding.as_ref() {
                     session.leave(true);
                 }
@@ -2316,6 +2326,9 @@ impl ApparentCoordinator {
             // Their finalized bundles remain on disk; stale results must not copy to
             // the clipboard, replace the current review, or finish a newer practice.
             self.capture_generation = self.capture_generation.wrapping_add(1);
+        }
+        if matches!(phase, IslandPhase::Recording) && !matches!(self.island_phase, IslandPhase::Recording) {
+            self.capture_local_practice = self.onboarding.as_ref().is_some_and(|session| session.local_practice());
         }
         let capture = match (self.island_phase, phase) {
             (IslandPhase::Recording, IslandPhase::Recording) => None,
@@ -3591,6 +3604,8 @@ impl ApparentCoordinator {
         drop(rec._metal_overlay);
         self.set_island_phase(IslandPhase::Processing);
         let generation = self.capture_generation;
+        // Freeze practice policy with the worker, independent of window/UI lifetime.
+        let local_practice = self.capture_local_practice;
         self.completed_note = None;
         cx.notify();
         if matches!(source, CaptureSource::Lab) {
@@ -3646,7 +3661,9 @@ impl ApparentCoordinator {
                         #[cfg(any(target_os = "macos", target_os = "linux"))]
                         finishing_id.as_deref(),
                         finalized,
-                        desktop_completion::connect_completed,
+                        |dir| {
+                            if !local_practice { desktop_completion::connect_completed(dir); }
+                        },
                         |coord, finalized| {
                             coord.present_capture_result(
                                 finalized, duration_ms, auto_active, cx,
