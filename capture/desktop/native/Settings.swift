@@ -1485,7 +1485,7 @@ enum ShortcutKeys {
     var unmanaged: Unmanaged<CFArray>?
     guard CopySymbolicHotKeys(&unmanaged) == noErr,
           let hotkeys = unmanaged?.takeRetainedValue() as? [[String: Any]]
-    else { return false }
+    else { return true }
     let mask = cmdKey | shiftKey | optionKey | controlKey
     return hotkeys.contains { hotkey in
       (hotkey[kHISymbolicHotKeyEnabled as String] as? Bool) == true

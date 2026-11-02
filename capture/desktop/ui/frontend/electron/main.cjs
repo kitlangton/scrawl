@@ -1,3 +1,4 @@
+if(process.argv.includes('--onboarding')) { require('./onboarding.cjs'); } else {
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, nativeTheme } = require('electron');
 const os = require('node:os');
 const {PublicShare} = require('./public-share.cjs');
@@ -267,3 +268,5 @@ app.whenReady().then(() => {
   void window.loadURL(page);
 });
 app.on('window-all-closed', () => app.quit());
+
+}
