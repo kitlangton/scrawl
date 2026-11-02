@@ -566,3 +566,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// This preference is sampled at capture admission, never inferred from silence.
+pub fn enabled() -> bool { enabled_in(&crate::shared::handoff::default_config_path()) }
+pub fn enabled_in(path: &std::path::Path) -> bool {
+    crate::shared::handoff::load_config_from(path).microphone_enabled.unwrap_or(true)
+}

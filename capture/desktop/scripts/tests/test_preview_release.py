@@ -36,12 +36,16 @@ class PreviewReleaseTest(unittest.TestCase):
             (root / "capture/desktop/scripts/release/setup-sparkle.sh").chmod(0o755)
             (root / "capture/desktop/scripts/packaging/stage-settings.py").write_text(
                 "import sys\nfrom pathlib import Path\n"
-                "p = Path(sys.argv[1]) / 'app/dist/settings.html'\np.parent.mkdir(parents=True)\np.write_text('synthetic Settings')\n")
+                "p = Path(sys.argv[1]) / 'app/dist/settings.html'\np.parent.mkdir(parents=True)\np.write_text('synthetic Settings')\n"
+                "r = Path(sys.argv[1]) / 'runtime/Electron.app/Contents/MacOS/Electron'\nr.parent.mkdir(parents=True)\nr.write_text('synthetic shared runtime')\n")
             (root / "bin/cargo").write_text(
                 '#!/bin/sh\nmkdir -p target/release\n'
                 'printf "test" > target/release/apparent\n'
                 'printf "test" > target/release/apparent-helper\n'
             )
+            (root / "bin/node").write_text('#!/bin/sh\nset -eu\ncase "$1" in\n'
+                '*/package-notes.mjs) mkdir -p "$2/dist"; printf synthetic > "$2/dist/index.html" ;;\n'
+                '*) exit 1 ;;\nesac\n')
             (root / "bin/plutil").write_text('#!/bin/sh\nexit 0\n')
             (root / "bin/codesign").write_text('#!/bin/sh\nexit 0\n')
             (root / "bin/hdiutil").write_text(
@@ -76,6 +80,7 @@ class PreviewReleaseTest(unittest.TestCase):
                     (root / "dist/Apparent Preview.app/Contents/Resources" / Path(asset).name).read_bytes(),
                     (root / ("capture/desktop" if asset == "Apparent.icns" else "shared") / "assets" / asset).read_bytes(),
                 )
+            self.assertTrue((root / "dist/Apparent Preview.app/Contents/Resources/settings/runtime/Electron.app/Contents/MacOS/Electron").is_file())
             self.assertTrue((root / "dist/Apparent-Preview-0.123.2-arm64.dmg.sha256").is_file())
             self.assertTrue((root / "dist/Apparent-Preview-0.123.2-arm64.zip").is_file())
             self.assertTrue((root / "dist/preview-staging/Applications").is_symlink())

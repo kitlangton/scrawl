@@ -275,3 +275,25 @@ Off by default; Linux Hyprland Wayland only. The guarded `handoff::run_draft_han
 Off by default; currently **fails closed on Linux**. When enabled, a finished capture saves the bundle and copies the text summary, but does not dispatch image or text paste keystrokes. The paper says “Saved · paste manually” and points to `contact-sheet.png`: attach it in the intended unsent composer, then use Ctrl+V for the summary. Apparent never sends the draft. The prior window-only trial could paste into another T3 thread within the same window. A window address is not a stable draft/editor identity, and a paste keystroke is not an image attachment receipt. Automatic handoff must wait for a receiver that can verify the capture-start and finish target, writable composer, accepted attachment, and visible text without duplicate insertions. The explicit user-directed `apparent paste` command remains available, but it cannot prove receiver acceptance either. Ordinary Ctrl+V and Omarchy Super+V are unchanged.
 
 To compare a summary experiment on real captures, `capture/agent/scripts/agent-eval.sh [--experiment NAME] [--out DIR] [bundle…]` reprocesses each bundle with and without it (Kit's own `experiments` removed from the baseline's config) and writes `before.md`, `after.md`, both contact sheets and frames per bundle, and an `index.md`, by default to `~/code/home/artifacts/apparent-context/`. Both summaries come from the baseline run's transcript. What a capture recorded live (Accessibility lookups, page events) is kept as recorded, so those only show on captures made with the experiment on.
+
+## Typed capture notes
+
+During screen capture, Shift-click opens a compact Electron text field at the
+point; Shift drawing is unchanged. Enter or Attach saves; empty Enter keeps
+only the pin. Escape preserves the in-capture draft. The count reflects durable
+saved notes; its compact list edits/deletes them. Unsubmitted drafts are not
+handoff content and do not survive ending/restarting the capture.
+
+Rust stores submitted text plus the pin's original timestamp and normalized
+position in `notes.json`. Finalization/recovery includes it as typed `note`
+events in `apparent.json` and an explicit Typed note section in `summary.md`,
+with the pin's keyframe link where available. Reprocessing replaces these
+events from the local notes file rather than duplicating them. The note's
+clock/anchor never moves to the time typing or editing finished. Text stays
+semantic; popup controls are not rasterized captions.
+
+`microphoneEnabled: false` allows intentional silent captures without a
+microphone grant; set it from the menu or Electron Recording control. Its
+value is sampled at admission, and file edits apply at the next capture. The
+selected microphone and all unrelated config keys remain intact. The saved
+`context.microphoneCapture=off` distinguishes this choice from an audio error.

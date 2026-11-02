@@ -56,6 +56,7 @@ cp shared/assets/fonts/HostGrotesk-Variable.ttf "$app/Contents/Resources/HostGro
 cp shared/assets/brand/apparent-wordmark.png "$app/Contents/Resources/apparent-wordmark.png"
 cp shared/assets/brand/apparent-a.png "$app/Contents/Resources/apparent-a.png"
 cp shared/assets/brand/connect-frogs.png "$app/Contents/Resources/connect-frogs.png"
+node capture/desktop/ui/frontend/scripts/package-notes.mjs "$app/Contents/Resources/note-ui"
 ditto "$SPARKLE_DIR/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
 
 cat > "$app/Contents/Info.plist" <<PLIST

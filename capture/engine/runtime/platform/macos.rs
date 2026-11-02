@@ -55,6 +55,10 @@ pub(crate) fn raw_windows_now() -> Vec<crate::shared::windows::RawWindow> {
     })
 }
 
+pub(crate) fn input_windows(_child: u32) -> Vec<crate::shared::windows::RawWindow> {
+    raw_windows_now()
+}
+
 /// Whether `pid` runs this Apparent's `apparent-helper` (the iPhone mirror, Settings, onboarding, the
 /// permission panel), going by its executable, so a helper started by another helper counts too.
 pub(crate) fn is_helper_process(pid: i32) -> bool {
@@ -1452,7 +1456,7 @@ fn install_mouse_monitor(telemetry: Arc<SharedCaptureTelemetry>) -> bool {
         let cg: *mut OpaqueCgEvent = unsafe { msg_send![event, CGEvent] };
         if !cg.is_null() {
             mouse_event(&telemetry, cg.cast(), |x, y| {
-                telemetry.on_apparent_window(x, y)
+                telemetry.on_capture_input_ui(x, y)
             });
         }
     });
@@ -1470,7 +1474,7 @@ fn mouse_event(
     event: EventRef,
     on_apparent: impl Fn(f64, f64) -> bool,
 ) {
-    if !telemetry.active.load(Ordering::Acquire) {
+    if !telemetry.active.load(Ordering::Acquire) || telemetry.notes_editing.load(Ordering::Acquire) {
         return;
     }
     let event_type = unsafe { CGEventGetType(event) };
@@ -1633,7 +1637,7 @@ unsafe extern "C" fn key_tap_callback(
     if keycode == KEY_ESCAPE && !cmd && !ctrl {
         telemetry.escape_pressed.store(true, Ordering::Release);
     }
-    if !telemetry.active.load(Ordering::Acquire) {
+    if !telemetry.active.load(Ordering::Acquire) || telemetry.notes_editing.load(Ordering::Acquire) {
         return event;
     }
 
@@ -1789,7 +1793,7 @@ fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
             buttons,
             (loc.x, loc.y),
             shift && !cmd && !ctrl && !alt,
-            |x, y| telemetry.on_apparent_window(x, y),
+            |x, y| telemetry.on_capture_input_ui(x, y),
         );
 
         let pure_shift = shift && !cmd && !ctrl && !alt && !await_shift_release;

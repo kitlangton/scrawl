@@ -46,6 +46,8 @@ cp -f "${REPO_DIR}/shared/assets/brand/apparent-wordmark.png" "${RESOURCES_DIR}/
 cp -f "${REPO_DIR}/shared/assets/brand/apparent-a.png" "${RESOURCES_DIR}/apparent-a.png"
 cp -f "${REPO_DIR}/shared/assets/brand/connect-frogs.png" "${RESOURCES_DIR}/connect-frogs.png"
 
+node "${REPO_DIR}/capture/desktop/ui/frontend/scripts/package-notes.mjs" "${RESOURCES_DIR}/note-ui"
+
 if [[ -n "${SPARKLE_DIR}" && -d "${SPARKLE_DIR}/Sparkle.framework" ]]; then
   rm -rf "${FRAMEWORKS_DIR}/Sparkle.framework"
   /usr/bin/ditto "${SPARKLE_DIR}/Sparkle.framework" "${FRAMEWORKS_DIR}/Sparkle.framework"

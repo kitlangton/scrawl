@@ -56,7 +56,7 @@ impl Permission {
     ];
 
     pub fn required(self) -> bool {
-        Self::REQUIRED.contains(&self)
+        Self::REQUIRED.contains(&self) && (self != Self::Microphone || crate::capture::engine::runtime::audio::mic::enabled())
     }
 
     /// Whether this Mac asks for it at all: Speech Recognition only when the helper reports it
