@@ -71,6 +71,11 @@ impl Session {
         let (app, runtime) =
             assets().ok_or_else(|| anyhow::anyhow!("Packaged recording pill unavailable"))?;
         let mut launch = Command::new(&runtime);
+        // Ozone initializes before main.cjs runs. Appending this switch in JS
+        // leaves current Electron on Wayland, where our X11 shape/ID contract
+        // is invalid. Select XWayland at process startup instead.
+        #[cfg(target_os = "linux")]
+        launch.arg("--ozone-platform=x11");
         launch.arg(app.join("electron/pill/main.cjs"));
         #[cfg(target_os = "linux")]
         {

@@ -4,7 +4,6 @@ const path=require('node:path');
 const {pathToFileURL}=require('node:url');
 const protocol=require('./protocol.cjs');
 const geometry=require('./geometry.cjs');
-if(process.platform==='linux')app.commandLine.appendSwitch('ozone-platform','x11');
 if(!['linux','darwin'].includes(process.platform))process.exit(1);
 app.setName('Apparent recording controls');
 app.setPath('userData',path.join(app.getPath('appData'),'apparent-pill'));
