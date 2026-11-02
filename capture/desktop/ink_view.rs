@@ -13,7 +13,9 @@ use gpui::{
 };
 
 use crate::capture::engine::runtime::SharedCaptureTelemetry;
-use crate::capture::engine::sketch::{pin_pulse, slice_laser_window, smooth_ink_points, smooth_laser_points};
+use crate::capture::engine::sketch::{
+    pin_pulse, slice_laser_window, smooth_ink_points, smooth_laser_points,
+};
 
 const TAIL_MS: u64 = 420;
 
@@ -63,7 +65,10 @@ fn rgba(r: f32, g: f32, b: f32, a: f32) -> Hsla {
 }
 
 impl OverlayView {
-    pub(crate) fn new(telemetry: Arc<SharedCaptureTelemetry>, placement: Arc<Mutex<Placement>>) -> Self {
+    pub(crate) fn new(
+        telemetry: Arc<SharedCaptureTelemetry>,
+        placement: Arc<Mutex<Placement>>,
+    ) -> Self {
         Self {
             telemetry,
             placement,
@@ -153,9 +158,16 @@ impl OverlayView {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
+            .filter(|s| s.laser || s.pin.is_some())
             .cloned()
             .map(|s| (s, false))
             .collect();
+        let desktop_ink = t
+            .desktop_ink
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        strokes.extend(desktop_ink.into_iter().map(|s| (s, false)));
         if let Some(laser) = t
             .active_laser
             .lock()
@@ -473,7 +485,10 @@ fn paint_scene(scene: &Scene, bounds: Bounds<Pixels>, window: &mut Window) {
 impl Render for OverlayView {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let size = window.viewport_size();
-        let scene = self.scene([f32::from(size.width), f32::from(size.height)], window.scale_factor());
+        let scene = self.scene(
+            [f32::from(size.width), f32::from(size.height)],
+            window.scale_factor(),
+        );
         // Telemetry changes on other threads; follow it every frame while the overlay is up.
         window.request_animation_frame();
         canvas(

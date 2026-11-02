@@ -2244,7 +2244,13 @@ impl ApparentCoordinator {
             .strokes
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(idx) = strokes.iter().rposition(|s| !s.laser) {
+        let mut desktop = self.telemetry.desktop_ink.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let latest = strokes.iter().rposition(|s| !s.laser && s.pin.is_some());
+        if desktop.last().is_some_and(|ink| latest.is_none_or(|i| ink.t0 >= strokes[i].t0)) {
+            let ink = desktop.pop().unwrap();
+            strokes.retain(|s| s.laser || s.pin.is_some() || !(ink.t0..=ink.t1).contains(&s.t0));
+        } else if let Some(idx) = latest {
             strokes.remove(idx);
         }
         drop(strokes);
@@ -3216,7 +3222,7 @@ impl ApparentCoordinator {
                 .push(overlay.window_number());
             overlay
         });
-        let metal_overlay = metal_overlay.or_else(|| {
+        let mut metal_overlay = metal_overlay.or_else(|| {
             let ov = platform::open_overlay(Arc::clone(&self.telemetry), Some(target_rect), cx)
                 .map_err(|error| apparent_log(format!("Metal overlay failed: {error}")))
                 .ok();
@@ -3234,6 +3240,22 @@ impl ApparentCoordinator {
             }
             ov
         });
+        #[cfg(target_os = "macos")]
+        if target.mode != CaptureMode::Device {
+            if let Some(overlay) = metal_overlay.as_mut() {
+                match overlay.cover_desktop() {
+                    Ok(ids) => {
+                        self.telemetry.excluded_window_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(ids.iter().copied());
+                        self.telemetry.passthrough_window_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(ids);
+                    }
+                    Err(error) => apparent_log(format!("Desktop ink overlays failed: {error}")),
+                }
+            }
+        }
+        #[cfg(target_os = "linux")]
+        if target.mode != CaptureMode::Device {
+            if let Some(overlay) = metal_overlay.as_mut() { overlay.move_to(target_rect); }
+        }
         start_metric("metal_open_ms", stage);
         let stage = Instant::now();
         self.publish_capture_busy();

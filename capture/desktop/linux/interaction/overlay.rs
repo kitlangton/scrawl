@@ -18,8 +18,8 @@ use gpui::{
 };
 
 use super::x11;
-use crate::capture::engine::runtime::SharedCaptureTelemetry;
 use crate::capture::desktop::ink_view::{OverlayView, Placement};
+use crate::capture::engine::runtime::SharedCaptureTelemetry;
 
 /// The open overlay's window, for `take_pointer`.
 static OVERLAY: AtomicU32 = AtomicU32::new(0);
@@ -32,6 +32,7 @@ static OVERLAY_STATE: Mutex<()> = Mutex::new(());
 pub struct InkOverlay {
     id: u32,
     placement: Arc<Mutex<Placement>>,
+    telemetry: Arc<SharedCaptureTelemetry>,
 }
 
 impl InkOverlay {
@@ -58,8 +59,12 @@ impl InkOverlay {
         // clicks to the focused app when a full-screen notification window sits above them.
         // Keep it mapped only while drawing, so the sharing dialog, the pill and the app
         // underneath stay usable. The bundle still contains the complete ink.
-        let hide_between_strokes =
-            hide_between_strokes(super::super::kde(), super::super::hyprland(), super::super::wayland_session());
+        let hide_between_strokes = hide_between_strokes(
+            super::super::kde(),
+            super::super::hyprland(),
+            super::super::wayland_session(),
+        );
+        let view_telemetry = Arc::clone(&telemetry);
         let handle = cx
             .open_window(
                 WindowOptions {
@@ -75,7 +80,7 @@ impl InkOverlay {
                     app_id: Some("dev.kitlangton.apparent".into()),
                     ..Default::default()
                 },
-                move |_, cx| cx.new(|_| OverlayView::new(telemetry, view_placement)),
+                move |_, cx| cx.new(|_| OverlayView::new(view_telemetry, view_placement)),
             )
             .map_err(|error| format!("{error:#}"))?;
         let id = handle
@@ -95,7 +100,11 @@ impl InkOverlay {
             x11::set_visible(id, false);
         }
         OVERLAY.store(id, Ordering::Release);
-        Ok(Self { id, placement })
+        Ok(Self {
+            id,
+            placement,
+            telemetry,
+        })
     }
 
     pub fn window_number(&self) -> u32 {
@@ -117,6 +126,13 @@ impl InkOverlay {
         let Some(monitor) = super::super::monitor_at(x + w / 2.0, y + h / 2.0) else {
             return false;
         };
+        let rect = if spans_desktop(self.telemetry.active.load(Ordering::Acquire),
+            self.telemetry.capture_mode.load(Ordering::Acquire)) {
+            desktop_bounds(&crate::capture::engine::runtime::screens::current())
+                .unwrap_or(monitor.rect)
+        } else {
+            monitor.rect
+        };
         let _state = OVERLAY_STATE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -125,15 +141,15 @@ impl InkOverlay {
                 .placement
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if (0..4).all(|i| (placement.rect[i] - monitor.rect[i]).abs() < 1.0) {
+            if (0..4).all(|i| (placement.rect[i] - rect[i]).abs() < 1.0) {
                 return false;
             }
             *placement = Placement {
-                rect: monitor.rect,
+                rect,
                 scale: monitor.scale as f32,
             };
         }
-        x11::place(self.id, monitor.rect);
+        x11::place(self.id, rect);
         // Hyprland remaps moved override-redirect windows. Restore the same input shape and
         // visibility they had before the move; an idle overlay must not swallow pill clicks.
         let taken = POINTER_TAKEN.load(Ordering::Acquire);
@@ -176,6 +192,25 @@ pub fn take_pointer(take: bool) {
     }
 }
 
+fn spans_desktop(active: bool, mode: u64) -> bool { active && mode <= 1 }
+
+/// One input region keeps Shift pointer ownership continuous at monitor boundaries.
+fn desktop_bounds(
+    screens: &[crate::capture::engine::runtime::screens::Screen],
+) -> Option<[f64; 4]> {
+    let first = screens.first()?.frame;
+    let (mut x, mut y, mut right, mut bottom) =
+        (first[0], first[1], first[0] + first[2], first[1] + first[3]);
+    for screen in &screens[1..] {
+        let r = screen.frame;
+        x = x.min(r[0]);
+        y = y.min(r[1]);
+        right = right.max(r[0] + r[2]);
+        bottom = bottom.max(r[1] + r[3]);
+    }
+    Some([x, y, right - x, bottom - y])
+}
+
 fn visible_after_move(hide_between_strokes: bool, pointer_taken: bool) -> bool {
     !hide_between_strokes || pointer_taken
 }
@@ -186,6 +221,30 @@ fn hide_between_strokes(kde: bool, hyprland: bool, wayland: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn desktop_region_preserves_negative_origins_and_global_scale_units() {
+        use crate::capture::engine::runtime::screens::Screen;
+        let screen = |frame, scale| Screen {
+            id: 1,
+            frame,
+            visible: frame,
+            scale,
+            safe_top: 0.0,
+        };
+        assert!(!super::spans_desktop(false, 0));
+        assert!(super::spans_desktop(true, 0));
+        assert!(super::spans_desktop(true, 1));
+        assert!(!super::spans_desktop(true, 3), "phone mirror stays local");
+        assert_eq!(super::desktop_bounds(&[]), None);
+        assert_eq!(
+            super::desktop_bounds(&[
+                screen([-1920.0, -200.0, 1920.0, 1080.0], 1.0),
+                screen([0.0, 0.0, 2560.0, 1440.0], 2.0),
+            ]),
+            Some([-1920.0, -200.0, 4480.0, 1640.0])
+        );
+    }
+
     #[test]
     fn picker_overlay_stays_unmapped_when_carried_into_recording() {
         // The picker creates the same overlay before telemetry.active becomes true.
