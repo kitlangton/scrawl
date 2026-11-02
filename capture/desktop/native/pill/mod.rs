@@ -1686,12 +1686,23 @@ mod tests {
         desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
         desc.set_width(w);
         desc.set_height(h);
-        desc.set_storage_mode(metal::MTLStorageMode::Shared);
+        // Keep the device default: Shared textures are unavailable on Intel GPUs.
+        // Managed textures need an explicit GPU-to-CPU copy before readback.
         desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
         let target = pipelines._device.new_texture(&desc);
         let cmd = pipelines.encode(&frame, false, theme, &target);
+        if target.storage_mode() == metal::MTLStorageMode::Managed {
+            let blit = cmd.new_blit_command_encoder();
+            blit.synchronize_resource(&target);
+            blit.end_encoding();
+        }
         cmd.commit();
         cmd.wait_until_completed();
+        assert_eq!(
+            cmd.status(),
+            metal::MTLCommandBufferStatus::Completed,
+            "offscreen rendering command failed before pixel readback"
+        );
         let mut bgra = vec![0_u8; (w * h * 4) as usize];
         target.get_bytes(
             bgra.as_mut_ptr().cast::<c_void>(),
