@@ -6,7 +6,7 @@ const path = require('node:path');
 const phases = new Set(['idle', 'selecting', 'starting', 'recording', 'processing', 'completed']);
 const failure = { status: 'error', message: 'The Rust app did not return a valid state. Retry when it is responsive.' };
 const codes = new Set(['invalid_request', 'invalid_path', 'conflict', 'admission_expired', 'config_write_failed',
-  'config_read_failed', 'app_busy', 'app_unresponsive', 'feature_disabled']);
+  'config_read_failed', 'app_busy', 'app_unresponsive', 'feature_disabled', 'usage_unavailable']);
 const text = (value) => typeof value === 'string' && Buffer.byteLength(value) <= 4096 && !value.includes('\0');
 
 async function exchange(home, request, decode, maxBytes, timeoutMs, timeoutResult) {
@@ -92,4 +92,34 @@ function captureLocation(home, operation = 'read', fields = {}, timeoutMs = 3500
     { status: 'error', code: operation === 'read' ? 'timeout' : 'outcome_unknown' });
 }
 
-module.exports = { readRuntimeState, captureLocation };
+function storagePreference(home, operation, fields = {}, timeoutMs = 3500) {
+  if (!['retention', 'saveretention', 'resetretention', 'usage'].includes(operation)) throw new Error('Invalid preference operation');
+  const mutation = ['saveretention', 'resetretention'].includes(operation);
+  const request = { storage: operation, deadline: Number(process.hrtime.bigint() / 1000000n) + Math.min(timeoutMs, 3000) };
+  if (mutation) {
+    if (!/^[a-f0-9]{16}$/.test(fields.expected)) throw new Error('Invalid revision');
+    request.expected = fields.expected;
+  }
+  if (operation === 'saveretention') {
+    if (!['week', 'month', 'forever'].includes(fields.preset)) throw new Error('Invalid preset');
+    request.preset = fields.preset;
+  }
+  return exchange(home, JSON.stringify(request) + '\n', (value) => {
+    if (value?.error) return decodeStorage(value);
+    if (operation === 'usage') {
+      const u = value?.usage;
+      return u && text(u.effectivePath) && text(u.displayPath) && text(u.formatted)
+        ? { status: 'connected', usage: { effectivePath: u.effectivePath, displayPath: u.displayPath, formatted: u.formatted } }
+        : { status: 'error', code: 'invalid_response' };
+    }
+    const r = value?.retention;
+    if (!r || !(r.preset === null || ['week', 'month', 'forever'].includes(r.preset)) || !text(r.note) ||
+        typeof value.custom !== 'boolean' || !/^[a-f0-9]{16}$/.test(value.revision) ||
+        !Array.isArray(r.options) || r.options.length !== 3 ||
+        !r.options.every((o, i) => o.id === ['week', 'month', 'forever'][i] && text(o.label))) return { status: 'error', code: 'invalid_response' };
+    return { status: 'connected', retention: { preset: r.preset, note: r.note,
+      options: r.options.map(o => ({ id: o.id, label: o.label })) }, custom: value.custom, revision: value.revision };
+  }, 16384, timeoutMs, { status: 'error', code: mutation ? 'outcome_unknown' : 'timeout' });
+}
+
+module.exports = { readRuntimeState, captureLocation, storagePreference };

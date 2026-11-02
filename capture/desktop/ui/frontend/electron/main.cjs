@@ -2,7 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain, session, shell } = require('electro
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { readRuntimeState, captureLocation } = require('./runtime.cjs');
+const { readRuntimeState, captureLocation, storagePreference } = require('./runtime.cjs');
 const { ConnectSettings, actions } = require('./connect.cjs');
 
 // Deliberately separate from the installed application's profile and identity.
@@ -38,7 +38,9 @@ app.whenReady().then(() => {
   let storageVersion = 0;
   const connect = new ConnectSettings(os.homedir());
   let pendingConnect;
-  const invalidate = () => { generation += 1; storageVersion += 1; connect.close(); };
+  let retentionRevision;
+  let retentionRead;
+  const invalidate = () => { generation += 1; storageVersion += 1; retentionRevision = undefined; connect.close(); };
   window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) invalidate(); });
   window.webContents.on('will-navigate', invalidate);
   window.webContents.on('render-process-gone', invalidate);
@@ -113,6 +115,49 @@ app.whenReady().then(() => {
         storageVersion += 1;
         mutation = false;
       }
+    });
+  }
+  const projectRetention = (result) => {
+    if (result.status !== 'connected') return result;
+    retentionRevision = result.revision;
+    const { revision: _revision, ...safe } = result;
+    return safe;
+  };
+  ipcMain.handle('apparent:read-retention', async (event, ...args) => {
+    validate(event, args);
+    const version = storageVersion;
+    if (!retentionRead || retentionRead.version !== version) {
+      const pending = { version, promise: storagePreference(os.homedir(), 'retention') };
+      retentionRead = pending;
+      void pending.promise.finally(() => { if (retentionRead === pending) retentionRead = undefined; });
+    }
+    const result = await retentionRead.promise;
+    if (version !== storageVersion) return { status: 'cancelled' };
+    retentionRevision = undefined;
+    return projectRetention(result);
+  });
+  ipcMain.handle('apparent:read-capture-usage', async (event, ...args) => {
+    validate(event, args);
+    const version = storageVersion;
+    const result = await storagePreference(os.homedir(), 'usage');
+    return version === storageVersion ? result : { status: 'cancelled' };
+  });
+  for (const operation of ['save', 'reset']) {
+    ipcMain.handle(`apparent:${operation}-retention`, async (event, ...args) => {
+      const preset = operation === 'save' ? args[0] : undefined;
+      validate(event, operation === 'save' && args.length === 1 && ['week', 'month', 'forever'].includes(preset) ? [] : args);
+      if (operation === 'save' && args.length !== 1) throw new Error('Invalid preset');
+      if (mutation) return { status: 'error', code: 'app_busy' };
+      if (!retentionRevision) return { status: 'error', code: 'refresh_required' };
+      const expected = retentionRevision;
+      retentionRevision = undefined;
+      mutation = true;
+      storageVersion += 1;
+      const token = generation;
+      try {
+        const result = await storagePreference(os.homedir(), `${operation}retention`, { expected, preset });
+        return token === generation ? projectRetention(result) : { status: 'cancelled' };
+      } finally { storageVersion += 1; mutation = false; }
     });
   }
   ipcMain.handle('apparent:read-runtime-state', (event, ...args) => {

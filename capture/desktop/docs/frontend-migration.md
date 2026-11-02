@@ -19,7 +19,7 @@
 
 ## Delivery shape
 
-Use short-lived, independently reviewable PRs against current `main`, not a long-lived migration branch. Keep new frontend code owner-local; reserve shared manifests and integration points for explicit, small edits. Do not combine broad moves, cleanup or unrelated feature work with a slice. Temporary coexistence is acceptable, but Rust remains the single owner of settings and capture policy. Each replacement needs its own acceptance evidence and a defined removal point for the old implementation.
+Migration is opportunistic work inside normal Desktop tasks, not a separate campaign or prerequisite queue. When a task changes a Desktop workflow, include the smallest coherent end-to-end Electron slice for that workflow in the same short-lived, independently reviewable PR. It may extend beyond the exact component being edited when needed to make the workflow usable, but must not become a wholesale rewrite or pull in unrelated surfaces. Keep new frontend code owner-local; reserve shared manifests and integration points for explicit, small edits. Temporary coexistence is acceptable across different surfaces, not as two competing implementations of one surface. Rust remains the single owner of settings and capture policy. Keep the old path until its replacement is accepted, then remove it after verifying consumers, packaging and runtime inputs.
 
 ## 1. Read-only foundation
 
@@ -27,17 +27,17 @@ The first implementation uses the existing same-user Rust GUI control socket's r
 
 Do not change the default launcher, installed app identity, permissions, capture lifecycle, recording controls or config in this slice. Do not expose capture or settings mutation commands. Verify the shell and read-only bridge on macOS/Linux; this proves neither overlay behaviour nor capture independence. No full capture migration gate is attached to this read-only slice unless its actual diff changes capture inputs.
 
-## 2. First useful migration: one Settings section
+## 2. Settings sections when touched
 
 Investigate the existing serializable `View` in `capture/desktop/settings/settings.rs` and its production producers/consumers. Choose one bounded section, then render it with standard controls while retaining Rust's existing policy. Define its exact actions, readback, error states and native checks before implementation; do not expose the entire Settings mutation surface merely because the view contains it. Keep unrelated sections on their current path. Preserve config concurrency and OS effects wherever the selected section touches them.
 
-## 3. Separate pill/overlay investigation
+## 3. Capture pill and overlay when touched
 
 Read `capture/desktop/mod.rs`, `capture/desktop/native/pill/{mod.rs,types.rs}`, `capture/desktop/ui/linux.rs`, and their callers. Trace Engine calls, timers, input/ink ownership, handoff, shutdown and startup. Inspect root build inputs and desktop packaging before choosing new file paths.
 
 Use `capture/engine/docs/capture.md#agent-control-of-the-running-gui` as the existing control contract: it has request-owned start/stop/cancel and receipts, but currently requires the running GUI. Do not present it as an already independent headless Engine or replace it with the telemetry-incomplete timed recorder.
 
-Deliver a small surface/owner table and the proposed narrow capture bridge. Identify which UI-owned lifecycle responsibilities must move before the Rust backend can outlive an Electron renderer. Keep the Engine-to-Desktop dependency prohibition. This work does not block independent ordinary Settings slices and is not a prerequisite for the read-only foundation.
+If a normal task changes the pill/overlay or renderer-dependent capture lifecycle, inventory the affected callers and responsibilities and implement the narrow bridge needed by that same workflow. Keep the Engine-to-Desktop dependency prohibition. Do not create a separate migration-only investigation or make it a prerequisite for unrelated Settings work.
 
 ### Later candidate: real pill-to-handoff slice
 
@@ -57,13 +57,13 @@ macOS: follow `onboarding-and-settings.md` and `motion.md`; use approved preview
 
 A browser preview/build is not native proof. Set the shell/native boundary from these results; do not reopen the selected Electron direction merely because an adapter is necessary.
 
-## 4. Expand in bounded, independently verified slices
+## 4. Other workflows when touched
 
-Continue onboarding and Settings migration using standard shadcn controls plus shared theme tokens, without waiting on unrelated overlay experiments. Preserve permission refresh/revocation, shortcut ownership/validation, microphone fallback/meter semantics, config concurrency and unknown-key preservation, and actual OS registration effects. See `onboarding-and-settings.md` for the contracts; cosmetic animation fidelity is not required. Each slice carries checks proportional to its changed behaviour, not all future migration gates.
+When normal work touches onboarding or Settings, use standard shadcn controls plus shared theme tokens. Preserve permission refresh/revocation, shortcut ownership/validation, microphone fallback/meter semantics, config concurrency and unknown-key preservation, and actual OS registration effects. See `onboarding-and-settings.md` for the contracts; cosmetic animation fidelity is not required. Verify the changed behaviour, not every future migration gate.
 
 Inventory any existing review surface and preserve required handoff actions outside it before removal; the target has no desktop review screen. Coordinate canonical shared UI placement across owners before editing manifests. `connect/web/AGENTS.md` currently limits its staging extraction to behaviour-identical copies: do not silently repurpose that slice or confuse its staging package with deployed Connect.
 
-Then migrate remaining picker/whiteboard/annotation surfaces in bounded increments, with relevant platform proof. Keep Connect functionality and marketing redesign out of scope; shared controls do not authorize a workspace rewrite.
+When a task touches picker, whiteboard or annotation, include the affected coherent Electron workflow and relevant platform proof in that PR. Keep Connect functionality and marketing redesign out of scope; shared controls do not authorize a workspace rewrite.
 
 ## Verification and delivery
 

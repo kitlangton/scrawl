@@ -1035,11 +1035,20 @@ pub struct PermissionView {
     pub relaunch: bool,
 }
 
-fn preset_id(preset: crate::capture::engine::bundle::retention::Preset) -> &'static str {
+pub(crate) fn preset_id(preset: crate::capture::engine::bundle::retention::Preset) -> &'static str {
     match preset {
         crate::capture::engine::bundle::retention::Preset::Week => "week",
         crate::capture::engine::bundle::retention::Preset::Month => "month",
         crate::capture::engine::bundle::retention::Preset::Forever => "forever",
+    }
+}
+
+pub(crate) fn retention_view(policy: &crate::capture::engine::bundle::retention::Policy) -> RetentionView {
+    RetentionView {
+        preset: policy.preset().map(preset_id),
+        options: crate::capture::engine::bundle::retention::Preset::ALL.into_iter()
+            .map(|p| OptionView { id: preset_id(p), label: p.label() }).collect(),
+        note: retention_note(policy),
     }
 }
 
@@ -1633,17 +1642,7 @@ impl Panel {
                 command,
             },
             video_export: config.video_export.unwrap_or(false),
-            retention: RetentionView {
-                preset: policy.preset().map(preset_id),
-                options: crate::capture::engine::bundle::retention::Preset::ALL
-                    .into_iter()
-                    .map(|p| OptionView {
-                        id: preset_id(p),
-                        label: p.label(),
-                    })
-                    .collect(),
-                note: retention_note(&policy),
-            },
+            retention: retention_view(&policy),
             captures_size: self.captures_size.map(crate::capture::engine::bundle::retention::format_bytes),
             captures_dir: CapturesDirView::new(&config),
             permissions: order

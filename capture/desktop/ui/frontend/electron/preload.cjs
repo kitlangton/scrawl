@@ -14,4 +14,8 @@ contextBridge.exposeInMainWorld('apparent', Object.freeze({
   disableConnectUploads: () => ipcRenderer.invoke('apparent:connect-disable'),
   disconnectConnectSettings: () => ipcRenderer.invoke('apparent:connect-disconnect'),
   openConnectBrowser: () => ipcRenderer.invoke('apparent:connect-open-browser'),
+  readRetention: () => ipcRenderer.invoke('apparent:read-retention'),
+  saveRetention: (preset) => ipcRenderer.invoke('apparent:save-retention', preset),
+  resetRetention: () => ipcRenderer.invoke('apparent:reset-retention'),
+  readCaptureUsage: () => ipcRenderer.invoke('apparent:read-capture-usage'),
 }));

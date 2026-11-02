@@ -30,7 +30,8 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
     keys: Object.keys(window.apparent), require: typeof window.require, process: typeof window.process,
   })), { keys: ['readRuntimeState', 'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation',
     'readConnectSettings', 'connectSettings', 'allowConnectUploads', 'cancelConnectSettings', 'checkConnectConnection',
-    'disableConnectUploads', 'disconnectConnectSettings', 'openConnectBrowser'], require: 'undefined', process: 'undefined' });
+    'disableConnectUploads', 'disconnectConnectSettings', 'openConnectBrowser',
+    'readRetention', 'saveRetention', 'resetRetention', 'readCaptureUsage'], require: 'undefined', process: 'undefined' });
   assert.equal(await application.evaluate(({ BrowserWindow }) => {
     const options = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences();
     return options.contextIsolation && options.sandbox && !options.nodeIntegration && options.webSecurity;

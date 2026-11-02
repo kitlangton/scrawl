@@ -352,6 +352,9 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     page.on('pageerror', error => rendererErrors.push(error.message));
     await page.getByText('Connected · idle', { exact: true }).waitFor({ timeout: budget(10000) });
     const card = page.getByRole('region', { name: 'Capture location', exact: true });
+    // Usage repeats the effective path; location assertions must target the
+    // location's own status, not any descendant text in the Storage card.
+    const locationStatus = card.locator(':scope > [role="status"]');
     const change = card.getByRole('button', { name: 'Change…', exact: true });
     const reset = card.getByRole('button', { name: 'Reset', exact: true });
     const assertFiles = async (savedPath) => {
@@ -368,7 +371,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.before = { ...await poll(snapshot, 'Initial authoritative read'), files: await assertFiles(null) };
     assert.equal(report.before.location.storage.source, 'builtin');
     assert.equal(report.before.location.storage.effectivePath, builtin);
-    await card.getByText(report.before.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
+    await locationStatus.getByText(report.before.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
     await change.click({ timeout: budget() });
     report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');
     // Only the OS picker receives the path. Never pass it through renderer/IPC.
@@ -389,12 +392,13 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       assert.equal(next.location.storage.savedPath, selected);
       return next;
     }, 'Saved location readback');
-    await card.getByText(changed.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
+    await locationStatus.getByText(changed.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
     report.change = { ...changed, files: await assertFiles(selected) };
     assert.equal(report.change.location.storage.source, 'configured');
     assert.equal(report.change.location.storage.savedPath, selected);
     assert.equal(report.change.location.storage.effectivePath, selected);
     await page.screenshot({ path: path.join(output, 'storage-saved.png'), timeout: budget() });
+    report.retention = await require('./native-retention.cjs')(page, { config, captures: selected, output });
     const beforeCancel = await fs.readFile(config);
     const beforeCancelStat = await fs.stat(config, { bigint: true });
     await change.click({ timeout: budget() });
@@ -414,7 +418,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       assert.equal(next.location.storage.savedPath, null);
       return next;
     }, 'Reset location readback');
-    await card.getByText(resetRead.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
+    await locationStatus.getByText(resetRead.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
     await expect(reset).toBeDisabled({ timeout: budget() });
     report.reset = { ...resetRead, files: await assertFiles(null) };
     assert.equal(report.reset.location.storage.savedPath, null);

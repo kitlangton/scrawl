@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@apparent/ui/button';
 import type { CaptureLocation, LocationSnapshot } from './bridge';
+import { Retention } from './retention';
 
 const errors: Record<string, string> = {
   conflict: 'The saved location changed while the picker was open. Refresh before choosing again.',
@@ -66,5 +67,6 @@ export function Storage() {
       <Button disabled={busy || result.status !== 'connected'} onClick={() => void request('change')}>Change…</Button>
       <Button variant="outline" disabled={busy || result.status !== 'connected' || !snapshot?.custom} onClick={() => void request('reset')}>Reset</Button>
     </div>
+    {snapshot && !busy && <Retention key={snapshot.effectivePath} effectivePath={snapshot.effectivePath} />}
   </section>;
 }
