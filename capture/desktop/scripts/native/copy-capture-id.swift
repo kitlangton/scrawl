@@ -96,6 +96,13 @@ func window() throws -> OwnedWindow {
 }
 func focusAndSize(_ width: Int? = nil) throws {
     guard let child = owned else { throw Failure("No owned app") }
+    guard let running = NSRunningApplication(processIdentifier: child.processIdentifier) else {
+        throw Failure("Owned app is absent from the running-application registry")
+    }
+    // Activation is asynchronous. NSRunningApplication's changing properties
+    // also stay cached until the main run loop advances (Apple's documented
+    // contract); a sleep followed by an immediate assertion is not a focus wait.
+    let accepted = running.activate(options: [.activateIgnoringOtherApps])
     let size = width.map { "set size of window 1 to {\($0), 700}\nset position of window 1 to {40, 40}" } ?? ""
     _ = try run("/usr/bin/osascript", ["-e", """
     tell application "System Events"
@@ -104,13 +111,27 @@ func focusAndSize(_ width: Int? = nil) throws {
             if (count of windows) is not 1 then error "Expected one owned AX window"
             set frontmost to true
             \(size)
+            repeat 30 times
+                if frontmost then exit repeat
+                delay 0.1
+            end repeat
             if not frontmost then error "Owned process did not gain focus"
         end tell
     end tell
     """])
-    Thread.sleep(forTimeInterval: 0.25)
-    try require(NSWorkspace.shared.frontmostApplication?.processIdentifier == child.processIdentifier,
-                "Focus is not the exact owned app PID")
+    let until = Date().addingTimeInterval(try remaining(3))
+    var frontmost: pid_t?
+    repeat {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if running.isActive && frontmost == child.processIdentifier { break }
+    } while Date() < until && child.isRunning
+    var attempts = report["focus"] as? [[String: Any]] ?? []
+    attempts.append(["pid": child.processIdentifier, "activationAccepted": accepted,
+        "isActive": running.isActive, "frontmostPID": frontmost ?? -1])
+    report["focus"] = attempts
+    try require(running.isActive && frontmost == child.processIdentifier,
+                "Focus is not the exact owned app PID after bounded activation")
 }
 struct TextBox { let text: String; let value: VNRecognizedText; let bounds: CGRect }
 func screenshot(_ label: String) throws -> (OwnedWindow, [TextBox]) {
@@ -150,6 +171,7 @@ func click(_ label: String) throws {
     let box = try locate(label, in: boxes)
     let current = try window()
     try require(current.id == before.id && current.bounds == before.bounds, "Window moved during OCR")
+    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     try require(NSWorkspace.shared.frontmostApplication?.processIdentifier == owned?.processIdentifier, "Focus changed before click")
     let point = CGPoint(x: current.bounds.minX + box.midX * current.bounds.width,
                         y: current.bounds.minY + (1 - box.midY) * current.bounds.height)
