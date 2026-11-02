@@ -22,6 +22,27 @@ actor CompletionFlag {
   var value = false
   func mark() { value = true }
 }
+// A third next() proves the coordinator processed the two available events
+// and is waiting for the missing owner. An early-return bug never reaches it.
+private struct ObservedProgress: AsyncSequence {
+  typealias Element = LiveProgress
+  let base: AsyncThrowingStream<LiveProgress, Error>
+  let suspended: AsyncStream<Void>.Continuation
+  struct AsyncIterator: AsyncIteratorProtocol {
+    var base: AsyncThrowingStream<LiveProgress, Error>.Iterator
+    let suspended: AsyncStream<Void>.Continuation
+    var consumed = 0
+    mutating func next() async throws -> LiveProgress? {
+      if consumed == 2 { suspended.yield(()) }
+      let value = try await base.next()
+      if value != nil { consumed += 1 }
+      return value
+    }
+  }
+  func makeAsyncIterator() -> AsyncIterator {
+    AsyncIterator(base: base.makeAsyncIterator(), suspended: suspended)
+  }
+}
 extension LiveTranscriber {
   static func checkSourceTimes() throws {
     let times = try sourceTimes(CMTimeRange(start: CMTime(value: 7, timescale: 16000), duration: CMTime(value: 9, timescale: 16000)))
@@ -68,10 +89,13 @@ func naturalTests() async throws {
   for missing in 0..<3 {
     let flag = CompletionFlag()
     let (events, input) = AsyncThrowingStream<LiveProgress, Error>.makeStream()
-    let worker = Task { let n = try await finishLiveInput(events); await flag.mark(); return n }
+    let (waiting, suspended) = AsyncStream<Void>.makeStream()
+    let observed = ObservedProgress(base: events, suspended: suspended)
+    let worker = Task { let n = try await finishLiveInput(observed); await flag.mark(); return n }
     let values: [LiveProgress] = [.samples(32801), .terminalFinished, .resultsDrained]
     for i in 0..<3 where i != missing { input.yield(values[i]) }
-    try await Task.sleep(nanoseconds: 5_000_000)
+    for await _ in waiting { break }
+    suspended.finish()
     let premature = await flag.value
     try require(!premature, "done before all three owners succeeded")
     input.yield(values[missing]); input.finish()

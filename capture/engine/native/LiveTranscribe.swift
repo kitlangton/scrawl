@@ -126,7 +126,7 @@ private enum LiveProgress { case samples(Int), resultsDrained, terminalFinished 
 
 /// Input success, terminal success AND complete result consumption are independent.
 /// Any failure bypasses a blocked reader/preparation without awaiting either task.
-private func finishLiveInput(_ events: AsyncThrowingStream<LiveProgress, Error>) async throws -> Int {
+private func finishLiveInput<S: AsyncSequence>(_ events: S) async throws -> Int where S.Element == LiveProgress {
   try Task.checkCancellation()
   var total: Int?
   var drained = false; var finished = false
