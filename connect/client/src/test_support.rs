@@ -2,6 +2,8 @@
 //! Not enabled by the production dependency.
 use super::*;
 #[cfg(test)]
+mod encrypted_tests;
+#[cfg(test)]
 mod renewal_tests;
 use std::sync::OnceLock;
 
@@ -41,6 +43,8 @@ impl ConfigProvider for FixtureConfig {
         // Legacy tests explicitly enable these flags; mutable-provider regressions
         // below separately exercise fresh false reads.
         matches!(name, HOSTED_SYNC | HOSTED_SHARING)
+            || (name == HOSTED_ENCRYPTION
+                && read_config(&self.0)["experiments"][name].as_bool() == Some(true))
     }
     fn set_cloud(&self, value: &CloudConfig) -> Result<()> {
         set_value(&self.0, "cloud", serde_json::to_value(value)?)
@@ -537,6 +541,7 @@ impl Fixture {
                     refresh_expires_at: None,
                     grant_id: None,
                     auth_required: false,
+                    encryption_identity: None,
                 },
             )
             .unwrap();
@@ -565,6 +570,9 @@ impl Drop for Fixture {
 
 #[derive(Default)]
 struct State {
+    // Optional synthetic registry: public keys and opaque storage, never crypto.
+    encryption: Option<EncryptionState>,
+    format: Option<String>,
     request_routes: Vec<String>,
     list_routes: Vec<String>,
     progress: Vec<String>,
@@ -579,6 +587,14 @@ struct State {
     requests: usize,
     mode: String,
     media_gate: Option<Arc<MediaGate>>,
+}
+#[derive(Default)]
+struct EncryptionState {
+    devices: Vec<Value>,
+    pending_key: Option<Value>,
+    pending_scope: String,
+    captured: Vec<(String, Vec<u8>)>,
+    revoke_reader_after_put: bool,
 }
 #[derive(Default)]
 struct MediaGate {
@@ -732,8 +748,19 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
     let mut s = state.lock().unwrap();
     s.requests += 1;
     s.request_routes.push(format!("{method} {route}"));
+    if let Some(encryption) = &mut s.encryption {
+        encryption
+            .captured
+            .push((format!("{method} {route}"), body.to_vec()));
+    }
     let mut status = 200;
     let result: Vec<u8> = if route == "/v1/device/start" {
+        if let Some(encryption) = &mut s.encryption {
+            let request: Value = serde_json::from_slice(body).unwrap();
+            encryption.pending_key = request.get("encryptionKey").cloned();
+            encryption.pending_scope = request["scope"].as_str().unwrap().into();
+            s.polls = 0;
+        }
         json!({"deviceCode":"synthetic-device-secret", "userCode":"TEST-CODE", "verificationUri":format!("{origin}/hosted/device?code=TEST-CODE"), "expiresIn":5,"interval":1}).to_string().into_bytes()
     } else if route == "/v1/device/poll" {
         s.polls += 1;
@@ -751,7 +778,18 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                 }
                 s = state.lock().unwrap();
             }
-            json!({"status":"approved","scope":if matches!(s.mode.as_str(), "wrong-scope" | "upload") {"upload"} else {"read"},"accessToken":"synthetic-approved-secret","refreshToken":"synthetic-refresh-secret","expiresIn":3600,"refreshExpiresIn":86400,"grantId":"synthetic-server-grant"}).to_string().into_bytes()
+            if let Some(encryption) = &mut s.encryption {
+                let scope = encryption.pending_scope.clone();
+                let grant = format!("synthetic-approved-{scope}-grant");
+                if let Some(key) = encryption.pending_key.take() {
+                    encryption
+                        .devices
+                        .push(json!({"grantId":grant,"scope":scope,"key":key}));
+                }
+                json!({"status":"approved","scope":scope,"accessToken":format!("synthetic-{scope}-secret"),"refreshToken":format!("synthetic-refresh-{scope}"),"expiresIn":3600,"refreshExpiresIn":86400,"grantId":grant}).to_string().into_bytes()
+            } else {
+                json!({"status":"approved","scope":if matches!(s.mode.as_str(), "wrong-scope" | "upload") {"upload"} else {"read"},"accessToken":"synthetic-approved-secret","refreshToken":"synthetic-refresh-secret","expiresIn":3600,"refreshExpiresIn":86400,"grantId":"synthetic-server-grant"}).to_string().into_bytes()
+            }
         }
     } else if route == "/v1/token/refresh" {
         let request: Value = serde_json::from_slice(&body).unwrap();
@@ -781,7 +819,21 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
         );
         let parts: Vec<_> = route.split('/').collect();
         let id = parts.get(3).copied().unwrap_or("");
-        if route.starts_with("/v1/shares?") || route == "/v1/shares" {
+        if route == "/v1/encryption/peers" && s.encryption.is_some() {
+            let scope = if head.contains("synthetic-upload-secret") {
+                "upload"
+            } else {
+                "read"
+            };
+            let encryption = s.encryption.as_ref().unwrap();
+            let grant = encryption
+                .devices
+                .iter()
+                .find(|p| p["scope"] == scope)
+                .map(|p| p["grantId"].clone())
+                .unwrap_or(Value::Null);
+            json!({"accountId":"a".repeat(64),"grantId":grant,"scope":scope,"devices":encryption.devices}).to_string().into_bytes()
+        } else if route.starts_with("/v1/shares?") || route == "/v1/shares" {
             s.list_routes.push(route.into());
             if s.mode == "paged-shares" || s.mode == "looped-shares" {
                 let second = route.contains('?');
@@ -797,6 +849,11 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
             status = 410;
             json!({"error":{"code":"expired"}}).to_string().into_bytes()
         } else if method == "POST" && parts.len() == 4 {
+            let reservation: Value = serde_json::from_slice(body).unwrap();
+            s.format = reservation
+                .get("format")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             if s.capture_id != id {
                 s.capture_id = id.into();
                 s.ready = false;
@@ -808,7 +865,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                 .iter()
                 .map(|v| serde_json::from_value(v.clone()).unwrap())
                 .collect();
-            json!({"id":id,"status":if s.ready {"ready"} else {"pending"}})
+            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"format":s.format})
                 .to_string()
                 .into_bytes()
         } else if parts.get(4) == Some(&"share") && parts.get(5) == Some(&"progress") {
@@ -831,7 +888,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                     );
                     return;
                 }
-                if path == "audio.wav" {
+                if path == "audio.wav" || (s.encryption.is_some() && path == "envelope.json") {
                     if let Some(gate) = s.media_gate.clone() {
                         drop(s);
                         gate.started.store(true, Ordering::SeqCst);
@@ -842,7 +899,24 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                         s = state.lock().unwrap();
                     }
                 }
+                if s.encryption.is_some() {
+                    let asset = s.files.iter().find(|asset| asset.path == path).unwrap();
+                    assert_eq!(
+                        asset.size,
+                        body.len() as u64,
+                        "opaque storage size mismatch"
+                    );
+                    assert!(
+                        path == "envelope.json"
+                            || (path.starts_with("sealed/part-") && path.ends_with(".age"))
+                    );
+                }
                 s.data.insert(path, body.to_vec());
+                if let Some(encryption) = &mut s.encryption {
+                    if encryption.revoke_reader_after_put {
+                        encryption.devices.retain(|peer| peer["scope"] != "read");
+                    }
+                }
                 b"{}".to_vec()
             } else if s.mode == "corrupt" {
                 b"corrupt".to_vec()
@@ -851,11 +925,13 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
             }
         } else if parts.get(4) == Some(&"complete") {
             s.ready = true;
-            json!({"id":id,"status":"ready"}).to_string().into_bytes()
+            json!({"id":id,"status":"ready","format":s.format})
+                .to_string()
+                .into_bytes()
         } else {
             let mut files = s.files.clone();
             files.reverse();
-            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"files":files})
+            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"files":files,"format":s.format})
                 .to_string()
                 .into_bytes()
         }

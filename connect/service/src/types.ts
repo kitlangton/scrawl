@@ -27,12 +27,14 @@ export interface TokenRow {
 export interface ManifestFile { path: string; size: number; sha256: string }
 export interface FileRow extends ManifestFile { capture_id: string; object_key: string | null }
 export interface CaptureRow {
+ format: 'plaintext-v1' | 'apparent-encrypted-v1';
  reservation_seq: number; id: string; account_id: string; manifest: string; bytes: number;
  status: 'pending' | 'ready' | 'deleted'; expires_at: number; pending_until: number;
 }
 export interface AttemptSnapshot { key: string; terminal: number }
 export type ShareState = 'pending' | 'ready' | 'paused' | 'failed' | 'expired' | 'revoked' | 'deleted';
 export interface ShareRow {
+ format: CaptureRow['format'];
  id: string; capture_id: string; account_id: string; hash: string; envelope: string;
  created_at: number; revoked_at: number | null; upload_state: 'uploading' | 'paused' | 'failed';
  status: CaptureRow['status']; expires_at: number; pending_until: number; bytes: number;

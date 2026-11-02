@@ -5,23 +5,27 @@ const live="status!='deleted' AND expires_at>? AND (status='ready' OR pending_un
 export function validPath(path: unknown): path is string {
  return typeof path==='string'&&path.length<=128&&/^(apparent\.json|summary\.md|contact-sheet(?:-full)?\.png|audio\.wav|recording\.(mp4|mov)|finish-trace\.json|timeline\.json|frames(?:-full)?\/frame-[0-9]+\.png)$/.test(path);
 }
-function manifest(input: unknown) {
+function transportPath(path:unknown,format:CaptureRow['format']): path is string {
+ return format==='plaintext-v1'?validPath(path):typeof path==='string'&&/^(envelope\.json|sealed\/part-[0-9]{6}\.age)$/.test(path);
+}
+function manifest(input: unknown,format:CaptureRow['format']) {
  if(!Array.isArray(input)||input.length<1||input.length>512)fail('invalid_manifest');
  const seen=new Set();let bytes=0;
  const files=input.map((f: unknown)=>{
-  if(!isRecord(f)||!validPath(f.path))fail('invalid_path');
+  if(!isRecord(f)||!transportPath(f.path,format))fail('invalid_path');
   if(seen.has(f.path)||typeof f.size!=='number'||!Number.isSafeInteger(f.size)||f.size<0||typeof f.sha256!=='string'||! /^[a-f0-9]{64}$/.test(f.sha256))fail('invalid_manifest');
   if(f.size>90000000)fail('file_too_large');
   seen.add(f.path);bytes+=f.size;return {path:f.path,size:f.size,sha256:f.sha256};
  }).sort((a,b)=>a.path.localeCompare(b.path));
  if(bytes>500000000)fail('quota_exceeded',409);
+ if(format==='apparent-encrypted-v1'&&(!seen.has('envelope.json')||files.length<2))fail('invalid_manifest');
  return {files,bytes,text:JSON.stringify(files)};
 }
 async function capture(env: Env,id: string,account: string) {
  const row=await stmt(env,`SELECT * FROM captures WHERE id=? AND account_id=? AND ${live}`,id,account,Date.now(),Date.now()).first<CaptureRow>();
  if(!row)fail('not_found',404);return row;
 }
-const info = (c: CaptureRow) => ({id:c.id,status:c.status,expiresAt:new Date(c.expires_at).toISOString()});
+const info = (c: CaptureRow) => ({id:c.id,status:c.status,expiresAt:new Date(c.expires_at).toISOString(),...(c.format==='plaintext-v1'?{}:{format:c.format})});
 export async function captureRoutes(request: Request,env: Env,url: URL) {
  if(url.pathname==='/v1/account'&&request.method==='GET') {const a=await bearer(request,env);return json({beta:a.beta,quotaBytes:500000000,usedBytes:await usage(env,a.account_id)});}
  const match=/^\/v1\/captures\/([a-f0-9]{32})(?:\/(complete|files\/(.+)))?$/.exec(url.pathname);if(!match)return null;
@@ -29,7 +33,9 @@ export async function captureRoutes(request: Request,env: Env,url: URL) {
  const a=await bearer(request,env,method!=='GET');
  if(!action&&method==='POST') {
   // Validate the complete manifest before any database write/eviction.
-  const m=manifest((await body(request)).files);
+  const input=await body(request),format=input.format===undefined?'plaintext-v1':input.format;
+  if(format!=='plaintext-v1'&&format!=='apparent-encrypted-v1')fail('unsupported_format');
+  const m=manifest(input.files,format);
   let existing=await stmt(env,'SELECT * FROM captures WHERE id=?',id).first<CaptureRow>();
   if(!existing) {
    const now=Date.now();
@@ -37,7 +43,7 @@ export async function captureRoutes(request: Request,env: Env,url: URL) {
     // The insert trigger tombstones the oldest quota overflow in this same
     // transaction. A duplicate ID cannot run it, including concurrent retries.
     await env.DB.batch([
-     stmt(env,'INSERT INTO captures(id,account_id,manifest,bytes,expires_at,pending_until) VALUES(?,?,?,?,?,?)',id,a.account_id,m.text,m.bytes,now+7*DAY,now+DAY),
+     stmt(env,'INSERT INTO captures(id,account_id,manifest,bytes,expires_at,pending_until,format) VALUES(?,?,?,?,?,?,?)',id,a.account_id,m.text,m.bytes,now+7*DAY,now+DAY,format),
      // One set insertion, not one SQL statement per file. JSON keeps the full
      // 512-file manifest below D1's 100-bound-parameter limit as well.
      stmt(env,"INSERT INTO files(capture_id,path,size,sha256) SELECT ?,json_extract(value,'$.path'),json_extract(value,'$.size'),json_extract(value,'$.sha256') FROM json_each(?)",id,m.text)
@@ -48,7 +54,7 @@ export async function captureRoutes(request: Request,env: Env,url: URL) {
    }
   }
   const c=await capture(env,id,a.account_id);
-  if(c.manifest!==m.text)fail('manifest_conflict',409);
+  if(c.manifest!==m.text||c.format!==format)fail('manifest_conflict',409);
   return json(info(c));
  }
  if(!action&&method==='DELETE') {
@@ -68,7 +74,7 @@ export async function captureRoutes(request: Request,env: Env,url: URL) {
  }
  if(encoded) {
   let path;try {path=encoded.split('/').map(segment=>{const decoded=decodeURIComponent(segment);if(decoded.includes('/')||decoded.includes('\\'))fail('invalid_path');return decoded;}).join('/');}catch{fail('invalid_path');}
-  if(!validPath(path))fail('invalid_path');
+  if(!transportPath(path,c.format))fail('invalid_path');
   const f=await stmt(env,'SELECT * FROM files WHERE capture_id=? AND path=?',id,path).first<FileRow>();if(!f)fail('not_found',404);
   if(method==='GET') {
    if(c.status!=='ready')fail('not_ready',409);
@@ -114,7 +120,7 @@ async function receive(reader: ReadableStreamDefaultReader<Uint8Array> | undefin
   await writer.close();
  }catch(e){void writer.abort(e).catch(()=>{});if(reader)void reader.cancel(e).catch(()=>{});throw e;}finally{reader?.releaseLock();}
 }
-function mime(path: string){if(path.endsWith('.png'))return 'image/png';if(path.endsWith('.mp4'))return 'video/mp4';if(path.endsWith('.mov'))return 'video/quicktime';if(path.endsWith('.wav'))return 'audio/wav';if(path.endsWith('.json'))return 'application/json';return 'text/plain; charset=utf-8';}
+function mime(path: string){if(path.endsWith('.age'))return 'application/octet-stream';if(path.endsWith('.png'))return 'image/png';if(path.endsWith('.mp4'))return 'video/mp4';if(path.endsWith('.mov'))return 'video/quicktime';if(path.endsWith('.wav'))return 'audio/wav';if(path.endsWith('.json'))return 'application/json';return 'text/plain; charset=utf-8';}
 export async function cleanup(env: Env) {
  const now=Date.now();
  await stmt(env,"UPDATE captures SET status='deleted' WHERE status!='deleted' AND (expires_at<=? OR (status='pending' AND pending_until<=?))",now,now).run();

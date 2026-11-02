@@ -19,6 +19,7 @@ export async function fixture(bindings={},options={}) {
  await db.exec((await readFile('migrations/0001.sql','utf8')).replaceAll('\n',' '));
  await db.exec((await readFile('migrations/0002.sql','utf8')).replaceAll('\n',' '));
  await db.exec((await readFile('migrations/0004.sql','utf8')).replace(/^--.*$/gm,'').replaceAll('\n',' '));
+ await db.exec((await readFile('migrations/0005.sql','utf8')).replace(/^--.*$/gm,'').replaceAll('\n',' '));
  const call=async (path,{token,cookie,csrf,origin,method='GET',body,raw,headers={},instance}={})=>{
   const target=instance?await mf.getWorker(instance):mf,fetch=instance?target.fetch.bind(target):target.dispatchFetch.bind(target);
   return fetch('https://api.example'+path,{method,redirect:'manual',headers:{...(token?{Authorization:'Bearer '+token}:{}),...(cookie?{Cookie:cookie}:{}),...(csrf?{'X-CSRF-Token':csrf}:{}),...(origin?{Origin:origin}:{}),...headers},...(body!==undefined?{body:JSON.stringify(body)}:raw!==undefined?{body:raw}:{})});

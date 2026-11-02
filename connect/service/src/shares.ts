@@ -12,7 +12,8 @@ function state(row: ShareRow): ShareState {
  if(row.status==='ready')return 'ready';
  return row.upload_state==='uploading'?'pending':row.upload_state;
 }
-const join=`SELECT s.*,c.status,c.expires_at,c.pending_until,c.bytes FROM shares s JOIN captures c ON c.id=s.capture_id`;
+function plaintext(row:Pick<CaptureRow,'format'>) {if(row.format!=='plaintext-v1')fail('encrypted_sharing_unsupported',409);}
+const join=`SELECT s.*,c.format,c.status,c.expires_at,c.pending_until,c.bytes FROM shares s JOIN captures c ON c.id=s.capture_id`;
 const publicUrl=(env: Env,secret: string)=>env.API_ORIGIN+'/s/'+secret;
 async function owner(request: Request,env: Env,write=false) {
  // Bearer and browser authority are explicit alternatives, never a capability.
@@ -22,10 +23,11 @@ async function owner(request: Request,env: Env,write=false) {
 }
 async function bySecret(env: Env,secret: string) {
  const row=await stmt(env,join+' WHERE s.hash=?',await hash(secret)).first<ShareRow>();
- if(!row)fail('not_found',404);return row;
+ if(!row)fail('not_found',404);plaintext(row);return row;
 }
 function available(row: ShareRow) {const s=state(row);if(['revoked','expired','deleted'].includes(s))fail(s,410);return s;}
 async function descriptor(env: Env,row: ShareRow,base: string): Promise<ShareModel> {
+ plaintext(row);
  const {results:files}=await stmt(env,'SELECT path,size,sha256,object_key FROM files WHERE capture_id=? ORDER BY path',row.capture_id).all<Pick<FileRow,'path'|'size'|'sha256'|'object_key'>>();
  const status=state(row),ready=status==='ready';
  return {url:base,status,title:'Apparent recording',createdAt:new Date(row.created_at).toISOString(),expiresAt:new Date(row.expires_at).toISOString(),
@@ -40,9 +42,10 @@ export async function shareRoutes(request: Request,env: Env,url: URL,render: (mo
  if(create&&request.method==='POST') {
   // Deployment switch controls new grants; revocation and existing reads remain
   // available if an operator turns it off. Desktop opt-in is separate.
-  if(env.SHARING_ENABLED!=='true')fail('sharing_disabled',403);
   const a=await bearer(request,env,true),id=create[1];
   const c=await stmt(env,"SELECT * FROM captures WHERE id=? AND account_id=? AND status!='deleted' AND expires_at>? AND (status='ready' OR pending_until>?)",id,a.account_id,Date.now(),Date.now()).first<CaptureRow>();if(!c)fail('not_found',404);
+  plaintext(c);
+  if(env.SHARING_ENABLED!=='true')fail('sharing_disabled',403);
   if(create[2]) {
    const input=await body(request);if(typeof input.state!=='string'||!['uploading','paused','failed'].includes(input.state))fail('invalid_request');
    // Bytes are derived from confirmed stored files, never caller estimates.
@@ -58,13 +61,14 @@ export async function shareRoutes(request: Request,env: Env,url: URL,render: (mo
   if(cursor!==null&&!/^\d{1,16}:[a-f0-9]{32}$/.test(cursor))fail('invalid_cursor');
   const [time,id]=cursor?cursor.split(':'):[];if(cursor&&!Number.isSafeInteger(Number(time)))fail('invalid_cursor');
   const {results}=await stmt(env,join+' WHERE s.account_id=?'+(cursor?' AND (s.created_at<? OR (s.created_at=? AND s.id<?))':'')+' ORDER BY s.created_at DESC,s.id DESC LIMIT 101',a.account_id,...(cursor?[Number(time),Number(time),id]:[])).all<ShareRow>();
-  const rows=results.slice(0,100),shares=[];for(const row of rows) {const status=state(row);shares.push({id:row.id,captureId:row.capture_id,title:'Apparent recording',status,createdAt:new Date(row.created_at).toISOString(),expiresAt:new Date(row.expires_at).toISOString(),url:['revoked','expired','deleted'].includes(status)?null:publicUrl(env,await envelope(env,row.envelope,true))});}
+  const rows=results.slice(0,100),shares=[];for(const row of rows) {plaintext(row);const status=state(row);shares.push({id:row.id,captureId:row.capture_id,title:'Apparent recording',status,createdAt:new Date(row.created_at).toISOString(),expiresAt:new Date(row.expires_at).toISOString(),url:['revoked','expired','deleted'].includes(status)?null:publicUrl(env,await envelope(env,row.envelope,true))});}
   // Explicit cursor paging avoids hiding older links from management.
   const last=rows.at(-1);return json({shares,nextCursor:results.length>100&&last?`${last.created_at}:${last.id}`:null});
  }
  const revoke=/^\/v1\/shares\/([a-f0-9]{32})$/.exec(url.pathname);
  if(revoke&&request.method==='DELETE') {
   const a=await owner(request,env,true);
+  const row=await stmt(env,join+' WHERE s.id=? AND s.account_id=?',revoke[1],a.account_id).first<ShareRow>();if(!row)fail('not_found',404);plaintext(row);
   const result=await stmt(env,'UPDATE shares SET revoked_at=COALESCE(revoked_at,?) WHERE id=? AND account_id=?',Date.now(),revoke[1],a.account_id).run();if(!result.meta.changes)fail('not_found',404);return json({ok:true});
  }
  const publicMatch=/^\/s\/([a-f0-9]{64})(?:\/(manifest\.json|thumbnail\.png|files\/(.+)))?$/.exec(url.pathname);
