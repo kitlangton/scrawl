@@ -22,6 +22,15 @@
   ],
   "features": [
     {
+      "id": "adaptive-mac-menu-bar-icon",
+      "group": "platforms",
+      "name": "Adaptive Mac menu bar icon",
+      "says": "The Mac menu bar keeps the Apparent a in purple: Lilac on Carbon in dark appearance, darker purple on Paper in light appearance. It follows live menu bar appearance changes without restarting. The app icon and Linux tray are unchanged.",
+      "status": "main",
+      "platforms": ["mac"],
+      "docs": ["capture/desktop/docs/onboarding-and-settings.md#mac-menu-bar-icon"]
+    },
+    {
       "id": "desktop-error-reporting",
       "group": "settings",
       "name": "Technical error reports",
