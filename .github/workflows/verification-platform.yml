@@ -179,6 +179,31 @@ jobs:
           TMPDIR="$storage_tmp" APPARENT_STORAGE_TEST_ELECTRON="$electron" \
             APPARENT_CONNECT_TEST_ELECTRON="$electron" \
             cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture
+      - name: Install the Mac candidate (packaging, not launch acceptance)
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        shell: bash
+        run: |
+          export APPARENT_APP_DIR="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
+          test ! -e "$APPARENT_APP_DIR"
+          APPARENT_NO_LAUNCH=1 bash capture/desktop/scripts/packaging/install-app.sh
+          codesign --verify --deep --strict "$APPARENT_APP_DIR"
+      - name: Packaged Mac Settings smoke (not capture or permission acceptance)
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        timeout-minutes: 3
+        shell: bash
+        env:
+          APPARENT_PACKAGED_SMOKE: '1'
+          APPARENT_SMOKE_OUTPUT: ${{ runner.temp }}/apparent-packaged-smoke
+        run: |
+          export APPARENT_APP_DIR="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
+          node capture/desktop/scripts/mac/packaged-smoke.cjs
+      - name: Retain packaged Mac smoke evidence, including failures
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-packaged-smoke
+          path: ${{ runner.temp }}/apparent-packaged-smoke/
+          if-no-files-found: warn
       - name: Native Mac Storage and error-reporting controls against the installed Rust GUI
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
         timeout-minutes: 10
@@ -190,9 +215,6 @@ jobs:
           test "$GITHUB_ACTIONS" = true
           test "$RUNNER_ENVIRONMENT" = github-hosted
           export APPARENT_APP_DIR="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
-          test ! -e "$APPARENT_APP_DIR"
-          APPARENT_NO_LAUNCH=1 bash capture/desktop/scripts/packaging/install-app.sh
-          codesign --verify --deep --strict "$APPARENT_APP_DIR"
           npm --prefix capture/desktop/ui/frontend run build
           APPARENT_STORAGE_NATIVE_APP_DIR="$APPARENT_APP_DIR" \
             node --test capture/desktop/ui/frontend/tests/mac-storage-native.cjs
