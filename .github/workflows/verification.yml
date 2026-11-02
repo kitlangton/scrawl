@@ -105,6 +105,9 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '26.0'
+      - name: Install CLI export speedup dependencies
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        run: command -v ffmpeg && command -v ffprobe || brew install ffmpeg
       - name: Install the Metal toolchain
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain

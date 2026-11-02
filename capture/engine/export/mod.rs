@@ -17,6 +17,7 @@ pub mod camera;
 pub mod crop;
 pub mod ink;
 mod narration;
+mod quiet;
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -50,6 +51,8 @@ pub struct Options {
     /// Long edge cap in pixels.
     pub size: u32,
     pub zoom: bool,
+    /// CLI quiet-hold compression; menu callers retain their existing timing.
+    pub speedup: bool,
     pub ink: bool,
     pub clicks: bool,
     pub hevc: bool,
@@ -66,6 +69,7 @@ impl Default for Options {
             crop: CropArg::Full,
             size: crop::DEFAULT_LONG_EDGE,
             zoom: true,
+            speedup: false,
             ink: true,
             clicks: true,
             hevc: false,
@@ -385,6 +389,12 @@ pub fn export(
         let _ = std::fs::remove_file(&plan_path);
         result
     };
+    let result = result.and_then(|done| {
+        if !options.speedup { return Ok(done); }
+        let quiet = quiet::analyze(&video, audio.as_ref().map(|_| partial.as_path()), 0, probe.duration_ms, bundle)?;
+        if quiet.is_empty() { return Ok(done); }
+        quiet::retime(&partial, &quiet, probe.duration_ms, audio.is_some(), options.hevc, fps)
+    });
     let done = match result {
         Ok(done) => done,
         Err(error) => {
@@ -823,6 +833,51 @@ mod tests {
         }, &mut |_| {}).unwrap_err();
         assert!(format!("{error:#}").contains("[AUDIO_MISSING]"), "{error:#}");
         assert!(!root.join("disjoint").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quiet_speedup_is_a_copy_and_preserves_explicit_realtime_and_marked_evidence() {
+        let root = std::env::temp_dir().join(format!("apparent-paced-{}",crate::shared::ids::make_bundle_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let movie = root.join("recording.mp4");
+        let status = Command::new("ffmpeg").args(["-v","error","-f","lavfi","-i",
+            "color=c=blue:s=160x90:r=10:d=40","-c:v","libx264","-y"]).arg(&movie).status().unwrap();
+        assert!(status.success());
+        let source = std::fs::read(&movie).unwrap();
+        let mut b = bundle();
+        b.video = Some("recording.mp4".into());
+        b.audio = None;
+        b.video_offset_ms = 0;
+        b.duration_ms = 40000;
+        b.events.clear(); b.cursor.clear(); b.strokes.clear();
+        let options = Options {out:Some(root.join("paced.mp4")), speedup:true, zoom:false,
+            audio:AudioPolicy::Silent, fps:Some(10), ..Default::default()};
+        let paced = export(&root,&b,&options,&mut |_|{}).unwrap();
+        assert!((paced.duration_ms as i64-17500).abs()<250);
+        assert!(!paced.audio);
+        let plain = export(&root,&b,&Options {out:Some(root.join("plain.mp4")),speedup:false,..options.clone()},&mut |_|{}).unwrap();
+        assert!((plain.duration_ms as i64-40000).abs()<250);
+        b.cursor = serde_json::from_value(serde_json::json!([[5000,0.1,0.1],[35000,0.2,0.2]])).unwrap();
+        let cursor_paced = export(&root,&b,&Options {out:Some(root.join("cursor.mp4")),..options.clone()},&mut |_|{}).unwrap();
+        assert!(cursor_paced.duration_ms < 30000,"sparse cursor telemetry preserves idle compression");
+        // Audible static screens are meaningful, even with no transcript. Analyze the
+        // selected rendered audio, which has already applied the nonzero video offset.
+        let wav = root.join("voice.wav");
+        let mut writer = hound::WavWriter::create(&wav,hound::WavSpec {channels:1,sample_rate:24000,bits_per_sample:16,sample_format:hound::SampleFormat::Int}).unwrap();
+        for i in 0..(24000*41) {writer.write_sample(((i as f32*0.1).sin()*4000.0) as i16).unwrap();}
+        writer.finalize().unwrap();
+        b.audio=Some("voice.wav".into()); b.video_offset_ms=1000;
+        let audible = export(&root,&b,&Options {out:Some(root.join("audible.mp4")),audio:AudioPolicy::Recorded,..options.clone()},&mut |_|{}).unwrap();
+        assert!(audible.audio);
+        assert!((audible.duration_ms as i64-40000).abs()<250,"audible content cannot be accelerated");
+        b.audio=None; b.video_offset_ms=0;
+        b.marks = serde_json::from_value(serde_json::json!([{
+            "id":"result","strokes":[],"t0":0,"t1":40000,"boxNorm":[0,0,1,1],"shape":"flag","description":"Important result"
+        }])).unwrap();
+        let marked = export(&root,&b,&Options {out:Some(root.join("marked.mp4")),..options},&mut |_|{}).unwrap();
+        assert!((marked.duration_ms as i64-40000).abs()<250);
+        assert_eq!(std::fs::read(movie).unwrap(),source);
         std::fs::remove_dir_all(root).unwrap();
     }
 
