@@ -94,31 +94,64 @@ func window() throws -> OwnedWindow {
           let bounds = CGRect(dictionaryRepresentation: dict as CFDictionary) else { throw Failure("Invalid owned bounds") }
     return OwnedWindow(id: id, bounds: bounds)
 }
+func postOwnedWindowClick(_ expected: OwnedWindow, at point: CGPoint) throws {
+    guard let child = owned, child.isRunning else { throw Failure("Owned preview exited before input") }
+    let current = try window()
+    try require(current.id == expected.id && current.bounds == expected.bounds && current.bounds.contains(point),
+                "Input target changed or escaped the owned window")
+    let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    let hit = rows.first { row in
+        guard (row[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+              let dict = row[kCGWindowBounds as String] as? [String: Any],
+              let rect = CGRect(dictionaryRepresentation: dict as CFDictionary) else { return false }
+        return rect.contains(point)
+    }
+    try require((hit?[kCGWindowOwnerPID as String] as? Int32) == child.processIdentifier &&
+                (hit?[kCGWindowNumber as String] as? UInt32) == current.id,
+                "Another window covers the observed input point")
+    for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+            throw Failure("Could not create owned-window mouse event")
+        }
+        event.post(tap: .cghidEventTap)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+}
 func focusAndSize(_ width: Int? = nil) throws {
     guard let child = owned else { throw Failure("No owned app") }
     guard let running = NSRunningApplication(processIdentifier: child.processIdentifier) else {
         throw Failure("Owned app is absent from the running-application registry")
     }
-    // Activation is asynchronous. NSRunningApplication's changing properties
-    // also stay cached until the main run loop advances (Apple's documented
-    // contract); a sleep followed by an immediate assertion is not a focus wait.
     let accepted = running.activate(options: [.activateIgnoringOtherApps])
     let size = width.map { "set size of window 1 to {\($0), 700}\nset position of window 1 to {40, 40}" } ?? ""
-    _ = try run("/usr/bin/osascript", ["-e", """
+    let axFrontmost = try run("/usr/bin/osascript", ["-e", """
     tell application "System Events"
         set p to first application process whose unix id is \(child.processIdentifier)
         tell p
             if (count of windows) is not 1 then error "Expected one owned AX window"
             set frontmost to true
             \(size)
-            repeat 30 times
-                if frontmost then exit repeat
-                delay 0.1
-            end repeat
-            if not frontmost then error "Owned process did not gain focus"
+            return frontmost
         end tell
     end tell
     """])
+    // Refresh AppKit's run-loop-cached activation properties before deciding
+    // whether a normal observed-window activation click is necessary.
+    RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+    var attempts = report["focus"] as? [[String: Any]] ?? []
+    attempts.append(["pid": child.processIdentifier, "activationAccepted": accepted,
+        "axFrontmost": axFrontmost, "isActive": running.isActive,
+        "frontmostPID": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1])
+    report["focus"] = attempts
+    if !running.isActive || NSWorkspace.shared.frontmostApplication?.processIdentifier != child.processIdentifier {
+        let (before, boxes) = try screenshot("before-activation")
+        let box = try locate("Capture review", in: boxes)
+        let point = CGPoint(x: before.bounds.minX + box.midX * before.bounds.width,
+                            y: before.bounds.minY + (1 - box.midY) * before.bounds.height)
+        // Only the non-interactive header is used for activation; the exact-PID
+        // foreground gate below still precedes every actual button click.
+        try postOwnedWindowClick(before, at: point)
+    }
     let until = Date().addingTimeInterval(try remaining(3))
     var frontmost: pid_t?
     repeat {
@@ -126,7 +159,6 @@ func focusAndSize(_ width: Int? = nil) throws {
         frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
         if running.isActive && frontmost == child.processIdentifier { break }
     } while Date() < until && child.isRunning
-    var attempts = report["focus"] as? [[String: Any]] ?? []
     attempts.append(["pid": child.processIdentifier, "activationAccepted": accepted,
         "isActive": running.isActive, "frontmostPID": frontmost ?? -1])
     report["focus"] = attempts
@@ -175,13 +207,7 @@ func click(_ label: String) throws {
     try require(NSWorkspace.shared.frontmostApplication?.processIdentifier == owned?.processIdentifier, "Focus changed before click")
     let point = CGPoint(x: current.bounds.minX + box.midX * current.bounds.width,
                         y: current.bounds.minY + (1 - box.midY) * current.bounds.height)
-    try require(current.bounds.contains(point), "Click escaped owned window")
-    for type in [CGEventType.leftMouseDown, .leftMouseUp] {
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
-            throw Failure("Could not create mouse event")
-        }
-        event.post(tap: .cghidEventTap)
-    }
+    try postOwnedWindowClick(current, at: point)
     Thread.sleep(forTimeInterval: 0.25)
 }
 func copyCheck(_ label: String, expected: String, caseName: String) throws {
