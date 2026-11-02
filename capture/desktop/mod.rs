@@ -5064,13 +5064,25 @@ fn review_neighbor<'a>(
     }
 }
 
+fn review_capture_id(directory: &std::path::Path) -> anyhow::Result<&str> {
+    directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Capture directory has no UTF-8 name"))
+}
+
 fn review_notice(
     history_error: Option<&str>,
     status: Option<&str>,
     feedback: bool,
 ) -> Option<String> {
     status
-        .filter(|message| feedback || message.starts_with("Could not open capture:"))
+        .filter(|message| {
+            feedback
+                || message.starts_with("Could not open capture:")
+                || *message == "Capture ID copied"
+                || message.starts_with("Could not copy capture ID:")
+        })
         .map(str::to_owned)
         .or_else(|| history_error.map(|error| format!("Could not read captures: {error}")))
 }
@@ -5399,6 +5411,7 @@ impl Render for BundleReviewWindow {
         let external_shortcut =
             crate::capture::desktop::settings::external_record_owned(crate::capture::engine::runtime::ShortcutKind::Record);
         let c_copy = self.coordinator.clone();
+        let c_copy_id = self.coordinator.clone();
         let c_feedback = self.coordinator.clone();
         let c_send = self.coordinator.clone();
         let c_tab_sheet = self.coordinator.clone();
@@ -5406,6 +5419,7 @@ impl Render for BundleReviewWindow {
         let c_newer = self.coordinator.clone();
         let c_older = self.coordinator.clone();
         let copy_dir = dir.clone();
+        let copy_id_dir = dir.clone();
         let send_dir = dir.clone();
 
         div()
@@ -5558,6 +5572,22 @@ impl Render for BundleReviewWindow {
                             .flex()
                             .items_center()
                             .gap_2()
+                            .when(crate::shared::handoff::experiment("copyCaptureId"), |actions| {
+                                actions.child(
+                                    action_button("btn-copy-capture-id", if compact { "Copy ID" } else { "Copy capture ID" }, false)
+                                        .on_click(move |_, _, cx| {
+                                            let result = review_capture_id(&copy_id_dir)
+                                                .and_then(crate::shared::handoff::copy_string_to_clipboard);
+                                            c_copy_id.update(cx, |coord, cx| {
+                                                coord.review_status = Some(match result {
+                                                    Ok(()) => "Capture ID copied".into(),
+                                                    Err(error) => format!("Could not copy capture ID: {error}"),
+                                                });
+                                                cx.notify();
+                                            });
+                                        }),
+                                )
+                            })
                             .child(
                                 action_button(
                                     "btn-copy",
@@ -7192,6 +7222,35 @@ mod tests {
             review_neighbor(&paths, &PathBuf::from("elsewhere"), true),
             None
         );
+    }
+
+    #[test]
+    fn review_capture_id_preserves_only_the_selected_directory_name() {
+        let history = vec![
+            PathBuf::from("/captures/apparent-123-456-2.apparent"),
+            PathBuf::from("/captures/older capture — unchanged.apparent"),
+        ];
+        assert_eq!(review_capture_id(&history[0]).unwrap(), "apparent-123-456-2.apparent");
+        let older = review_neighbor(&history, &history[0], true).unwrap();
+        assert_eq!(review_capture_id(older).unwrap(), "older capture — unchanged.apparent");
+        assert!(review_capture_id(std::path::Path::new("/")).is_err());
+        assert!(review_capture_id(std::path::Path::new("")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn review_capture_id_refuses_lossy_directory_names() {
+        use std::os::unix::ffi::OsStringExt;
+        let path = PathBuf::from(std::ffi::OsString::from_vec(b"capture-\xff.apparent".to_vec()));
+        assert!(review_capture_id(&path).is_err());
+    }
+
+    #[test]
+    fn review_copy_id_feedback_is_visible_without_feedback_mode() {
+        for status in ["Capture ID copied", "Could not copy capture ID: clipboard unavailable"] {
+            assert_eq!(review_notice(None, Some(status), false).as_deref(), Some(status));
+            assert_eq!(review_notice(Some("scan failed"), Some(status), false).as_deref(), Some(status));
+        }
     }
 
     #[test]

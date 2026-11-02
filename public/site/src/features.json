@@ -65,6 +65,20 @@
 
     },
     {
+      "id": "copy-capture-id",
+      "group": "delivery",
+      "name": "Copy a local capture ID",
+      "says": "Copy capture ID in the existing capture window copies only the selected bundle directory name, including .apparent, as plain text. Older/newer navigation changes the selected ID; no upload or automatic paste occurs.",
+      "status": "experiment:copyCaptureId",
+      "added": "2026-11-02",
+      "platforms": ["mac", "linux"],
+      "note": "Default off. Candidate requires native clipboard and capture-navigation proof on each platform before release. Compact windows label the action Copy ID. This is a local folder name, not a Connect identifier or share link.",
+      "config": [
+        { "key": "experiments.copyCaptureId", "value": "boolean; false by default", "does": "Show the text-only capture ID action on the next capture-window render" }
+      ],
+      "docs": ["capture/engine/docs/keyframes-and-text.md"]
+    },
+    {
       "id": "hosted-sharing",
       "group": "delivery",
       "name": "Share one recording by link",
