@@ -101,7 +101,7 @@ jobs:
             capture/engine -> target
             connect/client -> connect/client/target
       - uses: actions/setup-node@v4
-        if: needs.select.outputs.browser == 'true'
+        if: needs.select.outputs.root == 'true' || needs.select.outputs.browser == 'true'
         with:
           node-version: '22'
       - uses: oven-sh/setup-bun@v2
@@ -143,3 +143,50 @@ jobs:
             fi
           fi
           python3 enablement/verification.py --base "${BASE:-unknown}" --run --online
+      - name: Actual Electron to Rust Storage integration (not native GUI proof)
+        if: needs.select.outputs.root == 'true'
+        shell: bash
+        run: |
+          npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
+          # Electron 45 downloads lazily. Resolve it once before the test;
+          # do not capture its download log as part of an executable pathname.
+          node -e "require('./capture/desktop/ui/frontend/node_modules/electron')"
+          if [ "$RUNNER_OS" = macOS ]; then
+            electron="$PWD/capture/desktop/ui/frontend/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
+          else
+            electron="$PWD/capture/desktop/ui/frontend/node_modules/electron/dist/electron"
+          fi
+          test -x "$electron"
+          storage_tmp="$(mktemp -d "$HOME/.apparent-storage.XXXXXX")"
+          readonly storage_tmp
+          trap 'rm -rf -- "$storage_tmp"' EXIT
+          TMPDIR="$storage_tmp" APPARENT_STORAGE_TEST_ELECTRON="$electron" \
+            cargo test -j 3 --locked storage_electron_rust_roundtrip -- --ignored --nocapture
+      - name: Native Mac Storage controls against the installed Rust GUI
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        timeout-minutes: 10
+        shell: bash
+        env:
+          APPARENT_STORAGE_NATIVE_CI: '1'
+          APPARENT_STORAGE_NATIVE_OUTPUT: ${{ runner.temp }}/apparent-storage-native
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          export APPARENT_APP_DIR="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
+          test ! -e "$APPARENT_APP_DIR"
+          APPARENT_NO_LAUNCH=1 bash capture/desktop/scripts/packaging/install-app.sh
+          codesign --verify --deep --strict "$APPARENT_APP_DIR"
+          npm --prefix capture/desktop/ui/frontend run build
+          APPARENT_STORAGE_NATIVE_APP_DIR="$APPARENT_APP_DIR" \
+            node --test capture/desktop/ui/frontend/tests/mac-storage-native.cjs
+      - name: Retain synthetic Mac Storage evidence, including failures
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-storage-native
+          path: |
+            ${{ runner.temp }}/apparent-storage-native/*.json
+            ${{ runner.temp }}/apparent-storage-native/*.png
+            ${{ runner.temp }}/apparent-storage-native/*.log
+          if-no-files-found: error
+          retention-days: 7

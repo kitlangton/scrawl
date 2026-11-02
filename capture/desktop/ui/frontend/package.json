@@ -9,7 +9,7 @@
     "start": "npm run build && electron .",
     "preview": "npm run build && vite preview --host 127.0.0.1",
     "test": "node --test tests/*.test.cjs",
-    "test:electron": "npm run build && node --test tests/electron-smoke.cjs"
+    "test:electron": "npm run build && node --test --test-concurrency=1 tests/electron-smoke.cjs tests/storage-smoke.cjs"
   },
   "dependencies": {
     "@apparent/ui": "file:../../../../shared/ui",
