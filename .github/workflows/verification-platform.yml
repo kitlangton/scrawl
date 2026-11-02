@@ -71,6 +71,8 @@ jobs:
           cache: npm
           cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
       - run: npm ci --no-audit --no-fund
+      - name: Prepare Electron before timed renderer tests
+        run: node node_modules/electron/install.js
       - name: Linux Electron dependencies
         if: runner.os == 'Linux'
         run: npx --no-install playwright install-deps chromium
