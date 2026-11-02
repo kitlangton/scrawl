@@ -1,8 +1,9 @@
 # Desktop UI foundation
 
-Opt-in Electron development window using React/TypeScript, shadcn/ui and Tailwind.
-It does **not** replace the installed app, Settings, pill or launcher. The opt-in
-window has native Linux and macOS checks; see their distinct scope below. No Windows support.
+Shared Electron Settings surfaces and a separate opt-in development window use
+React/TypeScript, shadcn/ui and Tailwind. Installed routing and retained native
+fallbacks are described per surface below. The development window has native
+Linux and macOS checks with their own proof limits. No Windows support.
 
 From the repository root, with Node 22 and npm 10 or newer:
 
@@ -55,8 +56,13 @@ shared sources, rerun `npm ci`; builds reject a stale installed snapshot.
 ## Experimental General → Apparent Connect
 
 The default-on `connectSettings` flag also gates this opt-in window's Connect
-card; an explicit false hides it. Visibility alone never enables uploads. Installed Settings still use their existing native presentation;
-this slice does not change routing or onboarding. See
+card; an explicit false hides it. Visibility alone never enables uploads. Installed General connection actions open
+`--settings-connect` when its packaged assets are available. This mode loads the
+existing Connect card with a Connect-only preload, and no Storage, capture, clipboard
+or reporting capabilities. It consumes the originating native action once after
+a successful local read; renderer reload never replays it. Navigation returns to
+the existing Settings pages. Missing assets and startup/crash failure restore the
+native General presentation. No onboarding route changes. See
 `../../docs/onboarding-and-settings.md` for consent and recovery behavior.
 
 Electron main owns one persistent, same-user Rust socket/controller. Opening and
@@ -81,8 +87,8 @@ it does not approve a real account or upload media. Run it from the root with
 `cargo test --offline connect_settings_electron_rust_roundtrip -- --ignored --nocapture`.
 On Clanker, wrap the command once with `t3-build` as documented in `AGENTS.md`.
 Neither check substitutes for native Linux/macOS acceptance. The earlier shell evidence below does not
-certify this new workflow. Roll back by disabling `connectSettings` or closing
-this opt-in window and using installed Settings; do not remove the legacy
+certify this new workflow. Roll back by disabling `connectSettings`; missing packaged Connect assets or
+a failed Connect window also restore native General. Do not remove the legacy
 presentation until both platforms pass equivalent consent/cancel/recovery proof.
 
 Background completion receipts are consumed only on a valid window request,

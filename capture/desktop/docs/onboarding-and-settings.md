@@ -118,6 +118,16 @@ uploads. To hide the controls, set `"connectSettings": false` in the existing
 Settings. It adds no onboarding step and does not require `hostedSharing`. Without a configured `cloud.server`, sign-in uses
 `https://hosted.tryapparent.com`; an existing valid custom origin is preserved.
 
+Connection actions in General open the packaged shared Electron Connect view.
+It uses the existing Rust controller and a Connect-only bridge; navigating back
+returns to the existing Settings pages. Missing assets or a failed Electron window
+retain the native General fallback. Closing/reloading cancels pending approval;
+the native action that opened the view is consumed once and is never replayed by
+reload. Keep the native fallback until equivalent macOS and isolated Linux consent,
+cancellation, recovery and navigation acceptance passes. Ordinary Settings opens
+no longer measure capture history; the native Storage fallback measures only on
+an explicit Storage visit, and Electron Storage uses its bounded usage request.
+
 **Sign in to Connect… → Allow and continue → Open browser** explains the full
 upload scope before starting device authorization. The browser link carries the public code automatically; approve there, then return
 to Settings. Settings does not ask users to match a code that the browser does not show. Website sign-in/approval is not

@@ -35,10 +35,24 @@ pub(super) fn assets() -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(super) fn open(events: Arc<dyn Fn(Event) + Send + Sync>) -> anyhow::Result<Transport> {
+    open_mode(events, None)
+}
+
+pub(super) fn open_connect(events: Arc<dyn Fn(Event) + Send + Sync>, command: super::connect::Command) -> anyhow::Result<Transport> {
+    open_mode(events, Some(command))
+}
+
+fn open_mode(events: Arc<dyn Fn(Event) + Send + Sync>, connect: Option<super::connect::Command>) -> anyhow::Result<Transport> {
     use std::io::BufRead;
-    let (app, runtime) = assets().ok_or_else(|| anyhow::anyhow!("Packaged Storage Settings unavailable"))?;
-    let mut child = Command::new(runtime).arg(app).arg("--settings-storage").arg("--settings-parent")
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+    let (app, runtime) = assets().ok_or_else(|| anyhow::anyhow!("Packaged Settings unavailable"))?;
+    anyhow::ensure!(connect.is_none() || app.join("electron/connect-preload.cjs").is_file(), "Packaged Connect Settings unavailable");
+    let mut process = Command::new(runtime);
+    process.arg(app).arg(if connect.is_some() { "--settings-connect" } else { "--settings-storage" }).arg("--settings-parent");
+    if let Some(command) = connect {
+        let command = serde_json::to_value(command)?;
+        process.arg(format!("--connect-action={}", command.as_str().unwrap()));
+    }
+    let mut child = process.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let child = crate::capture::ui_process::UiChild::new(child);
@@ -48,7 +62,8 @@ pub(super) fn open(events: Arc<dyn Fn(Event) + Send + Sync>) -> anyhow::Result<T
                 // This presentation may navigate or reveal the effective folder;
                 // it cannot invoke other native Settings actions through this pipe.
                 if let Ok(action) = serde_json::from_str::<Action>(&line)
-                    && matches!(action, Action::Navigate { .. } | Action::ShowCaptures | Action::Close)
+                    && (matches!(action, Action::Navigate { .. } | Action::Close)
+                        || connect.is_none() && matches!(action, Action::ShowCaptures))
                 {
                     events(Event::Action(action));
                 }
