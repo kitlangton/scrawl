@@ -3,10 +3,37 @@
 import argparse
 import json
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+
+
+
+def sign_runtime(runtime, sign, entitlements):
+    bundles = [p for p in runtime.rglob("*") if not p.is_symlink()
+               and p.is_dir() and p.suffix in (".app", ".framework")] + [runtime]
+    executables = set()
+    for bundle in bundles:
+        info = bundle / ("Contents/Info.plist" if bundle.suffix == ".app" else "Resources/Info.plist")
+        with info.open("rb") as stream:
+            name = plistlib.load(stream)["CFBundleExecutable"]
+        executable = bundle / ("Contents/MacOS" if bundle.suffix == ".app" else "") / name
+        executables.add(executable.resolve())
+    magic = {b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
+    # Signing a bundle's principal executable can sign/validate the whole bundle.
+    # Defer it to the bundle pass, after all nested code has been signed.
+    for file in runtime.rglob("*"):
+        if file.is_symlink() or not file.is_file() or file.resolve() in executables:
+            continue
+        with file.open("rb") as stream:
+            is_code = stream.read(4) in magic
+        if is_code:
+            subprocess.run(sign + ["--entitlements", str(entitlements), str(file)], check=True)
+    for bundle in sorted(bundles, key=lambda p: len(p.parts), reverse=True):
+        subprocess.run(sign + ["--entitlements", str(entitlements), str(bundle)], check=True)
+    subprocess.run(["codesign", "--verify", "--deep", "--strict", str(runtime)], check=True)
 
 
 def main():
@@ -52,19 +79,7 @@ def main():
             sign.append("--timestamp")
         if args.keychain:
             sign.extend(["--keychain", str(args.keychain)])
-        magic = {b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
-        # Sign leaf Mach-O code, then containing frameworks/helper apps, inside out.
-        for file in runtime.rglob("*"):
-            if file.is_symlink() or not file.is_file():
-                continue
-            with file.open("rb") as stream:
-                is_code = stream.read(4) in magic
-            if is_code:
-                subprocess.run(sign + ["--entitlements", str(entitlements), str(file)], check=True)
-        bundles = [p for p in runtime.rglob("*") if not p.is_symlink() and p.is_dir() and p.suffix in (".app", ".framework")]
-        for bundle in sorted(bundles, key=lambda p: len(p.parts), reverse=True) + [runtime]:
-            subprocess.run(sign + ["--entitlements", str(entitlements), str(bundle)], check=True)
-        subprocess.run(["codesign", "--verify", "--deep", "--strict", str(runtime)], check=True)
+        sign_runtime(runtime, sign, entitlements)
     print(f"Staged Storage Settings: {destination}")
 
 
