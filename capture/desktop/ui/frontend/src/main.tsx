@@ -4,6 +4,7 @@ import { Button } from '@apparent/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@apparent/ui/tabs';
 import type { RuntimeState } from './bridge';
 import { Storage } from './storage';
+import { ErrorReporting } from './error-reporting';
 import { ConnectSettingsCard } from './connect-settings';
 import { CaptureReference } from './reference';
 import './style.css';
@@ -58,6 +59,7 @@ function App() {
       </section>
       <CaptureReference />
       <Storage />
+      <ErrorReporting />
       <ConnectSettingsCard />
       <section aria-labelledby="preview-title" className="space-y-4">
         <div className="flex items-baseline justify-between gap-4">

@@ -22,6 +22,20 @@
   ],
   "features": [
     {
+      "id": "desktop-error-reporting",
+      "group": "settings",
+      "name": "Technical error reports",
+      "says": "A small General setting controls default-on, content-free desktop failure reports. Requires a packaged EU PostHog project token. Reports contain a static failure category, app build, OS/architecture and source call site, not recordings, logs or raw error text. No session replay or persistent user identity.",
+      "status": "main",
+      "added": "2026-11-02",
+      "platforms": ["mac", "linux"],
+      "config": [
+        { "key": "errorReporting", "value": "true", "does": "Set false to stop admitting technical error reports without restarting" },
+        { "key": "errorReportingGeneration", "value": "private revision", "does": "Rotated by Settings to invalidate queued reports; never transmitted" }
+      ],
+      "docs": ["capture/desktop/docs/onboarding-and-settings.md"]
+    },
+    {
       "id": "site-feature-grid",
       "group": "install",
       "name": "Animated homepage feature explanations",
@@ -987,6 +1001,17 @@
       "pr": 86,
       "docs": ["README.md#settings"],
       "config": [{ "key": "capturesDir", "value": "\"~/Apparent\"", "does": "Where captures are written" }]
+    },
+    {
+      "id": "electron-error-reporting",
+      "group": "settings",
+      "name": "Technical error reporting setting",
+      "says": "The opt-in Electron Settings surface shows and changes the default-on, content-free technical error reporting preference through Rust.",
+      "status": "main",
+      "platforms": ["mac", "linux"],
+      "note": "The old native Settings presentations remain active pending Electron slice acceptance; Electron does not change installed routing. Requires the packaged EU PostHog token for sends. No live ingestion is performed by this UI.",
+      "config": [{ "key": "errorReporting", "value": "true by default; false disables", "does": "Control admission of technical error reports" }],
+      "docs": ["capture/desktop/ui/frontend/README.md", "capture/desktop/docs/onboarding-and-settings.md"]
     },
     {
       "id": "electron-capture-location",

@@ -36,12 +36,11 @@ changes the Rust config directory. One absolute 3.5-second deadline bounds a
 read. Reads occur only on open/renderer reload or manual refresh, with one
 in-flight read and a one-second cooldown. There is no background polling.
 
-The sandboxed, isolated preload exposes `readRuntimeState()`, two selected-reference
-methods, three zero-argument capture-location methods, four retention/usage methods
-and the Connect methods below. Main rejects other windows/frames, nonlocal URLs
-and unexpected arguments. There is no generic IPC, shell, filesystem or recording
-command API. Only the bounded Storage and Connect workflows may mutate their
-state; the selected-capture action only changes the clipboard.
+The sandboxed, isolated preload exposes runtime state, selected-reference read/copy,
+capture-location, retention/usage, Connect and typed error-reporting methods below.
+The main process rejects other windows/frames, nonlocal URLs and unexpected arguments.
+There is no generic IPC, shell, filesystem or recording command API.
+Only bounded Settings workflows save their preferences; Copy ID changes only the clipboard.
 Navigation, popups, webviews, network connections and permission requests are
 blocked. Electron keeps its own Chromium profile in `apparent-ui-foundation`,
 separate from the installed application's identity/config. These constraints do
@@ -332,6 +331,26 @@ installer (`APPARENT_NO_LAUNCH=1`) and explicitly runs
 `tests/mac-storage-native.cjs`. That CI-only probe uses the shipped renderer,
 installed Rust GUI and native parented picker. System Events input is restricted
 to the owned Electron PID; it checks the runner's existing automation permission
-and fails rather than granting or resetting TCC. Synthetic reports and owned
+and fails rather than granting or resetting TCC. It also checks the reporting
+toggle's default-on state, opt-out, authoritative readback, Rust-process restart
+plus renderer-reload persistence, and explicit re-enable/disable. Synthetic reports and owned
 window images are retained for seven days, including failures. A Linux skip or
 an unexecuted CI definition is not native Mac proof. No Mac rental is required.
+
+## Technical error reports
+
+The reporting card is available without an experiment. `readErrorReporting()`
+and `setErrorReporting(boolean)` share the existing private socket using only
+`{errorReporting:"read",deadline}` / `{errorReporting:"set",enabled,deadline}`.
+Main accepts the one Boolean only from its owned local main frame. Rust owns
+default-on policy, fail-closed config reads, atomic persistence and consent
+generation rotation; no config paths, tokens, raw config or error text reach the
+renderer. Both Settings contracts share one rendezvous worker so a config-lock
+wait cannot block capture controls. A mutation's deadline is checked again under
+the config lock; unknown outcomes are never retried automatically.
+
+This window does not replace installed Settings routing. The native toggle
+remains until replacement Settings acceptance; rollback is to close this opt-in
+window, not change the saved consent. Remove the old presentation only with the
+future Settings routing switch. The reporting preference itself is not an
+off-by-default experiment. A packaged PostHog token is required to send reports.
