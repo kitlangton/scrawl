@@ -1331,14 +1331,13 @@ pub fn hosted_roundtrip_pending_pointer_restart_complete_and_no_overwrite() {
     let bundle = f.bundle();
     let id = f.client.enqueue(&bundle).unwrap();
     let pointer = f.client.pointer(&bundle).unwrap();
-    assert!(
-        pointer.contains("pending")
-            && pointer.contains(&id)
-            && pointer.contains("--scope read")
-            && pointer.contains("apparent connect login --server")
-            && !pointer.contains("apparent cloud")
-            && !pointer.contains("secret")
+    assert_eq!(
+        pointer,
+        format!(
+            "apparent fetch {id} --out ./{id}.apparent --wait 120\napparent inspect ./{id}.apparent\n"
+        )
     );
+    assert!(!pointer.contains("login") && !pointer.contains("secret"));
     assert_eq!(server.state.lock().unwrap().requests, 0);
     let restarted = Client::new(f.client.provider.clone());
     restarted.process_once().unwrap();

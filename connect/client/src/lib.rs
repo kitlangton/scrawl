@@ -1091,14 +1091,12 @@ impl Client {
         if !self.enabled() || !self.state.is_dir() {
             return None;
         }
-        let job = self
-            .jobs()
-            .ok()?
-            .into_iter()
-            .find(|j| !j.public_copy && j.bundle == bundle && self.active(j) && j.status != "cancelled")?;
+        let job = self.jobs().ok()?.into_iter().find(|j| {
+            !j.public_copy && j.bundle == bundle && self.active(j) && j.status != "cancelled"
+        })?;
         Some(format!(
-            "\nHosted capture: {} ({}; local original remains available).\nOn the agent machine, sign in separately with `apparent connect login --server {} --scope read`, then run:\napparent fetch {} --out ./{}.apparent --wait 120\nNever paste account tokens. Fetch waits for the complete bundle.\n",
-            job.id, job.status, job.server, job.id, job.id
+            "apparent fetch {} --out ./{}.apparent --wait 120\napparent inspect ./{}.apparent\n",
+            job.id, job.id, job.id
         ))
     }
     fn raw_request(
