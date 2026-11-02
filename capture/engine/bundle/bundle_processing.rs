@@ -1023,7 +1023,11 @@ mod tests {
     fn typed_notes_survive_bundle_reload_and_reprocess_without_transcript_or_duplicates() {
         let dir = std::env::temp_dir().join(make_bundle_id());
         std::fs::create_dir(&dir).unwrap();
-        std::fs::write(dir.join("microphone-off"), b"").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        publication::write(&dir, "microphone-off", b"").unwrap();
         let mut notes = crate::capture::engine::runtime::recording::notes::Store::new(&dir);
         notes.open(1, 250, 0.3, 0.4).unwrap();
         notes

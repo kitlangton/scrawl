@@ -65,7 +65,7 @@ fn assets() -> Option<(PathBuf, PathBuf)> {
         #[cfg(target_os = "linux")]
         let runtime = runtime.join("electron");
         if runtime.is_file()
-            && app.join("dist/pill.html").is_file()
+            && app.join("dist/pill/index.html").is_file()
             && app.join("electron/pill/main.cjs").is_file()
         {
             return Some((app, runtime));

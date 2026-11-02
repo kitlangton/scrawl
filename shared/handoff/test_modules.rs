@@ -742,7 +742,7 @@ mod tests {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
         let config = load_config_from(&path);
-        for name in ["nativeLaunch", "movableRecordingControls", "exportNarration"] {
+        for name in ["nativeLaunch", "movableRecordingControls", "exportNarration", "onboardingFirstCapture"] {
             assert!(experiment_enabled_in(&config, name), "{name}");
             set_experiment_in(&path, name, false).unwrap();
             assert!(!experiment_enabled_in(&load_config_from(&path), name), "{name}");

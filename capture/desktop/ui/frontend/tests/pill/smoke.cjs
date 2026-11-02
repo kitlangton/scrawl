@@ -78,9 +78,9 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
 
 test('failed renderer assets never report readiness and the parent can retain native controls',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'pill-assets-'));
- await fs.mkdir(path.join(root,'electron'),{recursive:true});await fs.mkdir(path.join(root,'dist'));
+ await fs.mkdir(path.join(root,'electron'),{recursive:true});await fs.mkdir(path.join(root,'dist/pill'),{recursive:true});
  await fs.cp(path.resolve(__dirname,'../../electron/pill'),path.join(root,'electron/pill'),{recursive:true});
- await fs.copyFile(path.resolve(__dirname,'../../dist/pill.html'),path.join(root,'dist/pill.html'));
+ await fs.copyFile(path.resolve(__dirname,'../../dist/pill/index.html'),path.join(root,'dist/pill/index.html'));
  // The production HTML references deliberately absent production chunks.
  await fs.writeFile(path.join(root,'host.cjs'),"Object.defineProperty(process,'stdin',{value:new(require('node:stream').PassThrough)()});require('./electron/pill/main.cjs');\n");
  const application=await electron.launch({args:[path.join(root,'host.cjs'),'--no-sandbox'],env:{...process.env,HOME:root,XDG_CONFIG_HOME:path.join(root,'config')}});

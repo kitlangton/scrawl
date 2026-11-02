@@ -8,7 +8,7 @@ if(!['linux','darwin'].includes(process.platform))process.exit(1);
 app.setName('Apparent recording controls');
 app.setPath('userData',path.join(app.getPath('appData'),'apparent-pill'));
 nativeTheme.themeSource='system';
-const page=pathToFileURL(path.join(__dirname,'../../dist/pill.html')).href;
+const page=pathToFileURL(path.join(__dirname,'../../dist/pill/index.html')).href;
 let window,current=null,buffer='',pending=false,loaded=false,placed=false,activated=false,pendingPlace=null;
 let lastInput=Date.now(),hovered=false,expected=null,rendererReady=false,readySent=false,renderDeadline=Date.now()+5000,pasteGesture=null,lastFrame='';
 function position(bounds){

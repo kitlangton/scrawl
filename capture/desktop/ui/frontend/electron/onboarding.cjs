@@ -1,0 +1,33 @@
+const {parseAction,lines,parentWriter}=require('./onboarding-protocol.cjs');
+const {app,BrowserWindow,ipcMain,session,nativeTheme,Menu}=require('electron');
+const path=require('node:path');
+const followWindowTheme=require('@apparent/ui/window-theme');
+nativeTheme.themeSource='system';
+app.setName('Apparent Onboarding');
+app.setPath('userData',path.join(app.getPath('appData'),'apparent-onboarding'));
+const {pathToFileURL}=require('node:url');
+app.whenReady().then(()=>{
+ Menu.setApplicationMenu(null);
+ if(process.platform==='darwin')app.setActivationPolicy('accessory');
+ session.defaultSession.setPermissionRequestHandler((a,b,reply)=>reply(false));
+ session.defaultSession.setPermissionCheckHandler(()=>false);
+ const w=new BrowserWindow({width:620,height:660,backgroundColor:followWindowTheme.backgroundColor(nativeTheme),webPreferences:{preload:path.join(__dirname,'onboarding-preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false}});
+ followWindowTheme(nativeTheme,w);
+ const page=pathToFileURL(path.join(__dirname,'../dist/onboarding.html')).href;
+ w.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+ w.webContents.on('will-navigate',e=>e.preventDefault());
+ w.webContents.on('will-attach-webview',e=>e.preventDefault());
+ session.defaultSession.webRequest.onBeforeRequest((details,reply)=>reply({cancel:!details.url.startsWith(pathToFileURL(path.join(__dirname,'../dist/')).href)}));
+ const states=new Map();
+ let parentClosing=false;
+ const send=parentWriter(process.stdout,()=>app.exit(0));
+ ipcMain.handle('onboarding:action',(e,action)=>{
+  if(e.sender!==w.webContents||e.senderFrame!==w.webContents.mainFrame||e.senderFrame.url!==page) throw Error('Forbidden onboarding command');
+  send(parseAction(action));
+ });
+ w.webContents.on('did-finish-load',()=>{for(const v of states.values())w.webContents.send('onboarding:view',v)});
+ const receive=lines(v=>{if(!v||typeof v!=='object')return;if(['state','shortcut','shortcut-editor'].includes(v.type)){states.set(v.type,v);w.webContents.send('onboarding:view',v)}if(v.type==='hide')w.hide();if(v.type==='show'){w.show();w.focus()}if(v.type==='close'){parentClosing=true;app.quit()}});
+ process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>{try{receive(chunk)}catch{app.exit(1)}});
+ process.stdin.on('end',()=>{parentClosing=true;app.quit()});w.on('close',()=>{if(!parentClosing)send({action:'close'})});
+ w.webContents.on('render-process-gone',()=>app.exit(1));w.webContents.on('did-fail-load',()=>app.exit(1));void w.loadURL(page);
+});app.on('window-all-closed',()=>app.quit());

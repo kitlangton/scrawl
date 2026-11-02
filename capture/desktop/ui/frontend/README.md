@@ -389,7 +389,7 @@ switch is authorized. Socket/controller/browser fixtures are not native proof.
 
 ## Recording pill replacement candidate
 
-`pill.html`, `src/pill`, `electron/pill` and `../electron_pill` implement the
+`pill/index.html`, `src/pill`, `electron/pill` and `../electron_pill` implement the
 shared pill presentation and parent-owned Rust transport. This candidate is
 not evidence of accepted installed/native behavior. Do not remove the old
 pill or treat the synthetic tests as native capture proof.
