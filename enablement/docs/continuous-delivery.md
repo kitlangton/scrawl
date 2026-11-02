@@ -1,7 +1,8 @@
 # Website and Connect continuous delivery
 
-PRs run the inexpensive selector, push-hook and release-admission contracts. Feature
-pushes run those same contracts locally; they do not rebuild the application.
+GitHub Actions do not run automatically on PRs or feature-branch pushes. Feature
+pushes run inexpensive selector, push-hook and release-admission contracts locally;
+they do not rebuild the application.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 

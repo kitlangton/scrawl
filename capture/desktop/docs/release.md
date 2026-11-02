@@ -57,7 +57,7 @@ or publish a Windows zip.
 
 1. **Version:** bump `version` in `Cargo.toml` and `Cargo.lock` in a `release/<version>` PR, and in the
    same PR change every `"status": "main"` in `public/site/src/features.json` to `"stable@<version>"`.
-   PRs run cheap contracts; full platform verification on main gates publication.
+   PRs do not start Actions; full platform verification on main gates publication.
    Test changed behavior locally before merging.
 2. **Mac build** (Studio, from that commit): `APPARENT_BUILD_NUMBER=<n> APPARENT_SPARKLE_DIR=~/.local/share/apparent-release/sparkle-2.9.4 ./capture/desktop/scripts/release/release-app.sh`.
    The build number goes up by one every release (Sparkle compares it, not the version). The script
