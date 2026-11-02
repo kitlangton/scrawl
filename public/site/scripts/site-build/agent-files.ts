@@ -74,7 +74,7 @@ export function agentFiles(): Record<string, string> {
   const readme = repo("README.md")
   const skill = repo("capture/agent/skills/apparent/SKILL.md")
   const { version, macos } = release()
-  const releaseNote = version ? `Version ${version}, for Apple silicon Mac, macOS ${macos} or later.` : "No Apparent build has been released yet."
+  const releaseNote = version ? `Version ${version}, for Apple silicon Mac, macOS ${macos} or later.` : "For platform-specific stable and preview builds, see official GitHub releases."
   const tagline = readme.split("\n").find((l) => l && !l.startsWith("#"))!.trim()
   const intro = readme.split(/\n## /)[0].split("\n\n").slice(2).join("\n\n").trim()
   const summary = `> ${tagline} Apparent records your screen, voice, clicks and drawings and packs them into a bundle an AI coding agent can read. ${releaseNote}`
@@ -87,7 +87,8 @@ ${intro}
 
 ## Install
 
-${version ? `- [Download for Mac](${SITE}/releases/Apparent-latest-arm64.dmg): version ${version}, for macOS ${macos} or later.` : "No branded installer has been published yet. Build from source using the repository instructions."}
+- [Official headless CLI installation](${REPO}/blob/main/capture/agent/docs/installation.md): Linux architecture selection, checksums and extraction without FUSE or GUI launch. Installing a skill does not install the executable.
+- [Official releases](${REPO}/releases): select the platform and stable/preview channel explicitly; Mac appcast availability does not describe Linux builds.
 
 ## Agents
 
@@ -121,7 +122,8 @@ ${intro}
 
 Website: ${SITE}
 Source: ${REPO}
-Download: no branded build is published yet.
+Download: ${REPO}/releases
+Headless CLI installation: ${REPO}/blob/main/capture/agent/docs/installation.md
 
 ## Install
 

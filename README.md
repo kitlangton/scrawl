@@ -12,35 +12,27 @@ Press a shortcut (`⌥⇧S`) and Apparent starts recording the screen. Talk, cli
 
 ## Install
 
-No branded installers, Homebrew cask, or signed update have been published yet. Build from source
-in this checkout; see [macOS packaging](capture/desktop/docs/release.md) or [Linux](capture/desktop/docs/linux/linux.md). Apparent supports
-macOS and Linux, not Windows. The Mac build needs an Apple silicon Mac on macOS 15 or later (live
-transcription and Liquid Glass need macOS 26). Linux builds target Ubuntu 24.04+ on x86_64 or ARM64.
+Official builds are available from [Apparent releases](https://github.com/tryapparent/apparent/releases).
+For a recipient agent on headless Linux, follow [official CLI installation](capture/agent/docs/installation.md):
+architecture selection, checksums, a writable install and extraction without FUSE or GUI launch.
+Linux main builds are previews; select a release for your platform explicitly.
 
-When a Linux AppImage is published, make it executable and launch it with:
-
-```sh
-chmod +x Apparent-*-linux-*.AppImage
-./Apparent-<version>-linux-x86_64.AppImage app
-```
-
-Press **Alt+Shift+S** to record. On Wayland, clicks and Shift ink need access to input devices:
-run `sudo usermod -aG input "$USER"`, then **log out and back in**. Apparent checks access in the
-welcome tour and Settings › Permissions. If the AppImage reports a missing `libfuse.so.2`,
-install `libfuse2t64` on Ubuntu 24.04 (`libfuse2` on older distributions), or use
-`./Apparent-<version>-linux-x86_64.AppImage --appimage-extract-and-run app`.
-The first launch downloads the speech model (731 MB); captures get their transcript when it
-finishes. See [Linux](capture/desktop/docs/linux/linux.md) for desktop-specific limits.
+Desktop capture setup: [macOS packaging](capture/desktop/docs/release.md) and
+[Linux](capture/desktop/docs/linux/linux.md). Apparent supports macOS and Linux;
+Windows is unsupported. Recording setup and permissions are separate from fetching a capture.
 
 ## Agents
 
-Install the capture-reading skill for Claude Code, OpenCode, Codex and other agents:
+Install the [official CLI](capture/agent/docs/installation.md) to run `apparent` on the recipient machine.
+Read login/fetch needs no desktop launch, recording permissions, speech model or upload consent.
+
+Optionally install the capture-reading skill for Claude Code, OpenCode, Codex and other agents:
 
 ```sh
 bunx skills add https://github.com/tryapparent/apparent/tree/main/capture/agent/skills/apparent
 ```
 
-The `apparent` command is the binary inside Apparent.app. Click
+On macOS, the `apparent` command is the binary inside Apparent.app. Click
 **Install** beside Command-line tool in Settings › Agents, which links it into `/opt/homebrew/bin`
 or `/usr/local/bin` when you can write there, else `~/.local/bin`. The link always runs the app's
 current copy, so it updates with the app.
