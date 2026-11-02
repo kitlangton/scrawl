@@ -10,7 +10,7 @@ const rejected=await build({stdin:{resolveDir:process.cwd(),contents:`
    delete:key=>env.BUCKET.delete(key)
   }});
   return worker.fetch(request,env);
- }};`},bundle:true,format:'esm',platform:'browser',write:false});
+ }};`},bundle:true,format:'esm',platform:'browser',conditions:['workerd'],external:['node:*'],write:false});
 
 test('early rejected R2 PUT cancels a stalled source and returns a sanitized error without hanging', {timeout:10000},async()=>{
  const f=await fixture({}, {scriptPath:undefined,script:rejected.outputFiles[0].text});try{

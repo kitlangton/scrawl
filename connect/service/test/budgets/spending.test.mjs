@@ -10,7 +10,7 @@ const instrumented=await build({stdin:{resolveDir:process.cwd(),contents:`
   const BUCKET=new Proxy(env.BUCKET,{get(target,key){const value=target[key];return typeof value==='function'?(...args)=>{if(['put','get','head','list'].includes(key))calls++;return value.apply(target,args);}:value;}});
   const response=await worker.fetch(request,{...env,BUCKET});response.headers.set('X-Test-Metered',String(calls));return response;
  },scheduled:(controller,env)=>worker.scheduled(controller,env)};
-`},bundle:true,format:'esm',platform:'browser',write:false});
+`},bundle:true,format:'esm',platform:'browser',conditions:['workerd'],external:['node:*'],write:false});
 const setup=()=>fixture({}, {scriptPath:undefined,script:instrumented.outputFiles[0].text});
 const budget=f=>f.db.prepare('SELECT * FROM r2_budget WHERE id=1').first();
 const reserve=(f,a,n,files=[file()])=>f.call('/v1/captures/'+id(n),{token:a.token,method:'POST',body:{files}});

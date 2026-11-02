@@ -28,7 +28,7 @@ const instrumented=await build({stdin:{resolveDir:process.cwd(),contents:`
    return worker.scheduled(controller,{...env,BUCKET});
   }
  };
-`},bundle:true,format:'esm',platform:'browser',write:false});
+`},bundle:true,format:'esm',platform:'browser',conditions:['workerd'],external:['node:*'],write:false});
 const setup=async(instances=false)=>{const f=await fixture({}, {scriptPath:undefined,script:instrumented.outputFiles[0].text,instances});await f.db.exec('CREATE TABLE test_barrier(released INTEGER,hold_delete INTEGER,delete_done INTEGER); INSERT INTO test_barrier VALUES(0,0,0)');return f;};
 const release=f=>f.db.exec('UPDATE test_barrier SET released=1');
 const ledger=f=>f.db.prepare('SELECT * FROM r2_budget').first();
@@ -123,7 +123,7 @@ test('crash after durable grant before PUT leaks capacity safely and survives re
  await f.call(path(708),{token:a.token,method:'DELETE'});
  for(let i=0;i<2;i++)assert.equal((await(await f.mf.getWorker()).scheduled()).outcome,'ok');
  assert.equal((await ledger(f)).physical_used,5,'absent but uncertain key cannot free capacity');
- const before=await ledger(f);await f.reload();f.db=await f.mf.getD1Database('DB');f.bucket=await f.mf.getR2Bucket('BUCKET');assert.deepEqual(await ledger(f),before);
+ const before=await ledger(f);await f.reload();assert.deepEqual(await ledger(f),before);
  await assert.rejects(f.db.exec((await readFile('migrations/0002.sql','utf8')).replaceAll('\n',' ')));
  assert.deepEqual(await ledger(f),before);
  await f.db.prepare('UPDATE r2_budget SET a_cap=a_used,physical_cap=physical_used').run();await reserve(f,a,709);

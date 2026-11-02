@@ -20,6 +20,20 @@ For production builds set `VITE_HOSTED_API_ORIGIN=https://hosted.tryapparent.com
 
 Session/CSRF data stays in memory, never localStorage or DOM attributes. The human code is only passed to fixed approval endpoints and the fixed sign-in return route, never treated as a capture permission. There is no token input, private capture browser, web recorder, billing, or browser share-creation control. Capture authorization must be enforced by the API; knowing an ID is not access.
 
+### Better Auth migration candidate (#187)
+
+Connect's service owns Better Auth and the compatibility endpoints above. The
+browser keeps credentialed requests and explicit scope confirmation; it does not
+receive or renew native access/refresh tokens. Updated native clients renew each
+device's approved scope independently. Browser sign-in or logout is not native
+device approval or revocation, and account authentication never enrolls a trusted
+decryption key. Revoked or expired renewal requires a new CLI approval; temporary
+network failure does not. Existing credentials need an updated client and one new
+login. The limits disclosure states this distinction instead of promising a
+monthly reapproval cycle. See the API/client contracts for lifetimes and migration.
+Synthetic browser fixtures verify the disclosure and unchanged consent/readback
+controls, not actual Better Auth, Google OAuth or deployed cookie behavior.
+
 ## Single-recording sharing candidate (#171)
 
 The native off-by-default sharing experiment owns sender visibility. The backend separately gates capability sharing; browser assets do not enable it, start automatic native uploads, or provision resources. Connect links to **Manage shared links** at `/connect/shares` (legacy `/hosted/shares`), which reads `GET /v1/shares` with the existing browser session and follows `nextCursor` until the complete list is loaded. Each response is `{shares:[{id,captureId,url?,status,createdAt,expiresAt,title}],nextCursor:string|null}`. Only live, unexpired rows expose a validated HTTPS URL. Titles are captured evidence and render as text, never HTML. Empty, unavailable, anonymous and denied states do not invent links. A single-capture link is a read capability for that capture only, not an account-wide device grant.

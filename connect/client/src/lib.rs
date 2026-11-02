@@ -13,6 +13,7 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+mod renewal;
 
 /// Application-owned preferences and browser mechanics. Implementations must
 /// perform fresh reads, preserve unrelated config, and serialize each write.
@@ -104,7 +105,7 @@ pub struct CloudConfig {
     pub server: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 struct Credential {
     server: String,
     #[serde(default)]
@@ -112,6 +113,16 @@ struct Credential {
     scope: String,
     token: String,
     generation: String,
+    #[serde(default, rename = "refreshToken")]
+    refresh_token: Option<String>,
+    #[serde(default, rename = "expiresAt")]
+    expires_at: Option<u64>,
+    #[serde(default, rename = "refreshExpiresAt")]
+    refresh_expires_at: Option<u64>,
+    #[serde(default, rename = "grantId")]
+    grant_id: Option<String>,
+    #[serde(default, rename = "authRequired")]
+    auth_required: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -471,9 +482,24 @@ impl Lock {
             .custom_flags(libc::O_NOFOLLOW)
             .open(path)?;
         let op = libc::LOCK_EX | if nonblocking { libc::LOCK_NB } else { 0 };
+        let before = f.metadata()?;
+        ensure!(
+            before.is_file()
+                && before.uid() == unsafe { libc::geteuid() }
+                && before.mode() & 0o077 == 0
+                && before.nlink() == 1,
+            "Unsafe hosted lock"
+        );
         ensure!(
             unsafe { libc::flock(f.as_raw_fd(), op) } == 0,
             "Hosted worker already running"
+        );
+        let after = fs::symlink_metadata(path)?;
+        ensure!(
+            after.dev() == before.dev()
+                && after.ino() == before.ino()
+                && !after.file_type().is_symlink(),
+            "Hosted lock changed while waiting"
         );
         Ok(Self(f))
     }
@@ -524,7 +550,7 @@ impl Client {
         loop {
             let reply = self.json_request(
                 server,
-                Some(&credential.token),
+                Some(credential),
                 "GET",
                 &route,
                 None,
@@ -583,7 +609,7 @@ impl Client {
         let credential = self.credential("upload", &server)?;
         let reply = self.json_request(
             &server,
-            Some(&credential.token),
+            Some(&credential),
             "DELETE",
             &format!("/v1/shares/{id}"),
             None,
@@ -674,7 +700,7 @@ impl Client {
         let base = format!("/v1/captures/{id}");
         let reserved = self.json_request(
             &job.server,
-            Some(&credential.token),
+            Some(&credential),
             "POST",
             &base,
             Some(json!({"files":files})),
@@ -687,7 +713,7 @@ impl Client {
         );
         let reply = self.json_request(
             &job.server,
-            Some(&credential.token),
+            Some(&credential),
             "POST",
             &format!("{base}/share"),
             None,
@@ -727,14 +753,22 @@ impl Client {
         experiment && cloud.enabled && cloud.upload_consent && server_url(&cloud.server).is_ok()
     }
     fn credential(&self, scope: &str, server: &str) -> Result<Credential> {
+        let credential = self.stored_credential(scope)?;
+        ensure!(
+            credential.server == server,
+            "Sign in with the requested scope and server"
+        );
+        Ok(credential)
+    }
+    fn stored_credential(&self, scope: &str) -> Result<Credential> {
         private_dir(&self.state)?;
         let credential: Credential = serde_json::from_slice(&read_private(
             &self.state.join(format!("{scope}.credential")),
-            16384,
+            32768,
         )?)?;
         ensure!(
             credential.scope == scope
-                && credential.server == server
+                && credential.server == server_url(&credential.server)?
                 && valid_id(&credential.generation),
             "Sign in with the requested scope and server"
         );
@@ -744,6 +778,7 @@ impl Client {
                 && credential.token.bytes().all(|b| b.is_ascii_graphic()),
             "Invalid credential"
         );
+        credential.validate()?;
         Ok(credential)
     }
     fn active(&self, job: &Job) -> bool {
@@ -918,7 +953,7 @@ impl Client {
             job.id, job.status, job.server, job.id, job.id
         ))
     }
-    fn request(
+    fn raw_request(
         &self,
         server: &str,
         token: Option<&str>,
@@ -1044,6 +1079,12 @@ impl Client {
             "Hosted response exceeds limit"
         );
         if !code.starts_with('2') {
+            if code.trim() == "401" {
+                bail!("auth_required: approve this device again with apparent connect login");
+            }
+            if code.trim() == "429" || code.starts_with('5') {
+                bail!("Hosted API temporarily unavailable; retry later");
+            }
             // Only expose a known non-secret error code, not remote text or curl stderr.
             let error = fs::read(output)
                 .ok()
@@ -1067,17 +1108,19 @@ impl Client {
                 | "conflict"
                 | "authorization_pending"
                 | "device_expired"
-                | "device_rejected" => code,
+                | "device_rejected"
+                | "reauthorization_required" => code,
                 _ => "http_error",
             };
             bail!("Hosted API: {safe}");
         }
+        ensure!(allowed(), "cancelled");
         Ok(())
     }
     fn json_request(
         &self,
         server: &str,
-        token: Option<&str>,
+        token: Option<&Credential>,
         method: &str,
         route: &str,
         body: Option<Value>,
@@ -1121,6 +1164,24 @@ impl Client {
             scope != "upload" || consent,
             "Upload shares screen, voice, transcript and all bundle media with the hosted service. Repeat with --consent-upload to explicitly agree"
         );
+        private_dir(&self.state)?;
+        let login_id = random_id()?;
+        let login_path = self.state.join(format!("{scope}.login"));
+        {
+            let _queue = Lock::acquire(&self.state.join("queue.lock"), false)?;
+            ensure!(allowed(), "cancelled");
+            atomic_json(&login_path, &login_id)?;
+        }
+        let caller_allowed = allowed;
+        let still_current = || {
+            caller_allowed()
+                && read_private(&login_path, 128)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<String>(&b).ok())
+                    .as_deref()
+                    == Some(&login_id)
+        };
+        let allowed: &dyn Fn() -> bool = &still_current;
         let start = self.json_request(
             &server,
             None,
@@ -1170,6 +1231,7 @@ impl Client {
             ensure!(Instant::now() < deadline, "Device authorization expired");
             std::thread::sleep(interval.min(deadline.saturating_duration_since(Instant::now())));
             ensure!(Instant::now() < deadline, "Device authorization expired");
+            let issued = now();
             let reply = self.json_request(
                 &server,
                 None,
@@ -1197,13 +1259,20 @@ impl Client {
                             && token.bytes().all(|b| b.is_ascii_graphic()),
                         "Invalid access token"
                     );
-                    break Credential {
+                    let mut credential = Credential {
                         server: server.clone(),
                         site: Some(origin.clone()),
                         scope: scope.into(),
                         token: token.into(),
                         generation: random_id()?,
+                        refresh_token: None,
+                        expires_at: None,
+                        refresh_expires_at: None,
+                        grant_id: None,
+                        auth_required: false,
                     };
+                    credential.apply_reply(&reply, issued, false)?;
+                    break credential;
                 }
                 _ => bail!("Device authorization rejected or invalid"),
             }
@@ -1219,6 +1288,7 @@ impl Client {
             scope == "upload" || !settings.enabled || settings.server == server,
             "Disable uploads before switching servers"
         );
+        self.clear_renewal(scope)?;
         atomic_json(&self.state.join(format!("{scope}.credential")), &credential)?;
         if scope == "upload" {
             settings = CloudConfig {
@@ -1231,6 +1301,7 @@ impl Client {
             settings.server = server;
         }
         self.provider.set_cloud(&settings)?;
+        fs::remove_file(login_path)?;
         println!("Signed in for {scope}; tokens remain private on this machine.");
         Ok(())
     }
@@ -1245,7 +1316,16 @@ impl Client {
         settings.enabled = false;
         settings.upload_consent = false;
         self.provider.set_cloud(&settings)?;
+        atomic_json(&self.state.join("cancellation"), &random_id()?)?;
         let mut stopped = Vec::new();
+        let mut revoke = Vec::new();
+        for scope in ["upload", "read"] {
+            match fs::remove_file(self.state.join(format!("{scope}.login"))) {
+                Ok(()) => (),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                Err(e) => return Err(e.into()),
+            }
+        }
         for mut job in self.jobs()? {
             if job.status != "ready" {
                 job.status = "cancelled".into();
@@ -1261,6 +1341,10 @@ impl Client {
         }
         if logout {
             for scope in ["upload", "read"] {
+                if let Ok(c) = self.stored_credential(scope) {
+                    revoke.push(c);
+                }
+                self.clear_renewal(scope)?;
                 let path = self.state.join(format!("{scope}.credential"));
                 match fs::remove_file(path) {
                     Ok(()) => (),
@@ -1269,12 +1353,16 @@ impl Client {
                 }
             }
         }
+        File::open(&self.state)?.sync_all()?;
         drop(_lock);
         // Only status metadata may be sent after cancellation, never more media.
         // Bound the whole best-effort stop notification and hold neither lock.
         let deadline = Instant::now() + Duration::from_secs(2);
         for (job, credential) in stopped {
             self.notify_progress_with(&job, "paused", &credential, deadline);
+        }
+        for credential in revoke {
+            let _ = self.revoke_credential(&credential, deadline);
         }
         Ok(())
     }
@@ -1337,7 +1425,10 @@ impl Client {
                             "quota_exceeded"
                         } else if text.contains("unsupported_asset") {
                             "unsupported_asset"
-                        } else if text.contains("unauthorized") || text.contains("forbidden") {
+                        } else if text.contains("auth_required")
+                            || text.contains("unauthorized")
+                            || text.contains("forbidden")
+                        {
                             "auth_required"
                         } else {
                             "upload_failed"
@@ -1401,7 +1492,7 @@ impl Client {
     ) {
         let _ = self.json_request(
             &job.server,
-            Some(&credential.token),
+            Some(credential),
             "POST",
             &format!("/v1/captures/{}/share/progress", job.id),
             Some(json!({"state":state})),
@@ -1433,7 +1524,7 @@ impl Client {
         let base = format!("/v1/captures/{}", job.id);
         let reserved = self.json_request(
             &job.server,
-            Some(&credential.token),
+            Some(&credential),
             "POST",
             &base,
             Some(json!({"files": files})),
@@ -1454,7 +1545,7 @@ impl Client {
                 let response = scratch.0.join(format!("ack-{}", random_id()?));
                 self.request(
                     &job.server,
-                    Some(&credential.token),
+                    Some(&credential),
                     "PUT",
                     &format!("{base}/files/{}", file.path),
                     Some(&scratch.0.join(&file.path)),
@@ -1466,7 +1557,7 @@ impl Client {
             }
             let completed = self.json_request(
                 &job.server,
-                Some(&credential.token),
+                Some(&credential),
                 "POST",
                 &format!("{base}/complete"),
                 None,
@@ -1481,7 +1572,7 @@ impl Client {
         // Read back the exact manifest rather than trusting the completion write.
         let verified = self.json_request(
             &job.server,
-            Some(&credential.token),
+            Some(&credential),
             "GET",
             &base,
             None,
@@ -1535,7 +1626,7 @@ impl Client {
             );
             let reply = self.json_request(
                 &server,
-                Some(&credential.token),
+                Some(&credential),
                 "GET",
                 &base,
                 None,
@@ -1571,7 +1662,7 @@ impl Client {
             }
             self.request(
                 &server,
-                Some(&credential.token),
+                Some(&credential),
                 "GET",
                 &format!("{base}/files/{}", file.path),
                 None,
@@ -1596,7 +1687,7 @@ impl Client {
         let settings = self.settings();
         let jobs = self.jobs()?;
         let mut result = json!({"server": settings.server, "enabled": self.enabled(), "uploadConsent": settings.upload_consent,
-            "readSignedIn": self.credential("read", &settings.server).is_ok(), "uploadSignedIn": self.credential("upload", &settings.server).is_ok(),
+            "readSignedIn": self.credential("read", &settings.server).is_ok_and(|c| c.usable()), "uploadSignedIn": self.credential("upload", &settings.server).is_ok_and(|c| c.usable()),
             "queuePath": self.state, "queue": jobs.iter().map(|j| json!({"id":j.id,"bundle":j.bundle,"status":j.status,"attempts":j.attempts,"nextAttempt":j.next_attempt,"error":j.error})).collect::<Vec<_>>()});
         if account {
             let credential = self
@@ -1604,13 +1695,16 @@ impl Client {
                 .or_else(|_| self.credential("read", &settings.server))?;
             result["account"] = self.json_request(
                 &settings.server,
-                Some(&credential.token),
+                Some(&credential),
                 "GET",
                 "/v1/account",
                 None,
                 Duration::from_secs(30),
                 &|| true,
             )?;
+        }
+        for scope in ["read", "upload"] {
+            result[format!("{scope}Auth")] = self.auth_status(scope, &settings.server);
         }
         Ok(result)
     }
@@ -1849,7 +1943,7 @@ impl Client {
         client.enabled()
             && client
                 .credential("upload", &client.settings().server)
-                .is_ok()
+                .is_ok_and(|c| c.usable())
     }
 
     pub fn sharing_server(&self) -> Option<String> {
@@ -1884,7 +1978,10 @@ impl Client {
             &|| true,
         ) {
             Ok(_) => true,
-            Err(error) => error.to_string().starts_with("Hosted API:"),
+            Err(error) => {
+                error.to_string().starts_with("Hosted API:")
+                    || error.to_string().starts_with("auth_required:")
+            }
         }
     }
 
@@ -1911,7 +2008,7 @@ impl Client {
         let connected = self.enabled()
             && server
                 .as_ref()
-                .is_some_and(|server| self.credential("upload", server).is_ok());
+                .is_some_and(|server| self.credential("upload", server).is_ok_and(|c| c.usable()));
         AccountView { server, connected }
     }
 }

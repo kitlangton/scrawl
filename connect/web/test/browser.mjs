@@ -230,7 +230,11 @@ try {
       await details.focus(); await page.keyboard.press('Enter')
       assert.equal(await page.locator('.hosted-details').getAttribute('open'), '')
       await page.locator('.hosted-details .hosted-limits > summary').click()
-      assert.match(await page.locator('.hosted-details').innerText(), /500,000,000[\s\S]*90,000,000[\s\S]*20 accounts[\s\S]*30 days/)
+      const limits = await page.locator('.hosted-details').innerText()
+      assert.match(limits, /500,000,000[\s\S]*90,000,000[\s\S]*20 accounts[\s\S]*renew each approved device connection automatically/)
+      assert.match(limits, /Revoked or expired renewal requires CLI approval again/)
+      assert.match(limits, /Older apps need an update and one new approval; website sign-in does not renew device access/)
+      assert.doesNotMatch(limits, /no automatic renewal/)
       await page.getByRole('button', { name: 'Review access', exact: true }).click()
       if (!test.anonymous) {
         assert.equal(await page.getByRole('dialog').locator('pre code').innerText(), `apparent connect login --server ${apiOrigin || 'https://YOUR-HOSTED-API-ORIGIN'} --scope read --no-browser`)

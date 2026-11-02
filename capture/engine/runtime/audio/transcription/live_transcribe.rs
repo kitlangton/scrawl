@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use serde::Deserialize;
 
+use crate::capture::engine::runtime::audio::persistence::Samples;
 use crate::shared::model::{TranscriptData, TranscriptSegment, WordTiming};
 
 const FEED_EVERY: Duration = Duration::from_millis(160);
@@ -88,17 +89,17 @@ pub struct Finished {
 }
 
 impl Live {
-    /// Starts streaming `samples` (the recorder's 16 kHz buffer, which only grows until the
-    /// recording stops) to a new helper. Nothing here blocks: the helper starts on the feeder
+    /// Starts streaming `samples` (the recorder's rolling 16 kHz buffer) to a new helper.
+    /// Nothing here blocks: the helper starts on the feeder
     /// thread.
-    pub fn start(samples: Arc<Mutex<Vec<f32>>>) -> Result<Self> {
+    pub fn start(samples: Arc<Mutex<Samples>>) -> Result<Self> {
         let mut command = Command::new(crate::capture::desktop::helper::path()?);
         command.arg("transcribe-stream");
         command.args(crate::capture::engine::runtime::audio::transcription::speech_model::locale_args());
         Self::start_with(command, samples)
     }
 
-    fn start_with(mut command: Command, samples: Arc<Mutex<Vec<f32>>>) -> Result<Self> {
+    fn start_with(mut command: Command, samples: Arc<Mutex<Samples>>) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let feeder_stop = Arc::clone(&stop);
         command
@@ -223,7 +224,7 @@ fn transcript(
     }
 }
 
-fn feed(mut command: Command, samples: &Mutex<Vec<f32>>, stop: &AtomicBool) -> Result<Feeding> {
+fn feed(mut command: Command, samples: &Mutex<Samples>, stop: &AtomicBool) -> Result<Feeding> {
     let mut child = command
         .spawn()
         .context("Could not start apparent-helper transcribe-stream")?;
@@ -263,8 +264,12 @@ fn feed(mut command: Command, samples: &Mutex<Vec<f32>>, stop: &AtomicBool) -> R
             let buffer = samples
                 .lock()
                 .map_err(|_| anyhow!("Microphone buffer lock poisoned"))?;
-            // The recorder empties the buffer when it stops; the rest comes from the WAV.
-            if let Some(fresh) = buffer.get(feeding.fed..) {
+            // Stop clears the buffer; its tail comes from the WAV. A nonempty buffer
+            // missing our absolute offset instead means samples were overwritten.
+            if !buffer.is_empty() {
+                let fresh = buffer
+                    .get(feeding.fed..)
+                    .context("Live transcription fell behind the recording")?;
                 bytes.extend(
                     fresh
                         .iter()
@@ -292,7 +297,7 @@ fn le_bytes(samples: &[i16]) -> Vec<u8> {
 /// 10 ms callbacks, and returns it ready to finish (`apparent reprocess --bench N --live-speed S`).
 pub fn simulate(wav_bytes: &[u8], speed: f64) -> Result<Live> {
     let samples = crate::capture::engine::runtime::audio::audio::decode_wav_16k(wav_bytes)?;
-    let buffer = Arc::new(Mutex::new(Vec::with_capacity(samples.len())));
+    let buffer = Arc::new(Mutex::new(Samples::default()));
     let live = Live::start(Arc::clone(&buffer))?;
     let started = Instant::now();
     for (i, chunk) in samples.chunks(160).enumerate() {
@@ -360,7 +365,7 @@ mod tests {
         let script = format!(
             r#"{READY}; n=$(wc -c | tr -d ' '); echo '{{"segment":{{"t0":900,"t1":1500,"text":"Look here."}},"words":[{{"t0":900,"t1":1200,"text":"Look"}},{{"t0":1200,"t1":1500,"text":"here."}}]}}'; echo '{{"segment":{{"t0":60,"t1":600,"text":"Okay,"}},"words":[{{"t0":60,"t1":600,"text":"Okay,"}}]}}'; echo "{{\"done\":true,\"samples\":$((n / 2))}}""#
         );
-        let buffer = Arc::new(Mutex::new(vec![0.25_f32; 4_000]));
+        let buffer = Arc::new(Mutex::new(vec![0.25_f32; 4_000].into()));
         let mut live = Live::start_with(fake(&script), Arc::clone(&buffer)).unwrap();
         std::thread::sleep(Duration::from_millis(250));
         let mut all = vec![0.25_f32; 4_000];
@@ -393,10 +398,12 @@ mod tests {
             r#"{READY}; cat > '{}'; echo '{{"done":true,"samples":3}}'"#,
             out.display()
         );
-        let buffer = Arc::new(Mutex::new(vec![0.5_f32, -0.25]));
+        let buffer = Arc::new(Mutex::new(vec![0.5_f32, -0.25].into()));
         let mut live = Live::start_with(fake(&script), Arc::clone(&buffer)).unwrap();
         std::thread::sleep(Duration::from_millis(250));
         buffer.lock().unwrap().clear();
+        // Let the feeder observe Stop's cleared buffer before finishing from the WAV.
+        std::thread::sleep(Duration::from_millis(250));
         let recording = [0.5_f32, -0.25, 1.5];
         live.finish_within(&wav(&recording), Duration::from_secs(5))
             .unwrap();
@@ -409,7 +416,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_failing_helper_or_lost_samples_is_an_error() {
-        let buffer = || Arc::new(Mutex::new(vec![0.1_f32; 320]));
+        let buffer = || Arc::new(Mutex::new(vec![0.1_f32; 320].into()));
         let failed = Live::start_with(
             fake("echo 'apparent-helper: the speech model isnt installed' >&2; exit 1"),
             buffer(),
@@ -434,8 +441,28 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn overwritten_samples_fail_instead_of_skipping_to_the_recent_audio() {
+        let mut samples = Samples::default();
+        samples.extend(std::iter::repeat_n(0.1, 61 * 16_000));
+        assert_eq!(samples.len(), 61 * 16_000);
+        assert!(samples.get(0..).is_none());
+        let mut live = Live::start_with(
+            fake("cat > /dev/null"),
+            Arc::new(Mutex::new(samples)),
+        ).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !live.feeder.as_ref().unwrap().is_finished() {
+            assert!(Instant::now() < deadline, "overwritten samples must fail before Stop");
+            std::thread::yield_now();
+        }
+        let error = live.finish_within(&wav(&[]), Duration::from_secs(1)).unwrap_err();
+        assert!(error.to_string().contains("fell behind"));
+    }
+
+    #[test]
     fn dropping_an_unfinished_stream_stops_the_helper() {
-        let live = Live::start_with(fake("sleep 30"), Arc::new(Mutex::new(Vec::new()))).unwrap();
+        let live = Live::start_with(fake("sleep 30"), Arc::new(Mutex::new(Samples::default()))).unwrap();
         let started = Instant::now();
         drop(live);
         assert!(started.elapsed() < Duration::from_secs(2));

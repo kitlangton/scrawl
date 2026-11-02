@@ -811,14 +811,23 @@ pub(crate) fn run() -> Result<()> {
                 handoff::default_captures_dir().join(format!("{}.apparent", make_bundle_id()))
             });
             recover::begin_screen_capture(&bundle_dir)?;
+            let _signals = crate::capture::desktop::workflow::shutdown::Signals::install()?;
             let video_path = bundle_dir.join("recording.mp4");
             let playback = playback::Guard::start();
-            let audio = AudioRecorder::start().ok();
-            let session = ScreenCaptureSession::start(
+            let audio = Some(AudioRecorder::start(&bundle_dir)?);
+            let session = match ScreenCaptureSession::start(
                 target.clone(),
                 Some(video_path),
                 std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            )?;
+            ) {
+                Ok(session) => session,
+                Err(error) => {
+                    if let Err(cleanup) = recover::abandon_start(&bundle_dir, || drop(audio)) {
+                        crate::capture::engine::runtime::apparent_log(format!("Failed capture startup cleanup at {}: {cleanup:#}", bundle_dir.display()));
+                    }
+                    return Err(error);
+                }
+            };
             let window_log = (target.mode == CaptureMode::Display).then(|| {
                 windows::WindowLogger::start(
                     target.frame,
@@ -826,13 +835,16 @@ pub(crate) fn run() -> Result<()> {
                     std::sync::Arc::default(),
                 )
             });
-            std::thread::sleep(Duration::from_secs(duration.max(1)));
+            let deadline = std::time::Instant::now() + Duration::from_secs(duration.max(1));
+            while std::time::Instant::now() < deadline && !crate::capture::desktop::workflow::shutdown::requested() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             drop(playback);
             let recording = session.stop();
             let activity = window_log
                 .map(windows::WindowLogger::stop)
                 .unwrap_or_default();
-            let recorded_audio = audio.and_then(|a| a.stop().ok());
+            let recorded_audio = audio::audio::stop_optional(audio)?;
             let (_dir, _bundle, summary) = finalize_capture_bundle(
                 &bundle_dir,
                 target,
@@ -1103,6 +1115,7 @@ pub(crate) fn run() -> Result<()> {
             let failed = results.iter().filter(|(_, r)| r.is_err()).count();
             for (dir, result) in results {
                 match result {
+                    Ok(summary) if dir.join("narration-recovered.txt").exists() => print!("{summary}"),
                     Ok(_) => println!("rebuilt {}", dir.display()),
                     Err(error) => println!("failed  {}: {error:#}", dir.display()),
                 }

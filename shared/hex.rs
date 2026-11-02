@@ -990,6 +990,7 @@ mod tests {
             sample_count: samples.len(),
             duration_ms: 6_000,
             wav_bytes: audio::encode_wav_16k(&samples).unwrap(),
+            saved_lease: None,
             live: Default::default(),
             #[cfg(target_os = "linux")]
             pause: Default::default(),

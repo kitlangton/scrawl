@@ -18,7 +18,7 @@ const instrumented=await build({stdin:{resolveDir:process.cwd(),contents:`
  export default {
   async fetch(request,env){const counts={sql:0,r2:0};const response=await worker.fetch(request,counted(env,counts));if(counts.sql>50||counts.sql+counts.r2>1000)throw new Error('request exceeds Free budget: '+JSON.stringify(counts));response.headers.set('X-Test-SQL',String(counts.sql));response.headers.set('X-Test-R2',String(counts.r2));return response;},
   async scheduled(controller,env){const counts={sql:0,r2:0};try{await worker.scheduled(controller,counted(env,counts));}finally{console.log('cleanup operations: '+JSON.stringify(counts));if(counts.sql>50||counts.sql+counts.r2>1000)throw new Error('cleanup exceeds Free budget: '+JSON.stringify(counts));}}
- };`},bundle:true,format:'esm',platform:'browser',write:false});
+ };`},bundle:true,format:'esm',platform:'browser',conditions:['workerd'],external:['node:*'],write:false});
 
 test('512-file admission/completion stay within Free statement and internal-service budgets',async()=>{
  const f=await fixture({}, {scriptPath:undefined,script:instrumented.outputFiles[0].text});try{

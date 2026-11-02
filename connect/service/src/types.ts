@@ -9,28 +9,20 @@ export interface Env {
  GOOGLE_CLIENT_ID: string;
  GOOGLE_CLIENT_SECRET: string;
  TOKEN_ENCRYPTION_KEY: string;
+ BETTER_AUTH_SECRET: string;
+ OAUTH_DISCOVERY_URL?: string;
  SHARING_ENABLED?: string;
- OAUTH_ISSUER?: string;
- OAUTH_AUTHORIZATION_URL?: string;
- OAUTH_TOKEN_URL?: string;
- OAUTH_JWKS_URL?: string;
 }
 export type Scope = 'read' | 'upload';
 export type Beta = 'active' | 'waitlist';
 export interface SessionRow {
+ user_id: string;
  hash: string; account_id: string; csrf: string; expires_at: number;
  email: string; beta: Beta; interest: number;
 }
 export interface TokenRow {
- hash: string; account_id: string; scope: Scope; expires_at: number; beta: Beta;
-}
-export interface OAuthStateRow {
- hash: string; nonce: string; verifier: string; return_to: string; expires_at: number;
-}
-export interface DeviceRow {
- hash: string; user_code: string; scope: Scope; status: 'pending' | 'approved' | 'rejected';
- account_id: string | null; token_hash: string | null; envelope: string | null;
- expires_at: number; last_poll: number;
+ grant_id: string;
+ hash: string; account_id: string; scope: Scope; expires_at: string; beta: Beta;
 }
 export interface ManifestFile { path: string; size: number; sha256: string }
 export interface FileRow extends ManifestFile { capture_id: string; object_key: string | null }

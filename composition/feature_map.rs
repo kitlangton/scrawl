@@ -45,6 +45,7 @@ fn sources() -> Vec<(PathBuf, String)> {
         .filter(|path| {
             path != &root.join("composition/feature_map.rs")
                 && path != &root.join("connect/client/src/test_support.rs")
+                && !path.starts_with(root.join("connect/client/src/test_support"))
         })
         .filter_map(|path| {
             let text = fs::read_to_string(&path).unwrap();
