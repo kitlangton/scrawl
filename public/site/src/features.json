@@ -1342,10 +1342,11 @@
       "group": "install",
       "name": "Choose and try your Record shortcut",
       "says": "Onboarding requires an explicit shortcut choice and a successful shortcut-started recording before it can finish. Closing leaves setup unfinished for the next launch.",
-      "status": "experiment:onboardingFirstCapture",
+      "status": "main",
       "added": "2026-10-31",
       "platforms": ["mac", "linux"],
-      "note": "Default off. Desktop-owned Linux shortcuts must be explicitly accepted rather than edited. Native Mac and Linux interaction proof is required before promotion.",
+      "note": "Enabled by default; experiments.onboardingFirstCapture=false restores optional practice. Desktop-owned Linux shortcuts must be explicitly accepted rather than edited. Existing completed users are not forced through setup again.",
+      "config": [{ "key": "experiments.onboardingFirstCapture", "value": "false", "does": "Restore optional shortcut choice and practice on the next tour open" }],
       "docs": ["capture/desktop/docs/onboarding-and-settings.md"]
     },
     {

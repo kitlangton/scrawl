@@ -391,6 +391,10 @@ impl Flow {
         self
     }
 
+    pub(crate) fn local_practice(&self) -> bool {
+        self.practice_recording || self.shortcut_pending
+    }
+
     pub fn tutorial(&self) -> Option<Tutorial> {
         self.tutorial
     }
@@ -422,7 +426,8 @@ impl Flow {
                 Effect::None
             }
             Input::ShortcutTriggered => {
-                self.shortcut_pending = self.step == Step::TryIt && self.shortcut_chosen;
+                self.shortcut_pending = self.step == Step::TryIt
+                    && (!self.first_capture_required || self.shortcut_chosen);
                 Effect::None
             }
             Input::Continue => self.primary(),
@@ -926,7 +931,7 @@ fn reconcile_accessibility(
 /// messages and report the same button actions.
 enum Transport {
     Helper {
-        child: std::process::Child,
+        child: crate::capture::ui_process::UiChild,
         stdin: Option<std::process::ChildStdin>,
     },
     InProcess(Option<flume::Sender<serde_json::Value>>),
@@ -955,9 +960,14 @@ pub fn poll_grants(
 /// supplies permission updates even while this window is closed; other platforms poll here.
 pub struct Session {
     flow: Flow,
+    fallback: Option<Box<dyn Fn() -> anyhow::Result<Transport>>>,
+    fallback_pending: bool,
     transport: Transport,
+    permission_adapter: Option<Transport>,
     polling: std::sync::Arc<std::sync::atomic::AtomicBool>,
     last_view: String,
+    shortcut_label: String,
+    shortcut_state: Option<serde_json::Value>,
     saved_resume: Option<Step>,
     saved_tutorial: Option<Tutorial>,
     saved_shortcut_chosen: bool,
@@ -971,9 +981,14 @@ impl Session {
     pub(crate) fn for_test(flow: Flow) -> Self {
         Self {
             flow,
+            fallback: None,
+            fallback_pending: false,
             transport: Transport::InProcess(None),
+            permission_adapter: None,
             polling: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_view: String::new(),
+            shortcut_label: String::new(),
+            shortcut_state: None,
             saved_resume: None,
             saved_tutorial: None,
             saved_shortcut_chosen: false,
@@ -991,20 +1006,35 @@ impl Session {
         #[cfg(not(target_os = "macos"))]
         use std::sync::atomic::Ordering;
 
-        let transport = if cfg!(not(target_os = "macos")) {
-            let (sender, receiver) = flume::unbounded();
-            let window_events = events.clone();
-            crate::capture::desktop::settings::onboarding_window::request_open(
-                receiver,
-                shortcut.to_owned(),
-                std::sync::Arc::new(move |event| window_events(event)),
-            );
-            Transport::InProcess(Some(sender))
-        } else {
-            Self::spawn_helper(shortcut, events.clone())?
+        let polling = std::sync::Arc::new(AtomicBool::new(true));
+        let event_alive = polling.clone();
+        let events = move |event| {
+            if event_alive.load(std::sync::atomic::Ordering::Acquire) { events(event); }
+        };
+        let electron = super::presentation::assets().filter(|(app, _)| app.join("dist/onboarding.html").is_file() && app.join("electron/onboarding.cjs").is_file());
+        let native_events = events.clone();
+        let native_shortcut = shortcut.to_owned();
+        let native = move || {
+            if cfg!(target_os = "macos") {
+                Self::spawn_helper(&native_shortcut, native_events.clone())
+            } else {
+                let (sender, receiver) = flume::unbounded();
+                let window_events = native_events.clone();
+                crate::capture::desktop::settings::onboarding_window::request_open(
+                    receiver, native_shortcut.clone(),
+                    std::sync::Arc::new(move |event| window_events(event)),
+                );
+                Ok(Transport::InProcess(Some(sender)))
+            }
+        };
+        let attempted = electron.and_then(|(app, runtime)| {
+            Self::spawn_transport(std::process::Command::new(runtime).arg(app).arg("--onboarding"), events.clone()).ok()
+        });
+        let (transport, fallback) = match attempted {
+            Some(transport) => (transport, Some(Box::new(native) as Box<dyn Fn() -> anyhow::Result<Transport>>)),
+            None => (native()?, None),
         };
 
-        let polling = std::sync::Arc::new(AtomicBool::new(true));
         #[cfg(not(target_os = "macos"))]
         let alive = std::sync::Arc::clone(&polling);
         #[cfg(not(target_os = "macos"))]
@@ -1031,14 +1061,20 @@ impl Session {
                     progress.first_capture_completed,
                 ),
             transport,
+            permission_adapter: None,
+            fallback,
+            fallback_pending: false,
             polling,
             last_view: String::new(),
+            shortcut_label: String::new(),
+            shortcut_state: None,
             saved_resume: None,
             saved_tutorial: progress.tutorial,
             saved_shortcut_chosen: progress.shortcut_chosen,
             saved_first_capture_completed: progress.first_capture_completed,
             clock: std::time::Instant::now(),
         };
+        session.shortcut_changed(shortcut);
         session.sync();
         Ok(session)
     }
@@ -1047,7 +1083,6 @@ impl Session {
         shortcut: &str,
         events: impl Fn(Event) + Send + Sync + Clone + 'static,
     ) -> anyhow::Result<Transport> {
-        use std::io::BufRead;
         use std::process::{Command, Stdio};
 
         let mut command = Command::new(crate::capture::desktop::helper::path()?);
@@ -1061,16 +1096,25 @@ impl Session {
         if Path::new(dev_icon).is_file() {
             command.args(["--icon", dev_icon]);
         }
+        Self::spawn_transport(&mut command, events)
+    }
+
+    fn spawn_transport(command: &mut std::process::Command, events: impl Fn(Event) + Send + Sync + Clone + 'static) -> anyhow::Result<Transport> {
+        use std::io::BufRead;
+        command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
         let mut child = command.spawn()?;
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
 
         std::thread::spawn(move || {
+            let mut closed = false;
             if let Some(stdout) = stdout {
-                for line in std::io::BufReader::new(stdout)
-                    .lines()
-                    .map_while(Result::ok)
-                {
+                let mut reader = std::io::BufReader::new(stdout);
+                loop {
+                    let mut line = Vec::new();
+                    let read = read_protocol_line(&mut reader, &mut line);
+                    if !matches!(read, Ok(n) if n > 0 && n <= 65_536) { break; }
+                    let Ok(line) = std::str::from_utf8(&line) else { continue; };
                     let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
                         continue;
                     };
@@ -1086,7 +1130,11 @@ impl Session {
                         if action == "reset-shortcut" && value.get("kind").is_none() {
                             value["kind"] = "record".into();
                         }
-                        if let Ok(action) = serde_json::from_value(value) {
+                        if let Ok(mut action) = serde_json::from_value(value) {
+                            #[cfg(target_os = "macos")]
+                            if let super::settings::Action::Shortcut { pressed, .. } = &mut action {
+                                pressed.reserved = native_shortcut_reserved(pressed.key_code, pressed.modifiers);
+                            }
                             events(Event::Shortcut(action));
                         }
                         continue;
@@ -1095,12 +1143,42 @@ impl Session {
                         Some(permission) => format!("{action}:{permission}"),
                         None => action.to_owned(),
                     };
+                    closed |= action == "close";
                     events(Event::Action(action));
                 }
             }
-            events(Event::Exited);
+            if !closed { events(Event::Exited); }
         });
-        Ok(Transport::Helper { child, stdin })
+        Ok(Transport::Helper { child: crate::capture::ui_process::UiChild::new(child), stdin })
+    }
+
+    pub fn restore_native(&mut self) -> bool {
+        if self.fallback.is_some() && self.flow.hidden {
+            // A replacement native window may map before a queued hide reaches it.
+            // Defer creating any replacement until capture completion reveals the flow.
+            self.fallback_pending = true;
+            let old = std::mem::replace(&mut self.transport, Transport::InProcess(None));
+            retire_transport(old);
+            return true;
+        }
+        self.fallback_pending = false;
+        let Some(fallback) = self.fallback.take() else { return false; };
+        if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
+        let old = std::mem::replace(&mut self.transport, Transport::InProcess(None));
+        retire_transport(old);
+        match fallback() {
+            Ok(transport) => {
+                self.transport = transport;
+                self.last_view.clear();
+                let label = self.shortcut_label.clone();
+                self.shortcut_changed(&label);
+                if let Some(editor) = self.shortcut_state.clone() { self.send(&editor); }
+                self.sync();
+                if self.flow.hidden { self.send(&serde_json::json!({"type": "hide"})); }
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     pub fn mode(&self) -> Mode {
@@ -1137,11 +1215,11 @@ impl Session {
                 Effect::None
             }
             Effect::Request(permission) => {
-                self.send(&serde_json::json!({"type": "request", "permission": permission}));
+                self.permission_action("request", permission);
                 Effect::None
             }
             Effect::OpenSettings(permission) => {
-                self.send(&serde_json::json!({"type": "open-settings", "permission": permission}));
+                self.permission_action("open-settings", permission);
                 Effect::None
             }
             Effect::Hide => {
@@ -1210,16 +1288,28 @@ impl Session {
     }
 
     pub fn show(&mut self) {
+        if self.fallback_pending && !self.flow.hidden { self.restore_native(); }
         self.send(&serde_json::json!({"type": "show"}));
     }
 
     /// Keep every step's displayed Record keys in sync with the active shortcut.
     pub fn shortcut_changed(&mut self, label: &str) {
+        self.shortcut_label = label.to_owned();
         self.send(&serde_json::json!({"type": "shortcut", "label": label}));
     }
 
     pub fn shortcut_editor(&mut self, editor: &crate::capture::desktop::settings::ShortcutView) {
-        self.send(&serde_json::json!({"type": "shortcut-editor", "shortcut": editor}));
+        let message = serde_json::json!({"type": "shortcut-editor", "shortcut": editor});
+        self.shortcut_state = Some(message.clone());
+        self.send(&message);
+    }
+
+    pub(crate) fn local_practice(&self) -> bool {
+        self.flow.local_practice()
+    }
+
+    pub(crate) fn choosing_shortcut(&self) -> bool {
+        self.flow.step() == Step::Shortcut
     }
 
     pub fn editing_shortcut(&self) -> bool {
@@ -1230,6 +1320,14 @@ impl Session {
         #[cfg(test)]
         if matches!(self.transport, Transport::InProcess(None)) {
             return;
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(Transport::Helper { stdin: Some(pipe), .. }) = self.permission_adapter.as_mut() {
+            use std::io::Write;
+            for row in self.flow.view().rows.iter().filter(|row| row.status == Status::Granted) {
+                let message = serde_json::json!({"type": "close-guide", "permission": row.permission});
+                let _ = writeln!(pipe, "{message}").and_then(|()| pipe.flush());
+            }
         }
         let mut view = serde_json::to_value(self.flow.view()).unwrap_or_default();
         view["type"] = "state".into();
@@ -1264,6 +1362,52 @@ impl Session {
         }
     }
 
+    // Electron owns presentation; the installed helper retains consent attribution and
+    // the lifetime of asynchronous native prompts. Never send it a presentation state.
+    fn permission_action(&mut self, action: &str, permission: Permission) {
+        if self.fallback_pending { return; }
+        if self.fallback.is_none() {
+            self.send(&serde_json::json!({"type": action, "permission": permission}));
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        crate::capture::desktop::linux::privacy::open_settings(permission);
+        #[cfg(target_os = "macos")]
+        {
+            let adapter_dead = match self.permission_adapter.as_mut() {
+                Some(Transport::Helper { child, stdin }) => stdin.is_none() || !matches!(child.try_wait(), Ok(None)),
+                Some(_) => true,
+                None => false,
+            };
+            if adapter_dead {
+                if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
+                if self.restore_native() { self.permission_action(action, permission); }
+                return;
+            }
+            if self.permission_adapter.is_none() {
+                let Ok(path) = crate::capture::desktop::helper::path() else {
+                    if self.restore_native() { self.permission_action(action, permission); }
+                    return;
+                };
+                let mut command = std::process::Command::new(path);
+                command.args(["onboarding", "--permissions-only"]);
+                self.permission_adapter = Self::spawn_transport(&mut command, |_| {}).ok();
+                if self.permission_adapter.is_none() {
+                    if self.restore_native() { self.permission_action(action, permission); }
+                    return;
+                }
+            }
+            if let Some(Transport::Helper { stdin: Some(pipe), .. }) = self.permission_adapter.as_mut() {
+                use std::io::Write;
+                let message = serde_json::json!({"type": action, "permission": permission});
+                if writeln!(pipe, "{message}").and_then(|()| pipe.flush()).is_err() {
+                    if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
+                    if self.restore_native() { self.permission_action(action, permission); }
+                }
+            }
+        }
+    }
+
     fn send(&mut self, message: &serde_json::Value) {
         use std::io::Write;
         match &mut self.transport {
@@ -1288,18 +1432,33 @@ impl Session {
     }
 }
 
+fn read_protocol_line(reader: &mut impl std::io::BufRead, line: &mut Vec<u8>) -> std::io::Result<usize> {
+    use std::io::BufRead;
+    std::io::Read::take(reader, 65_537).read_until(b'\n', line)
+}
+
+fn retire_transport(transport: Transport) {
+    if let Transport::Helper { mut child, stdin } = transport {
+        drop(stdin);
+        std::thread::spawn(move || {
+            for _ in 0..20 {
+                if !matches!(child.try_wait(), Ok(None)) { return; }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        });
+    }
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
         self.polling
             .store(false, std::sync::atomic::Ordering::Release);
+        if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
         self.send(&serde_json::json!({"type": "close"}));
-        match &mut self.transport {
-            Transport::Helper { child, stdin } => {
-                *stdin = None;
-                let _ = child.wait();
-            }
-            Transport::InProcess(sender) => *sender = None,
-        }
+        let transport = std::mem::replace(&mut self.transport, Transport::InProcess(None));
+        retire_transport(transport);
     }
 }
 
@@ -2053,6 +2212,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("apparent-onboarding-{}", std::process::id()));
         let path = dir.join("config.json");
         std::fs::create_dir_all(&dir).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         std::fs::write(&path, r#"{"agentHost":"studio","autocrop":false}"#).unwrap();
         assert_eq!(Progress::load_from(&path), Progress::default());
         let progress = Progress {
@@ -2198,4 +2362,137 @@ mod tests {
         }
         assert!(admission[2].is_empty());
     }
+}
+
+#[cfg(test)]
+mod local_practice_tests {
+    use super::*;
+
+    #[test]
+    fn optional_practice_stays_local_with_or_without_explicit_shortcut_choice() {
+        for chosen in [false, true] {
+            let mut flow = Flow::tour(Step::TryIt, None).with_first_capture(false, chosen, false);
+            assert!(!flow.local_practice());
+            flow.on(Input::ShortcutTriggered);
+            assert!(flow.local_practice(), "opting out must not enable practice uploads");
+            flow.on(Input::CaptureStarted);
+            flow.on(Input::Closed);
+            assert!(flow.local_practice(), "closing the tour must not change practice policy");
+            flow.on(Input::CaptureEnded { completed: true });
+            assert!(!flow.local_practice());
+        }
+    }
+
+    #[test]
+    fn practice_policy_follows_shortcut_attempt_and_survives_processing() {
+        let mut flow = Flow::tour(Step::TryIt, None).with_first_capture(true, true, false);
+        assert!(!flow.local_practice());
+        flow.on(Input::ShortcutTriggered);
+        assert!(flow.local_practice());
+        flow.on(Input::CaptureStarted);
+        assert!(flow.local_practice());
+        flow.on(Input::CaptureEnded { completed: false });
+        assert!(!flow.local_practice());
+        flow.on(Input::CaptureStarted);
+        assert!(!flow.local_practice(), "menu captures cannot inherit practice status");
+    }
+}
+
+#[cfg(test)]
+mod adapter_regressions {
+    use super::*;
+    #[test]
+    fn bounded_reader_limits_each_line_without_limiting_the_stream() {
+        let mut reader = std::io::Cursor::new(b"{}\n{}\n");
+        for _ in 0..2 {
+            let mut line = Vec::new();
+            assert_eq!(read_protocol_line(&mut reader, &mut line).unwrap(), 3);
+        }
+        let mut reader = std::io::Cursor::new(vec![b'x'; 100_000]);
+        let mut line = Vec::new();
+        assert_eq!(read_protocol_line(&mut reader, &mut line).unwrap(), 65_537);
+        assert_eq!(line.len(), 65_537);
+    }
+    #[test]
+    fn hidden_fallback_waits_until_capture_ends_before_creating_native_window() {
+        let mut flow = Flow::tour(Step::TryIt, None);
+        flow.hidden = true;
+        let mut session = Session::for_test(flow);
+        session.shortcut_label = "Test shortcut".into();
+        let (tx, rx) = flume::unbounded();
+        session.fallback = Some(Box::new(move || Ok(Transport::InProcess(Some(tx.clone())))));
+        assert!(session.restore_native());
+        assert!(rx.try_recv().is_err(), "no replacement transport is created while hidden");
+        assert!(session.fallback_pending);
+        assert!(session.fallback.is_some());
+        session.input(Input::CaptureEnded { completed: false });
+        let messages: Vec<_> = rx.try_iter().collect();
+        assert_eq!(messages.last().unwrap()["type"], "show");
+        assert!(messages.iter().any(|v| v["type"] == "show"));
+        assert!(messages.iter().any(|v| v["type"] == "state"));
+        assert!(messages.iter().any(|v| v["label"] == "Test shortcut"));
+        assert!(!session.restore_native());
+    }
+}
+
+/// Runs on the transport reader, never on the GUI thread. Missing native evidence rejects.
+#[cfg(target_os = "macos")]
+fn native_shortcut_reserved(key: u32, modifiers: u32) -> bool {
+    use std::{process::Command, time::Duration};
+    if key > 127 || modifiers & !0x1b00 != 0 { return true; }
+    let Ok(path) = crate::capture::desktop::helper::path() else { return true; };
+    let mut command = Command::new(path);
+    command.args(["onboarding", "--validate-shortcut", &key.to_string(), &modifiers.to_string()]);
+    query_shortcut_reservation(&mut command, Duration::from_secs(2))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn query_shortcut_reservation(command: &mut std::process::Command, timeout: std::time::Duration) -> bool {
+    use std::{io::Read, process::Stdio, time::{Duration, Instant}};
+    let Ok(mut child) = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else { return true; };
+    let stdout = child.stdout.take();
+    let mut child = crate::capture::ui_process::UiChild::new(child);
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => { let _ = child.kill(); let _ = child.wait(); return true; }
+        }
+    }
+    let mut bytes = Vec::new();
+    let Some(stdout) = stdout else { return true; };
+    if stdout.take(33).read_to_end(&mut bytes).is_err() { return true; }
+    shortcut_reservation_projection(&bytes)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn shortcut_reservation_projection(bytes: &[u8]) -> bool {
+    if bytes.len() > 32 { return true; }
+    serde_json::from_slice::<bool>(bytes).unwrap_or(true)
+}
+
+#[test]
+fn shortcut_native_projection_fails_closed() {
+    assert!(!shortcut_reservation_projection(b"false\n"));
+    for bytes in [b"true".as_slice(), b"", b"null", b"{}", b"false true", b"{\"reserved\":false}"] {
+        assert!(shortcut_reservation_projection(bytes));
+    }
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn shortcut_native_process_failures_reject_without_accepting_renderer_claims() {
+    use std::{process::Command, time::Duration};
+    let query = |script: &str| {
+        let mut command = Command::new("sh");
+        command.args(["-c", script]);
+        query_shortcut_reservation(&mut command, Duration::from_millis(100))
+    };
+    assert!(!query("printf false"));
+    assert!(query("printf true"));
+    assert!(query("printf false; exit 1"));
+    assert!(query("printf invalid"));
+    assert!(query("exec sleep 2"));
+    assert!(query_shortcut_reservation(&mut Command::new("/nonexistent/apparent-test-helper"), Duration::from_millis(100)));
 }

@@ -216,6 +216,11 @@ fn open(request: Request, cx: &mut App) {
         }
         early.push(message);
     }
+    let initially_visible = early.iter().rev().find_map(|message| match message["type"].as_str() {
+        Some("hide") => Some(false),
+        Some("show") => Some(true),
+        _ => None,
+    }).unwrap_or(true);
     let height = first.as_ref().map_or(if cfg!(target_os = "windows") { 500.0 + CAPTION_H } else { 600.0 + CAPTION_H }, ViewState::height);
     let bounds = Bounds::centered(None, size(px(WIDTH), px(height)), cx);
     let Request {
@@ -232,8 +237,8 @@ fn open(request: Request, cx: &mut App) {
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(14.0), px(14.0))),
             }),
-            focus: true,
-            show: true,
+            focus: initially_visible,
+            show: initially_visible,
             kind: WindowKind::Normal,
             is_movable: true,
             is_resizable: false,
