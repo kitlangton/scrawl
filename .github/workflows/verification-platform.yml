@@ -105,7 +105,7 @@ jobs:
           workspaces: |
             . -> target
             capture/engine -> target
-            connect/client -> connect/client/target
+            connect/client -> target
       - uses: actions/setup-node@v4
         if: needs.select.outputs.root == 'true' || needs.select.outputs.browser == 'true'
         with:
