@@ -452,7 +452,7 @@
       "id": "live-transcribe",
       "group": "record",
       "name": "Transcribe while recording",
-      "says": "Streams the microphone to Apple Speech during the capture, so finishing waits only for the last words.",
+      "says": "Streams the microphone to one continuous Apple recognizer during capture. Final results may wait until EOF; failure retries the complete saved audio.",
       "status": "experiment:liveTranscribe",
       "platforms": ["mac"],
       "added": "2026-10-19",

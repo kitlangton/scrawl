@@ -158,10 +158,18 @@ pub fn transcribe(wav: Option<&Path>, audio: Option<&RecordedAudio>) -> Transcri
                     Err(error) => crate::capture::engine::runtime::apparent_log(format!("Pause transcription failed, transcribing the recording: {error:#}")),
                 }
             }
-            live.and_then(|live| finish_live(live, audio))
-                .unwrap_or_else(|| apple(wav))
+            live_or_saved(live, audio, || apple(wav))
         },
     )
+}
+
+/// A live failure always retries the complete saved recording, never a live prefix.
+pub(super) fn live_or_saved(
+    live: Option<crate::capture::engine::runtime::audio::transcription::live_transcribe::Live>,
+    audio: &RecordedAudio,
+    saved: impl FnOnce() -> TranscriptData,
+) -> TranscriptData {
+    live.and_then(|live| finish_live(live, audio)).unwrap_or_else(saved)
 }
 
 /// The transcript made while recording, or `None` (logged) to transcribe the WAV instead.
