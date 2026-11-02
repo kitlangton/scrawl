@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@apparent/ui/button';
+import { StatusCard } from '@apparent/ui/status-card';
+import { DisclosureMenu } from '@apparent/ui/disclosure-menu';
+import '@apparent/ui/status.css';
+import frogs from '../../../../../shared/assets/brand/connect-frogs.png';
+import font from '../../../../../shared/assets/fonts/HostGrotesk-Variable.ttf?url';
 import type { ConnectAction, ConnectSettings, ConnectView } from './bridge';
 
 export function ConnectSettingsCard() {
@@ -16,6 +21,9 @@ export function ConnectSettingsCard() {
         connect: bridge.connectSettings, allow: bridge.allowConnectUploads, cancel: bridge.cancelConnectSettings,
         check: bridge.checkConnectConnection, disable: bridge.disableConnectUploads,
         disconnect: bridge.disconnectConnectSettings, 'open-browser': bridge.openConnectBrowser,
+        'request-disable': bridge.requestDisableConnectUploads,
+        'request-disconnect': bridge.requestDisconnectConnectSettings,
+        'open-shared-links': bridge.openConnectSharedLinks,
       };
       const next = !bridge ? { status: 'disconnected' } as const : action
         ? await handlers![action]() : await bridge.readConnectSettings();
@@ -44,39 +52,36 @@ export function ConnectSettingsCard() {
 
   if (result.status === 'disabled') return null;
   const view = result.status === 'connected' ? result.view : undefined;
-  return <section aria-labelledby="connect-title" className="space-y-4 rounded-xl border border-border bg-white p-6">
-    <div className="flex flex-wrap items-start justify-between gap-4">
-      <div>
-        <p className="text-xs font-medium text-primary">GENERAL / CONNECT · EXPERIMENTAL</p>
-        <h2 id="connect-title" className="text-lg font-semibold">Apparent Connect</h2>
-      </div>
-      <Button variant="outline" disabled={busy} onClick={() => void request()}>Refresh Connect</Button>
-    </div>
-    <p className="text-sm leading-relaxed text-muted-foreground">
-      Connecting this device requires explicit permission to upload new captures to your configured Connect server. It does not create public links or upload older captures.
-    </p>
-    <div role="status" aria-live="polite" className="space-y-2 rounded-lg bg-muted px-4 py-3 text-sm">
-      {busy && <p>Checking local Connect settings…</p>}
-      {view ? <ConnectDetails view={view} busy={busy} onAction={request} /> : result.status === 'disconnected'
-        ? <p>Not connected to the running Rust app. Open Apparent and refresh; this window never starts it.</p>
-        : result.status === 'error'
-          ? <p>Connect state is unavailable. Check the running app and refresh. Private connection details were not returned.</p>
-          : <p>Connect is unavailable.</p>}
-    </div>
+  const p = view?.presentation;
+  const buttons = p?.buttons ?? view?.buttons ?? [];
+  const menu = new Set(p?.menuActions ?? []);
+  const controls = buttons.filter(button => menu.has(button.command));
+  const cardButtons = buttons.filter(button => !menu.has(button.command));
+  function renderButton(button: typeof buttons[number], close?: () => void) {
+    const destructive = button.command === 'disconnect' || button.command === 'request-disconnect';
+    return <Button key={button.command} variant="ghost"
+      className={close ? destructive ? 'disconnect-action' : undefined
+        : destructive ? 'destructive-action' : button.command === 'cancel' ? 'secondary-action' : 'primary-action'}
+      disabled={busy || !button.enabled} onClick={() => { close?.(); void request(button.command); }}>{button.title}</Button>;
+  }
+  return <section aria-label="Apparent Connect" className="apparent-connect-workflow">
+    <style>{`@font-face { font-family: 'Connect Host Grotesk'; src: url('${font}'); }`}</style>
+    {p?.accountMenu && <div className="flex justify-end pb-4">
+      <DisclosureMenu label="Account and connection options" trigger="A">
+        {close => <>
+          <p className="menu-context">This computer{view?.server && <><br />{view.server}</>}</p>
+          {controls.map(button => renderButton(button, close))}
+          <p className="menu-context">Disconnecting does not delete uploaded captures.</p>
+        </>}
+      </DisclosureMenu>
+    </div>}
+    <StatusCard tone={p?.tone ?? (view ? 'neutral' : busy ? 'progress' : 'failure')}
+      headline={p?.headline ?? view?.status ?? (busy ? 'Reading connection settings…' : 'Connection unavailable.')}
+      compact={p?.compact} artwork={p?.artwork ? <img src={frogs} alt="" /> : undefined}>
+      <p>{p?.detail ?? view?.detail ?? 'Open the current Apparent app, then refresh. Local recording remains available.'}</p>
+      {p?.note && <p className="status-note">{p.note}</p>}
+      {cardButtons.length > 0 && <div className="status-actions">{cardButtons.map(button => renderButton(button))}</div>}
+      {!view && <Button className="primary-action" disabled={busy} onClick={() => void request()}>Refresh connection</Button>}
+    </StatusCard>
   </section>;
-}
-
-function ConnectDetails({ view, busy, onAction }: { view: ConnectView; busy: boolean; onAction: (action: ConnectAction) => void }) {
-  return <>
-    <strong>{view.status}</strong>
-    <p>{view.detail}</p>
-    {view.server && <p className="break-all text-muted-foreground">Server: {view.server}</p>}
-    {view.userCode && <p className="font-mono text-lg font-semibold tracking-wider">{view.userCode}</p>}
-    {view.verificationUri && <p className="break-all text-muted-foreground">Approve this device in your browser: {view.verificationUri}</p>}
-    <p className="text-muted-foreground">{view.note}</p>
-    <div className="flex flex-wrap gap-2 pt-2">
-      {view.buttons.map(button => <Button key={button.command} variant={button.command === 'allow' ? 'default' : 'outline'}
-        disabled={busy || !button.enabled} onClick={() => onAction(button.command)}>{button.title}</Button>)}
-    </div>
-  </>;
 }

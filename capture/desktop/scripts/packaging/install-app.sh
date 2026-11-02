@@ -44,6 +44,7 @@ cp -f "${REPO_DIR}/capture/desktop/assets/Apparent.icns" "${RESOURCES_DIR}/Appar
 cp -f "${REPO_DIR}/shared/assets/fonts/HostGrotesk-Variable.ttf" "${RESOURCES_DIR}/HostGrotesk-Variable.ttf"
 cp -f "${REPO_DIR}/shared/assets/brand/apparent-wordmark.png" "${RESOURCES_DIR}/apparent-wordmark.png"
 cp -f "${REPO_DIR}/shared/assets/brand/apparent-a.png" "${RESOURCES_DIR}/apparent-a.png"
+cp -f "${REPO_DIR}/shared/assets/brand/connect-frogs.png" "${RESOURCES_DIR}/connect-frogs.png"
 
 if [[ -n "${SPARKLE_DIR}" && -d "${SPARKLE_DIR}/Sparkle.framework" ]]; then
   rm -rf "${FRAMEWORKS_DIR}/Sparkle.framework"

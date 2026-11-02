@@ -111,7 +111,7 @@ and permission-repair windows retain their existing behavior.
 
 ### Apparent Connect (experiment)
 
-**General → Apparent Connect** appears by default below Launch at login on
+**General → Connect** appears by default above Launch at login on
 macOS and Linux. Opening it does not sign in, grant upload consent or enable
 uploads. To hide the controls, set `"connectSettings": false` in the existing
 `experiments` object in `~/.config/apparent/config.json`, then close and reopen
@@ -119,8 +119,8 @@ Settings. It adds no onboarding step and does not require `hostedSharing`. Witho
 `https://hosted.tryapparent.com`; an existing valid custom origin is preserved.
 
 **Sign in to Connect… → Allow and continue → Open browser** explains the full
-upload scope before starting device authorization. Match the public code and
-approve in the browser, then return to Settings. Website sign-in/approval is not
+upload scope before starting device authorization. The browser link carries the public code automatically; approve there, then return
+to Settings. Settings does not ask users to match a code that the browser does not show. Website sign-in/approval is not
 local success: **Uploads on** requires fresh local credentials, upload consent,
 and enabled upload gates. Read-only credentials remain **uploads off**. New
 captures may upload privately; existing captures are not scanned, and account
@@ -140,6 +140,23 @@ do not delete the client's pending revocation files. Failed state writes are not
 presented as successful sign-out.
 Native renderers only display the shared controller's view and emit commands;
 raw errors, tokens and device secrets never enter its presentation contract.
+
+Connect uses the accepted Paper card and the shared frog artwork, without a separate
+section heading. The invitation reads “Help others see what you mean.”; successful
+local activation becomes a compact confirmation. The top-right A opens connection
+controls, not an asserted account identity: the current Desktop contract has no
+verified email. Disable and disconnect first show a local confirmation; declining
+it does not revoke or cancel anything. Confirmed commands retain the existing
+revocation and pending-login cancellation semantics. Shared-link management is
+available only through its existing feature gate and validated credential site.
+
+Rust supplies typed presentation and action placement to GPUI, SwiftUI and Electron;
+renderers do not infer success from status copy or browser approval. Success uses
+#146B43, progress #7A58C7, preventive caution #FFBE2E with Carbon, and failures and
+destructive actions #B42318. Each status has a label plus icon/bar; disabled controls
+use Carbon at 45%, while explanations stay readable. The source for the reused art
+is Public’s approved `assets/pond/belief/hug.png`; the runtime copy is owned by
+`shared/assets/brand/connect-frogs.png` and packaged locally, never fetched from the site.
 
 The opt-in Electron development window also presents this bounded workflow using
 the same Rust controller and client, not a second auth implementation. Launch

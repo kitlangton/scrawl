@@ -54,6 +54,7 @@ impl FeatureBackend {
 }
 impl Backend for FeatureBackend {
     fn snapshot(&self) -> Result<Snapshot, SafeError> { self.inner.snapshot() }
+    fn shared_links_url(&self) -> Option<String> { self.inner.shared_links_url() }
     fn login(&self, server: &str, allowed: Arc<dyn Fn() -> bool + Send + Sync>, approval: &dyn Fn(Approval)) -> Result<(), SafeError> {
         self.inner.login(server, self.allowed(allowed), approval)
     }
