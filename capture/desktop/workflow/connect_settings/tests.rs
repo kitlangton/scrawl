@@ -79,12 +79,26 @@ fn opening_and_commands_are_exact_and_deadline_is_not_a_renderer_option() {
     assert!(serde_json::from_str::<Message>(r#"{"connect":"read","deadline":1,"command":"allow"}"#).is_err());
 }
 #[test]
-fn disabled_open_never_constructs_client_and_missing_config_stays_missing() {
+fn explicit_opt_out_never_constructs_client_or_changes_config() {
     let fixture = Fixture::new(false);
-    std::fs::remove_file(&fixture.config).unwrap();
+    let before = std::fs::read(&fixture.config).unwrap();
     let (client, server) = UnixStream::pair().unwrap();
     run(server, clock_ms()+3000, &fixture.config, || panic!("disabled feature instantiated backend"), || panic!("worker"), LEASE);
     assert_eq!(read(&mut BufReader::new(client))["error"], "feature_disabled");
+    assert_eq!(std::fs::read(&fixture.config).unwrap(), before);
+}
+#[test]
+fn missing_config_opens_local_controls_without_writes_or_network() {
+    let fixture = Fixture::new(false);
+    std::fs::remove_file(&fixture.config).unwrap();
+    let (backend, started, _release) = fake();
+    let (mut client, handle, workers) = start(&fixture.config, backend.clone(), LEASE);
+    let first = read(&mut client);
+    assert_eq!(first["connect"]["status"], "Not connected");
+    drop(client); handle.join().unwrap();
+    assert!(started.try_recv().is_err());
+    assert_eq!(workers.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.disables.load(Ordering::SeqCst), 0);
     assert!(!fixture.config.exists());
 }
 #[test]

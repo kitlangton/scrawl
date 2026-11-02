@@ -61,9 +61,14 @@ async function main() {
   origin = `http://127.0.0.1:${server.address().port}`;
   try {
     client = new ConnectSettings(home);
-    assert.deepEqual(await client.request(), { status: 'disabled' });
+    assert.equal((await client.request()).status, 'connected');
+    await client.request('allow'); // Default availability never supplies consent.
+    assert.equal(calls.length, 0);
     await assert.rejects(fs.stat(config), { code: 'ENOENT' });
-    const original = { experiments: { connectSettings: true }, cloud: { server: origin, privateNested: { keep: true } }, privateFixture: { keep: 'synthetic' } };
+    await fs.writeFile(config, JSON.stringify({ experiments: { connectSettings: false } }), { mode: 0o600 });
+    await until(() => client.request(), r => r.status === 'disabled', 'Explicit opt-out did not hide Connect');
+    assert.equal(calls.length, 0);
+    const original = { experiments: { unrelated: true }, cloud: { server: origin, privateNested: { keep: true } }, privateFixture: { keep: 'synthetic' } };
     await fs.writeFile(config, JSON.stringify(original), { mode: 0o600 });
     await until(() => client.request(), r => r.status === 'connected', 'Actual Rust opening did not become ready');
     const preserved = await fs.readFile(config, 'utf8');

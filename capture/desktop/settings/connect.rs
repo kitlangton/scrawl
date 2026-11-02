@@ -1,6 +1,7 @@
 //! Shared Connect Settings policy; native renderers only draw `View` and send `Command`.
 //!
-//! The parent gates construction/rendering with the default-off `EXPERIMENT`. A Session
+//! The parent gates construction/rendering with the default-on `connectSettings` flag.
+//! An explicit false hides the controls without changing upload consent. A Session
 //! owns one controller and routes emitted events back to that same controller on its UI
 //! thread. Call `refresh()` on Settings Tick for fresh **local-only** state; it never
 //! probes the network. `Check` alone starts a background health request. Call `close()`

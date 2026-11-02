@@ -48,8 +48,8 @@ Other files: `apparent.json` is the full manifest (keyframes, `marks` with shape
 
 ### Configuring Apparent
 
-Native app launch is a default-off candidate experiment on Mac and Linux. With an
-updated, OS-registered app and `"experiments": {"nativeLaunch": true}`, the exact
+Native app launch is available by default on Mac and Linux (an explicit
+`experiments.nativeLaunch: false` disables it). With an updated, OS-registered app, the exact
 `apparent://open` URL opens the idle app; it never records or sends, and leaves
 active capture work alone. Other URLs/parameters are rejected. Linux registration
 is explicit: `apparent launch-handler install`; `apparent launch-handler status`

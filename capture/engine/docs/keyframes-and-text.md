@@ -63,12 +63,12 @@ On by default. After a local capture, the Completed capsule keeps its Copy/Send 
 
 Off by default. During a microphone recording, a separate best-effort recognizer checks completed six-second chunks of captured 16 kHz audio, including continuous noise without silence. Only after two active chunks have completed successfully without recognized words does the recording capsule show the inline amber “No words yet” warning. Words clear it; after words arrive it does not claim “yet” again. A missing model or recognition error is not an empty result and cannot trigger that warning. The energy threshold qualifies audio for a check; it is not proof of speech or microphone health. The probe does not supply the final transcript; after Stop the saved audio and final transcription determine the Completed warning above. On Mac the probe runs the helper with a short deadline; on Linux and Windows it uses a separate Parakeet session. The live experiment does not change final transcription or delivered bundle content.
 
-## Experiment `exportNarration` (`capture/engine/export/narration.rs`)
+## Local export narration (`exportNarration`) (`capture/engine/export/narration.rs`)
 
-Off by default. Explicit `apparent export B --narration cues.json` replaces recorded
+Available by default. Explicit `apparent export B --narration cues.json` replaces recorded
 audio in the exported movie with locally generated Kokoro `bm_fable` speech. It never
-changes the bundle or its transcript. Enable `experiments.exportNarration` in the
-inspectable config; provisioning is separate and export does not download models.
+changes the bundle or its transcript. An explicit `experiments.exportNarration: false`
+disables it; provisioning is separate and export does not download models.
 See [export audio](export-and-retention.md#explicit-export-audio) for the versioned
 timed script, integrity pins, limits, provenance and failure/recovery contract.
 
@@ -186,9 +186,9 @@ native pill/Swift Settings proof, onboarding cancellation and foreground
 clipboard tests, and the real-feature walkthrough remain release gates. See
 [hosted client](../../../connect/docs/hosted-client.md) for limits and isolated synthetic test commands.
 
-## Experiment `nativeLaunch`
+## Native URL launch (`nativeLaunch`)
 
-The separate default-off `nativeLaunch` experiment opens the app by the exact
+The default-on `nativeLaunch` setting opens the app by the exact
 `apparent://open` URL, never a capture or handoff. Its OS registration and validation
 contract are in [native launch](../../desktop/docs/native-launch.md).
 

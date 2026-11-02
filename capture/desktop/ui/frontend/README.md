@@ -54,8 +54,8 @@ shared sources, rerun `npm ci`; builds reject a stale installed snapshot.
 
 ## Experimental General → Apparent Connect
 
-The existing default-off `connectSettings` flag also gates this opt-in window's
-Connect card. Installed Settings still use their existing native presentation;
+The default-on `connectSettings` flag also gates this opt-in window's Connect
+card; an explicit false hides it. Visibility alone never enables uploads. Installed Settings still use their existing native presentation;
 this slice does not change routing or onboarding. See
 `../../docs/onboarding-and-settings.md` for consent and recovery behavior.
 

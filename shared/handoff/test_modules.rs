@@ -721,13 +721,38 @@ mod tests {
     }
 
     #[test]
-    fn video_export_flag_defaults_off() {
+    fn video_export_defaults_on_and_preserves_explicit_opt_out() {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
+        assert!(load_config_from(&path).video_export_enabled());
         fs::write(&path, br#"{"autoSend":false}"#).unwrap();
-        assert_eq!(load_config_from(&path).video_export, None);
+        assert!(load_config_from(&path).video_export_enabled());
+        update_config_in(&path, |config| {
+            config["videoExport"] = false.into();
+            Ok(())
+        }).unwrap();
+        assert!(!load_config_from(&path).video_export_enabled());
+        assert_eq!(load_config_from(&path).auto_send, Some(false));
         fs::write(&path, br#"{"videoExport":true}"#).unwrap();
-        assert_eq!(load_config_from(&path).video_export, Some(true));
+        assert!(load_config_from(&path).video_export_enabled());
+    }
+
+    #[test]
+    fn promoted_features_default_on_without_activating_other_experiments() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("config.json");
+        let config = load_config_from(&path);
+        for name in ["nativeLaunch", "movableRecordingControls", "exportNarration"] {
+            assert!(experiment_enabled_in(&config, name), "{name}");
+            set_experiment_in(&path, name, false).unwrap();
+            assert!(!experiment_enabled_in(&load_config_from(&path), name), "{name}");
+            set_experiment_in(&path, name, true).unwrap();
+            assert!(experiment_enabled_in(&load_config_from(&path), name), "{name}");
+        }
+        for name in ["hostedSync", "hostedSharing", "hostedEncryption", "clipboardImage", "autoPasteDraft", "unknownFutureFeature"] {
+            assert!(!experiment_enabled_in(&config, name), "{name}");
+        }
+        assert!(config.cloud.is_none());
     }
 
     #[test]
@@ -834,6 +859,25 @@ mod tests {
         assert!(!experiment("neverEnabled"));
         enable_experiment("enabledForThisTest");
         assert!(experiment("enabledForThisTest"));
+    }
+
+    #[test]
+    fn connect_settings_defaults_on_without_enabling_uploads_and_preserves_opt_out() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("config.json");
+        let missing = load_config_from(&path);
+        assert!(experiment_enabled_in(&missing, "connectSettings"));
+        assert!(!experiment_enabled_in(&missing, "hostedSync"));
+        assert!(!experiment_enabled_in(&missing, "hostedSharing"));
+        assert!(missing.cloud.is_none());
+        fs::write(&path, r#"{"autoSend":false,"experiments":{"other":true}}"#).unwrap();
+        assert!(experiment_enabled_in(&load_config_from(&path), "connectSettings"));
+        set_experiment_in(&path, "connectSettings", false).unwrap();
+        let opted_out = load_config_from(&path);
+        assert!(!experiment_enabled_in(&opted_out, "connectSettings"));
+        assert_eq!(opted_out.auto_send, Some(false));
+        assert_eq!(opted_out.experiments.get("other"), Some(&true));
+        assert!(opted_out.cloud.is_none());
     }
 
     #[test]
