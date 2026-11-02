@@ -1,10 +1,9 @@
 .hosted-page {
-  --paper: #f5f0e8;
-  --carbon: #19161d;
-  --rule: #cbc4bc;
+  --paper: var(--color-background);
+  --carbon: var(--color-foreground);
+  --rule: var(--color-border);
   min-height: 100svh;
   padding: 24px 20px 36px;
-  color-scheme: light;
   background: var(--paper);
   color: var(--carbon);
   font-synthesis: none;
@@ -16,9 +15,9 @@
 .hosted-page button { border: 1px solid var(--rule); background: transparent; padding: 10px 16px; border-radius: 0; }
 .hosted-page button:disabled { cursor: not-allowed; opacity: .4; }
 .hosted-page button:hover:not(:disabled) { border-color: var(--carbon); }
-.pond-page.hosted-page :is(a, button, input, summary):focus-visible { outline: 2px solid #0000f2; outline-offset: 4px; }
+.pond-page.hosted-page :is(a, button, input, summary):focus-visible { outline: 2px solid var(--color-ring); outline-offset: 4px; }
 .hosted-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--rule); margin-top: 30px; }
-.hosted-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 9px 0; font-size: 14px; color: #67616a; }
+.hosted-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 9px 0; font-size: 14px; color: var(--color-muted-foreground); }
 .hosted-tabs button[aria-selected=true] { color: var(--carbon); border-bottom-color: var(--carbon); }
 .hosted-panel { text-align: center; }
 .hosted-main h1 { font-size: 36px; line-height: 1.08; font-weight: 550; letter-spacing: -1.15px; margin: 31px 0 8px; }
@@ -27,7 +26,7 @@
 .hosted-scene img { width: 100%; height: auto; max-height: 220px; object-fit: contain; }
 .hosted-agent { padding-bottom: 3px; }
 .hosted-crossing { position: relative; margin-top: 42px; display: flex; justify-content: center; align-items: center; }
-.hosted-crossing::before { content: ''; position: absolute; left: -16px; right: -16px; top: 50%; border-top: 3px dotted #b7a5d8; }
+.hosted-crossing::before { content: ''; position: absolute; left: -16px; right: -16px; top: 50%; border-top: 3px dotted var(--color-brand); }
 .hosted-page .hosted-gate { position: relative; display: grid; place-items: center; width: 38px; height: 42px; padding: 6px; border: 0; background: var(--paper); }
 .hosted-gate svg { width: 26px; height: 30px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: square; stroke-linejoin: miter; }
 .hosted-agent-view { display: flex; justify-content: center; align-items: center; }
@@ -48,14 +47,14 @@
 .hosted-identity button { flex-shrink: 0; }
 .hosted-check { display: flex; align-items: flex-start; gap: 10px; text-align: left; margin: 20px 0; line-height: 1.45; cursor: pointer; }
 .hosted-check input { width: 19px; height: 19px; margin: 2px 0; flex-shrink: 0; accent-color: var(--carbon); }
-.hosted-quiet { font-size: 14px; color: #605b63; }
-.hosted-error { text-align: left; border-left: 3px solid #9f342a; padding-left: 16px; }
+.hosted-quiet { font-size: 14px; color: var(--color-muted-foreground); }
+.hosted-error { text-align: left; border-left: 3px solid var(--color-destructive); padding-left: 16px; }
 .hosted-session-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .hosted-session-actions > button { min-height: 44px; }
 .hosted-permission { text-align: left; }
 .hosted-permission > .hosted-primary { display: flex; margin: 20px auto 0; }
 .hosted-dialog { background: var(--paper); color: var(--carbon); border: 1px solid var(--carbon); padding: 30px; width: 480px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 32px); overflow: auto; }
-.hosted-dialog::backdrop { background: rgb(25 22 29 / .25); }
+.hosted-dialog::backdrop { background: var(--color-overlay); }
 .hosted-page .hosted-dialog-close { position: absolute; right: 10px; top: 8px; font-size: 24px; line-height: 1; border: 0; padding: 4px 8px; }
 .hosted-dialog h2 { padding-right: 14px; margin: 0 0 20px; font-size: 26px; line-height: 1.12; font-weight: 550; letter-spacing: -.5px; }
 .hosted-dialog p { font-size: 15px; }
@@ -79,7 +78,7 @@
 .hosted-account-link { margin-left: auto; }
 .hosted-page > .pond-nav { max-width: 720px; margin: 0 auto 18px; padding: 0; gap: 16px; flex-wrap: wrap; }
 .hosted-main > [aria-label="Shared links"] { text-align: left; margin-top: 24px; }
-.hosted-eyebrow { color: #605b63; font-size: 14px; }
+.hosted-eyebrow { color: var(--color-muted-foreground); font-size: 14px; }
 .hosted-intro { font-size: 18px; }
 .hosted-shares { list-style: none; padding: 0; margin: 0; }
 .hosted-shares li { border-top: 1px solid var(--rule); padding: 24px 0; overflow-wrap: anywhere; }

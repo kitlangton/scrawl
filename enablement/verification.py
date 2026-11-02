@@ -194,6 +194,7 @@ def check_temp_environment():
 
 
 def run_pr_checks():
+    subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
     for pattern in ("test_*push*.py", "test_verification.py", "test_release_gate.py",
                     "test_temp_preflight.py", "test_owner_lanes.py"):
         subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
@@ -203,6 +204,7 @@ def run_pr_checks():
 def run_checks(selection, offline=True):
     if selection["root"] or selection["engine"]:
         check_temp_environment()
+    subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_*push*.py"], cwd=ROOT, check=True)
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",

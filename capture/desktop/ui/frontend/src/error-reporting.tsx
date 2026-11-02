@@ -39,7 +39,7 @@ export function ErrorReporting() {
     } finally { if (token === order.current) setBusy(false); }
   }
   useEffect(() => { void request(); return () => { order.current += 1; }; }, []);
-  return <section aria-labelledby="reporting-title" className="space-y-4 rounded-xl border border-border bg-white p-6">
+  return <section aria-labelledby="reporting-title" className="space-y-4 rounded-xl border border-border bg-surface p-6">
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div><p className="text-xs font-medium text-primary">GENERAL / TECHNICAL ERRORS</p>
         <h2 id="reporting-title" className="text-lg font-semibold">Send technical error reports</h2></div>

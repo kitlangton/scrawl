@@ -32,6 +32,11 @@ def main():
     app = destination / "app"
     app.mkdir(parents=True)
     shutil.copytree(frontend / "electron", app / "electron")
+    theme = app / "node_modules/@apparent/ui"
+    (theme / "src").mkdir(parents=True)
+    for name in ("window-theme.cjs", "tokens.css"):
+        shutil.copy2(root / "shared/ui/src" / name, theme / "src" / name)
+    (theme / "package.json").write_text(json.dumps({"exports": {"./window-theme": "./src/window-theme.cjs"}}) + "\n")
     shutil.copytree(frontend / "dist/assets", app / "dist/assets",
                     ignore=shutil.ignore_patterns("foundation-*"))
     shutil.copy2(frontend / "dist/settings.html", app / "dist/settings.html")

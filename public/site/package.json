@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && vite build --ssr src/entry-server.tsx --outDir dist-ssr && node scripts/site-build/prerender.ts",
+    "build": "python3 ../../shared/ui/scripts/check-theme.py && tsc -b && vite build && vite build --ssr src/entry-server.tsx --outDir dist-ssr && node scripts/site-build/prerender.ts",
     "preview": "vite preview",
     "test:video": "node --test scripts/browser-proof/test-video-demo.mjs",
     "test:try-button": "node scripts/pages/test-try-button-browser.mjs",

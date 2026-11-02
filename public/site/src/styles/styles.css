@@ -1,14 +1,14 @@
+@import "../../../../shared/ui/src/tokens.css";
 :root {
-  --bg: #0a0a0b;
-  --fg: #f4f4f5;
-  --muted: #8e8e93;
-  --faint: #48484a;
-  --line: rgba(255, 255, 255, 0.08);
+  --bg: var(--color-background);
+  --fg: var(--color-foreground);
+  --muted: var(--color-muted-foreground);
+  --faint: var(--color-muted-foreground);
+  --line: var(--color-border);
   --ink: #ff3b30;
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
   --term: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
-  color-scheme: dark;
 }
 
 * {

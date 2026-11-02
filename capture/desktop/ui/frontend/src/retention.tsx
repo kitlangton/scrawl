@@ -72,7 +72,7 @@ export function Retention({ effectivePath, settings = false }: { effectivePath: 
     </div>
     {snapshot && <div className="flex flex-wrap items-end gap-3">
       <label className="grid gap-2 text-sm" htmlFor="retention-preset">Keep recordings
-        <select id="retention-preset" className="h-9 rounded-md border border-border bg-white px-3 text-sm focus-visible:outline-2 focus-visible:outline-primary"
+        <select id="retention-preset" className="h-9 rounded-md border border-border bg-surface px-3 text-sm focus-visible:outline-2 focus-visible:outline-primary"
           disabled={busy || scanning} value={preset} onChange={event => setPreset(event.target.value)}>
           <option value="" disabled>Custom policy (config file)</option>
           {snapshot.retention.options.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}

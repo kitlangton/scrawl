@@ -258,6 +258,77 @@ fn encrypted_settings_approval_preserves_endpoint_enrollment_and_roundtrip() {
 }
 
 #[test]
+fn encrypted_settings_future_capture_restart_retry_and_disconnect() {
+    let f = Fixture::new();
+    let server = encryption_server("");
+    encrypted(&f);
+    // A completed capture predates consent. Merely connecting or reading Settings
+    // must never discover it, even when it is beside subsequent captures.
+    let history = f.root.join("history.apparent");
+    fs::rename(f.bundle(), &history).unwrap();
+    for scope in ["read", "upload"] {
+        f.client.login_with_approval(&server.url, scope, scope == "upload", &|| true, &|_| ()).unwrap();
+    }
+    let config_before = fs::read(&f.client.config).unwrap();
+    let requests_before = server.state.lock().unwrap().requests;
+    for _ in 0..3 {
+        assert!(f.client.settings_snapshot().unwrap().uploads_enabled);
+    }
+    Client::new(provider(f.client.config.clone())).process_once().unwrap();
+    assert_eq!(fs::read(&f.client.config).unwrap(), config_before);
+    assert_eq!(server.state.lock().unwrap().requests, requests_before);
+    assert!(f.client.jobs().unwrap().is_empty());
+    no_media(&server);
+
+    let future = f.bundle();
+    let id = f.client.enqueue(&future).unwrap();
+    server.state.lock().unwrap().mode = "fail-file".into();
+    f.client.process_once().unwrap();
+    assert_ne!(job(&f).status, "ready");
+    assert!(!server.state.lock().unwrap().ready);
+    let spool = job(&f).files.clone();
+    // Construct a new client from durable state, as desktop startup does.
+    let restarted = Client::new(provider(f.client.config.clone()));
+    server.state.lock().unwrap().mode.clear();
+    restarted.retry().unwrap();
+    restarted.process_once().unwrap();
+    assert_ready(&f);
+    assert_eq!(job(&f).id, id);
+    assert_eq!(job(&f).files, spool);
+    let out = f.root.join("retrieved.apparent");
+    restarted.fetch(&id, &out, 0).unwrap();
+    assert_bundle(&future, &out);
+    assert_eq!(restarted.jobs().unwrap().len(), 1);
+    assert!(history.is_dir());
+
+    // A second future completion is cancelled durably. Neither restart, Retry,
+    // nor another explicit approval may silently resurrect that cancelled job.
+    let pending = f.root.join("pending.apparent");
+    fs::rename(&future, &pending).unwrap();
+    let cancelled_id = restarted.enqueue(&pending).unwrap();
+    restarted.settings_disable(false).unwrap();
+    assert!(restarted.stored_credential("upload").is_ok());
+    let disabled = Client::new(provider(f.client.config.clone()));
+    let requests_before = server.state.lock().unwrap().requests;
+    assert!(!disabled.settings_snapshot().unwrap().uploads_enabled);
+    assert!(disabled.retry().is_err());
+    disabled.process_once().unwrap();
+    assert_eq!(server.state.lock().unwrap().requests, requests_before);
+    disabled.login_with_approval(&server.url, "upload", true, &|| true, &|_| ()).unwrap();
+    let requests_after_approval = server.state.lock().unwrap().requests;
+    disabled.retry().unwrap();
+    disabled.process_once().unwrap();
+    assert_eq!(server.state.lock().unwrap().requests, requests_after_approval);
+    assert_eq!(disabled.jobs().unwrap().iter().find(|j| j.id == cancelled_id).unwrap().status, "cancelled");
+    disabled.settings_disable(true).unwrap();
+    let disconnected = Client::new(provider(f.client.config.clone()));
+    assert!(!disconnected.settings_snapshot().unwrap().connected);
+    assert!(disconnected.stored_credential("upload").is_err());
+    assert!(disconnected.stored_credential("read").is_err());
+    assert_bundle(&history, &out);
+}
+
+#[test]
 fn encrypted_settings_cancelled_approval_never_publishes_credentials_or_media() {
     let f = Fixture::new();
     let server = encryption_server("");
