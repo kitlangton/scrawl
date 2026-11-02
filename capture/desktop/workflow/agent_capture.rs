@@ -35,6 +35,8 @@ pub enum Action {
     Inspect,
     Stop,
     Cancel,
+    ReferenceRead,
+    ReferenceCopy,
 }
 
 /// Small in-process receipts, not capture history on disk. Media stays in the bundle.
@@ -288,6 +290,29 @@ impl Storage {
     }
 }
 
+#[derive(serde::Deserialize, Debug)]
+#[serde(tag = "reference", rename_all = "lowercase", deny_unknown_fields)]
+enum Reference {
+    Read { deadline: u64 },
+    Copy { expected: String, deadline: u64 },
+}
+
+impl Reference {
+    fn admission(self) -> Option<(Option<(Action, String)>, u64)> {
+        let (action, expected, deadline) = match self {
+            Self::Read { deadline } => (Action::ReferenceRead, String::new(), deadline),
+            Self::Copy { expected, deadline } => {
+                if expected.is_empty() || expected.len() > 4096 || expected.contains(['\0', '/']) { return None; }
+                (Action::ReferenceCopy, expected, deadline)
+            }
+        };
+        // Node uses the same clock as Storage. Convert only the remaining budget
+        // to the GUI request clock; never compare different macOS clock origins.
+        let remaining = deadline.saturating_sub(storage_clock_ms()).min(3000);
+        Some((Some((action, expected)), clock_ms() + remaining))
+    }
+}
+
 enum Wire {
     Capture(Option<(Action, String)>, u64),
     Storage(Storage),
@@ -295,6 +320,10 @@ enum Wire {
 
 fn parse_request(line: &str) -> Option<Wire> {
     if line.starts_with('{') {
+        if let Ok(reference) = serde_json::from_str::<Reference>(line) {
+            let (action, deadline) = reference.admission()?;
+            return Some(Wire::Capture(action, deadline));
+        }
         let storage: Storage = serde_json::from_str(line).ok()?;
         match &storage {
             Storage::Set { path, expected, .. } if path.is_empty() || path.len() > 4096 || path.contains('\0') || !std::path::Path::new(path).is_absolute() || !valid_revision(expected) => return None,
@@ -711,6 +740,7 @@ fn command_at(
                 Action::Inspect => "inspect",
                 Action::Stop => "stop",
                 Action::Cancel => "cancel",
+                Action::ReferenceRead | Action::ReferenceCopy => bail!("Reference actions require the typed GUI protocol"),
             }
         ),
     };
@@ -829,6 +859,58 @@ fn execute_with(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn capture_reference_policy_checks_selection_before_any_clipboard_write() {
+        use super::super::super::capture_reference_response as reply;
+        let directory = std::path::Path::new("/private/captures/older capture — test.apparent");
+        let read = reply(Some(directory), None, true, false, |_| panic!("read wrote clipboard"));
+        assert_eq!(read, serde_json::json!({"reference":{"id":"older capture — test.apparent","copied":false}}));
+        assert_eq!(reply(None, None, true, false, |_| panic!())["reference"]["id"], serde_json::Value::Null);
+        for (dir, expected, enabled, expired, error) in [
+            (Some(directory), Some("stale.apparent"), true, false, "conflict"),
+            (None, Some("stale.apparent"), true, false, "no_selection"),
+            (Some(directory), Some("older capture — test.apparent"), false, false, "feature_disabled"),
+            (Some(directory), Some("older capture — test.apparent"), true, true, "admission_expired"),
+        ] {
+            assert_eq!(reply(dir, expected, enabled, expired, |_| panic!("refused copy wrote clipboard"))["error"], error);
+        }
+        let calls = std::cell::Cell::new(0);
+        let copied = reply(Some(directory), Some("older capture — test.apparent"), true, false, |id| {
+            assert_eq!(id, "older capture — test.apparent");
+            calls.set(calls.get() + 1);
+            Ok(())
+        });
+        assert_eq!(calls.get(), 1);
+        assert_eq!(copied["reference"]["copied"], true);
+        let failed = reply(Some(directory), Some("older capture — test.apparent"), true, false,
+            |_| anyhow::bail!("private backend detail"));
+        assert_eq!(failed, serde_json::json!({"error":"clipboard_failed"}));
+    }
+
+    #[test]
+    fn capture_reference_wire_admits_only_bounded_named_requests() {
+        assert!(super::parse_request(r#"{"reference":"read","deadline":999999999999}"#).is_some());
+        assert!(super::parse_request(r#"{"reference":"copy","deadline":999999999999,"expected":"older capture — test.apparent"}"#).is_some());
+        for invalid in [
+            r#"{"reference":"read","deadline":1,"expected":"unexpected"}"#,
+            r#"{"reference":"copy","deadline":1}"#,
+            r#"{"reference":"copy","deadline":1,"expected":"/private/path.apparent"}"#,
+            r#"{"reference":"copy","deadline":1,"expected":""}"#,
+            r#"{"reference":"read","deadline":1,"storage":"read"}"#,
+        ] { assert!(super::parse_request(invalid).is_none(), "{invalid}"); }
+    }
+
+    #[test]
+    fn capture_reference_deadlines_translate_remaining_time_and_expire() {
+        let (_, expired) = super::Reference::Read { deadline: 0 }.admission().unwrap();
+        assert!(expired <= super::clock_ms());
+        let before = super::clock_ms();
+        let (_, limited) = super::Reference::Read {
+            deadline: super::storage_clock_ms() + 60_000,
+        }.admission().unwrap();
+        assert!(limited >= before && limited <= super::clock_ms() + 3000);
+    }
+
     #[test]
     fn storage_retention_contract_preserves_unknowns_and_captures() {
         let (path, listener) = transport_fixture();
