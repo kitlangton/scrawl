@@ -159,6 +159,9 @@ struct Job {
     files: Vec<Asset>,
     #[serde(default)]
     shared: bool,
+    // Only an explicit public-sharing choice admits a separate readable copy.
+    #[serde(default)]
+    public_copy: bool,
     // Admission pins the format. A preference change cannot downgrade this job.
     #[serde(default)]
     encrypted: bool,
@@ -668,12 +671,30 @@ impl Client {
         bundle: &Path,
         foreground: &dyn Fn() -> bool,
     ) -> Result<PreparedLink> {
-        let (url, job) = self.share_prepared(bundle, foreground)?;
+        self.prepare_link_with_intent(bundle, foreground, false)
+    }
+    /// Call only after disclosing that anyone with the link can view this capture
+    /// and shared captures are not end-to-end encrypted. Upload consent alone is
+    /// insufficient. This never changes an existing private upload's format.
+    pub fn prepare_public_link(
+        &self,
+        bundle: &Path,
+        foreground: &dyn Fn() -> bool,
+    ) -> Result<PreparedLink> {
+        self.prepare_link_with_intent(bundle, foreground, true)
+    }
+    fn prepare_link_with_intent(
+        &self,
+        bundle: &Path,
+        foreground: &dyn Fn() -> bool,
+        public_copy: bool,
+    ) -> Result<PreparedLink> {
+        let (url, job) = self.share_prepared_with_intent(bundle, foreground, public_copy)?;
         Ok(PreparedLink {
             client: self.clone(),
             job,
             text: format!(
-                "I recorded some feedback in Apparent. Open this link for the recording, transcript and annotated screenshots: {url}. Anyone with this link can view and download this capture."
+                "I recorded some feedback in Apparent. Open this link for the recording, transcript and original image evidence: {url}. Anyone with this link can view this capture; shared captures are not end-to-end encrypted."
             ),
         })
     }
@@ -681,21 +702,30 @@ impl Client {
     fn share_allowed(&self, bundle: &Path, foreground: &dyn Fn() -> bool) -> Result<String> {
         self.share_prepared(bundle, foreground).map(|(url, _)| url)
     }
+    #[cfg(any(test, feature = "test-support"))]
     fn share_prepared(
         &self,
         bundle: &Path,
         foreground: &dyn Fn() -> bool,
     ) -> Result<(String, Job)> {
+        self.share_prepared_with_intent(bundle, foreground, false)
+    }
+    fn share_prepared_with_intent(
+        &self,
+        bundle: &Path,
+        foreground: &dyn Fn() -> bool,
+        public_copy: bool,
+    ) -> Result<(String, Job)> {
         ensure!(foreground(), "cancelled");
         ensure!(
-            !self.provider.experiment(HOSTED_ENCRYPTION),
+            public_copy || !self.provider.experiment(HOSTED_ENCRYPTION),
             "encrypted_sharing_unsupported: encrypted captures require an approved agent client"
         );
         ensure!(
             self.provider.experiment(HOSTED_SHARING),
             "Hosted sharing is disabled"
         );
-        let id = self.enqueue(bundle)?;
+        let id = self.enqueue_with_intent(bundle, false, public_copy)?;
         let mut job = self
             .jobs()?
             .into_iter()
@@ -764,6 +794,23 @@ impl Client {
             "Invalid share response"
         );
         ensure!(allowed(), "cancelled");
+        if job.public_copy {
+            let _lock = Lock::acquire(&self.state.join("queue.lock"), false)?;
+            ensure!(
+                foreground() && self.provider.experiment(HOSTED_SHARING)
+                    && self.share_active_locked(&job),
+                "cancelled"
+            );
+            let mut current = self.jobs()?.into_iter().find(|j| j.id == id)
+                .context("Missing queued capture")?;
+            // A crash/cancel before share reservation must not leave an upload
+            // that retry or a background worker can publish without the caller.
+            if current.status == "awaiting_share" {
+                current.status = "pending".into();
+                self.save_job(&current)?;
+            }
+            job = current;
+        }
         Ok((url.into(), job))
     }
     /// Providers must read current state and delegate writes to the caller's
@@ -861,7 +908,8 @@ impl Client {
     // Caller holds queue.lock. Never acquire it recursively from a save path.
     fn active_locked(&self, job: &Job) -> bool {
         self.current_incarnation(job)
-            .is_some_and(|current| current.status == job.status && current.status != "cancelled")
+            .is_some_and(|current| current.status == job.status
+                && !matches!(current.status.as_str(), "cancelled" | "awaiting_share"))
     }
     fn share_active(&self, job: &Job) -> bool {
         if !self.enabled() {
@@ -876,7 +924,8 @@ impl Client {
     // uses active_locked's exact-status check before publishing its own results.
     fn share_active_locked(&self, job: &Job) -> bool {
         self.current_incarnation(job).is_some_and(|current| {
-            matches!(current.status.as_str(), "pending" | "failed" | "ready")
+            (matches!(current.status.as_str(), "pending" | "failed" | "ready")
+                || (current.public_copy && current.status == "awaiting_share"))
                 && now().saturating_sub(current.created) <= RETENTION
                 && (job.files.is_empty() || current.files == job.files)
                 && (!job.shared || current.shared)
@@ -886,7 +935,11 @@ impl Client {
     // policies, but mutable upload status must not stand in for consent.
     fn current_incarnation(&self, job: &Job) -> Option<Job> {
         if !self.enabled()
-            || job.encrypted != self.provider.experiment(HOSTED_ENCRYPTION)
+            || if job.public_copy {
+                job.encrypted || !job.shared || !self.provider.experiment(HOSTED_SHARING)
+            } else {
+                job.encrypted != self.provider.experiment(HOSTED_ENCRYPTION)
+            }
             || self.settings().server != job.server
             || !self
                 .credential("upload", &job.server)
@@ -903,6 +956,8 @@ impl Client {
             && current.server == job.server
             && current.generation == job.generation
             && current.encrypted == job.encrypted
+            && current.public_copy == job.public_copy
+            && (!current.public_copy || current.shared)
             && current.created == job.created)
             .then_some(current)
     }
@@ -936,12 +991,12 @@ impl Client {
         atomic_json(&path, &job)
     }
     pub fn enqueue(&self, bundle: &Path) -> Result<String> {
-        self.enqueue_with_intent(bundle, false)
+        self.enqueue_with_intent(bundle, false, false)
     }
     pub fn enqueue_explicit(&self, bundle: &Path) -> Result<String> {
-        self.enqueue_with_intent(bundle, true)
+        self.enqueue_with_intent(bundle, true, false)
     }
-    fn enqueue_with_intent(&self, bundle: &Path, explicit: bool) -> Result<String> {
+    fn enqueue_with_intent(&self, bundle: &Path, explicit: bool, public_copy: bool) -> Result<String> {
         ensure!(
             self.enabled(),
             "Enable hostedSync and grant upload consent with apparent connect login --scope upload --consent-upload"
@@ -953,6 +1008,10 @@ impl Client {
         // Disable clears the gates and cancels jobs under this same lock.
         // An admission paused before the lock must not publish after it returns.
         ensure!(self.enabled(), "Hosted uploads are disabled");
+        ensure!(
+            !public_copy || self.provider.experiment(HOSTED_SHARING),
+            "Hosted sharing is disabled"
+        );
         let bundle = bundle.canonicalize()?;
         // The bundle may itself be supplied through an alias, but no bundled data may be symlinked.
         ensure!(
@@ -969,7 +1028,13 @@ impl Client {
             // a fresh device grant. Pruned records leave no permanent dedup history.
             if let Some(job) = jobs
                 .iter()
-                .find(|j| j.bundle == bundle && j.server == settings.server)
+                .find(|j| {
+                    j.bundle == bundle && j.server == settings.server
+                        && j.public_copy == public_copy
+                        && (!public_copy || (j.generation == credential.generation
+                            && !matches!(j.status.as_str(), "cancelled" | "expired")
+                            && now().saturating_sub(j.created) <= RETENTION))
+                })
             {
                 return Ok(job.id.clone());
             }
@@ -977,16 +1042,19 @@ impl Client {
             // Explicit consent for this bundle creates a fresh remote identity. A
             // reserved manifest and server tombstone are immutable; retry keeps an ID.
             for job in &mut jobs {
-                if job.bundle == bundle && job.server == settings.server && job.status != "ready" {
+                if !job.public_copy && job.bundle == bundle
+                    && job.server == settings.server && job.status != "ready"
+                {
                     job.status = "cancelled".into();
                     self.save_job(job)?;
                 }
             }
         }
-        // Reclaim only terminal/expired metadata; never drop a live job to make room.
+        // Public admission leaves private metadata/spools untouched. Other
+        // admissions reclaim only terminal/expired metadata, never live work.
         jobs.retain(|job| {
-            if now().saturating_sub(job.created) > RETENTION
-                || (!job.shared && matches!(job.status.as_str(), "ready" | "cancelled" | "expired"))
+            if (!public_copy || job.public_copy) && (now().saturating_sub(job.created) > RETENTION
+                || (!job.shared && matches!(job.status.as_str(), "ready" | "cancelled" | "expired")))
             {
                 let _ = fs::remove_file(self.state.join(format!("{}.job", job.id)));
                 let _ = fs::remove_dir_all(self.state.join(format!("{}.sealed", job.id)));
@@ -1007,11 +1075,12 @@ impl Client {
             created: now(),
             attempts: 0,
             next_attempt: 0,
-            status: "pending".into(),
+            status: if public_copy { "awaiting_share" } else { "pending" }.into(),
             error: None,
             files: Vec::new(),
-            shared: false,
-            encrypted: self.provider.experiment(HOSTED_ENCRYPTION),
+            shared: public_copy,
+            public_copy,
+            encrypted: !public_copy && self.provider.experiment(HOSTED_ENCRYPTION),
             encryption: None,
         };
         self.save_job(&job)?;
@@ -1026,7 +1095,7 @@ impl Client {
             .jobs()
             .ok()?
             .into_iter()
-            .find(|j| j.bundle == bundle && self.active(j) && j.status != "cancelled")?;
+            .find(|j| !j.public_copy && j.bundle == bundle && self.active(j) && j.status != "cancelled")?;
         Some(format!(
             "\nHosted capture: {} ({}; local original remains available).\nOn the agent machine, sign in separately with `apparent connect login --server {} --scope read`, then run:\napparent fetch {} --out ./{}.apparent --wait 120\nNever paste account tokens. Fetch waits for the complete bundle.\n",
             job.id, job.status, job.server, job.id, job.id
@@ -2200,7 +2269,8 @@ impl Client {
             .jobs()
             .unwrap_or_default()
             .into_iter()
-            .find(|job| Some(&job.bundle) == canonical.as_ref());
+            .filter(|job| Some(&job.bundle) == canonical.as_ref() && job.shared)
+            .max_by_key(|job| (job.public_copy, job.created));
         match job {
             Some(job) if job.status == "ready" => "Link copied · ready".into(),
             Some(job) if job.status == "failed" => "Link copied · upload failed".into(),

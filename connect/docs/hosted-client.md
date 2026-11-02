@@ -28,6 +28,32 @@ plus the candidate's pinned age, ed25519-dalek and zeroize dependencies. It does
 GStreamer, Swift helper or root build script. Runtime curl and system SHA-256
 requirements still apply; supported platforms remain macOS and Linux.
 
+### Explicit public-copy admission
+
+`Client::prepare_public_link` is the compatible client integration contract for
+#171. Call it only after the sender explicitly chooses public sharing with:
+“Anyone with this link can view this capture. Shared captures are not end-to-end
+encrypted.” Existing Desktop callers still use `prepare_link`, which retains the
+encrypted-sharing refusal until their consent/UI integration is accepted.
+
+The explicit method persists a separate `publicCopy` job, plaintext manifest and
+fresh capture ID under the current upload grant. It never edits/cancels the
+private job, uploads endpoint identities, or discovers other captures. Repeated
+requests/restart reuse that copy's ID while retained and eligible; cancellation,
+expiry or a new credential generation requires a fresh explicit choice. Public
+copies consume ordinary account quota and have the ordinary seven-day capture
+retention. The existing capability grant controls anonymous reads and revocation;
+the private bucket remains private. Revocation does not delete the private capture.
+
+Public-copy intent is pinned across worker saves; workers still check current
+upload consent, grant generation, cancellation and sharing availability. Private
+format pinning is unchanged. Admission starts in `awaiting_share`; workers and
+Retry cannot upload it until the foreground caller completes capability
+reservation and commits `pending`. A crash/cancel earlier requires another
+explicit public-sharing call. Local Paste pointers exclude public copies, and share
+progress selects the public job. This API alone does not change installed sender
+routing, enable sharing or constitute native/platform acceptance.
+
 `connect/hosted.rs` is Desktop composition: it supplies `ConfigProvider` via the
 accepted shared config store, browser opening, CLI/bundle-selector/logging
 adapters, and the once-per-process worker launcher. All existing main/UI/Settings
