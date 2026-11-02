@@ -22,7 +22,23 @@
   ],
   "features": [
     {
+      "id": "shared-system-appearance",
+      "added": "2026-11-02",
+      "group": "platforms",
+      "name": "System light and dark appearance",
+      "says": "Frontend surfaces share one semantic theme and follow system light/dark appearance while open: Electron frontend, Connect account and recording recipient pages, and public pages. Native legacy surfaces and captured media keep their existing rendering. Browser checks cover Chromium and Firefox; native platform acceptance remains separate.",
+      "status": "main",
+      "platforms": [
+        "mac",
+        "linux"
+      ],
+      "docs": [
+        "shared/ui/README.md#system-appearance-contract"
+      ]
+    },
+    {
       "id": "adaptive-mac-menu-bar-icon",
+      "added": "2026-11-02",
       "group": "platforms",
       "name": "Adaptive Mac menu bar icon",
       "says": "The Mac menu bar keeps the Apparent a in purple: Lilac on Carbon in dark appearance, darker purple on Paper in light appearance. It follows live menu bar appearance changes without restarting. The app icon and Linux tray are unchanged.",
@@ -200,6 +216,7 @@
     },
     {
       "id": "switch-chips",
+      "added": "2026-10-22",
       "group": "start",
       "name": "Switch target as it starts",
       "says": "The capsule opens onto Area · Screen · iPhone for 3.5 s; a chip restarts the capture on that target.",
@@ -210,6 +227,7 @@
     },
     {
       "id": "picker",
+      "added": "2026-10-22",
       "group": "start",
       "name": "Choose What to Record…",
       "says": "The menu's picker opens on the pointer's display: drag an area, or pick Screen or iPhone.",
@@ -632,6 +650,7 @@
     },
     {
       "id": "recover",
+      "added": "2026-10-22",
       "group": "finish",
       "name": "Recover unbuilt captures",
       "says": "Saved capture assets can be recovered after the app exits unexpectedly. An interrupted recording recovers saved narration only, without reconstructing privacy-excluded screenshots.",
@@ -882,6 +901,7 @@
     },
     {
       "id": "electron-ui-foundation",
+      "added": "2026-11-01",
       "group": "settings",
       "name": "Opt-in Electron UI foundation",
       "says": "Development-only React/shadcn/Tailwind window with synthetic previews and read-only state from the running Rust app. Does not replace the installed app or recording controls.",
@@ -1006,6 +1026,7 @@
     },
     {
       "id": "electron-error-reporting",
+      "added": "2026-11-02",
       "group": "settings",
       "name": "Technical error reporting setting",
       "says": "The opt-in Electron Settings surface shows and changes the default-on, content-free technical error reporting preference through Rust.",
@@ -1017,6 +1038,7 @@
     },
     {
       "id": "electron-capture-location",
+      "added": "2026-11-01",
       "group": "storage",
       "name": "Storage Settings in Electron",
       "says": "Storage Settings uses shared React controls for capture location, retention and on-demand folder usage. Rust validates and saves preferences; existing captures are not moved.",

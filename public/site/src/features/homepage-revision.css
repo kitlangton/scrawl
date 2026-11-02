@@ -3,11 +3,11 @@
 .frog-footer .footer-scene{padding:12px 24px 34px!important;min-height:0!important}
 .cutout-composition{margin-top:48px;align-items:flex-end}
 .cutout-person{padding-top:52px}
-.person-name{position:absolute;top:0;left:0;width:100%;margin:0;text-align:center;font-size:28px;font-weight:650;letter-spacing:-.035em;color:#020102}
+.person-name{position:absolute;top:0;left:0;width:100%;margin:0;text-align:center;font-size:28px;font-weight:650;letter-spacing:-.035em;color:var(--color-foreground)}
 dialog[data-dialog="social"] .social-names{display:flex;align-items:flex-start;justify-content:space-between;gap:64px;padding:12px 6px 38px}
 dialog[data-dialog="social"] .social-names>p{margin:0;position:relative}
-dialog[data-dialog="social"] .social-names a{font-size:24px;font-weight:650;text-decoration:none;color:#020102}
-dialog[data-dialog="social"] .social-names a:hover{text-decoration:underline;text-decoration-color:#7a58c7;text-underline-offset:5px}
+dialog[data-dialog="social"] .social-names a{font-size:24px;font-weight:650;text-decoration:none;color:var(--color-foreground)}
+dialog[data-dialog="social"] .social-names a:hover{text-decoration:underline;text-decoration-color:var(--color-ring);text-underline-offset:5px}
 dialog[data-dialog="social"] .rude-bubble{position:absolute;top:24px;left:0}
 @media(max-width:600px){.cutout-composition{margin-top:28px;gap:36px}.person-name{font-size:25px}.cutout-person{padding-top:44px}dialog[data-dialog="social"] .social-names{gap:38px}}
 .dog-cutout .cutout-ink{top:65px;left:-12px}

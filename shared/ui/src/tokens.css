@@ -1,0 +1,91 @@
+/* Canonical system appearance for every value stream. No framework required. */
+:root {
+  color-scheme: light;
+  --font-sans: system-ui, sans-serif;
+  --apparent-background: #f5f0e8;
+  --apparent-foreground: #19161d;
+  --apparent-surface: #faf9f6;
+  --apparent-primary: #6943ac;
+  --apparent-primary-foreground: #ffffff;
+  --apparent-secondary: #eae4f4;
+  --apparent-secondary-foreground: #3d3352;
+  --apparent-muted: #e7e0ee;
+  --apparent-muted-foreground: #625b66;
+  --apparent-accent: #eae4f4;
+  --apparent-accent-foreground: #3d3352;
+  --apparent-destructive: #b42318;
+  --apparent-destructive-foreground: #ffffff;
+  --apparent-border: #cbc4bc;
+  --apparent-input: #aaa0b3;
+  --apparent-ring: #6943ac;
+  --apparent-success: #146b43;
+  --apparent-warning: #815600;
+  --apparent-warning-surface: #ffbe2e;
+  --apparent-warning-foreground: #19161d;
+  --apparent-selection: #c4a9e6;
+  --apparent-selection-foreground: #19161d;
+  --apparent-inverse: #19161d;
+  --apparent-inverse-foreground: #f5f0e8;
+  --apparent-overlay: #19161d80;
+  --apparent-shadow: #00000033;
+  --apparent-brand: #b7a5d8;
+  --apparent-brand-foreground: #19161d;
+  --apparent-artwork: #f5f0e8;
+  --color-background: var(--apparent-background);
+  --color-foreground: var(--apparent-foreground);
+  --color-surface: var(--apparent-surface);
+  --color-primary: var(--apparent-primary);
+  --color-primary-foreground: var(--apparent-primary-foreground);
+  --color-secondary: var(--apparent-secondary);
+  --color-secondary-foreground: var(--apparent-secondary-foreground);
+  --color-muted: var(--apparent-muted);
+  --color-muted-foreground: var(--apparent-muted-foreground);
+  --color-accent: var(--apparent-accent);
+  --color-accent-foreground: var(--apparent-accent-foreground);
+  --color-destructive: var(--apparent-destructive);
+  --color-destructive-foreground: var(--apparent-destructive-foreground);
+  --color-border: var(--apparent-border);
+  --color-input: var(--apparent-input);
+  --color-ring: var(--apparent-ring);
+  --color-success: var(--apparent-success);
+  --color-warning: var(--apparent-warning);
+  --color-warning-surface: var(--apparent-warning-surface);
+  --color-warning-foreground: var(--apparent-warning-foreground);
+  --color-selection: var(--apparent-selection);
+  --color-selection-foreground: var(--apparent-selection-foreground);
+  --color-inverse: var(--apparent-inverse);
+  --color-inverse-foreground: var(--apparent-inverse-foreground);
+  --color-overlay: var(--apparent-overlay);
+  --color-shadow: var(--apparent-shadow);
+  --color-brand: var(--apparent-brand);
+  --color-brand-foreground: var(--apparent-brand-foreground);
+  --color-artwork: var(--apparent-artwork);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --apparent-background: #201b24;
+    --apparent-foreground: #f5f0e8;
+    --apparent-surface: #29232f;
+    --apparent-primary: #c4a9e6;
+    --apparent-primary-foreground: #20132f;
+    --apparent-secondary: #3d3352;
+    --apparent-secondary-foreground: #f5f0e8;
+    --apparent-muted: #302a36;
+    --apparent-muted-foreground: #b5aebc;
+    --apparent-accent: #40324f;
+    --apparent-accent-foreground: #f5f0e8;
+    --apparent-destructive: #ffaaa0;
+    --apparent-destructive-foreground: #400b06;
+    --apparent-border: #65576f;
+    --apparent-input: #8c7e98;
+    --apparent-ring: #c4a9e6;
+    --apparent-success: #84d4aa;
+    --apparent-warning: #ffce68;
+    --apparent-selection: #6943ac;
+    --apparent-selection-foreground: #ffffff;
+    --apparent-inverse: #f5f0e8;
+    --apparent-inverse-foreground: #19161d;
+  }
+}
+::selection { background: var(--color-selection); color: var(--color-selection-foreground); }

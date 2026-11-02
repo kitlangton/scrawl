@@ -47,7 +47,11 @@ five canonical assets only; identical collisions pass and differing bytes refuse
 Symlinks, nonregular files, private/unexpected paths, missing resources and loopback
 configuration refuse without changing the prior destination. The accepted homepage
 is the sole deliberate differing-byte overlay, bound to the unchanged checksum
-inventory. `verify-composed.mjs` checks its hashes and both final resource graphs
+inventory. A deterministic color-only system-appearance adapter combines the
+canonical `shared/ui/src/tokens.css` with `src/styles/system-appearance.css` and
+adds one inline stylesheet to the accepted HTML after checksum validation.
+The snapshot source, layout, scripts and media stay byte-identical.
+`verify-composed.mjs` checks the exact HTML transformation, retained hashes and both final resource graphs
 before existing metadata/video publication. Do not assume editing `src/App`
 alone changes the published homepage. For an intentional homepage change, reconcile
 it into the accepted public input and update the checksum contract in the same PR;

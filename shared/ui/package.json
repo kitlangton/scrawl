@@ -9,7 +9,9 @@
     "./theme.css": "./src/theme.css",
     "./status-card": "./src/status-card.tsx",
     "./disclosure-menu": "./src/disclosure-menu.tsx",
-    "./status.css": "./src/status.css"
+    "./status.css": "./src/status.css",
+    "./tokens.css": "./src/tokens.css",
+    "./window-theme": "./src/window-theme.cjs"
   },
   "peerDependencies": {
     "react": "^19.2.0"

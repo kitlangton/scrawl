@@ -1,50 +1,35 @@
-/* Canonical light tokens for Desktop and future Connect adoption. */
-@theme {
-  --font-sans: system-ui, sans-serif;
-  --color-background: #faf9f6;
-  --color-foreground: #27252a;
-  --color-primary: #514372;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #eae4f4;
-  --color-secondary-foreground: #3d3352;
-  --color-muted: #efede8;
-  --color-muted-foreground: #635e69;
-  --color-accent: #eae4f4;
-  --color-accent-foreground: #3d3352;
-  --color-destructive: #b42b35;
-  --color-destructive-foreground: #ffffff;
-  --color-border: #dedbd4;
-  --color-input: #dedbd4;
-  --color-ring: #786096;
-}
+@import "./tokens.css";
 
-/* Installed Settings: Apparent Paper/Carbon/Signal, matching native Settings.
-   Scoped so development fixtures and other consumers keep their existing theme. */
-.settings-shell {
-  --color-background: #f5f0e8;
-  --color-foreground: #020102;
-  --color-primary: #7a58c7;
-  --color-primary-foreground: #f5f0e8;
-  --color-muted: #e7e0ee;
-  --color-muted-foreground: #625b66;
-  --color-accent: #c4a9e6;
-  --color-accent-foreground: #020102;
-  --color-border: #d4ccd8;
-  --color-input: #aaa0b3;
-  --color-ring: #7a58c7;
-  color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  .settings-shell {
-    --color-background: #201b24;
-    --color-foreground: #f5f0e8;
-    --color-muted: #302a36;
-    --color-muted-foreground: #b5aebc;
-    --color-accent: #302442;
-    --color-accent-foreground: #f5f0e8;
-    --color-border: #4b4055;
-    --color-input: #70637c;
-    --color-ring: #c4a9e6;
-    color-scheme: dark;
-  }
+/* Register canonical tokens as Tailwind utilities; values live in tokens.css. */
+@theme inline {
+  --font-sans: system-ui, sans-serif;
+  --color-background: var(--apparent-background);
+  --color-foreground: var(--apparent-foreground);
+  --color-surface: var(--apparent-surface);
+  --color-primary: var(--apparent-primary);
+  --color-primary-foreground: var(--apparent-primary-foreground);
+  --color-secondary: var(--apparent-secondary);
+  --color-secondary-foreground: var(--apparent-secondary-foreground);
+  --color-muted: var(--apparent-muted);
+  --color-muted-foreground: var(--apparent-muted-foreground);
+  --color-accent: var(--apparent-accent);
+  --color-accent-foreground: var(--apparent-accent-foreground);
+  --color-destructive: var(--apparent-destructive);
+  --color-destructive-foreground: var(--apparent-destructive-foreground);
+  --color-border: var(--apparent-border);
+  --color-input: var(--apparent-input);
+  --color-ring: var(--apparent-ring);
+  --color-success: var(--apparent-success);
+  --color-warning: var(--apparent-warning);
+  --color-warning-surface: var(--apparent-warning-surface);
+  --color-warning-foreground: var(--apparent-warning-foreground);
+  --color-selection: var(--apparent-selection);
+  --color-selection-foreground: var(--apparent-selection-foreground);
+  --color-inverse: var(--apparent-inverse);
+  --color-inverse-foreground: var(--apparent-inverse-foreground);
+  --color-overlay: var(--apparent-overlay);
+  --color-shadow: var(--apparent-shadow);
+  --color-brand: var(--apparent-brand);
+  --color-brand-foreground: var(--apparent-brand-foreground);
+  --color-artwork: var(--apparent-artwork);
 }

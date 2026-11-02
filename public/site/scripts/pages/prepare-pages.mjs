@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, lstatSync, mkdirSync, copyFileSync, writeFil
 import { resolve, join, dirname, relative } from 'node:path'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { withAppearance } from './system-appearance.mjs'
 const site = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const output = join(site, process.env.COMPOSE_SYNTHETIC_ORIGIN ? 'dist/synthetic-composition' : 'dist-apparent')
 const snapshot = join(site, 'published-homepage')
@@ -37,6 +38,8 @@ for (const path of actual) {
   mkdirSync(dirname(target), { recursive: true })
   copyFileSync(join(snapshot, path), target)
 }
+// Preserve the accepted source snapshot, applying only the reviewed shared theme.
+writeFileSync(join(output, 'index.html'), withAppearance(readFileSync(join(snapshot, 'index.html'), 'utf8')))
 // A real 404 disables Pages' default SPA fallback on private/unknown paths.
 writeFileSync(join(output, '404.html'), '<!doctype html><html lang="en"><meta name="robots" content="noindex"><title>Not found</title><body>Not found</body></html>\n')
 // Pages rejects host-specific source URLs. The existing connect shortcut uses

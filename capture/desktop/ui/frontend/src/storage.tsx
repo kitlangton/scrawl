@@ -42,7 +42,7 @@ export function Storage({ settings = false }: { settings?: boolean }) {
   }
   useEffect(() => { void request('read'); return () => { order.current += 1; }; }, []);
   if (result.status === 'disabled' && !settings) return null;
-  return <section aria-labelledby="storage-title" className="space-y-4 rounded-xl border border-border bg-white p-6">
+  return <section aria-labelledby="storage-title" className="space-y-4 rounded-xl border border-border bg-surface p-6">
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div>{!settings && <p className="text-xs font-medium text-primary">EXPERIMENTAL / STORAGE</p>}
         <h2 id="storage-title" className="text-lg font-semibold">Capture location</h2></div>

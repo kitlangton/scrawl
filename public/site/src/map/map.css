@@ -1,20 +1,20 @@
+@import "../../../../shared/ui/src/tokens.css";
 :root {
-  --bg: #0a0a0b;
-  --panel: #111113;
-  --fg: #f4f4f5;
-  --muted: #8e8e93;
-  --faint: #48484a;
-  --line: rgba(255, 255, 255, 0.08);
-  --stable: #30d158;
-  --main: #0a84ff;
-  --experiment: #ffd60a;
-  --branch: #98989d;
-  --review: #bf5af2;
-  --issue: #ff9f0a;
+  --bg: var(--color-background);
+  --panel: var(--color-surface);
+  --fg: var(--color-foreground);
+  --muted: var(--color-muted-foreground);
+  --faint: var(--color-muted-foreground);
+  --line: var(--color-border);
+  --stable: var(--color-success);
+  --main: var(--color-primary);
+  --experiment: var(--color-warning);
+  --branch: var(--color-muted-foreground);
+  --review: var(--color-primary);
+  --issue: var(--color-warning);
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
   --w: 1080px;
-  color-scheme: dark;
 }
 
 * {
@@ -56,7 +56,7 @@ kbd {
   font: 12px var(--sans);
   color: var(--fg);
   border-radius: 6px;
-  background: linear-gradient(#2c2c2e, #1f1f21);
+  background: var(--color-surface);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
     0 1px 0 #000;
@@ -74,7 +74,7 @@ kbd {
   gap: 24px;
   height: 48px;
   padding: 0 max(24px, calc((100vw - var(--w)) / 2 + 24px));
-  background: rgba(10, 10, 11, 0.8);
+  background: var(--color-background);
   backdrop-filter: blur(18px) saturate(1.4);
   -webkit-backdrop-filter: blur(18px) saturate(1.4);
   box-shadow: 0 1px 0 var(--line);
