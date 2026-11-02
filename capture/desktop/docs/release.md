@@ -31,24 +31,44 @@ Sparkle key and production appcast are unrelated. Test an actual update between 
 a Mac before announcing it; CI packaging and an appcast alone do not prove installation works.
 
 The app is named `Apparent Preview` with bundle ID `dev.simonvanlaak.apparent.preview`, so it
-does not overwrite `Apparent.app` or follow Kit's Sparkle feed. By default it is ad-hoc signed,
-**not notarized**: the first download may require System Settings → Privacy & Security → Open Anyway.
-Sparkle verifies subsequent ZIPs with the separate EdDSA key; this is not Apple notarization.
+does not overwrite `Apparent.app` or follow Kit's Sparkle feed. Release
+[0.11.1](https://github.com/tryapparent/apparent/releases/tag/preview-mac-11-1) is signed with
+Developer ID and notarized by Apple. Earlier previews were ad-hoc signed and could require
+System Settings → Privacy & Security → Open Anyway on first launch. Sparkle authenticates
+update ZIPs with its separate EdDSA key; that signature is independent of Apple notarization.
 It still uses Apparent's normal
 capture/config paths, so it is not a separate data profile: don't run it alongside production
 Apparent or assume their settings and hotkeys are independent. The preview cannot register itself
-at login or install the `apparent` command, to avoid replacing production integrations. The optional
-Developer ID setup below keeps these preview restrictions. Moving
+at login or install the `apparent` command, to avoid replacing production integrations.
+Developer ID signing keeps these preview restrictions. Moving
 users from the preview back to a signed stable app is a separate migration, not an update in this
 feed. The stable app's build-number ordering and bundle identity will need an explicit plan.
 
-### Optional Developer ID signing
+### Updating an older preview
 
-Follow [the credential setup and first signed-release checklist](mac-signing.md) to prepare
-Simon's certificate and notarization API key. `MAC_APPLE_SIGNING_ENABLED=true` enables the
-signed/notarized path in this same workflow without changing the preview identity or Sparkle
-key/feed. Leave it unset/`false` until credentials are ready. Native signing and the first
-ad-hoc-to-signed update remain unverified until tested with that real certificate.
+1. Open `Apparent Preview.app` from `/Applications`, then choose **Settings → About →
+   Check for Updates…**. Accept the update and relaunch when prompted, after capture finishes.
+2. If the in-app update fails, quit Apparent Preview, download the notarized DMG from the
+   [0.11.1 release](https://github.com/tryapparent/apparent/releases/tag/preview-mac-11-1)
+   (or a newer notarized preview), and drag `Apparent Preview.app` into `/Applications`,
+   choosing **Replace**. Eject the DMG and launch the installed copy.
+
+Replacing the app bundle leaves recordings and config in their existing external paths.
+The signing change may require macOS capture permissions to be approved again. Notarization
+keeps the preview bundle identity, Sparkle key/feed and version ordering; it does not enable
+silent installation. Kit's original `Apparent.app` uses a separate feed and will not receive
+this preview update.
+
+The old ad-hoc-to-notarized Sparkle transition still needs a recorded test on a Mac;
+publishing a notarized release and appcast does not establish that an existing installation
+successfully updated. See the [native acceptance checklist](mac-signing.md#release-verification).
+
+### Developer ID signing
+
+Keep `MAC_APPLE_SIGNING_ENABLED=true` for subsequent releases. It selects the signed/notarized
+path without changing the preview identity or Sparkle key/feed. Follow the
+[credential setup and release checklist](mac-signing.md) for maintenance and verification;
+do not publish a higher-version ad-hoc build as a workaround for signing failures.
 
 ## Kit's original production release procedure
 

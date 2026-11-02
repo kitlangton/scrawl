@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Notify the committing agent when its branch needs integration; never rebase."""
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+
+
+def git(*args):
+    return subprocess.check_output(["git", *args], text=True, stderr=subprocess.DEVNULL).strip()
+
+
+def notify(message):
+    print(f"post-commit: {message}", file=sys.stderr)
+
+
+def checkpoint():
+    # Git paths are worktree-local, unlike a literal .git directory.
+    for state in ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD",
+                  "REVERT_HEAD", "sequencer", "BISECT_START"):
+        if Path(git("rev-parse", "--git-path", state)).exists():
+            return
+    branch = git("symbolic-ref", "--quiet", "--short", "HEAD")
+    if branch == "main":
+        return
+
+    # No credential prompts or unbounded network wait on the commit path.
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="/bin/false",
+               SSH_ASKPASS="/bin/false", GCM_INTERACTIVE="Never")
+    fetch = subprocess.Popen(
+        ["git", "-c", "credential.interactive=false", "fetch", "--quiet", "--no-tags",
+         "--no-recurse-submodules", "origin", "refs/heads/main:refs/remotes/origin/main"],
+        env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        status = fetch.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(fetch.pid, signal.SIGKILL)
+        fetch.wait()
+        status = -1
+    if status:
+        notify("could not refresh origin/main; freshness is unknown. Fetch and check main before continuing.")
+        return
+
+    main = git("rev-parse", "--verify", "refs/remotes/origin/main^{commit}")
+    head = git("rev-parse", "HEAD")
+    contained = subprocess.run(["git", "merge-base", "--is-ancestor", main, head],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if contained.returncode == 0:
+        return
+    if contained.returncode != 1:
+        raise RuntimeError("cannot compare main with HEAD")
+    notify(f"INTEGRATION REQUIRED: origin/main ({main[:12]}) is not included in HEAD ({head[:12]}).")
+    if git("status", "--porcelain", "--untracked-files=normal"):
+        notify("Uncommitted work remains; preserve it explicitly before integrating. Do not auto-stash.")
+    notify("Before the next work section, finish running operations, then rebase onto the fetched main commit above;")
+    notify("inspect incoming changes, resolve conflicts, and rerun affected checks. The commit succeeded; no rebase was run.")
+
+
+if __name__ == "__main__":
+    try:
+        checkpoint()
+    except subprocess.CalledProcessError:
+        # Detached evidence checkouts have no owning branch to update.
+        try:
+            git("symbolic-ref", "--quiet", "HEAD")
+        except subprocess.CalledProcessError:
+            sys.exit(0)
+        notify("checkpoint unavailable; fetch and check main before continuing. The commit is preserved.")
+    except Exception:
+        notify("checkpoint unavailable; fetch and check main before continuing. The commit is preserved.")

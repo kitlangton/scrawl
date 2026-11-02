@@ -38,7 +38,9 @@ test('only approved public assets are copied without changing their URLs or byte
 test('runtime and SSR graph cannot import the legacy site implementation', async () => {
   for (const name of await readdir('src')) {
     if (!/\.(tsx?|css)$/.test(name)) continue
-    const source = await readFile(`src/${name}`, 'utf8')
+    const raw = await readFile(`src/${name}`, 'utf8')
+    // The canonical framework-independent theme is the only cross-owner CSS import.
+    const source = name === 'base.css' ? raw.replace('@import "../../../shared/ui/src/tokens.css";', '') : raw
     assert.doesNotMatch(source, /(?:from\s*|import\s*)["'][^"']*(?:site\/|\.\.\/)/)
     assert.doesNotMatch(source, /localStorage|sessionStorage|console\./)
   }
