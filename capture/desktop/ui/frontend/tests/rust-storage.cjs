@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const net = require('node:net');
 const path = require('node:path');
-const { captureLocation } = require('../electron/runtime.cjs');
+const { captureLocation, storagePreference } = require('../electron/runtime.cjs');
 const [home, config] = process.argv.slice(2);
 async function main() {
   const selected = path.join(home, 'selected é captures');
@@ -22,6 +22,19 @@ async function main() {
   assert.equal(raw.privateFixture, 'keep');
   assert.equal(raw.capturesDir, selected);
   assert.deepEqual(await captureLocation(home, 'reset', { expected: first.storage.revision }), { status: 'error', code: 'conflict' });
+  const policy = await storagePreference(home, 'retention');
+  assert.equal(policy.retention.preset, 'week');
+  const changedPolicy = await storagePreference(home, 'saveretention', { expected: policy.revision, preset: 'month' });
+  assert.equal(changedPolicy.retention.preset, 'month');
+  assert.deepEqual(await storagePreference(home, 'retention'), changedPolicy);
+  assert.deepEqual(await storagePreference(home, 'saveretention', { expected: policy.revision, preset: 'forever' }), { status: 'error', code: 'conflict' });
+  await fs.writeFile(path.join(selected, 'synthetic.bin'), Buffer.alloc(1_000_000));
+  assert.equal((await storagePreference(home, 'usage')).usage.formatted, '1 MB');
+  const defaultPolicy = await storagePreference(home, 'resetretention', { expected: changedPolicy.revision });
+  assert.equal(defaultPolicy.retention.preset, 'week');
+  assert.equal(defaultPolicy.custom, false);
+  assert.equal(JSON.parse(await fs.readFile(config, 'utf8')).privateFixture, 'keep');
+  assert.equal((await fs.stat(path.join(selected, 'synthetic.bin'))).size, 1_000_000);
   const expired = await new Promise((resolve, reject) => {
     const socket = net.createConnection(path.join(home, '.config/apparent/agent-control/capture.sock'));
     const timer = setTimeout(() => { socket.destroy(); reject(new Error('expired request stalled')); }, 4000);

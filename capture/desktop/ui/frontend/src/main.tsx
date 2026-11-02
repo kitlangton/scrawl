@@ -76,7 +76,7 @@ function App() {
         </Tabs>
       </section>
       <footer className="border-t border-border pt-4 text-xs leading-relaxed text-muted-foreground">
-        React + shadcn/ui + Tailwind, hosted by Electron. No recording commands or permission prompts. Copy ID changes only the clipboard; the opt-in capture-location card can save a preference.
+        React + shadcn/ui + Tailwind, hosted by Electron. No recording commands or permission prompts. Copy ID changes only the clipboard; opt-in Storage controls save location and retention preferences.
       </footer>
     </main>
   );

@@ -6,3 +6,4 @@ pub(crate) mod launch_instance;
 pub(crate) mod launch_url;
 pub(crate) mod page;
 pub(crate) mod shutdown;
+mod storage_preferences;
