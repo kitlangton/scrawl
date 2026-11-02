@@ -1,10 +1,12 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, nativeTheme } = require('electron');
 const os = require('node:os');
 const {PublicShare} = require('./public-share.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference } = require('./runtime.cjs');
 const { ConnectSettings, actions } = require('./connect.cjs');
+const followWindowTheme = require('@apparent/ui/window-theme');
+nativeTheme.themeSource = 'system';
 const connectSettings = process.argv.includes('--settings-connect');
 const settings = connectSettings || process.argv.includes('--settings-storage');
 const initialConnectAction = process.argv.find(value => value.startsWith('--connect-action='))?.slice('--connect-action='.length);
@@ -22,13 +24,15 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler(() => false);
   const window = new BrowserWindow({
     width: 920, height: 760, minWidth: 640, minHeight: 620,
-    title: connectSettings ? 'Apparent Settings — Connect' : settings ? 'Apparent Settings — Storage' : 'Apparent — UI foundation', backgroundColor: settings ? '#201b24' : '#faf9f6',
+    title: connectSettings ? 'Apparent Settings — Connect' : settings ? 'Apparent Settings — Storage' : 'Apparent — UI foundation',
+    backgroundColor: followWindowTheme.backgroundColor(nativeTheme),
     webPreferences: {
       preload: path.join(__dirname, connectSettings ? 'connect-preload.cjs' : settings ? 'storage-preload.cjs' : 'preload.cjs'),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
       webSecurity: true, spellcheck: false,
     },
   });
+  followWindowTheme(nativeTheme, window);
   window.removeMenu();
   const pageUrl = pathToFileURL(path.join(__dirname, settings ? '../dist/settings.html' : '../dist/index.html'));
   if (connectSettings) {

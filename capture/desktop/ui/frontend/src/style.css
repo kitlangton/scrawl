@@ -14,14 +14,14 @@
   src: url('../../../../../shared/assets/fonts/HostGrotesk-Variable.ttf') format('truetype');
 }
 .settings-shell { display: flex; min-height: 100vh; background: var(--color-background); color: var(--color-foreground); font-family: 'Host Grotesk', system-ui, sans-serif; }
-.settings-sidebar { width: 210px; flex: none; background: #020102; color: #f5f0e8; padding-top: 32px; }
+.settings-sidebar { width: 210px; flex: none; background: var(--color-surface); color: var(--color-foreground); padding-top: 32px; }
 .settings-brand { padding: 0 24px 30px; }
 .settings-brand img { width: 132px; height: auto; }
 .settings-sidebar nav { display: grid; }
 .settings-sidebar button { min-height: 44px; text-align: left; padding: 10px 24px; border-left: 2px solid transparent; font-size: 14px; }
-.settings-sidebar button:hover { background: #29232f; }
-.settings-sidebar button[aria-current='page'] { background: #302442; border-color: #b7a5d8; }
-.settings-sidebar button:focus-visible { outline: 2px solid #c4a9e6; outline-offset: -4px; }
+.settings-sidebar button:hover { background: var(--color-accent); }
+.settings-sidebar button[aria-current='page'] { background: var(--color-accent); border-color: var(--color-ring); }
+.settings-sidebar button:focus-visible { outline: 2px solid var(--color-ring); outline-offset: -4px; }
 .settings-content { min-width: 0; flex: 1; padding: 30px; }
 .settings-content header { margin-bottom: 28px; }
 .settings-content h1 { font-size: 25px; line-height: 1.25; font-weight: 650; margin-bottom: 8px; }
