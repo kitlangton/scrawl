@@ -74,7 +74,7 @@
       "platforms": ["mac", "linux"],
       "note": "Default off. Candidate requires native clipboard and capture-navigation proof on each platform before release. Compact windows label the action Copy ID. This is a local folder name, not a Connect identifier or share link.",
       "config": [
-        { "key": "experiments.copyCaptureId", "value": "boolean; false by default", "does": "Show the text-only capture ID action on the next capture-window render" }
+        { "key": "copyCaptureId", "value": "boolean experiment; false by default", "does": "Under experiments, show the text-only capture ID action on the next capture-window render" }
       ],
       "docs": ["capture/engine/docs/keyframes-and-text.md"]
     },
