@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { readRuntimeState } = require('../electron/runtime.cjs');
+const { readRuntimeState, captureLocation } = require('../electron/runtime.cjs');
 
 async function fixture(t, reply, { mode = 0o700 } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ui-'));
@@ -75,4 +75,41 @@ test('absolute deadline bounds an unresponsive server', async (t) => {
   assert.equal((await readRuntimeState(f.home, 50)).status, 'error');
   assert.ok(performance.now() - before < 1000);
   assert.deepEqual(f.requests, ['state\n']);
+});
+
+const snapshot = { savedPath: '/saved', effectivePath: '/override', displayPath: '/override',
+  custom: true, source: 'environment', revision: 'a'.repeat(16) };
+test('storage uses typed requests and projects only permitted snapshot fields', async (t) => {
+  const f = await fixture(t, JSON.stringify({ storage: { ...snapshot, token: 'private' }, secret: 'hidden' }) + '\n');
+  assert.deepEqual(await captureLocation(f.home), { status: 'connected', storage: snapshot });
+  const request = JSON.parse(f.requests[0]);
+  assert.deepEqual(Object.keys(request).sort(), ['deadline', 'storage']);
+  assert.equal(request.storage, 'read');
+  assert.ok(request.deadline > Number(process.hrtime.bigint() / 1000000n));
+  await captureLocation(f.home, 'set', { path: '/space é/folder', expected: snapshot.revision, secret: 'ignored' });
+  const set = JSON.parse(f.requests[1]);
+  assert.deepEqual({ ...set, deadline: 0 }, { storage: 'set', path: '/space é/folder', expected: snapshot.revision, deadline: 0 });
+  await captureLocation(f.home, 'reset', { expected: snapshot.revision });
+  assert.equal(JSON.parse(f.requests[2]).storage, 'reset');
+});
+test('storage refuses unsafe permissions and times out mutations without retry', async (t) => {
+  const unsafe = await fixture(t, '{}\n', { mode: 0o755 });
+  assert.equal((await captureLocation(unsafe.home)).status, 'error');
+  assert.deepEqual(unsafe.requests, []);
+  const stalled = await fixture(t, null);
+  assert.deepEqual(await captureLocation(stalled.home, 'reset', { expected: snapshot.revision }, 50),
+    { status: 'error', code: 'outcome_unknown' });
+  assert.equal(stalled.requests.length, 1);
+});
+for (const [reply, expected] of [
+  [{ error: 'invalid_request', secret: 'hidden' }, { status: 'incompatible' }],
+  [{ error: 'feature_disabled' }, { status: 'disabled' }],
+  [{ error: 'conflict', message: 'secret' }, { status: 'error', code: 'conflict' }],
+  [{ error: 'raw config secret' }, { status: 'error', code: 'invalid_response' }],
+  [{ storage: { ...snapshot, custom: false } }, { status: 'error', code: 'invalid_response' }],
+  [{ storage: { ...snapshot, effectivePath: 123 } }, { status: 'error', code: 'invalid_response' }],
+  [{ storage: { ...snapshot, revision: 'secret' } }, { status: 'error', code: 'invalid_response' }],
+]) test(`storage validates response ${JSON.stringify(reply).slice(0, 60)}`, async (t) => {
+  const f = await fixture(t, JSON.stringify(reply) + '\n');
+  assert.deepEqual(await captureLocation(f.home), expected);
 });

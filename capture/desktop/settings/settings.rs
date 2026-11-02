@@ -1493,20 +1493,11 @@ impl Panel {
             }
             // An absolute folder from the helper's open panel; "" or null is the built-in one.
             // Captures already made stay where they are.
-            ("capturesDir", serde_json::Value::Null) => {
-                write(key, serde_json::Value::Null);
-                return Effect::Measure;
-            }
-            ("capturesDir", serde_json::Value::String(dir)) => {
-                if dir.trim().is_empty() {
-                    write(key, serde_json::Value::Null);
-                    return Effect::Measure;
+            ("capturesDir", serde_json::Value::Null | serde_json::Value::String(_)) => {
+                match crate::shared::handoff::capture_location::set_in(&path, value.as_str(), None, || true) {
+                    Ok(()) => return Effect::Measure,
+                    Err(code) => crate::capture::engine::runtime::apparent_log(format!("Saving capturesDir failed: {code}")),
                 }
-                if crate::shared::handoff::configured_captures_dir(dir).is_some() {
-                    write(key, dir.trim().into());
-                    return Effect::Measure;
-                }
-                crate::capture::engine::runtime::apparent_log(format!("Settings: ignoring capturesDir={dir}"));
             }
             ("retention", serde_json::Value::String(id)) => {
                 if let Some(preset) = crate::capture::engine::bundle::retention::Preset::ALL

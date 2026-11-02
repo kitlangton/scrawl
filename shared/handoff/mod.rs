@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::shared::model::ApparentBundle;
 
 mod config_store;
+pub(crate) mod capture_location;
 pub use config_store::{default_config_path, set_config_value_in};
 pub(crate) use config_store::update_config_in;
 #[cfg(test)]
@@ -24,11 +25,16 @@ pub fn default_captures_dir() -> PathBuf {
     } else {
         config().captures_dir
     };
-    configured
-        .as_deref()
-        .and_then(configured_captures_dir)
-        .filter(|dir| usable_captures_dir(dir))
-        .unwrap_or_else(builtin_captures_dir)
+    resolve_captures_dir(configured.as_deref(), std::env::var_os("APPARENT_CAPTURES_DIR").map(PathBuf::from)).0
+}
+
+fn resolve_captures_dir(configured: Option<&str>, environment: Option<PathBuf>) -> (PathBuf, &'static str) {
+    if let Some(dir) = environment { return (dir, "environment"); }
+    if let Some(dir) = configured.and_then(configured_captures_dir) {
+        if usable_captures_dir(&dir) { return (dir, "configured"); }
+        return (builtin_captures_dir(), "fallback");
+    }
+    (builtin_captures_dir(), "builtin")
 }
 
 /// A chosen folder that exists (or can be made) and takes writes; otherwise it's logged once and the
@@ -948,14 +954,18 @@ pub fn enable_experiment(name: &str) {
         .push(name.to_owned());
 }
 
-/// Whether an experiment is on: `"experiments": {"<name>": true}` in `config.json`, or
-/// `enable_experiment` in this process. Off by default; tests see only `enable_experiment`.
-pub fn experiment(name: &str) -> bool {
-    let overridden = EXPERIMENT_OVERRIDES
+fn experiment_overridden(name: &str) -> bool {
+    EXPERIMENT_OVERRIDES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .iter()
-        .any(|n| n == name);
+        .any(|n| n == name)
+}
+
+/// Whether an experiment is on: `"experiments": {"<name>": true}` in `config.json`, or
+/// `enable_experiment` in this process. Off by default; tests see only `enable_experiment`.
+pub fn experiment(name: &str) -> bool {
+    let overridden = experiment_overridden(name);
     if overridden || cfg!(test) {
         return overridden;
     }

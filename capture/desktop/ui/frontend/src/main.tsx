@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Button } from '@apparent/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@apparent/ui/tabs';
 import type { RuntimeState } from './bridge';
+import { Storage } from './storage';
 import './style.css';
 
 // Visual fixtures only. These do not model or control real recording state.
@@ -33,7 +34,7 @@ function App() {
       <header className="space-y-3">
         <p className="text-sm font-medium text-primary">Apparent / UI foundation</p>
         <h1 className="text-3xl font-semibold tracking-tight">A small window into what’s next.</h1>
-        <p className="max-w-2xl text-muted-foreground">An opt-in development surface. Your current app still handles recording, Settings and handoff.</p>
+        <p className="max-w-2xl text-muted-foreground">An opt-in development surface. Recording and handoff stay in the current app; experimental Settings controls appear only when enabled.</p>
       </header>
       <section aria-labelledby="runtime-title" className="rounded-xl border border-border bg-white p-6">
         <div className="flex items-center justify-between gap-4">
@@ -53,6 +54,7 @@ function App() {
           </> : <><strong>Unable to read state</strong><p className="mt-1 text-muted-foreground">{runtime.message}</p></>}
         </div>
       </section>
+      <Storage />
       <section aria-labelledby="preview-title" className="space-y-4">
         <div className="flex items-baseline justify-between gap-4">
           <h2 id="preview-title" className="text-lg font-semibold">State previews</h2>
@@ -72,7 +74,7 @@ function App() {
         </Tabs>
       </section>
       <footer className="border-t border-border pt-4 text-xs leading-relaxed text-muted-foreground">
-        React + shadcn/ui + Tailwind, hosted by Electron. No capture commands, permission prompts or Settings writes.
+        React + shadcn/ui + Tailwind, hosted by Electron. No capture commands or permission prompts. Only the opt-in capture-location card can save a preference.
       </footer>
     </main>
   );

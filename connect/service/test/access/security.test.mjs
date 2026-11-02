@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {setTimeout as delay} from 'node:timers/promises';
 import {fixture,id,file,digest} from '../helpers.mjs';
 
 test('identity refuses missing or weak configured secrets instead of library development defaults',async()=>{
@@ -101,10 +102,36 @@ test('device preview, CSRF, explicit scope approval, durable poll and revocation
  assert.equal((await f.call('/v1/device/approve',{...a,origin:'https://evil.example',method:'POST',body:{userCode}})).status,403);
  assert.equal((await f.call('/v1/device/approve',{...a,method:'POST',body:{userCode}})).status,200);
  await f.db.prepare('UPDATE auth_grants SET last_poll=0').run();await f.db.prepare('UPDATE auth_device SET lastPolledAt=NULL').run();
+ const approvedStarted=Date.now();
  const approved=await(await f.call('/v1/device/poll',{method:'POST',body:{deviceCode}})).json();
+ const approvedEnded=Date.now();
  assert.equal(approved.status,'approved');assert.equal(approved.scope,'read');assert.ok(approved.accessToken.length>=32);
+ // Force a complete remaining-lifetime second to elapse, not a lucky same-tick retry.
+ const boundary=approvedEnded+1000,waitDeadline=performance.now()+5000;
+ while(Date.now()<boundary){assert.ok(performance.now()<waitDeadline,'local clock did not cross the second boundary');await delay(Math.min(1000,boundary-Date.now()));}
  await f.db.prepare('UPDATE auth_grants SET last_poll=0').run();
- assert.deepEqual(await(await f.call('/v1/device/poll',{method:'POST',body:{deviceCode}})).json(),approved);
+ const retryStarted=Date.now();assert.ok(retryStarted>=boundary);
+ const retry=await(await f.call('/v1/device/poll',{method:'POST',body:{deviceCode}})).json(),retryEnded=Date.now();
+ const {expiresIn:accessBefore,refreshExpiresIn:refreshBefore,...approvedIdentity}=approved;
+ const {expiresIn:accessAfter,refreshExpiresIn:refreshAfter,...retryIdentity}=retry;
+ assert.deepEqual(retryIdentity,approvedIdentity,'a durable poll must preserve every non-countdown field');
+ const accessExpiry=await f.db.prepare('SELECT expiresAt FROM oauthAccessToken WHERE token=?').bind(digest(approved.accessToken)).first();
+ const refreshExpiry=await f.db.prepare('SELECT expiresAt FROM oauthRefreshToken WHERE token=?').bind(digest(approved.refreshToken)).first();
+ for(const [key,expiry,maximum,before,after] of [
+  ['expiresIn',Date.parse(accessExpiry.expiresAt),3600,accessBefore,accessAfter],
+  ['refreshExpiresIn',Date.parse(refreshExpiry.expiresAt),30*86400,refreshBefore,refreshAfter],
+ ]){
+  assert.ok(Number.isFinite(expiry),key+' persisted expiry must be valid');
+  for(const [value,started,ended] of [[before,approvedStarted,approvedEnded],[after,retryStarted,retryEnded]]){
+   assert.ok(ended>=started,'local request clock must not move backwards');
+   assert.ok(Number.isSafeInteger(value)&&value>0&&value<=maximum,key+' must be bounded remaining seconds');
+   // Local workerd shares this host clock. issued() floors milliseconds to seconds;
+   // its Date.now() must lie inside this dispatch/JSON-read interval. No slack added.
+   assert.ok(value>=Math.max(0,Math.floor((expiry-ended)/1000)),key+' below observed expiry bound');
+   assert.ok(value<=Math.max(0,Math.floor((expiry-started)/1000)),key+' above observed expiry bound');
+  }
+  assert.ok(after<before,key+' must decrease after at least one complete second');
+ }
  assert.equal((await f.call('/v1/captures/'+id(70),{token:approved.accessToken,method:'POST',body:{files:[file()]}})).status,403);
  assert.equal((await f.call('/v1/token/revoke',{token:approved.accessToken,method:'POST'})).status,200);
  assert.equal((await f.call('/v1/account',{token:approved.accessToken})).status,401);
