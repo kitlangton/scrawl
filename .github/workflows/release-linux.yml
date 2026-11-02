@@ -1,6 +1,8 @@
 name: Release (Linux)
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
@@ -24,7 +26,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-linux-${{ github.ref }}-${{ inputs.tag }}
+  # Verification cannot replace the pending publisher behind a running Main build.
+  group: release-linux-${{ github.ref }}-${{ inputs.tag }}-${{ inputs.verify_only == true && 'verify-only' || 'publish' }}
+  # Finish the running build/publication; GitHub coalesces to the latest pending run.
+  cancel-in-progress: false
 
 jobs:
   preview-needed:
@@ -37,7 +42,7 @@ jobs:
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          PUBLISH_MAIN: ${{ github.event_name == 'schedule' || inputs.publish_main }}
+          PUBLISH_MAIN: ${{ github.event_name == 'push' || github.event_name == 'schedule' || inputs.publish_main }}
           TAG: ${{ inputs.tag }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
         run: |
@@ -67,7 +72,7 @@ jobs:
     timeout-minutes: 90
     env:
       TAG: ${{ inputs.tag }}
-      PUBLISH_MAIN: ${{ github.event_name == 'schedule' || inputs.publish_main }}
+      PUBLISH_MAIN: ${{ github.event_name == 'push' || github.event_name == 'schedule' || inputs.publish_main }}
       VERIFY_ONLY: ${{ inputs.verify_only }}
     steps:
       - name: Validate release request
@@ -179,10 +184,9 @@ jobs:
           gh release upload "$TAG" dist/* --clobber
 
   main-preview:
-    if: (github.event_name == 'schedule' || inputs.publish_main) && inputs.tag == '' && github.ref == 'refs/heads/main' && inputs.verify_only != true
+    if: needs.linux.result == 'success' && (github.event_name == 'push' || github.event_name == 'schedule' || inputs.publish_main) && inputs.tag == '' && github.ref == 'refs/heads/main' && inputs.verify_only != true
     needs: linux
     permissions:
-      actions: write
       contents: write
     runs-on: ubuntu-24.04
     steps:

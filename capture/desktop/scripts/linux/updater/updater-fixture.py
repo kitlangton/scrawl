@@ -13,19 +13,45 @@ import ssl
 import time
 
 API = '/repos/tryapparent/apparent/releases/latest'
+MAIN_API = '/repos/tryapparent/apparent/releases?per_page=10&page='
+CANDIDATE_SHA = 'b' * 40
+
+
+def metadata_path(control):
+    return MAIN_API + '1' if control.get('channel', 'stable') == 'main' else API
 
 
 def response(control, path, payload):
     mode = control['mode']
     version = control['version'] if mode == 'current' else '999.0.0'
+    main = control.get('channel', 'stable') == 'main'
+    revision = control['source_head'] if main and mode == 'current' else CANDIDATE_SHA
     name = f'Apparent-{version}-linux-x86_64.AppImage'
-    prefix = f'/tryapparent/apparent/releases/download/v{version}/'
-    if path == API:
+    tag = 'linux-main-' + revision if main else 'v' + version
+    prefix = f'/tryapparent/apparent/releases/download/{tag}/'
+    release = {'tag_name': tag, 'draft': False, 'prerelease': main,
+               'published_at': '2026-11-01T00:00:00Z',
+               'assets': [{'name': filename, 'browser_download_url': 'https://github.com' + prefix + filename}
+                          for filename in [name, name + '.sha256']]}
+    if path == metadata_path(control):
         if mode == 'error':
             return 503, b'controlled fixture failure\n'
-        return 200, json.dumps({'tag_name': 'v' + version, 'draft': False, 'prerelease': False,
-                               'assets': [{'name': filename, 'browser_download_url': 'https://github.com' + prefix + filename}
-                                          for filename in [name, name + '.sha256']]}).encode()
+        # Put the usable Main release on a later page, beyond unrelated releases.
+        return 200, json.dumps([{'tag_name': 'v1.0.0', 'prerelease': False,
+                                'draft': False, 'assets': []}] if main else release).encode()
+    if main and path == MAIN_API + '2':
+        return 200, json.dumps([release]).encode()
+    if main and path == MAIN_API + '3':
+        return 200, b'[]'
+    if main:
+        compare = '/repos/tryapparent/apparent/compare/'
+        source = control['source_head']
+        query = '?per_page=1&page=2'
+        if path == compare + source + '...' + CANDIDATE_SHA + query:
+            return 200, json.dumps({'status': 'diverged' if mode == 'diverged' else 'ahead',
+                                    'base_commit': {'sha': source}}).encode()
+        if path == compare + CANDIDATE_SHA + '...' + source + query:
+            return 200, json.dumps({'status': 'behind', 'base_commit': {'sha': CANDIDATE_SHA}}).encode()
     if path == prefix + name + '.sha256':
         digest = '0' * 64 if mode == 'bad-checksum' else hashlib.sha256(payload).hexdigest()
         return 200, f'{digest}  {name}\n'.encode()
@@ -55,7 +81,7 @@ def serve(directory, payload, port=8443):
             control = json.loads((directory / 'control.json').read_text())
             with (directory / 'requests.jsonl').open('a') as log:
                 log.write(json.dumps({'time': time.time(), 'path': self.path, 'control': control}) + '\n')
-            if self.path == API and control.get('gate'):
+            if self.path == metadata_path(control) and control.get('gate'):
                 (directory / 'request-started').touch()
                 deadline = time.monotonic() + 30
                 while not (directory / 'release-response').exists():

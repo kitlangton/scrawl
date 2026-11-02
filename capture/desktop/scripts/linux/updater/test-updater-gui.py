@@ -5,12 +5,13 @@ from pathlib import Path
 import hashlib
 import unittest
 import json
+import re
 import socket
 import subprocess
 import sys
 import tempfile
 import time
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 def load(name):
@@ -87,6 +88,108 @@ class LocatorTests(unittest.TestCase):
 
 
 class CandidateTests(unittest.TestCase):
+    def test_capture_restart_click_requires_ack_and_bounds_focus_retries(self):
+        scenario = Path(__file__).with_name('updater-gui-scenario.sh').read_text()
+        function = scenario.split('  click_update_guard() {\n', 1)[1].split('\n  }\n', 1)[0]
+        for acknowledged_at, expected_clicks, success in [(1, 1, True), (2, 2, True), (99, 3, False)]:
+            with self.subTest(acknowledged_at=acknowledged_at), tempfile.TemporaryDirectory() as temporary:
+                script = '''out=$1; acknowledged_at=$2; clicks=0
+ui() {
+    clicks=$((clicks+1))
+    if [ "$clicks" -eq "$acknowledged_at" ]; then
+        echo 'Update restart deferred until capture is idle' >> "$out/app.log"
+    fi
+}
+sleep() { :; }
+click_update_guard() {
+''' + function + '''
+}
+click_update_guard; result=$?
+echo "$clicks"
+exit "$result"
+'''
+                result = subprocess.run(['bash', '-c', script, 'focus-retry-test', temporary, str(acknowledged_at)],
+                                        capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode == 0, success, result.stderr)
+                self.assertEqual(result.stdout.strip(), str(expected_clicks))
+
+    def test_capture_guard_requires_owned_admitted_receipt_and_active_state(self):
+        scenario = Path(__file__).with_name('updater-gui-scenario.sh').read_text()
+        source = scenario.split('cat > "$out/assert-owned-capture.py" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
+        validator = compile(source, 'scenario-owned-capture-validator', 'exec')
+        owned = 'c' * 32
+        cases = [
+            ('starting', owned, None, 'starting', owned, True),
+            ('starting', owned, None, 'selecting', owned, True),
+            ('recording', owned, None, 'recording', owned, True),
+            ('starting', 'd' * 32, None, 'starting', owned, False),
+            ('starting', owned, None, 'starting', 'd' * 32, False),
+            ('starting', owned, 'start_failed', 'starting', owned, False),
+            ('failed', owned, None, 'starting', owned, False),
+            ('unknown', owned, None, 'starting', owned, False),
+            ('rejected', owned, None, 'idle', None, False),
+            ('cancelled', owned, None, 'idle', None, False),
+            ('recording', owned, None, 'processing', owned, False),
+            ('recording', owned, None, 'idle', None, False),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = Path(temporary) / 'receipt.json'
+            state = Path(temporary) / 'state.json'
+            for status, receipt_id, error, phase, state_id, accepted in cases:
+                with self.subTest(status=status, receipt_id=receipt_id, phase=phase, state_id=state_id, error=error):
+                    receipt.write_text(json.dumps({'capture_id': receipt_id, 'status': status, 'error': error}))
+                    state.write_text(json.dumps({'state': {'capture_id': state_id, 'phase': phase}}))
+                    with patch.object(sys, 'argv', ['validator', owned, str(receipt), str(state)]):
+                        if accepted:
+                            exec(validator, {})
+                        else:
+                            with self.assertRaises(AssertionError):
+                                exec(validator, {})
+
+    def test_controller_generates_both_channels_and_uses_relocated_vm_runner(self):
+        gui = load('updater-gui')
+        for channel in ['stable', 'main']:
+            with self.subTest(channel=channel), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                image = directory / 'candidate.AppImage'
+                image.write_bytes(b'\x7fELF' + b'\0' * 4 + b'AI\x02')
+                results = directory / 'results'
+                argv = ['updater-gui.py', '--template', str(directory / 'template'),
+                        '--ovmf-vars', str(directory / 'vars'), '--ssh-key', str(directory / 'key'),
+                        '--ssh-user', 'fixture', '--appimage', str(image), '--results', str(results)]
+                if channel == 'main':
+                    argv.extend(['--channel', channel])
+                # Stop at the runner boundary: this test must never launch a VM.
+                process = Mock(returncode=1)
+                process.poll.return_value = 1
+
+                def git_output(command, **kwargs):
+                    self.assertEqual(command[:2], ['git', '-C'])
+                    if command[3:] == ['rev-parse', 'HEAD']:
+                        return 'a' * 40
+                    self.assertEqual(command[3:], ['status', '--porcelain', '--untracked-files=all'])
+                    self.assertEqual(kwargs, {'text': True})
+                    return ''
+
+                with patch.object(sys, 'argv', argv), \
+                     patch.object(gui.subprocess, 'check_output', side_effect=git_output), \
+                     patch.object(gui.subprocess, 'Popen', return_value=process) as launch:
+                    self.assertEqual(gui.main(), 1)
+                command = launch.call_args.args[0]
+                expected = Path(__file__).resolve().parent.parent / 'gui/gui-vm.py'
+                self.assertEqual(Path(command[1]), expected)
+                self.assertTrue(expected.is_file())
+                self.assertIn('--isolated-network', command)
+                self.assertEqual(json.loads((results / 'candidate.json').read_text())['channel'], channel)
+                scenario = (results / 'scenario.sh').read_text()
+                self.assertIn("export UPDATER_CHANNEL='" + channel + "'", scenario)
+                self.assertNotIn('__UPDATER_', scenario)
+                subprocess.run(['bash', '-n', str(results / 'scenario.sh')], check=True)
+                for index, source in enumerate(re.findall(r"<<'PY'\n(.*?)\nPY", scenario, re.S)):
+                    compile(source, f'generated-{channel}-{index}', 'exec')
+                fixture = scenario.split("<<'UPDATER_FIXTURE_EOF'\n", 1)[1].split('\nUPDATER_FIXTURE_EOF', 1)[0]
+                compile(fixture, f'generated-{channel}-fixture', 'exec')
+
     def test_transferred_digest_must_equal_the_recorded_candidate(self):
         gui = load('updater-gui')
         expected = hashlib.sha256(b'exact packaged candidate').hexdigest()
@@ -99,9 +202,96 @@ class CandidateTests(unittest.TestCase):
             self.assertFalse(gui.candidate_matches(path, expected))
 
 
+    def test_dirty_repository_refuses_before_vm_launch_including_docs_and_tooling(self):
+        gui = load('updater-gui')
+        real_check_output = subprocess.check_output
+        real_popen = subprocess.Popen
+        for path in ['capture/desktop/linux/updates/update.rs', 'capture/desktop/mod.rs',
+                     'capture/desktop/settings/settings.rs', 'shared/handoff.rs',
+                     'composition/command_line.rs', 'capture/desktop/docs/linux/linux.md',
+                     'capture/desktop/scripts/linux/updater/updater-gui.py']:
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                repository = directory / 'repository'
+                repository.mkdir()
+                subprocess.run(['git', 'init', '-q', str(repository)], check=True)
+                dirty = repository / path
+                dirty.parent.mkdir(parents=True, exist_ok=True)
+                dirty.write_text('uncommitted candidate change\n')
+                if path.endswith('.rs'):
+                    subprocess.run(['git', '-C', str(repository), 'add', path], check=True)
+                image = directory / 'candidate.AppImage'
+                image.write_bytes(b'\x7fELF' + b'\0' * 4 + b'AI\x02')
+                results = directory / 'results'
+                argv = ['updater-gui.py', '--template', str(directory / 'template'),
+                        '--ovmf-vars', str(directory / 'vars'), '--ssh-key', str(directory / 'key'),
+                        '--ssh-user', 'fixture', '--appimage', str(image), '--results', str(results)]
+
+                def git_output(command, **kwargs):
+                    self.assertEqual(command[:2], ['git', '-C'])
+                    if command[3:] == ['rev-parse', 'HEAD']:
+                        return 'a' * 40
+                    self.assertEqual(command[3], 'status')
+                    with patch.object(gui.subprocess, 'Popen', real_popen):
+                        return real_check_output(command[:2] + [str(repository)] + command[3:], **kwargs)
+
+                with patch.object(sys, 'argv', argv), \
+                     patch.object(gui.subprocess, 'check_output', side_effect=git_output), \
+                     patch.object(gui.subprocess, 'Popen', return_value=Mock(returncode=1)) as launch, \
+                     patch.object(sys, 'stderr') as stderr:
+                    with self.assertRaises(SystemExit) as error:
+                        gui.main()
+                    self.assertEqual(error.exception.code, 2)
+                    self.assertIn('repository must be clean', ''.join(c.args[0] for c in stderr.write.call_args_list))
+                    launch.assert_not_called()
+                self.assertFalse((results / 'scenario.sh').exists())
+                self.assertFalse((results / 'candidate.json').exists())
+
+
 class FixtureTests(unittest.TestCase):
     def setUp(self):
         self.fixture = load('updater-fixture')
+
+    def test_main_pagination_canonical_assets_and_current_identity(self):
+        source = 'a' * 40
+        control = {'channel': 'main', 'source_head': source, 'version': '1.2.3', 'mode': 'current'}
+        base = '/repos/tryapparent/apparent/releases?per_page=10&page='
+        first = json.loads(self.fixture.response(control, base + '1', b'x')[1])
+        self.assertFalse(first[0]['prerelease'])
+        release = json.loads(self.fixture.response(control, base + '2', b'x')[1])[0]
+        self.assertEqual(release['tag_name'], 'linux-main-' + source)
+        self.assertTrue(release['prerelease'])
+        self.assertFalse(release['draft'])
+        self.assertTrue(release['published_at'])
+        self.assertEqual(json.loads(self.fixture.response(control, base + '3', b'x')[1]), [])
+        for mode in ['available', 'bad-checksum', 'diverged']:
+            control['mode'] = mode
+            release = json.loads(self.fixture.response(control, base + '2', b'x')[1])[0]
+            self.assertEqual(release['tag_name'], 'linux-main-' + 'b' * 40)
+            for asset in release['assets']:
+                self.assertEqual(asset['browser_download_url'],
+                                 'https://github.com/tryapparent/apparent/releases/download/'
+                                 + release['tag_name'] + '/' + asset['name'])
+            status, body = self.fixture.response(control, release['assets'][1]['browser_download_url'].split('github.com')[1], b'x')
+            self.assertEqual(status, 200)
+            self.assertEqual(body.split()[0], b'0' * 64 if mode == 'bad-checksum' else hashlib.sha256(b'x').hexdigest().encode())
+
+    def test_main_compare_direction_divergence_and_fail_closed_routes(self):
+        control = {'channel': 'main', 'source_head': 'a' * 40, 'version': '1.2.3', 'mode': 'available'}
+        base = '/repos/tryapparent/apparent/compare/'
+        query = '?per_page=1&page=2'
+        forward = base + 'a' * 40 + '...' + 'b' * 40 + query
+        reverse = base + 'b' * 40 + '...' + 'a' * 40 + query
+        self.assertEqual(json.loads(self.fixture.response(control, forward, b'')[1])['status'], 'ahead')
+        self.assertEqual(json.loads(self.fixture.response(control, forward, b'')[1])['base_commit']['sha'], 'a' * 40)
+        self.assertEqual(json.loads(self.fixture.response(control, reverse, b'')[1])['status'], 'behind')
+        self.assertEqual(json.loads(self.fixture.response(control, reverse, b'')[1])['base_commit']['sha'], 'b' * 40)
+        control['mode'] = 'diverged'
+        self.assertEqual(json.loads(self.fixture.response(control, forward, b'')[1])['status'], 'diverged')
+        self.assertEqual(self.fixture.response(control, base + 'c' * 40 + '...' + 'b' * 40, b'')[0], 404)
+        control['mode'] = 'error'
+        self.assertEqual(self.fixture.response(control, '/repos/tryapparent/apparent/releases?per_page=10&page=1', b'')[0], 503)
+        self.assertEqual(self.fixture.response(control, '/repos/tryapparent/apparent/releases?per_page=10&page=0', b'')[0], 404)
 
     def test_release_contract_and_digest_are_exact(self):
         import hashlib
