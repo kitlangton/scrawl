@@ -9,6 +9,11 @@ license = "MIT"
 test-support = []
 
 [dependencies]
+# Maintained X25519 release line; 0.12 adds unconditional P256/HPKE and
+# crypto-bigint 0.5.x (RUSTSEC-2026-0387), even with all features disabled.
+age = { version = "=0.11.5", default-features = false }
+ed25519-dalek = "=3.0.0"
+zeroize = "=1.9.1"
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 libc = "0.2.189"

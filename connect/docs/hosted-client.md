@@ -1,12 +1,16 @@
 # Apparent Connect desktop client and remote CLI (candidate)
 
+## Endpoint encryption candidate
+
+`experiments.hostedEncryption` is off by default. The candidate keeps local bundles ordinary and uses the existing any-browser link/sign-in/approve journey for grant-bound endpoint public keys. Account authorization is trusted; a compromised authorization service can substitute recipients. This is not Better Auth's token encryption and is not independent device pairing. No production enablement, plaintext migration or recovery guarantee is implied. See [the exact trust, wire, consent and remaining policy contract](hosted-encryption.md). Encrypted capture fetch requires the experiment and the original private endpoint identity; public/server-rendered sharing is rejected. Legacy plaintext remains explicitly identified and is not automatically migrated.
+
 Shared macOS/Linux implementation, default-off `hostedSync` experiment. This is an implementation candidate, not a deployed service or proof of native GUI behavior. No Windows support. See [hosted-api.md](hosted-api.md) for the v1 protocol and hosting prerequisites.
 
 ## Implementation ownership
 
-Optional desktop account controls live in **Settings → General**, behind the
-independent default-off `connectSettings` experiment (close/reopen Settings after
-editing config). They use the same client device flow, private credentials,
+Desktop account controls appear by default in **Settings → General**. The
+independent `connectSettings` flag supports an explicit false opt-out; close and
+reopen Settings after editing it. Visibility does not grant upload consent. They use the same client device flow, private credentials,
 renewal, queue cancellation and config writer as the CLI. There is no Connect
 onboarding step. The Settings controller is owned by Desktop; the client's
 secret-free presentation API supplies fresh local state, a validated public
@@ -19,8 +23,8 @@ does not claim live account approval, deployment or platform proof from compilat
 protocol-only staging package. It owns transfer, device auth, credentials, queue
 and worker locking, generation/cancellation checks, sharing identity/reservation/
 revocation, secure staging, fetch publication and their real curl/loopback tests.
-It builds independently with only the existing anyhow, Clap derive, libc, serde
-and serde_json dependencies. It does not build the root app, GPUI, Engine,
+It builds independently with anyhow, Clap derive, libc, serde and serde_json,
+plus the candidate's pinned age, ed25519-dalek and zeroize dependencies. It does not build the root app, GPUI, Engine,
 GStreamer, Swift helper or root build script. Runtime curl and system SHA-256
 requirements still apply; supported platforms remain macOS and Linux.
 

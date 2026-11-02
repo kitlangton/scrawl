@@ -980,7 +980,7 @@ pub(crate) fn experiment_enabled_in(config: &Config, name: &str) -> bool {
         .experiments
         .get(name)
         .copied()
-        .unwrap_or(name == AGENT_DEMO_VIDEO || name == "copyCaptureId")
+        .unwrap_or(name == AGENT_DEMO_VIDEO || name == "copyCaptureId" || name == "connectSettings")
 }
 
 pub fn load_config_from(path: &Path) -> Config {

@@ -93,11 +93,11 @@ and permission-repair windows retain their existing behavior.
 
 ### Apparent Connect (experiment)
 
-Set `"experiments": {"connectSettings": true}` in
-`~/.config/apparent/config.json` before opening Settings (close/reopen an already
-open window). This default-off experiment adds **General → Apparent Connect**
-below Launch at login, on macOS and Linux. It adds no onboarding step and does
-not require `hostedSharing`. Without a configured `cloud.server`, sign-in uses
+**General → Apparent Connect** appears by default below Launch at login on
+macOS and Linux. Opening it does not sign in, grant upload consent or enable
+uploads. To hide the controls, set `"connectSettings": false` in the existing
+`experiments` object in `~/.config/apparent/config.json`, then close and reopen
+Settings. It adds no onboarding step and does not require `hostedSharing`. Without a configured `cloud.server`, sign-in uses
 `https://hosted.tryapparent.com`; an existing valid custom origin is preserved.
 
 **Sign in to Connect… → Allow and continue → Open browser** explains the full
