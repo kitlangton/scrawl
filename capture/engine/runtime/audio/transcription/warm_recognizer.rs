@@ -518,7 +518,7 @@ mod tests {
         let mut pcm = vec![0.2; 4 * 16_000];
         pcm.extend(vec![0.0; 16_000]);
         let pause = crate::capture::engine::runtime::audio::transcription::pause_transcribe::Pause::start_with(
-            Arc::new(Mutex::new(pcm)),
+            Arc::new(Mutex::new(pcm.into())),
             move |samples, offset| lease.transcribe("model", samples, offset),
         )
         .unwrap();
@@ -572,7 +572,7 @@ mod tests {
             assert!(!crate::shared::handoff::experiment("warmRecognizer"));
             assert_eq!(case, "default");
             let pause = crate::capture::engine::runtime::audio::transcription::pause_transcribe::Pause::start(std::sync::Arc::new(
-                std::sync::Mutex::new(Vec::new()),
+                std::sync::Mutex::new(crate::capture::engine::runtime::audio::persistence::Samples::default()),
             ))
             .unwrap();
             let wav = crate::capture::engine::runtime::audio::audio::encode_wav_16k(&[]).unwrap();
@@ -627,7 +627,7 @@ mod tests {
         for value in [0.2, 0.7] {
             let lease = owner.begin().unwrap();
             let pause = crate::capture::engine::runtime::audio::transcription::pause_transcribe::Pause::start_with(
-                Arc::new(Mutex::new(Vec::new())),
+                Arc::new(Mutex::new(crate::capture::engine::runtime::audio::persistence::Samples::default())),
                 move |samples, offset| lease.transcribe("model", samples, offset),
             )
             .unwrap();
@@ -669,7 +669,7 @@ mod tests {
         for succeeds in [false, true] {
             let lease = owner.begin().unwrap();
             let pause = crate::capture::engine::runtime::audio::transcription::pause_transcribe::Pause::start_with(
-                Arc::new(Mutex::new(Vec::new())),
+                Arc::new(Mutex::new(crate::capture::engine::runtime::audio::persistence::Samples::default())),
                 move |samples, offset| lease.transcribe("model", samples, offset),
             )
             .unwrap();

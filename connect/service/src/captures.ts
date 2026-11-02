@@ -125,5 +125,17 @@ export async function cleanup(env: Env) {
   const page=results.slice(i,i+100);
   await deleteAttempts(env,page,now);
  }
- await env.DB.batch([stmt(env,'DELETE FROM sessions WHERE expires_at<=?',now),stmt(env,'DELETE FROM tokens WHERE expires_at<=?',now),stmt(env,'DELETE FROM oauth_states WHERE expires_at<=?',now),stmt(env,'DELETE FROM devices WHERE expires_at<=?',now),stmt(env,'DELETE FROM rate_limits WHERE window<?',Math.floor(now/3600000)-1)]);
+ const iso=new Date(now).toISOString();
+ await env.DB.batch([
+  stmt(env,'DELETE FROM auth_session WHERE expiresAt<=?',iso),
+  stmt(env,'DELETE FROM oauthAccessToken WHERE expiresAt<=?',iso),
+  stmt(env,'DELETE FROM auth_verification WHERE expiresAt<=?',iso),
+  stmt(env,'DELETE FROM auth_device WHERE expiresAt<=?',iso),
+  stmt(env,'DELETE FROM rate_limits WHERE window<?',Math.floor(now/3600000)-1),
+  stmt(env,'UPDATE auth_grants SET response=NULL WHERE response IS NOT NULL AND (expires_at<=? OR revoked_at IS NOT NULL)',now),
+  stmt(env,'UPDATE oauthRefreshToken SET rotationReplayResponse=NULL WHERE rotationReplayExpiresAt<=? AND rotationReplayResponse IS NOT NULL',iso),
+  // Keep live independently approved devices when the short device code expires.
+  // Terminal per-grant clients cascade only their own provider credential rows.
+  stmt(env,'DELETE FROM oauthClient WHERE clientId IN (SELECT g.client_id FROM auth_grants g WHERE g.expires_at<=? AND (g.revoked_at IS NOT NULL OR (NOT EXISTS(SELECT 1 FROM oauthRefreshToken r WHERE r.clientId=g.client_id AND r.expiresAt>?) AND NOT EXISTS(SELECT 1 FROM oauthAccessToken t WHERE t.clientId=g.client_id AND t.expiresAt>?))))',now,iso,iso),
+ ]);
 }

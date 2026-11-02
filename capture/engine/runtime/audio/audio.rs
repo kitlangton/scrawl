@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use super::persistence::{Samples, Writer};
 
 const SAMPLE_RATE: u32 = 16_000;
 
@@ -122,6 +123,7 @@ pub struct RecordedAudio {
     pub sample_count: usize,
     pub duration_ms: u64,
     pub wav_bytes: Vec<u8>,
+    pub saved_lease: Option<Arc<super::persistence::Lease>>,
     /// The transcription that ran while recording, if one did (`live_transcribe`).
     pub live: crate::capture::engine::runtime::audio::transcription::live_transcribe::Slot,
     #[cfg(target_os = "linux")]
@@ -131,7 +133,8 @@ pub struct RecordedAudio {
 pub struct AudioRecorder {
     worker: Option<std::thread::JoinHandle<Result<()>>>,
     stop_sender: Option<std::sync::mpsc::Sender<()>>,
-    samples: Arc<Mutex<Vec<f32>>>,
+    samples: Arc<Mutex<Samples>>,
+    writer: Option<Writer>,
     error: Arc<Mutex<Option<String>>>,
     health: Arc<Mutex<InputHealth>>,
     live: Option<crate::capture::engine::runtime::audio::transcription::live_transcribe::Live>,
@@ -155,10 +158,11 @@ impl AudioRecorder {
         let samples = self.samples.lock().ok()?;
         Some((samples.len(), input_level(&samples)))
     }
-    pub fn start() -> Result<Self> {
+    pub fn start(bundle_dir: &std::path::Path) -> Result<Self> {
         let started = std::time::Instant::now();
-        let samples = Arc::new(Mutex::new(Vec::new()));
+        let samples = Arc::new(Mutex::new(Samples::default()));
         let error = Arc::new(Mutex::new(None));
+        let writer = Writer::start(bundle_dir, Arc::clone(&samples), Arc::clone(&error))?;
         let health = Arc::new(Mutex::new(InputHealth::new(started)));
         let (stop_sender, stop_receiver) = std::sync::mpsc::channel();
         let worker_samples = Arc::clone(&samples);
@@ -201,6 +205,7 @@ impl AudioRecorder {
             worker: Some(worker),
             stop_sender: Some(stop_sender),
             samples,
+            writer: Some(writer),
             error,
             health,
             live,
@@ -217,7 +222,7 @@ impl AudioRecorder {
     /// The chosen microphone (`mic`), else the system default. A chosen device that is missing or
     /// won't open never stops the recording.
     fn open_stream(
-        samples: Arc<Mutex<Vec<f32>>>,
+        samples: Arc<Mutex<Samples>>,
         error: Arc<Mutex<Option<String>>>,
         health: Arc<Mutex<InputHealth>>,
     ) -> Result<InputStream> {
@@ -285,7 +290,7 @@ impl AudioRecorder {
     #[cfg(target_os = "linux")]
     fn open_pulse(
         source: &str,
-        samples: Arc<Mutex<Vec<f32>>>,
+        samples: Arc<Mutex<Samples>>,
         health: Arc<Mutex<InputHealth>>,
     ) -> Result<InputStream> {
         let stream = crate::capture::desktop::linux::microphone::Stream::start(source, move |data| {
@@ -302,7 +307,7 @@ impl AudioRecorder {
 
     fn open_device(
         device: &cpal::Device,
-        samples: Arc<Mutex<Vec<f32>>>,
+        samples: Arc<Mutex<Samples>>,
         error: Arc<Mutex<Option<String>>>,
         health: Arc<Mutex<InputHealth>>,
     ) -> Result<cpal::Stream> {
@@ -359,32 +364,34 @@ impl AudioRecorder {
     pub fn stop(mut self) -> Result<RecordedAudio> {
         // Joining drops the stream and stops its callback before taking the buffer,
         // including a stop requested while the device was still being initialized.
-        self.join_worker()?;
+        let input_result = self.join_worker();
         let error = self
             .error
             .lock()
             .map_err(|_| anyhow!("Microphone error lock poisoned"))?
             .take();
-        let samples_16k = std::mem::take(
-            &mut *self
-                .samples
-                .lock()
-                .map_err(|_| anyhow!("Microphone buffer lock poisoned"))?,
-        );
+        let (wav_bytes, saved_lease) = if let Some(mut writer) = self.writer.take() {
+            let (bytes, lease) = writer.finish()?;
+            (bytes, Some(lease))
+        } else {
+            (encode_wav_16k(self.samples.lock().map_err(|_| anyhow!("Microphone buffer lock poisoned"))?.recent())?, None)
+        };
+        let sample_count = wav_16k_reader(&wav_bytes)?.duration() as usize;
+        // Check saving even if input failed. A save failure must not become successful silence.
+        if let Err(error) = input_result {
+            crate::capture::engine::runtime::apparent_log(format!("Microphone unavailable: {error:#}; retaining narration ownership through finalization"));
+        }
+        self.samples.lock().map_err(|_| anyhow!("Microphone buffer lock poisoned"))?.clear();
         // An overload, or a device unplugged partway, keeps what was heard before it.
         if let Some(error) = error {
-            if samples_16k.is_empty() {
-                bail!("Microphone capture failed: {error}");
-            }
             crate::capture::engine::runtime::apparent_log(format!("Microphone: {error}; keeping what it heard"));
         }
-        let sample_count = samples_16k.len();
         let duration_ms = sample_count as u64 * 1_000 / SAMPLE_RATE as u64;
-        let wav_bytes = encode_wav_16k(&samples_16k)?;
         Ok(RecordedAudio {
             sample_count,
             duration_ms,
             wav_bytes,
+            saved_lease,
             live: crate::capture::engine::runtime::audio::transcription::live_transcribe::Slot::new(self.live.take()),
             #[cfg(target_os = "linux")]
             pause: crate::capture::engine::runtime::audio::transcription::pause_transcribe::Slot::new(self.pause.take()),
@@ -398,6 +405,11 @@ impl Drop for AudioRecorder {
     }
 }
 
+/// Mic permission/device failure does not invalidate a screen capture. Save failure does.
+pub fn stop_optional(recorder: Option<AudioRecorder>) -> Result<Option<RecordedAudio>> {
+    recorder.map(AudioRecorder::stop).transpose()
+}
+
 fn device_name(device: &cpal::Device) -> Option<String> {
     Some(device.description().ok()?.name().to_owned())
 }
@@ -405,7 +417,7 @@ fn device_name(device: &cpal::Device) -> Option<String> {
 fn input_stream<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
-    samples: Arc<Mutex<Vec<f32>>>,
+    samples: Arc<Mutex<Samples>>,
     error: Arc<Mutex<Option<String>>>,
     health: Arc<Mutex<InputHealth>>,
 ) -> Result<cpal::Stream>
@@ -479,6 +491,7 @@ pub fn recorded_audio_from_wav(wav_bytes: Vec<u8>) -> Result<RecordedAudio> {
         sample_count,
         duration_ms: sample_count as u64 * 1_000 / u64::from(SAMPLE_RATE),
         wav_bytes,
+        saved_lease: None,
         live: Default::default(),
         #[cfg(target_os = "linux")]
         pause: Default::default(),
@@ -693,7 +706,7 @@ mod tests {
 
     #[test]
     fn stop_joins_worker_before_reading_its_last_samples() {
-        let samples = Arc::new(Mutex::new(Vec::new()));
+        let samples = Arc::new(Mutex::new(Samples::default()));
         let output = Arc::clone(&samples);
         let (stop_sender, stop_receiver) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
@@ -709,6 +722,7 @@ mod tests {
             worker: Some(worker),
             stop_sender: Some(stop_sender),
             samples,
+            writer: None,
             error: Arc::new(Mutex::new(None)),
             health: Arc::new(Mutex::new(InputHealth::new(Instant::now()))),
             live: None,
@@ -732,7 +746,8 @@ mod tests {
         let recorder = |samples: Vec<f32>| AudioRecorder {
             worker: None,
             stop_sender: None,
-            samples: Arc::new(Mutex::new(samples)),
+            samples: Arc::new(Mutex::new(samples.into())),
+            writer: None,
             error: Arc::new(Mutex::new(Some("Device disconnected".into()))),
             health: Arc::new(Mutex::new(InputHealth::new(Instant::now()))),
             live: None,
@@ -741,29 +756,35 @@ mod tests {
             pause: None,
         };
         assert_eq!(recorder(vec![0.1; 160]).stop().unwrap().sample_count, 160);
-        assert!(recorder(Vec::new()).stop().is_err());
+        assert_eq!(recorder(Vec::new()).stop().unwrap().sample_count, 0);
     }
 
     #[test]
-    fn stop_propagates_background_initialization_failure() {
+    fn unavailable_input_keeps_its_lease_through_screen_finalization() {
+        let dir = std::env::temp_dir().join(format!("apparent-no-mic-{}", crate::shared::ids::make_bundle_id()));
+        crate::capture::engine::bundle::recover::begin_screen_capture(&dir).unwrap();
+        let samples = Arc::new(Mutex::new(Samples::default()));
+        let error = Arc::new(Mutex::new(None));
+        let writer = Writer::start(&dir, samples.clone(), error.clone()).unwrap();
         let recorder = AudioRecorder {
             worker: Some(std::thread::spawn(|| bail!("device unavailable"))),
             stop_sender: None,
-            samples: Arc::new(Mutex::new(Vec::new())),
-            error: Arc::new(Mutex::new(None)),
+            samples,
+            writer: Some(writer),
+            error,
             health: Arc::new(Mutex::new(InputHealth::new(Instant::now()))),
             live: None,
             word_probe: None,
             #[cfg(target_os = "linux")]
             pause: None,
         };
-        assert!(
-            recorder
-                .stop()
-                .unwrap_err()
-                .to_string()
-                .contains("device unavailable")
-        );
+        let audio = recorder.stop().unwrap();
+        assert_eq!(audio.sample_count, 0, "unavailable input must not claim recorded narration");
+        assert!(super::super::persistence::Lease::acquire(&dir).is_err());
+        assert!(!crate::capture::engine::bundle::recover::owed(&dir));
+        drop(audio);
+        assert!(super::super::persistence::Lease::acquire(&dir).is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -2,7 +2,9 @@
 //! Never replace a debug build, a symlink, or somebody else's /opt installation.
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::fd::AsRawFd;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -108,17 +110,18 @@ pub fn check_cli() -> Result<&'static str> {
 /// Start the installed AppImage after this process exits, not the old running inode.
 pub fn relaunch_staged() -> Result<()> {
     let image = target()?.context("Updates require an owned AppImage under your home directory")?;
-    ensure!(status()?["pendingRestart"] == true, "no installed update is waiting for a restart");
     let name = image.file_name().context("AppImage has no name")?.to_string_lossy();
     let backup = image.with_file_name(format!(".{name}.previous"));
+    // Own the transaction from validation through post-exit readiness/recovery.
+    let mut command = relaunch_command(&image, &backup, std::process::id())?;
+    ensure!(status()?["pendingRestart"] == true, "no installed update is waiting for a restart");
     ensure!(backup.is_file(), "previous AppImage is unavailable for recovery");
     ensure!(fs::metadata(&backup)?.permissions().mode() & 0o111 != 0, "previous AppImage is not executable");
     // A successful shell spawn proves nothing about the image it will execute later.
     // Check the new image before leaving the running app, and keep the old one as a
     // recovery path if the image disappears or fails to start after this process exits.
     preflight_image(&image, Duration::from_secs(5))?;
-    relaunch_command(&image, &backup, std::process::id())
-        .spawn()
+    command.spawn()
         .context("cannot start updated AppImage after exit")?;
     Ok(())
 }
@@ -144,7 +147,28 @@ fn preflight_image(image: &Path, timeout: Duration) -> Result<()> {
     }
 }
 
-fn relaunch_command(image: &Path, backup: &Path, pid: u32) -> Command {
+fn file_identity(path: &Path) -> Result<String> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => {
+            ensure!(meta.is_file() && !meta.file_type().is_symlink() && meta.uid() == unsafe { libc::geteuid() },
+                "update recovery input must be an owned regular file");
+            Ok(format!("{}:{}", meta.dev(), meta.ino()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("-".into()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn marker_contents(path: &Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(text.trim_end_matches('\n').to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn relaunch_command(image: &Path, backup: &Path, pid: u32) -> Result<Command> {
+    let lock = transaction_lock(image)?;
     let marker = image.with_extension("AppImage.apparent-update.json");
     let previous_marker = backup.with_file_name(format!("{}.apparent-update.json", backup.file_name().unwrap().to_string_lossy()));
     let failed_marker = image.with_file_name(format!(".{}.failed-update.json", image.file_name().unwrap().to_string_lossy()));
@@ -152,21 +176,73 @@ fn relaunch_command(image: &Path, backup: &Path, pid: u32) -> Command {
     let mut command = Command::new("/bin/sh");
     command
         .arg("-c")
-        .arg("pid=$1; image=$2; backup=$3; marker=$4; previous_marker=$5; failed_marker=$6; ready=$7; i=0; while kill -0 \"$pid\" 2>/dev/null && [ \"$i\" -lt 100 ]; do sleep 0.1; i=$((i+1)); done; kill -0 \"$pid\" 2>/dev/null && exit 1; rm -f \"$ready\"; APPARENT_UPDATE_READY=\"$ready\" \"$image\" app & child=$!; i=0; while [ \"$i\" -lt 150 ]; do if [ -f \"$ready\" ] && kill -0 \"$child\" 2>/dev/null; then rm -f \"$ready\"; exit 0; fi; if ! kill -0 \"$child\" 2>/dev/null; then break; fi; sleep 0.1; i=$((i+1)); done; if kill -0 \"$child\" 2>/dev/null; then kill \"$child\" 2>/dev/null; fi; wait \"$child\" 2>/dev/null; rm -f \"$ready\"; if [ -x \"$backup\" ]; then if mv -f \"$backup\" \"$image\"; then if [ -f \"$marker\" ]; then mv -f \"$marker\" \"$failed_marker\" || rm -f \"$marker\"; fi; if [ -f \"$previous_marker\" ]; then mv -f \"$previous_marker\" \"$marker\" || rm -f \"$marker\"; else rm -f \"$marker\"; fi; exec \"$image\" app; fi; exec \"$backup\" app; fi; exit 1")
+        .arg(r#"pid=$1; image=$2; backup=$3; marker=$4; previous_marker=$5; failed_marker=$6; ready=$7
+image_id=$8; backup_id=$9; shift 9; marker_id=$1; previous_id=$2; marker_text=$3; previous_text=$4
+same() {
+    [ ! -L "$1" ] || return 1
+    if [ "$2" = '-' ]; then [ ! -e "$1" ]; else [ "$(stat -c '%d:%i' "$1" 2>/dev/null)" = "$2" ]; fi
+}
+unchanged() {
+    { same "$image" "$image_id" || { [ ! -e "$image" ] && [ ! -L "$image" ]; }; } &&
+    same "$backup" "$backup_id" && same "$marker" "$marker_id" && same "$previous_marker" "$previous_id" &&
+    [ "$(cat "$marker" 2>/dev/null)" = "$marker_text" ] && [ "$(cat "$previous_marker" 2>/dev/null)" = "$previous_text" ]
+}
+i=0
+while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+kill -0 "$pid" 2>/dev/null && exit 1
+unchanged || exit 1
+rm -f "$ready"
+APPARENT_UPDATE_READY="$ready" "$image" app </dev/null & child=$!
+i=0
+while [ "$i" -lt 150 ]; do
+    if [ -f "$ready" ] && kill -0 "$child" 2>/dev/null; then rm -f "$ready"; exit 0; fi
+    if ! kill -0 "$child" 2>/dev/null; then break; fi
+    sleep 0.1; i=$((i+1))
+done
+if kill -0 "$child" 2>/dev/null; then
+    kill "$child" 2>/dev/null
+    i=0
+    while kill -0 "$child" 2>/dev/null && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i+1)); done
+    # SIGTERM may only queue cooperative Stop. Do not hold the transaction
+    # forever, force-kill a possibly busy app, or replace an image still live.
+    kill -0 "$child" 2>/dev/null && exit 1
+fi
+wait "$child" 2>/dev/null
+rm -f "$ready"
+# A non-cooperating writer must not make us roll back or blacklist its image.
+unchanged || exit 1
+if [ -x "$backup" ]; then
+    if mv -f "$backup" "$image"; then
+        if [ -f "$marker" ]; then mv -f "$marker" "$failed_marker" || rm -f "$marker"; fi
+        if [ -f "$previous_marker" ]; then mv -f "$previous_marker" "$marker" || rm -f "$marker"; else rm -f "$marker"; fi
+        exec "$image" app </dev/null
+    fi
+    exec "$backup" app </dev/null
+fi
+exit 1"#)
         .arg("apparent-update-relaunch")
         .arg(pid.to_string())
         .arg(image)
         .arg(backup)
-        .arg(marker)
-        .arg(previous_marker)
+        .arg(&marker)
+        .arg(&previous_marker)
         .arg(failed_marker)
         .arg(ready)
+        .arg(file_identity(image)?)
+        .arg(file_identity(backup)?)
+        .arg(file_identity(&marker)?)
+        .arg(file_identity(&previous_marker)?)
+        .arg(marker_contents(&marker)?)
+        .arg(marker_contents(&previous_marker)?)
         .env_remove("APPIMAGE")
         .env_remove("APPDIR")
-        .stdin(std::process::Stdio::null())
+        // Carry the same open-file-description lock across exec with no
+        // unlock/relock gap. The shell reads its program from -c, not stdin;
+        // launched app children reopen /dev/null and cannot retain the lock.
+        .stdin(std::process::Stdio::from(lock))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    command
+    Ok(command)
 }
 
 // Main previews are published from main as GitHub releases.
@@ -347,6 +423,24 @@ fn newer(candidate: &Candidate, installed: Option<(String, String)>) -> bool {
     true
 }
 
+fn main_advances(current: Option<&str>, candidate: &Candidate, fetch: &impl Fn(&str) -> Result<Vec<u8>>) -> Result<bool> {
+    if candidate.channel != "main" { return Ok(true) }
+    let Some(current) = current else { return Ok(true) };
+    ensure!([current, &candidate.id].iter().all(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())),
+        "invalid Main update revision");
+    if current == candidate.id { return Ok(false) }
+    // Page two retains comparison metadata but omits GitHub's potentially huge
+    // first-page file patches. Commit dates and publication times are not ancestry.
+    let body = fetch(&format!("https://api.github.com/repos/{REPO}/compare/{current}...{}?per_page=1&page=2", candidate.id))?;
+    let comparison: serde_json::Value = serde_json::from_slice(&body).context("invalid Main comparison")?;
+    ensure!(comparison["base_commit"]["sha"].as_str() == Some(current), "unexpected Main comparison base");
+    match comparison["status"].as_str() {
+        Some("ahead") => Ok(true),
+        Some("behind" | "identical") => Ok(false),
+        _ => anyhow::bail!("Main update is not a verified descendant of the installed revision"),
+    }
+}
+
 fn target() -> Result<Option<PathBuf>> {
     let Some(path) = std::env::var_os("APPIMAGE").map(PathBuf::from) else { return Ok(None) };
     let meta = fs::symlink_metadata(&path)?;
@@ -439,8 +533,26 @@ fn install(candidate: &Candidate, image: &Path) -> Result<()> {
     result
 }
 
+fn transaction_lock(image: &Path) -> Result<File> {
+    let name = image.file_name().context("AppImage has no name")?.to_string_lossy();
+    let path = image.with_file_name(format!(".{name}.lock"));
+    // Do not unlink this inode on release: a waiter must never lock a different
+    // file while the previous transaction still holds the original one.
+    let lock = OpenOptions::new().read(true).write(true).create(true).mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(path)?;
+    let meta = lock.metadata()?;
+    ensure!(meta.is_file() && meta.uid() == unsafe { libc::geteuid() }
+        && meta.nlink() == 1 && meta.mode() & 0o077 == 0, "update lock must be a private owned file");
+    ensure!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
+        "another update transaction is running: {}", std::io::Error::last_os_error());
+    Ok(lock)
+}
+
 fn check() -> Result<bool> {
     let Some(image) = target()? else { return Ok(false) };
+    // CLI processes and the GUI's hourly/manual worker share this lock. Acquire
+    // before reading identity or discovering a release; hold through the swap.
+    let _transaction = transaction_lock(&image)?;
     let status = status()?;
     let arch = arch().context("no AppImage for this CPU")?;
     let candidate = if status["channel"] == "main" {
@@ -451,7 +563,15 @@ fn check() -> Result<bool> {
     let name = image.file_name().context("AppImage has no name")?.to_string_lossy();
     let failed = image.with_file_name(format!(".{name}.failed-update.json"));
     ensure!(!previously_failed(&failed, &candidate), "this update failed to start previously; waiting for a newer release");
-    if !newer(&candidate, installed_id(&image)) { return Ok(false) }
+    let installed = installed_id(&image);
+    if !newer(&candidate, installed.clone()) { return Ok(false) }
+    let current = match &installed {
+        Some((channel, id)) if channel == "main" => Some(id.as_str()),
+        // No marker yet: a freshly packaged Main build already knows its SHA.
+        None => option_env!("GITHUB_SHA").filter(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())),
+        _ => None, // An explicit channel switch keeps its existing semantics.
+    };
+    if !main_advances(current, &candidate, &|url| get(url, None))? { return Ok(false) }
     install(&candidate, &image)?;
     super::super::integration::shell::notify("Apparent updated", "The new version will start the next time you open Apparent. Your previous AppImage is kept beside it.");
     Ok(true)
@@ -476,6 +596,119 @@ pub fn start() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_transaction_lock_child() {
+        let Some(image) = std::env::var_os("APPARENT_TEST_UPDATE_LOCK_IMAGE").map(PathBuf::from) else { return };
+        let mode = std::env::var("APPARENT_TEST_UPDATE_LOCK_MODE").unwrap();
+        let lock = transaction_lock(&image);
+        if mode == "contended" {
+            assert!(lock.is_err(), "other process must not enter discovery/download/swap");
+            return;
+        }
+        let _lock = lock.unwrap();
+        let candidate = Candidate { id: "b".repeat(40), channel: "main", url: String::new(), sha256: String::new() };
+        let (channel, current) = installed_id(&image).unwrap();
+        assert_eq!(channel, "main");
+        assert_eq!(current, "c".repeat(40));
+        assert!(!main_advances(Some(&current), &candidate, &|_| Ok(serde_json::to_vec(
+            &serde_json::json!({"base_commit":{"sha":current},"status":"behind"}))?)).unwrap());
+        assert_eq!(fs::read(&image).unwrap(), b"newer C image", "stale B must not swap over C");
+    }
+
+    #[test]
+    fn updater_processes_serialize_before_identity_selection_and_cannot_finish_stale() {
+        let dir = std::env::temp_dir().join(format!("apparent-update-lock-{}", crate::shared::ids::make_bundle_id()));
+        fs::create_dir(&dir).unwrap();
+        let image = dir.join("Apparent.AppImage");
+        fs::write(&image, b"old A image").unwrap();
+        let run_child = |mode: &str| {
+            let test = format!("{}::update_transaction_lock_child", module_path!().split_once("::").unwrap().1);
+            let output = Command::new(std::env::current_exe().unwrap()).args(["--exact", &test, "--nocapture"])
+                .env("APPARENT_TEST_UPDATE_LOCK_IMAGE", &image).env("APPARENT_TEST_UPDATE_LOCK_MODE", mode)
+                .output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "child test must actually execute");
+        };
+        let lock = transaction_lock(&image).unwrap();
+        let inode = fs::metadata(image.with_file_name(".Apparent.AppImage.lock")).unwrap().ino();
+        run_child("contended");
+        let stage = dir.join("C.download");
+        fs::write(&stage, b"newer C image").unwrap();
+        exchange(&stage, &image).unwrap();
+        fs::write(image.with_extension("AppImage.apparent-update.json"), serde_json::to_vec(
+            &serde_json::json!({"channel":"main","id":"c".repeat(40)})).unwrap()).unwrap();
+        drop(lock);
+        run_child("stale");
+        assert_eq!(fs::metadata(image.with_file_name(".Apparent.AppImage.lock")).unwrap().ino(), inode);
+        assert_eq!(fs::read(&stage).unwrap(), b"old A image");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn transaction_lock_rejects_symlinks_hardlinks_and_public_files() {
+        let dir = std::env::temp_dir().join(format!("apparent-lock-safety-{}", crate::shared::ids::make_bundle_id()));
+        fs::create_dir(&dir).unwrap();
+        let image = dir.join("image");
+        let path = dir.join(".image.lock");
+        let other = dir.join("other");
+        fs::write(&other, b"untouched").unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(transaction_lock(&image).is_err());
+        fs::remove_file(&path).unwrap();
+        fs::hard_link(&other, &path).unwrap();
+        assert!(transaction_lock(&image).is_err());
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, b"untouched").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(transaction_lock(&image).is_err());
+        assert_eq!(fs::read(&other).unwrap(), b"untouched");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn main_updates_require_forward_ancestry_not_different_shas() {
+        let current = "a".repeat(40);
+        let candidate = Candidate { id: "b".repeat(40), channel: "main", url: String::new(), sha256: String::new() };
+        for (status, expected) in [("ahead", Some(true)), ("behind", Some(false)), ("identical", Some(false)), ("diverged", None), ("unknown", None)] {
+            let result = main_advances(Some(&current), &candidate, &|url| {
+                assert_eq!(url, format!("https://api.github.com/repos/{REPO}/compare/{current}...{}?per_page=1&page=2", candidate.id));
+                Ok(serde_json::to_vec(&serde_json::json!({"status":status,"base_commit":{"sha":current}}))?)
+            });
+            match expected {
+                Some(expected) => assert_eq!(result.unwrap(), expected),
+                None => assert!(result.is_err()),
+            }
+        }
+        assert!(main_advances(Some(&current), &candidate, &|_| anyhow::bail!("offline")).is_err());
+        assert!(main_advances(Some(&current), &candidate, &|_| Ok(b"{}".to_vec())).is_err());
+        assert!(main_advances(Some(&current), &candidate, &|_| Ok(serde_json::to_vec(&serde_json::json!({"status":"ahead","base_commit":{"sha":candidate.id}}))?)).is_err());
+        assert!(main_advances(Some("bad-revision"), &candidate, &|_| panic!("must validate before fetch")).is_err());
+        assert!(!main_advances(Some(&candidate.id), &candidate, &|_| panic!("same revision needs no request")).unwrap());
+        assert!(main_advances(None, &candidate, &|_| panic!("legacy migration has no baseline")).unwrap());
+        let stable = Candidate { channel: "stable", ..candidate };
+        assert!(main_advances(Some(&current), &stable, &|_| panic!("Stable must not use Main comparison")).unwrap());
+    }
+
+    #[test]
+    fn main_channel_rejects_other_architecture_and_unpublished_releases() {
+        let tag = format!("linux-main-{}", "a".repeat(40));
+        let image = "Apparent-0.3.13-linux-aarch64.AppImage";
+        let release = || Release {
+            tag_name: tag.clone(), prerelease: true, draft: false, published_at: Some("2026-11-01T01:00:00Z".into()),
+            assets: [image.to_owned(), format!("{image}.sha256")].into_iter().map(|name| ReleaseAsset {
+                browser_download_url: format!("https://github.com/{REPO}/releases/download/{tag}/{name}"), name,
+            }).collect(),
+        };
+        assert!(first_usable_main(vec![release()], "x86_64", &|_| panic!("foreign architecture must not fetch")).unwrap().is_none());
+        let mut draft = release();
+        draft.draft = true;
+        let mut unpublished = release();
+        unpublished.published_at = None;
+        assert!(first_usable_main(vec![draft, unpublished], "aarch64", &|_| panic!("private releases must not fetch")).unwrap().is_none());
+        let candidate = first_usable_main(vec![release()], "aarch64", &|_| Ok(format!("{}  {image}", "c".repeat(64)).into_bytes())).unwrap().unwrap();
+        assert!(candidate.url.ends_with("-linux-aarch64.AppImage"));
+    }
 
     #[test]
     fn main_channel_selects_latest_published_main_release() {
@@ -590,6 +823,123 @@ mod tests {
     }
 
     #[test]
+    fn relaunch_recovery_serializes_updates_and_never_blacklists_a_different_image() {
+        for bypass_lock in [false, true] {
+            let dir = std::env::temp_dir().join(format!("apparent-recovery-race-{}", crate::shared::ids::make_bundle_id()));
+            fs::create_dir(&dir).unwrap();
+            let image = dir.join("Apparent.AppImage");
+            let backup = dir.join(".Apparent.AppImage.previous");
+            let marker = image.with_extension("AppImage.apparent-update.json");
+            let previous_marker = dir.join(".Apparent.AppImage.previous.apparent-update.json");
+            let failed_marker = dir.join(".Apparent.AppImage.failed-update.json");
+            let started = dir.join("started");
+            let fail = dir.join("fail");
+            let recovered = dir.join("recovered");
+            fs::write(&image, b"#!/bin/sh\ntouch \"$TEST_STARTED\"\nwhile [ ! -f \"$TEST_FAIL\" ]; do sleep 0.02; done\nexit 1\n").unwrap();
+            fs::write(&backup, b"#!/bin/sh\ntouch \"$TEST_RECOVERED\"\n").unwrap();
+            for path in [&image, &backup] { fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap(); }
+            let identity = |id: &str| serde_json::to_vec(&serde_json::json!({"channel":"main","id":id.repeat(40)})).unwrap();
+            fs::write(&marker, identity("b")).unwrap();
+            fs::write(&previous_marker, identity("a")).unwrap();
+            let mut command = relaunch_command(&image, &backup, u32::MAX).unwrap();
+            let mut helper = command.env("TEST_STARTED", &started).env("TEST_FAIL", &fail)
+                .env("TEST_RECOVERED", &recovered).spawn().unwrap();
+            drop(command); // Only the post-exit helper now holds the flock.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !started.exists() && Instant::now() < deadline { std::thread::sleep(Duration::from_millis(10)); }
+            assert!(started.exists(), "actual attempted B must reach its gated startup");
+            assert!(transaction_lock(&image).is_err(), "C cannot stage while B readiness/recovery is unresolved");
+            assert!(relaunch_command(&image, &backup, u32::MAX).is_err(), "competing restart must also refuse");
+            if bypass_lock {
+                // An external writer deliberately ignores the lock: production
+                // exchange/backup operations must not fool rollback identity.
+                let stage = dir.join("C.download");
+                fs::write(&stage, b"newer C image").unwrap();
+                exchange(&stage, &image).unwrap();
+                fs::rename(&stage, &backup).unwrap();
+                fs::copy(&marker, &previous_marker).unwrap();
+                let next_marker = dir.join("C.marker");
+                fs::write(&next_marker, identity("c")).unwrap();
+                fs::rename(next_marker, &marker).unwrap();
+            }
+            fs::write(&fail, b"fail B now").unwrap();
+            assert_eq!(helper.wait().unwrap().success(), !bypass_lock);
+            let _lock = transaction_lock(&image).expect("helper must release its lock on either outcome");
+            if bypass_lock {
+                assert_eq!(fs::read(&image).unwrap(), b"newer C image");
+                assert_eq!(installed_id(&image), Some(("main".into(), "c".repeat(40))));
+                assert!(!failed_marker.exists(), "C was never attempted and cannot be blacklisted");
+                assert!(!recovered.exists());
+            } else {
+                assert!(recovered.exists());
+                assert_eq!(installed_id(&image), Some(("main".into(), "a".repeat(40))));
+                assert_eq!(fs::read(&failed_marker).unwrap(), identity("b"));
+            }
+            fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn startup_timeout_releases_lock_without_killing_a_live_term_handler() {
+        let dir = std::env::temp_dir().join(format!("apparent-startup-term-{}", crate::shared::ids::make_bundle_id()));
+        fs::create_dir(&dir).unwrap();
+        let tools = dir.join("tools");
+        fs::create_dir(&tools).unwrap();
+        // Execute the production helper verbatim. Accelerate only its sleep
+        // utility, not its readiness/termination policy or real signal effects.
+        let sleep = tools.join("sleep");
+        fs::write(&sleep, b"#!/bin/sh\nexec /bin/sleep 0.001\n").unwrap();
+        fs::set_permissions(&sleep, fs::Permissions::from_mode(0o700)).unwrap();
+        let image = dir.join("Apparent.AppImage");
+        let backup = dir.join(".Apparent.AppImage.previous");
+        let marker = image.with_extension("AppImage.apparent-update.json");
+        let previous_marker = dir.join(".Apparent.AppImage.previous.apparent-update.json");
+        let failed_marker = dir.join(".Apparent.AppImage.failed-update.json");
+        let started = dir.join("started");
+        let term = dir.join("term-requested");
+        let recovered = dir.join("recovered");
+        fs::write(&image, b"#!/bin/sh\ntrap 'touch \"$TEST_TERM\"' TERM\nprintf '%s' \"$$\" > \"$TEST_STARTED\"\nwhile :; do /bin/sleep 0.02; done\n").unwrap();
+        fs::write(&backup, b"#!/bin/sh\ntouch \"$TEST_RECOVERED\"\n").unwrap();
+        for path in [&image, &backup] { fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap(); }
+        let next = br#"{"channel":"main","id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}"#;
+        let previous = br#"{"channel":"main","id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+        fs::write(&marker, next).unwrap();
+        fs::write(&previous_marker, previous).unwrap();
+        let backup_bytes = fs::read(&backup).unwrap();
+        let mut command = relaunch_command(&image, &backup, u32::MAX).unwrap();
+        let mut helper = command.env("PATH", format!("{}:/usr/bin:/bin", tools.display()))
+            .env("TEST_STARTED", &started).env("TEST_TERM", &term).env("TEST_RECOVERED", &recovered)
+            .spawn().unwrap();
+        drop(command);
+        let deadline = Instant::now() + Duration::from_secs(12);
+        let mut result = None;
+        while Instant::now() < deadline {
+            if let Some(status) = helper.try_wait().unwrap() { result = Some(status); break; }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let fixture_pid: i32 = fs::read_to_string(&started).unwrap().parse().unwrap();
+        let fixture_cmd = fs::read(format!("/proc/{fixture_pid}/cmdline")).unwrap();
+        assert!(fixture_cmd.split(|b| *b == 0).any(|arg| arg == image.as_os_str().as_encoded_bytes()), "cleanup must own this exact fixture");
+        let terminated_cooperatively = term.exists();
+        let still_alive = unsafe { libc::kill(fixture_pid, 0) } == 0;
+        let lock_released = transaction_lock(&image).is_ok();
+        let left_images_untouched = fs::read(&marker).unwrap() == next
+            && fs::read(&previous_marker).unwrap() == previous
+            && fs::read(&backup).unwrap() == backup_bytes
+            && !recovered.exists() && !failed_marker.exists();
+        // Only this synthetic fixture is killed for test cleanup. Production
+        // must not turn a startup timeout into SIGKILL of a possibly busy app.
+        unsafe { libc::kill(fixture_pid, libc::SIGKILL); }
+        if result.is_none() { let _ = helper.wait(); }
+        fs::remove_dir_all(dir).unwrap();
+        assert!(result.is_some(), "readiness timeout must not wait forever or retain its transaction lock");
+        assert!(!result.unwrap().success(), "unresolved startup is not successful recovery");
+        assert!(terminated_cooperatively && still_alive, "SIGTERM must be observed without forcing exit");
+        assert!(lock_released, "later updates must remain possible");
+        assert!(left_images_untouched, "a live child forbids rollback or blacklisting");
+    }
+
+    #[test]
     fn failed_post_exit_launch_recovers_the_previous_image() {
         let dir = std::env::temp_dir().join(format!("apparent-relaunch-{}", crate::shared::ids::make_bundle_id()));
         fs::create_dir(&dir).unwrap();
@@ -609,7 +959,7 @@ mod tests {
             fs::set_permissions(path, permissions).unwrap();
         }
         assert!(relaunch_command(&image, &backup, u32::MAX)
-            .env("TEST_RECOVERY_MARKER", &marker).status().unwrap().success());
+            .unwrap().env("TEST_RECOVERY_MARKER", &marker).status().unwrap().success());
         assert_eq!(fs::read(&marker).unwrap(), b"recovered");
         assert_eq!(fs::read(&image).unwrap(), b"#!/bin/sh\nprintf recovered > \"$TEST_RECOVERY_MARKER\"\n");
         assert_eq!(installed_id(&image), Some(("stable".into(), "v1.0.0".into())), "rollback must restore the old version marker");
@@ -627,7 +977,7 @@ mod tests {
         fs::remove_file(&image).unwrap();
         fs::remove_file(&marker).unwrap();
         assert!(relaunch_command(&image, &backup, u32::MAX)
-            .env("TEST_RECOVERY_MARKER", &marker).status().unwrap().success());
+            .unwrap().env("TEST_RECOVERY_MARKER", &marker).status().unwrap().success());
         assert_eq!(fs::read(&marker).unwrap(), b"recovered");
         fs::write(&backup, fs::read(&image).unwrap()).unwrap();
         let mut permissions = fs::metadata(&backup).unwrap().permissions();
@@ -639,7 +989,7 @@ mod tests {
         permissions.set_mode(0o700);
         fs::set_permissions(&image, permissions).unwrap();
         assert!(relaunch_command(&image, &backup, u32::MAX)
-            .env("TEST_RECOVERY_MARKER", &marker).status().unwrap().success());
+            .unwrap().env("TEST_RECOVERY_MARKER", &marker).status().unwrap().success());
         assert_eq!(fs::read(&marker).unwrap(), b"recovered", "a clean early exit without a running app still needs recovery");
         fs::write(&backup, fs::read(&image).unwrap()).unwrap();
         let mut permissions = fs::metadata(&backup).unwrap().permissions();
@@ -651,7 +1001,7 @@ mod tests {
         fs::set_permissions(&image, permissions).unwrap();
         fs::remove_file(&marker).unwrap();
         assert!(relaunch_command(&image, &backup, u32::MAX)
-            .env("TEST_RECOVERY_MARKER", &marker).status().unwrap().success());
+            .unwrap().env("TEST_RECOVERY_MARKER", &marker).status().unwrap().success());
         assert_eq!(fs::read(&marker).unwrap(), b"recovered", "a slow failure before GPUI readiness needs recovery");
         fs::write(&backup, fs::read(&image).unwrap()).unwrap();
         let mut permissions = fs::metadata(&backup).unwrap().permissions();
@@ -663,7 +1013,7 @@ mod tests {
         fs::set_permissions(&image, permissions).unwrap();
         fs::remove_file(&marker).unwrap();
         assert!(relaunch_command(&image, &backup, u32::MAX)
-            .env("TEST_RECOVERY_MARKER", &marker).status().unwrap().success());
+            .unwrap().env("TEST_RECOVERY_MARKER", &marker).status().unwrap().success());
         std::thread::sleep(Duration::from_secs(6));
         assert!(!marker.exists(), "a failure after GPUI readiness must not resurrect the old image");
         fs::remove_dir_all(dir).unwrap();

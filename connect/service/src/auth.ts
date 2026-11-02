@@ -1,55 +1,62 @@
-import type {Env, OAuthStateRow, DeviceRow} from './types.ts';
-import {createRemoteJWKSet,jwtVerify} from 'jose';
-import {DAY,random,hash,json,fail,stmt,body,cookie,setCookie,session,csrf,usage,slots,rate,envelope,bearer} from './common.ts';
-const jwks=new Map<string, ReturnType<typeof createRemoteJWKSet>>();
-const provider=(env: Env)=>({issuer:env.OAUTH_ISSUER||'https://accounts.google.com',authorize:env.OAUTH_AUTHORIZATION_URL||'https://accounts.google.com/o/oauth2/v2/auth',token:env.OAUTH_TOKEN_URL||'https://oauth2.googleapis.com/token',jwks:env.OAUTH_JWKS_URL||'https://www.googleapis.com/oauth2/v3/certs'});
-function returnTo(value: string | null) {
- // Validate the raw fixed path, not URL-normalized input (no URLs/dot segments).
- const match=/^\/(?:connect|hosted)(\/device)?\/?(?:\?([^#]*))?$/.exec(value??'/connect');
- if(!match)fail('invalid_request');
- const query=new URLSearchParams(match[2]);
- if([...query.keys()].some(key=>key!=='code')||query.getAll('code').length>1)fail('invalid_request');
- const code=query.get('code');
- return '/connect'+(match[1]||'')+(code!==null?'?'+new URLSearchParams({code}).toString():'');
+import type {Env,Scope} from './types.ts';
+import {identity,DEVICE_CODE_GRANT_TYPE} from './identity.ts';
+import {random,hash,json,fail,stmt,body,bounded,session,csrf,usage,slots,rate,envelope,bearer} from './common.ts';
+
+interface Grant {id:string;client_id:string;device_hash:string;user_code:string;scope:Scope;account_id:string|null;user_id:string|null;expires_at:number;revoked_at:number|null;response:string|null;last_poll:number}
+function returnTo(value:string|null) {
+ const match=/^\/(?:connect|hosted)(\/device)?\/?(?:\?([^#]*))?$/.exec(value??'/connect');if(!match)fail('invalid_request');
+ const query=new URLSearchParams(match[2]);if([...query.keys()].some(k=>k!=='code')||query.getAll('code').length>1)fail('invalid_request');
+ return '/connect'+(match[1]||'')+(query.has('code')?'?'+new URLSearchParams({code:query.get('code')!}):'');
 }
-export async function authRoutes(request: Request,env: Env,url: URL) {
+// Deliberately private dispatch: no raw Better Auth administration, session-token
+// device endpoint, registration or OAuth token route is reachable from HTTP.
+async function call(env:Env,path:string,data?:Record<string,unknown>,headers?:Headers) {
+ const h=new Headers(headers);h.delete('Origin');h.delete('Authorization');
+ if(h.has('Cookie'))h.set('Origin',env.SITE_ORIGIN);
+ const form=path==='/oauth2/token'||path==='/oauth2/revoke';
+ if(data)h.set('Content-Type',form?'application/x-www-form-urlencoded':'application/json');
+ try{return await identity(env).handler(new Request(env.API_ORIGIN+'/auth'+path,{method:data?'POST':'GET',headers:h,...data?{body:form?new URLSearchParams(data as Record<string,string>):JSON.stringify(data)}:{}}));}catch{fail('auth_unavailable',503);}
+}
+async function tokens(env:Env,g:Grant,response:Response) {
+ if(response.status>=500||response.status===429)return {error:'server_error',status:response.status};
+ const b=await body(response);
+ if(!response.ok)return {error:typeof b.error==='string'?b.error:'server_error',status:response.status};
+ if(typeof b.access_token!=='string'||typeof b.refresh_token!=='string'||typeof b.expires_in!=='number')fail('internal_error',500);
+ return issued(env,g,b.access_token,b.refresh_token);
+}
+async function issued(env:Env,g:Grant,accessToken:string,refreshToken:string){
+ const expiry=await stmt(env,'SELECT a.expiresAt AS access_expiry,r.expiresAt AS refresh_expiry FROM oauthAccessToken a JOIN oauthRefreshToken r ON a.clientId=r.clientId AND a.userId=r.userId WHERE a.token=? AND r.token=? AND a.clientId=? AND a.userId=? AND a.revoked IS NULL',await hash(accessToken),await hash(refreshToken),g.client_id,g.user_id).first<{access_expiry:string;refresh_expiry:string}>();
+ if(!expiry)fail('auth_unavailable',503);
+ const live=await stmt(env,'SELECT id FROM auth_grants WHERE id=? AND revoked_at IS NULL',g.id).first();if(!live)fail('reauthorization_required',401);
+ const seconds=(date:string)=>Math.max(0,Math.floor((Date.parse(date)-Date.now())/1000));
+ return {accessToken,refreshToken,expiresIn:seconds(expiry.access_expiry),refreshExpiresIn:seconds(expiry.refresh_expiry),scope:g.scope,grantId:g.id};
+}
+export async function authRoutes(request:Request,env:Env,url:URL) {
  const p=url.pathname,m=request.method;
  if(p==='/auth/google/start'&&m==='GET') {
   await rate(env,'oauth:'+request.headers.get('CF-Connecting-IP'));
-  const state=random(),nonce=random(),verifier=random(),dest=returnTo(url.searchParams.get('returnTo'));
-  await stmt(env,'INSERT INTO oauth_states VALUES(?,?,?,?,?)',await hash(state),nonce,verifier,dest,Date.now()+600000).run();
-  const auth=new URL(provider(env).authorize);
-  const bytes=Uint8Array.from((await hash(verifier)).match(/../g)!,x=>parseInt(x,16));
-  const challenge=btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
-  for(const [k,v] of Object.entries({client_id:env.GOOGLE_CLIENT_ID,redirect_uri:env.API_ORIGIN+'/auth/google/callback',response_type:'code',scope:'openid email',state,nonce,code_challenge:challenge,code_challenge_method:'S256'}))auth.searchParams.set(k,v);
-  return new Response(null,{status:302,headers:{Location:auth.href,'Set-Cookie':setCookie('__Host-apparent_oauth',state,600)}});
+  const result=await identity(env).api.signInSocial({body:{provider:'google',callbackURL:env.SITE_ORIGIN+returnTo(url.searchParams.get('returnTo')),errorCallbackURL:env.API_ORIGIN+'/auth/error'},asResponse:true});
+  const b=await body(result);if(typeof b.url!=='string')fail('oauth_failed',401);
+  const headers=new Headers(result.headers);headers.set('Location',b.url);return new Response(null,{status:302,headers});
  }
  if(p==='/auth/google/callback'&&m==='GET') {
-  try {
-   const state=url.searchParams.get('state');if(!state||state!==cookie(request,'__Host-apparent_oauth')||!url.searchParams.get('code'))throw new Error();
-   const stored=await stmt(env,'DELETE FROM oauth_states WHERE hash=? AND expires_at>? RETURNING *',await hash(state),Date.now()).first<OAuthStateRow>();if(!stored)throw new Error();
-   const dest=returnTo(stored.return_to);
-   const config=provider(env);
-   const response=await fetch(config.token,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',code:url.searchParams.get('code')!,redirect_uri:env.API_ORIGIN+'/auth/google/callback',client_id:env.GOOGLE_CLIENT_ID,client_secret:env.GOOGLE_CLIENT_SECRET,code_verifier:stored.verifier}),signal:AbortSignal.timeout(15000)});
-   if(!response.ok)throw new Error();const token=await body(response,32768);if(typeof token.id_token!=='string')throw new Error();
-   if(!jwks.has(config.jwks))jwks.set(config.jwks,createRemoteJWKSet(new URL(config.jwks)));
-   const {payload}=await jwtVerify(token.id_token,jwks.get(config.jwks)!,{issuer:env.OAUTH_ISSUER?config.issuer:['https://accounts.google.com','accounts.google.com'],audience:env.GOOGLE_CLIENT_ID,algorithms:['RS256'],requiredClaims:['sub','exp','iat','nonce','email','email_verified'],maxTokenAge:'10m'});
-   if(payload.nonce!==stored.nonce||payload.email_verified!==true||typeof payload.email!=='string'||payload.email.length>254||typeof payload.sub!=='string'||payload.sub.length>255||(payload.azp&&payload.azp!==env.GOOGLE_CLIENT_ID))throw new Error();
-   const account=await hash(config.issuer+'/'+payload.sub);
-   await stmt(env,"INSERT INTO accounts(id,email,beta,created_at) SELECT ?,?,CASE WHEN (SELECT count(*) FROM accounts WHERE beta='active')<20 THEN 'active' ELSE 'waitlist' END,? ON CONFLICT(id) DO UPDATE SET email=excluded.email",account,payload.email,Date.now()).run();
-   const sessionToken=random(),csrfToken=random();
-   await stmt(env,'INSERT INTO sessions VALUES(?,?,?,?)',await hash(sessionToken),account,csrfToken,Date.now()+7*DAY).run();
-   const headers=new Headers({Location:env.SITE_ORIGIN+dest});headers.append('Set-Cookie',setCookie('__Host-apparent_session',sessionToken,7*86400));headers.append('Set-Cookie',setCookie('__Host-apparent_oauth','',0));
-   return new Response(null,{status:302,headers});
-  } catch {fail('oauth_failed',401);}
+  const target=new URL(request.url);target.pathname='/auth/callback/google';
+  const response=await identity(env).handler(new Request(target,request));
+  const location=response.headers.get('Location');
+  if(!location||new URL(location).origin!==env.SITE_ORIGIN)fail('oauth_failed',401);
+  const destination=new URL(location);let path;
+  try{path=returnTo(location.slice(env.SITE_ORIGIN.length));}catch{fail('oauth_failed',401);}
+  if(destination.hash)fail('oauth_failed',401);
+  const headers=new Headers(response.headers);headers.set('Location',env.SITE_ORIGIN+path);return new Response(null,{status:302,headers});
  }
  if(p==='/v1/session'&&m==='GET') {
   const s=await session(request,env,false);
   return json({authenticated:!!s,csrfToken:s?.csrf||null,account:s?{email:s.email,beta:s.beta,quotaBytes:500000000,usedBytes:await usage(env,s.account_id),waitlist:{interestedAtFiveDollars:!!s.interest}}:null,slots:await slots(env)});
  }
  if(p==='/auth/logout'&&m==='POST') {
-  const s=await session(request,env);csrf(request,env,s);await stmt(env,'DELETE FROM sessions WHERE hash=?',s.hash).run();
-  return new Response(JSON.stringify({ok:true}),{headers:{'Content-Type':'application/json','Set-Cookie':setCookie('__Host-apparent_session','',0)}});
+  const s=await session(request,env);csrf(request,env,s);
+  const response=await call(env,'/sign-out',{},request.headers);if(!response.ok)fail('auth_unavailable',503);
+  return new Response(JSON.stringify({ok:true}),{headers:response.headers});
  }
  if(p==='/v1/waitlist'&&m==='POST') {
   const s=await session(request,env);csrf(request,env,s);const b=await body(request);if(typeof b.interestedAtFiveDollars!=='boolean')fail('invalid_request');
@@ -58,45 +65,89 @@ export async function authRoutes(request: Request,env: Env,url: URL) {
  if(p==='/v1/device/start'&&m==='POST') {
   await rate(env,'device:'+request.headers.get('CF-Connecting-IP'));
   const b=await body(request);if(b.scope!=='upload'&&b.scope!=='read')fail('invalid_request');
-  const deviceCode=random(),userCode=random(6).toUpperCase();
-  await stmt(env,'INSERT INTO devices(hash,user_code,scope,expires_at) VALUES(?,?,?,?)',await hash(deviceCode),userCode,b.scope,Date.now()+600000).run();
-  return json({deviceCode,userCode,verificationUri:env.SITE_ORIGIN+'/connect/device?code='+userCode,expiresIn:600,interval:5});
+  // One library client per authorization also isolates library family invalidation.
+  const registered=await call(env,'/oauth2/register',{client_name:'Apparent device',application_type:'native',token_endpoint_auth_method:'none',grant_types:[DEVICE_CODE_GRANT_TYPE,'refresh_token'],scope:b.scope+' offline_access'});
+  const client=await body(registered);if(!registered.ok||typeof client.client_id!=='string')fail('auth_unavailable',503);
+  const response=await call(env,'/device/code',{client_id:client.client_id,scope:b.scope+' offline_access'}),d=await body(response);
+  if(!response.ok||typeof d.device_code!=='string'||typeof d.user_code!=='string')fail('auth_unavailable',503);
+  await stmt(env,'INSERT INTO auth_grants(id,client_id,device_hash,user_code,scope,expires_at) VALUES(?,?,?,?,?,?)',random(),client.client_id,await hash(d.device_code),d.user_code,b.scope,Date.now()+600000).run();
+  return json({deviceCode:d.device_code,userCode:d.user_code,verificationUri:env.SITE_ORIGIN+'/connect/device?code='+d.user_code,expiresIn:600,interval:5});
  }
  if(p==='/v1/device/poll'&&m==='POST') {
-  const {deviceCode}=await body(request);if(typeof deviceCode!=='string'||! /^[a-f0-9]{64}$/.test(deviceCode))fail('invalid_request');
-  const h=await hash(deviceCode),now=Date.now();
-  const d=await stmt(env,'SELECT * FROM devices WHERE hash=?',h).first<DeviceRow>();if(!d||d.expires_at<=now)return json({status:'expired'});
-  const changed=await stmt(env,'UPDATE devices SET last_poll=? WHERE hash=? AND last_poll<=?',now,h,now-5000).run();if(!changed.meta.changes)fail('slow_down',429);
-  if(d.status==='approved') {
-   const token=await stmt(env,'SELECT hash FROM tokens WHERE hash=? AND expires_at>?',d.token_hash,now).first();if(!token)return json({status:'rejected'});
-   return json({status:'approved',accessToken:await envelope(env,d.envelope!,true),scope:d.scope});
-  }
-  return json({status:d.status});
+  const {deviceCode}=await body(request);if(typeof deviceCode!=='string'||!/^[a-f0-9]{64}$/.test(deviceCode))fail('invalid_request');
+  const g=await stmt(env,'SELECT * FROM auth_grants WHERE device_hash=?',await hash(deviceCode)).first<Grant>();if(!g||g.expires_at<=Date.now())return json({status:'expired'});
+  if(g.revoked_at!==null)return json({status:'rejected'});
+  const changed=await stmt(env,'UPDATE auth_grants SET last_poll=? WHERE id=? AND last_poll<=?',Date.now(),g.id,Date.now()-5000).run();if(!changed.meta.changes)fail('slow_down',429);
+  // Do not consume a library approval until its application account binding
+  // has completed; a crash in that gap requires a new explicit approval.
+  if(!g.user_id||!g.account_id)return json({status:'pending'});
+  if(g.response){const saved=JSON.parse(await envelope(env,g.response,true));return json({status:'approved',...await issued(env,g,saved.accessToken,saved.refreshToken)});}
+  const result=await tokens(env,g,await call(env,'/oauth2/token',{grant_type:DEVICE_CODE_GRANT_TYPE,client_id:g.client_id,device_code:deviceCode}));
+  if('error' in result){if(result.error==='authorization_pending')return json({status:'pending'});if(result.error==='slow_down'||result.status===429)fail('slow_down',429);if(result.status>=500)fail('auth_unavailable',503);return json({status:result.error==='expired_token'?'expired':'rejected'});}
+  await stmt(env,'UPDATE auth_grants SET response=? WHERE id=? AND revoked_at IS NULL',await envelope(env,JSON.stringify(result)),g.id).run();
+  return json({status:'approved',...result});
  }
  if(p==='/v1/device'&&m==='GET') {
   const s=await session(request,env);await rate(env,'preview:'+s.account_id,120);
-  const code=url.searchParams.get('userCode');if(!code||! /^[A-F0-9]{12}$/.test(code))fail('invalid_request');
-  const d=await stmt(env,'SELECT scope,status,expires_at FROM devices WHERE user_code=?',code).first<Pick<DeviceRow,'scope'|'status'|'expires_at'>>();if(!d)fail('device_unavailable',404);
-  return json({scope:d.scope,status:d.expires_at<=Date.now()?'expired':d.status,expiresAt:new Date(d.expires_at).toISOString()});
+  const code=url.searchParams.get('userCode');if(!code||!/^[A-F0-9]{12}$/.test(code))fail('invalid_request');
+  const g=await stmt(env,'SELECT * FROM auth_grants WHERE user_code=?',code).first<Grant>();if(!g)fail('device_unavailable',404);
+  const d=await stmt(env,'SELECT status FROM auth_device WHERE userCode=?',code).first<{status:string}>();
+  return json({scope:g.scope,status:g.expires_at<=Date.now()?'expired':g.revoked_at!==null?'rejected':g.response?'approved':d?.status==='denied'?'rejected':d?.status||'pending',expiresAt:new Date(g.expires_at).toISOString()});
  }
  if(['/v1/device/approve','/v1/device/reject'].includes(p)&&m==='POST') {
   const s=await session(request,env);csrf(request,env,s);await rate(env,'approve:'+s.account_id);
-  const {userCode}=await body(request);if(typeof userCode!=='string'||! /^[A-F0-9]{12}$/.test(userCode))fail('invalid_request');
-  const d=await stmt(env,'SELECT * FROM devices WHERE user_code=?',userCode).first<DeviceRow>();if(!d||d.expires_at<=Date.now())fail('device_unavailable',404);
-  if(d.status!=='pending'){if(d.account_id===s.account_id&&d.status===(p.endsWith('approve')?'approved':'rejected'))return json({ok:true});fail('device_unavailable',409);}
-  if(p.endsWith('reject')) {
-   const r=await stmt(env,"UPDATE devices SET status='rejected',account_id=? WHERE hash=? AND status='pending' AND expires_at>?",s.account_id,d.hash,Date.now()).run();if(!r.meta.changes)fail('device_unavailable',409);
-  }else {
-   if(s.beta!=='active')fail('beta_required',403);
-   const token=random(),h=await hash(token),encrypted=await envelope(env,token);
-   const result=await env.DB.batch([
-    stmt(env,"UPDATE devices SET status='approved',account_id=?,token_hash=?,envelope=? WHERE hash=? AND status='pending' AND expires_at>?",s.account_id,h,encrypted,d.hash,Date.now()),
-    stmt(env,"INSERT INTO tokens(hash,account_id,scope,expires_at) SELECT ?,account_id,scope,? FROM devices WHERE hash=? AND token_hash=? AND status='approved'",h,Date.now()+30*DAY,d.hash,h)
-   ]);
-   if(!result[0].meta.changes)fail('device_unavailable',409);
-  }
+  const {userCode}=await body(request);if(typeof userCode!=='string'||!/^[A-F0-9]{12}$/.test(userCode))fail('invalid_request');
+  const g=await stmt(env,'SELECT * FROM auth_grants WHERE user_code=?',userCode).first<Grant>();if(!g||g.expires_at<=Date.now())fail('device_unavailable',404);
+  if(g.revoked_at!==null)fail('device_unavailable',409);
+  if(g.account_id&&g.account_id!==s.account_id)fail('device_unavailable',409);
+  if(p.endsWith('approve')&&s.beta!=='active')fail('beta_required',403);
+  const preview=await call(env,'/device?user_code='+encodeURIComponent(userCode),undefined,request.headers);if(!preview.ok)fail('device_unavailable',409);
+  const result=await call(env,p.endsWith('approve')?'/device/approve':'/device/deny',{userCode},request.headers);
+  if(!result.ok)fail('device_unavailable',409);
+  await stmt(env,'UPDATE auth_grants SET account_id=?,user_id=?,revoked_at=COALESCE(revoked_at,?) WHERE id=?',s.account_id,s.user_id,p.endsWith('reject')?Date.now():null,g.id).run();
   return json({ok:true});
  }
- if(p==='/v1/token/revoke'&&m==='POST'){const a=await bearer(request,env);await stmt(env,'DELETE FROM tokens WHERE hash=?',a.hash).run();return json({ok:true});}
+ if(p==='/v1/token/refresh'&&m==='POST') {
+  const {refreshToken}=await body(request);if(typeof refreshToken!=='string'||refreshToken.length>2048)fail('invalid_request');
+  const r=await stmt(env,'SELECT g.*,r.revoked,r.rotatedAt,r.rotationReplayExpiresAt,r.rotationReplayResponse FROM oauthRefreshToken r JOIN auth_grants g ON g.client_id=r.clientId AND g.user_id=r.userId WHERE r.token=?',await hash(refreshToken)).first<Grant&{revoked:string|null;rotatedAt:string|null;rotationReplayExpiresAt:string|null;rotationReplayResponse:string|null}>();
+  if(!r||r.revoked_at!==null)fail('reauthorization_required',401);
+  // Tombstone BEFORE any fallible/non-atomic library family invalidation.
+  // A concurrent mint can leave rows behind, but cannot regain authorization.
+  if(r.revoked&&(!r.rotationReplayExpiresAt||Date.parse(r.rotationReplayExpiresAt)<=Date.now())){
+   await stmt(env,'UPDATE auth_grants SET revoked_at=COALESCE(revoked_at,?) WHERE id=?',Date.now(),r.id).run();fail('reauthorization_required',401);
+  }
+  // Do not let an in-progress library rotation with no saved replay response
+  // trigger family invalidation. Wait only within the library's bounded grace.
+  if(r.revoked&&r.rotatedAt&&!r.rotationReplayResponse&&r.rotationReplayExpiresAt&&Date.parse(r.rotationReplayExpiresAt)>Date.now())fail('auth_unavailable',503);
+  const result=await tokens(env,r,await call(env,'/oauth2/token',{grant_type:'refresh_token',client_id:r.client_id,refresh_token:refreshToken}));
+  if('error' in result){
+   if(result.status===429)fail('slow_down',429);
+   if(result.status>=500)fail('auth_unavailable',503);
+   const latest=await stmt(env,'SELECT rotationReplayExpiresAt FROM oauthRefreshToken WHERE token=?',await hash(refreshToken)).first<{rotationReplayExpiresAt:string|null}>();
+   if(latest?.rotationReplayExpiresAt&&Date.parse(latest.rotationReplayExpiresAt)>Date.now())fail('auth_unavailable',503);
+   await stmt(env,'UPDATE auth_grants SET revoked_at=? WHERE id=?',Date.now(),r.id).run();fail('reauthorization_required',401);
+  }
+  return json(result);
+ }
+ if(p==='/v1/token/revoke'&&m==='POST') {
+  const raw=await bounded(request,131072),b=raw.length?await body(new Response(raw)):{};let g:Grant|null=null;
+  if(typeof b.refreshToken==='string')g=await stmt(env,'SELECT g.* FROM oauthRefreshToken r JOIN auth_grants g ON g.client_id=r.clientId AND g.user_id=r.userId WHERE r.token=?',await hash(b.refreshToken)).first<Grant>();
+  if(b.refreshToken!==undefined&&(!g||typeof b.refreshToken!=='string'))fail('unauthorized',401);
+  if(request.headers.has('Authorization')){
+   if(g){
+    // Renewal proves authority even after access expiry. A supplied bearer
+    // must still identify this SAME device, never another account or grant.
+    const token=/^Bearer ([A-Za-z0-9._~-]{20,2048})$/.exec(request.headers.get('Authorization')!)?.[1];
+    if(!token||!await stmt(env,'SELECT id FROM oauthAccessToken WHERE token=? AND clientId=? AND userId=?',await hash(token),g.client_id,g.user_id).first())fail('unauthorized',401);
+   }else{const a=await bearer(request,env);g=await stmt(env,'SELECT * FROM auth_grants WHERE id=?',a.grant_id).first<Grant>();}
+  }
+  if(!g)fail('unauthorized',401);
+  // This durable application authorization tombstone dominates any concurrent
+  // library mint, so even a surviving row cannot access captures or renew.
+  await stmt(env,'UPDATE auth_grants SET revoked_at=COALESCE(revoked_at,?),response=NULL WHERE id=?',Date.now(),g.id).run();
+  const token=typeof b.refreshToken==='string'?b.refreshToken:request.headers.get('Authorization')!.slice(7);
+  await call(env,'/oauth2/revoke',{client_id:g.client_id,token,token_type_hint:typeof b.refreshToken==='string'?'refresh_token':'access_token'});
+  return json({ok:true});
+ }
  return null;
 }

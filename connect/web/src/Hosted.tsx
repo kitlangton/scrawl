@@ -159,7 +159,7 @@ function Limits() {
     <li>Seven days maximum. The 500 MB (500,000,000-byte) account cap evicts oldest captures first, possibly earlier. Keep a local copy.</li>
     <li>Any file over 90 MB (90,000,000 bytes) fails the whole upload. Complete bundles only.</li>
     <li>Free during beta, with at most 20 accounts.</li>
-    <li>Grants expire after 30 days, with no automatic renewal. Reapprove through the CLI; website sign-in does not renew grants.</li>
+    <li>Updated apps renew each approved device connection automatically while its renewal remains valid. Revoked or expired renewal requires CLI approval again. Older apps need an update and one new approval; website sign-in does not renew device access.</li>
   </ul></details>
 }
 function message(error: unknown) { return error instanceof Error ? error.message : "The request could not be confirmed. Please reload and retry." }

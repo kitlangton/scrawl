@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use gpui::{AnyElement, App, Div, Window};
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, NSObjectProtocol};
+use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, NSObjectProtocol, Sel};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSCellImagePosition, NSColor, NSImage, NSMenu, NSMenuDelegate, NSMenuItem,
@@ -217,6 +217,53 @@ pub(in crate::capture::desktop) fn configure_lab_backdrop(w: f32, h: f32) {
 /// launched, so this puts it back (`stay_out_of_dock`).
 pub(in crate::capture::desktop) fn keep_alive(_cx: &mut App) {
     stay_out_of_dock();
+    if let Some(mtm) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        let delegate: Option<Retained<AnyObject>> = unsafe { msg_send![&*app, delegate] };
+        if !delegate.as_ref().is_some_and(|delegate| install_quit_guard(delegate.class())) {
+            crate::capture::engine::runtime::apparent_log(
+                "Native quit guard not installed: unexpected GPUI application delegate",
+            );
+        }
+    }
+}
+
+// GPUI 0.2.2 registers GPUIApplicationDelegate (an NSResponder subclass) without
+// applicationShouldTerminate:. Add only that missing method, not a replacement
+// delegate: GPUI's platform ivar and every existing handler must remain intact.
+// Refuse a foreign delegate or a future GPUI implementation rather than replacing
+// an unknown IMP/ABI. Its existing applicationWillTerminate: still owns shutdown.
+fn install_quit_guard(class: &AnyClass) -> bool {
+    let Some(expected) = AnyClass::get(c"GPUIApplicationDelegate") else { return false };
+    if !std::ptr::eq(class, expected) { return false; }
+    let selector = sel!(applicationShouldTerminate:);
+    if let Some(method) = class.instance_method(selector) {
+        return method.implementation() as *const () == application_should_terminate as *const ();
+    }
+    unsafe extern "C" {
+        fn class_addMethod(class: &AnyClass, selector: Sel, imp: Imp, types: *const std::ffi::c_char) -> Bool;
+    }
+    // NSApplicationTerminateReply is NSUInteger (Q on supported 64-bit Macs).
+    // Main-thread installation precedes capture admission; no method is replaced.
+    unsafe {
+        class_addMethod(
+            class, selector,
+            std::mem::transmute::<unsafe extern "C-unwind" fn(&AnyObject, Sel, &AnyObject) -> usize, Imp>(application_should_terminate),
+            c"Q@:@".as_ptr(),
+        ).as_bool()
+    }
+}
+
+unsafe extern "C-unwind" fn application_should_terminate(
+    _delegate: &AnyObject, _selector: Sel, _application: &AnyObject,
+) -> usize {
+    use crate::capture::desktop::workflow::shutdown;
+    if shutdown::busy() {
+        shutdown::request();
+        0 // NSTerminateCancel; the GUI performs normal Stop and drains finalizers.
+    } else {
+        1 // NSTerminateNow, AppKit's default when this optional method is absent.
+    }
 }
 
 /// Keeps Apparent a menu bar app with no Dock icon.
@@ -1254,6 +1301,39 @@ fn capture_cg_window_rgba(window_id: u32) -> Option<crate::shared::model::RgbaFr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "Mutates process-wide shutdown state; run this test alone on macOS"]
+    fn native_quit_guard_cancels_busy_termination() {
+        use crate::capture::desktop::workflow::shutdown;
+
+        let class = AnyClass::get(c"GPUIApplicationDelegate").expect("GPUI 0.2.2 delegate");
+        let will_terminate = class.instance_method(sel!(applicationWillTerminate:)).unwrap();
+        let original = will_terminate.implementation() as *const ();
+        let foreign = AnyClass::get(c"NSObject").unwrap();
+        let foreign_method = foreign.instance_method(sel!(applicationShouldTerminate:))
+            .map(|method| method.implementation() as *const ());
+        assert!(!install_quit_guard(foreign));
+        assert_eq!(foreign.instance_method(sel!(applicationShouldTerminate:))
+            .map(|method| method.implementation() as *const ()), foreign_method);
+        assert!(install_quit_guard(class));
+        assert!(install_quit_guard(class));
+        assert_eq!(will_terminate.implementation() as *const (), original);
+
+        let delegate: Retained<AnyObject> = unsafe { msg_send![class, new] };
+        let sender = NSObject::new();
+        shutdown::set_phase_busy(false);
+        let reply: usize = unsafe { msg_send![&*delegate, applicationShouldTerminate: &*sender] };
+        assert_eq!(reply, 1);
+        assert!(!shutdown::requested(), "run this test in its own test process");
+        shutdown::set_phase_busy(true);
+        let reply: usize = unsafe { msg_send![&*delegate, applicationShouldTerminate: &*sender] };
+        assert_eq!(reply, 0);
+        assert!(shutdown::requested());
+        shutdown::set_phase_busy(false);
+        let reply: usize = unsafe { msg_send![&*delegate, applicationShouldTerminate: &*sender] };
+        assert_eq!(reply, 1, "drained shared shutdown may terminate");
+    }
 
     #[test]
     fn reveal_appkit_queries_pass_objc2_verification() {

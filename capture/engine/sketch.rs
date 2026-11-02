@@ -2205,6 +2205,7 @@ mod tests {
             sample_count: 0,
             duration_ms: 0,
             wav_bytes: empty_wav,
+            saved_lease: None,
             live: Default::default(),
             #[cfg(target_os = "linux")]
             pause: Default::default(),

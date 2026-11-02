@@ -1,6 +1,8 @@
 //! Private synthetic transport fixtures, also reused by root real-provider tests.
 //! Not enabled by the production dependency.
 use super::*;
+#[cfg(test)]
+mod renewal_tests;
 use std::sync::OnceLock;
 
 pub type ConfigWriteHook = Box<dyn FnMut(&str, &Path)>;
@@ -530,6 +532,11 @@ impl Fixture {
                     scope: scope.into(),
                     token: format!("synthetic-{scope}-secret"),
                     generation: "a".repeat(32),
+                    refresh_token: None,
+                    expires_at: None,
+                    refresh_expires_at: None,
+                    grant_id: None,
+                    auth_required: false,
                 },
             )
             .unwrap();
@@ -744,8 +751,22 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                 }
                 s = state.lock().unwrap();
             }
-            json!({"status":"approved","scope":if matches!(s.mode.as_str(), "wrong-scope" | "upload") {"upload"} else {"read"},"accessToken":"synthetic-approved-secret"}).to_string().into_bytes()
+            json!({"status":"approved","scope":if matches!(s.mode.as_str(), "wrong-scope" | "upload") {"upload"} else {"read"},"accessToken":"synthetic-approved-secret","refreshToken":"synthetic-refresh-secret","expiresIn":3600,"refreshExpiresIn":86400,"grantId":"synthetic-server-grant"}).to_string().into_bytes()
         }
+    } else if route == "/v1/token/refresh" {
+        let request: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(request.as_object().unwrap().len(), 1);
+        let scope = if request["refreshToken"] == "synthetic-refresh-read" {
+            "read"
+        } else {
+            assert_eq!(request["refreshToken"], "synthetic-refresh-upload");
+            "upload"
+        };
+        json!({"accessToken":format!("synthetic-{scope}-secret"),"refreshToken":format!("synthetic-refresh-{scope}"),"scope":scope,"expiresIn":3600,"refreshExpiresIn":86400,"grantId":format!("grant-{scope}")}).to_string().into_bytes()
+    } else if route == "/v1/token/revoke" {
+        let request: Value = serde_json::from_slice(&body).unwrap();
+        assert!(head.contains("Authorization:") || request["refreshToken"].is_string());
+        json!({"ok":true}).to_string().into_bytes()
     } else if s.mode == "slow" {
         drop(s);
         std::thread::sleep(Duration::from_millis(400));
@@ -1309,7 +1330,7 @@ pub fn hosted_transport_network_timeout_and_cancellation() {
     let start = Instant::now();
     assert!(
         f.client
-            .request(
+            .raw_request(
                 &server.url,
                 Some("synthetic-secret"),
                 "GET",

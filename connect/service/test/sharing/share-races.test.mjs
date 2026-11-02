@@ -16,7 +16,7 @@ const instrumented=await build({stdin:{resolveDir:process.cwd(),contents:`
   const DB=request.headers.has('X-Hold-Manifest')?{prepare(sql){const statement=env.DB.prepare(sql);if(!sql.startsWith('SELECT path,size,sha256,object_key FROM files'))return statement;return {bind(...args){const bound=statement.bind(...args);return {async all(){const result=await bound.all();await env.DB.prepare('UPDATE test_barrier SET entered=1').run();while(!(await env.DB.prepare('SELECT released FROM test_barrier').first()).released)await new Promise(r=>setTimeout(r,5));return result;}}}};}}:env.DB;
   const response=await worker.fetch(request,{...env,DB,BUCKET});response.headers.set('X-Metered',String(calls));return response;
  }};
-`},bundle:true,format:'esm',platform:'browser',write:false});
+`},bundle:true,format:'esm',platform:'browser',conditions:['workerd'],external:['node:*'],write:false});
 async function setup(){
  const f=await fixture({SHARING_ENABLED:'true'},{scriptPath:undefined,script:instrumented.outputFiles[0].text,instances:true});
  await f.db.exec((await readFile('migrations/0003.sql','utf8')).replaceAll('\n',' '));

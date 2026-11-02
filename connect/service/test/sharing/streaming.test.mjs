@@ -42,12 +42,12 @@ test('zero-byte file, concurrent identical manifests, rejection, device expiry a
  assert.equal((await f.call(p+'/complete',{token:a.token,method:'POST'})).status,200);
  for(const expired of [false,true]) {
   const d=await(await f.call('/v1/device/start',{method:'POST',body:{scope:'upload'}})).json();
-  if(expired)await f.db.prepare('UPDATE devices SET expires_at=? WHERE user_code=?').bind(Date.now()-1,d.userCode).run();
+  if(expired)await f.db.prepare('UPDATE auth_grants SET expires_at=? WHERE user_code=?').bind(Date.now()-1,d.userCode).run();
   else assert.equal((await f.call('/v1/device/reject',{...a,method:'POST',body:{userCode:d.userCode}})).status,200);
   assert.equal((await(await f.call('/v1/device/poll',{method:'POST',body:{deviceCode:d.deviceCode}})).json()).status,expired?'expired':'rejected');
   assert.equal((await f.call('/v1/device/approve',{...a,method:'POST',body:{userCode:d.userCode}})).status,expired?404:409);
  }
- await f.db.prepare('UPDATE tokens SET expires_at=?').bind(Date.now()-1).run();
+ await f.db.prepare('UPDATE oauthAccessToken SET expiresAt=?').bind(new Date(Date.now()-1).toISOString()).run();
  assert.equal((await f.call('/v1/account',{token:a.read})).status,401);
  }finally{await f.close();}
 });

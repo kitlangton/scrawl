@@ -275,6 +275,7 @@ def main():
     for name in ['template', 'ovmf-vars', 'ssh-key', 'appimage', 'results']:
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--ssh-user', required=True)
+    parser.add_argument('--channel', choices=['stable', 'main'], default='stable')
     args = parser.parse_args()
     args.results = args.results.resolve()
     if args.results.exists():
@@ -287,10 +288,12 @@ def main():
     source = Path(__file__).resolve().parent
     repository = source.parents[4]
     source_head = subprocess.check_output(['git', '-C', str(repository), 'rev-parse', 'HEAD'], text=True).strip()
-    runtime_dirty = subprocess.check_output(['git', '-C', str(repository), 'status', '--porcelain', '--',
-                                            'main.rs', 'capture/engine', 'capture/desktop/native', 'shared/native', 'capture/desktop/assets', 'public/site/public/assets', 'Cargo.toml', 'Cargo.lock', 'build.rs'], text=True)
-    if runtime_dirty:
-        parser.error('runtime source must be clean before testing a packaged candidate')
+    if args.channel == 'main' and (not re.fullmatch('[0-9a-f]{40}', source_head) or source_head == 'b' * 40):
+        parser.error('Main fixture needs a 40hex source HEAD distinct from its synthetic candidate')
+    repository_dirty = subprocess.check_output(
+        ['git', '-C', str(repository), 'status', '--porcelain', '--untracked-files=all'], text=True)
+    if repository_dirty:
+        parser.error('repository must be clean before testing a packaged candidate (including docs and tooling)')
     with args.appimage.open('rb') as image:
         digest = hashlib.file_digest(image, 'sha256').hexdigest()
     fixture = (source / 'updater-fixture.py').read_text()
@@ -298,13 +301,14 @@ def main():
         '__UPDATER_FIXTURE_SOURCE__', "cat > \"$out/fixture.py\" <<'UPDATER_FIXTURE_EOF'\n" + fixture + '\nUPDATER_FIXTURE_EOF')
     scenario = scenario.replace('__UPDATER_EXPECTED_SOURCE_HEAD__', source_head)
     scenario = scenario.replace('__UPDATER_EXPECTED_SHA256__', digest)
+    scenario = scenario.replace('__UPDATER_CHANNEL__', args.channel)
     scenario_path = args.results / 'scenario.sh'
     scenario_path.write_text(scenario)
     (args.results / 'candidate.json').write_text(json.dumps({
         'appimage': str(args.appimage.resolve()), 'sha256': digest,
-        'source_head': source_head,
+        'source_head': source_head, 'channel': args.channel,
         'scope': 'isolated Omarchy; guest-local synthetic HTTPS release contract, NOT GitHub publication'}, indent=2) + '\n')
-    command = [sys.executable, str(source / 'gui-vm.py'), '--template', str(args.template.resolve()),
+    command = [sys.executable, str(source.parent / 'gui/gui-vm.py'), '--template', str(args.template.resolve()),
                '--ovmf-vars', str(args.ovmf_vars.resolve()), '--ssh-key', str(args.ssh_key.resolve()),
                '--ssh-user', args.ssh_user, '--binary', str(args.appimage.resolve()),
                '--scenario', str(scenario_path), '--results', str(args.results / 'vm'),

@@ -107,6 +107,22 @@ The app checks that an update is still staged before quitting; a failed relaunch
 shows the failure result instead of silently exiting. macOS continues to hand off to Sparkle's
 native updater; it does not synthesize a frog result from a Sparkle launch.
 
+Restart admission uses the shared coordinator's `capture_busy()` decision, including admitted
+captures and detached finalizers whose capsule was dismissed. Settings/onboarding relaunches,
+Linux Update now and Sparkle installation refuse while that decision is busy. Quit, SIGINT and
+SIGTERM request normal Stop and wait for all finalizer receipts; a failed Stop leaves the app
+open to show the error. The Mac AppKit termination guard cancels a busy native termination and
+requests the same Stop path; its atomic boolean is only a copy of the coordinator decision.
+Force quit/SIGKILL cannot finish a bundle: see narration-only recovery and durability limits in
+`capture/engine/docs/capture.md`.
+
+Before running `capture/desktop/scripts/packaging/install-app.sh` or `install-app-remote.sh`,
+finish captures and quit the destination app. Both installers refuse replacement while an
+executable inside that exact destination bundle is running, including its helpers; inability to
+inspect processes also refuses. They do not kill other installations or CLI recorders, and
+`APPARENT_NO_LAUNCH=1` does not bypass the replacement check. This is a pre-write snapshot,
+not a lock that prevents a separate user from launching the destination during installation.
+
 The three embedded illustrations in `desktop/assets/settings/` isolate the frog-and-pond scenes
 from the selected concept. Each fits a transparent 256×192 device-pixel canvas; Settings
 shows it at native device size, including fractional DPI. The rounded lily pads, water

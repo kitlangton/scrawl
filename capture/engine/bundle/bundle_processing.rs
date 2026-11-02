@@ -320,8 +320,13 @@ pub fn finalize_capture_bundle(
     }
     if let Some(ref audio) = recorded_audio {
         let wav_path = bundle_dir.join("audio.wav");
-        let _ = std::fs::create_dir_all(bundle_dir);
-        let _ = std::fs::write(&wav_path, &audio.wav_bytes);
+        // The incremental recorder already saved this file. Never truncate its saved prefix.
+        if !wav_path.exists() {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&wav_path)?;
+            file.write_all(&audio.wav_bytes)?;
+            file.sync_all()?;
+        }
     }
     let wav_path = bundle_dir.join("audio.wav");
     let has_wav = wav_path.exists();
