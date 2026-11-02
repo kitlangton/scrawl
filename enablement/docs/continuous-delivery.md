@@ -11,6 +11,9 @@ coalescing superseded runs within its own platform. Both call the same reusable
 `verification-platform.yml`, preserving the full Rust, Engine/client, browser,
 Electron and applicable native checks. Each checks the entire tree, not just the
 latest push delta: changes from a cancelled earlier run cannot escape verification.
+Explicit `workflow_dispatch` on a feature branch runs the same full test jobs.
+Feature dispatch does not emit the main-only `Release verification` receipt and
+cannot authorize publication; automatic execution remains main-only.
 Each caller's `verify / Release verification` job is its platform receipt.
 General Mac verification uses `macos-15-intel` so it does not depend on the
 standard Apple Silicon runner pool. The required Xcode/macOS SDK remains selected
