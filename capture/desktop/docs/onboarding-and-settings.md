@@ -86,14 +86,16 @@ Onboarding follows the system's light or dark appearance. The macOS window and i
 
 Rows for draggable lists (`Permission::draggable`: Screen Recording, Accessibility) go straight to `OpenSettings`, which launches `apparent-helper permission-panel` (`capture/desktop/native/PermissionPanel.swift`) from the row's button: the card flies to just below System Settings (inside its empty lower area when the screen has no room; `PermissionPanel.dock`, checked by `capture/desktop/scripts/support/check-permission-panel-dock.sh`), drags the `Apparent.app` that contains the helper, reads grants from a fresh `--check` process (never trusts the drop), and is told `granted` when the row turns on. Preview it with `permission-panel --permission screen-recording --preview`; never `tccutil reset` Kit's real grants to test it.
 
-### First-capture experiment
+### First-capture onboarding
 
-Enable `"experiments": {"onboardingFirstCapture": true}` before opening the tour
-(restart the app or replay onboarding from Settings). It is off by default.
+First-capture onboarding is enabled by default. Set
+`"experiments": {"onboardingFirstCapture": false}` to opt out, then restart the app
+or reopen the tour. The opt-out restores optional shortcut choice and practice.
 Existing users who already finished setup are not forced through it again.
 
-On Shortcut, Continue stays disabled until a valid Record combination has been
-entered in the inline recorder. Invalid, cancelled or reset choices do not count.
+On Shortcut, explicitly confirm the current Record combination or enter a valid
+combination in the inline recorder before continuing. Invalid, cancelled or reset
+choices alone do not count; confirm the default after resetting.
 A verified desktop-owned Linux binding instead offers **Use desktop shortcut**;
 Apparent cannot rewrite that compositor setting. The next page asks the user to
 try giving feedback on onboarding: start with the chosen shortcut, talk and point,
@@ -101,7 +103,7 @@ then press it again to finish. This is a local practice capture, not feedback se
 to the team. Menu-started captures and cancelled or failed attempts do not finish
 the tour. A successful bundle completion advances to Done.
 
-Closing or choosing Try later is allowed, but leaves the experimental setup
+Closing or choosing Try later is allowed, but leaves the first-capture setup
 unfinished so it resumes on the next launch. `onboarding.shortcutChosen` and
 `onboarding.firstCaptureCompleted` persist those milestones beside `resume`;
 `seen` becomes true only after a successful practice capture. The default flow
@@ -275,3 +277,16 @@ Render every pane (dark, light, each shortcut state: held, listening, partial, r
 ## Lower other audio while recording (`capture/desktop/playback.rs`, `capture/engine/native/PlaybackVolume.swift`)
 
 Off by default. General › Lower other audio while recording (`"lowerPlayback": true`) ramps the default output device's volume over one second to `playbackLevel` percent of what it was (Lower to, default 20%; 0 mutes) from the moment the shortcut is pressed or a recording starts, Mac or cabled iPhone, and back when it finishes, is cancelled or the picker closes without recording. `apparent-helper playback-volume --server`, started at launch while the setting is on, does the CoreAudio work and takes `start N` / `stop` lines on stdin. It reads every writable output channel's volume scalar before writing any (the master volume only when the channels have none), so balance and silent channels come back as they were; it never touches the mute flag or any input device. It restores when told to stop, when Apparent exits or crashes (stdin closes) and at once on SIGTERM, SIGINT or SIGHUP; it leaves the volume alone if someone changed it during the recording, and a device switched to mid-recording isn't lowered (the original device is restored). Fixed-volume outputs are left unchanged. Linux does nothing. `apparent-helper playback-volume --self-test` runs the ramp tests on fake devices; `--inspect` prints the current device's volume controls without changing them.
+
+Electron onboarding permission effects stay in Rust: Linux uses its privacy
+adapter; macOS keeps an installed `apparent-helper onboarding --permissions-only`
+process alive for AVFoundation/Speech consent and permission guidance panels.
+That mode never creates the onboarding window, admits only fixed permission
+identifiers/actions, closes granted guides, and cleans up guides on pipe closure.
+The Electron pipe carries presentation only. Native fallback remains available;
+its presentation can be removed only after Mac permission/media and isolated
+Linux acceptance. Packaged assets route this workflow to Electron; missing assets, spawn failure
+or a renderer crash restore the native presentation. During capture, construction
+of a crashed presentation’s native replacement waits until capture ends. The
+first-capture opt-out changes the workflow requirements; it does not select a
+second competing onboarding surface.
