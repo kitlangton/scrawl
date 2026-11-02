@@ -75,6 +75,7 @@ app.whenReady().then(()=>{
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   window.webContents.on('will-navigate',event=>event.preventDefault());
   window.webContents.on('will-attach-webview',event=>event.preventDefault());
+  window.webContents.on('page-title-updated',event=>event.preventDefault());
   window.webContents.on('render-process-gone',()=>app.exit(1));
   window.webContents.on('did-start-loading',()=>{loaded=false;pending=false;rendererReady=false;pasteGesture=null;renderDeadline=Date.now()+5000;});
   ipcMain.handle('pill:read',(event,...args)=>{valid(event,args);return current;});
@@ -130,6 +131,7 @@ app.whenReady().then(()=>{
       if(!readySent){
         const windowId=Number(window.getMediaSourceId().match(/^window:(\d+):\d+$/)?.[1]);
         if(!Number.isSafeInteger(windowId) || windowId<=0 || windowId>0xffffffff){app.exit(1);return;}
+        if(process.platform==='linux')window.setTitle('Apparent Recording Controls '+windowId.toString(16));
         readySent=true;emit({ready:true,windowId});
       }
       visibility();
@@ -150,6 +152,11 @@ app.whenReady().then(()=>{
     if(process.platform==='darwin')window.setIgnoreMouseEvents(!inside && !pasteGesture,{forward:true});
   },16);
   window.on('closed',()=>{clearInterval(sizing);clearInterval(pointerTimer);app.quit();});
+  // Hyprland assigns even override-redirect XWayland windows to a workspace.
+  // Rust's existing native adapter pins only this exact child/window identity.
+  if(process.platform==='linux'){
+    for(const event of ['show','move','resize'])window.on(event,()=>emit({pin:true}));
+  }
   window.on('move',()=>{
     const b=window.getBounds(),a=screen.getDisplayMatching(b).workArea;
     if(current?.draggable && expected && (b.x!==expected.x || b.y!==expected.y)){emit({moved:true});expected=b;}

@@ -391,12 +391,23 @@ fn run(command: &str) -> Result<()> {
 /// XWayland's override-redirect keeps the capsule above windows, but Hyprland still
 /// assigns it to one workspace. Pin only the exact capsule, never the whole app.
 pub fn pin_pill(xid: u32) -> Result<()> {
+    pin_pill_for_process(xid, std::process::id(), || true)
+}
+
+/// The Electron presentation has its own parent-owned process, with the same
+/// XID-specific title and exact compositor identity contract as the native pill.
+pub fn pin_pill_for_process(xid: u32, pid: u32, still_current: impl FnOnce() -> bool) -> Result<()> {
     if let Some(command) = pill_pin_command(
         &request("j/clients")?,
-        std::process::id(),
+        pid,
         xid,
         syntax()?,
     )? {
+        // Discovery/syntax RPCs may have waited while the child was retired.
+        // Recheck its caller-owned lifetime immediately before any mutation.
+        if !still_current() {
+            return Ok(());
+        }
         run(&command)?;
     }
     Ok(())

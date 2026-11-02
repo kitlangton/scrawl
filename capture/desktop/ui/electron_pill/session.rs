@@ -95,6 +95,8 @@ impl Session {
             .spawn()?;
         let mut stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
+        #[cfg(target_os = "linux")]
+        let child_pid = child.id();
         let alive = Arc::new(AtomicBool::new(true));
         let ready = Arc::new(AtomicBool::new(false));
         let window_id = Arc::new(AtomicU32::new(0));
@@ -148,6 +150,9 @@ impl Session {
         let hovering = hovered.clone();
         let moved = Arc::new(AtomicBool::new(false));
         let moving = moved.clone();
+        let pin_needed = Arc::new(AtomicBool::new(false));
+        #[cfg(target_os = "linux")]
+        let pin_request = pin_needed.clone();
         let reading = alive.clone();
         let mounted = ready.clone();
         std::thread::spawn(move || {
@@ -164,6 +169,10 @@ impl Session {
                     continue;
                 }
                 if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&line) {
+                    if value.get("pin").and_then(|v| v.as_bool()) == Some(true) {
+                        pin_needed.store(true, Ordering::Release);
+                        continue;
+                    }
                     if value.get("ready").and_then(|v| v.as_bool()) == Some(true) {
                         let Some(id) = value
                             .get("windowId")
@@ -212,6 +221,45 @@ impl Session {
             selection,
             window_id,
         };
+        #[cfg(target_os = "linux")]
+        if crate::capture::desktop::linux::hyprland::running() {
+            let alive = session.alive.clone();
+            let id = session.window_id.clone();
+            std::thread::spawn(move || {
+                // Compositor requests can block; neither GUI ticks nor the state
+                // writer may wait for them. Coalesce remap/drag notifications.
+                while alive.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(120));
+                    if !pin_request.swap(false, Ordering::AcqRel) {
+                        continue;
+                    }
+                    let mut last_error = None;
+                    for _ in 0..8 {
+                        if !alive.load(Ordering::Acquire)
+                            || !crate::capture::ui_process::owns(child_pid as i32)
+                        {
+                            return;
+                        }
+                        let xid = id.load(Ordering::Acquire);
+                        if xid != 0 {
+                            match crate::capture::desktop::linux::hyprland::pin_pill_for_process(xid, child_pid, || {
+                                alive.load(Ordering::Acquire)
+                                    && crate::capture::ui_process::owns(child_pid as i32)
+                            }) {
+                                Ok(()) => { last_error = None; break; }
+                                Err(error) => last_error = Some(error),
+                            }
+                        }
+                        std::thread::sleep(Duration::from_millis(120));
+                    }
+                    if let Some(error) = last_error {
+                        crate::capture::engine::runtime::apparent_log(format!(
+                            "Electron recording pill: could not pin on Hyprland: {error:#}"
+                        ));
+                    }
+                }
+            });
+        }
         session.send();
         Ok(session)
     }
@@ -302,6 +350,7 @@ impl Session {
 }
 impl Drop for Session {
     fn drop(&mut self) {
+        self.alive.store(false, Ordering::Release);
         let (lock, wake) = &*self.mailbox;
         lock.lock().unwrap().closed = true;
         wake.notify_one();
