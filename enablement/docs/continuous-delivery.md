@@ -124,3 +124,43 @@ configuration using **synthetic** identifiers and run
 `(cd connect/service && node_modules/.bin/wrangler deploy --config wrangler.cd.json --dry-run)`.
 This proves configuration and packaging only, not permissions or deployment. Never
 put real tokens in test fixtures, the generated file, artifacts, or logs.
+
+## Rust verification environment
+
+Before explicit local verification (or a direct main push) starts subprocesses
+for Rust checks, the verifier
+checks the caller's Unix `TMPDIR` (or `/tmp` when unset). Run the same read-only
+check before direct expensive commands:
+
+```sh
+python3 enablement/verification.py --base unknown --preflight
+```
+
+Supply a short absolute, user-owned mode-0700 temporary root. Ancestors must be
+root/current-user owned and not group/world writable, except root-owned sticky
+ancestors supported by the Engine. Symlinks are rejected without following them.
+The check diagnoses rather than replaces `TMPDIR`, repairs permissions or deletes
+anything. For an isolated run, create a fresh directory with
+`tempfile.TemporaryDirectory(prefix='.av-', dir=Path.home())`, explicitly pass it
+as child `TMPDIR`, and keep its context alive until all foreground checks exit.
+Retain ownership/cleanup receipts outside that tree for long-running work.
+
+The pathname budget models ordinary `agent_capture` socket fixtures: Linux
+`apparent-owner-<32 hex>/capture.sock`, macOS `ac-<32 hex>/s` (owner fixtures use
+`/tmp` there). It counts filesystem bytes, including separators, with space for
+NUL. This is a deterministic prerequisite, not a writability/bind guarantee,
+fixture completeness check or native proof. Ignored Electron/native scenarios
+must check their own longer HOME-derived socket paths. Keep hostile/sticky and
+symlink production tests enabled; a friendly preflight environment does not
+replace those assertions.
+
+The CI workflow has separate setup and focused Cargo steps before this verifier;
+those steps are not covered by this verifier entry-point guard. Feature pushes
+and PR CI run its regression tests as part of the cheap contracts; they do not
+require a Rust test environment when no Rust suite is selected. Before any native
+allocation, inspect the exact candidate and real scenario entry point offline:
+verify fixture files/schema, selectors against current controls, required guest
+capabilities and the existing canonical repository/issue budget ledger plus
+allocation/cleanup receipts. Missing receipts are not zero spend. Follow the
+native owner's existing preflight and shared queue; this command grants no
+allocation authority and establishes no GUI acceptance.

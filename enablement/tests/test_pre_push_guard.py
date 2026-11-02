@@ -23,7 +23,7 @@ def run(*args, cwd, env=None, input=None):
 
 class PrePushGuardTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(prefix=".pf-", dir=Path.home())
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name) / "repo"
         self.repo.mkdir()
@@ -36,7 +36,8 @@ class PrePushGuardTests(unittest.TestCase):
         # The driver runs tests as well as Cargo. Keep this fixture finite:
         # copying the real hook tests here would recursively invoke itself.
         fixture_test = "import unittest\nclass Fixture(unittest.TestCase):\n    def test_fixture(self):\n        self.assertTrue(True)\n"
-        for name in ("test_fixture_push.py", "test_verification.py", "test_release_gate.py"):
+        for name in ("test_fixture_push.py", "test_verification.py", "test_release_gate.py",
+                     "test_temp_preflight.py"):
             (self.repo / "enablement" / "tests" / name).write_text(fixture_test)
         shutil.copy2(SELECTOR, self.repo / "enablement" / "verification.py")
         run("git", "add", ".", cwd=self.repo)
@@ -49,7 +50,7 @@ class PrePushGuardTests(unittest.TestCase):
         taskpolicy.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$COMMAND_LOG\"\nexit \"${MOCK_STATUS:-0}\"\n")
         taskpolicy.chmod(0o755)
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
-                        COMMAND_LOG=str(self.log), PYTHONDONTWRITEBYTECODE="1")
+                        COMMAND_LOG=str(self.log), PYTHONDONTWRITEBYTECODE="1", TMPDIR=self.tmp.name)
         # Default-policy fixtures must not inherit the live build runner's
         # allocation. Exercise explicit allocations separately below.
         self.env.pop("T3_BUILD_JOBS", None)

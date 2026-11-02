@@ -30,6 +30,7 @@ jobs:
         run: |
           python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
           python3 -m unittest discover -s enablement/tests -p 'test_verification.py'
+          python3 -m unittest discover -s enablement/tests -p 'test_temp_preflight.py'
       - name: Validate workflow syntax and job dependencies
         uses: docker://rhysd/actionlint:1.7.12
         with:
