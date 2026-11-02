@@ -117,6 +117,8 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "${SIGN_ID}"; 
 else
   IDENTITY="-"
 fi
+python3 "${REPO_DIR}/capture/desktop/scripts/packaging/stage-settings.py" "${RESOURCES_DIR}/settings" --sign "${IDENTITY}"
+
 if [[ -d "${FRAMEWORKS_DIR}/Sparkle.framework/Versions/B" ]]; then
   SPARKLE_VER="${FRAMEWORKS_DIR}/Sparkle.framework/Versions/B"
   codesign --force --sign "${IDENTITY}" "${SPARKLE_VER}/XPCServices/Installer.xpc"

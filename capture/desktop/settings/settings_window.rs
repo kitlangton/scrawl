@@ -1012,6 +1012,10 @@ impl SettingsWindow {
                     view.act(Action::CancelShortcut);
                 }
                 view.menu = None;
+                if pane == Pane::Storage {
+                    view.act(Action::Navigate { pane });
+                    return;
+                }
                 view.pane = pane;
                 view.sync_meter();
                 cx.notify();

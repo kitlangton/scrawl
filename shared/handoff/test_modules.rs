@@ -862,6 +862,22 @@ mod tests {
     }
 
     #[test]
+    fn storage_defaults_on_without_changing_retention_and_preserves_opt_out() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("config.json");
+        assert!(experiment_enabled_in(&load_config_from(&path), "electronCaptureLocation"));
+        fs::write(&path, r#"{"retention":{"mediaDays":null,"bundleDays":null},"secret":"keep","experiments":{"other":true}}"#).unwrap();
+        set_experiment_in(&path, "electronCaptureLocation", false).unwrap();
+        let config = load_config_from(&path);
+        assert!(!experiment_enabled_in(&config, "electronCaptureLocation"));
+        let raw: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["secret"], "keep");
+        assert!(raw["retention"]["mediaDays"].is_null());
+        assert!(raw["retention"]["bundleDays"].is_null());
+        assert_eq!(raw["experiments"]["other"], true);
+    }
+
+    #[test]
     fn connect_settings_defaults_on_without_enabling_uploads_and_preserves_opt_out() {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");

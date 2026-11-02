@@ -17,6 +17,10 @@ class AppleSigningTest(unittest.TestCase):
         shutil.copytree(ROOT / "capture/desktop/scripts", root / "capture/desktop/scripts")
         shutil.copytree(ROOT / "capture/desktop/assets", root / "capture/desktop/assets")
         shutil.copytree(ROOT / "shared/assets", root / "shared/assets")
+        (root / "capture/desktop/scripts/packaging/stage-settings.py").write_text(
+            "import os, sys\nfrom pathlib import Path\n"
+            "p = Path(sys.argv[1]) / 'app/dist/settings.html'\np.parent.mkdir(parents=True)\np.write_text('synthetic Settings')\n"
+            "with Path(os.environ['TRACE']).open('a') as f: f.write('stage-settings ' + ' '.join(sys.argv[1:]) + '\\n')\n")
         (root / "bin").mkdir()
         (root / "sparkle/Sparkle.framework/Versions/B/XPCServices").mkdir(parents=True)
         setup = root / "capture/desktop/scripts/release/setup-sparkle.sh"

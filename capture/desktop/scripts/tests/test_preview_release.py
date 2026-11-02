@@ -34,6 +34,9 @@ class PreviewReleaseTest(unittest.TestCase):
             )
             (root / "capture/desktop/scripts/release/setup-sparkle.sh").write_text('#!/bin/sh\nprintf "%s/sparkle\\n" "$PWD"\n')
             (root / "capture/desktop/scripts/release/setup-sparkle.sh").chmod(0o755)
+            (root / "capture/desktop/scripts/packaging/stage-settings.py").write_text(
+                "import sys\nfrom pathlib import Path\n"
+                "p = Path(sys.argv[1]) / 'app/dist/settings.html'\np.parent.mkdir(parents=True)\np.write_text('synthetic Settings')\n")
             (root / "bin/cargo").write_text(
                 '#!/bin/sh\nmkdir -p target/release\n'
                 'printf "test" > target/release/apparent\n'
@@ -63,6 +66,7 @@ class PreviewReleaseTest(unittest.TestCase):
             self.assertEqual(info["CFBundleIdentifier"], "dev.simonvanlaak.apparent.preview")
             self.assertEqual(info["CFBundleShortVersionString"], "0.123.2")
             self.assertEqual(info["CFBundleVersion"], "123.2")
+            self.assertTrue((root / "dist/Apparent Preview.app/Contents/Resources/settings/app/dist/settings.html").is_file())
             self.assertIn("preview-mac-feed/appcast.xml", info["SUFeedURL"])
             self.assertEqual(info["SUPublicEDKey"], env["APPARENT_PREVIEW_PUBLIC_KEY"])
             self.assertTrue((root / "dist/Apparent Preview.app/Contents/Frameworks/Sparkle.framework").is_dir())

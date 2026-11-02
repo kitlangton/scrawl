@@ -1120,6 +1120,7 @@ pub(crate) fn external_record_owned(kind: ShortcutKind) -> bool {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum Action {
+    Navigate { pane: Pane },
     Connect { command: super::connect::Command },
     /// A settings control: `launchAtLogin`, `errorReporting`, `videoExport`, `lowerPlayback` (bool),
     /// `playbackLevel` (u8), `microphone` ("default" or a device id), `transcriber`
@@ -1347,6 +1348,7 @@ impl Panel {
                     Effect::None
                 }
             }
+            Action::Navigate { .. } => Effect::None, // Session owns presentation routing.
             Action::ShowCaptures => Effect::ShowCaptures,
             Action::CheckForUpdates => {
                 if cfg!(target_os = "linux") && self.update_check.checking {
@@ -1755,6 +1757,7 @@ impl Host for AppHost<'_> {
 /// From the window's helper process and its pollers.
 #[derive(Clone, Debug)]
 pub enum Event {
+    Presentation { generation: u64, event: Box<Event> },
     Connect(super::connect::Event),
     Action(Action),
     Grants(Grants),
@@ -1767,11 +1770,21 @@ pub enum Event {
     Exited,
 }
 
-/// Where the window runs: the SwiftUI helper on macOS, a GPUI window in this process on Windows
-/// (`settings_window`). Both take the same JSON messages and report the same `Action`s.
-enum Transport {
+impl Event {
+    pub(super) fn for_presentation(self, current: u64) -> Option<Self> {
+        match self {
+            Self::Presentation { generation, event } if generation == current => Some(*event),
+            Self::Presentation { .. } => None,
+            event => Some(event),
+        }
+    }
+}
+
+/// Native or Electron presentation. Separate children register their exact live
+/// process with capture's own-window exclusion; all use the same bounded actions.
+pub(super) enum Transport {
     Helper {
-        child: std::process::Child,
+        child: crate::capture::ui_process::UiChild,
         stdin: Option<std::process::ChildStdin>,
     },
     InProcess(Option<flume::Sender<serde_json::Value>>),
@@ -1779,6 +1792,8 @@ enum Transport {
 
 /// The open Settings window.
 pub struct Session {
+    generation: u64,
+    storage: bool,
     panel: Panel,
     connect: Option<super::connect::Controller>,
     transport: Transport,
@@ -1797,13 +1812,8 @@ impl Session {
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let events: std::sync::Arc<dyn Fn(Event) + Send + Sync> = std::sync::Arc::new(events);
-        let transport = if cfg!(not(target_os = "macos")) {
-            let (sender, receiver) = flume::unbounded();
-            crate::capture::desktop::settings::settings_window::request_open(receiver, pane, std::sync::Arc::clone(&events));
-            Transport::InProcess(Some(sender))
-        } else {
-            Self::spawn_helper(pane, std::sync::Arc::clone(&events))?
-        };
+        let generation = super::presentation::generation();
+        let (transport, storage) = Self::open_presentation(pane, generation, &events, true)?;
 
         let polling = std::sync::Arc::new(AtomicBool::new(true));
         let alive = std::sync::Arc::clone(&polling);
@@ -1855,6 +1865,8 @@ impl Session {
             });
         panel.connect = connect.as_ref().map(|controller| controller.view());
         Ok(Self {
+            generation,
+            storage,
             panel,
             connect,
             transport,
@@ -1863,6 +1875,31 @@ impl Session {
             last_view: String::new(),
             _microphones: microphones,
         })
+    }
+
+    fn open_presentation(
+        pane: Option<Pane>, generation: u64,
+        events: &std::sync::Arc<dyn Fn(Event) + Send + Sync>,
+        allow_storage: bool,
+    ) -> anyhow::Result<(Transport, bool)> {
+        let target = events.clone();
+        let events: std::sync::Arc<dyn Fn(Event) + Send + Sync> = std::sync::Arc::new(move |event| {
+            target(Event::Presentation { generation, event: Box::new(event) });
+        });
+        if allow_storage && pane == Some(Pane::Storage) && crate::shared::handoff::experiment("electronCaptureLocation") {
+            match super::presentation::open(events.clone()) {
+                Ok(transport) => return Ok((transport, true)),
+                Err(error) => crate::capture::engine::runtime::apparent_log(format!("Storage Settings fallback: {error:#}")),
+            }
+        }
+        let transport = if cfg!(not(target_os = "macos")) {
+            let (sender, receiver) = flume::unbounded();
+            crate::capture::desktop::settings::settings_window::request_open(receiver, pane, events);
+            Transport::InProcess(Some(sender))
+        } else {
+            Self::spawn_helper(pane, events)?
+        };
+        Ok((transport, false))
     }
 
     /// `apparent-helper settings`, reading its actions off stdout.
@@ -1906,13 +1943,25 @@ impl Session {
             }
             events(Event::Exited);
         });
-        Ok(Transport::Helper { child, stdin })
+        Ok(Transport::Helper { child: crate::capture::ui_process::UiChild::new(child), stdin })
     }
 
     /// Feeds an event in, redraws, and returns what the app must do (`Relaunch`, `Tour`,
     /// `Close`); the rest is done here.
+    /// Filter retired windows before coordinator safety/permission checks too.
+    pub fn current_event(&self, event: Event) -> Option<Event> {
+        event.for_presentation(self.generation)
+    }
+
     pub fn event(&mut self, event: Event, host: &mut dyn Host) -> Effect {
+        let Some(event) = self.current_event(event) else { return Effect::None; };
         let effect = match event {
+            Event::Presentation { .. } => return Effect::None,
+            Event::Action(Action::Navigate { pane }) => {
+                self.panel.on(Action::CancelShortcut, host);
+                self.show(Some(pane));
+                Effect::None
+            }
             Event::Connect(event) => {
                 if self.connect.as_mut().is_some_and(|controller| controller.receive(event)) {
                     crate::connect::hosted::start_worker();
@@ -1949,6 +1998,20 @@ impl Session {
                 Effect::None
             }
             Event::Tick => Effect::None,
+            Event::Exited if self.storage => {
+                // EOF without a normal Close means Electron crashed or failed to
+                // launch. Keep Settings usable without touching saved policy.
+                let generation = super::presentation::generation();
+                if let Ok((transport, storage)) = Self::open_presentation(Some(Pane::Storage), generation, &self.events, false) {
+                    self.generation = generation;
+                    self.storage = storage;
+                    self.last_view.clear();
+                    super::presentation::retire(std::mem::replace(&mut self.transport, transport));
+                    self.sync(host);
+                    return Effect::None;
+                }
+                return Effect::Close;
+            }
             Event::Exited => {
                 if let Some(controller) = &mut self.connect { controller.close(); }
                 self.panel.on(Action::Close, host);
@@ -2031,10 +2094,29 @@ impl Session {
     }
 
     pub fn show(&mut self, pane: Option<Pane>) {
+        if let Some(pane) = pane {
+            let storage = pane == Pane::Storage && crate::shared::handoff::experiment("electronCaptureLocation");
+            if storage != self.storage {
+                let generation = super::presentation::generation();
+                match Self::open_presentation(Some(pane), generation, &self.events, true) {
+                    Ok((transport, storage)) => {
+                        self.send(&serde_json::json!({"type": "close"}));
+                        self.generation = generation;
+                        self.storage = storage;
+                        self.last_view.clear();
+                        super::presentation::retire(std::mem::replace(&mut self.transport, transport));
+                    }
+                    Err(error) => crate::capture::engine::runtime::apparent_log(format!("Settings navigation failed: {error:#}")),
+                }
+            }
+        }
         self.send(&serde_json::json!({"type": "show", "pane": pane}));
     }
 
     pub fn sync(&mut self, host: &dyn Host) {
+        // Storage reads its narrow projected socket contract. Do not forward the
+        // other pages' state to a renderer which does not present those pages.
+        if self.storage { return; }
         let mut view = serde_json::to_value(self.panel.view(host)).unwrap_or_default();
         view["type"] = "state".into();
         // Switched from Hex to Apple Speech: get its model now, not at the first capture.
@@ -2080,19 +2162,34 @@ impl Drop for Session {
         self.polling
             .store(false, std::sync::atomic::Ordering::Release);
         self.send(&serde_json::json!({"type": "close"}));
-        match &mut self.transport {
-            Transport::Helper { child, stdin } => {
-                *stdin = None;
-                let _ = child.wait();
-            }
-            Transport::InProcess(sender) => *sender = None,
-        }
+        let transport = std::mem::replace(&mut self.transport, Transport::InProcess(None));
+        super::presentation::retire(transport);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_windows_cannot_close_or_restart_a_reopened_settings_session() {
+        let old_session = super::super::presentation::generation();
+        let old_storage = super::super::presentation::generation();
+        let reopened_session = super::super::presentation::generation();
+        let reopened_storage = super::super::presentation::generation();
+        for retired in [old_session, old_storage] {
+            for current in [reopened_session, reopened_storage] {
+                for event in [Event::Exited, Event::Action(Action::Close), Event::Action(Action::UpdateNow)] {
+                    assert!(Event::Presentation { generation: retired, event: Box::new(event) }
+                        .for_presentation(current).is_none());
+                }
+            }
+        }
+        assert!(matches!(Event::Presentation { generation: reopened_storage,
+            event: Box::new(Event::Action(Action::Close)) }.for_presentation(reopened_storage),
+            Some(Event::Action(Action::Close))));
+        assert!(matches!(Event::Tick.for_presentation(reopened_storage), Some(Event::Tick)));
+    }
 
     // Key codes: macOS `kVK_*` (ANSI), Windows virtual keys.
     /// Windows and Linux store virtual keys.

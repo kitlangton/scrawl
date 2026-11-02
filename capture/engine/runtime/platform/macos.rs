@@ -44,7 +44,15 @@ pub fn main_display_id() -> u32 {
 
 /// CGWindowList's windows, front to back, in an autorelease pool.
 pub(crate) fn raw_windows_now() -> Vec<crate::shared::windows::RawWindow> {
-    objc2::rc::autoreleasepool(|_| crate::shared::windows::raw_windows())
+    objc2::rc::autoreleasepool(|_| {
+        let mut raw = crate::shared::windows::raw_windows();
+        // kCGCursorWindowLevelKey, from CGWindowLevel.h. Query the actual level
+        // instead of baking the Window Server's observed numeric layer into policy.
+        const CURSOR_WINDOW_LEVEL_KEY: i32 = 19;
+        let cursor_level = unsafe { CGWindowLevelForKey(CURSOR_WINDOW_LEVEL_KEY) };
+        crate::shared::windows::remove_system_cursor(&mut raw, cursor_level);
+        raw
+    })
 }
 
 /// Whether `pid` runs this Apparent's `apparent-helper` (the iPhone mirror, Settings, onboarding, the
@@ -220,6 +228,7 @@ unsafe extern "C" {
     fn CGEventGetLocation(event: EventRef) -> CGPoint;
     fn CGEventGetIntegerValueField(event: EventRef, field: u32) -> i64;
     fn CGMainDisplayID() -> u32;
+    fn CGWindowLevelForKey(key: i32) -> i32;
     fn CGDisplayPixelsWide(display: u32) -> usize;
     fn CGDisplayPixelsHigh(display: u32) -> usize;
     fn CGPreflightScreenCaptureAccess() -> bool;
