@@ -31,7 +31,7 @@ class SigningTests(unittest.TestCase):
                     (bundle / "Resources").symlink_to("Versions/A/Resources")
                     (bundle / name).symlink_to("Versions/A/" + name)
                 info.parent.mkdir(parents=True, exist_ok=True)
-                info.write_bytes(plistlib.dumps({"CFBundleExecutable": name}))
+                info.write_bytes(plistlib.dumps({} if bundle == helper else {"CFBundleExecutable": name}))
                 binary.parent.mkdir(parents=True, exist_ok=True)
                 binary.write_bytes(b"\xcf\xfa\xed\xfe synthetic Mach-O")
                 principals.append(binary)
