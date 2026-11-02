@@ -59,7 +59,8 @@ static WAYLAND_DISPLAY: OnceLock<Option<OsString>> = OnceLock::new();
 /// Called first thing in `main`, before any thread starts: remembers the Wayland display (for
 /// the clipboard and the portals) and hides it from GPUI, so its windows go through XWayland.
 pub fn prepare_process() {
-    let wayland = std::env::var_os("WAYLAND_DISPLAY").filter(|v| !v.is_empty());
+    // Relaunches inherit the saved display, not the variable hidden from GPUI.
+    let wayland = read_wayland_display();
     let _ = WAYLAND_DISPLAY.set(wayland.clone());
     if wayland.is_some() && std::env::var_os("APPARENT_NATIVE_WAYLAND").is_none() {
         // SAFETY: called from `main` before any other thread exists.
@@ -73,13 +74,13 @@ pub fn prepare_process() {
 
 /// The Wayland display name the session had, if it is a Wayland session.
 pub fn wayland_display() -> Option<OsString> {
-    WAYLAND_DISPLAY
-        .get_or_init(|| {
-            std::env::var_os("WAYLAND_DISPLAY")
-                .or_else(|| std::env::var_os("APPARENT_WAYLAND_DISPLAY"))
-                .filter(|v| !v.is_empty())
-        })
-        .clone()
+    WAYLAND_DISPLAY.get_or_init(read_wayland_display).clone()
+}
+
+fn read_wayland_display() -> Option<OsString> {
+    std::env::var_os("WAYLAND_DISPLAY")
+        .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var_os("APPARENT_WAYLAND_DISPLAY").filter(|v| !v.is_empty()))
 }
 
 /// A Wayland session: the X server Apparent talks to is XWayland, which sees only X11 apps.
@@ -246,5 +247,55 @@ mod tests {
         assert_eq!(pretty_app_name("gnome-terminal-server"), "Gnome Terminal Server");
         assert_eq!(pretty_app_name("org.gnome.Nautilus"), "Nautilus");
         assert_eq!(pretty_app_name("Google-chrome"), "Google Chrome");
+    }
+
+    #[test]
+    fn clipboard_display_survives_relaunch() {
+        const CHILD: &str = "APPARENT_TEST_CLIPBOARD_DISPLAY";
+        if let Ok(expected) = std::env::var(CHILD) {
+            let visible = std::env::var_os("WAYLAND_DISPLAY");
+            let native = std::env::var_os("APPARENT_NATIVE_WAYLAND").is_some();
+            prepare_process();
+            let expected = (!expected.is_empty()).then(|| OsString::from(expected));
+            assert_eq!(wayland_display(), expected);
+            assert_eq!(wayland_display(), expected, "cached lookup must agree");
+            if native || expected.is_none() {
+                assert_eq!(std::env::var_os("WAYLAND_DISPLAY"), visible);
+            } else {
+                assert_eq!(std::env::var_os("WAYLAND_DISPLAY"), None);
+                assert_eq!(std::env::var_os("APPARENT_WAYLAND_DISPLAY"), expected);
+            }
+            return;
+        }
+
+        // A fresh process exercises main's actual environment mutation and OnceLock,
+        // without changing the test runner's environment or racing other tests.
+        let test_name = concat!(module_path!(), "::clipboard_display_survives_relaunch")
+            .split_once("::").unwrap().1;
+        for (display, saved, native, expected) in [
+            (Some("wayland-1"), None, false, "wayland-1"),
+            (None, Some("wayland-1"), false, "wayland-1"),
+            (Some(""), Some("wayland-1"), false, "wayland-1"),
+            (Some("wayland-2"), Some("wayland-1"), false, "wayland-2"),
+            (None, None, false, ""),
+            (Some(""), Some(""), false, ""),
+            (Some("wayland-1"), None, true, "wayland-1"),
+            (None, Some("wayland-1"), true, "wayland-1"),
+        ] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", test_name, "--nocapture"])
+                .env_remove("WAYLAND_DISPLAY")
+                .env_remove("APPARENT_WAYLAND_DISPLAY")
+                .env_remove("APPARENT_NATIVE_WAYLAND")
+                .env(CHILD, expected);
+            if let Some(display) = display { command.env("WAYLAND_DISPLAY", display); }
+            if let Some(saved) = saved { command.env("APPARENT_WAYLAND_DISPLAY", saved); }
+            if native { command.env("APPARENT_NATIVE_WAYLAND", "1"); }
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "display={display:?}, saved={saved:?}, native={native}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "child test did not run");
+        }
     }
 }
