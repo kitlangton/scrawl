@@ -74,7 +74,33 @@ timed script, integrity pins, limits, provenance and failure/recovery contract.
 
 ## Experiment `liveTranscribe` (`capture/engine/runtime/audio/transcription/live_transcribe.rs`, `capture/engine/native/LiveTranscribe.swift`)
 
-Off by default (see Experiments in `AGENTS.md`). With it on and Apple Speech the transcriber, `AudioRecorder::start` also starts `apparent-helper transcribe-stream` (one SpeechAnalyzer, finalized results only; it never downloads a model, so one that isn't installed fails at once) and a thread that feeds it the recorder's 16 kHz buffer as `audio::pcm16` every 160 ms. `RecordedAudio.live` carries it to `transcribe::transcribe`, which sends the samples it hasn't had from the finished WAV, closes its input and waits up to 6 s for the tail; the helper must report exactly the WAV's sample count. Word times are therefore the WAV's own, and match one SpeechAnalyzer pass over `audio.wav` word for word and millisecond for millisecond (the batch path splits recordings over 22 s at silences and transcribes the pieces in parallel, so long recordings can differ from it at the cuts). Any failure is logged (`Live transcription failed, …`) and the WAV is transcribed as before; Hex, iPhone and imported recordings never stream. `apparent reprocess B --out O --bench 1 --live-speed 1` replays a bundle's audio into it in real time and logs `Live transcription: N words, … tail N ms` and the finish timings.
+Off by default. With Apple Speech selected, this uses one continuous SpeechAnalyzer,
+with the preferred SpeechTranscriber or existing DictationTranscriber fallback and
+installed assets only. It emits natural finalized results; Apple may defer all
+results until EOF. There are no finite recognition chunks or forced pause boundaries.
+Source samples and timestamps use the saved WAV clock; lexical and timing identity
+with batch recognition is not promised.
+
+The feeder reads the recorder's rolling history by absolute sample offset every
+160 ms. Overwritten history, input overflow, malformed/over-budget helper output,
+invalid ranges, failed completion or timeout discard the live result and retain
+complete saved-WAV transcription as the fallback. Finish sends only the unwritten
+WAV tail and closes input. A six-second helper I/O deadline, measured from Finish
+entry, covers tail writes, output drain and helper exit. Feeder spawn/join and saved
+WAV decoding are synchronous; this is not a total Finish latency guarantee. Success requires exact source sample count, Ready/results/Done order,
+stdout EOF and successful exit. Cancellation uses nonblocking writes and helper
+process-group cleanup. The native audio queue holds at most 32 buffers; retained
+helper output is capped at 8 MiB, 64 KiB per line and 16,384 events. Exceeding a
+budget fails rather than dropping audio. Linux, Hex, iPhone and imported recordings
+keep their existing paths. `apparent reprocess B --out O --bench 1 --live-speed 1`
+replays audio and logs the streamed sample count and tail latency. Helper proof does
+not establish preferred-engine availability or installed-app capture acceptance.
+
+On macOS with Swift 6.2+, `python3 capture/engine/native/tests/live-transcribe.py`
+checks the actual production source/converter/completion seams using generated PCM
+without speech models or audio devices. The macOS Rust suite invokes it too. These
+regressions do not replace actual selected-module and installed-app capture proof.
+
 
 ## Linux pause transcription (`capture/engine/runtime/audio/transcription/pause_transcribe.rs`, `capture/engine/runtime/audio/transcription/speech.rs`)
 
