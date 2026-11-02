@@ -12,8 +12,16 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let root =
-            std::env::temp_dir().join(format!("crypto-{}", super::super::random_id().unwrap()));
+        Self::in_temp_base(&std::env::temp_dir())
+    }
+    fn in_temp_base(base: &Path) -> Self {
+        // Darwin's system temp directory can contain /var -> /private/var.
+        // Resolve the trusted fixture base before creating private artifacts;
+        // production paths still reject all symlink components unchanged.
+        let root = base
+            .canonicalize()
+            .unwrap()
+            .join(format!("crypto-{}", super::super::random_id().unwrap()));
         private_dir(&root).unwrap();
         let stage = root.join("stage");
         let spool = root.join("spool");
@@ -158,6 +166,18 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[test]
+fn fixture_resolves_temp_alias_without_relaxing_production_symlink_rejection() {
+    let outer = Fixture::new();
+    let alias = outer.root.join("temp-alias");
+    symlink(&outer.root, &alias).unwrap();
+    assert!(private_dir(&alias).is_err());
+    let nested = Fixture::in_temp_base(&alias);
+    assert!(!nested.root.starts_with(&alias));
+    assert_eq!(nested.root, nested.root.canonicalize().unwrap());
+    assert_eq!(fs::metadata(&nested.root).unwrap().mode() & 0o777, 0o700);
 }
 
 #[test]
