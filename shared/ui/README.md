@@ -15,3 +15,9 @@ so npm installs a snapshot rather than resolving dependencies from this source
 directory. After changing this package, run `npm ci` in
 `capture/desktop/frontend` to refresh that snapshot. Its build checks that the
 installed source matches these canonical files.
+
+StatusCard and DisclosureMenu supply the shared Connect surface. `status.css` owns
+functional status roles from the Apparent brand guidelines: green confirmation,
+Signal progress, gold/Carbon caution and red failure/destructive actions. Ordinary
+Tab navigation, Escape and outside-click dismissal are retained by the disclosure.
+Rust owns state, authorization, action placement and confirmation decisions.

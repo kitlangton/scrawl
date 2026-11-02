@@ -24,6 +24,9 @@ declare global {
       checkConnectConnection: () => Promise<ConnectSettings>;
       disableConnectUploads: () => Promise<ConnectSettings>;
       disconnectConnectSettings: () => Promise<ConnectSettings>;
+      requestDisableConnectUploads: () => Promise<ConnectSettings>;
+      requestDisconnectConnectSettings: () => Promise<ConnectSettings>;
+      openConnectSharedLinks: () => Promise<ConnectSettings>;
       openConnectBrowser: () => Promise<ConnectSettings>;
       readRetention: () => Promise<RetentionResult>;
       saveRetention: (preset: string) => Promise<RetentionResult>;
@@ -49,12 +52,16 @@ export type CaptureLocation =
 
 export type ErrorReporting = { status: 'connected'; enabled: boolean } |
   { status: 'disconnected' | 'incompatible' } | { status: 'error'; code: string };
-export type ConnectAction = 'connect' | 'allow' | 'cancel' | 'check' | 'disable' | 'disconnect' | 'open-browser';
+export type ConnectAction = 'connect' | 'allow' | 'cancel' | 'check' | 'disable' | 'disconnect' | 'open-browser' | 'request-disable' | 'request-disconnect' | 'open-shared-links';
 export type ConnectView = {
   title: string; status: string; detail: string; server: string | null;
   verificationUri: string | null; userCode: string | null;
-  buttons: { command: ConnectAction; title: string; enabled: boolean }[]; note: string;
+  buttons: ConnectButton[]; note: string;
+  presentation?: { tone: 'neutral' | 'success' | 'progress' | 'warning' | 'failure';
+    headline: string; detail: string; note: string; artwork: boolean; compact: boolean;
+    accountMenu: boolean; buttons: ConnectButton[]; menuActions: ConnectAction[]; sharedLinksUrl: string | null };
 };
+export type ConnectButton = { command: ConnectAction; title: string; enabled: boolean };
 export type ConnectSettings =
   | { status: 'connected'; view: ConnectView }
   | { status: 'disabled' | 'disconnected' | 'cancelled' }

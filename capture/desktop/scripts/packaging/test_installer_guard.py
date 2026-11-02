@@ -63,7 +63,7 @@ esac
                              "capture/desktop/assets/Apparent.icns",
                              "shared/assets/fonts/HostGrotesk-Variable.ttf",
                              "shared/assets/brand/apparent-wordmark.png",
-                             "shared/assets/brand/apparent-a.png"):
+                             "shared/assets/brand/apparent-a.png", "shared/assets/brand/connect-frogs.png"):
                 asset = repo / relative
                 asset.parent.mkdir(parents=True, exist_ok=True)
                 asset.write_text("synthetic new asset")

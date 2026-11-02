@@ -7,3 +7,5 @@
   button { cursor: pointer; }
   button:disabled { cursor: default; }
 }
+
+.apparent-connect-workflow { font-family: 'Connect Host Grotesk', var(--font-sans); }

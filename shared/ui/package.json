@@ -6,9 +6,14 @@
   "exports": {
     "./button": "./src/button.tsx",
     "./tabs": "./src/tabs.tsx",
-    "./theme.css": "./src/theme.css"
+    "./theme.css": "./src/theme.css",
+    "./status-card": "./src/status-card.tsx",
+    "./disclosure-menu": "./src/disclosure-menu.tsx",
+    "./status.css": "./src/status.css"
   },
-  "peerDependencies": { "react": "^19.2.0" },
+  "peerDependencies": {
+    "react": "^19.2.0"
+  },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-tabs": "^1.1.13",

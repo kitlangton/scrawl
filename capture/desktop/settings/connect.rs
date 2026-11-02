@@ -20,6 +20,9 @@ use std::sync::{
 
 use serde::{Deserialize, Serialize};
 
+mod presentation;
+pub use presentation::{Presentation, Tone};
+
 pub const CONNECT_SETTINGS: &str = "connectSettings";
 pub const DEFAULT_SERVER: &str = "https://hosted.tryapparent.com";
 
@@ -33,6 +36,9 @@ pub enum Command {
     Disable,
     Disconnect,
     OpenBrowser,
+    RequestDisable,
+    RequestDisconnect,
+    OpenSharedLinks,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +60,8 @@ pub struct View {
     pub user_code: Option<String>,
     pub buttons: Vec<Button>,
     pub note: String,
+    #[serde(default)]
+    pub presentation: Presentation,
 }
 
 /// Local, authoritative state, not cached network health. The adapter must validate
@@ -136,6 +144,7 @@ impl SafeError {
 /// UI guard cannot replace that transaction. All calls must have bounded waits.
 pub trait Backend: Send + Sync + 'static {
     fn snapshot(&self) -> Result<Snapshot, SafeError>;
+    fn shared_links_url(&self) -> Option<String> { None }
     fn login(
         &self,
         server: &str,
@@ -200,6 +209,7 @@ pub struct Controller {
     closed: bool,
     // A failed durable cancellation must remain actionable even if snapshot fails.
     retry_disable: Option<bool>,
+    confirmation: Option<bool>,
 }
 
 impl Controller {
@@ -216,6 +226,7 @@ impl Controller {
             request: None,
             closed: false,
             retry_disable: None,
+            confirmation: None,
         };
         controller.refresh();
         controller
@@ -317,6 +328,15 @@ impl Controller {
         if self.closed || self.disabling() {
             return None;
         }
+        if matches!(command, Command::RequestDisable | Command::RequestDisconnect) {
+            self.confirmation = Some(command == Command::RequestDisconnect);
+            return None;
+        }
+        if command == Command::Cancel && self.confirmation.take().is_some() {
+            return None;
+        }
+        if command != Command::Cancel { self.confirmation = None; }
+        if command == Command::OpenSharedLinks { return self.backend.shared_links_url(); }
         if command == Command::OpenBrowser {
             return self
                 .request
@@ -331,6 +351,11 @@ impl Controller {
             let logout = command == Command::Disconnect;
             self.retry_disable = Some(logout);
             self.start(Operation::Disable { logout }, String::new());
+            return None;
+        }
+        if command == Command::Cancel && self.consent {
+            self.cancel_request();
+            self.refresh();
             return None;
         }
         if command == Command::Cancel {
@@ -439,6 +464,7 @@ impl Controller {
             verification_uri: None,
             user_code: None,
             buttons: Vec::new(),
+            presentation: Presentation::default(),
             note: "Existing captures are not uploaded. No public links are created. Disabling cancels unfinished uploads; disconnecting also signs out this computer. Already uploaded data is not deleted.".into(),
         };
         if let Some(snapshot) = &self.snapshot {
@@ -593,9 +619,11 @@ impl Controller {
                 ));
             }
         }
+        view.presentation = self.presentation(&view);
         if self.closed {
             view.verification_uri = None;
             view.user_code = None;
+            for button in &mut view.presentation.buttons { button.enabled = false; }
             for button in &mut view.buttons {
                 button.enabled = false;
             }

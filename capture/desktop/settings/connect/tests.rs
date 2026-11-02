@@ -404,3 +404,63 @@ fn reopened_unsettled_revocation_can_be_retried_without_allowing_a_new_login() {
     assert!(!c.receive(recv(&events)));
     assert_eq!(c.view().status, "Not connected");
 }
+
+#[test]
+fn typed_presentation_never_promotes_unverified_or_unreadable_state_to_success() {
+    let (mut c, backend, _events, _logins, _probes, _disables) = fixture();
+    assert_eq!(c.view().presentation.headline, "Help others see what you mean.");
+    assert_eq!(c.view().presentation.tone, Tone::Neutral);
+    *backend.local.lock().unwrap() = Ok(connected()); c.refresh();
+    assert_eq!(c.view().presentation.tone, Tone::Success);
+    c.health = Some(Health::Offline);
+    assert_eq!(c.view().presentation.tone, Tone::Failure);
+    c.health = None;
+    c.error = Some(SafeError::UnverifiedCommit);
+    assert_eq!(c.view().presentation.tone, Tone::Failure);
+    *backend.local.lock().unwrap() = Err(SafeError::LocalState); c.refresh();
+    let p = c.view().presentation;
+    assert_eq!(p.tone, Tone::Failure);
+    assert!(p.buttons.iter().any(|b| b.command == Command::RequestDisconnect));
+}
+
+#[test]
+fn confirmation_and_consent_cancel_are_local_until_explicit_allow_or_revoke() {
+    let (mut c, backend, events, logins, probes, disables) = fixture();
+    *backend.local.lock().unwrap() = Ok(connected()); c.refresh();
+    c.command(Command::RequestDisconnect);
+    let p = c.view().presentation;
+    assert_eq!(p.tone, Tone::Warning);
+    assert_eq!(p.buttons[0].command, Command::Disconnect);
+    assert!(disables.try_recv().is_err());
+    c.command(Command::Cancel);
+    assert_eq!(c.view().presentation.tone, Tone::Success);
+    c.command(Command::Connect);
+    c.command(Command::Cancel);
+    assert!(logins.try_recv().is_err());
+    assert!(probes.try_recv().is_err());
+    assert!(disables.try_recv().is_err());
+    assert_eq!(c.view().presentation.tone, Tone::Success);
+    c.command(Command::RequestDisable);
+    c.command(Command::Disable);
+    let (logout, result) = recv(&disables);
+    assert!(!logout);
+    assert_eq!(c.view().presentation.tone, Tone::Progress);
+    assert!(!c.view().presentation.buttons[0].enabled);
+    result.send(Err(SafeError::LocalState)).unwrap();
+    c.receive(recv(&events));
+    assert_eq!(c.view().presentation.tone, Tone::Failure);
+    assert!(c.view().presentation.buttons.iter().any(|b| b.command == Command::Disable));
+}
+
+#[test]
+fn failed_first_signin_keeps_recovery_actions_reachable() {
+    let (mut c, _backend, _events, _logins, _probes, _disables) = fixture();
+    for error in [SafeError::Rejected, SafeError::Expired, SafeError::Offline] {
+        c.error = Some(error);
+        let p = c.view().presentation;
+        assert_eq!(p.tone, Tone::Failure);
+        assert!(p.account_menu);
+        assert!(p.menu_actions.contains(&Command::Check));
+        assert!(p.buttons.iter().any(|b| b.command == Command::Check && b.enabled));
+    }
+}

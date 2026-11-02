@@ -60,10 +60,10 @@ fn client_at(path: PathBuf) -> Client {
 pub fn settings_backend(
     config: &Path,
 ) -> Arc<dyn crate::capture::desktop::settings::connect::Backend> {
-    Arc::new(SettingsBackend(client_at(config.into())))
+    Arc::new(SettingsBackend(client_at(config.into()), config.into()))
 }
 
-struct SettingsBackend(Client);
+struct SettingsBackend(Client, PathBuf);
 use crate::capture::desktop::settings::connect as settings_controller;
 use apparent_connect_client::settings as client_settings;
 
@@ -83,6 +83,10 @@ fn settings_error(error: client_settings::SafeError) -> settings_controller::Saf
 }
 
 impl settings_controller::Backend for SettingsBackend {
+    fn shared_links_url(&self) -> Option<String> {
+        crate::shared::handoff::capture_location::experiment_in(&self.1, HOSTED_SHARING)
+            .ok().filter(|enabled| *enabled).and_then(|_| self.0.shared_links_url())
+    }
     fn snapshot(
         &self,
     ) -> std::result::Result<settings_controller::Snapshot, settings_controller::SafeError> {

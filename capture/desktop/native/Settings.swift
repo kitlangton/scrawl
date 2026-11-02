@@ -164,8 +164,86 @@ struct ConnectState: Decodable, Equatable {
   var status: String
   var detail: String
   var userCode: String?
+  var presentation: ConnectPresentation?
   var buttons: [ConnectButton]
   var note: String
+}
+
+struct ConnectPresentation: Decodable, Equatable {
+  var tone: String
+  var headline: String
+  var detail: String
+  var note: String
+  var artwork: Bool
+  var compact: Bool
+  var accountMenu: Bool
+  var buttons: [ConnectButton]
+  var menuActions: [String]
+  var sharedLinksUrl: String?
+}
+
+private func connectColor(_ hex: Int) -> Color {
+  Color(red: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)
+}
+
+private struct ConnectCard: View {
+  @ObservedObject var model: SettingsModel
+  var connect: ConnectState
+  private let paper = connectColor(0xf5f0e8)
+  private let carbon = connectColor(0x020102)
+  private var p: ConnectPresentation {
+    connect.presentation ?? ConnectPresentation(tone: "neutral", headline: connect.status,
+      detail: connect.detail, note: "", artwork: false, compact: false, accountMenu: false,
+      buttons: connect.buttons, menuActions: [], sharedLinksUrl: nil)
+  }
+  private var color: Color { connectColor(["success":0x146b43, "progress":0x7a58c7, "warning":0xffbe2e, "failure":0xb42318][p.tone] ?? 0xcbc4bc) }
+  private var statusIcon: String { ["success":"checkmark.circle", "progress":"clock", "warning":"exclamationmark.triangle", "failure":"xmark.circle"][p.tone] ?? "" }
+  var body: some View {
+    HStack(spacing: 24) {
+      VStack(alignment: .leading, spacing: 16) {
+        HStack(alignment: .top, spacing: 8) {
+          if p.tone != "neutral" {
+            Image(systemName: statusIcon).font(.system(size: 20))
+              .foregroundStyle(p.tone == "warning" ? carbon : color)
+              .padding(p.tone == "warning" ? 3 : 0)
+              .background(p.tone == "warning" ? color : Color.clear)
+              .accessibilityHidden(true)
+          }
+          Text(p.headline).font(.custom("HostGrotesk_700wght", size: p.compact ? 18 : 36))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        Text(p.detail).font(.custom("HostGrotesk_400wght", size: 18))
+          .fixedSize(horizontal: false, vertical: true)
+        if !p.note.isEmpty {
+          Text(p.note).font(.custom("HostGrotesk_400wght", size: 18))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        // A VStack keeps translated and large-type actions from clipping.
+        VStack(alignment: .leading, spacing: 8) {
+          ForEach(p.buttons.filter { !p.menuActions.contains($0.command) }, id: \.command) { button in
+            let secondary = button.command == "cancel"
+            let destructive = button.command == "disconnect"
+            Button { model.act("connect", ["command":button.command]) } label: {
+              Text(button.title).font(.custom("HostGrotesk_500wght", size: 18))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 16).padding(.vertical, 8).frame(minHeight: 44)
+                .foregroundStyle(secondary || !button.enabled ? carbon : paper)
+                .background(secondary || !button.enabled ? paper : connectColor(destructive ? 0xb42318 : 0x7a58c7))
+                .overlay(Rectangle().stroke(secondary ? connectColor(0xcbc4bc) : Color.clear, lineWidth: 1))
+            }.buttonStyle(.plain).disabled(!button.enabled).opacity(button.enabled ? 1 : 0.45)
+          }
+        }
+      }.frame(maxWidth: .infinity, alignment: .leading)
+      if p.artwork, let url = Bundle.main.url(forResource: "connect-frogs", withExtension: "png"), let image = NSImage(contentsOf: url) {
+        Image(nsImage: image).resizable().scaledToFit().frame(width: p.compact ? 100 : 144).accessibilityHidden(true)
+      }
+    }
+    .foregroundStyle(carbon).padding(24).frame(maxWidth: .infinity, alignment: .leading)
+    .background(paper).clipShape(RoundedRectangle(cornerRadius: 8))
+    .overlay(RoundedRectangle(cornerRadius: 8).stroke(connectColor(0xcbc4bc), lineWidth: 1))
+    .overlay(alignment: .leading) { if p.tone != "neutral" { Rectangle().fill(color).frame(width: 4) } }
+    .padding(.top, 20).padding(.bottom, 24)
+  }
 }
 
 struct SettingsState: Decodable, Equatable {
@@ -931,11 +1009,22 @@ struct SettingsView: View {
         Text(pane.title)
           .font(.custom("HostGrotesk_700wght", size: 31))
           .foregroundStyle(SettingsTheme(scheme).text)
+        Spacer()
+        if let connect = model.state.connect, let p = connect.presentation, p.accountMenu {
+          Menu {
+            ForEach(p.buttons.filter { p.menuActions.contains($0.command) }, id: \.command) { button in
+              Button(role: button.command == "request-disconnect" || button.command == "disconnect" ? .destructive : nil) {
+                model.act("connect", ["command":button.command])
+              } label: { Text(button.title) }.disabled(!button.enabled)
+            }
+          } label: { Text("A").font(.custom("HostGrotesk_700wght", size: 18)).frame(width: 44, height: 44) }
+            .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Account and connection options")
+        }
       }
       .frame(height: 92)
       Rectangle().fill(SettingsTheme(scheme).groupLine).frame(height: 1)
       switch pane {
-      case .general: general
+      case .general: ScrollView { general }.id(state.connect?.presentation?.headline)
       case .recording: recording
       case .storage: storage
       case .permissions: permissions
@@ -951,6 +1040,7 @@ struct SettingsView: View {
 
   private var general: some View {
     VStack(spacing: 0) {
+      if let connect = state.connect { ConnectCard(model: model, connect: connect) }
       SettingsGroup {
         SettingsRow(title: "Launch at login", enabled: state.login.available) {
           SettingsSwitch(on: state.login.on, enabled: state.login.available) { model.set("launchAtLogin", $0) }
@@ -969,29 +1059,6 @@ struct SettingsView: View {
       } else if !state.login.available {
         SettingsCaption(text: "Launch at login works in the installed Apparent.app.")
       }
-      if let connect = state.connect {
-        SettingsHeader(connect.title)
-        SettingsGroup {
-          VStack(alignment: .leading, spacing: 10) {
-            Text(connect.status).font(.system(size: 14, weight: .semibold))
-            Text(connect.detail).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
-            if let code = connect.userCode {
-              Text("Verification code: \(code)").font(.system(size: 14, weight: .medium, design: .monospaced))
-                .textSelection(.enabled)
-            }
-            ForEach(connect.buttons, id: \.command) { button in
-              SettingsButton(title: button.title, enabled: button.enabled) {
-                model.act("connect", ["command": button.command])
-              }
-            }
-          }
-          .padding(14)
-          .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        if connect.status != "Not connected" {
-          SettingsCaption(text: connect.note)
-        }
-      }
       ForEach(state.shortcuts) { shortcut in
         Color.clear.frame(height: 14)
         ShortcutRecorder(model: model, clock: model.clock, shortcut: shortcut)
@@ -1005,7 +1072,7 @@ struct SettingsView: View {
         }
       }
       SettingsCaption(text: "No recordings, screenshots, transcripts or clipboard contents are sent.")
-      if let hosted = state.hosted {
+      if let hosted = state.hosted, state.connect == nil {
         SettingsHeader(state.connect == nil ? "Hosted account" : "Shared links")
         if state.connect == nil {
         SettingsCaption(text: hosted.connected
