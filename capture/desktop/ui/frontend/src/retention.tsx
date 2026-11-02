@@ -16,7 +16,7 @@ function problem(result: RetentionResult | UsageResult | undefined) {
   return 'Not connected to Rust. Open Apparent and refresh.';
 }
 
-export function Retention({ effectivePath }: { effectivePath: string }) {
+export function Retention({ effectivePath, settings = false }: { effectivePath: string; settings?: boolean }) {
   const [result, setResult] = useState<RetentionResult>();
   const [usage, setUsage] = useState<UsageResult>();
   const [preset, setPreset] = useState('');
@@ -81,7 +81,9 @@ export function Retention({ effectivePath }: { effectivePath: string }) {
       <Button disabled={busy || scanning || !preset || preset === snapshot.retention.preset} onClick={() => void request('save')}>Save retention</Button>
       <Button variant="outline" disabled={busy || scanning || !snapshot.custom} onClick={() => void request('reset')}>Reset retention</Button>
     </div>}
-    <p className="text-sm text-muted-foreground">Saving schedules the existing cleanup worker in about 5 seconds; it waits while recording. File edits apply on the next pass (normally hourly). A running worker keeps its startup folder until Apparent restarts. Saving does not move captures or run cleanup in this window.</p>
+    <p className="text-sm text-muted-foreground">{settings
+      ? 'Changes apply to cleanup shortly after saving. Cleanup waits until recording finishes. After changing the capture folder, restart Apparent so cleanup uses the new folder.'
+      : 'Saving schedules the existing cleanup worker in about 5 seconds; it waits while recording. File edits apply on the next pass (normally hourly). A running worker keeps its startup folder until Apparent restarts. Saving does not move captures or run cleanup in this window.'}</p>
     <div className="flex flex-wrap items-center justify-between gap-3">
       <h3 className="font-semibold">Capture-folder usage</h3>
       <Button variant="outline" disabled={busy || scanning} onClick={() => void measure()}>Refresh usage</Button>

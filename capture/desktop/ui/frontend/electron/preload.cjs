@@ -28,4 +28,6 @@ contextBridge.exposeInMainWorld('apparent', Object.freeze({
   saveRetention: (preset) => ipcRenderer.invoke('apparent:save-retention', preset),
   resetRetention: () => ipcRenderer.invoke('apparent:reset-retention'),
   readCaptureUsage: () => ipcRenderer.invoke('apparent:read-capture-usage'),
+  navigateSettings: (pane) => ipcRenderer.invoke('apparent:navigate-settings', pane),
+  showCaptureFolder: () => ipcRenderer.invoke('apparent:show-capture-folder'),
 }));

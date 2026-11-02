@@ -1385,6 +1385,9 @@ impl ApparentCoordinator {
 
     fn settings_event(&mut self, event: crate::capture::desktop::settings::Event, cx: &mut Context<Self>) {
         use crate::capture::desktop::settings::{Effect, Event};
+        let Some(event) = self.settings.as_ref().and_then(|session| session.current_event(event)) else {
+            return;
+        };
         #[cfg(target_os = "linux")]
         if self.defer_update_restart(&event) {
             // Check before Session spawns its relaunch helper. Capture admission

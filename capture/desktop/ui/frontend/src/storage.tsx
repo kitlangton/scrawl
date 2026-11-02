@@ -13,10 +13,10 @@ const errors: Record<string, string> = {
   invalid_path: 'That folder was not accepted. Choose an absolute folder path.',
 };
 
-export function Storage() {
+export function Storage({ settings = false }: { settings?: boolean }) {
   const [result, setResult] = useState<CaptureLocation>({ status: 'disabled' });
   const [snapshot, setSnapshot] = useState<LocationSnapshot>();
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const order = useRef(0);
   async function request(operation: 'read' | 'change' | 'reset') {
     const token = ++order.current;
@@ -41,10 +41,10 @@ export function Storage() {
     finally { if (token === order.current) setBusy(false); }
   }
   useEffect(() => { void request('read'); return () => { order.current += 1; }; }, []);
-  if (result.status === 'disabled') return null;
+  if (result.status === 'disabled' && !settings) return null;
   return <section aria-labelledby="storage-title" className="space-y-4 rounded-xl border border-border bg-white p-6">
     <div className="flex flex-wrap items-center justify-between gap-4">
-      <div><p className="text-xs font-medium text-primary">EXPERIMENTAL / STORAGE</p>
+      <div>{!settings && <p className="text-xs font-medium text-primary">EXPERIMENTAL / STORAGE</p>}
         <h2 id="storage-title" className="text-lg font-semibold">Capture location</h2></div>
       <Button variant="outline" disabled={busy} onClick={() => void request('read')}>Refresh location</Button>
     </div>
@@ -60,13 +60,17 @@ export function Storage() {
       </>}
       {result.status === 'disconnected' && <p>Not connected to Rust. Open the current Apparent app and refresh. This window never starts it.</p>}
       {result.status === 'incompatible' && <p>This Rust backend does not support capture location. Update it before using this card.</p>}
+      {!busy && result.status === 'disabled' && <p>Storage is disabled in your configuration. Close this window and reopen Settings to use the fallback.</p>}
       {result.status === 'error' && <p>{errors[result.code] ?? 'Unable to read capture location. Refresh when the Rust app is responsive.'}</p>}
     </div>
     <p className="text-sm text-muted-foreground">New captures use this location. Existing captures stay where they are. Nothing is moved.</p>
     <div className="flex gap-3">
       <Button disabled={busy || result.status !== 'connected'} onClick={() => void request('change')}>Change…</Button>
       <Button variant="outline" disabled={busy || result.status !== 'connected' || !snapshot?.custom} onClick={() => void request('reset')}>Reset</Button>
+      {settings && <Button variant="outline" disabled={busy || result.status !== 'connected'} onClick={() => {
+        void window.apparent?.showCaptureFolder().catch(() => setResult({ status: 'error', code: 'bridge_failed' }));
+      }}>Show folder</Button>}
     </div>
-    {snapshot && !busy && <Retention key={snapshot.effectivePath} effectivePath={snapshot.effectivePath} />}
+    {snapshot && !busy && <Retention key={snapshot.effectivePath} effectivePath={snapshot.effectivePath} settings={settings} />}
   </section>;
 }
