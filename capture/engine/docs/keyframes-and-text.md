@@ -205,15 +205,15 @@ On by default; set `"experiments": {"agentDemoVideo": false}` or switch it off i
 
 ## Experiment `copyCaptureId` (`capture/desktop/mod.rs`)
 
-Off by default. Set `"experiments": {"copyCaptureId": true}` in
+On by default. To hide it, set `"experiments": {"copyCaptureId": false}` in
 `~/.config/apparent/config.json`, preserving other keys. Reopen the existing
 capture window after editing. **Copy capture ID** (**Copy ID** in compact windows)
 copies only the displayed bundle directory's exact name, including `.apparent`,
 as plain text. Browsing older/newer captures changes the copied ID. This is the
 local folder name, not a Connect identifier or share link. It does not copy a
 path, summary or image, upload, paste, or mark the capture handled. Clipboard
-failures are shown in the window. Native platform proof is required before
-enabling it for everyone.
+failures are shown in the window. An explicit opt-out is preserved; unrelated
+experiments remain opt-in.
 
 ## Experiment `clipboardImage` (`shared/handoff/mod.rs`, `capture/engine/runtime/platform/legacy_windows/platform/clipboard.rs`, `capture/desktop/linux/clipboard.rs`)
 

@@ -837,6 +837,30 @@ mod tests {
     }
 
     #[test]
+    fn copy_capture_id_defaults_on_and_preserves_explicit_opt_out() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("config.json");
+        assert!(experiment_enabled_in(
+            &load_config_from(&path),
+            "copyCaptureId"
+        ));
+        fs::write(&path, r#"{"autoSend":false,"experiments":{"other":true}}"#).unwrap();
+        let cfg = load_config_from(&path);
+        assert!(experiment_enabled_in(&cfg, "copyCaptureId"));
+        assert!(!experiment_enabled_in(&cfg, "unrelatedNewExperiment"));
+        set_experiment_in(&path, "copyCaptureId", false).unwrap();
+        let cfg = load_config_from(&path);
+        assert!(!experiment_enabled_in(&cfg, "copyCaptureId"));
+        assert_eq!(cfg.auto_send, Some(false));
+        assert_eq!(cfg.experiments.get("other"), Some(&true));
+        set_experiment_in(&path, "copyCaptureId", true).unwrap();
+        assert!(experiment_enabled_in(
+            &load_config_from(&path),
+            "copyCaptureId"
+        ));
+    }
+
+    #[test]
     fn demo_video_request_is_only_added_to_enabled_copy_text() {
         let fixture = Fixture::new();
         let directory = fixture.bundle("demo-video", 100);
