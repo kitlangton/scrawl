@@ -59,7 +59,7 @@ At assignment start, identify the requested artifact, checks/platform proof, and
 
 ## Product gates and operations
 
-User-visible changes to handoff/output ship behind an off-by-default experiment until Kit enables it for everyone; bug fixes ship normally. Config is `~/.config/apparent/config.json`, the code checks `shared::handoff::experiment("<name>")`, tests use `shared::handoff::enable_experiment`, and `apparent reprocess`/`inspect` accept `--experiment <name>`. Invalid config values are skipped/logged and a bad key drops only that key. Current flags and output contract: `capture/engine/docs/keyframes-and-text.md`.
+New user-facing features, including handoff/output changes, ship enabled by default; do not add an off-by-default experiment unless explicitly requested. Preserve consent, permission and safety gates. This policy does not itself enable existing experiments. Config is `~/.config/apparent/config.json`, the code checks `shared::handoff::experiment("<name>")`, tests use `shared::handoff::enable_experiment`, and `apparent reprocess`/`inspect` accept `--experiment <name>`. Invalid config values are skipped/logged and a bad key drops only that key. Current flags and output contract: `capture/engine/docs/keyframes-and-text.md`.
 
 Keep `public/site/src/features.json` accurate in the same PR when adding/removing/renaming a user-facing feature or changing its status. It records status, platforms, shortcuts, config keys and docs; release changes `main` entries to `stable@<version>`. `cargo test feature_map` checks code/config entries. Release procedures: `capture/desktop/docs/release.md`.
 
