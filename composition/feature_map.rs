@@ -171,24 +171,34 @@ fn experiments(sources: &[(PathBuf, String)]) -> Result<BTreeSet<String>, String
     }
     let mut flags = BTreeSet::new();
     for (path, text) in sources {
-        for (at, _) in text.match_indices("experiment(") {
-            // `enable_experiment(` and `fn experiment(` aren't questions.
-            let prefix = &text[..at];
-            if prefix.ends_with(|c: char| c.is_alphanumeric() || c == '_') || prefix.ends_with("fn ") {
-                continue;
-            }
-            let arg = &text[at + "experiment(".len()..];
-            if let Some(name) = literal(arg) {
-                flags.insert(name.to_owned());
-                continue;
-            }
-            let path_arg = arg[..arg.find(')').unwrap_or(arg.len())].trim();
-            let name = path_arg.rsplit("::").next().unwrap_or(path_arg);
-            match consts.get(name) {
-                Some(value) => {
-                    flags.insert(value.clone());
+        for call in ["experiment(", "experiment_enabled_in("] {
+            for (at, _) in text.match_indices(call) {
+                // `enable_experiment(` and function declarations aren't questions.
+                let prefix = &text[..at];
+                if prefix.ends_with(|c: char| c.is_alphanumeric() || c == '_') || prefix.ends_with("fn ") {
+                    continue;
                 }
-                None => return Err(format!("{}: can't resolve experiment({path_arg})", path.display())),
+                let args = &text[at + call.len()..];
+                let arg = if call == "experiment_enabled_in(" {
+                    // Its first argument is the already-read config, not the flag.
+                    let Some((_, name)) = args.split_once(',') else { continue; };
+                    name
+                } else { args };
+                if let Some(name) = literal(arg) {
+                    flags.insert(name.to_owned());
+                    continue;
+                }
+                let path_arg = arg[..arg.find(')').unwrap_or(arg.len())].trim();
+                let name = path_arg.rsplit("::").next().unwrap_or(path_arg);
+                match consts.get(name) {
+                    Some(value) => {
+                        flags.insert(value.clone());
+                    }
+                    // File-backed readers can forward a dynamic `name`, as the
+                    // canonical experiment() wrapper does. Discover their callers.
+                    None if call == "experiment_enabled_in(" => {},
+                    None => return Err(format!("{}: can't resolve experiment({path_arg})", path.display())),
+                }
             }
         }
     }
@@ -235,6 +245,20 @@ fn test_module_stripping_preserves_following_production_code() {
     assert!(stripped.contains("before();"));
     assert!(stripped.contains("after();"));
     assert!(!stripped.contains("only_for_tests"));
+}
+
+#[test]
+fn file_backed_experiments_are_discovered_without_counting_forwarders() {
+    let sources = vec![(PathBuf::from("fixture.rs"), r#"
+const STORAGE_FLAG: &str = "fixtureStorage";
+fn experiment_enabled_in(config: &Config, name: &str) -> bool { false }
+experiment_enabled_in(&config, "fileBackedFlag");
+experiment_enabled_in(&load_config(), STORAGE_FLAG);
+experiment_enabled_in(&config, name);
+"#.to_owned())];
+    assert_eq!(experiments(&sources).unwrap(), BTreeSet::from([
+        "fileBackedFlag".to_owned(), "fixtureStorage".to_owned(),
+    ]));
 }
 
 #[test]
