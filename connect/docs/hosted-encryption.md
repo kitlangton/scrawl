@@ -30,6 +30,15 @@ An approved reader while the recorder is offline means **approved—waiting for 
 
 Admission pins the format. Toggling the experiment cannot turn a queued encrypted upload into plaintext or silently upload a previously queued plaintext job as encrypted. Disable cancels pending jobs; renewal cannot restore consent or revive cancellation. Read login never enables upload. Public/server-rendered sharing of encrypted captures is rejected, including existing capability read paths; no server decryption is introduced.
 
+The separately authorized public-copy exception in #171 uses
+`Client::prepare_public_link` after explicit non-E2E disclosure (see
+[client admission](hosted-client.md#explicit-public-copy-admission)). It creates
+an ordinary service-readable capture with its own ID rather than relabeling or
+decrypting private server ciphertext. Private transfer, endpoint keys and the
+service's encrypted-capture sharing refusal are unchanged. Existing Desktop
+callers retain their refusal pending the consent/UI integration; this compatible
+API is not evidence that the sender workflow or native gates are complete.
+
 Discovery is rechecked at transfer boundaries and before plaintext publication. Revocation observed before a subsequent request stops remaining sends/publication. A request already in flight and ciphertext/plaintext/keys already obtained cannot be recalled. A spool addressed to a now-revoked recipient is not reused; it needs explicit fresh-ID upload from the local original. Revoking the sender also prevents new normal-client publication verified through that sender. There is no claim to erase authorized offline copies.
 
 ## Accepted v1 scope

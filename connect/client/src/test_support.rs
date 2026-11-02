@@ -1055,7 +1055,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                         s = state.lock().unwrap();
                     }
                 }
-                if s.encryption.is_some() {
+                if s.encryption.is_some() && s.format.as_deref() == Some("apparent-encrypted-v1") {
                     let asset = s.files.iter().find(|asset| asset.path == path).unwrap();
                     assert_eq!(
                         asset.size,
@@ -1699,7 +1699,7 @@ pub fn hosted_disable_rejects_enqueue_paused_before_queue_lock() {
                 hook_disabled.store(true, Ordering::SeqCst);
             }
         });
-        let result = f.client.enqueue_with_intent(&bundle, explicit);
+        let result = f.client.enqueue_with_intent(&bundle, explicit, false);
         clear_hook();
         assert!(disabled.load(Ordering::SeqCst));
         assert!(result.is_err(), "admitted a job after disable returned");

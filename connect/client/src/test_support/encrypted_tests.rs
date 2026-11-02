@@ -629,3 +629,85 @@ fn encrypted_public_sharing_has_no_outbound_and_fetch_refuses_unknown_or_legacy_
         );
     }
 }
+
+#[test]
+fn explicit_public_copy_preserves_private_identity_and_reuses_only_public_intent() {
+    let f = Fixture::new();
+    let server = encryption_server("");
+    let (bundle, private_id) = upload(&f, &server);
+    let private_path = f.client.state.join(format!("{private_id}.job"));
+    let private_before = fs::read(&private_path).unwrap();
+    let sealed_before = server.state.lock().unwrap().data.clone();
+    assert!(!sealed_before.is_empty());
+    let prepared = f.client.prepare_public_link(&bundle, &|| true).unwrap();
+    assert!(prepared.authorized());
+    assert!(prepared.text.contains("not end-to-end encrypted"));
+    assert_ne!(prepared.job.id, private_id);
+    assert!(prepared.job.public_copy && prepared.job.shared && !prepared.job.encrypted);
+    assert!(prepared.job.encryption.is_none());
+    assert_eq!(fs::read(&private_path).unwrap(), private_before);
+    assert_eq!(f.client.enqueue(&bundle).unwrap(), private_id);
+    assert!(f.client.pointer(&bundle).unwrap().contains(&private_id));
+    assert!(!f.client.pointer(&bundle).unwrap().contains(&prepared.job.id));
+    assert!(server.state.lock().unwrap().data.is_empty(), "reservation must not upload media");
+    let restarted = Client::new(provider(f.client.config.clone()));
+    let again = restarted.prepare_public_link(&bundle, &|| true).unwrap();
+    assert_eq!(again.job.id, prepared.job.id);
+    assert_eq!(again.text, prepared.text);
+    restarted.process_once().unwrap();
+    let copy = restarted.jobs().unwrap().into_iter().find(|j| j.id == prepared.job.id).unwrap();
+    assert_eq!(copy.status, "ready");
+    assert_eq!(fs::read(&private_path).unwrap(), private_before);
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.capture_id, prepared.job.id);
+    assert!(state.format.is_none());
+    assert_eq!(state.data["frames/frame-01.png"], fs::read(bundle.join("frames/frame-01.png")).unwrap());
+    assert_eq!(state.data["apparent.json"], fs::read(bundle.join("apparent.json")).unwrap());
+    assert!(!state.data.keys().any(|p| p.ends_with(".identity") || p.starts_with("sealed/")));
+    drop(state);
+    assert_eq!(restarted.sharing_progress(&bundle), "Link copied · ready");
+    let requests = server.state.lock().unwrap().requests;
+    assert!(restarted.prepare_public_link(&bundle, &|| false).is_err());
+    assert_eq!(server.state.lock().unwrap().requests, requests);
+    restarted.disable(false).unwrap();
+    let disabled_requests = server.state.lock().unwrap().requests;
+    assert!(!prepared.authorized());
+    assert!(restarted.prepare_public_link(&bundle, &|| true).is_err());
+    restarted.process_once().unwrap();
+    assert_eq!(server.state.lock().unwrap().requests, disabled_requests);
+}
+
+#[test]
+fn public_intent_cannot_resurrect_cancelled_jobs_or_relabel_private_jobs() {
+    let f = Fixture::new();
+    let server = Server::new("");
+    f.authorize(&server.url);
+    encrypted(&f);
+    let bundle = f.bundle();
+    // Model a process exit after durable admission, before capability reservation.
+    let staged_id = f.client.enqueue_with_intent(&bundle, false, true).unwrap();
+    f.client.process_once().unwrap();
+    f.client.retry().unwrap();
+    f.client.process_once().unwrap();
+    assert_eq!(server.state.lock().unwrap().requests, 0);
+    let link = f.client.prepare_public_link(&bundle, &|| true).unwrap();
+    assert_eq!(link.job.id, staged_id);
+    let private_id = f.client.enqueue(&bundle).unwrap();
+    assert_ne!(private_id, staged_id);
+    let mut copy = link.job.clone();
+    copy.public_copy = false;
+    assert!(!f.client.active(&copy));
+    let mut private = f.client.jobs().unwrap().into_iter().find(|j| j.id == private_id).unwrap();
+    private.public_copy = true;
+    private.shared = true;
+    private.encrypted = false;
+    assert!(!f.client.active(&private));
+    copy = link.job.clone();
+    copy.status = "cancelled".into();
+    f.client.save_job(&copy).unwrap();
+    assert!(!link.authorized());
+    let fresh = f.client.prepare_public_link(&bundle, &|| true).unwrap();
+    assert_ne!(fresh.job.id, link.job.id);
+    assert_eq!(f.client.enqueue(&bundle).unwrap(), private_id);
+    assert_eq!(f.client.jobs().unwrap().into_iter().find(|j| j.id == private_id).unwrap().status, "pending");
+}
