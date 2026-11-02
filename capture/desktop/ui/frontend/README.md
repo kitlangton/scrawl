@@ -70,9 +70,9 @@ not enter the renderer. Only an explicit zero-argument **Open browser** command
 can open the current Rust-validated public verification URI; no arbitrary URL is
 accepted from the renderer. Ambiguous commands are never retried automatically.
 
-`tests/connect.test.cjs` exercises real Unix-stream transport and projection;
-`tests/integration/connect-smoke.cjs` exercises shipped Electron main/preload/renderer against
-an explicitly synthetic socket. `tests/integration/rust-connect.cjs`, launched by the ignored
+`tests/connect/transport.test.cjs` exercises real Unix-stream transport and projection;
+`tests/connect/smoke.cjs` exercises shipped Electron main/preload/renderer against
+an explicitly synthetic socket. `tests/rust-connect.cjs`, launched by the ignored
 Rust `connect_settings_electron_rust_roundtrip` test, exercises the actual Rust
 listener/controller/production client using Electron's real clock and a synthetic
 loopback pending-device HTTP fixture. It verifies explicit consent admission,

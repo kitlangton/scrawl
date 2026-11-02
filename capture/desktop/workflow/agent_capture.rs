@@ -1101,7 +1101,7 @@ mod tests {
         let path = directory.join("capture.sock");
         let receiver = listen_at_config(path.clone(), config.clone()).unwrap();
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("capture/desktop/ui/frontend/tests/integration/rust-connect.cjs");
+            .join("capture/desktop/ui/frontend/tests/rust-connect.cjs");
         let output = std::process::Command::new(electron)
             .env("ELECTRON_RUN_AS_NODE", "1")
             .arg(script).arg(&home).arg(&config).output().unwrap();

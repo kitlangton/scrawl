@@ -11,6 +11,7 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ui-r-'));
   const directory = path.join(home, '.config/apparent/agent-control');
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  let initialRetentionBusy = true;
   let preset = 'week';
   let custom = false;
   let revision = 'a'.repeat(16);
@@ -28,6 +29,8 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
       if (data.toString() === 'state\n') return socket.end('{"state":{"phase":"idle"}}\n');
       const r = JSON.parse(data); requests.push(r);
       const send = value => socket.end(JSON.stringify(value) + '\n');
+      if (r.reference || r.connect) return send({ error: 'feature_disabled' });
+      if (r.storage === 'retention' && initialRetentionBusy) return send({ error: 'app_busy' });
       if (r.storage === 'read') return send({ storage: { savedPath: '/captures', effectivePath: '/captures', displayPath: '/captures', source: 'configured', custom: true, revision } });
       if (r.storage === 'usage') {
         if (usageError) return send({ error: 'usage_unavailable', message: 'private failure' });
@@ -75,6 +78,13 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   await expect(card.getByText('/captures', { exact: true })).toHaveCount(2);
   await expect(card.locator(':scope > [role="status"]').getByText('/captures', { exact: true })).toBeVisible();
   const select = page.getByLabel('Keep recordings');
+  // A genuine single-worker busy response hides an unverified policy. The
+  // native helper must use the visible Refresh recovery before asserting it.
+  await expect(page.getByText('Storage is unavailable. Refresh when the Rust app is responsive.', { exact: true })).toBeVisible();
+  assert.equal(await select.count(), 0);
+  initialRetentionBusy = false;
+  await page.getByRole('button', { name: 'Refresh retention', exact: true }).click();
+  await expect(select).toHaveValue('week');
   await select.selectOption('month');
   await page.getByRole('button', { name: 'Save retention', exact: true }).click();
   await expect(select).toHaveValue('month');
