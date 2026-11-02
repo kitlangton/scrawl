@@ -3,6 +3,8 @@
 set -eu
 
 refs=$(cat)
+mode=--pr
+if printf '%s\n' "$refs" | grep -q ' refs/heads/main '; then mode=--run; fi
 [ -n "$refs" ] || exit 0
 
 head=$(git rev-parse --verify HEAD) || exit 1
@@ -37,7 +39,7 @@ fi
 # Missing main/history deliberately selects broad verification.
 base=$(git merge-base "$head" refs/remotes/origin/main 2>/dev/null || printf 'unknown')
 echo "pre-push: selecting verification for $base..$head" >&2
-if ! python3 enablement/verification.py --base "$base" --head "$head" --run; then
+if ! python3 enablement/verification.py --base "$base" --head "$head" "$mode"; then
     echo "pre-push: verification failed; push rejected" >&2
     exit 1
 fi

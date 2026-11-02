@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# Coalesce main verification to the newest tree. Publication has separate locks.
+concurrency:
+  group: changed-tree-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   select:
     runs-on: ubuntu-24.04
@@ -25,15 +30,26 @@ jobs:
         run: |
           python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
           python3 -m unittest discover -s enablement/tests -p 'test_verification.py'
+      - name: Validate workflow syntax and job dependencies
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -shellcheck= -pyflakes= .github/workflows/verification.yml .github/workflows/release-linux.yml .github/workflows/release-mac-preview.yml .github/workflows/web-delivery.yml
+      - name: Release admission contracts
+        run: python3 -m unittest discover -s enablement/tests -p 'test_release_gate.py'
       - id: plan
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: python3 enablement/verification.py --base "${BASE:-unknown}" --github-output "$GITHUB_OUTPUT"
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            # Full tree: a cancelled earlier main run must not hide its delta.
+            BASE=$(git hash-object -t tree /dev/null)
+          fi
+          python3 enablement/verification.py --base "${BASE:-unknown}" --github-output "$GITHUB_OUTPUT"
 
   desktop-ui:
     needs: select
-    # Frontend/shared UI changes currently select the conservative root gate.
-    if: needs.select.outputs.root == 'true'
+    # Every main candidate runs both matrices; PRs run only select.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +84,7 @@ jobs:
 
   rust:
     needs: select
-    if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true' || needs.select.outputs.browser == 'true'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       matrix:
@@ -142,7 +158,8 @@ jobs:
               cargo test -j 3 --locked connect::hosted::hosted_tests::hosted_security_darwin_acl_grants_fail_closed -- --exact
             fi
           fi
-          python3 enablement/verification.py --base "${BASE:-unknown}" --run --online
+          BASE=$(git hash-object -t tree /dev/null)
+          python3 enablement/verification.py --base "$BASE" --run --online
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash
@@ -241,3 +258,11 @@ jobs:
             ${{ runner.temp }}/apparent-storage-native/*.log
           if-no-files-found: error
           retention-days: 7
+
+  release-ready:
+    name: Release verification
+    needs: [select, desktop-ui, rust]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "Both platform matrices passed for $GITHUB_SHA"

@@ -1,11 +1,34 @@
 # Website and Connect continuous delivery
 
-`.github/workflows/web-delivery.yml` checks website/Connect/hosted changes on PRs,
-relevant pushes to `main`, and manual dispatch. It never publishes from PRs or
-non-`main` dispatches. The two production jobs have independent activation gates
-and GitHub environments. **Both are off until their repository variable is exactly
-`true`.** This change prepares delivery; it does not merge, provision, migrate,
-change a plan, or activate production.
+PRs run the inexpensive selector, push-hook and release-admission contracts. Feature
+pushes run those same contracts locally; they do not rebuild the application.
+Use `python3 enablement/verification.py --base <base> --run` for explicit affected
+local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
+
+`Changed-tree verification` runs the full Linux/macOS matrices on `main`, with one
+concurrency group that cancels superseded verification. It checks the entire tree,
+not just the latest push delta: changes from a cancelled earlier run cannot escape
+verification. Its final `Release verification` job is the publication receipt.
+
+Linux and web delivery start after a successful main verification. Their admission
+job reads trusted-main code and checks the exact upstream run/attempt, repository,
+commit and every required matrix job through `enablement/release_gate.py`. A PR
+success, skipped native job, cancelled/failed run or historical selector-only run
+cannot authorize publication. Automatic stale candidates are skipped before builds.
+Every downstream checkout and website artifact uses the admitted SHA, including
+when `workflow_run`'s default SHA points at a newer main commit. Publication locks
+are separate from cancellable verification; a new push never cancels publication.
+
+Manual/tag Linux and manual Mac preview publication require successful full main
+verification of their exact candidate too. Linux `verify_only` still permits
+isolated branch packaging without publication. Main verification failures leave the
+last published version available; fix or revert main and let the next run verify it.
+CodeQL managed setup is disabled by Simon's explicit instruction; it is not a
+release gate.
+
+`.github/workflows/web-delivery.yml` retains the existing independent website and
+hosted production environments and activation variables. This policy does not
+enable a disabled publisher, provision resources or apply migrations.
 
 ## Checks and artifact identity
 

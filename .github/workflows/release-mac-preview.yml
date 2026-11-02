@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: mac-preview-release
@@ -25,6 +26,10 @@ jobs:
       APPARENT_NOTARY_ISSUER: ${{ vars.APPLE_NOTARY_ISSUER }}
     steps:
       - uses: actions/checkout@v5
+      - name: Require full verification of this exact main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 enablement/release_gate.py --sha "$GITHUB_SHA"
       - name: Prepare Developer ID credentials
         if: env.APPARENT_PREVIEW_NOTARIZE == 'true'
         env:
