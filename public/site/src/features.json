@@ -79,6 +79,17 @@
 
     },
     {
+      "id": "hosted-encryption",
+      "group": "delivery",
+      "name": "Endpoint-encrypted Connect handoff",
+      "says": "Candidate endpoint encryption preserves click-link, sign-in and approval from any browser or device. Local bundles remain ordinary; approved agent clients decrypt authenticated ciphertext locally.",
+      "status": "experiment:hostedEncryption",
+      "added": "2026-11-01",
+      "platforms": ["mac", "linux"],
+      "note": "Off by default and unshipped. Connect account authorization is trusted to authorize recipients: a compromised authorization service can add or substitute an attacker key. No independent pairing, plaintext fallback, server content keys or public rendering of encrypted captures. Missing recipient leaves the local recording pending. V1 covers future freshly staged captures only, with no historical regrant or key-recovery UI; existing plaintext remains untouched without data migration. Independent security review, adverse integration and exact native platform proof remain required; no deployment or permission change is implied.",
+      "docs": ["connect/docs/hosted-encryption.md", "connect/docs/hosted-client.md", "connect/docs/hosted-api.md"]
+    },
+    {
       "id": "connect-settings",
       "group": "delivery",
       "name": "Connect account controls in General Settings",
@@ -86,7 +97,7 @@
       "status": "experiment:connectSettings",
       "added": "2026-11-02",
       "platforms": ["mac", "linux"],
-      "note": "Default off, independent of hostedSharing; no onboarding step. Close/reopen Settings after changing the experiment. The opt-in Electron General card reuses the Rust controller/client over a window-owned socket; reload/close cancels pending sign-in. Installed native Settings remain the rollback; routing is unchanged. Uses the configured API or hosted.tryapparent.com, not a CLI setup prerequisite. Website approval alone is not local activation. Electron transport checks, actual-Rust integration, native platform proof and live account approval are distinct gates; this entry is not proof of them.",
+      "note": "Default off, independent of hostedSharing; no onboarding step. Native Settings reads the experiment on open. Reopen the Electron window to show a newly enabled card; an open Electron stream observes disabling at its next request or client predicate, or within 500 ms while idle, and cancels pending sign-in. The opt-in Electron General card reuses the Rust controller/client over a window-owned socket; reload/close also cancels pending sign-in. Installed native Settings remain the rollback; routing is unchanged. Uses the configured API or hosted.tryapparent.com, not a CLI setup prerequisite. Website approval alone is not local activation. Electron transport checks, actual-Rust integration, native platform proof and live account approval are distinct gates; this entry is not proof of them.",
       "docs": ["capture/desktop/docs/onboarding-and-settings.md", "connect/docs/hosted-client.md"]
     },
     {

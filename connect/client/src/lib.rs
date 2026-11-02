@@ -14,6 +14,8 @@ use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 mod renewal;
+mod encrypted_transfer;
+mod encryption;
 pub mod settings;
 
 /// Application-owned preferences and browser mechanics. Implementations must
@@ -35,6 +37,7 @@ pub trait ConfigProvider: Send + Sync {
 
 pub const HOSTED_SYNC: &str = "hostedSync";
 pub const HOSTED_SHARING: &str = "hostedSharing";
+pub const HOSTED_ENCRYPTION: &str = "hostedEncryption";
 
 /// Only the foreground caller may put this result on the clipboard. Detached
 /// workers never own clipboard access, including retries and account completion.
@@ -129,6 +132,8 @@ struct Credential {
     grant_id: Option<String>,
     #[serde(default, rename = "authRequired")]
     auth_required: bool,
+    #[serde(default)]
+    encryption_identity: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -154,6 +159,11 @@ struct Job {
     files: Vec<Asset>,
     #[serde(default)]
     shared: bool,
+    // Admission pins the format. A preference change cannot downgrade this job.
+    #[serde(default)]
+    encrypted: bool,
+    #[serde(default)]
+    encryption: Option<encrypted_transfer::EncryptedJob>,
 }
 
 #[derive(Clone)]
@@ -338,6 +348,7 @@ fn trusted_directory_tree(path: &Path, sticky_leaf: bool) -> Result<()> {
         let sticky = meta.mode() & libc::S_ISVTX as u32 != 0;
         #[cfg(target_os = "macos")]
         no_allow_acl(&prefix)?;
+
         ensure!(
             meta.is_dir()
                 && !meta.file_type().is_symlink()
@@ -677,6 +688,10 @@ impl Client {
     ) -> Result<(String, Job)> {
         ensure!(foreground(), "cancelled");
         ensure!(
+            !self.provider.experiment(HOSTED_ENCRYPTION),
+            "encrypted_sharing_unsupported: encrypted captures require an approved agent client"
+        );
+        ensure!(
             self.provider.experiment(HOSTED_SHARING),
             "Hosted sharing is disabled"
         );
@@ -871,6 +886,7 @@ impl Client {
     // policies, but mutable upload status must not stand in for consent.
     fn current_incarnation(&self, job: &Job) -> Option<Job> {
         if !self.enabled()
+            || job.encrypted != self.provider.experiment(HOSTED_ENCRYPTION)
             || self.settings().server != job.server
             || !self
                 .credential("upload", &job.server)
@@ -886,6 +902,7 @@ impl Client {
             && current.bundle == job.bundle
             && current.server == job.server
             && current.generation == job.generation
+            && current.encrypted == job.encrypted
             && current.created == job.created)
             .then_some(current)
     }
@@ -972,6 +989,7 @@ impl Client {
                 || (!job.shared && matches!(job.status.as_str(), "ready" | "cancelled" | "expired"))
             {
                 let _ = fs::remove_file(self.state.join(format!("{}.job", job.id)));
+                let _ = fs::remove_dir_all(self.state.join(format!("{}.sealed", job.id)));
                 false
             } else {
                 true
@@ -993,6 +1011,8 @@ impl Client {
             error: None,
             files: Vec::new(),
             shared: false,
+            encrypted: self.provider.experiment(HOSTED_ENCRYPTION),
+            encryption: None,
         };
         self.save_job(&job)?;
         Ok(job.id)
@@ -1294,12 +1314,25 @@ impl Client {
                     == Some(&login_id)
         };
         let allowed: &dyn Fn() -> bool = &still_current;
+        // Public keys are bound to this same approval, never to its server-known
+        // user code. Secret material stays in a separate private endpoint artifact.
+        let encryption_identity = if self.provider.experiment(HOSTED_ENCRYPTION) {
+            let identity_path = self.state.join(format!("{login_id}.identity"));
+            let identity = encryption::load_or_create_identity(&identity_path)?;
+            Some((login_id.clone(), identity.public_key()))
+        } else {
+            None
+        };
+        let mut start_body = json!({"scope":scope});
+        if let Some((_, public_key)) = &encryption_identity {
+            start_body["encryptionKey"] = public_key.clone();
+        }
         let start = self.json_request(
             &server,
             None,
             "POST",
             "/v1/device/start",
-            Some(json!({"scope":scope})),
+            Some(start_body),
             Duration::from_secs(30),
             allowed,
         )?;
@@ -1397,6 +1430,7 @@ impl Client {
                         refresh_expires_at: None,
                         grant_id: None,
                         auth_required: false,
+                        encryption_identity: encryption_identity.as_ref().map(|(id, _)| id.clone()),
                     };
                     credential.apply_reply(&reply, issued, false)?;
                     break credential;
@@ -1570,7 +1604,11 @@ impl Client {
                 Err(error) => {
                     let text = error.to_string();
                     job.error = Some(
-                        if text.contains("file_too_large") {
+                        if text.contains("encryption_pending_recipient") {
+                            "encryption_pending_recipient"
+                        } else if text.contains("encryption_") || text.contains("encrypted_") {
+                            "encryption_action_required"
+                        } else if text.contains("file_too_large") {
                             "file_too_large"
                         } else if text.contains("quota_exceeded") {
                             "quota_exceeded"
@@ -1586,10 +1624,14 @@ impl Client {
                         }
                         .into(),
                     );
-                    if job.attempts >= MAX_ATTEMPTS
+                    if job.error.as_deref() == Some("encryption_pending_recipient") {
+                        // Offline/unapproved agent is a waiting state, not eight
+                        // failed attempts followed by a stranded recording.
+                        job.attempts = job.attempts.saturating_sub(1);
+                    } else if job.attempts >= MAX_ATTEMPTS
                         || matches!(
                             job.error.as_deref(),
-                            Some("auth_required" | "file_too_large")
+                            Some("auth_required" | "file_too_large" | "encryption_action_required")
                         )
                     {
                         job.status = "failed".into();
@@ -1652,6 +1694,9 @@ impl Client {
         );
     }
     fn upload(&self, job: &mut Job) -> Result<()> {
+        if job.encrypted {
+            return self.upload_encrypted(job);
+        }
         let credential = self.credential("upload", &job.server)?;
         let scratch = Scratch::new(&self.state)?;
         // Stage a stable snapshot through O_NOFOLLOW handles. Retry the same manifest;
@@ -1805,6 +1850,14 @@ impl Client {
         };
         let files: Vec<Asset> =
             serde_json::from_value(manifest["files"].clone()).context("Invalid hosted manifest")?;
+        match manifest.get("format").and_then(Value::as_str).unwrap_or("plaintext-v1") {
+            "apparent-encrypted-v1" => {
+                ensure!(self.provider.experiment(HOSTED_ENCRYPTION), "encryption_required: enable hostedEncryption to fetch this capture");
+                return self.fetch_encrypted(id, &server, &credential, &manifest, &stage.0, &out, &parent);
+            }
+            "plaintext-v1" => ensure!(!self.provider.experiment(HOSTED_ENCRYPTION), "encryption_downgrade_refused: capture is explicitly plaintext; disable the experiment only to deliberately fetch legacy content"),
+            _ => bail!("unsupported_encryption_format"),
+        }
         validate_assets(&files)?;
         for file in &files {
             let destination = stage.0.join(&file.path);
@@ -1839,7 +1892,8 @@ impl Client {
         let jobs = self.jobs()?;
         let mut result = json!({"server": settings.server, "enabled": self.enabled(), "uploadConsent": settings.upload_consent,
             "readSignedIn": self.credential("read", &settings.server).is_ok_and(|c| c.usable()), "uploadSignedIn": self.credential("upload", &settings.server).is_ok_and(|c| c.usable()),
-            "queuePath": self.state, "queue": jobs.iter().map(|j| json!({"id":j.id,"bundle":j.bundle,"status":j.status,"attempts":j.attempts,"nextAttempt":j.next_attempt,"error":j.error})).collect::<Vec<_>>()});
+            "encryption": self.provider.experiment(HOSTED_ENCRYPTION),
+            "queuePath": self.state, "queue": jobs.iter().map(|j| json!({"id":j.id,"bundle":j.bundle,"status":j.status,"encrypted":j.encrypted,"attempts":j.attempts,"nextAttempt":j.next_attempt,"error":j.error})).collect::<Vec<_>>()});
         if account {
             let credential = self
                 .credential("upload", &settings.server)
@@ -1960,7 +2014,10 @@ fn snapshot(bundle: &Path, stage: &Path) -> Result<Vec<Asset>> {
             "quota_exceeded: bundle exceeds account limit"
         );
         let target = stage.join(&path);
-        fs::create_dir_all(target.parent().unwrap())?;
+        // Explicit private modes also constrain inherited default ACL masks.
+        // create_dir_all's ambient defaults may leave a group-writable leaf,
+        // which must not be accepted by later staging validation.
+        private_dir(target.parent().unwrap())?;
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)

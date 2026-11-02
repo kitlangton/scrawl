@@ -1,5 +1,16 @@
 # Apparent Connect API (v1)
 
+## Endpoint-encryption candidate extension
+
+This additive extension remains undeployed and off by default in the client. See [the selected trust and versioned content contract](hosted-encryption.md), including its explicit departure from older independent-pairing assumptions. The account service is trusted to authorize recipients; it never needs capture content keys.
+
+- `POST /v1/device/start` optionally includes `encryptionKey:{version:1,recipient:<canonical age X25519 public recipient>,signing:<64 lowercase hex Ed25519 public key>}`. The descriptor is immutable and becomes discoverable only through the same explicit account/scope approval. No key-registration bearer shortcut or new manual pairing ceremony is added.
+- `GET /v1/encryption/peers` requires a read/upload bearer grant and returns `{accountId,grantId,scope,devices:[{grantId,scope,key:{version,recipient,signing}}]}` for approved, unrevoked same-account grants with live refresh authorization. More than 64 entries fails closed rather than returning an incomplete key list. Public keys are not secrets and are not proof of possession or independent pairing.
+- Capture reservation accepts `format:'apparent-encrypted-v1'`. Missing format remains `plaintext-v1` for compatibility; unsupported values and mixed plaintext/opaque paths are rejected. Encrypted info/manifest responses repeat the discriminator. The existing immutable file manifest describes `envelope.json` and `sealed/part-NNNNNN.age` ciphertext transport, not inner asset names/hashes. Existing physical quotas, spending budgets, retention, per-file caps and cleanup still apply.
+- Encrypted public/server-rendered sharing fails `encrypted_sharing_unsupported`, including capability reads. Clients must decrypt and validate locally before publishing an ordinary bundle. A format marker, successful upload or token renewal is not proof that decryption succeeded.
+
+`0005.sql` adds the discriminator and grant-key/approval constraints without rewriting existing content or budgets. Do not execute it as a side effect of building/testing this candidate. There is no automatic plaintext migration, historical regrant, key escrow or production rollout in this extension.
+
 Implementation candidate; no deployment or live Google verification is implied. The Worker owns API/auth only; Connect's canonical browser routes are `/connect` and `/connect/device`. The site retains `/hosted` and `/hosted/device` rendering aliases.
 
 ## Browser integration contract

@@ -1,6 +1,20 @@
 import type {Env,Scope} from './types.ts';
 import {identity,DEVICE_CODE_GRANT_TYPE} from './identity.ts';
-import {random,hash,json,fail,stmt,body,bounded,session,csrf,usage,slots,rate,envelope,bearer} from './common.ts';
+import {random,hash,json,fail,stmt,body,bounded,session,csrf,usage,slots,rate,envelope,bearer,isRecord} from './common.ts';
+
+// Validate canonical age X25519 Bech32 encoding, including checksum and padding.
+// This proves encoding, not possession or cryptographic suitability of a key.
+function encryptionKey(value:unknown) {
+ if(!isRecord(value)||Object.keys(value).sort().join(',')!=='recipient,signing,version'||value.version!==1||typeof value.recipient!=='string'||!/^age1[023456789acdefghjklmnpqrstuvwxyz]{58}$/.test(value.recipient)||typeof value.signing!=='string'||! /^(?!0{64}$)[a-f0-9]{64}$/.test(value.signing))fail('invalid_encryption_key');
+ const alphabet='qpzry9x8gf2tvdw0s3jn54khce6mua7l',words=[...value.recipient.slice(4)].map(c=>alphabet.indexOf(c));
+ const generators=[0x3b6a57b2,0x26508e6d,0x1ea119fa,0x3d4233dd,0x2a1462b3];let checksum=1;
+ for(const word of [3,3,3,0,1,7,5,...words]) {
+  const top=checksum>>>25;checksum=((checksum&0x1ffffff)<<5)^word;
+  for(let i=0;i<5;i++)if((top>>>i)&1)checksum^=generators[i];
+ }
+ if(checksum!==1||(words[51]&15)!==0||words.slice(0,52).every(w=>w===0))fail('invalid_encryption_key');
+ return {version:1,recipient:value.recipient,signing:value.signing};
+}
 
 interface Grant {id:string;client_id:string;device_hash:string;user_code:string;scope:Scope;account_id:string|null;user_id:string|null;expires_at:number;revoked_at:number|null;response:string|null;last_poll:number}
 function returnTo(value:string|null) {
@@ -33,6 +47,15 @@ async function issued(env:Env,g:Grant,accessToken:string,refreshToken:string){
 }
 export async function authRoutes(request:Request,env:Env,url:URL) {
  const p=url.pathname,m=request.method;
+ if(p==='/v1/encryption/peers'&&m==='GET') {
+  const a=await bearer(request,env);
+  // The ten-minute approval code expiry is deliberately NOT a device lifetime.
+  // EXISTS avoids duplicate peers after refresh rotation and never trusts a
+  // caller's account/scope/key. Only issued, still-renewable grants qualify.
+  const {results}=await stmt(env,`SELECT g.id AS grantId,g.scope,k.version,k.recipient,k.signing FROM auth_grants g JOIN encryption_keys k ON k.grant_id=g.id WHERE g.account_id=? AND g.approved_at IS NOT NULL AND g.user_id IS NOT NULL AND g.revoked_at IS NULL AND EXISTS(SELECT 1 FROM oauthRefreshToken r WHERE r.clientId=g.client_id AND r.userId=g.user_id AND r.revoked IS NULL AND r.expiresAt>?) ORDER BY g.id LIMIT 65`,a.account_id,new Date().toISOString()).all<{grantId:string;scope:Scope;version:number;recipient:string;signing:string}>();
+  if(results.length>64)fail('encryption_peer_limit',409);
+  return json({accountId:a.account_id,grantId:a.grant_id,scope:a.scope,devices:results.map(({grantId,scope,...key})=>({grantId,scope,key:encryptionKey(key)}))});
+ }
  if(p==='/auth/google/start'&&m==='GET') {
   await rate(env,'oauth:'+request.headers.get('CF-Connecting-IP'));
   const result=await identity(env).api.signInSocial({body:{provider:'google',callbackURL:env.SITE_ORIGIN+returnTo(url.searchParams.get('returnTo')),errorCallbackURL:env.API_ORIGIN+'/auth/error'},asResponse:true});
@@ -65,12 +88,15 @@ export async function authRoutes(request:Request,env:Env,url:URL) {
  if(p==='/v1/device/start'&&m==='POST') {
   await rate(env,'device:'+request.headers.get('CF-Connecting-IP'));
   const b=await body(request);if(b.scope!=='upload'&&b.scope!=='read')fail('invalid_request');
+  const key=b.encryptionKey===undefined?null:encryptionKey(b.encryptionKey);
+
   // One library client per authorization also isolates library family invalidation.
   const registered=await call(env,'/oauth2/register',{client_name:'Apparent device',application_type:'native',token_endpoint_auth_method:'none',grant_types:[DEVICE_CODE_GRANT_TYPE,'refresh_token'],scope:b.scope+' offline_access'});
   const client=await body(registered);if(!registered.ok||typeof client.client_id!=='string')fail('auth_unavailable',503);
   const response=await call(env,'/device/code',{client_id:client.client_id,scope:b.scope+' offline_access'}),d=await body(response);
   if(!response.ok||typeof d.device_code!=='string'||typeof d.user_code!=='string')fail('auth_unavailable',503);
-  await stmt(env,'INSERT INTO auth_grants(id,client_id,device_hash,user_code,scope,expires_at) VALUES(?,?,?,?,?,?)',random(),client.client_id,await hash(d.device_code),d.user_code,b.scope,Date.now()+600000).run();
+  const grant=random(),insert=stmt(env,'INSERT INTO auth_grants(id,client_id,device_hash,user_code,scope,expires_at) VALUES(?,?,?,?,?,?)',grant,client.client_id,await hash(d.device_code),d.user_code,b.scope,Date.now()+600000);
+  if(key)await env.DB.batch([insert,stmt(env,'INSERT INTO encryption_keys(grant_id,version,recipient,signing) VALUES(?,?,?,?)',grant,key.version,key.recipient,key.signing)]);else await insert.run();
   return json({deviceCode:d.device_code,userCode:d.user_code,verificationUri:env.SITE_ORIGIN+'/connect/device?code='+d.user_code,expiresIn:600,interval:5});
  }
  if(p==='/v1/device/poll'&&m==='POST') {
@@ -96,15 +122,17 @@ export async function authRoutes(request:Request,env:Env,url:URL) {
  }
  if(['/v1/device/approve','/v1/device/reject'].includes(p)&&m==='POST') {
   const s=await session(request,env);csrf(request,env,s);await rate(env,'approve:'+s.account_id);
-  const {userCode}=await body(request);if(typeof userCode!=='string'||!/^[A-F0-9]{12}$/.test(userCode))fail('invalid_request');
+  const input=await body(request),{userCode}=input;if(input.encryptionKey!==undefined||typeof userCode!=='string'||!/^[A-F0-9]{12}$/.test(userCode))fail('invalid_request');
   const g=await stmt(env,'SELECT * FROM auth_grants WHERE user_code=?',userCode).first<Grant>();if(!g||g.expires_at<=Date.now())fail('device_unavailable',404);
   if(g.revoked_at!==null)fail('device_unavailable',409);
   if(g.account_id&&g.account_id!==s.account_id)fail('device_unavailable',409);
   if(p.endsWith('approve')&&s.beta!=='active')fail('beta_required',403);
+  const collision=()=>stmt(env,'SELECT 1 FROM encryption_keys k JOIN encryption_keys other ON other.grant_id!=k.grant_id JOIN auth_grants g ON g.id=other.grant_id WHERE k.grant_id=? AND (k.recipient=other.recipient OR k.signing=other.signing) AND g.approved_at IS NOT NULL AND (g.account_id!=? OR g.scope!=? OR k.recipient!=other.recipient OR k.signing!=other.signing)',g.id,s.account_id,g.scope).first();
+  if(p.endsWith('approve')&&await collision())fail('encryption_key_conflict',409);
   const preview=await call(env,'/device?user_code='+encodeURIComponent(userCode),undefined,request.headers);if(!preview.ok)fail('device_unavailable',409);
   const result=await call(env,p.endsWith('approve')?'/device/approve':'/device/deny',{userCode},request.headers);
   if(!result.ok)fail('device_unavailable',409);
-  await stmt(env,'UPDATE auth_grants SET account_id=?,user_id=?,revoked_at=COALESCE(revoked_at,?) WHERE id=?',s.account_id,s.user_id,p.endsWith('reject')?Date.now():null,g.id).run();
+  try{await stmt(env,'UPDATE auth_grants SET account_id=?,user_id=?,revoked_at=COALESCE(revoked_at,?),approved_at=COALESCE(approved_at,?) WHERE id=?',s.account_id,s.user_id,p.endsWith('reject')?Date.now():null,p.endsWith('approve')?Date.now():null,g.id).run();}catch(error){if(await collision())fail('encryption_key_conflict',409);throw error;}
   return json({ok:true});
  }
  if(p==='/v1/token/refresh'&&m==='POST') {
