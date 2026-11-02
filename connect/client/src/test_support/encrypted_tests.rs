@@ -191,6 +191,109 @@ fn encrypted_login_binds_public_key_before_approval_and_read_never_enables_uploa
 }
 
 #[test]
+fn encrypted_settings_approval_preserves_endpoint_enrollment_and_roundtrip() {
+    let f = Fixture::new();
+    let server = encryption_server("");
+    encrypted(&f);
+    for scope in ["read", "upload"] {
+        let presented = std::cell::Cell::new(false);
+        f.client
+            .login_with_approval(
+                &server.url,
+                scope,
+                scope == "upload",
+                &|| true,
+                &|approval| {
+                    assert!(
+                        !presented.replace(true),
+                        "approval was presented more than once"
+                    );
+                    assert_eq!(approval.user_code, "TEST-CODE");
+                    assert_eq!(
+                        approval.verification_uri,
+                        format!("{}/hosted/device?code=TEST-CODE", server.url)
+                    );
+                    let state = server.state.lock().unwrap();
+                    let registry = state.encryption.as_ref().unwrap();
+                    assert!(
+                        registry.pending_key.is_some(),
+                        "public endpoint key was not submitted before presentation"
+                    );
+                    assert!(!f.client.state.join(format!("{scope}.credential")).exists());
+                },
+            )
+            .unwrap();
+        assert!(presented.get());
+        let credential = f.client.stored_credential(scope).unwrap();
+        let identity_id = credential.encryption_identity.as_ref().unwrap();
+        let identity =
+            encryption::load_identity(&f.client.state.join(format!("{identity_id}.identity")))
+                .unwrap();
+        let state = server.state.lock().unwrap();
+        assert!(
+            state
+                .encryption
+                .as_ref()
+                .unwrap()
+                .devices
+                .iter()
+                .any(|peer| peer["scope"] == scope && peer["key"] == identity.public_key()),
+            "Settings approval lost the immutable endpoint key binding"
+        );
+        drop(state);
+        if scope == "read" {
+            assert!(!f.client.enabled());
+            assert!(!f.client.settings_snapshot().unwrap().uploads_enabled);
+            no_media(&server);
+        }
+    }
+    assert!(f.client.settings_snapshot().unwrap().uploads_enabled);
+    let bundle = f.bundle();
+    let id = f.client.enqueue(&bundle).unwrap();
+    f.client.process_once().unwrap();
+    assert_ready(&f);
+    let out = f.root.join("settings-encrypted-roundtrip.apparent");
+    f.client.fetch(&id, &out, 0).unwrap();
+    assert_bundle(&bundle, &out);
+}
+
+#[test]
+fn encrypted_settings_cancelled_approval_never_publishes_credentials_or_media() {
+    let f = Fixture::new();
+    let server = encryption_server("");
+    encrypted(&f);
+    let allowed = std::cell::Cell::new(true);
+    let result =
+        f.client
+            .login_with_approval(&server.url, "upload", true, &|| allowed.get(), &|_| {
+                assert!(server
+                    .state
+                    .lock()
+                    .unwrap()
+                    .encryption
+                    .as_ref()
+                    .unwrap()
+                    .pending_key
+                    .is_some());
+                allowed.set(false);
+            });
+    assert_eq!(result, Err(crate::settings::SafeError::Cancelled));
+    assert!(!f.client.state.join("upload.credential").exists());
+    assert!(!f.client.settings().upload_consent);
+    assert!(server
+        .state
+        .lock()
+        .unwrap()
+        .encryption
+        .as_ref()
+        .unwrap()
+        .devices
+        .is_empty());
+    assert_eq!(server.state.lock().unwrap().polls, 0);
+    no_media(&server);
+}
+
+#[test]
 fn encrypted_roundtrip_has_only_opaque_wire_assets_and_no_plaintext_metadata() {
     let f = Fixture::new();
     let server = encryption_server("");

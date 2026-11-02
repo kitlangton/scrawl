@@ -10,9 +10,11 @@ use crate::shared::model::ApparentBundle;
 mod config_store;
 pub(crate) mod capture_location;
 pub use config_store::{default_config_path, set_config_value_in};
-pub(crate) use config_store::update_config_in;
+pub(crate) use config_store::{update_config_in, update_config_allowed_in};
 #[cfg(test)]
 pub(crate) use config_store::set_config_write_hook;
+#[cfg(test)]
+pub(crate) use config_store::set_config_directory_sync_failure;
 
 /// Where captures go: `APPARENT_CAPTURES_DIR`, else `"capturesDir"` in `config.json` (Settings ›
 /// Storage), else `builtin_captures_dir`. Tests never see the config file.

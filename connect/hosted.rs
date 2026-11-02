@@ -25,10 +25,27 @@ impl ConfigProvider for AppConfig {
         app_experiment(name)
     }
     fn set_cloud(&self, value: &CloudConfig) -> Result<()> {
-        crate::shared::handoff::set_config_value_in(&self.0, "cloud", serde_json::to_value(value)?)
+        self.set_cloud_allowed(value, &|| true)
+    }
+    fn set_cloud_allowed(&self, value: &CloudConfig, allowed: &dyn Fn() -> bool) -> Result<()> {
+        crate::shared::handoff::update_config_allowed_in(&self.0, allowed, |config| {
+            let cloud = config.as_object_mut().unwrap().entry("cloud")
+                .or_insert_with(|| serde_json::json!({}));
+            let cloud = cloud.as_object_mut().context("Invalid cloud configuration")?;
+            cloud.insert("enabled".into(), value.enabled.into());
+            cloud.insert("uploadConsent".into(), value.upload_consent.into());
+            cloud.insert("server".into(), value.server.clone().into());
+            Ok(())
+        })
     }
     fn set_experiment(&self, name: &str, enabled: bool) -> Result<()> {
-        crate::shared::handoff::set_experiment_in(&self.0, name, enabled)
+        crate::shared::handoff::update_config_allowed_in(&self.0, &|| true, |config| {
+            let experiments = config.as_object_mut().unwrap().entry("experiments")
+                .or_insert_with(|| serde_json::json!({}));
+            experiments.as_object_mut().context("Invalid experiments configuration")?
+                .insert(name.to_owned(), enabled.into());
+            Ok(())
+        })
     }
     fn open_browser(&self, uri: &Path) {
         let _ = crate::shared::handoff::open_path(uri);
@@ -36,6 +53,74 @@ impl ConfigProvider for AppConfig {
 }
 fn client_at(path: PathBuf) -> Client {
     Client::new(Arc::new(AppConfig(path)))
+}
+
+/// Settings composition only; all protocol, credential and consent policy remains
+/// in the production client. The controller owns browser clicks and worker start.
+pub fn settings_backend(
+    config: &Path,
+) -> Arc<dyn crate::capture::desktop::settings::connect::Backend> {
+    Arc::new(SettingsBackend(client_at(config.into())))
+}
+
+struct SettingsBackend(Client);
+use crate::capture::desktop::settings::connect as settings_controller;
+use apparent_connect_client::settings as client_settings;
+
+fn settings_error(error: client_settings::SafeError) -> settings_controller::SafeError {
+    use client_settings::SafeError as C;
+    use settings_controller::SafeError as S;
+    match error {
+        C::Cancelled => S::Cancelled,
+        C::Offline => S::Offline,
+        C::AuthRequired => S::AuthRequired,
+        C::Rejected => S::Rejected,
+        C::Expired => S::Expired,
+        C::LocalState => S::LocalState,
+        C::InvalidServer => S::InvalidServer,
+        C::Unavailable => S::Unavailable,
+    }
+}
+
+impl settings_controller::Backend for SettingsBackend {
+    fn snapshot(
+        &self,
+    ) -> std::result::Result<settings_controller::Snapshot, settings_controller::SafeError> {
+        self.0
+            .settings_snapshot()
+            .map(|state| settings_controller::Snapshot {
+                server: state.server,
+                connected: state.connected,
+                uploads_enabled: state.uploads_enabled,
+                reauthorization_required: state.reauthorization_required,
+            })
+            .map_err(settings_error)
+    }
+    fn login(
+        &self,
+        server: &str,
+        allowed: Arc<dyn Fn() -> bool + Send + Sync>,
+        on_approval: &dyn Fn(settings_controller::Approval),
+    ) -> std::result::Result<(), settings_controller::SafeError> {
+        self.0
+            .login_with_approval(server, "upload", true, &*allowed, &|approval| {
+                on_approval(settings_controller::Approval {
+                    verification_uri: approval.verification_uri,
+                    user_code: approval.user_code,
+                });
+            })
+            .map_err(settings_error)
+    }
+    fn health(&self, allowed: Arc<dyn Fn() -> bool + Send + Sync>) -> settings_controller::Health {
+        match self.0.settings_health(&*allowed) {
+            client_settings::Health::Online => settings_controller::Health::Online,
+            client_settings::Health::Offline => settings_controller::Health::Offline,
+            client_settings::Health::AuthRequired => settings_controller::Health::AuthRequired,
+        }
+    }
+    fn disable(&self, logout: bool) -> std::result::Result<(), settings_controller::SafeError> {
+        self.0.settings_disable(logout).map_err(settings_error)
+    }
 }
 fn client() -> Client {
     client_at(crate::shared::handoff::default_config_path())
@@ -175,11 +260,10 @@ pub fn start_worker() {
 }
 
 #[cfg(test)]
-
 #[cfg(test)]
-
-
 #[cfg(test)]
 mod hosted_logging_tests;
+#[cfg(test)]
+mod hosted_settings_tests;
 #[cfg(test)]
 pub(crate) mod hosted_tests;

@@ -198,6 +198,7 @@ fn playback_note() -> String {
 #[serde(rename_all = "camelCase", default)]
 struct ViewState {
     version: String,
+    connect: Option<super::connect::View>,
     hosted: Option<crate::connect::hosted::AccountView>,
     login: Login,
     agent_demo_video: bool,
@@ -1108,21 +1109,44 @@ impl SettingsWindow {
                 false,
             ));
         }
+        if let Some(connect) = &state.connect {
+            column = column
+                .child(div().mt(px(20.0)).child(connect.title.clone()))
+                .child(div().mt(px(8.0)).child(connect.status.clone()))
+                .child(caption(theme, &connect.detail, false));
+            if let Some(code) = &connect.user_code {
+                column = column.child(caption(theme, &format!("Verification code: {code}"), false));
+            }
+            for (index, item) in connect.buttons.iter().enumerate() {
+                let command = item.command;
+                column = column.child(
+                    button(theme, format!("connect-action-{index}"), &item.title, item.enabled)
+                        .when(item.enabled, |button| button.on_click(cx.listener(move |view, _, _, _| {
+                            view.act(Action::Connect { command });
+                        }))),
+                );
+            }
+            if connect.status != "Not connected" {
+                column = column.child(caption(theme, &connect.note, false));
+            }
+        }
         for shortcut in &state.shortcuts {
             column = column.child(self.recorder(theme, shortcut, cx));
         }
         if let Some(account) = &state.hosted {
             let available = account.server.is_some();
+            if state.connect.is_none() {
             column = column.child(div().mt(px(20.0)).child("Hosted account"))
                 .child(caption(theme, if account.connected { "Connected. Captures stay private until you click Copy link." } else {
                     "Connect to upload screen, voice, transcript and bundle media. New captures upload privately; only the selected capture is shared."
                 }, false))
                 .child(button(theme, "hosted-connect", "Connect and allow uploads", available && !account.connected)
-                    .when(available && !account.connected, |button| button.on_click(cx.listener(|view, _, _, _| view.act(Action::ConnectHosted)))))
-                .child(button(theme, "hosted-shares", "Manage shared links", available)
+                    .when(available && !account.connected, |button| button.on_click(cx.listener(|view, _, _, _| view.act(Action::ConnectHosted)))));
+            }
+            column = column.child(button(theme, "hosted-shares", "Manage shared links", available)
                     .when(available, |button| button.on_click(cx.listener(|view, _, _, _| view.act(Action::ManageSharedLinks)))))
                 .child(caption(theme, "Anyone with a link can view and download that capture. Stopping sharing cannot recall downloads or cached previews.", false));
-            if !available {
+            if !available && state.connect.is_none() {
                 column = column.child(caption(theme, "Set the API server first with apparent cloud login --server <API origin> --scope read.", false));
             }
         }
@@ -2244,6 +2268,26 @@ fn menu_setting_value(key: &str, id: &str) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_connect_view_and_commands_reach_the_gpui_transport() {
+        use crate::capture::desktop::settings::connect::{Button, Command, View};
+        assert!(serde_json::from_value::<ViewState>(serde_json::json!({})).unwrap().connect.is_none());
+        let connect = View {
+            title: "Apparent Connect".into(),
+            status: "Waiting for browser approval".into(),
+            detail: "Check the code before approving.".into(),
+            server: Some("https://synthetic.example".into()),
+            verification_uri: Some("https://synthetic.example/connect/device?code=TEST-CODE".into()),
+            user_code: Some("TEST-CODE".into()),
+            buttons: vec![Button { command: Command::OpenBrowser, title: "Open browser".into(), enabled: true }],
+            note: "Synthetic transport contract.".into(),
+        };
+        let state: ViewState = serde_json::from_value(serde_json::json!({"type":"state", "connect":connect})).unwrap();
+        assert_eq!(state.connect.as_ref(), Some(&connect));
+        let action: Action = serde_json::from_value(serde_json::json!({"action":"connect", "command":connect.buttons[0].command})).unwrap();
+        assert_eq!(action, Action::Connect { command: Command::OpenBrowser });
+    }
 
     #[test]
     fn playback_preferences_reach_the_gpui_window() {
