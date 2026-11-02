@@ -17,3 +17,34 @@
   --color-input: #dedbd4;
   --color-ring: #786096;
 }
+
+/* Installed Settings: Apparent Paper/Carbon/Signal, matching native Settings.
+   Scoped so development fixtures and other consumers keep their existing theme. */
+.settings-shell {
+  --color-background: #f5f0e8;
+  --color-foreground: #020102;
+  --color-primary: #7a58c7;
+  --color-primary-foreground: #f5f0e8;
+  --color-muted: #e7e0ee;
+  --color-muted-foreground: #625b66;
+  --color-accent: #c4a9e6;
+  --color-accent-foreground: #020102;
+  --color-border: #d4ccd8;
+  --color-input: #aaa0b3;
+  --color-ring: #7a58c7;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  .settings-shell {
+    --color-background: #201b24;
+    --color-foreground: #f5f0e8;
+    --color-muted: #302a36;
+    --color-muted-foreground: #b5aebc;
+    --color-accent: #302442;
+    --color-accent-foreground: #f5f0e8;
+    --color-border: #4b4055;
+    --color-input: #70637c;
+    --color-ring: #c4a9e6;
+    color-scheme: dark;
+  }
+}

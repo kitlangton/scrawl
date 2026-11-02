@@ -17,6 +17,7 @@ tools="$out/tools"
 appdir="$out/AppDir"
 mkdir -p "$tools"
 rm -rf "$appdir"
+python3 "$root/capture/desktop/scripts/packaging/stage-settings.py" "$appdir/usr/share/apparent/settings"
 
 fetch() {
   [ -s "$tools/$2" ] || curl -fsSL -o "$tools/$2" "$1"

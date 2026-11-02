@@ -63,7 +63,7 @@ esac
                              "capture/desktop/assets/Apparent.icns",
                              "shared/assets/fonts/HostGrotesk-Variable.ttf",
                              "shared/assets/brand/apparent-wordmark.png",
-                             "shared/assets/brand/apparent-a.png"):
+                             "shared/assets/brand/apparent-a.png", "shared/assets/brand/connect-frogs.png"):
                 asset = repo / relative
                 asset.parent.mkdir(parents=True, exist_ok=True)
                 asset.write_text("synthetic new asset")
@@ -74,9 +74,12 @@ esac
             for name in ("install-app.sh", "install-app-remote.sh"):
                 source = (SCRIPTS / name).read_text()
                 # Redirect fixed native paths into this disposable synthetic fixture.
-                source = source.replace("/usr/bin/ditto", str(tools / "ditto"))
                 source = source.replace("/tmp/", str(root) + "/")
+                source = source.replace("/usr/bin/ditto", str(tools / "ditto"))
                 (packaging / name).write_text(source)
+            (packaging / "stage-settings.py").write_text(
+                "import os\nfrom pathlib import Path\n"
+                "with Path(os.environ['MOCK_LOG']).open('a') as log: log.write('stage-settings\\n')\n")
             env = dict(os.environ, HOME=str(home), PATH=str(tools) + ":" + os.environ["PATH"],
                        MOCK_LOG=str(log), MOCK_PROCESSES=str(processes),
                        MOCK_PS_STATUS=str(ps_status), MOCK_TMP=str(root),
@@ -88,6 +91,7 @@ esac
             self.assertNotIn("pkill ", calls, result.stderr)
             refused = running is not None or ps_status != 0
             if refused:
+                self.assertNotIn("stage-settings", calls, "Never stage Settings into a running app")
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(executable.read_text(), "old app")
                 self.assertFalse((app / "Contents/Info.plist").exists())

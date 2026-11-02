@@ -32,6 +32,7 @@ cp -f "${REPO_DIR}/capture/desktop/assets/Apparent.icns" "${APP_BUNDLE}/Contents
 cp -f "${REPO_DIR}/shared/assets/fonts/HostGrotesk-Variable.ttf" "${APP_BUNDLE}/Contents/Resources/HostGrotesk-Variable.ttf"
 cp -f "${REPO_DIR}/shared/assets/brand/apparent-wordmark.png" "${APP_BUNDLE}/Contents/Resources/apparent-wordmark.png"
 cp -f "${REPO_DIR}/shared/assets/brand/apparent-a.png" "${APP_BUNDLE}/Contents/Resources/apparent-a.png"
+cp -f "${REPO_DIR}/shared/assets/brand/connect-frogs.png" "${APP_BUNDLE}/Contents/Resources/connect-frogs.png"
 
 /usr/bin/ditto "${SPARKLE_DIR}/Sparkle.framework" "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework"
 
@@ -108,6 +109,8 @@ SIGN=(codesign --force --options runtime --timestamp --sign "${IDENTITY}")
 if [[ "${IDENTITY}" == "-" ]]; then
   SIGN=(codesign --force --sign "-")
 fi
+
+python3 "${REPO_DIR}/capture/desktop/scripts/packaging/stage-settings.py" "${APP_BUNDLE}/Contents/Resources/settings" --sign "${IDENTITY}"
 
 SPARKLE_VER="${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework/Versions/B"
 "${SIGN[@]}" "${SPARKLE_VER}/XPCServices/Installer.xpc"

@@ -2,7 +2,7 @@
 const { lstat } = require('node:fs/promises');
 const net = require('node:net');
 const path = require('node:path');
-const actions = new Set(['connect', 'allow', 'cancel', 'check', 'disable', 'disconnect', 'open-browser']);
+const actions = new Set(['connect', 'allow', 'cancel', 'check', 'disable', 'disconnect', 'open-browser', 'request-disable', 'request-disconnect', 'open-shared-links']);
 const failed = () => ({ status: 'error' });
 const text = value => typeof value === 'string' && Buffer.byteLength(value) <= 4096 && !/[\x00-\x1f\x7f]/.test(value);
 function browserUri(value, code) {
@@ -14,6 +14,11 @@ function browserUri(value, code) {
       (!url.search || url.search === `?code=${code}`);
   } catch { return false; }
 }
+function linksUri(value) {
+  if (!browserUri(value, null)) return false;
+  const url = new URL(value);
+  return !url.search && ['/connect/shares', '/hosted/shares'].includes(url.pathname);
+}
 function decode(value, action) {
   if (value?.error === 'feature_disabled') return { status: 'disabled' };
   const v = value?.connect;
@@ -24,9 +29,26 @@ function decode(value, action) {
       !Array.isArray(v.buttons) || v.buttons.length > actions.size ||
       !v.buttons.every(b => actions.has(b.command) && text(b.title) && typeof b.enabled === 'boolean') ||
       new Set(v.buttons.map(b => b.command)).size !== v.buttons.length) return failed();
-  if (value.openUri !== undefined && (action !== 'open-browser' || value.openUri !== v.verificationUri ||
-      !browserUri(value.openUri, v.userCode))) return failed();
+  let presentation;
+  if (v.presentation !== undefined) {
+    const p = v.presentation;
+    if (!p || !['neutral','success','progress','warning','failure'].includes(p.tone) ||
+        !['headline','detail','note'].every(k => text(p[k])) ||
+        !['artwork','compact','accountMenu'].every(k => typeof p[k] === 'boolean') ||
+        !Array.isArray(p.buttons) || p.buttons.length > actions.size ||
+        !p.buttons.every(b => actions.has(b.command) && text(b.title) && typeof b.enabled === 'boolean') ||
+        new Set(p.buttons.map(b => b.command)).size !== p.buttons.length ||
+        !Array.isArray(p.menuActions) || !p.menuActions.every(a => p.buttons.some(b => b.command === a)) ||
+        !(p.sharedLinksUrl == null || linksUri(p.sharedLinksUrl))) return failed();
+    presentation = { tone:p.tone, headline:p.headline, detail:p.detail, note:p.note,
+      artwork:p.artwork, compact:p.compact, accountMenu:p.accountMenu,
+      buttons:p.buttons.map(({command,title,enabled}) => ({command,title,enabled})), menuActions:[...p.menuActions], sharedLinksUrl:p.sharedLinksUrl ?? null };
+  }
+  if (value.openUri !== undefined && !(
+      action === 'open-browser' && value.openUri === v.verificationUri && browserUri(value.openUri, v.userCode) ||
+      action === 'open-shared-links' && value.openUri === presentation?.sharedLinksUrl && linksUri(value.openUri))) return failed();
   return { status: 'connected', view: { title: v.title, status: v.status, detail: v.detail, note: v.note,
+    ...(presentation === undefined ? {} : { presentation }),
     server: v.server, verificationUri: v.verificationUri, userCode: v.userCode,
     buttons: v.buttons.map(({ command, title, enabled }) => ({ command, title, enabled })) },
     ...(value.openUri === undefined ? {} : { openUri: value.openUri }) };

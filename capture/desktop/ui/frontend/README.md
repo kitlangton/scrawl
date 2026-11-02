@@ -128,8 +128,9 @@ the owned generated-fixture windows and stay outside git.
 
 ## Storage retention and usage (#291)
 
-The same **default-off** `electronCaptureLocation` boundary now includes the
-remaining Storage presentation; there is no second experiment or new policy.
+Installed Settings routes Storage to the branded React presentation by default.
+`experiments.electronCaptureLocation=false` restores the native Storage page on
+its next open. No retention policy is changed by enabling the presentation.
 `readRetention()`, `saveRetention(preset)`, `resetRetention()` and
 `readCaptureUsage()` are the only additional preload methods. Only Save takes
 an argument: a validated `week`, `month` or `forever` identifier. Rust supplies
@@ -165,15 +166,22 @@ effective path. Loading/error states hide old totals, and Retry never starts
 Rust. A slow filesystem syscall can outlive client expiry; the existing single
 Storage worker stays busy rather than spawning unbounded scans.
 
-Routing/rollback is unchanged: only the separate `npm start` development window
-uses React Storage, and only an explicitly enabled running Rust backend admits
-it. Closing it or removing the experiment flag restores the old-only path;
-saved preferences remain readable by native Settings. The old retention and
-usage presentation is deliberately retained. Remove it **only after** the React
-replacement is explicitly accepted with exact-candidate Mac and isolated Linux
-Settings proof, installed launch/routing and packaging consumers verified, and
-an authorized routing switch; then remove its unused callers/tests together.
-This PR does not switch routing, activate the experiment, merge or release.
+The Rust Settings session owns navigation and the Electron child. The installed
+page contains Storage only, with the existing Settings sidebar and system-following
+light/dark Paper/Carbon/Signal palette. Other sidebar pages return to their native
+presentation. Retired windows cannot send commands or close the current page.
+Closing Settings cancels the session; an Electron crash restores native Storage.
+Missing packaged assets also fall back to native Storage. Reopen Settings after
+editing the opt-out. Saved preferences remain readable by both presentations.
+
+`stage-settings.py` builds the locked frontend/runtime into Linux AppImage and Mac
+installer/release packages. Installed packages contain no development dashboard or
+synthetic examples. Node/npm are build prerequisites, not runtime dependencies.
+macOS stages and signs nested Electron code before the enclosing app is signed.
+The old Storage presentation is retained solely for the explicit opt-out and
+startup/crash fallback. Remove it only after exact-candidate installed Mac/Linux
+acceptance and a deliberate retirement of that fallback contract. Functional
+transport tests and synthetic backend fixtures remain verification tooling.
 
 `tests/retention-smoke.cjs` exercises production Electron with a **synthetic**
 socket (save/reset/readback/write error/loading/usage error/stale results,
@@ -235,12 +243,11 @@ physical-device or performance acceptance.
 
 ## Experimental Storage card
 
-This separate slice is off by default. Set
-`"experiments": {"electronCaptureLocation": true}` in the **Rust app's**
-`~/.config/apparent/config.json`, preserving other keys, then open or refresh the
-Electron window. File edits apply on the next request; there is no renderer or
-environment flag that enables this experiment. The installed native Settings,
-launcher and pill are unchanged. Browser preview has no Storage bridge.
+The installed Storage bridge is on unless `experiments.electronCaptureLocation`
+is explicitly false in the Rust app's `~/.config/apparent/config.json`. File edits
+apply at the next request; reopen Settings to change presentation routing. The
+separate `npm start` window remains a developer harness; it is not installed or
+used by the Settings route. Browser preview has no Storage bridge.
 
 `readCaptureLocation()`, `changeCaptureLocation()` and `resetCaptureLocation()`
 accept no path, revision, dialog options or other arguments. Main reads the

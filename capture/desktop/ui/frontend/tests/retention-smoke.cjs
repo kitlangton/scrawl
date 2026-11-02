@@ -19,6 +19,7 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   let usageError = false;
   let releaseUsage;
   let holdUsage = true;
+  let releaseLocation;
   const requests = [];
   const clients = new Set();
   const policy = () => ({ revision, custom, retention: { preset, note: 'Rust policy note',
@@ -31,7 +32,11 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
       const send = value => socket.end(JSON.stringify(value) + '\n');
       if (r.reference || r.connect) return send({ error: 'feature_disabled' });
       if (r.storage === 'retention' && initialRetentionBusy) return send({ error: 'app_busy' });
-      if (r.storage === 'read') return send({ storage: { savedPath: '/captures', effectivePath: '/captures', displayPath: '/captures', source: 'configured', custom: true, revision } });
+      if (r.storage === 'read') {
+        const reply = () => send({ storage: { savedPath: '/captures', effectivePath: '/captures', displayPath: '/captures', source: 'configured', custom: true, revision } });
+        if (!releaseLocation) { releaseLocation = reply; return; }
+        return reply();
+      }
       if (r.storage === 'usage') {
         if (usageError) return send({ error: 'usage_unavailable', message: 'private failure' });
         const reply = { usage: { effectivePath: '/captures', displayPath: '/captures', formatted: '12 MB', secret: 'hidden' } };
@@ -49,7 +54,7 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   });
   const address = path.join(directory, 'capture.sock');
   await new Promise(resolve => server.listen(address, resolve)); await fs.chmod(address, 0o600);
-  const app = await electron.launch({ args: [path.join(__dirname, '..')], env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') } });
+  const app = await electron.launch({ args: [path.join(__dirname, '..'), '--settings-storage'], env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') } });
   t.after(async () => {
     for (const c of clients) c.destroy();
     let timer;
@@ -68,6 +73,10 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   });
   const page = await app.firstWindow();
   t.diagnostic('Retention window opened');
+  await expect.poll(() => typeof releaseLocation).toBe('function');
+  await expect(page.getByText('Waiting for capture location…')).toBeVisible();
+  assert.equal(await page.getByText('Storage is disabled in your configuration.', { exact: false }).count(), 0);
+  releaseLocation();
   await expect(page.getByText('Calculating folder usage…')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Refresh usage', exact: true })).toBeDisabled();
   releaseUsage(); releaseUsage = undefined;
@@ -122,6 +131,33 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   const safe = await page.evaluate(() => window.apparent.readRetention());
   assert.equal(safe.revision, undefined); assert.equal(safe.secret, undefined); assert.equal(safe.retention.options[0].secret, undefined);
   assert.equal(await page.evaluate(() => window.apparent.saveRetention('arbitrary').then(() => false, () => true)), true);
+  assert.deepEqual(await page.evaluate(() => Object.keys(window.apparent).sort()), [
+    'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation', 'readRetention',
+    'saveRetention', 'resetRetention', 'readCaptureUsage', 'navigateSettings', 'showCaptureFolder',
+  ].sort());
+  // Even a direct main-process call from this legitimate frame must not reach
+  // unrelated handlers. Check all registered non-Storage capabilities, not only
+  // methods omitted by the preload.
+  const denied = await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
+    const sender = BrowserWindow.getAllWindows()[0].webContents;
+    const event = { sender, senderFrame: sender.mainFrame };
+    const allowed = new Set(['read-capture-location', 'change-capture-location', 'reset-capture-location',
+      'read-retention', 'save-retention', 'reset-retention', 'read-capture-usage', 'navigate-settings', 'show-capture-folder']);
+    const rejected = [];
+    for (const [channel, handler] of ipcMain._invokeHandlers) {
+      if (!channel.startsWith('apparent:') || allowed.has(channel.slice('apparent:'.length))) continue;
+      let refused = false;
+      try { await handler(event, ...(channel === 'apparent:set-error-reporting' ? [false] : [])); }
+      catch { refused = true; }
+      if (!refused) throw new Error(`Unrelated Storage capability admitted: ${channel}`);
+      rejected.push(channel);
+    }
+    return rejected;
+  });
+  assert.ok(denied.includes('apparent:connect-allow'));
+  assert.ok(denied.includes('apparent:set-error-reporting'));
+  assert.ok(denied.includes('apparent:copy-capture-reference'));
+  assert.ok(denied.includes('apparent:read-runtime-state'));
   // Real handler origin/arity gates, including the mutation channel.
   assert.equal(await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents;
@@ -145,5 +181,24 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   }
   assert.ok(requests.some(r => r.storage === 'resetretention'));
   assert.equal((await page.locator('body').innerText()).includes('private failure'), false);
-  t.diagnostic('Retention assertions completed');
+  await expect(page.getByRole('heading', { name: 'Storage', exact: true })).toBeVisible();
+  assert.equal(await page.getByText('UI foundation', { exact: false }).count(), 0);
+  assert.equal(await page.getByText('State previews', { exact: true }).count(), 0);
+  assert.equal(await page.evaluate(() => window.apparent.navigateSettings('storage').then(() => false, () => true)), true);
+  assert.equal(await page.evaluate(() => window.apparent.navigateSettings('arbitrary').then(() => false, () => true)), true);
+  assert.equal(await page.evaluate(() => window.apparent.showCaptureFolder('arbitrary').then(() => false, () => true)), false, 'zero-argument preload cannot forward a path');
+  for (const colorScheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme });
+    assert.equal(await page.locator('.settings-shell').evaluate(element => getComputedStyle(element).colorScheme), colorScheme);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    if (process.env.APPARENT_SETTINGS_PROOF) {
+      await fs.mkdir(process.env.APPARENT_SETTINGS_PROOF, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.APPARENT_SETTINGS_PROOF, `storage-${colorScheme}.png`), fullPage: true });
+    }
+  }
+  const emitted = [];
+  app.process().stdout.on('data', data => emitted.push(data.toString()));
+  await page.getByRole('button', { name: 'General', exact: true }).click();
+  await expect.poll(() => emitted.join('')).toContain('"action":"navigate","pane":"general"');
+  t.diagnostic('Retention and installed Settings presentation assertions completed');
 });

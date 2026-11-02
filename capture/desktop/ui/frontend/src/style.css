@@ -7,3 +7,38 @@
   button { cursor: pointer; }
   button:disabled { cursor: default; }
 }
+
+@font-face {
+  font-family: 'Host Grotesk'; font-style: normal; font-weight: 300 800;
+  font-display: swap;
+  src: url('../../../../../shared/assets/fonts/HostGrotesk-Variable.ttf') format('truetype');
+}
+.settings-shell { display: flex; min-height: 100vh; background: var(--color-background); color: var(--color-foreground); font-family: 'Host Grotesk', system-ui, sans-serif; }
+.settings-sidebar { width: 210px; flex: none; background: #020102; color: #f5f0e8; padding-top: 32px; }
+.settings-brand { padding: 0 24px 30px; }
+.settings-brand img { width: 132px; height: auto; }
+.settings-sidebar nav { display: grid; }
+.settings-sidebar button { min-height: 44px; text-align: left; padding: 10px 24px; border-left: 2px solid transparent; font-size: 14px; }
+.settings-sidebar button:hover { background: #29232f; }
+.settings-sidebar button[aria-current='page'] { background: #302442; border-color: #b7a5d8; }
+.settings-sidebar button:focus-visible { outline: 2px solid #c4a9e6; outline-offset: -4px; }
+.settings-content { min-width: 0; flex: 1; padding: 30px; }
+.settings-content header { margin-bottom: 28px; }
+.settings-content h1 { font-size: 25px; line-height: 1.25; font-weight: 650; margin-bottom: 8px; }
+.settings-content header p { color: var(--color-muted-foreground); font-size: 14px; }
+.settings-content section { background: transparent; border: 0; padding: 0; border-radius: 0; }
+.settings-content button, .settings-content select { border-radius: 2px; min-height: 40px; }
+.settings-content select { background: var(--color-muted); color: var(--color-foreground); max-width: 100%; }
+.settings-content h2, .settings-content h3 { font-size: 16px; }
+.settings-content [role='alert'] { color: var(--color-destructive); margin-bottom: 16px; }
+@media (max-width: 700px) {
+  .settings-sidebar { width: 150px; }
+  .settings-sidebar button { padding-inline: 16px; }
+  .settings-brand { padding-inline: 16px; }
+  .settings-brand img { width: 116px; }
+  .settings-content { padding: 24px 20px; }
+}
+
+.settings-content button[class*="border-input"] { background: var(--color-muted); color: var(--color-foreground); border-color: var(--color-input); }
+.settings-content button:hover { background: var(--color-accent); color: var(--color-accent-foreground); }
+.apparent-connect-workflow { font-family: 'Connect Host Grotesk', var(--font-sans); }
