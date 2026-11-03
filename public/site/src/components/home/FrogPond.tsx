@@ -118,7 +118,7 @@ export function FrogPond() {
   return <section className="pond-hero" ref={hero} id="top">
     <div className="pond-copy">
       <h1><span className="hero-agent-line">Tell your coding agent what to change</span><span className="hero-feedback-line">by pointing, talking, and drawing.</span><span className="pond-word"><img className="pond-cover-pad" src={LILY} alt="" /><button ref={frog} className="pond-cover-frog" type="button" onClick={jump} aria-label="Jump to the other lily" data-at-end={atEnd.current} data-landings={landings}><img src={`${ART}/frog-rest-cohesive.png`} alt="" className={airborne ? "pond-hidden" : ""} /><img src={`${ART}/frog-air-cohesive.png`} alt="" className={airborne ? "" : "pond-hidden"} /></button></span></h1>
-      <p><img className="pond-wordmark" src="/apparent-wordmark.svg" alt="Apparent" /> creates the instructions.<br className="hero-sentence-break" />Your agent makes the changes and uses apparent to send back a video walkthrough.</p>
+      <p><img className="pond-wordmark" src="/apparent-wordmark.svg" alt="Apparent" /> creates the instructions.<br className="hero-sentence-break" />Your agent makes the changes and uses<br className="hero-return-break" /> apparent to send back a video walkthrough.</p>
       <div className="pond-download"><LatestDownload /></div>
     </div>
     <div className="pond-scene">

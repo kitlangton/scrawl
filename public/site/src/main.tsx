@@ -7,6 +7,7 @@ import "./cta.css"
 import "./styles/accepted-homepage.css"
 import "./features/homepage-revision.css"
 import "./styles/system-appearance.css"
+import "./styles/approved-pond-layout.css"
 
 const root = document.getElementById("root")!
 const app = (
