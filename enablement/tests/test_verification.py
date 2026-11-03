@@ -44,7 +44,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_receipt_wrapper_preserves_explicit_suite(self):
         args = ['verification.py', '--base', 'unknown', '--run', '--online',
-                '--suite', 'rust', '--parallel-contracts', '--receipt-dir', '/external/receipts']
+                '--suite', 'rust', '--parallel-contracts', '--cargo-timings', '--receipt-dir', '/external/receipts']
         with patch.object(verification.sys, 'argv', args), patch.object(verification.subprocess, 'run') as run:
             verification.main()
             command = run.call_args.args[0]
@@ -52,6 +52,7 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(command[command.index('--suite') + 1], 'platform-rust')
             self.assertIn('--online', command)
             self.assertIn('--parallel-contracts', command[command.index('--') + 1:])
+            self.assertIn('--cargo-timings', command[command.index('--') + 1:])
 
     def test_parallel_contracts_overlap_selected_checks_and_join_both_results(self):
         real_spawn = subprocess.Popen
@@ -72,7 +73,7 @@ class SelectionTests(unittest.TestCase):
                     if outcome == 'spawn-signal':
                         os.kill(os.getpid(), signal.SIGTERM)
                     return process
-                def selected(selection, offline):
+                def selected(selection, offline, cargo_timings):
                     self.assertFalse(offline)
                     self.assertEqual(selection, {'root': True, 'engine': False})
                     self.assertTrue(select.select([ready_read], [], [], 5)[0], 'contracts did not start before selected checks')
@@ -117,6 +118,20 @@ class SelectionTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, 'spawn failed'), verification.overlapping_contracts():
                 self.fail('selected checks must not run')
         self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+
+    def test_cargo_timings_preserve_commands_and_test_arguments(self):
+        selection = {'root': True, 'engine': True, 'browser': False}
+        with patch.object(verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+            verification.run_selected_checks(selection, offline=False, cargo_timings=True)
+        commands = [call.args[0] for call in run.call_args_list if 'cargo' in call.args[0]]
+        self.assertEqual(len(commands), 4)
+        for command in commands:
+            self.assertEqual(command.count('--timings'), 1)
+            self.assertIn('--locked', command)
+            self.assertIn('-j', command)
+            if 'test' in command:
+                self.assertLess(command.index('--timings'), command.index('--'))
+                self.assertIn('--test-threads=2', command)
 
     def test_explicit_platform_suites_execute_even_when_changed_tree_has_no_matching_inputs(self):
         for suite in ('rust', 'browser'):

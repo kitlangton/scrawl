@@ -333,6 +333,13 @@ succeed before the receipt succeeds; failure or cancellation terminates and reap
 the owned contract process group. The receipt wrapper forwards this option.
 Local invocations remain sequential unless the option is explicitly supplied.
 
+`--cargo-timings` records Cargo unit reports on the existing build/test commands;
+the platform job retains available HTML reports even when later verification
+fails. Reports may be absent for an interrupted compilation and do not certify
+native acceptance. The private verification TMPDIR is removed after successful
+verification only. Failure or interruption leaves it to disposable hosted-runner
+teardown, since shell exit alone does not prove every detached worker has stopped.
+
 `verification.py --run|--pr --receipt-dir <external-directory>` and
 `owner_lanes.py --lane <name> --run --receipt-dir <external-directory>` record
 observation-only JSON through `enablement/verification/receipt.ts` (Node 22).
