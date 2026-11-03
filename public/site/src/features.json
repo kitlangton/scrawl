@@ -195,10 +195,11 @@
       "group": "delivery",
       "name": "Share one recording by link",
       "says": "Copy link beside Paste reserves public-by-link access for the selected capture before its media finishes uploading. Settings exposes hosted account consent and shared-link management. CLI listing follows every page and revocation preserves the private recording. The React recipient viewer pairs native video with a timestamped transcript and Copy for agent; original image evidence remains available without a gallery.",
-      "status": "experiment:hostedSharing",
+      "status": "main",
       "added": "2026-10-31",
       "platforms": ["mac", "linux"],
-      "note": "Default off. Native candidate only: Linux GUI, macOS native pill/Swift Settings, onboarding cancellation, foreground clipboard gating and end-to-end real-feature walkthrough still require platform proof. A configured hosted API and explicit upload consent are required. Deployment also needs SHARING_ENABLED=true; it defaults off. No production deployment is implied. Completed Copy link opens a capture-bound Electron confirmation using the shared installed runtime. Explicit non-E2E public-copy consent precedes Rust background preparation and foreground clipboard delivery; private encrypted transfers and local Paste remain separate. Changed installed routing still requires exact-candidate macOS and isolated Linux acceptance; existing activation holds remain.",
+      "config": [{ "key": "experiments.hostedSharing", "value": "boolean; true by default", "does": "An explicit false hides public sharing controls; consent remains separate" }],
+      "note": "Available by default; experiments.hostedSharing=false explicitly hides sharing controls. Availability grants neither upload consent nor public access. Linux synthetic sender acceptance is retained; affected macOS native acceptance remains pending. A configured hosted API and explicit upload consent are required. Deployment also needs SHARING_ENABLED=true; it defaults off. No production deployment is implied. Completed Copy link opens a capture-bound Electron confirmation using the shared installed runtime. Explicit non-E2E public-copy consent precedes Rust background preparation and foreground clipboard delivery; private encrypted transfers and local Paste remain separate. Server activation is separately verified; default availability is not a deployment receipt. Affected native boundaries remain subject to the Desktop verification policy.",
       "docs": ["capture/engine/docs/keyframes-and-text.md", "connect/docs/hosted-client.md", "connect/docs/hosted-api.md"]
     },
     {

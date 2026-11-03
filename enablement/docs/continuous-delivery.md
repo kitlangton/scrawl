@@ -186,9 +186,13 @@ as far as Cloudflare permits and review its actual access before activation.
 `hosted_config.py` validates the required public identifiers and writes an ignored
 `connect/service/wrangler.cd.json` next to the existing entrypoint. The fixed production
 origins retain hosted API/auth/callback and legacy transition CORS; the UI stays
-on app. Only the existing `/auth/*` and `/v1/*` Worker routes are declared; the
-publisher does not claim the whole hostname, Pages/legacy UI or a public-share
-route. `keep_vars` preserves other writers' plain variables; provider secret
+on app. The Worker owns `/auth/*`, `/v1/*`, `/s/*` and the four exact recipient assets
+(`/share-view.js`, `/share-view.css`, `/share-wordmark.svg`, `/share-font.ttf`);
+Pages/legacy UI and the rest of the hostname remain untouched. The initial
+sharing activation must establish these exact routes before CD preflight passes.
+`SHARING_ENABLED` defaults to `true` for this approved deployment; an explicit
+`false` environment variable stops new grants while retaining existing-link
+reads and revocation. This does not publish any capture without sender consent. `keep_vars` preserves other writers' plain variables; provider secret
 bindings are not rendered, replaced or rotated. Preflight reads the selected
 existing service and refuses missing service, different D1/R2/origin bindings,
 missing/malformed settings, missing auth-secret names, route/cron drift or
@@ -438,10 +442,21 @@ Preparation, exact evidence and rollback constraints are in
 ## Verification runtime budgets
 
 The complete pre-commit hook has 60 seconds; pre-push has 300 seconds.
-Each supported-platform CI job has 10 minutes of execution, including setup,
-checks and cleanup; GitHub runner queue time is excluded. Reusable workflow
-callers inherit the limits on their executing jobs. Job dependencies may wait
-without consuming another job's execution budget. A timeout fails verification.
+Each supported-platform workflow attempt has a 10-minute workload execution
+budget. The final `runtime-budget` gate reads all jobs in that exact run attempt,
+including reusable workflows, and measures the union of their execution intervals.
+Parallel jobs count once. Gaps with no executing workload job (runner, dependency
+and concurrency waiting) and budget-audit jobs are excluded. Setup, checks,
+cleanup and post actions in workload jobs count. Reruns audit their own attempt.
+API errors, incomplete inventories, nonterminal jobs or invalid timestamps fail
+closed. Skipped jobs consume no execution time.
+
+This is a final failure gate, not live whole-run cancellation: an over-budget
+attempt fails after its workload jobs finish. Existing 10-minute job timeouts
+remain additional stop safeguards. Releases/deployments in the same workflow may
+already have completed before the final audit fails; a failed workflow is never
+successful verification or release admission. The audit does not waive native
+proof or attest cleanup after a job timeout.
 The agent whose run exceeds a budget owns optimizing the tests and rerunning
 successfully before continuing delivery. Do not increase/bypass limits, remove
 coverage or weaken checks to obtain a pass. CI logs print this instruction before

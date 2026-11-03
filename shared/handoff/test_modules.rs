@@ -742,25 +742,25 @@ mod tests {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
         let config = load_config_from(&path);
-        for name in ["nativeLaunch", "movableRecordingControls", "exportNarration", "onboardingFirstCapture", "hostedSync", "hostedEncryption"] {
+        for name in ["nativeLaunch", "movableRecordingControls", "exportNarration", "onboardingFirstCapture", "hostedSync", "hostedEncryption", "hostedSharing"] {
             assert!(experiment_enabled_in(&config, name), "{name}");
             set_experiment_in(&path, name, false).unwrap();
             assert!(!experiment_enabled_in(&load_config_from(&path), name), "{name}");
             set_experiment_in(&path, name, true).unwrap();
             assert!(experiment_enabled_in(&load_config_from(&path), name), "{name}");
         }
-        for name in ["hostedSharing", "clipboardImage", "autoPasteDraft", "unknownFutureFeature"] {
+        for name in ["clipboardImage", "autoPasteDraft", "unknownFutureFeature"] {
             assert!(!experiment_enabled_in(&config, name), "{name}");
         }
         assert!(config.cloud.is_none());
     }
 
     #[test]
-    fn private_connect_defaults_do_not_grant_consent_or_change_unknown_config() {
+    fn connect_defaults_do_not_grant_consent_or_change_unknown_config() {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
         fs::write(&path, r#"{"secret":"synthetic","unknown":{"kept":true},"cloud":{"enabled":false,"uploadConsent":false,"server":"https://api.example.invalid"}}"#).unwrap();
-        for name in ["hostedSync", "hostedEncryption"] {
+        for name in ["hostedSync", "hostedEncryption", "hostedSharing"] {
             assert!(experiment_enabled_in(&load_config_from(&path), name));
             set_experiment_in(&path, name, false).unwrap();
             assert!(!experiment_enabled_in(&load_config_from(&path), name));
@@ -903,7 +903,7 @@ mod tests {
         assert!(experiment_enabled_in(&missing, "connectSettings"));
         assert!(experiment_enabled_in(&missing, "hostedSync"));
         assert!(experiment_enabled_in(&missing, "hostedEncryption"));
-        assert!(!experiment_enabled_in(&missing, "hostedSharing"));
+        assert!(experiment_enabled_in(&missing, "hostedSharing"));
         assert!(missing.cloud.is_none());
         fs::write(&path, r#"{"autoSend":false,"experiments":{"other":true}}"#).unwrap();
         assert!(experiment_enabled_in(&load_config_from(&path), "connectSettings"));

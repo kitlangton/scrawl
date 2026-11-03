@@ -28,18 +28,23 @@ def config(env):
     analytics_enabled = env.get('POSTHOG_ENABLED', 'true')
     if analytics_enabled not in ('true', 'false'):
         raise ValueError('Invalid POSTHOG_ENABLED')
+    sharing_enabled = env.get('SHARING_ENABLED', 'true')
+    if sharing_enabled not in ('true', 'false'):
+        raise ValueError('Invalid SHARING_ENABLED')
     return {
         'name': worker_name(env), 'account_id': account,
         'main': 'dist/worker.js', 'compatibility_date': '2026-02-05',
         'compatibility_flags': ['nodejs_compat'],
         'workers_dev': False, 'preview_urls': False,
-        'routes': [{'pattern': 'hosted.tryapparent.com/' + path + '/*', 'zone_name': 'tryapparent.com'}
-                   for path in ('auth', 'v1')],
+        'routes': [{'pattern': 'hosted.tryapparent.com/' + path, 'zone_name': 'tryapparent.com'}
+                   for path in ('auth/*', 'v1/*', 's/*', 'share-view.js', 'share-view.css',
+                                'share-wordmark.svg', 'share-font.ttf')],
         # Keep existing provider-managed plain variables and all secret bindings.
         'keep_vars': True,
         'vars': {'API_ORIGIN': 'https://hosted.tryapparent.com',
                  'SITE_ORIGIN': 'https://app.tryapparent.com',
                  'LEGACY_SITE_ORIGIN': 'https://hosted.tryapparent.com',
+                 'SHARING_ENABLED': sharing_enabled,
                  'POSTHOG_ENABLED': analytics_enabled,
                  'POSTHOG_HOST': 'https://eu.i.posthog.com',
                  'POSTHOG_ENVIRONMENT': 'production'},

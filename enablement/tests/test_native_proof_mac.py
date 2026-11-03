@@ -112,6 +112,7 @@ class NativeProofMacTests(unittest.TestCase):
         self.assertIn('--producer-kind focused-share-build', build)
         self.assertIn('artifact: ${{ steps.executables.outputs.artifact-id }}', build)
         self.assertIn('needs: share-build', native)
+        self.assertIn('  runtime-budget:\n    if: always()\n    needs: [share-build, connect-worker]', workflow)
         self.assertIn("needs.share-build.result == 'success'", native)
         self.assertIn("needs.share-build.result == 'skipped'", native)
         self.assertNotIn("needs.share-build.result == 'failure'", native)

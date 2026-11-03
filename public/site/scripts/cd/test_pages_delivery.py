@@ -14,6 +14,23 @@ spec.loader.exec_module(pages)
 
 
 class PagesDeliveryTests(unittest.TestCase):
+    def test_difference_metadata_locates_insertion_replacement_and_deletion_privately(self):
+        prefix, suffix = b'<body>approved', b'</body>'
+        inserted = b'<script type="speculationrules">private-body-sentinel</script>'
+        detail = pages.difference_metadata(prefix + suffix, prefix + inserted + suffix)
+        self.assertEqual(detail['common_prefix_bytes'], len(prefix) + 1)
+        self.assertEqual(detail['expected_changed_bytes'], 0)
+        self.assertEqual(detail['actual_changed_bytes'], len(inserted))
+        self.assertTrue(detail['edge_markers']['speculationrules'])
+        self.assertFalse(detail['edge_markers']['cloudflare_beacon'])
+        self.assertNotIn('private-body-sentinel', str(detail))
+        for expected, actual, sizes in [(b'abc', b'axc', (1, 1)),
+                                        (b'abc', b'ac', (1, 0)),
+                                        (b'', b'abc', (0, 3)),
+                                        (b'abc', b'abc', (0, 0))]:
+            result = pages.difference_metadata(expected, actual)
+            self.assertEqual((result['expected_changed_bytes'], result['actual_changed_bytes']), sizes)
+
     def test_publisher_checks_deployed_revision_instead_of_requiring_main_tip(self):
         project = {'canonical_deployment': {'deployment_trigger': {'metadata': {'commit_hash': 'b' * 40}}}}
         with patch.object(pages, 'api', return_value=project), patch.dict(pages.os.environ, {'GITHUB_REPOSITORY': 'example/project'}):
