@@ -7,8 +7,8 @@ interface Activity {
  bytes: number; captures: number; pending_bytes: number; physical_bytes: number;
 }
 const hosts=new Set(['https://eu.i.posthog.com']);
-const events=new Set(['connect_account_created','connect_device_connected','connect_upload_completed','connect_storage_snapshot']);
-const actor=(event: string)=>event==='connect_upload_completed'?'device':event==='connect_storage_snapshot'?'system':'browser';
+const events=new Set(['connect_account_created','connect_device_connected','connect_upload_completed','connect_share_created','connect_storage_snapshot']);
+const actor=(event: string)=>['connect_upload_completed','connect_share_created'].includes(event)?'device':event==='connect_storage_snapshot'?'system':'browser';
 const host=(env:Env)=>env.POSTHOG_HOST??'https://eu.i.posthog.com';
 const environment=(env:Env)=>env.POSTHOG_ENVIRONMENT??'production';
 const configured=(env:Env)=>(env.POSTHOG_ENABLED===undefined||env.POSTHOG_ENABLED==='true')&&!!env.POSTHOG_PROJECT_TOKEN&&hosts.has(host(env))&&['production','synthetic','development'].includes(environment(env));

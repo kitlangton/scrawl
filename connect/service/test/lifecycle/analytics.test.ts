@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile,readdir} from 'node:fs/promises';
 import {build} from 'esbuild';
 import {Miniflare} from 'miniflare';
 import {fixture,digest,id,file} from '../helpers.mjs';
@@ -297,6 +297,65 @@ test('collection remains bounded during outages and overflow is explicit, not a 
  await enroll(f,accountId(digest('overflow')));const a=await f.identity(digest('overflow'));
  assert.equal((await queued(f)).length,10000);assert.equal((await f.db.prepare('SELECT dropped FROM analytics_control').first()).dropped,1);
  assert.equal((await f.call('/v1/account',{token:a.token})).status,200);
+ }finally{await f.close();}
+});
+test('DAU: one consented account, durable upload/share actions, retry and withdrawal',async()=>{
+ const f=await setup({SHARING_ENABLED:'true'});try{
+  await f.db.exec((await readFile('migrations/0003.sql','utf8')).replaceAll('\n',' '));
+  // Exercise the actual current migration suffix, as the production ledger does.
+  for(const name of (await readdir('migrations')).filter(name=>/^\d{4}\.sql$/.test(name)&&Number(name.slice(0,4))>=7).sort())await f.db.exec((await readFile('migrations/'+name,'utf8')).replaceAll('\n',' '));
+  const a=await f.identity('one-dau-account');
+  const share=path=>f.call(path+'/share',{token:a.token,method:'POST'});
+  const before=await upload(f,a,801);assert.equal((await f.call(before+'/complete',{token:a.token,method:'POST'})).status,200);
+  assert.equal((await share(before)).status,200);assert.deepEqual(await queued(f),[],'authoritative actions before consent do not queue');
+  const allowed=await f.call('/v1/analytics/consent',{...a,method:'POST',body:{consented:true,revision:null,noticeVersion:'product-analytics-v1'}});
+  assert.equal(allowed.status,200);const on=await allowed.json();
+  assert.equal((await share(before)).status,200);assert.deepEqual(await queued(f),[],'reading an existing pre-consent link does not backfill activity');
+  const path=await upload(f,a,802);assert.equal((await f.call(path+'/complete',{token:a.token,method:'POST'})).status,200);
+  const first=await share(path);assert.equal(first.status,200);const link=(await first.json()).url;
+  assert.equal((await share(path)).status,200);assert.equal((await f.call(path+'/complete',{token:a.token,method:'POST'})).status,200);
+  const rows=(await queued(f)).filter(row=>['connect_upload_completed','connect_share_created'].includes(row.event));
+  assert.equal(rows.length,2,'repeat complete/share calls do not create additional qualifying actions');
+  assert.equal(rows.filter(row=>row.event==='connect_share_created').length,1);
+  f.provider.status=503;await sweep(f);
+  const actions=f.provider.bodies.at(-1).batch.filter(event=>['connect_upload_completed','connect_share_created'].includes(event.event));
+  assert.equal(actions.length,2,'both authoritative action kinds reach actual export transport');
+  assert.equal(new Set(actions.map(event=>event.timestamp.slice(0,10)+':'+event.properties.distinct_id)).size,1,'one account/day across both action kinds');
+  assert.ok(actions.every(event=>event.properties.distinct_id==='account:'+a.id&&event.properties.actor==='device'&&event.properties.outcome==='success'));
+  assert.equal(JSON.stringify(actions).includes(link),false,'capability links never enter event properties');
+  assert.ok(actions.every(event=>event.timestamp.endsWith('Z')));
+  f.provider.status=200;await sweep(f);
+  assert.deepEqual(f.provider.bodies.at(-1).batch.filter(event=>['connect_upload_completed','connect_share_created'].includes(event.event)),actions,'retry keeps UUIDs and authoritative timestamps');
+  const off=await f.call('/v1/analytics/consent',{...a,method:'POST',body:{consented:false,revision:on.revision,noticeVersion:'product-analytics-v1'}});assert.equal(off.status,200);
+  const after=await upload(f,a,803);assert.equal((await f.call(after+'/complete',{token:a.token,method:'POST'})).status,200);assert.equal((await share(after)).status,200);
+  assert.deepEqual(await queued(f),[],'withdrawal blocks subsequent real upload/share admissions');
+  await sweep(f);assert.equal(f.provider.bodies.length,2,'post-withdrawal activity never sends another batch');
+ }finally{await f.close();}
+});
+test('DAU: additive share migration preserves state and authoritative UTC days',async()=>{
+ const f=await setup({SHARING_ENABLED:'true'});try{
+  await f.db.exec((await readFile('migrations/0003.sql','utf8')).replaceAll('\n',' '));
+  const a=await f.identity('utc-dau-account'),midnight=Math.floor(Date.now()/86400000)*86400000;
+  await enroll(f,a.id,midnight-2);
+  const insert=async(n,at)=>{
+   await upload(f,a,n);
+   await f.db.prepare('INSERT INTO shares(id,capture_id,account_id,hash,envelope,created_at) VALUES(?,?,?,?,?,?)').bind('share-'+n,id(n),a.id,digest('share-'+n),'synthetic-owned-capability',at).run();
+  };
+  await insert(811,midnight-1);
+  await f.db.exec('UPDATE analytics_control SET enabled=0,dropped=11');
+  const control=await f.db.prepare('SELECT * FROM analytics_control').first(),budget=await f.db.prepare('SELECT * FROM r2_budget').first(),consent=await f.db.prepare('SELECT * FROM analytics_consent').first();
+  await f.db.exec((await readFile('migrations/0008.sql','utf8')).replaceAll('\n',' '));
+  assert.deepEqual(await f.db.prepare('SELECT * FROM analytics_control').first(),control,'a later operator stop is preserved');
+  assert.deepEqual(await f.db.prepare('SELECT * FROM r2_budget').first(),budget);assert.deepEqual(await f.db.prepare('SELECT * FROM analytics_consent').first(),consent);
+  assert.deepEqual(await queued(f),[],'existing share rows are not backfilled');
+  await insert(812,midnight-1);assert.deepEqual(await queued(f),[],'global stop prevents share admission');
+  await f.db.exec('UPDATE analytics_control SET enabled=1');
+  await insert(813,midnight-1);await insert(814,midnight);
+  await sweep(f);
+  const actions=f.provider.bodies.at(-1).batch.filter(event=>event.event==='connect_share_created');
+  assert.deepEqual(actions.map(event=>event.timestamp).sort(),[new Date(midnight-1).toISOString(),new Date(midnight).toISOString()]);
+  assert.equal(new Set(actions.map(event=>event.timestamp.slice(0,10)+':'+event.properties.distinct_id)).size,2,'UTC midnight separates days without local-time conversion');
+  assert.equal(JSON.stringify(actions).includes('synthetic-owned-capability'),false);
  }finally{await f.close();}
 });
 test('excluded accounts cannot be linked or exported; disabled/invalid delivery never contacts provider',async()=>{

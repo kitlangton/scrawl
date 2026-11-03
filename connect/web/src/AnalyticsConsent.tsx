@@ -37,7 +37,7 @@ export function AnalyticsConsent({ csrf }: { csrf: string }) {
   }
   return <details className="hosted-details">
     <summary>Optional account analytics</summary>
-    <p>Simon van Laak uses EU-hosted PostHog to measure account creation, device connections, completed uploads and storage quantities. No recording contents, filenames, email, keys or capability links are sent.</p>
+    <p>Simon van Laak uses EU-hosted PostHog to measure account creation, device connections, completed uploads, creation of share links and storage quantities. Daily active Connect accounts counts accounts with a completed upload or a share link created that UTC day; it does not count local-only recordings. No recording contents, filenames, email, keys or capability links are sent.</p>
     <p>This is separate from website analytics, Google sign-in, upload consent and agent read access. Saying no does not disable Connect. Your choice stays until you change it or delete the account.</p>
     {choice && <label className="hosted-check"><input type="checkbox" checked={desired ?? choice.consented} disabled={pending || !choice.available} onChange={event => void choose(event.target.checked)} /><span>Allow account analytics</span></label>}
     {choice && !choice.available && <p className="hosted-quiet">Analytics delivery is currently unavailable. An existing choice is retained; you can still stop account analytics.</p>}
