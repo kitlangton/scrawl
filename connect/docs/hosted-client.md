@@ -273,3 +273,7 @@ The private destination guard, integrity validation and atomic complete-bundle
 publication still apply. Loopback tests exercise queue pointer → delayed upload
 → fetch and unavailable/unauthorized failures; these are not live service or
 native clipboard proof.
+
+Upload failures emit local allowlisted stage/reason codes on stderr. The existing
+queue/progress categories are unchanged; diagnostics emit neither raw error text,
+paths, endpoint keys, credentials or capture contents.

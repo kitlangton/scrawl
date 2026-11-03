@@ -9,13 +9,13 @@ test('share window requires explicit consent and keeps URLs and other bridges ou
  const child=spawn(require('electron'),['--no-sandbox','--remote-debugging-port=0',path.resolve(__dirname,'../../electron/share/main.cjs')],{stdio:['pipe','pipe','pipe']});
  let browser,lines='';child.stdout.on('data',b=>lines+=b);
  t.after(async()=>{await browser?.close().catch(()=>{});child.stdin.end();if(child.exitCode===null)child.kill();});
- const endpoint=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('No Electron endpoint')),10000);child.stderr.on('data',b=>{const m=b.toString().match(/DevTools listening on (ws:\/\/\S+)/);if(m){clearTimeout(timer);resolve(m[1]);}});});
+ const endpoint=await new Promise<string>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('No Electron endpoint')),10000);child.stderr.on('data',b=>{const m=b.toString().match(/DevTools listening on (ws:\/\/\S+)/);if(m){clearTimeout(timer);resolve(m[1]);}});});
  browser=await chromium.connectOverCDP(endpoint);const context=browser.contexts()[0];await expect.poll(()=>context.pages().length).toBe(1);
  const page=context.pages()[0];const send=state=>child.stdin.write(JSON.stringify({capture:'synthetic.apparent',state})+'\n');
  send('confirm');
  await expect(page.getByText('Anyone with this link can view this capture. Shared captures are not end-to-end encrypted.')).toBeVisible();
  assert.equal(lines,'');
- assert.deepEqual(await page.evaluate(()=>({require:typeof window.require,process:typeof window.process,other:typeof window.apparent,keys:Object.keys(window.apparentShare).sort()})),{require:'undefined',process:'undefined',other:'undefined',keys:['cancel','confirm','subscribe']});
+ assert.deepEqual(await page.evaluate(()=>{const exposed=window as unknown as Record<string,unknown>;return {require:typeof exposed.require,process:typeof exposed.process,other:typeof exposed.apparent,keys:Object.keys(exposed.apparentShare as object).sort()};}),{require:'undefined',process:'undefined',other:'undefined',keys:['cancel','confirm','subscribe']});
  await page.getByRole('button',{name:'Create and copy public link'}).click();
  await expect.poll(()=>lines).toBe('confirm\n');
  await expect(page.getByRole('button',{name:'Create and copy public link'})).toBeDisabled();

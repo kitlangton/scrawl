@@ -26,10 +26,11 @@ await mkdir(output, {mode: 0o700});
 const home = await realpath(await mkdtemp('/tmp/acn-')), evidence = join(output, 'evidence');
 await mkdir(evidence, {mode: 0o700});
 process.chdir(join(source, 'connect/service'));
-let server, service, account, desktop, log, scene, recorder;
-const children = new Set(), calls = [], desktopPids = [], report = {passed: false,
+let server, service, account, desktop, log, scene, recorder, capturedBundle, runDiagnosticUpload;
+const children = new Set(), calls = [], desktopPids = [];
+const report: {passed:boolean;scope:string;[key:string]:unknown} = {passed: false,
   scope: 'installed Mac completed-pill public-copy; synthetic hosted desktop and loopback Worker; no Google/deployed proof'};
-const delay = ms => new Promise(r => setTimeout(r, ms));
+const delay = (ms:number) => new Promise<void>(r => setTimeout(r, ms));
 const alive = p => p.exitCode === null && p.signalCode === null;
 async function stop(p) {
   if (!p) return;
@@ -38,7 +39,7 @@ async function stop(p) {
     const closed = new Promise(r => p.once('close', r));
     process.kill(-p.pid, 'SIGTERM');
     let timer;
-    try { await Promise.race([closed, new Promise(r => { timer = setTimeout(() => {
+    try { await Promise.race([closed, new Promise<void>(r => { timer = setTimeout(() => {
       if (alive(p)) process.kill(-p.pid, 'SIGKILL'); r();
     }, 5000); })]); await closed; } finally { clearTimeout(timer); }
   }
@@ -50,7 +51,7 @@ const {fixture} = await import('../helpers.mjs');
 server = createServer(async (req, res) => {
   try {
     assert(req.url.startsWith('/v1/') || req.url.startsWith('/s/'), 'Only local native API/public routes admitted');
-    const receipt = {method: req.method, path: new URL(req.url, 'http://fixture').pathname}; calls.push(receipt);
+    const receipt: {method:string;path:string;status?:number} = {method: req.method, path: new URL(req.url, 'http://fixture').pathname}; calls.push(receipt);
     const chunks = []; let bytes = 0;
     for await (const chunk of req) { bytes += chunk.length; assert(bytes < 4 * 1024 * 1024); chunks.push(chunk); }
     const response = await service.mf.dispatchFetch(origin + req.url, {method: req.method, headers: req.headers,
@@ -63,7 +64,7 @@ await new Promise(r => server.listen(0, '127.0.0.1', r));
 const origin = `http://127.0.0.1:${server.address().port}`, config = join(home, 'config.json');
 await writeFile(config, JSON.stringify({microphoneEnabled: false, experiments: {hostedEncryption: true, hostedSync: true, hostedSharing: true}, cloud: {server: origin, enabled: false, uploadConsent: false},
   onboarding: {seen: true}, errorReporting: false, syntheticFixture: {preserve: true}}), {mode: 0o600});
-const env = {...process.env, HOME: home, CFFIXED_USER_HOME: home, XDG_CONFIG_HOME: join(home, '.config'),
+const env:NodeJS.ProcessEnv = {...process.env, HOME: home, CFFIXED_USER_HOME: home, XDG_CONFIG_HOME: join(home, '.config'),
   TMPDIR: home, TMP: home, TEMP: home, APPARENT_CONFIG: config, APPARENT_CAPTURES_DIR: join(home, 'captures')};
 delete env.ELECTRON_RUN_AS_NODE;
 // Keep model/update curl invocations offline; native transport may only reach this fixture.
@@ -94,8 +95,8 @@ sys.exit(subprocess.run(['/usr/bin/curl',*args],input=data,env=env).returncode)
 env.PATH = bin + ':' + env.PATH;
 for (const args of [['https://example.invalid'], ['--proxy', 'http://example.invalid', '--config', '-'], ['--location', '--config', '-'], ['--resolve', '127.0.0.1:80:192.0.2.1', '--config', '-']])
   assert.equal(spawnSync(join(bin, 'curl'), args, {env, input: ''}).status, 22);
-function cli(args, onData = () => {}) {
-  return new Promise((resolve, reject) => {
+function cli(args:string[], onData:(text:string)=>void = () => {}):Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     const p = spawn(binary, ['fetch', 'capture'].includes(args[0]) ? args : ['connect', ...args], {env, detached: true, stdio: ['ignore', 'pipe', 'pipe']});
     children.add(p); let stdout = '';
     let hardTimeout;
@@ -108,6 +109,7 @@ function cli(args, onData = () => {}) {
       if (code === 0) resolve(stdout); else reject(new Error(`Native ${args[0]} failed (${code})`)); });
   });
 }
+runDiagnosticUpload = bundle => cli(['upload', bundle]);
 async function login(scope) {
   let approval;
   await cli(['login', '--server', origin, '--scope', scope, ...(scope === 'upload' ? ['--consent-upload'] : []), '--no-browser'], text => {
@@ -133,8 +135,8 @@ const driver = join(output, 'share-driver');
 const compiled = spawnSync('swiftc', [join(source, 'capture/desktop/scripts/native/public-share.swift'), '-o', driver], {timeout: 45000, encoding: 'utf8'});
 assert.equal(compiled.status, 0, 'Native driver compilation failed: ' + compiled.stderr);
 let serial = 0;
-function ui(action, pid, label) {
-  const args = action === 'clipboard' ? [action, ...(pid === undefined ? [] : [pid])] : [action, String(pid), label, join(evidence, `window-${++serial}.png`)];
+function ui(action:string, pid?:number|string, label?:string) {
+  const args = action === 'clipboard' ? [action, ...(pid === undefined ? [] : [String(pid)])] : [action, String(pid), label, join(evidence, `window-${++serial}.png`)];
   const result = spawnSync(driver, args, {env, timeout: 12000, encoding: 'utf8'});
   assert.equal(result.status, 0, `Owned-window ${action} failed: ${result.stderr}`);
   return result.stdout.trim();
@@ -184,10 +186,19 @@ async function openPopup() {
   await delay(2500);
   const saved = JSON.parse(await cli(['capture', 'stop', id, '--wait', '--timeout', '60']));
   assert.equal(saved.capture_id, id); assert.equal(saved.status, 'saved');
-  const bundle = saved.bundle_path; assert(bundle.startsWith(join(home, 'captures') + '/'));
+  const bundle = saved.bundle_path; assert(bundle.startsWith(join(home, 'captures') + '/')); capturedBundle = bundle;
   Object.assign(report, {captureSaved: true, binarySHA256: createHash('sha256').update(await readFile(binary)).digest('hex')});
   await retainBundle(bundle);
-  const jobs = async () => Promise.all((await readdir(join(home, 'hosted'))).filter(n => n.endsWith('.job')).map(async n => JSON.parse(await readFile(join(home, 'hosted', n)))));
+  const known = new Set(['apparent.json', 'notes.json', 'summary.md', 'contact-sheet.png', 'contact-sheet-full.png', 'recording.mp4', 'recording.mov', 'audio.wav', 'timeline.json', 'finish-trace.json', 'frames', 'frames-full', 'notes-ui.log', '.publication.lock', '.publication-pending', 'unfinished.json']);
+  const {lstat} = await import('node:fs/promises');
+  report.sourceEntries = await Promise.all((await readdir(bundle)).map(async name => {
+    const stat = await lstat(join(bundle, name));
+    return {name: known.has(name) ? name : 'unrecognized', regular: stat.isFile(), directory: stat.isDirectory(),
+      symlink: stat.isSymbolicLink(), owned: stat.uid === process.getuid(), mode: stat.mode & 0o777, links: stat.nlink, size: stat.size};
+  }));
+  const acl = spawnSync('/bin/ls', ['-lde', home, join(home, 'captures'), bundle, join(bundle, 'frames')], {encoding: 'utf8', timeout: 3000});
+  report.sourceAcl = {checked: acl.status === 0, hasAllowEntry: /\ballow\b/.test(acl.stdout || '')};
+  const jobs = async () => Promise.all((await readdir(join(home, 'hosted'))).filter(n => n.endsWith('.job')).map(async n => JSON.parse(await readFile(join(home, 'hosted', n), 'utf8'))));
   const privateJob = await until(async () => (await jobs()).find(j => j.encrypted && j.status === 'ready'), 25, 'Approved private transfer not ready');
   const privateFile = join(home, 'hosted', privateJob.id + '.job');
   const privateBytes = await readFile(privateFile);
@@ -239,13 +250,25 @@ finally {
   try {
     const allowedErrors = new Set(['file_too_large', 'encryption_pending_recipient', 'encryption_action_required', 'quota_exceeded', 'unsupported_asset', 'auth_required', 'upload_failed']);
     report.uploadQueue = await Promise.all((await readdir(join(home, 'hosted'))).filter(n => n.endsWith('.job')).map(async name => {
-      const j = JSON.parse(await readFile(join(home, 'hosted', name)));
+      const j = JSON.parse(await readFile(join(home, 'hosted', name), 'utf8'));
       return {status: ['pending', 'ready', 'failed', 'cancelled', 'expired'].includes(j.status) ? j.status : 'unknown',
         error: j.error == null ? null : allowedErrors.has(j.error) ? j.error : 'unknown',
         encrypted: j.encrypted === true, publicCopy: j.publicCopy === true,
         attempts: Number.isSafeInteger(j.attempts) ? j.attempts : null};
     }));
-    report.apiStatuses = calls.map(c => ({method: c.method, status: c.status ?? null}));
+    if (!report.passed && capturedBundle && report.failure === 'Approved private transfer not ready') {
+      // A failed case stays failed. Stop the GUI worker before the explicit
+      // synthetic CLI control so another worker cannot own that control upload.
+      try {
+        await stop(desktop); report.sameSourceCliGuiStopped = !alive(desktop);
+        assert(report.sameSourceCliGuiStopped, 'GUI must stop before the CLI diagnostic');
+        report.sameSourceCliAfterApiCall = calls.length;
+        await runDiagnosticUpload(capturedBundle);
+        const controls = await Promise.all((await readdir(join(home, 'hosted'))).filter(n => n.endsWith('.job')).map(async n => JSON.parse(await readFile(join(home, 'hosted', n), 'utf8'))));
+        report.sameSourceCliEncryptedReady = controls.some(j => j.bundle === capturedBundle && j.encrypted && j.status === 'ready');
+      } catch { report.sameSourceCliControlFailed = true; }
+    }
+    report.apiStatuses = calls.map(c => ({route: c.path === '/v1/encryption/peers' ? 'encryption_peers' : c.path === '/v1/account' ? 'reachability' : 'other', method: c.method, status: c.status ?? null}));
   } catch { report.queueInspectionUnavailable = true; }
 
   if (recorder && alive(recorder)) {
