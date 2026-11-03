@@ -597,6 +597,8 @@ fn check() -> Result<bool> {
     if result.is_err() {
         super::retry::failed(&retry, super::retry::now()?)
             .context("cannot persist update failure cooldown")?;
+    } else {
+        super::retry::clear(&retry)?;
     }
     result
 }
