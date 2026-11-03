@@ -6887,6 +6887,7 @@ pub fn run_app(
                             }
                             LiveOverlayEvent::NoteClosed { focus, owner } => platform::restore_note_focus(focus, owner),
                             LiveOverlayEvent::NoteOutside => { if let Some(ui) = coord.note_ui.as_ref() { ui.outside(); } },
+                            LiveOverlayEvent::NoteResumeDrawing => { if let Some(ui) = coord.note_ui.as_ref() { ui.resume_drawing(); } },
                             LiveOverlayEvent::Note { pin, t, x, y, screen_x, screen_y } => {
                                 coord.request_immediate_frame();
                                 let (focus, owner) = platform::note_focus();

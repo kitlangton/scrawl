@@ -219,6 +219,7 @@ pub enum LiveOverlayEvent {
     Note { pin: u32, t: u64, x: f32, y: f32, screen_x: f64, screen_y: f64 },
     NoteClosed { focus: u64, owner: u32 },
     NoteOutside,
+    NoteResumeDrawing,
     NotesUnavailable,
     /// The iPhone mirror ended on its own (unplugged, never found, or access denied).
     PhoneEnded,
@@ -1529,7 +1530,7 @@ impl SharedCaptureTelemetry {
     fn resume_note_drawing(&self, gesture: &mut NoteDrawGesture, at: (f64, f64), shift: bool) {
         if gesture.update(self.notes_editing.load(Ordering::Acquire), shift, at,
             |x, y| self.on_capture_input_ui(x, y)) {
-            let _ = self.ui_sender.try_send(LiveOverlayEvent::NoteOutside);
+            let _ = self.ui_sender.try_send(LiveOverlayEvent::NoteResumeDrawing);
         }
     }
 }

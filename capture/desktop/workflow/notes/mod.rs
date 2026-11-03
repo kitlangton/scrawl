@@ -456,6 +456,11 @@ impl Session {
         });
         result
     }
+    /// A Shift gesture leaves typing without selecting another app, so retain
+    /// the original focus token (unlike an actual outside click).
+    pub fn resume_drawing(&self) {
+        let _ = self.sender.try_send(Message::Action(CommandMessage::Dismiss));
+    }
     pub fn open(&self, anchor: Anchor) {
         let _ = self.sender.try_send(Message::Open(anchor));
     }
