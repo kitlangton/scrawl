@@ -346,17 +346,28 @@ GitHub-hosted **Linux** images; Mac and local runs still execute the suite. Root
 Rust checks, real-provider consumer tests and native/platform proof always remain
 required. This pilot does not cache any GUI/native acceptance or release artifacts.
 
-The reviewed closure includes every tracked non-Public input, conservatively
-invalidating consumers, shared code, workflows and tooling. The standalone client
-has no Public source dependency. Client sources/fixtures/manifests/locks, root
-Cargo manifests/locks and `.cargo` configuration are additionally pinned by a
-reviewed signature. A changed package/configuration automatically runs in full;
-updating that signature requires reviewing its new dependency and runtime-input
-closure, not copying a new hash to make a test pass. New untracked work, symlinks,
+The standalone client stream excludes `capture/`, `composition/`, `shared/`,
+`public/`, `connect/web/` and `enablement/native/`. Its reviewed Cargo package has
+no path dependencies, build script or source/fixture includes outside the package;
+its tests construct local synthetic configuration, media and transport fixtures.
+Root tests still execute the real application-provider consumers. Service/API,
+root build, workflow, verification and unknown inputs remain conservative
+invalidation inputs, even when not compiled by the standalone client. Changes in
+excluded streams do not invalidate matching client proof; that is not permission
+to skip those streams' own checks or any native acceptance.
+
+Client sources/fixtures/manifests/locks, root Cargo manifests/locks and `.cargo`
+configuration are additionally pinned by a reviewed signature. A changed
+package/configuration automatically runs in full; updating that signature requires
+reviewing its new dependency and runtime-input closure, not copying a new hash to
+make a test pass. The renewed signature covers the current encryption, renewal,
+settings and transport scenarios. New untracked work anywhere, symlinks in included inputs,
 unknown runner images, global Cargo configuration, missing tool probes and
 application environment overrides disable reuse. Image, kernel, architecture,
-Rust/Cargo/curl/compiler/libc/Node identities and relevant build/locale environment
-also participate in compatibility. Values are hashed rather than published.
+Rust/Cargo/curl/checksum/compiler/libc/Node identities and relevant build/locale
+environment also participate in compatibility. Curl proxy/bypass and certificate
+environment overrides invalidate prior proof too. Values are hashed rather than
+published.
 
 A successful baseline plus **two matching full shadow executions** are required
 before the first reuse, independently per compatible input/environment identity.
@@ -369,7 +380,7 @@ Actions caches only the small proof/tombstone JSON, with a unique run/attempt ke
 and a verifier/platform restore prefix. Automatic main workflows alone save it;
 manual diagnostics cannot displace it. Failed audits are saved too. A missing,
 malformed, incompatible, failed or incomplete proof always executes; malformed
-proof also disables reuse. Whole-tree input identity, not the last-push delta,
+proof also disables reuse. Complete client-stream input identity, not the last-push delta,
 prevents cancelled intermediate commits from hiding changes. Reuse reports both
 the currently checked candidate and the original successful test SHA/evidence.
 The `connect-client-proof-<runner>` artifact records decisions and duration for
