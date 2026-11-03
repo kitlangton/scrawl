@@ -36,10 +36,43 @@ fn native_wayland_clipboard() -> bool {
 /// clipboard contents: another process may have become the selection owner.
 pub fn combined_offer_supported() -> bool {
     native_wayland_clipboard()
-        && super::super::wayland_display().is_some_and(|_| {
-            std::env::current_exe().is_ok_and(|exe| exe.is_file())
-                && read_wayland(&["--list-types"], 8192).is_ok()
-        })
+        && owner_backend_ready()
+}
+
+// Probe the actual replacement in a bounded child, without claiming a selection.
+// A successful wl-paste probe does not establish that this backend can start.
+fn owner_backend_ready() -> bool {
+    let (Ok(executable), Some(display)) = (owner_executable(), super::super::wayland_display()) else {
+        return false;
+    };
+    Command::new("timeout")
+        .arg("3s")
+        .arg(executable)
+        .args([OWNER_ARGUMENT, "--check"])
+        .env("WAYLAND_DISPLAY", display)
+        .output()
+        .is_ok_and(|output| output.status.success() && output.stdout == b"READY\n")
+}
+
+fn owner_executable() -> std::io::Result<std::path::PathBuf> {
+    // Native integration tests run inside a Rust test harness; re-exec the
+    // separately built application (or AppImage), which owns the real protocol.
+    #[cfg(test)]
+    if let Some(path) = std::env::var_os("APPARENT_TEST_CLIPBOARD_OWNER") {
+        return Ok(path.into());
+    }
+    std::env::current_exe()
+}
+
+pub fn check_owner_backend() -> Result<()> {
+    use wl_clipboard_rs::paste::{ClipboardType, Error, Seat, get_mime_types};
+    match get_mime_types(ClipboardType::Regular, Seat::Unspecified) {
+        Ok(_) | Err(Error::ClipboardEmpty) => {
+            println!("READY");
+            Ok(())
+        }
+        Err(error) => Err(error).context("Native clipboard backend unavailable"),
+    }
 }
 
 pub struct TextSnapshot {
@@ -96,7 +129,7 @@ pub fn snapshot_text_wayland() -> Result<TextSnapshot> {
     );
     if entries.len() > 1 {
         anyhow::ensure!(
-            std::env::current_exe().is_ok_and(|exe| exe.is_file()),
+            owner_backend_ready(),
             "Rich clipboard owner is unavailable; original clipboard untouched"
         );
     }
@@ -121,7 +154,7 @@ pub fn restore_text_wayland(snapshot: TextSnapshot, offered: Option<(&str, &[u8]
 fn copy_multi_wayland(entries: &[(String, Vec<u8>)]) -> Result<()> {
     validate_entries(entries)?;
     let display = super::super::wayland_display().context("No Wayland display")?;
-    let mut child = Command::new(std::env::current_exe().context("Locating clipboard owner")?)
+    let mut child = Command::new(owner_executable().context("Locating clipboard owner")?)
         .arg(OWNER_ARGUMENT)
         .env("WAYLAND_DISPLAY", display)
         .stdin(Stdio::piped())
@@ -428,6 +461,35 @@ fn copy_wayland(mime: &str, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn application_owner_fails_closed_before_acquiring_a_selection() {
+        let Some(executable) = std::env::var_os("APPARENT_TEST_CLIPBOARD_OWNER") else {
+            return;
+        };
+        let root = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
+        std::fs::create_dir(&root).unwrap();
+        let launch = || {
+            let mut command = Command::new(&executable);
+            // An owned directory with no compositor socket: never access the
+            // host clipboard, even when this test runs in a desktop session.
+            command.env("XDG_RUNTIME_DIR", &root).env("WAYLAND_DISPLAY", "missing-socket");
+            command
+        };
+        let check = launch().args([OWNER_ARGUMENT, "--check"]).output().unwrap();
+        assert!(!check.status.success());
+        assert!(check.stdout.is_empty());
+        for bytes in [vec![0, 0, 0, 0], vec![0, 0, 0, 33], vec![0, 0, 0, 1, 0]] {
+            let mut child = launch().arg(OWNER_ARGUMENT)
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+                .spawn().unwrap();
+            child.stdin.take().unwrap().write_all(&bytes).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn rich_offer_protocol_round_trips_exact_mime_and_binary_bytes() {
