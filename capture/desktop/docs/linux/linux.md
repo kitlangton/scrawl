@@ -96,6 +96,14 @@ or failed pin is retried briefly and logged, not replaced with a broad app rule.
 Verified with Hyprland in the isolated Omarchy VM. Lua uses an explicit set-pin
 action; legacy hyprlang dispatches pin only after observing the capsule unpinned.
 
+Electron pin admission is scoped to the current visible capture presentation.
+Hiding the controls or changing capture generation invalidates an outstanding
+pin attempt, including a compositor reply that arrives after cancellation.
+Clock updates do not restart its bounded retry budget. A pin failure for the
+still-current visible presentation restores native controls through the existing
+coordinator fallback; process exit and renderer/activation timeouts retain that
+fallback too. This changes no routing flag and does not remove the native path.
+
 XWayland sees the pointer only over X11 windows and keeps the last place it saw it over the rest, which picked the wrong display for a recording and started an area selection in the wrong place. On Hyprland `linux::cursor_position` asks Hyprland (`j/cursorpos`) and maps the point to the same place on the same output in XWayland's layout (`hyprland::cursor_in_x_space`): XWayland can put a monitor at y 0 where Hyprland has it at y 1080, so outputs are matched by name and the point is moved by the difference.
 
 The clipboard goes through `wl-copy`, as on KDE Wayland.

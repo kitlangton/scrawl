@@ -101,6 +101,45 @@ class ParserTests(unittest.TestCase):
         result = subprocess.run(['bash', str(Path(__file__).with_name('capture-smoke.py')), '--help'], capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('--consent-timeout', result.stdout)
+        self.assertIn('--pill-recovery', result.stdout)
+
+
+class PillIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.processes = [
+            {"pid": 40, "ppid": 1, "uid": 1000, "args": ["/tmp/apparent"]},
+            {"pid": 41, "ppid": 40, "uid": 1000, "args": ["/opt/electron", "--ozone-platform=x11", "/opt/share/apparent/settings/app/electron/pill/main.cjs"]},
+        ]
+        self.clients = [{"pid": 41, "xwayland": True, "title": "Apparent Recording Controls 18000005",
+                         "address": "0xabc", "pinned": True,
+                         "workspace": {"id": 2, "name": "2"}}]
+
+    def test_exact_descendant_xwayland_client_and_native_xid_are_required(self):
+        child, client, xid = smoke.pill_client_identity(self.processes, 40, self.clients)
+        self.assertEqual(child["pid"], 41)
+        self.assertEqual(client["address"], "0xabc")
+        self.assertEqual(xid, "18000005")
+
+    def test_matching_title_without_owned_electron_child_is_rejected(self):
+        processes = [self.processes[0], self.processes[1] | {"ppid": 1}]
+        with self.assertRaisesRegex(smoke.Failure, "Electron pill child"):
+            smoke.pill_client_identity(processes, 40, self.clients)
+
+    def test_title_cannot_substitute_for_exact_client_pid(self):
+        clients = [self.clients[0] | {"pid": 42}]
+        with self.assertRaisesRegex(smoke.Failure, "Hyprland client"):
+            smoke.pill_client_identity(self.processes, 40, clients)
+
+    def test_xwayland_and_pinned_state_are_asserted(self):
+        for change, message in (({"xwayland": False}, "not an XWayland client"),
+                                ({"pinned": False}, "is not pinned")):
+            with self.subTest(change=change), self.assertRaisesRegex(smoke.Failure, message):
+                smoke.pill_client_identity(self.processes, 40, [self.clients[0] | change])
+
+    def test_native_xid_must_be_hexadecimal(self):
+        clients = [self.clients[0] | {"title": "Apparent Recording Controls unknown"}]
+        with self.assertRaisesRegex(smoke.Failure, "no native XID"):
+            smoke.pill_client_identity(self.processes, 40, clients)
 
 
 class CleanupTests(unittest.TestCase):
@@ -184,6 +223,22 @@ class CleanupTests(unittest.TestCase):
 
 
 class TransportTests(unittest.TestCase):
+    def test_cleanup_removes_only_owned_runtime_scratch_without_following_links(self):
+        with tempfile.TemporaryDirectory(prefix='cs-') as directory:
+            root = Path(directory)
+            out = root / 'output'
+            scratch = out / 'tmp'
+            scratch.mkdir(parents=True)
+            retained = root / 'retained'
+            retained.write_text('retain this')
+            (scratch / 'package-link').symlink_to(retained)
+            recipe = smoke.Recipe(out, root / 'unused', 1)
+            recipe.env['TMPDIR'] = str(scratch)
+            recipe.cleanup()
+            self.assertFalse(scratch.exists())
+            self.assertEqual(retained.read_text(), 'retain this')
+            self.assertEqual(recipe.report['removed_runtime_scratch'], 'tmp')
+
     def exercise(self, fail=False, pending=False):
         # Keep paths short, as required by the real Unix control socket contract.
         with tempfile.TemporaryDirectory(prefix='cs-', dir=os.environ.get('TMPDIR')) as directory:

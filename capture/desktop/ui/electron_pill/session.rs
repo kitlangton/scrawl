@@ -43,6 +43,8 @@ pub struct Session {
     #[cfg(target_os = "linux")]
     pin: Arc<AtomicBool>,
     #[cfg(target_os = "linux")]
+    pin_admission: Arc<Mutex<super::pin::Admission>>,
+    #[cfg(target_os = "linux")]
     drag_position: Arc<Mutex<Option<[f64; 4]>>>,
     frame: Arc<Mutex<Option<(u64, [f64; 4])>>>,
 }
@@ -259,6 +261,8 @@ impl Session {
             #[cfg(target_os = "linux")]
             pin: pin_request.clone(),
             #[cfg(target_os = "linux")]
+            pin_admission: Arc::new(Mutex::new(super::pin::Admission::default())),
+            #[cfg(target_os = "linux")]
             drag_position: Arc::new(Mutex::new(None)),
             frame,
         };
@@ -267,6 +271,7 @@ impl Session {
             let alive = session.alive.clone();
             let id = session.window_id.clone();
             let activated = session.activated.clone();
+            let admission = session.pin_admission.clone();
             std::thread::spawn(move || {
                 // Compositor requests can block; neither GUI ticks nor the state
                 // writer may wait for them. Coalesce remap/drag notifications.
@@ -279,28 +284,19 @@ impl Session {
                     {
                         continue;
                     }
+                    let Some(epoch) = admission.lock().unwrap().begin() else { continue; };
                     let context = pin_diagnostics.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
                         .clone().unwrap_or_else(|| "presentation context unavailable".into());
-                    let mut last_error = None;
-                    for _ in 0..8 {
-                        if !alive.load(Ordering::Acquire)
-                            || !crate::capture::ui_process::owns(child_pid as i32)
-                        {
-                            return;
-                        }
+                    let current = || alive.load(Ordering::Acquire)
+                        && crate::capture::ui_process::owns(child_pid as i32);
+                    let error = super::pin::reconcile(&admission, epoch, current, || {
                         let xid = id.load(Ordering::Acquire);
-                        if xid != 0 {
-                            match crate::capture::desktop::linux::hyprland::pin_pill_for_process(xid, child_pid, || {
-                                alive.load(Ordering::Acquire)
-                                    && crate::capture::ui_process::owns(child_pid as i32)
-                            }) {
-                                Ok(()) => { last_error = None; break; }
-                                Err(error) => last_error = Some(error),
-                            }
-                        }
-                        std::thread::sleep(Duration::from_millis(120));
-                    }
-                    if let Some(error) = last_error {
+                        anyhow::ensure!(xid != 0, "Recording pill has no native window identity");
+                        crate::capture::desktop::linux::hyprland::pin_pill_for_process(xid, child_pid, || {
+                            current() && admission.lock().unwrap().current(epoch)
+                        })
+                    }, || std::thread::sleep(Duration::from_millis(120)));
+                    if let Some(error) = error {
                         crate::capture::engine::runtime::apparent_log(format!(
                             "Electron recording pill: could not pin on Hyprland: {error:#} ({context}; activation_ack={})",
                             activated.load(Ordering::Acquire),
@@ -309,8 +305,8 @@ impl Session {
                         // prove that XWayland supplied a compositor surface. Do not
                         // leave capture without usable controls after bounded native
                         // admission fails; the coordinator restores its native pill.
-                        alive.store(false, Ordering::Release);
-                        return;
+                        // The GUI consumes this presentation's failure and restores
+                        // native controls if it is still current at its next tick.
                     }
                 }
             });
@@ -337,6 +333,8 @@ impl Session {
         }
     }
     pub fn healthy(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if !self.pin_admission.lock().unwrap().healthy() { return false; }
         self.alive.load(Ordering::Acquire)
             && (self.ready() || self.opened.elapsed() < Duration::from_secs(5))
             && self.activation.is_none_or(|since| {
@@ -389,6 +387,8 @@ impl Session {
         }
     }
     fn send(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.pin_admission.lock().unwrap().update(self.view.phase != "hidden", self.generation);
         let (lock, wake) = &*self.mailbox;
         lock.lock().unwrap().state = Some(serde_json::json!({"type":"state","view":self.view}));
         self.sent = Instant::now();
@@ -463,5 +463,44 @@ impl Drop for Session {
                 let _ = child.wait();
             });
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod native_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires owned disposable Hyprland guest and packaged Electron assets"]
+    fn cancelled_native_pin_keeps_child_for_next_capture() {
+        assert!(crate::capture::desktop::linux::hyprland::running());
+        let view = View {
+            revision: 1, phase: "recording", clock: "00:01".into(), label: "Synthetic pin test".into(),
+            warning: None, notice: None, pocket: None, reduced_motion: true,
+            draggable: false, input_level: None, actions: vec![],
+        };
+        let mut session = Session::open(view.clone(), 1, Default::default()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !session.ready() && Instant::now() < deadline {
+            session.update(view.clone(), 1, Default::default());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(session.ready() && session.healthy());
+        session.activate();
+        std::thread::sleep(Duration::from_millis(600));
+        let mut hidden = view.clone();
+        hidden.phase = "hidden";
+        session.update(hidden, 1, Default::default());
+        // Model a show/resize notification already in flight when Cancel hides
+        // the surface. The real worker, child and compositor handle the request.
+        session.pin.store(true, Ordering::Release);
+        std::thread::sleep(Duration::from_millis(1800));
+        assert!(session.healthy(), "cancelled native pin retired the reusable Electron child");
+        session.update(view, 2, Default::default());
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(session.healthy());
+        crate::capture::desktop::linux::hyprland::pin_pill_for_process(
+            session.window_number().unwrap(), session.child_pid, || true,
+        ).expect("next capture must map the same owned Electron child");
     }
 }
