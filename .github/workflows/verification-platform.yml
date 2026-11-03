@@ -27,6 +27,11 @@ jobs:
           ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verification receipt contracts
+        run: node --test enablement/verification/*.test.ts
       - name: Selector and hook contracts (no native proof)
         run: |
           python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
@@ -82,15 +87,24 @@ jobs:
       - name: Linux Electron dependencies
         if: runner.os == 'Linux'
         run: npx --no-install playwright install-deps chromium
-      - run: npm test
+      - name: Renderer test receipt (not native acceptance)
+        run: node ../../../../enablement/verification/receipt.ts --suite desktop-unit --output "$RUNNER_TEMP/verification-receipts" -- npm test
       - name: Electron bridge and renderer smoke (synthetic socket, not native acceptance)
         shell: bash
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
-            xvfb-run -a npm run test:electron
+            node ../../../../enablement/verification/receipt.ts --suite desktop-electron --output "$RUNNER_TEMP/verification-receipts" -- xvfb-run -a npm run test:electron
           else
-            npm run test:electron
+            node ../../../../enablement/verification/receipt.ts --suite desktop-electron --output "$RUNNER_TEMP/verification-receipts" -- npm run test:electron
           fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-receipts-desktop-${{ inputs.runner }}
+          path: ${{ runner.temp }}/verification-receipts/
+          if-no-files-found: warn
+          retention-days: 14
 
   rust:
     needs: select
@@ -140,11 +154,33 @@ jobs:
       - uses: browser-actions/setup-chrome@v1
         if: needs.select.outputs.browser == 'true'
         id: chrome
-      - name: Verify the independent Connect client package
+      - name: Identify the bounded client verifier cache
+        id: client-plan
         if: needs.select.outputs.root == 'true'
-        run: |
-          cargo build --manifest-path connect/client/Cargo.toml --locked
-          cargo test --manifest-path connect/client/Cargo.toml --locked -- --test-threads=2
+        run: node enablement/verification/client-suite.ts --namespace >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        if: needs.select.outputs.root == 'true'
+        with:
+          path: ${{ runner.temp }}/client-proof/
+          key: ${{ steps.client-plan.outputs.namespace }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ steps.client-plan.outputs.namespace }}-
+      - name: Verify the independent Connect client package with gated reuse
+        if: needs.select.outputs.root == 'true'
+        run: node enablement/verification/client-suite.ts --state "$RUNNER_TEMP/client-proof/proof.json"
+      # Save failed audit tombstones too. Only automatic main runs can seed proof;
+      # diagnostic dispatches cannot displace automatic candidate evidence.
+      - uses: actions/cache/save@v4
+        if: always() && steps.client-plan.outputs.namespace != '' && (github.event_name == 'push' || github.event_name == 'workflow_run')
+        with:
+          path: ${{ runner.temp }}/client-proof/
+          key: ${{ steps.client-plan.outputs.namespace }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.client-plan.outputs.namespace != ''
+        with:
+          name: connect-client-proof-${{ inputs.runner }}
+          path: ${{ runner.temp }}/client-proof/proof.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Execute the same changed-tree checks (not GUI acceptance)
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
@@ -171,7 +207,7 @@ jobs:
             fi
           fi
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online
+          python3 enablement/verification.py --base "$BASE" --run --online --receipt-dir "$RUNNER_TEMP/verification-receipts"
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash
@@ -313,6 +349,14 @@ jobs:
             ${{ runner.temp }}/apparent-storage-native/*.log
           if-no-files-found: error
           retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-receipts-rust-${{ inputs.runner }}
+          path: ${{ runner.temp }}/verification-receipts/
+          if-no-files-found: warn
+          retention-days: 14
 
   release-ready:
     name: ${{ inputs.revision && format('Release verification ({0})', inputs.revision) || 'Release verification' }}

@@ -156,7 +156,7 @@ class PagesDeliveryTests(unittest.TestCase):
 
     def test_readiness_retry_is_bounded_and_never_masks_integrity_or_auth_failures(self):
         from urllib.error import HTTPError
-        for code in (404, 502, 503, 504):
+        for code in (404, 500, 502, 503, 504):
             with self.subTest(code=code), patch.object(pages, 'verify', side_effect=[HTTPError('https://example.test', code, 'temporary', Message(), None), {'deployment_id': 'ready'}]) as verify, patch.object(pages.time, 'sleep') as sleep:
                 self.assertEqual(pages.verify_ready('a' * 40, Path('checked')), {'deployment_id': 'ready'})
                 self.assertEqual(verify.call_count, 2)
@@ -167,11 +167,12 @@ class PagesDeliveryTests(unittest.TestCase):
                     pages.verify_ready('a' * 40, Path('checked'))
                 verify.assert_called_once()
                 sleep.assert_not_called()
-        with patch.object(pages, 'verify', side_effect=HTTPError('https://example.test', 404, 'not ready', Message(), None)) as verify, patch.object(pages.time, 'sleep') as sleep:
-            with self.assertRaises(HTTPError):
-                pages.verify_ready('a' * 40, Path('checked'))
-            self.assertEqual(verify.call_count, 5)
-            self.assertEqual([call.args for call in sleep.call_args_list], [(1,), (2,), (4,), (8,)])
+        for code in (404, 500):
+            with self.subTest(persistent=code), patch.object(pages, 'verify', side_effect=HTTPError('https://example.test', code, 'not ready', Message(), None)) as verify, patch.object(pages.time, 'sleep') as sleep:
+                with self.assertRaises(HTTPError):
+                    pages.verify_ready('a' * 40, Path('checked'))
+                self.assertEqual(verify.call_count, 5)
+                self.assertEqual([call.args for call in sleep.call_args_list], [(1,), (2,), (4,), (8,)])
 
 if __name__ == '__main__':
     unittest.main()

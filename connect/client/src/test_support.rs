@@ -1339,7 +1339,7 @@ pub fn hosted_roundtrip_pending_pointer_restart_complete_and_no_overwrite() {
     assert_eq!(
         pointer,
         format!(
-            "apparent fetch {id} --out ./{id}.apparent --wait 120\napparent inspect ./{id}.apparent\n"
+            "apparent inspect {id}\n"
         )
     );
     assert!(!pointer.contains("login") && !pointer.contains("secret"));

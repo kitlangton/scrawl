@@ -9,6 +9,10 @@ on:
     - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
+      bridge_commit:
+        description: One-time signed compatibility bridge commit; aliases already verified v2 assets.
+        required: false
+        default: ""
       tag:
         description: Version tag to build and attach to its release. Leave empty only for a Main preview.
         required: false
@@ -49,6 +53,11 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Bridge publication contracts
+        run: node --experimental-strip-types --test capture/desktop/scripts/linux/maintenance/signing-bridge.test.ts
       - id: gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -56,9 +65,14 @@ jobs:
           VERIFY_RUN_ID: ${{ github.event.workflow_run.id }}
           TAG: ${{ inputs.tag }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
+          BRIDGE_COMMIT: ${{ inputs.bridge_commit }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -n "$BRIDGE_COMMIT" ]]; then
+            [[ "$GITHUB_REF" == refs/heads/main && -z "$TAG" && "$VERIFY_ONLY" != true ]]
+            REQUEST_SHA=$(node --experimental-strip-types capture/desktop/scripts/linux/maintenance/signing-bridge.ts inspect "$BRIDGE_COMMIT")
+          fi
           if [[ "$VERIFY_ONLY" == true ]]; then
             echo "sha=$REQUEST_SHA" >> "$GITHUB_OUTPUT"
             exit 0
@@ -72,7 +86,7 @@ jobs:
 
   preview-needed:
     needs: admit
-    if: needs.admit.outputs.sha != ''
+    if: needs.admit.outputs.sha != '' && inputs.bridge_commit == ''
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -90,7 +104,7 @@ jobs:
           if [[ "$VERIFY_ONLY" == "true" ]]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           elif [[ "$PUBLISH_MAIN" == "true" && -z "$TAG" ]] && \
-             [[ "$(gh release view "linux-main-$CANDIDATE_SHA" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)" == "false" ]]; then
+             [[ "$(gh release view "linux-main-v2-$CANDIDATE_SHA" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)" == "false" ]]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
@@ -113,6 +127,7 @@ jobs:
     timeout-minutes: 90
     env:
       CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
+      # workflow_run's event SHA may be newer than the admitted checkout.
       TAG: ${{ inputs.tag }}
       PUBLISH_MAIN: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main }}
       VERIFY_ONLY: ${{ inputs.verify_only }}
@@ -144,12 +159,12 @@ jobs:
       - name: Build with PostHog error reporting
         env:
           APPARENT_POSTHOG_TOKEN: ${{ secrets.APPARENT_POSTHOG_TOKEN }}
-        run: cargo build --release --locked
+        run: GITHUB_SHA="$CANDIDATE_SHA" cargo build --release --locked
       - name: Unit tests and model test executable
         run: |
-          cargo test --release --locked -- --test-threads=2
-          cargo test --release --locked speech:: -- --nocapture
-          cargo test --release --locked --bin apparent --no-run --message-format=json > target/test-artifacts.jsonl
+          GITHUB_SHA="$CANDIDATE_SHA" cargo test --release --locked -- --test-threads=2
+          GITHUB_SHA="$CANDIDATE_SHA" cargo test --release --locked speech:: -- --nocapture
+          GITHUB_SHA="$CANDIDATE_SHA" cargo test --release --locked --bin apparent --no-run --message-format=json > target/test-artifacts.jsonl
           test=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "apparent" and .profile.test) | .executable // empty' target/test-artifacts.jsonl)
           test -f "$test"
           echo "SPEECH_TEST=$test" >> "$GITHUB_ENV"
@@ -240,7 +255,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ needs.admit.outputs.sha }}
+          # Publication policy comes from current trusted main, not an older
+          # admitted build whose publisher may still use the legacy feed.
+          ref: main
+          fetch-depth: 0
       - uses: actions/download-artifact@v5
         with:
           pattern: Apparent-*.AppImage
@@ -251,5 +269,28 @@ jobs:
           CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          # Never put a pre-migration updater into the corrected feed.
+          git show "$CANDIDATE_SHA:capture/desktop/linux/updates/update.rs" | grep -F 'strip_prefix("linux-main-v2-")'
+          version=$(git show "$CANDIDATE_SHA:Cargo.toml" | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
           GITHUB_SHA="$CANDIDATE_SHA" APPARENT_VERSION="$version" python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py
+
+  signing-bridge:
+    needs: admit
+    if: inputs.bridge_commit != '' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Publish unchanged verified assets for legacy updaters
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRIDGE_COMMIT: ${{ inputs.bridge_commit }}
+        run: node --experimental-strip-types capture/desktop/scripts/linux/maintenance/signing-bridge.ts publish "$BRIDGE_COMMIT"

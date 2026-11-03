@@ -26,6 +26,7 @@ class SigningHookTests(unittest.TestCase):
         self.key = self.root / 'key'
         subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(self.key)],
                        env=self.env, check=True, capture_output=True, timeout=15)
+        self.key.chmod(0o600)
         self.allowed = self.root / 'allowed_signers'
         self.allowed.write_text('fixture@example.invalid ' + self.key.with_suffix('.pub').read_text())
         self.git('config', 'gpg.format', 'ssh')
