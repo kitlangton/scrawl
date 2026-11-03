@@ -6418,6 +6418,13 @@ fn ensure_hud_pill_open(coord_entity: &Entity<ApparentCoordinator>, cx: &mut App
     {
         coord_entity.update(cx, |coord, _| coord.ensure_electron_pill());
         if coord_entity.read(cx).electron_pill_routed { return; }
+        // Linux reserves presentation for the launching renderer. The tick
+        // restores GPUI only on a real launch/readiness failure, avoiding a
+        // native pill flashing before the healthy Electron surface arrives.
+        #[cfg(target_os = "linux")]
+        if coord_entity.read(cx).electron_pill.as_ref().is_some_and(|session| session.healthy()) {
+            return;
+        }
     }
     if crate::shared::handoff::native_pill() {
         let _ = coord_entity.update(cx, |coord, _| {
@@ -6796,6 +6803,10 @@ pub fn run_app(
         }
         let has_initial = initial_bundle.is_some();
         let coordinator = cx.new(|_| ApparentCoordinator::new(telemetry, initial_bundle));
+        // Warm the hidden Linux controls before the first capture. Capture
+        // admission and shortcuts do not wait for renderer startup.
+        #[cfg(target_os = "linux")]
+        coordinator.update(cx, |coord, _| coord.ensure_electron_pill());
         set_status_inbox_count(coordinator.read(cx).inbox.len());
         #[cfg(target_os = "linux")]
         if let Err(error) = crate::capture::desktop::linux::update::mark_relaunch_ready() {
