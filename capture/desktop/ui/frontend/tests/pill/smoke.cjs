@@ -124,6 +124,32 @@ test('failed renderer assets never report readiness and the parent can retain na
  assert.equal(output.join('').includes('"ready":true'),false);
 });
 
+test('authoritative dismissal hides the window while its renderer reloads',async t=>{
+ const home=await fs.mkdtemp(path.join(os.tmpdir(),'pill-reload-hide-'));
+ const application=await electron.launch({args:[path.resolve(__dirname,'host.cjs'),'--no-sandbox'],env:{...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,'config')}});
+ t.after(async()=>{await application.close().catch(()=>{});await fs.rm(home,{recursive:true,force:true});});
+ const page=await application.firstWindow();
+ await application.evaluate((_electron,state)=>{
+  process.stdin.emit('data',JSON.stringify({type:'state',view:state})+'\n'+JSON.stringify({type:'activate'})+'\n');
+ },base);
+ await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeVisible();
+ const reloaded=page.waitForEvent('load');
+ await application.evaluate(({BrowserWindow},hidden)=>{
+  const window=BrowserWindow.getAllWindows()[0];
+  window.webContents.once('did-start-loading',()=>{
+   process.stdin.emit('data',JSON.stringify({type:'state',view:hidden})+'\n');
+   globalThis.pillHiddenDuringReload=!window.isVisible();
+  });
+  window.webContents.reload();
+ },{...base,revision:2,phase:'hidden',actions:[]});
+ await reloaded;
+ assert.equal(await application.evaluate(()=>globalThis.pillHiddenDuringReload),true);
+ assert.equal(await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].isVisible()),false);
+ await expect.poll(()=>page.evaluate(async()=>(await window.apparentPill.read()).phase)).toBe('hidden');
+ await application.evaluate((_electron,state)=>process.stdin.emit('data',JSON.stringify({type:'state',view:state})+'\n'),{...base,revision:3});
+ await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeVisible();
+});
+
 test('startup placement preserves a fragmented next parent frame',async t=>{
  const home=await fs.mkdtemp(path.join(os.tmpdir(),'pill-framing-'));
  const application=await electron.launch({args:[path.join(__dirname,'framing.cjs'),'--no-sandbox'],env:{...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,'config')}});

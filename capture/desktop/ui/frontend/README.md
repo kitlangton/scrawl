@@ -483,6 +483,8 @@ Electron remains hidden until Rust closes the old pill and activates it.
 Linux pin discovery waits for activation acknowledgement; hidden placement and
 uncommitted renderer layout do not start native retries. Failure diagnostics
 retain only phase and activation/readiness/visibility flags.
+Authoritative dismissal hides the native window during renderer loading too;
+hidden-state heartbeats do not repeatedly request native hiding.
 Recording and finalization remain owned by Rust across renderer reload/exit.
 A failed or ambiguous action is never automatically retried. The keyboard
 shortcut and tray remain independent controls.
