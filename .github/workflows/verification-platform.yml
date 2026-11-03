@@ -152,6 +152,41 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  connect-web:
+    needs: select
+    if: github.ref == 'refs/heads/main'
+    name: connect-web (${{ inputs.runner }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - name: Verify independent Connect browser package
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          TMPDIR: ${{ runner.temp }}
+          CONNECT_EVIDENCE: ${{ runner.temp }}/connect-web-evidence
+        run: |
+          BASE=$(git hash-object -t tree /dev/null)
+          python3 enablement/verification.py --base "$BASE" --run --online --suite browser --receipt-dir "$RUNNER_TEMP/verification-receipts"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-receipts-connect-web-${{ inputs.runner }}
+          path: ${{ runner.temp }}/verification-receipts/
+          if-no-files-found: warn
+          retention-days: 14
+
   rust:
     needs: select
     if: github.ref == 'refs/heads/main'
@@ -187,21 +222,12 @@ jobs:
             . -> target
             capture/engine -> target
       - uses: actions/setup-node@v4
-        if: needs.select.outputs.root == 'true' || needs.select.outputs.browser == 'true'
+        if: needs.select.outputs.root == 'true'
         with:
           node-version: '22'
           cache: ${{ needs.select.outputs.root == 'true' && 'npm' || '' }}
           cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
-      - uses: oven-sh/setup-bun@v2
-        if: needs.select.outputs.browser == 'true'
-        with:
-          bun-version: '1.3.10'
-      - uses: browser-actions/setup-chrome@v1
-        if: needs.select.outputs.browser == 'true'
-        id: chrome
-      - name: Execute the same changed-tree checks (not GUI acceptance)
-        env:
-          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+      - name: Execute Rust changed-tree checks (not GUI acceptance)
         run: |
           # Engine finalizer proofs reject group-writable cache ancestors.
           verification_tmp="$(mktemp -d "$HOME/.apparent-verification.XXXXXX")"
@@ -225,7 +251,7 @@ jobs:
             fi
           fi
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online --receipt-dir "$RUNNER_TEMP/verification-receipts"
+          python3 enablement/verification.py --base "$BASE" --run --online --suite rust --receipt-dir "$RUNNER_TEMP/verification-receipts"
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash
@@ -378,7 +404,7 @@ jobs:
 
   release-ready:
     name: ${{ inputs.revision && format('Release verification ({0})', inputs.revision) || 'Release verification' }}
-    needs: [select, desktop-ui, connect-client, rust]
+    needs: [select, desktop-ui, connect-client, connect-web, rust]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:

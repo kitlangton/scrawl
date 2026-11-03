@@ -66,7 +66,7 @@ server = createServer(async (req, res) => {
 });
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 const origin = `http://127.0.0.1:${server.address().port}`, config = join(home, 'config.json');
-await writeFile(config, JSON.stringify({experiments: {hostedEncryption: true}, cloud: {server: origin, enabled: false, uploadConsent: false},
+await writeFile(config, JSON.stringify({cloud: {server: origin, enabled: false, uploadConsent: false},
   onboarding: {seen: true}, errorReporting: false, syntheticFixture: {preserve: true}}), {mode: 0o600});
 const env = {...process.env, HOME: home, CFFIXED_USER_HOME: home, XDG_CONFIG_HOME: join(home, '.config'),
   TMPDIR: home, TMP: home, TEMP: home, APPARENT_CONFIG: config, APPARENT_CAPTURES_DIR: join(home, 'captures')};

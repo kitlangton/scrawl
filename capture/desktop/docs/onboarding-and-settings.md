@@ -121,11 +121,14 @@ and permission-repair windows retain their existing behavior.
 
 ## Settings (`capture/desktop/settings/settings.rs`, `capture/desktop/native/Settings.swift`)
 
-### Apparent Connect (experiment)
+### Apparent Connect
 
 **General → Connect** appears by default above Launch at login on
 macOS and Linux. Opening it does not sign in, grant upload consent or enable
-uploads. To hide the controls, set `"connectSettings": false` in the existing
+uploads. Private Connect and endpoint encryption are available by default; explicit
+`experiments.hostedSync=false` or `experiments.hostedEncryption=false` retains an
+opt-out. Availability never changes `cloud.enabled` or `cloud.uploadConsent`, and
+onboarding practice remains local-only. To hide the controls, set `"connectSettings": false` in the existing
 `experiments` object in `~/.config/apparent/config.json`, then close and reopen
 Settings. It adds no onboarding step and does not require `hostedSharing`. Without a configured `cloud.server`, sign-in uses
 `https://hosted.tryapparent.com`; an existing valid custom origin is preserved.

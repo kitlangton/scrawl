@@ -25,6 +25,41 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(result["root"])
         self.assertFalse(result["engine"])
 
+    def test_explicit_platform_suite_executes_only_its_commands_and_default_keeps_all(self):
+        for suite, cargo, browser in [('all', True, True), ('rust', True, False), ('browser', False, True)]:
+            args = ['verification.py', '--base', 'unknown', '--run']
+            if suite != 'all': args += ['--suite', suite]
+            with self.subTest(suite=suite), patch.object(verification.sys, 'argv', args), patch.object(
+                    verification, 'plan', return_value=verification.select(['build.rs', 'connect/web/package.json'])), patch.object(
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                verification.main()
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(any('cargo' in command for command in commands), cargo)
+                self.assertEqual(any(command[0] == 'bun' for command in commands), browser)
+                self.assertEqual(['node', 'scripts/test-browser.mjs'] in commands, browser)
+                self.assertEqual(any('capture/engine/Cargo.toml' in command for command in commands), cargo)
+
+    def test_receipt_wrapper_preserves_explicit_suite(self):
+        args = ['verification.py', '--base', 'unknown', '--run', '--online',
+                '--suite', 'rust', '--receipt-dir', '/external/receipts']
+        with patch.object(verification.sys, 'argv', args), patch.object(verification.subprocess, 'run') as run:
+            verification.main()
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index('--suite', command.index('--') + 1) + 1], 'rust')
+            self.assertEqual(command[command.index('--suite') + 1], 'platform-rust')
+            self.assertIn('--online', command)
+
+    def test_explicit_platform_suites_execute_even_when_changed_tree_has_no_matching_inputs(self):
+        for suite in ('rust', 'browser'):
+            args = ['verification.py', '--base', 'unknown', '--run', '--suite', suite]
+            with self.subTest(suite=suite), patch.object(verification.sys, 'argv', args), patch.object(
+                    verification, 'plan', return_value=verification.select(['README.md'])), patch.object(
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                verification.main()
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(['node', 'scripts/test-browser.mjs'] in commands, suite == 'browser')
+                self.assertEqual(any('cargo' in command for command in commands), suite == 'rust')
+
     def test_engine_tests_compile_and_test_package(self):
         result = verification.select(["capture/engine/tests/process.rs"])
         self.assertFalse(result["root"])

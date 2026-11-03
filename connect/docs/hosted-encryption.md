@@ -1,6 +1,6 @@
 # Encrypted Connect handoff — issue #189 candidate
 
-This owner-local implementation is an **off-by-default candidate**, not deployed encryption or a completed security audit. Local `.apparent` bundles remain ordinary. `experiments.hostedEncryption=true` selects encryption on each endpoint before its existing Connect approval. No production setting, account access, real recording or migration is enabled by this change.
+Endpoint encryption is available by default with private Connect; availability is not a completed security audit. Local `.apparent` bundles remain ordinary. An explicit `experiments.hostedEncryption=false` opts out. Encrypted transfer requires an endpoint enrolled through its existing explicit Connect approval; changing the flag does not enroll a key or grant upload consent. Availability alone does not grant credentials, change a deployment, upload history, migrate plaintext or guarantee key recovery.
 
 ## Accepted journey and trust boundary
 
@@ -49,7 +49,7 @@ Simon confirmed these limits on 2026-11-02:
 2. **Lost keys:** losing every endpoint key makes existing ciphertext unrecoverable through password reset. No server backup/escrow or key-recovery UI is included.
 3. **Existing plaintext:** leave existing hosted plaintext untouched and clearly identified. No plaintext data migration, deletion or reupload is needed. Encrypted-mode fetch refuses plaintext unless the operator deliberately leaves that mode to retrieve legacy data.
 
-These scope decisions do not enable the disabled experiment or waive independent review and native/platform proof. The additive `0005.sql` schema change supports encrypted uploads; it is separate from migrating existing capture data and remains unapplied by this candidate.
+Default availability does not grant account access, upload consent or endpoint approval, and does not waive independent review and affected native/platform proof. The additive `0005.sql` schema change supports encrypted uploads; applying it is a separately authorized operational step, never a side effect of building/testing or migration of existing capture data.
 
 ## Verification and rollout gates
 
