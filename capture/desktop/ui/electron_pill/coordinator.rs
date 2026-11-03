@@ -11,6 +11,7 @@ impl ApparentCoordinator {
             crate::shared::handoff::experiment("movableRecordingControls"),
         )
         .with_handoff(self.completed_dir.is_some(), self.review_bundle.is_some())
+        .with_completion_notice(self.completed_note.as_deref())
     }
     fn electron_pill_selection(&self) -> super::session::Selection {
         (

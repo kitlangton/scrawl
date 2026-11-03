@@ -268,3 +268,41 @@ fn electron_pill_requires_an_explicit_capture_for_handoff() {
         Some(PillAction::DismissCompleted)
     ));
 }
+
+#[test]
+fn electron_pill_pocket_projects_without_paths_or_new_authority() {
+    let recording = View::new(&snapshot(Pres::RecordingWarning { chips: false, has_iphone: false }), 12, true);
+    assert_eq!(recording.pocket.as_ref().unwrap().tone, "warning");
+    assert!(recording.clone().with_size_failure(6_000_000_000, 5_000_000_000).pocket.unwrap().action_ids.is_empty());
+    let completed = View::new(&snapshot(Pres::Completed { label: "Saved".into(), routes: vec![], warning: false, share: Some(false) }), 15, false)
+        .with_handoff(true, false).with_size_failure(6_000_000_000, 5_000_000_000);
+    let pocket = completed.pocket.as_ref().unwrap();
+    assert_eq!(pocket.title, "Too large to upload");
+    assert!(pocket.description.contains("6.0 GB · limit 5.0 GB"));
+    assert_eq!(pocket.action_ids, ["paste"]);
+    assert!(matches!(completed.admit(command(15, "paste")), Some(PillAction::Paste(None))));
+    assert!(completed.admit(command(14, "paste")).is_none());
+    assert!(completed.admit(command(15, "copy-link")).is_none());
+    let unavailable = View::new(&snapshot(Pres::Completed { label: "Saved".into(), routes: vec![], warning: false, share: None }), 16, false)
+        .with_handoff(false, false).with_size_failure(u64::MAX, 5_000_000_000);
+    assert!(unavailable.pocket.unwrap().action_ids.is_empty());
+}
+
+#[test]
+fn electron_pill_completion_notice_keeps_saved_row_short() {
+    let mut view = View::new(&snapshot(Pres::Completed { label: "Link copied · uploading · Estimating…".into(), routes: vec![], warning: false, share: Some(true) }), 4, false)
+        .with_completion_notice(Some("Link copied · uploading · Estimating…"));
+    assert_eq!(view.label, "Saved");
+    assert!(view.pocket.as_ref().unwrap().description.contains("uploading"));
+    assert!(view.consume(command(4, "shell"), true).is_none());
+    assert_eq!(view.pocket.unwrap().title, "Control changed");
+}
+
+#[test]
+fn electron_pill_bounds_notification_unicode_and_size_precision() {
+    let text = bounded_text(&"😀".repeat(300), 300);
+    assert_eq!(text.encode_utf16().count(), 300);
+    assert_eq!(upload_size(90_000_001, true), "91 MB");
+    assert_eq!(upload_size(90_000_000, false), "90 MB");
+    assert!(!upload_size(u64::MAX, true).is_empty());
+}

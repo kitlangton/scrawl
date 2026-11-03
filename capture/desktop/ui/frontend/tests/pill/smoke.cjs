@@ -39,16 +39,25 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  await expect(page.getByText('Processing recording…',{exact:true})).toBeVisible();
  assert.equal(await page.getByRole('button').count(),0);
  await publish({...base,revision:3,warning:'Microphone input stopped; screen recording continues',actions:base.actions.map(a=>({...a,primary:false}))});
- await expect(page.getByRole('status')).toContainText('screen recording continues');
+ await expect(page.getByRole('alert')).toContainText('screen recording continues');
  await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeEnabled();
  await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeInViewport();
  await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth && document.documentElement.scrollHeight<=innerHeight)).toBe(true);
  await page.emulateMedia({colorScheme:'dark',reducedMotion:'reduce'});
- const dark=await page.locator('main').evaluate(el=>getComputedStyle(el).backgroundColor);
+ const dark=await page.locator('.pill-row').evaluate(el=>getComputedStyle(el).backgroundColor);
  await page.emulateMedia({colorScheme:'light'});
- assert.notEqual(await page.locator('main').evaluate(el=>getComputedStyle(el).backgroundColor),dark);
- assert.equal(await page.locator('.indicator').evaluate(el=>getComputedStyle(el).animationName),'none');
+ assert.notEqual(await page.locator('.pill-row').evaluate(el=>getComputedStyle(el).backgroundColor),dark);
+ assert.equal(await page.locator('main').evaluate(el=>[...el.querySelectorAll('*')].every(child=>getComputedStyle(child).animationName==='none')),true);
  if(evidence)await page.screenshot({path:path.join(evidence,'warning-light.png')});
+ // Escape closes the pocket before it can cancel recording; width and row anchor stay stable.
+ const expanded=await page.locator('.pill-row').boundingBox();
+ await page.keyboard.press('Escape');
+ await expect(page.getByRole('button',{name:'Show notification'})).toBeVisible();
+ assert.equal(sent.filter(x=>x.action==='cancel').length,0);
+ const collapsed=await page.locator('.pill-row').boundingBox();assert.equal(collapsed.width,expanded.width);
+ await page.getByRole('button',{name:'Show notification'}).click();
+ await expect(page.getByRole('alert')).toBeVisible();
+
  await publish({...base,revision:4,phase:'selecting',label:'Choose what to record',draggable:false,actions:[
   {id:'select-area',label:'Area',enabled:true,selected:false,primary:false},
   {id:'select-screen',label:'Screen',enabled:true,selected:true,primary:false},
@@ -69,6 +78,25 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  assert.equal(await page.evaluate(async()=>{try{await fetch('https://example.com');return false;}catch{return true;}}),true);
  assert.equal(await page.evaluate(()=>window.open('https://example.com')),null);
  assert.equal(await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().length),1);
+ // An oversized upload offers an explicit local fallback without moving the leading row.
+ const anchor=await application.evaluate(({BrowserWindow,screen})=>{const w=BrowserWindow.getAllWindows()[0],b=w.getBounds(),a=screen.getDisplayMatching(b).workArea;w.setBounds({...b,y:a.y+a.height-b.height-8});return w.getBounds();});
+ const completed={...base,revision:6,phase:'completed',label:'Saved',draggable:false,actions:[
+ {id:'paste',label:'Paste',enabled:true,selected:false,primary:true},
+ {id:'copy-link',label:'Copy link',enabled:false,selected:false,primary:false},
+ {id:'dismiss',label:'Dismiss',enabled:true,selected:false,primary:false}]};
+ await publish({...completed,pocket:{tone:'failure',title:'Too large to upload',description:'6.0 GB · limit 5.0 GB. Your recording is saved. Paste it locally.',actionIds:['paste']}});
+ await expect(page.getByText('Too large to upload',{exact:true})).toBeVisible();
+ await expect(page.locator('main')).toHaveAttribute('data-pocket-side','up');
+ const expandedBounds=await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getBounds());
+ const row=await page.locator('.pill-row').boundingBox();
+ assert.equal(expandedBounds.width,anchor.width);assert.equal(expandedBounds.y+row.y,anchor.y);
+ assert.equal(sent.filter(x=>x.action==='paste').length,0);
+ if(evidence)await page.screenshot({path:path.join(evidence,'size-failure-up.png')});
+ await page.locator('.pocket-actions').getByRole('button',{name:'Paste',exact:true}).click();
+ await expect.poll(()=>sent.filter(x=>x.action==='paste').length).toBe(1);
+ assert.deepEqual(sent.find(x=>x.action==='paste'),{revision:6,action:'paste'});
+ await publish({...completed,revision:7});
+ await expect(page.getByText('Too large to upload',{exact:true})).toHaveCount(0);
  // Right-click must never invoke Paste; a cancelled gesture must not invoke it either.
  const before=sent.filter(x=>x.action==='paste').length;
  await page.getByRole('button',{name:'Paste',exact:true}).click({button:'right'});

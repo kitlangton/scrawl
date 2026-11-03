@@ -26,3 +26,28 @@ XWayland's mask resets on remap. No new input access or collection is requested.
 Native Linux moves also reconcile Electron's cached origin through the bounded,
 revision-scoped parent pipe. The notes badge uses the actual pill frame on both
 platforms, so it follows the replacement rather than the retired GPUI window.
+
+## Notification pocket candidate
+
+`View.pocket` optionally carries tone (`info`, `warning`, `failure`), title
+(80 UTF-16 units), description (300), and at most three action IDs from the
+existing authoritative action set. Unknown fields are stripped; no new mutation
+route exists. Collapsible + Alert live in shared/ui; Desktop owns presentation.
+Warnings, completion notes and bridge failures use the same vertical pocket.
+Escape first collapses it, then retains the existing recording Cancel behavior.
+The existing indicator position contains its disclosure; opening adds no width.
+
+The native footprint is the union of the leading row and rounded pocket, with a
+four-point transparent gap. Expansion preserves the leading-row screen anchor,
+opens upward near the bottom, and clamps to the display work area. Main measures
+trusted DOM and retains revision/readiness checks; the renderer chooses no native
+coordinates. Synthetic Electron and geometry checks do not establish native
+compositor, drag, capture exclusion, focus or receiving-editor acceptance.
+
+`with_size_failure(size, limit)` projects numeric facts into a local Paste fallback.
+Live upload-state caching/admission remains a separate integration hunk coordinated
+with the public-sharing owner; this helper alone does not display a real queue
+failure. No retry, compression, consent, clipboard or upload policy changes.
+Installed routing/rollback and the native fallback stay under the producer's
+existing acceptance hold. Remove donors only after accepted platform replacement;
+this slice does not activate experiments or retire native presentations.

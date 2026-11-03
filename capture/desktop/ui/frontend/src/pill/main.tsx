@@ -1,8 +1,9 @@
-import {useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Button} from '@apparent/ui/button';
 import type {PillView} from './bridge';
 import './style.css';
+import {UploadPocket} from './UploadPocket';
 
 function Pill() {
   const [view,setView]=useState<PillView|null>(null);
@@ -41,18 +42,23 @@ function Pill() {
     };
     window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);
   },[view]);
+  const layout=useCallback(()=>{const revision=current.current?.revision;if(revision!==undefined)void window.apparentPill?.layout(revision).catch(()=>{});},[]);
   if(!view)return <div role="status" className="pill connection">{error?'Recording controls unavailable':'Connecting…'}</div>;
   if(view.phase==='hidden')return null;
   return <main data-revision={view.revision} className="pill settings-shell" data-phase={view.phase} data-reduced={view.reducedMotion} data-warning={view.warning!==null}>
+    <UploadPocket pocket={error?{tone:'failure',title:'Action not confirmed',description:'Use the recording shortcut or tray menu.',actionIds:[]}:view.pocket??(view.warning?{tone:'warning',title:'Recording notice',description:view.warning,actionIds:[]}:view.notice?{tone:'info',title:'Control changed',description:view.notice,actionIds:[]}:null)} onLayout={layout}
+      actions={view.pocket?.actionIds.map(id=>{const action=view.actions.find(a=>a.id===id);return action && <Button key={id} variant="outline" disabled={!action.enabled || pending} onClick={()=>void act(id)}>{action.label}</Button>;})}>
+    {trigger=><div className="pill-row">
     <div className={`lead ${view.draggable?'movable':''} ${window.apparentPill?.manualDrag?'manual-drag':''}`} title={view.draggable?'Drag recording controls':undefined}
-      onPointerDown={event=>{if(view.draggable && window.apparentPill?.manualDrag && event.button===0 && event.isPrimary)void window.apparentPill.beginDrag(view.revision).catch(()=>{});}}>
-      <span aria-hidden="true" className={`indicator ${view.phase}`}>{view.phase==='completed'?'✓':''}</span>
+      onPointerDown={event=>{if(view.draggable && !(event.target as HTMLElement).closest('button') && window.apparentPill?.manualDrag && event.button===0 && event.isPrimary)void window.apparentPill.beginDrag(view.revision).catch(()=>{});}}>
+      <span className={`indicator-slot ${view.phase}`}>
+        {trigger || <span aria-hidden="true" className={`indicator ${view.phase}`}>{view.phase==='completed'?'✓':''}</span>}
+      </span>
       <span className="clock" aria-label={view.phase==='recording'?`Recording ${view.clock}`:undefined}>
         {view.phase==='recording'?view.clock:view.label}
       </span>
     </div>
     {view.inputLevel!==null && view.phase==='recording' && <span className="meter" aria-label="Microphone input level">{[.55,.8,1,.75,.5].map((gain,index)=><i key={index} style={{height:`${3+19*gain*view.inputLevel!}px`}}/>)}</span>}
-    {view.warning && view.warning!==view.label && <span className="warning" role="status">{view.warning}</span>}
     {view.actions.length>0 && <div className="controls" role="group" aria-label="Recording controls" aria-busy={pending}>
       {view.actions.map(action=><Button key={action.id} variant={action.primary?'default':'ghost'}
         data-primary={action.primary}
@@ -63,8 +69,8 @@ function Pill() {
         onPointerCancel={()=>{pasteStart.current=null;void window.apparentPill?.cancelPaste();}}
         onClick={event=>{if(action.id!=='paste' || event.detail===0)void act(action.id);}}>{action.label}</Button>)}
     </div>}
-    {view.notice && <span role="status" className="notice">{view.notice}</span>}
-    {error && <span role="alert">Action not confirmed. Use the recording shortcut or tray menu.</span>}
+    </div>}
+    </UploadPocket>
   </main>;
 }
 createRoot(document.getElementById('root')!).render(<Pill/>);

@@ -18,10 +18,21 @@ pub struct View {
     pub label: String,
     pub warning: Option<String>,
     pub notice: Option<String>,
+    pub pocket: Option<Pocket>,
     pub reduced_motion: bool,
     pub draggable: bool,
     pub input_level: Option<f32>,
     pub actions: Vec<Control>,
+}
+
+/// Display-only notification. Actions reference the same authoritative control set.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pocket {
+    pub tone: &'static str,
+    pub title: String,
+    pub description: String,
+    pub action_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -33,6 +44,18 @@ pub struct Control {
     pub primary: bool,
 }
 
+// Match JavaScript protocol bounds, including astral Unicode characters.
+fn bounded_text(value: &str, units: usize) -> String {
+    String::from_utf16_lossy(&value.encode_utf16().take(units).collect::<Vec<_>>())
+}
+
+fn upload_size(bytes: u64, round_up: bool) -> String {
+    let unit = if bytes >= 1_000_000_000 { 100_000_000 } else { 1_000_000 };
+    let value = bytes / unit + u64::from(round_up && bytes % unit != 0);
+    if unit == 100_000_000 { format!("{}.{:01} GB", value / 10, value % 10) }
+    else { format!("{value} MB") }
+}
+
 impl View {
     pub fn new(snapshot: &PillSnapshot, revision: u64, draggable: bool) -> Self {
         let mut view = Self {
@@ -41,6 +64,7 @@ impl View {
             clock: snapshot.clock.clone(),
             label: String::new(),
             notice: None,
+            pocket: None,
             warning: snapshot
                 .mic_warning
                 .map(|warning| warning.announcement().to_owned()),
@@ -94,6 +118,7 @@ impl View {
                 view.label = label.clone();
                 if *warning {
                     view.warning = Some(label.clone());
+                    view.label = "Saved".into();
                 }
                 view.control("paste", "Paste", true, false, !warning);
                 if let Some(enabled) = share {
@@ -103,7 +128,54 @@ impl View {
                 view.control("dismiss", "Dismiss", true, false, false);
             }
         }
+        view.project_notifications();
         view
+    }
+
+    fn project_notifications(&mut self) {
+        self.pocket = self.warning.as_ref().map(|warning| Pocket {
+            tone: "warning",
+            title: "Recording notice".into(),
+            description: bounded_text(warning, 300),
+            action_ids: vec![],
+        }).or_else(|| self.notice.as_ref().map(|notice| Pocket {
+            tone: "info",
+            title: "Control changed".into(),
+            description: bounded_text(notice, 300),
+            action_ids: vec![],
+        }));
+    }
+
+    /// Keep completion feedback in the pocket instead of growing the control row.
+    pub fn with_completion_notice(mut self, note: Option<&str>) -> Self {
+        if self.phase == "completed" {
+            if let Some(note) = note.filter(|note| !note.is_empty()) {
+                self.label = "Saved".into();
+                if self.warning.is_none() {
+                    self.pocket = Some(Pocket {
+                        tone: "info",
+                        title: "Sharing".into(),
+                        description: bounded_text(note, 300),
+                        action_ids: vec![],
+                    });
+                }
+            }
+        }
+        self
+    }
+
+    /// Numeric upload facts only: private bundle paths never cross the bridge.
+    /// The caller must supply facts for the currently selected completed capture.
+    pub fn with_size_failure(mut self, size: u64, limit: u64) -> Self {
+        if self.phase == "completed" {
+            self.pocket = Some(Pocket {
+                tone: "failure",
+                title: "Too large to upload".into(),
+                description: format!("{} · limit {}. Your recording is saved. Paste it locally.", upload_size(size, true), upload_size(limit, false)),
+                action_ids: self.actions.iter().filter(|a| a.id == "paste" && a.enabled).map(|a| a.id.clone()).collect(),
+            });
+        }
+        self
     }
 
     /// The new bridge never falls back to an implicit latest capture.
@@ -162,6 +234,7 @@ impl View {
         self.notice = action
             .is_none()
             .then(|| "Control request expired or changed. Try again.".into());
+        self.project_notifications();
         action
     }
 
