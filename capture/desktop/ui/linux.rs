@@ -902,10 +902,28 @@ pub(in crate::capture::desktop) fn restore_note_focus(token: u64, owner: u32) {
 }
 
 /// The Electron counter follows the same native recording panel, including user drags.
-pub(in crate::capture::desktop) fn note_badge_anchor(width: f32, y: f32) -> Option<[f64; 4]> {
+pub(in crate::capture::desktop) fn note_badge_anchor(width: f32, y: f32, height: f32) -> Option<[f64; 4]> {
     let rect = x11::geometry(own_window(&PILL_WINDOW)?)?;
-    Some([rect[0] + rect[2] / 2.0 - f64::from(width) / 2.0,
-        rect[1] + f64::from(y), f64::from(width), f64::from(super::super::ISLAND_H)])
+    Some(note_badge_rect(rect, width, y, height))
+}
+
+fn note_badge_rect(window: [f64; 4], width: f32, y: f32, height: f32) -> [f64; 4] {
+    // GPUI dimensions are DIPs; the X11 root geometry is physical pixels.
+    let scale = window[2] / f64::from(PILL_WINDOW_W);
+    [window[0] + (window[2] - f64::from(width) * scale) / 2.0,
+        window[1] + f64::from(y) * scale, f64::from(width) * scale, f64::from(height) * scale]
+}
+
+#[cfg(test)]
+mod note_anchor_tests {
+    use super::note_badge_rect;
+    #[test]
+    fn counter_anchor_uses_the_capsule_physical_rect_at_fractional_scale() {
+        assert_eq!(note_badge_rect([100.0, 30.0, 800.0, 105.0], 400.0, 22.0, 40.0),
+            [250.0, 57.5, 500.0, 50.0]);
+        assert_eq!(note_badge_rect([-1280.0, 0.0, 640.0, 84.0], 400.0, 22.0, 40.0),
+            [-1160.0, 22.0, 400.0, 40.0]);
+    }
 }
 
 #[derive(Clone, Copy, Default)]

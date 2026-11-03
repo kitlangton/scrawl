@@ -25,7 +25,7 @@ test('popup stays inside work areas including negative display coordinates and s
 
 test('counter falls left or below instead of covering the capsule at a display edge', () => {
   const area = { x: -1280, y: 0, width: 1280, height: 800 };
-  assert.deepEqual(badgeBounds([-1000, 40, 350, 40], area), { x: -644, y: 40 });
-  assert.deepEqual(badgeBounds([-370, 40, 350, 40], area), { x: -526, y: 40 });
-  assert.deepEqual(badgeBounds([-1270, 40, 1260, 40], area), { x: -715, y: 86 });
+  assert.deepEqual(badgeBounds([-1000, 40, 350, 40], area), { x: -644, y: 38 });
+  assert.deepEqual(badgeBounds([-370, 40, 350, 40], area), { x: -492, y: 38 });
+  assert.deepEqual(badgeBounds([-1270, 40, 1260, 40], area), { x: -698, y: 86 });
 });

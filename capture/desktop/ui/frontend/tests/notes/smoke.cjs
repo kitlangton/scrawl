@@ -40,7 +40,7 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   const popup = pages.find(p => p.url().endsWith('#notes-popup')) || pages[0];
   const badge = pages.find(p => p !== popup);
   await popup.waitForFunction(() => !!window.captureNotes);
-  let state = { mode: 'editor', current: 1, position: [600, 280], notes: [], drafts: [{ pin: 1, t: 123, x: .5, y: .35, text: '' }], error: null };
+  let state = { mode: 'editor', current: 1, position: [600, 280], badgeRect: [450, 36, 380, 40], notes: [], drafts: [{ pin: 1, t: 123, x: .5, y: .35, text: '' }], error: null };
   const send = () => child.stdin.write(JSON.stringify(state) + '\n');
   send();
   const field = popup.getByRole('textbox', { name: 'Note text' });
@@ -55,6 +55,11 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   }
   assert.deepEqual(await popup.evaluate(() => ({ require: typeof window.require, process: typeof window.process, keys: Object.keys(window.captureNotes).sort() })),
     { require: 'undefined', process: 'undefined', keys: ['command', 'onSnapshot'] });
+  await popup.evaluate(() => {
+    document.activeElement.blur();
+    window.dispatchEvent(new Event('focus'));
+  });
+  await expect(field).toBeFocused();
   await field.pressSequentially('Smaller button', { delay: 20 }); await expect(field).toBeFocused(); await field.press('Shift+Enter'); await field.press('x');
   await expect(field).toHaveValue('Smaller button\nx');
   await field.press('Enter');
@@ -66,7 +71,7 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   await expect.poll(() => messages.some(m => m.action === 'list')).toBe(true);
   state.mode = 'list'; state.badgeRect = [450, 36, 380, 40]; send();
   if (process.platform === 'linux') {
-    await expect.poll(() => messages.some(m => m.action === 'surface' && JSON.stringify(m.rect) === '[836,36,150,44]')).toBe(true);
+    await expect.poll(() => messages.some(m => m.action === 'surface' && JSON.stringify(m.rect) === '[836,34,116,44]')).toBe(true);
     await expect.poll(() => messages.some(m => m.action === 'surface' && m.rect[3] === 350)).toBe(true);
   }
   await popup.getByRole('button', { name: /Smaller button/ }).click();

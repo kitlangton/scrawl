@@ -23,14 +23,17 @@ function popupBounds(point, area, height) {
     y: Math.round(Math.max(area.y, Math.min(point.y + 12, area.y + area.height - height))),
     width, height: Math.min(height, area.height) };
 }
+const BADGE_WIDTH = 116;
+const BADGE_HEIGHT = 44;
 function badgeBounds(rect, area) {
   const [x, y, width, height] = rect;
-  let bx = x + width + 6, by = y;
-  if (bx + 150 > area.x + area.width) {
-    bx = x - 156;
-    if (bx < area.x) { bx = x + (width - 150) / 2; by = y + height + 6; }
+  let bx = x + width + 6, by = y + (height - BADGE_HEIGHT) / 2;
+  if (bx + BADGE_WIDTH > area.x + area.width) {
+    bx = x - BADGE_WIDTH - 6;
+    if (bx < area.x) { bx = x + (width - BADGE_WIDTH) / 2; by = y + height + 6; }
   }
-  return { x: Math.round(Math.max(area.x, Math.min(bx, area.x + area.width - 150))),
-    y: Math.round(Math.max(area.y, Math.min(by, area.y + area.height - 44))) };
+  return { x: Math.round(Math.max(area.x, Math.min(bx, area.x + area.width - BADGE_WIDTH))),
+    y: Math.round(Math.max(area.y, Math.min(by, area.y + area.height - BADGE_HEIGHT))) };
 }
-module.exports = { validCommand, validSnapshot, popupBounds, badgeBounds };
+
+module.exports = { validCommand, validSnapshot, popupBounds, badgeBounds, BADGE_WIDTH, BADGE_HEIGHT };

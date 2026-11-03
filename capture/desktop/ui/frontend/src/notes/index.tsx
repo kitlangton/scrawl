@@ -30,7 +30,12 @@ export function CaptureNotes() {
     }
   }), []);
   useEffect(() => {
-    if (!badge && state?.mode === 'editor') field.current?.focus({ preventScroll: true });
+    if (badge || state?.mode !== 'editor') return;
+    const focus = () => field.current?.focus({ preventScroll: true });
+    focus();
+    // Native focus can arrive after the first state paint on XWayland/macOS.
+    window.addEventListener('focus', focus);
+    return () => window.removeEventListener('focus', focus);
   }, [badge, state?.current, state?.mode]);
   async function command(message: Command) {
     if (!window.captureNotes) { setError('Notes are not connected to the recording.'); return; }
@@ -53,7 +58,7 @@ export function CaptureNotes() {
   }}>
     {badge ? <Button variant="ghost" className="note-count" aria-label={`${state.notes.length} saved notes. Open notes`} onClick={() => void command({ action: 'list' })}>
       <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 2.5h10v11H3zM5 6h6M5 9h4" stroke="currentColor" strokeLinecap="round" /></svg>
-      {state.notes.length} {state.notes.length === 1 ? 'note' : 'notes'}
+      <span>Notes</span>{state.notes.length > 0 && <span className="note-total">{state.notes.length}</span>}
     </Button> : state.mode === 'list' ? <section className="note-list" aria-label="Capture notes">
       <header><strong>Notes</strong><Button variant="ghost" size="sm" aria-label="Close notes" onClick={() => void dismiss()}>Close</Button></header>
       {state.drafts.filter(n => n.text.trim()).length === 0 ? <p>No notes yet. Shift-click to type.</p> :

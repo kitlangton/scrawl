@@ -6,7 +6,7 @@ const suppliedProfile = process.argv.find(v => v.startsWith('--notes-profile='))
 const profile = suppliedProfile || fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'apparent-note-ui-'));
 const { pathToFileURL } = require('node:url');
 const readline = require('node:readline');
-const { validCommand, validSnapshot, popupBounds, badgeBounds } = require('./protocol.cjs');
+const { validCommand, validSnapshot, popupBounds, badgeBounds, BADGE_WIDTH, BADGE_HEIGHT } = require('./protocol.cjs');
 app.setName('Apparent Notes');
 nativeTheme.themeSource = 'system';
 app.setPath('userData', profile);
@@ -43,10 +43,7 @@ app.whenReady().then(() => {
     win.loadURL(page + '#notes-' + surface);
     return win;
   }
-  popup = window('popup', 332, 200); badge = window('badge', 150, 44);
-  const display = screen.getDisplayNearestPoint({ x: Math.round(frame[0] + frame[2] / 2), y: Math.round(frame[1] + frame[3] / 2) });
-  const area = display.workArea;
-  badge.setPosition(Math.min(area.x + area.width - 156, Math.round(frame[0] + frame[2] / 2 + 150)), area.y + 12);
+  popup = window('popup', 332, 200); badge = window('badge', BADGE_WIDTH, BADGE_HEIGHT);
   const placed = new Map();
   const requested = new Map();
   function setRequestedBounds(win, bounds, opening) {
@@ -103,7 +100,7 @@ app.whenReady().then(() => {
         const rect = state.badgeRect;
         const work = screen.getDisplayNearestPoint({ x: Math.round(rect[0] + rect[2] / 2), y: Math.round(rect[1] + rect[3] / 2) }).workArea;
         const bounds = badgeBounds(rect, work);
-        requestedBadge = { ...bounds, width: 150, height: 44 };
+        requestedBadge = { ...bounds, width: BADGE_WIDTH, height: BADGE_HEIGHT };
         setRequestedBounds(badge, requestedBadge, openingBadge);
       }
       const point = { x: Math.round(state.position[0]), y: Math.round(state.position[1]) };
@@ -114,11 +111,14 @@ app.whenReady().then(() => {
         setRequestedBounds(popup, bounds, opening);
         if (opening) popup.show();
         const focus = !previous || previous.mode !== state.mode || previous.current !== state.current;
-        if (focus) popup.focus();
+        if (focus) { popup.focus(); popup.webContents.focus(); }
         placeSurface(popup, focus, opening, bounds);
       } else { popup.hide(); if (previous && previous.mode !== 'badge') send({ action: 'hidden' }); }
-      if (openingBadge) badge.showInactive();
-      placeSurface(badge, false, openingBadge, requestedBadge); publish();
+      if (requestedBadge) {
+        if (openingBadge) badge.showInactive();
+        placeSurface(badge, false, openingBadge, requestedBadge);
+      } else { badge.hide(); }
+      publish();
     } catch { app.quit(); }
   });
   lines.on('close', () => app.quit());

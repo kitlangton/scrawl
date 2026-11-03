@@ -2870,7 +2870,7 @@ impl ApparentCoordinator {
         if self.note_ui.is_some() {
             let anchor = self.native_pill.as_ref().and_then(|p| p.note_badge_anchor());
             #[cfg(target_os = "linux")]
-            let anchor = anchor.or_else(|| platform::note_badge_anchor(self.island_width * self.island_scale, self.island_y + (PILL_WINDOW_H - ISLAND_H * self.island_scale) / 2.0));
+            let anchor = anchor.or_else(|| platform::note_badge_anchor(self.island_width * self.island_scale, self.island_y + (PILL_WINDOW_H - ISLAND_H * self.island_scale) / 2.0, ISLAND_H * self.island_scale));
             if let (Some(ui), Some(point)) = (self.note_ui.as_mut(), anchor) { ui.position_badge(point); }
         }
         let live_no_words = self.recording_has_no_words();
