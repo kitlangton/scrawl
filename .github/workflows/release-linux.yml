@@ -274,6 +274,32 @@ jobs:
           version=$(git show "$CANDIDATE_SHA:Cargo.toml" | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
           GITHUB_SHA="$CANDIDATE_SHA" APPARENT_VERSION="$version" python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py
 
+  main-feed:
+    # Also repair metadata after an interrupted publication whose immutable v2
+    # release already exists. This job shares the workflow publication lock.
+    needs: [admit, preview-needed, linux, main-preview]
+    if: always() && needs.admit.outputs.sha != '' && (needs.main-preview.result == 'success' || needs.preview-needed.outputs.build == 'false') && (github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main) && inputs.tag == '' && inputs.bridge_commit == '' && github.ref == 'refs/heads/main' && inputs.verify_only != true
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Validate metadata contracts
+        run: node --experimental-strip-types --test capture/desktop/scripts/linux/maintenance/main-feed.test.ts
+      - name: Publish admitted immutable artifact identities and complete ancestry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
+        run: node --experimental-strip-types capture/desktop/scripts/linux/maintenance/main-feed.ts "$CANDIDATE_SHA"
+
   signing-bridge:
     needs: admit
     if: inputs.bridge_commit != '' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'

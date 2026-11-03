@@ -98,6 +98,48 @@ def find_phrase(words, phrase):
     return matches[0]
 
 
+def native_picker_dismissed(words, cleaned_words=()):
+    # Either OCR view seeing chooser headers vetoes thumbnail text. Use the
+    # same outline-removal fallback as normal live-button location.
+    if any(w['text'] in ('Windows', 'Outputs', 'Region')
+           for variant in (words, cleaned_words) for w in variant):
+        return False
+    for variant in (words, cleaned_words):
+        try:
+            find_phrase(variant, 'Update now')
+            return True
+        except PhraseMatchError as error:
+            if error.count:
+                return False
+    return False
+
+
+def picker_output_center(image, words):
+    """Fail closed on the frozen template's single-output native picker layout.
+
+    The thumbnail is an output selection target, never a source of app controls.
+    Guest-side monitor enumeration separately requires exactly one output.
+    """
+    if image.size != (1280, 800):
+        raise ValueError('unexpected picker display geometry')
+    headers = [w for w in words if w['text'] in ('Windows', 'Outputs', 'Region')]
+    if [w['text'] for w in headers] != ['Windows', 'Outputs', 'Region']:
+        raise ValueError('native output picker headers missing or ambiguous')
+    for word, left in zip(headers, (178, 261, 343)):
+        if abs(int(word['left']) - left) > 4 or abs(int(word['top']) - 185) > 4:
+            raise ValueError('native output picker moved')
+    pixels = image.convert('RGB')
+    # Native picker frame and the one centered output thumbnail, measured from
+    # this sanitized template. A theme/layout change needs a new reviewed map.
+    for point in ((144, 154), (1134, 154), (144, 644), (1134, 644)):
+        if pixels.getpixel(point) != (122, 162, 247):
+            raise ValueError('native output picker frame changed')
+    for point in ((340, 233), (640, 232), (640, 604)):
+        if pixels.getpixel(point) != (17, 17, 17):
+            raise ValueError('native output thumbnail geometry changed')
+    return (640, 400)
+
+
 def qmp(path, command, arguments):
     with socket.socket(socket.AF_UNIX) as sock:
         sock.settimeout(10)
@@ -197,9 +239,15 @@ class Evidence:
     def perform(self, request):
         start = time.monotonic() - self.clock
         op = request['op']
-        if op in ('click', 'assert'):
-            path, (x, y) = self.locate(request['text'], request.get('timeout', 20))
-            if op == 'click':
+        if op in ('click', 'assert', 'select-native-output'):
+            if op == 'select-native-output':
+                from PIL import Image
+                path = self.frame()
+                with Image.open(path) as image:
+                    x, y = picker_output_center(image, self.words(path))
+            else:
+                path, (x, y) = self.locate(request['text'], request.get('timeout', 20))
+            if op in ('click', 'select-native-output'):
                 from PIL import Image
                 with Image.open(path) as image:
                     width, height = image.size
@@ -218,6 +266,16 @@ class Evidence:
                 qmp(self.socket, 'input-send-event', {'events': [
                     {'type': 'abs', 'data': {'axis': 'x', 'value': 32700}},
                     {'type': 'abs', 'data': {'axis': 'y', 'value': 32700}}]})
+        elif op == 'assert-native-picker-dismissed':
+            deadline = time.monotonic() + 10
+            while True:
+                path = self.frame()
+                words = self.words(path)
+                if native_picker_dismissed(words, self.words(path, cleaned=True)):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f'native picker still covers live update dialog: {path}')
+                time.sleep(0.1)
         elif op == 'assert-dismissed':
             deadline = time.monotonic() + request.get('timeout', 20)
             while True:
