@@ -142,8 +142,9 @@ automatic OS, architecture, compiler, environment and lock hashes. `cache-on-fai
 retains reusable dependencies after downstream failure; it does not cache a proof
 verdict. Inspect the action's actual restored-key/size log, not just its configured
 key or an exact-match boolean. The observed cold build/install took 25m24s: the
-stage allows 30 minutes and the hosted job 55, reserving time outside the build
-for setup/restore, the four-minute native scenario, owned cleanup, evidence and
+stage allows 30 minutes. Every step has an explicit cap, totaling 58 minutes
+including setup/restore, the four-minute scenario, cleanup and evidence. The
+hosted job allows 65 minutes, leaving seven for job overhead and post-action
 cache saving. Warm reuse is expected to reduce dependency compilation, but
 restoration and native success must be verified on the actual run. These Actions
 limits do not change NoMac spending/session limits. This focused route runs no full suites,

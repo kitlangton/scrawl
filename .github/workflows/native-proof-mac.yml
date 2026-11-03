@@ -16,18 +16,20 @@ jobs:
   connect-worker:
     if: github.repository == 'tryapparent/apparent' && github.event_name == 'workflow_dispatch'
     runs-on: macos-15-intel
-    # Observed cold install: 25m24s. Allow 30m for that stage and 25m outside
-    # it for setup/cache restore, the 4m native scenario, cleanup/artifacts/cache save.
+    # Observed cold install: 25m24s; build cap 30m. All explicit steps sum to
+    # 58m, leaving 7m for job overhead/post-actions (including dependency save).
     # These are hosted Actions limits, unrelated to the human NoMac session cap.
-    timeout-minutes: 55
+    timeout-minutes: 65
     env:
       APPARENT_APP_DIR: /Users/runner/Applications/Apparent-Connect-${{ github.run_id }}-${{ github.run_attempt }}.app
       APPARENT_BUILD_TMP: /Users/runner/.apparent-connect-build-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
+        timeout-minutes: 1
         with:
           persist-credentials: false
       - name: Establish private evidence and build directories
+        timeout-minutes: 1
         run: |
           umask 077
           export APPARENT_CONNECT_PROOF="$RUNNER_TEMP/apparent-connect-native"
@@ -45,15 +47,18 @@ jobs:
           }))
           PY
       - uses: maxim-lobanov/setup-xcode@v1
+        timeout-minutes: 1
         with:
           xcode-version: '26.0'
       - name: Prepare synthetic media and Metal compiler
-        timeout-minutes: 10
+        timeout-minutes: 5
         run: |
           command -v ffmpeg && command -v ffprobe || brew install ffmpeg
           xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - uses: dtolnay/rust-toolchain@stable
+        timeout-minutes: 2
       - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 3
         with:
           # Match the main platform job's automatic job-id namespace and inputs.
           shared-key: rust
@@ -63,6 +68,7 @@ jobs:
             connect/client -> target
           cache-on-failure: 'true'
       - uses: actions/setup-node@v4
+        timeout-minutes: 2
         with:
           node-version: '22'
           cache: npm
@@ -92,7 +98,7 @@ jobs:
             "$APPARENT_APP_DIR/Contents/MacOS/apparent" "$APPARENT_CONNECT_PROOF/scenario"
       - name: Verify owned cleanup and retain only allowlisted evidence
         if: always()
-        timeout-minutes: 3
+        timeout-minutes: 2
         run: |
           python3 - <<'PY'
           import json, os, pathlib, shutil, subprocess
@@ -124,7 +130,7 @@ jobs:
           PY
       - name: Retain synthetic proof evidence including failures
         if: always()
-        timeout-minutes: 3
+        timeout-minutes: 2
         uses: actions/upload-artifact@v4
         with:
           name: mac-connect-worker-native

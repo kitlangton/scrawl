@@ -22,7 +22,7 @@ class NativeProofMacTests(unittest.TestCase):
         self.assertNotIn('secrets.', workflow)
         self.assertNotIn('write\n', workflow)
         self.assertIn("github.event_name == 'workflow_dispatch'", workflow)
-        self.assertIn('    timeout-minutes: 55\n', workflow)
+        self.assertIn('    timeout-minutes: 65\n', workflow)
         self.assertIn('timeout-minutes: 4\n', workflow)
         self.assertIn('persist-credentials: false', workflow)
 
@@ -74,7 +74,19 @@ class NativeProofMacTests(unittest.TestCase):
                      'Retain synthetic proof evidence including failures'):
             step = workflow.split('      - name: ' + name + '\n', 1)[1].split('      - name:', 1)[0]
             self.assertIn('if: always()\n', step)
-            self.assertIn('timeout-minutes: 3\n', step)
+            self.assertIn('timeout-minutes: 2\n', step)
+
+    def test_step_caps_preserve_post_action_reserve(self):
+        workflow = WORKFLOW.read_text()
+        job_cap = int(re.search(r'^    timeout-minutes: (\d+)$', workflow, re.M)[1])
+        steps = re.split(r'^      - ', workflow.split('    steps:\n', 1)[1], flags=re.M)[1:]
+        caps = []
+        for step in steps:
+            cap = re.search(r'^        timeout-minutes: (\d+)$', step, re.M)
+            self.assertIsNotNone(cap, step.splitlines()[0])
+            caps.append(int(cap[1]))
+        self.assertEqual(sum(caps), 58)
+        self.assertGreaterEqual(job_cap - sum(caps), 7)
 
     def run_cleanup(self, *, owned=False, unsafe=False):
         script = re.search(r'      - name: Verify owned cleanup.*?python3 - <<\'PY\'\n(.*?)^          PY',
