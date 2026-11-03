@@ -1,0 +1,12 @@
+name: Whole-workflow runtime audit
+description: Fail closed if the completed workflow workload exceeded its execution budget.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: node --experimental-strip-types enablement/verification/workflow-budget.ts

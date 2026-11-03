@@ -81,7 +81,7 @@ class NativeProofMacTests(unittest.TestCase):
         workflow = WORKFLOW.read_text()
         job_cap = int(re.search(r'^    timeout-minutes: (\d+)$', workflow, re.M)[1])
         self.assertEqual(job_cap, 10)
-        steps = re.split(r'^      - ', workflow.split('    steps:\n', 1)[1], flags=re.M)[1:]
+        steps = re.split(r'^      - ', workflow.split('  runtime-budget:\n', 1)[0].split('    steps:\n', 1)[1], flags=re.M)[1:]
         self.assertTrue(steps[0].startswith('name: Verification runtime budget and ownership\n'))
         for step in steps:
             if step.startswith('name: Verification runtime budget and ownership\n'):
@@ -119,7 +119,7 @@ class NativeProofMacTests(unittest.TestCase):
         self.assertIn('!cancelled()', native)
         self.assertIn("'focused-share-build' || 'verified-main'", native)
         self.assertIn('needs.share-build.outputs.artifact || inputs.producer_artifact', native)
-        self.assertEqual(re.findall(r'^    timeout-minutes: (\d+)$', workflow, re.M), ['10', '10'])
+        self.assertEqual(re.findall(r'^    timeout-minutes: (\d+)$', workflow.split('  runtime-budget:\n', 1)[0], re.M), ['10', '10'])
 
     def test_share_scenario_is_explicit_and_cannot_run_worker_case(self):
         workflow = WORKFLOW.read_text()

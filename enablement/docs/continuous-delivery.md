@@ -451,12 +451,26 @@ cleanup and post actions in workload jobs count. Reruns audit their own attempt.
 API errors, incomplete inventories, nonterminal jobs or invalid timestamps fail
 closed. Skipped jobs consume no execution time.
 
-This is a final failure gate, not live whole-run cancellation: an over-budget
-attempt fails after its workload jobs finish. Existing 10-minute job timeouts
-remain additional stop safeguards. Releases/deployments in the same workflow may
-already have completed before the final audit fails; a failed workflow is never
-successful verification or release admission. The audit does not waive native
-proof or attest cleanup after a job timeout.
+A trusted-default-branch `Workflow runtime watchdog` starts on each supported
+workflow's `in_progress` event, including reruns. It polls every 15 seconds during
+execution (shortening the final interval to the remaining budget) and every minute
+while idle, includes currently running jobs in the same interval union, and
+requests normal GitHub cancellation at 600 seconds. It rechecks repository, workflow allowlist,
+run ID and attempt before cancellation; a stale observer leaves a newer attempt
+alone. Only this controller receives `actions: write`; workload/audit permissions
+stay unchanged. It never checks out or executes the observed candidate.
+
+Cancellation is subject to controller runner availability, API latency and GitHub's
+normal shutdown/cleanup grace; it is not an exact-second kill or a guarantee of
+successful cleanup. Native cleanup steps and their existing caps remain required.
+Rate-limit reset/Retry-After headers pause and resume observation; transient API
+failures have bounded retries. The controller has a separate six-hour waiting
+ceiling so target runner queues do not consume the workload budget; its waiting time is not workload execution.
+It does not observe itself, and its seven-workflow allowlist is contract-tested.
+The read-only final audit remains a backstop for completed overruns and API errors.
+Existing 10-minute workload-job timeouts remain additional stop safeguards. A
+cancelled/failed verification workflow cannot admit downstream releases. Neither
+the watcher nor audit waives native proof or attests cleanup after a timeout.
 The agent whose run exceeds a budget owns optimizing the tests and rerunning
 successfully before continuing delivery. Do not increase/bypass limits, remove
 coverage or weaken checks to obtain a pass. CI logs print this instruction before
