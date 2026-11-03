@@ -166,8 +166,11 @@ impl Session {
         let moved = Arc::new(AtomicBool::new(false));
         let moving = moved.clone();
         let pin_needed = Arc::new(AtomicBool::new(false));
+        let pin_context = Arc::new(Mutex::new(None::<String>));
         #[cfg(target_os = "linux")]
         let pin_request = pin_needed.clone();
+        #[cfg(target_os = "linux")]
+        let pin_diagnostics = pin_context.clone();
         let reading = alive.clone();
         let mounted = ready.clone();
         std::thread::spawn(move || {
@@ -192,6 +195,15 @@ impl Session {
                         continue;
                     }
                     if value.get("pin").and_then(|v| v.as_bool()) == Some(true) {
+                        let phase = value.get("phase").and_then(|v| v.as_str())
+                            .filter(|phase| matches!(*phase, "hidden" | "selecting" | "recording" | "processing" | "completed"))
+                            .unwrap_or("unknown");
+                        *pin_context.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!(
+                            "phase={phase} child_activated={:?} renderer_ready={:?} visible={:?}",
+                            value.get("activated").and_then(|v| v.as_bool()),
+                            value.get("rendererReady").and_then(|v| v.as_bool()),
+                            value.get("visible").and_then(|v| v.as_bool()),
+                        ));
                         pin_needed.store(true, Ordering::Release);
                         continue;
                     }
@@ -254,14 +266,21 @@ impl Session {
         if crate::capture::desktop::linux::hyprland::running() {
             let alive = session.alive.clone();
             let id = session.window_id.clone();
+            let activated = session.activated.clone();
             std::thread::spawn(move || {
                 // Compositor requests can block; neither GUI ticks nor the state
                 // writer may wait for them. Coalesce remap/drag notifications.
                 while alive.load(Ordering::Acquire) {
                     std::thread::sleep(Duration::from_millis(120));
-                    if !pin_request.swap(false, Ordering::AcqRel) {
+                    // Preserve an early/coalesced request until main acknowledges
+                    // activation. A hidden surface cannot satisfy native admission.
+                    if !activated.load(Ordering::Acquire)
+                        || !pin_request.swap(false, Ordering::AcqRel)
+                    {
                         continue;
                     }
+                    let context = pin_diagnostics.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone().unwrap_or_else(|| "presentation context unavailable".into());
                     let mut last_error = None;
                     for _ in 0..8 {
                         if !alive.load(Ordering::Acquire)
@@ -283,7 +302,8 @@ impl Session {
                     }
                     if let Some(error) = last_error {
                         crate::capture::engine::runtime::apparent_log(format!(
-                            "Electron recording pill: could not pin on Hyprland: {error:#}"
+                            "Electron recording pill: could not pin on Hyprland: {error:#} ({context}; activation_ack={})",
+                            activated.load(Ordering::Acquire),
                         ));
                         // Electron's visibility/activation acknowledgement does not
                         // prove that XWayland supplied a compositor surface. Do not
