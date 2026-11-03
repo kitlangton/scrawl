@@ -30,7 +30,7 @@ process.chdir(join(source, 'connect/service'));
 let server, service, account, desktop, log, scene, recorder, capturedBundle, runDiagnosticUpload;
 const children = new Set(), calls = [], desktopPids = [];
 const report: {passed:boolean;scope:string;[key:string]:unknown} = {passed: false,
-  scope: 'installed Mac completed-pill public-copy; synthetic hosted desktop and loopback Worker; no Google/deployed proof'};
+  scope: 'installed Mac completed-controls public-copy; synthetic hosted desktop and loopback Worker; no Google/deployed proof'};
 const delay = (ms:number) => new Promise<void>(r => setTimeout(r, ms));
 const alive = p => p.exitCode === null && p.signalCode === null;
 async function stop(p) {
@@ -178,7 +178,7 @@ async function openPopup() {
   // controls. Exercise that installed entry too; the consent child below must
   // still be the packaged Electron share surface, never a direct-copy fallback.
   const pill = installedChildPID('pill');
-  report.completedEntrySurface = pill ? 'electron-pill' : 'native-fallback';
+  report.completedEntrySurface = pill ? 'electron-pill' : 'native-controls';
   ui('click', pill ?? desktop.pid, 'Copy link');
   const pid = await until(popupPID, 10, 'Installed share child absent');
   // OCR is scoped to this child; it proves the actual installed renderer/disclosure.
