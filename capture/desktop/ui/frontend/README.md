@@ -470,7 +470,7 @@ switch is authorized. Socket/controller/browser fixtures are not native proof.
 
 The default-available notes surface runs `electron/notes/main.cjs`, launched by
 Rust for a screen capture. It renders only the nearby text popup and a small
-saved-note badge/list beside the existing capture controls; picker, ink and
+compact Notes control/list beside the existing capture controls; picker, ink and
 capture lifecycle remain on their current native path. There is no competing
 Electron capture state machine. This is independent of the foundation Settings
 window and requires no experiment. Packagers ship its production assets and
@@ -480,10 +480,19 @@ and `npm run build` before starting the rebuilt Rust app.
 A private inherited pipe carries click-time anchors and bounded note commands.
 Only trusted local main frames can submit draft/save/edit/delete/dismiss/list;
 no renderer paths, window IDs, IPC names, shell or network commands are accepted.
-Rust writes saved notes to `notes.json` before acknowledging/counting them;
-unsent drafts stay in the capture's Rust session rather than note metadata/summary. Linux display video still includes the visible popup and its text. Enter with no text closes the
+Rust writes saved notes to `notes.json` before acknowledging/counting them.
+An acknowledged nonempty save briefly flies a click-through letter to the counter.
+It reuses the owned popup, which the native input filter temporarily treats as
+passthrough; new notes and Finish cancel the animation. Reduced motion hides the
+decorative flight. Animation never delays saving or the Finish barrier.
+Linux anchors convert GPUI DIPs to the panel's physical X11 geometry, including
+fractional display scales. Native focus arrival refocuses an open textarea.
+
+Unsent drafts stay in the capture's Rust session rather than note metadata/summary. Linux display video still includes the visible popup and its text. Enter with no text closes the
 field and retains the pin. Escape keeps the in-capture draft; Shift+Enter adds
-a newline. Capture completion closes this capture-local surface. Restarting or
+a newline. Shift-move outside the note retains its draft and returns to drawing
+once the pointer has moved beyond the existing ink threshold; Shift typing and
+selection inside the editor stay protected. Capture completion closes this capture-local surface. Restarting or
 ending a capture does not promise recovery of unsubmitted drafts.
 
 The native menu and Electron Recording control share `microphoneEnabled` in
