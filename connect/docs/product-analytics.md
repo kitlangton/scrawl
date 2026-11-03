@@ -34,6 +34,8 @@ The signed-in account page has an independent **Optional account analytics** con
 
 `connect/web`'s normal tests include the packaged account-control scenarios. Cross-owner enabled-client proof is `npm run test:analytics` there, after both packages' locked dependencies are installed; it builds only separate `dist-analytics-test` outputs, uses synthetic identities and intercepts all provider transport. It never replaces production `dist` or proves actual deployed ingestion. Website delivery runs it before publishing the composed artifact.
 
+Saved browser permission is reused only while the preference store remains writable, without renewing its timestamp. A failed write stops this stream and attempts to remove an old positive choice, but preserves an existing refusal. The notice explains an unsaved refusal is for this visit: if every storage operation fails, permanent withdrawal cannot be confirmed. A still-read-only store cannot reactivate its old positive choice on reload.
+
 ## Delivery and operations
 
 The bounded outbox has a 10,000-row limit, a 24-hour queue lifetime and bounded batches. Overflow/expiry is disclosed through the aggregate drop counter, not invented complete coverage. Requests require a successful HTTP result plus exact provider acknowledgment `status: "Ok"` or legacy numeric `1`. Ambiguous acknowledgments retain stable UUIDs for retry. Provider retries may duplicate raw rows; reporting must deduplicate explicitly.

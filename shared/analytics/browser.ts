@@ -42,8 +42,14 @@ export function startAnalytics(config: AnalyticsConfig) {
   function save() {
     if (!storageAvailable) { choice = "deny"; anonymous = identified = linkedAccount = null; return false }
     try { localStorage.setItem(KEY, JSON.stringify({choice, at: consentAt, noticeVersion: NOTICE, ...(choice === "allow" ? {id: anonymous, account: linkedAccount} : {})})); return true }
-    catch { storageAvailable = false; choice = "deny"; anonymous = identified = linkedAccount = null; return false }
+    catch {
+      storageAvailable = false; choice = "deny"; anonymous = identified = linkedAccount = null
+      try { if (JSON.parse(localStorage.getItem(KEY) || "null")?.choice === "allow") localStorage.removeItem(KEY) } catch { /* Read-only storage may also refuse removal. */ }
+      return false
+    }
   }
+  // Do not reuse a saved grant if a new refusal could not be persisted now.
+  if (choice === "allow") save()
   function permitted() {
     if (!storageAvailable || choice !== "allow") return false
     const now = Date.now()
@@ -100,7 +106,7 @@ export function startAnalytics(config: AnalyticsConfig) {
   shadow.innerHTML = `<style>:host{font:14px/1.5 system-ui,sans-serif;color:var(--apparent-foreground)}section{box-sizing:border-box;width:min(420px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;padding:20px;border:1px solid var(--apparent-border);border-radius:12px;background:var(--apparent-surface)}h2{font-size:16px;margin:0 0 8px}p{margin:0 0 12px}nav{display:flex;gap:8px;flex-wrap:wrap;position:sticky;bottom:0;padding-block:8px;background:var(--apparent-surface)}button{font:inherit;min-height:40px;padding:8px 14px;background:var(--apparent-secondary);color:var(--apparent-secondary-foreground);border:1px solid var(--apparent-border);border-radius:6px;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid var(--apparent-ring);outline-offset:3px}a{color:inherit;text-decoration:underline}.settings{min-height:32px;padding:4px 8px;font-size:12px;background:var(--apparent-surface)}</style><div></div>`
   const panel = shadow.querySelector("div")!
   let previousFocus: Element | null = null
-  function render(open = choice === null) {
+  function render(open = choice === null || !storageAvailable) {
     if (!open) {
       panel.innerHTML = '<button class="settings" type="button">Analytics settings</button>'
       panel.querySelector("button")!.onclick = () => { previousFocus = shadow.activeElement ?? document.activeElement; render(true); panel.querySelector("button")!.focus() }
@@ -118,8 +124,8 @@ export function startAnalytics(config: AnalyticsConfig) {
       choice = button.dataset.choice === "allow" ? "allow" : "deny"; consentAt = Date.now(); decision++
       if (choice === "deny") { anonymous = identified = linkedAccount = lastPage = null }
       else anonymous ||= "anon:" + crypto.randomUUID()
-      const saved = save()
-      render(!saved && button.dataset.choice === "allow"); pageview()
+      const wasStorageAvailable = storageAvailable, saved = save()
+      render(!saved && (button.dataset.choice === "allow" || wasStorageAvailable)); pageview()
       if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus(); else panel.querySelector("button")!.focus()
     } })
   }
