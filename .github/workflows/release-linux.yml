@@ -283,7 +283,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
-        run: node --experimental-strip-types capture/desktop/scripts/linux/maintenance/main-feed.ts "$CANDIDATE_SHA"
+        run: |
+          # The preceding publisher creates its immutable tag after checkout.
+          # Refresh all release tags for candidate identity and ancestry checks.
+          git fetch --tags origin
+          node --experimental-strip-types capture/desktop/scripts/linux/maintenance/main-feed.ts "$CANDIDATE_SHA"
 
       - name: Publish unchanged verified assets for legacy updaters
         if: env.BRIDGE_COMMIT != '' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
