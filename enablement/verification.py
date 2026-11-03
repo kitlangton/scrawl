@@ -251,6 +251,8 @@ def main():
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--receipt-dir", type=Path, help="Write observation-only receipts outside the checkout (Node 22 required)")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--suite", choices=("all", "rust", "browser"), default="all",
+                        help="Execute a full platform suite; default runs all changed-tree selections")
     parser.add_argument("--pr", action="store_true", help="Hook/CI: cheap PR contract checks")
     parser.add_argument("--online", action="store_true", help="CI: use locked graph instead of offline cache")
     parser.add_argument("--github-output", type=Path)
@@ -263,12 +265,18 @@ def main():
         command = ['python3', str(Path(__file__).resolve()), '--base', args.base, '--head', args.head]
         if args.github_output:
             command += ['--github-output', str(args.github_output.resolve())]
+        command += ['--suite', args.suite]
         command += [flag for flag, enabled in [('--pr', args.pr), ('--run', args.run), ('--online', args.online)] if enabled]
+        label = ('changed-tree' if args.suite == 'all' else 'platform-' + args.suite) if args.run else 'pr-contracts'
         subprocess.run(['node', str(ROOT / 'enablement/verification/receipt.ts'),
-                        '--suite', 'changed-tree' if args.run else 'pr-contracts',
+                        '--suite', label,
                         '--output', str(args.receipt_dir.resolve()), '--', *command], cwd=ROOT, check=True)
         return
     selection = plan(args.base, args.head)
+    if args.suite == 'rust':
+        selection.update(root=True, engine=True, browser=False, focused=[])
+    elif args.suite == 'browser':
+        selection.update(root=False, engine=False, browser=True, focused=[])
     print(json.dumps(selection, sort_keys=True), flush=True)
     if args.github_output:
         with args.github_output.open("a") as output:

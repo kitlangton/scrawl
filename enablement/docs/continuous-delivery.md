@@ -307,6 +307,21 @@ Dependency caches are not test receipts; no speedup is claimed here.
 
 ## Verification receipts and timing
 
+Platform verification runs Desktop UI, Connect client, Connect browser and Rust
+jobs independently after selector contracts. All four jobs must pass on the exact
+candidate before the terminal platform receipt or publication admission succeeds.
+The browser job owns Bun/Chrome setup and the existing production-build, artifact,
+route and synthetic-browser checks; Rust retains root/staged-Engine checks and
+real bridge/native acceptance. Browser tests still execute on each claimed platform.
+This split adds no browser-result reuse or owner-report skipping.
+
+`verification.py --suite rust --run` explicitly executes full root and staged-Engine
+checks; `--suite browser --run` explicitly executes the browser package checks.
+These choices cannot become empty successes from changed-tree selection. Omitting
+`--suite` preserves normal changed-tree selection for hooks and manual checks.
+Receipt wrapping forwards the explicit choice and labels it `platform-rust` or
+`platform-browser`; the default remains `changed-tree`.
+
 `verification.py --run|--pr --receipt-dir <external-directory>` and
 `owner_lanes.py --lane <name> --run --receipt-dir <external-directory>` record
 observation-only JSON through `enablement/verification/receipt.ts` (Node 22).
