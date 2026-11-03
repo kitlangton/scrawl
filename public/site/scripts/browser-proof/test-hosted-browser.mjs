@@ -232,12 +232,21 @@ try {
       await page.evaluate(() => document.fonts.ready)
       const geometry = await page.evaluate(() => {
         const sheet = document.querySelector('.hosted-main'), title = document.querySelector('h1'), cta = document.querySelector('.hosted-main-action')
-        return { width: sheet.getBoundingClientRect().width, radius: getComputedStyle(sheet).borderRadius, title: getComputedStyle(title).fontSize, textColor: getComputedStyle(title).color, ctaRadius: getComputedStyle(cta).borderRadius, ctaColor: getComputedStyle(cta).backgroundColor, font: getComputedStyle(sheet).fontFamily }
+        return { width: sheet.getBoundingClientRect().width, radius: getComputedStyle(sheet).borderRadius, title: getComputedStyle(title).fontSize, textColor: getComputedStyle(title).color, foreground: getComputedStyle(title).getPropertyValue('--color-foreground').trim(), ctaRadius: getComputedStyle(cta).borderRadius, ctaColor: getComputedStyle(cta).backgroundColor, font: getComputedStyle(sheet).fontFamily }
       })
       assert.equal(geometry.width, test.width >= 760 ? 720 : (test.width || 1100) > 550 ? Math.min(720, (test.width || 1100) - 40) : test.width - 24)
       assert.equal(geometry.radius, '0px'); assert.equal(geometry.ctaRadius, '0px'); assert.equal(geometry.ctaColor, 'rgb(25, 22, 29)')
       assert.equal(geometry.title, test.width <= 550 ? '32px' : '36px'); assert.match(geometry.font, /Host Grotesk/)
-      assert.equal(geometry.textColor, 'rgb(2, 1, 2)', 'preserve the current marketing cascade text colour')
+      assert.notEqual(geometry.foreground, '', 'Connect loads the shared foreground token')
+      const foregroundColor = await page.evaluate(foreground => {
+        const probe = document.createElement('span')
+        probe.style.color = foreground
+        document.body.append(probe)
+        const color = getComputedStyle(probe).color
+        probe.remove()
+        return color
+      }, geometry.foreground)
+      assert.equal(geometry.textColor, foregroundColor, 'Connect heading uses the current shared theme foreground')
       await page.screenshot({ path: `${evidence}/${test.name}-computer.png`, fullPage: true })
       await computer.focus(); await page.keyboard.press('ArrowRight')
       assert.equal(await agent.getAttribute('aria-selected'), 'true'); assert.equal(await agent.evaluate(e => e === document.activeElement), true)
