@@ -60,6 +60,7 @@ impl Fixture {
                 account_id: "account-a".into(),
                 capture_id: "0123456789abcdef0123456789abcdef".into(),
                 sender_grant_id: "sender-grant".into(),
+                group: None,
             },
         }
     }
@@ -162,6 +163,119 @@ impl Fixture {
         out.extend(trailing);
         out
     }
+}
+
+#[test]
+fn context_group_is_optional_on_wire_and_bound_to_transfer() {
+    let f = Fixture::new();
+    let wire = serde_json::to_value(&f.context).unwrap();
+    assert!(wire.get("group").is_none());
+    assert_eq!(
+        serde_json::to_string(&f.context).unwrap(),
+        r#"{"origin":"https://api.example.com","accountId":"account-a","captureId":"0123456789abcdef0123456789abcdef","senderGrantId":"sender-grant"}"#
+    );
+    let mut grouped = f.context.clone();
+    grouped.group = Some("evidence".into());
+    assert_ne!(
+        serde_json::to_vec(&grouped).unwrap(),
+        serde_json::to_vec(&f.context).unwrap()
+    );
+    assert!(f.pack().len() >= 2);
+    assert!(unpack(&f.spool, &f.output, &grouped, &f.reader, &f.sender_peer()).is_err());
+}
+
+#[test]
+fn media_group_can_be_empty_but_rejects_non_media_assets() {
+    let f = Fixture::new();
+    let mut context = f.context.clone();
+    context.group = Some("media".into());
+    let spool = f.root.join("media-spool");
+    private_dir(&spool).unwrap();
+    let transport = pack(&f.stage, &spool, &context, &f.sender, &f.recipients()).unwrap();
+    assert!(transport.len() >= 2);
+    let mut invalid = context.clone();
+    invalid.group = Some("other".into());
+    let bad_spool = f.root.join("bad-spool");
+    private_dir(&bad_spool).unwrap();
+    assert!(pack(&f.stage, &bad_spool, &invalid, &f.sender, &f.recipients()).is_err());
+}
+
+#[test]
+fn evidence_preserves_full_frame_directory_guard() {
+    let f = Fixture::new();
+    for alias in ["fullFrames", "full_frames"] {
+        for path in ["../private", "/tmp/private", "frames-full"] {
+            let metadata = serde_json::json!({"autocrop":{alias:path}});
+            fs::write(f.stage.join("apparent.json"), serde_json::to_vec(&metadata).unwrap()).unwrap();
+            let files = stage_assets(&f.stage).unwrap();
+            assert_eq!(validate_group_references(&f.stage, &files, Some("evidence")).is_ok(),
+                path == "frames-full", "{alias}: {path}");
+        }
+    }
+}
+
+#[test]
+fn evidence_group_rejects_missing_real_frame_and_media_group_rejects_evidence() {
+    let f = Fixture::new();
+    let metadata = serde_json::json!({"contactSheet":"contact-sheet.png", "keyframes":[{"file":"frames/missing.png"}]});
+    fs::write(
+        f.stage.join("apparent.json"),
+        serde_json::to_vec(&metadata).unwrap(),
+    )
+    .unwrap();
+    let files = stage_assets(&f.stage).unwrap();
+    validate_group_manifest(&files, Some("evidence")).unwrap();
+    assert!(validate_group_references(&f.stage, &files, Some("evidence")).is_err());
+    assert!(validate_group_manifest(&files, Some("media")).is_err());
+}
+
+#[test]
+fn grouped_manifests_reject_duplicate_bad_hash_and_oversized_media() {
+    let f = Fixture::new();
+    let mut files = stage_assets(&f.stage).unwrap();
+    let mut duplicate = files[0].clone();
+    duplicate.path = files[1].path.clone();
+    files.push(duplicate);
+    assert!(validate_group_manifest(&files, Some("media")).is_err());
+
+    files.pop();
+    files[0].sha256 = "not-a-digest".into();
+    assert!(validate_group_manifest(&files, Some("media")).is_err());
+
+    let media = Asset {
+        path: "recording.mp4".into(),
+        size: MAX_FILE_BYTES + 1,
+        sha256: "0".repeat(64),
+    };
+    assert!(validate_group_manifest(&[media], Some("media")).is_err());
+}
+
+#[test]
+fn deferred_media_cannot_satisfy_evidence_frame_reference() {
+    let f = Fixture::new();
+    let metadata = serde_json::json!({"contactSheet":"contact-sheet.png", "audio":"audio.wav", "keyframes":[{"file":"audio.wav"}]});
+    fs::write(
+        f.stage.join("apparent.json"),
+        serde_json::to_vec(&metadata).unwrap(),
+    )
+    .unwrap();
+    let files = stage_assets(&f.stage).unwrap();
+    validate_group_manifest(&files, Some("evidence")).unwrap();
+    assert!(validate_group_references(&f.stage, &files, Some("evidence")).is_err());
+}
+
+#[test]
+fn deferred_media_cannot_satisfy_autocrop_evidence_reference() {
+    let f = Fixture::new();
+    let metadata = serde_json::json!({"contactSheet":"contact-sheet.png", "video":"recording.mp4", "autocrop":{"fullContactSheet":"recording.mp4"}});
+    fs::write(
+        f.stage.join("apparent.json"),
+        serde_json::to_vec(&metadata).unwrap(),
+    )
+    .unwrap();
+    let files = stage_assets(&f.stage).unwrap();
+    validate_group_manifest(&files, Some("evidence")).unwrap();
+    assert!(validate_group_references(&f.stage, &files, Some("evidence")).is_err());
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -469,8 +583,11 @@ fn source_allowlist_limits_and_nonempty_scratch_are_preserved() {
         .set_len(90_000_001)
         .unwrap();
     let error = pack(&f.stage, &f.spool, &f.context, &f.sender, &f.recipients())
-        .context("encryption_pack_failed").unwrap_err();
-    let size = error.downcast_ref::<SizeFailure>().expect("preserve typed size reason through encryption context");
+        .context("encryption_pack_failed")
+        .unwrap_err();
+    let size = error
+        .downcast_ref::<SizeFailure>()
+        .expect("preserve typed size reason through encryption context");
     assert_eq!(size.path, "recording.mp4");
     assert_eq!(size.size, MAX_FILE_BYTES + 1);
     assert_eq!(size.limit, MAX_FILE_BYTES);

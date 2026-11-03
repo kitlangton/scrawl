@@ -212,6 +212,8 @@ struct Job {
     encrypted: bool,
     #[serde(default)]
     encryption: Option<encrypted_transfer::EncryptedJob>,
+    #[serde(default)]
+    grouped: bool,
 }
 
 #[derive(Clone)]
@@ -1126,6 +1128,7 @@ impl Client {
             public_copy,
             encrypted: !public_copy && self.provider.experiment(HOSTED_ENCRYPTION),
             encryption: None,
+            grouped: !public_copy && self.provider.experiment(HOSTED_ENCRYPTION),
         };
         self.save_job(&job)?;
         Ok(job.id)
@@ -1930,7 +1933,7 @@ impl Client {
         Ok(())
     }
     pub fn fetch(&self, id: &str, out: &Path, wait: u64) -> Result<PathBuf> {
-        self.fetch_inner(id, out, wait).map_err(|error| {
+        self.fetch_inner(id, out, wait, false).map_err(|error| {
             match error.to_string().as_str() {
                 "Hosted API: not_found" => anyhow::anyhow!("Capture unavailable (not_found). The sender may still be uploading, the capture may have expired or been deleted, or this account/API origin may not have access. Check apparent connect status and confirm the API origin and approved read account with the sender; ask the sender to check upload status or provide a fresh handoff. Retry with --wait 120 if upload is still in progress."),
                 message if message.starts_with("auth_required:") || matches!(message, "Hosted API: unauthorized" | "Hosted API: forbidden" | "Hosted API: reauthorization_required") => anyhow::anyhow!("Capture read authorization failed. Run `{}` and ask the user to approve its verification link/code, then retry inspection.", self.read_login_command().unwrap_or_else(|_| "apparent connect login".into())),
@@ -1938,7 +1941,11 @@ impl Client {
             }
         })
     }
-    fn fetch_inner(&self, id: &str, out: &Path, wait: u64) -> Result<PathBuf> {
+    /// Fetch an immutable evidence snapshot; legacy captures retain full retrieval.
+    pub fn fetch_evidence(&self, id: &str, out: &Path, wait: u64) -> Result<PathBuf> {
+        self.fetch_inner(id, out, wait, true)
+    }
+    fn fetch_inner(&self, id: &str, out: &Path, wait: u64, evidence: bool) -> Result<PathBuf> {
         ensure!(
             valid_id(id),
             "Capture ID must be 32 lowercase hexadecimal characters"
@@ -2004,6 +2011,12 @@ impl Client {
                 reply["id"].as_str() == Some(id),
                 "Wrong capture ID in manifest"
             );
+            if evidence && reply["delivery"] == "evidence-first-v1"
+                && reply["evidenceReady"] == true
+            {
+                ensure!(matches!(reply["status"].as_str(), Some("pending" | "ready")), "Invalid capture status");
+                break reply;
+            }
             match reply["status"].as_str() {
                 Some("ready") => break reply,
                 Some("pending") => {
@@ -2024,6 +2037,10 @@ impl Client {
         match manifest.get("format").and_then(Value::as_str).unwrap_or("plaintext-v1") {
             "apparent-encrypted-v1" => {
                 ensure!(credential.encryption_identity.is_some(), "encryption_approval_required: run apparent connect login to approve this agent's decryption key, then ask the sender to retry the upload");
+                if manifest["delivery"] == "evidence-first-v1" {
+                    return self.fetch_grouped(id, &server, &credential, &manifest, &stage.0, &out, &parent, evidence);
+                }
+                ensure!(manifest["delivery"].is_null(), "unsupported_encryption_delivery");
                 return self.fetch_encrypted(id, &server, &credential, &manifest, &stage.0, &out, &parent);
             }
             "plaintext-v1" => ensure!(!self.provider.experiment(HOSTED_ENCRYPTION), "encryption_downgrade_refused: capture is explicitly plaintext; disable the experiment only to deliberately fetch legacy content"),

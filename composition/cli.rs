@@ -206,6 +206,9 @@ enum Command {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     Fetch {
         id: String,
+        /// Explicitly retrieve the complete recording (also the default for fetch).
+        #[arg(long)]
+        media: bool,
         #[arg(long)]
         out: PathBuf,
         #[arg(long, default_value_t = 0)]
@@ -363,7 +366,7 @@ enum Command {
     },
     /// Fetch and inspect a Connect capture ID, or inspect a local bundle (or `latest`).
     Inspect {
-        /// Connect ID (fetches to ./<id>.apparent, waits 120s), local bundle, or `latest`.
+        /// Connect ID (fetches evidence to ./<id>.evidence.apparent, waits 120s), local bundle, or `latest`.
         #[arg(default_value = "latest")]
         bundle: PathBuf,
         /// Emit raw `apparent.json` instead of `summary.md` (with `--marks`, the marks as JSON).
@@ -679,7 +682,7 @@ pub(crate) fn run() -> Result<()> {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         Command::Issue(args) => super::issues::command(args),
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        Command::Fetch { id, out, wait } => hosted::fetch(&id, &out, wait),
+        Command::Fetch { id, out, wait, media: _ } => hosted::fetch(&id, &out, wait),
         #[cfg(target_os = "linux")]
         Command::LaunchHandler { command } => match command {
             LaunchHandlerCommand::Install => linux::launch_handler::install(),
@@ -1329,6 +1332,9 @@ pub(crate) fn run() -> Result<()> {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             let bundle = hosted::inspect_source(&bundle)?;
             let (dir, loaded) = handoff::load_bundle(&bundle)?;
+            if dir.join(".evidence-only.json").exists() {
+                eprintln!("Evidence snapshot: video/audio not downloaded. Use apparent fetch <id> --media --out <new-directory> for the complete recording.");
+            }
             if marks {
                 let entries = agent_context::mark_entries(&loaded);
                 if json {

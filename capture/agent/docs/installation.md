@@ -66,9 +66,9 @@ GET to the official `/v1/account` returning 401 proves API reachability, not tha
 the authorization POST or capture fetch succeeds. Retry login deliberately only
 after connectivity is restored. Installer success alone does not prove login readiness.
 
-`inspect` downloads a hosted ID to `./<id>.apparent`, waits up to 120 seconds for
+`inspect` downloads a hosted ID to `./<id>.evidence.apparent`, waits up to 120 seconds for
 readiness, and prints the summary. It never overwrites existing output: inspect a
-previous download using `apparent inspect ./<id>.apparent`. For custom paths/waits,
+previous download using `apparent inspect ./<id>.evidence.apparent`. For custom paths/waits,
 use `apparent fetch <id> --out <new-path> --wait <seconds>`.
 Open `contact-sheet.png` and relevant full frames before acting. A summary alone
 is not visual inspection. See [Connect](../../../connect/docs/hosted-client.md).

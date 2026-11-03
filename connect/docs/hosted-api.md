@@ -67,6 +67,28 @@ Scheduled cleanup deletes tombstoned/expired R2 objects, retaining D1 tombstones
 
 Stable errors: `invalid_request`, `body_too_large`, `invalid_manifest`, `invalid_path`, `file_too_large`, `manifest_conflict`, `quota_exceeded`, `not_found`, `not_ready`, `size_mismatch`, `hash_mismatch`, `unauthorized`, `reauthorization_required`, `auth_unavailable`, `forbidden`, `csrf_failed`, `beta_required`, `device_unavailable`, `slow_down`, `oauth_failed`, `budget_exhausted`, `budget_unavailable`, `internal_error`.
 
+### Evidence-first encrypted delivery
+
+New private clients reserve the complete immutable transport manifest with
+`format: 'apparent-encrypted-v1', delivery: 'evidence-first-v1'`. Each of `evidence/`
+and `media/` contains `envelope.json` and one to sixteen contiguous
+`sealed/part-NNNNNN.age` files. Mixed legacy/grouped paths, missing groups, unknown
+delivery values and grouped paths without the explicit request field are rejected
+before writes. The delivery discriminator is derived from the validated immutable
+manifest, requiring no database migration. Legacy manifests and responses retain
+their existing shape.
+
+Grouped reservation, metadata and completion responses repeat `delivery` and add
+`evidenceReady`. Evidence is ready only after every evidence file has a validated,
+published storage object; individual uploads do not make a partial group readable.
+Authenticated GETs of evidence paths may then proceed while full `status` remains
+`pending`. Media and legacy reads still require full readiness; `/complete` still
+verifies every file. Authorization, tombstones, revocation rechecks, aggregate
+quotas, spending grants and cleanup remain in force. Evidence-first pending
+captures retain the existing 24-hour incomplete deadline. Full readiness retains
+the seven-day reservation expiry. Encrypted captures remain ineligible for public
+sharing. No cloud decryption or processing is introduced.
+
 ### Initial beta R2 spending limits
 
 The global D1 ledger permits at most **500,000 lifetime Class A** and **5,000,000 lifetime Class B** operation grants, with **no automatic calendar reset**. Every PUT consumes one A; every GET one B; pending completion atomically reserves the full manifest file count as B before any HEAD, even if it stops early. Operation grants are never refunded, including checksum failures, canceled streams and retries. Ready completion/metadata need no grant. Owner/auth/scope/path/expiry denial precedes the spending gate. Missing/invalid budget state or reservation DB error fails closed before R2 with `budget_unavailable` (503); exhausted valid budget returns `budget_exhausted` (503). A client must keep its complete durable upload job on either 503; no capture erasure, manifest shrink or omitted files. Caller input, token changes, restarts and deployments cannot reset the ledger.

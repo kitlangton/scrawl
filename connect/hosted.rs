@@ -239,7 +239,7 @@ pub fn inspect_source(source: &Path) -> Result<PathBuf> {
     let Some(id) = inspect_capture_id(source) else {
         return Ok(source.to_path_buf());
     };
-    client().fetch(id, &PathBuf::from(format!("./{id}.apparent")), 120)
+    client().fetch_evidence(id, &PathBuf::from(format!("./{id}.evidence.apparent")), 120)
 }
 
 fn inspect_capture_id(source: &Path) -> Option<&str> {

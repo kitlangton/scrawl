@@ -215,6 +215,8 @@ pub fn zoom(
     count: usize,
     cropped: bool,
 ) -> Result<ZoomSheet> {
+    anyhow::ensure!(!dir.join(".evidence-only.json").exists(),
+        "Evidence snapshot has no downloaded media. Use apparent fetch <id> --media --out <new-directory> and zoom the complete bundle.");
     let pending = dir.join(crate::shared::handoff::MEDIA_PENDING);
     // A bundle copied from another Mac gets its video a few seconds after the rest; wait for it.
     let waited = std::time::Instant::now();
