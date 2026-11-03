@@ -1098,7 +1098,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(summary.contains("Typed note · pin 1 · 0:00"));
+        assert!(summary.contains("0:00 Typed note · pin 1"));
         assert!(summary.contains("    Smaller button\n    Keep the label"));
         assert!(!summary.contains("No microphone audio"));
         assert_eq!(bundle.context["microphoneCapture"], "off");

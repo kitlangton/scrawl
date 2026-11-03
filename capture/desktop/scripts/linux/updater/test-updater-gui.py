@@ -252,6 +252,22 @@ class FixtureTests(unittest.TestCase):
     def setUp(self):
         self.fixture = load('updater-fixture')
 
+    def test_migration_preserves_old_discovery_and_authenticates_bridge_source(self):
+        control = {'channel':'main','source_head':'c'*40,'version':'0.3.13',
+                   'mode':'available','migration':True,'legacy':True}
+        base = '/repos/tryapparent/apparent/'
+        releases = json.loads(self.fixture.response(control, base+'releases?per_page=10&page=2', b'candidate')[1])
+        old_visible = [r for r in releases if re.fullmatch(r'linux-main-[0-9a-f]{40}', r['tag_name'])]
+        self.assertEqual([r['tag_name'] for r in old_visible], ['linux-main-'+'f'*40])
+        bridge = json.loads(self.fixture.response(control, base+'git/commits/'+'f'*40, b'candidate')[1])
+        source = json.loads(self.fixture.response(control, base+'git/commits/'+'c'*40, b'candidate')[1])
+        self.assertEqual([p['sha'] for p in bridge['parents']], [self.fixture.LEGACY_SHA, source['sha']])
+        self.assertEqual(bridge['tree'], source['tree'])
+        self.assertEqual(self.fixture.response(control, base+'git/commits/'+'d'*40, b'candidate')[0], 404)
+        control['legacy'] = False
+        releases = json.loads(self.fixture.response(control, base+'releases?per_page=10&page=2', b'candidate')[1])
+        self.assertEqual(releases[0]['tag_name'], 'linux-main-v2-'+'b'*40)
+
     def test_main_pagination_canonical_assets_and_current_identity(self):
         source = 'a' * 40
         control = {'channel': 'main', 'source_head': source, 'version': '1.2.3', 'mode': 'current'}
@@ -259,7 +275,7 @@ class FixtureTests(unittest.TestCase):
         first = json.loads(self.fixture.response(control, base + '1', b'x')[1])
         self.assertFalse(first[0]['prerelease'])
         release = json.loads(self.fixture.response(control, base + '2', b'x')[1])[0]
-        self.assertEqual(release['tag_name'], 'linux-main-' + source)
+        self.assertEqual(release['tag_name'], 'linux-main-v2-' + source)
         self.assertTrue(release['prerelease'])
         self.assertFalse(release['draft'])
         self.assertTrue(release['published_at'])
@@ -267,7 +283,7 @@ class FixtureTests(unittest.TestCase):
         for mode in ['available', 'bad-checksum', 'diverged']:
             control['mode'] = mode
             release = json.loads(self.fixture.response(control, base + '2', b'x')[1])[0]
-            self.assertEqual(release['tag_name'], 'linux-main-' + 'b' * 40)
+            self.assertEqual(release['tag_name'], 'linux-main-v2-' + 'b' * 40)
             for asset in release['assets']:
                 self.assertEqual(asset['browser_download_url'],
                                  'https://github.com/tryapparent/apparent/releases/download/'

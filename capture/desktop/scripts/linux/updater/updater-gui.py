@@ -276,7 +276,15 @@ def main():
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--ssh-user', required=True)
     parser.add_argument('--channel', choices=['stable', 'main'], default='stable')
+    parser.add_argument('--legacy-appimage', type=Path, help='checksum-verified released a5cf47d x86_64 AppImage for migration acceptance')
     args = parser.parse_args()
+    legacy_digest = ''
+    if args.legacy_appimage:
+        if args.channel != 'main' or not re.fullmatch(r'[A-Za-z0-9_.-]+', args.legacy_appimage.name):
+            parser.error('legacy migration requires Main and a simple fixture filename')
+        legacy_digest = hashlib.sha256(args.legacy_appimage.read_bytes()).hexdigest()
+        if legacy_digest != 'a8e4e8c1c75cd52c871b742861b86864c4488511c1310da502db936be70bb26a':
+            parser.error('legacy fixture must match the published a5cf47d x86_64 asset digest')
     args.results = args.results.resolve()
     if args.results.exists():
         parser.error('results must be a new private directory')
@@ -302,17 +310,22 @@ def main():
     scenario = scenario.replace('__UPDATER_EXPECTED_SOURCE_HEAD__', source_head)
     scenario = scenario.replace('__UPDATER_EXPECTED_SHA256__', digest)
     scenario = scenario.replace('__UPDATER_CHANNEL__', args.channel)
+    scenario = scenario.replace('__UPDATER_LEGACY_SHA256__', legacy_digest)
+    scenario = scenario.replace('__UPDATER_LEGACY_NAME__', args.legacy_appimage.name if args.legacy_appimage else '')
     scenario_path = args.results / 'scenario.sh'
     scenario_path.write_text(scenario)
     (args.results / 'candidate.json').write_text(json.dumps({
         'appimage': str(args.appimage.resolve()), 'sha256': digest,
         'source_head': source_head, 'channel': args.channel,
+        'legacy_sha256': legacy_digest,
         'scope': 'isolated Omarchy; guest-local synthetic HTTPS release contract, NOT GitHub publication'}, indent=2) + '\n')
     command = [sys.executable, str(source.parent / 'gui/gui-vm.py'), '--template', str(args.template.resolve()),
                '--ovmf-vars', str(args.ovmf_vars.resolve()), '--ssh-key', str(args.ssh_key.resolve()),
                '--ssh-user', args.ssh_user, '--binary', str(args.appimage.resolve()),
                '--scenario', str(scenario_path), '--results', str(args.results / 'vm'),
                '--isolated-network', '--scenario-timeout', '360', '--job-timeout', '660']
+    if args.legacy_appimage:
+        command.extend(['--fixture-file', str(args.legacy_appimage.resolve())])
     evidence = Evidence(args.results)
     error = None
     with (args.results / 'runner.log').open('wb') as log:

@@ -4,6 +4,7 @@ import {authRoutes} from './auth.ts';
 import {captureRoutes,cleanup} from './captures.ts';
 import {shareRoutes} from './shares.ts';
 import {renderShare,shareViewScript,shareViewStyles,shareWordmark,shareFont} from './share-view.ts';
+import {flushAnalytics} from './analytics.ts';
 
 export default {
  async fetch(request: Request,env: Env) {
@@ -30,5 +31,5 @@ export default {
   if(trustedSiteOrigin(origin,env)){headers.set('Access-Control-Allow-Origin',origin);headers.set('Access-Control-Allow-Credentials','true');}
   return new Response(response.body,{status:response.status,headers});
  },
- async scheduled(_controller: ScheduledController,env: Env) {await cleanup(env);}
+ async scheduled(_controller: ScheduledController,env: Env) {await cleanup(env);await flushAnalytics(env);}
 };

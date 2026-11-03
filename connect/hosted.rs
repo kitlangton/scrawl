@@ -227,6 +227,47 @@ pub fn fetch(id: &str, out: &Path, wait: u64) -> Result<()> {
     println!("{}", client().fetch(id, out, wait)?.display());
     Ok(())
 }
+/// Only a bare canonical Connect ID implies a download. Explicit local paths
+/// retain local inspection semantics; fetch never overwrites existing output.
+pub fn inspect_source(source: &Path) -> Result<PathBuf> {
+    let Some(id) = inspect_capture_id(source) else {
+        return Ok(source.to_path_buf());
+    };
+    client().fetch(id, &PathBuf::from(format!("./{id}.apparent")), 120)
+}
+
+fn inspect_capture_id(source: &Path) -> Option<&str> {
+    source.to_str().filter(|id| {
+        id.len() == 32
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+
+#[cfg(test)]
+mod inspect_tests {
+    use super::*;
+
+    #[test]
+    fn only_bare_canonical_ids_trigger_connect_fetch() {
+        let id = "0123456789abcdef0123456789abcdef";
+        assert_eq!(inspect_capture_id(Path::new(id)), Some(id));
+        for local in [
+            format!("./{id}"),
+            format!("/{id}"),
+            format!("{id}.apparent"),
+            id.to_uppercase(),
+            "latest".into(),
+            "apparent.json".into(),
+            "0123456789abcdef0123456789abcde".into(),
+            "g123456789abcdef0123456789abcdef".into(),
+        ] {
+            assert_eq!(inspect_capture_id(Path::new(&local)), None, "{local}");
+        }
+    }
+}
+
 pub fn completed(bundle: &Path) {
     if cfg!(test) {
         return;
