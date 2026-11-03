@@ -136,7 +136,7 @@ def verify_ready(sha, package):
         try:
             return verify(sha, package)
         except HTTPError as error:
-            if error.code not in (404, 502, 503, 504) or attempt == 4:
+            if error.code not in (404, 500, 502, 503, 504) or attempt == 4:
                 raise
             error.close()
             time.sleep(2 ** attempt)
