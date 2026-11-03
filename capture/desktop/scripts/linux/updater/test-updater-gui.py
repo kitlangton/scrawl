@@ -249,6 +249,23 @@ exit "$result"
 
 
 class FixtureTests(unittest.TestCase):
+    def test_static_feed_works_with_api_unavailable_and_binds_checksum(self):
+        fixture = load('updater-fixture')
+        control = {'channel': 'main', 'source_head': 'a'*40, 'version': '1.2.3',
+                   'mode': 'available', 'api_unavailable': True}
+        self.assertEqual(fixture.response(control, fixture.MAIN_API+'1', b'image')[0], 403)
+        status, body = fixture.response(control, fixture.MAIN_FEED, b'image')
+        self.assertEqual(status, 200)
+        feed = json.loads(body)
+        self.assertEqual(feed['source'], 'b'*40)
+        self.assertIn('a'*40, feed['ancestors'])
+        self.assertEqual(len(feed['release']['assets']), 4)
+        for name, checksum in feed['checksums'].items():
+            self.assertEqual(checksum, hashlib.sha256(b'image').hexdigest()+'  '+name+'\n')
+        control['mode'] = 'diverged'
+        feed = json.loads(fixture.response(control, fixture.MAIN_FEED, b'image')[1])
+        self.assertNotIn('a'*40, feed['ancestors'])
+
     def setUp(self):
         self.fixture = load('updater-fixture')
 

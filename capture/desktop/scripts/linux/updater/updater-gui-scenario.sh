@@ -48,7 +48,7 @@ serial=0
 control() {
   serial=$((serial + 1))
   rm -f "$out/request-started" "$out/release-response"
-  printf '{"version":"%s","mode":"%s","gate":%s,"serial":%s,"channel":"%s","source_head":"%s","migration":%s,"legacy":%s}\n' "$version" "$1" "${2:-false}" "$serial" "$UPDATER_CHANNEL" "$UPDATER_EXPECTED_SOURCE_HEAD" "$migration" "$legacy" > "$out/control.new"
+  printf '{"version":"%s","mode":"%s","gate":%s,"serial":%s,"channel":"%s","source_head":"%s","migration":%s,"legacy":%s,"api_unavailable":%s}\n' "$version" "$1" "${2:-false}" "$serial" "$UPDATER_CHANNEL" "$UPDATER_EXPECTED_SOURCE_HEAD" "$migration" "$legacy" "$([[ "$migration" == false && "$UPDATER_CHANNEL" == main ]] && echo true || echo false)" > "$out/control.new"
   mv "$out/control.new" "$out/control.json"
 }
 wait_file() {
@@ -152,7 +152,7 @@ downloads=[r for r in requests if r['path'].endswith('.AppImage')]
 assert len(downloads)==2, downloads
 assert '/linux-main-'+'f'*40+'/' in downloads[0]['path'], downloads
 assert '/linux-main-v2-'+'b'*40+'/' in downloads[1]['path'], downloads
-assert any('/git/commits/'+'f'*40 in r['path'] for r in requests), requests
+assert any(r['path'].endswith('/linux-main-feed/main.json') for r in requests), requests
 PY
   "$image" app >> "$out/app.log" 2>&1
   ui '{"op":"click","text":"About","label":"migrated-about"}'
@@ -258,12 +258,13 @@ assert_deferred escape-deferred
 if [[ "$UPDATER_CHANNEL" == main ]]; then
   # A stale feed must not replace the already-staged descendant with source HEAD.
   manual current
-  ui '{"op":"assert","text":"Update available","label":"stale-feed-pending"}'
+  ui '{"op":"assert","text":"Update check failed","label":"stale-feed-pending"}'
   assert_deferred stale-feed
   [[ "$(stat -c %i "$image")" == "$(cat "$out/staged-inode.txt")" ]]
   [[ "$(stat -c %i "$backup")" == "$original_inode" ]]
-  ui '{"op":"click","text":"Update later","label":"stale-feed-defer"}'
+  ui '{"op":"click","text":"OK","label":"stale-feed-defer"}'
   ui '{"op":"assert-dismissed","label":"stale-feed-dismissed"}'
+  expire_retry
   control available
 fi
 ui '{"op":"click","text":"Check for Updates","label":"check-before-relaunch"}'
@@ -368,18 +369,14 @@ from collections import Counter
 import json,os,sys
 requests=[json.loads(line) for line in open(sys.argv[1])]
 main=os.environ['UPDATER_CHANNEL']=='main'
-metadata='/repos/tryapparent/apparent/releases?per_page=100&page=1' if main else '/repos/tryapparent/apparent/releases/latest'
+metadata='/tryapparent/apparent/releases/download/linux-main-feed/main.json' if main else '/repos/tryapparent/apparent/releases/latest'
 counts=Counter(r['control']['serial'] for r in requests if r['control']['gate'] and r['path']==metadata)
 assert counts == ({2:1,3:1,4:1,5:1,6:1,7:1,9:1} if main else {2:1,3:1,4:1,5:1,6:1}), counts
 downloads=[r for r in requests if r['path'].endswith('.AppImage')]
 assert len(downloads)==2, downloads  # rejected checksum, then staged; no re-download on recheck
 assert not any(r['control']['serial']==1 for r in downloads), downloads
 if main:
-    compare='/repos/tryapparent/apparent/compare/'
-    source=os.environ['UPDATER_EXPECTED_SOURCE_HEAD']; candidate=os.environ['UPDATER_CANDIDATE_ID']
-    query='?per_page=1&page=2'
-    assert any(r['path']==compare+source+'...'+candidate+query and r['control']['mode']=='diverged' for r in requests), requests
-    assert any(r['path']==compare+candidate+'...'+source+query and r['control']['serial']==9 for r in requests), requests
+    assert not any(r['path'].startswith('/repos/') for r in requests), requests
     assert not any(r['control']['serial'] in (1,5,9) for r in downloads), downloads
 PY
 printf 'UPDATER_GUI_PASS\n'
