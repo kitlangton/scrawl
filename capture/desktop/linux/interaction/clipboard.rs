@@ -35,8 +35,7 @@ fn native_wayland_clipboard() -> bool {
 /// This is a preflight only. A failed offer after this check must not replace
 /// clipboard contents: another process may have become the selection owner.
 pub fn combined_offer_supported() -> bool {
-    native_wayland_clipboard()
-        && owner_backend_ready()
+    native_wayland_clipboard() && owner_backend_ready()
 }
 
 // Probe the actual replacement in a bounded child, without claiming a selection.
@@ -104,18 +103,10 @@ pub fn snapshot_text_wayland() -> Result<TextSnapshot> {
         });
     }
     let _ = plain_text_mime(types)?;
-    let mimes: Vec<_> = types.lines().collect();
-    anyhow::ensure!(
-        mimes.len() <= MAX_MIME_TYPES,
-        "Clipboard has too many MIME types to preserve"
-    );
+    let mimes = snapshot_mime_types(types)?;
     let mut entries = Vec::with_capacity(mimes.len());
     let mut size = 0usize;
     for mime in mimes {
-        anyhow::ensure!(
-            !mime.is_empty() && mime.len() <= MAX_MIME_BYTES,
-            "Invalid clipboard MIME type"
-        );
         let bytes = read_wayland(
             &["--no-newline", "--type", mime],
             MAX_CLIPBOARD_BYTES - size,
@@ -134,6 +125,26 @@ pub fn snapshot_text_wayland() -> Result<TextSnapshot> {
         );
     }
     Ok(TextSnapshot { entries })
+}
+
+fn snapshot_mime_types(types: &str) -> Result<Vec<&str>> {
+    let mut mimes: Vec<_> = types.lines().collect();
+    anyhow::ensure!(
+        mimes.len() <= MAX_MIME_TYPES,
+        "Clipboard has too many MIME types to preserve"
+    );
+    for mime in &mimes {
+        anyhow::ensure!(
+            !mime.is_empty() && mime.len() <= MAX_MIME_BYTES,
+            "Invalid clipboard MIME type"
+        );
+    }
+    // wl-copy can advertise its explicit text type again among its text
+    // aliases. One MIME name identifies one payload; preserve its first entry
+    // instead of feeding duplicate names into the replacement owner protocol.
+    let mut seen = std::collections::HashSet::new();
+    mimes.retain(|mime| seen.insert(*mime));
+    Ok(mimes)
 }
 
 pub fn restore_text_wayland(snapshot: TextSnapshot, offered: Option<(&str, &[u8])>) -> Result<()> {
@@ -461,6 +472,14 @@ fn copy_wayland(mime: &str, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_preserves_each_mime_once_when_the_owner_advertises_duplicates() {
+        assert_eq!(
+            snapshot_mime_types("text/plain;charset=utf-8\ntext/plain\ntext/plain;charset=utf-8\n").unwrap(),
+            vec!["text/plain;charset=utf-8", "text/plain"]
+        );
+    }
 
     #[test]
     fn application_owner_fails_closed_before_acquiring_a_selection() {
