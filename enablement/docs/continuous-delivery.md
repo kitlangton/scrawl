@@ -261,12 +261,15 @@ Dependency caches are not test receipts; no speedup is claimed here.
 
 With `core.hooksPath=.githooks`, `post-commit` refreshes `origin/main` with a
 five-second, noninteractive fetch on feature branches. When HEAD does not contain
-that main commit, it prints `INTEGRATION REQUIRED` and the exact fetched SHA.
-The owning agent should finish running operations, preserve any remaining
-uncommitted work, rebase onto that SHA, inspect incoming changes and rerun affected
-checks before starting the next work section. This is an advisory checkpoint,
-not an enforced merge gate or an automatic rebase. A partial commit remains a
-partial commit: the hook never stashes, stages, rewrites, pushes or changes files.
+that main commit, it prints `INTEGRATION CHECKPOINT`, the exact fetched SHA,
+incoming paths/areas and paths changed on both branches. Shared/build/verification
+changes explicitly prompt consumer assessment. Paths are advisory: disjoint files
+can still share contracts. Assess incoming dependencies and integrate immediately
+for conflicts or relevant changes; otherwise finish the current bounded slice.
+Before merging, fetch current main, integrate, rerun affected checks and complete
+independent review. This checkpoint never automatically rebases or relaxes that
+pre-merge requirement. Preserve remaining uncommitted work explicitly: the hook
+never stashes, stages, rewrites, pushes or changes files.
 
 Detached checkouts, main, and in-progress rebase/merge/cherry-pick/revert/bisect
 operations skip the checkpoint. A failed or timed-out fetch reports unknown
