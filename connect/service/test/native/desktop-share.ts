@@ -154,6 +154,10 @@ let serial = 0;
 function ui(action:string, pid?:number|string, label?:string) {
   const args = action === 'clipboard' ? [action, ...(pid === undefined ? [] : [String(pid)])] : [action, String(pid), label, join(evidence, `window-${++serial}.png`)];
   const result = spawnSync(driver, args, {env, timeout: 12000, encoding: 'utf8'});
+  if (action === 'click') {
+    const diagnostics = result.stdout.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line));
+    report.nativeInput = [...(report.nativeInput as unknown[] ?? []), ...diagnostics];
+  }
   assert.equal(result.status, 0, `Owned-window ${action} failed: ${result.stderr}`);
   return result.stdout.trim();
 }
