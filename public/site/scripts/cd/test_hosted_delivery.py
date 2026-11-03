@@ -40,6 +40,23 @@ class HostedDeliveryTests(unittest.TestCase):
         self.assertIn('/workers/scripts/synthetic-existing-worker/deployments', request.full_url)
         self.assertEqual(request.get_header('User-agent'), 'apparent-connect-cd/1')
 
+    def test_analytics_defaults_on_without_exposing_secrets_and_preserves_explicit_stop(self):
+        rendered = configuration.config(self.env)
+        self.assertEqual(rendered['vars']['POSTHOG_ENABLED'], 'true')
+        self.assertEqual(rendered['vars']['POSTHOG_HOST'], 'https://eu.i.posthog.com')
+        self.assertEqual(rendered['vars']['POSTHOG_ENVIRONMENT'], 'production')
+        self.assertNotIn('POSTHOG_PROJECT_TOKEN', json.dumps(rendered))
+        self.assertTrue(rendered['keep_vars'])
+        self.assertEqual(configuration.config({**self.env, 'POSTHOG_ENABLED': 'false'})['vars']['POSTHOG_ENABLED'], 'false')
+        with self.assertRaises(ValueError):
+            configuration.config({**self.env, 'POSTHOG_ENABLED': 'invalid'})
+
+    def test_existing_service_need_not_already_have_new_analytics_variables(self):
+        settings = self.existing_settings()
+        settings['bindings'] = [b for b in settings['bindings'] if not b['name'].startswith('POSTHOG_')]
+        with patch.object(worker, 'api', side_effect=[settings, {'schedules': [{'cron': '*/15 * * * *'}]}]), patch.object(worker, 'provider_api', side_effect=self.route_readback()):
+            worker.preflight()
+
     def existing_settings(self):
         config = configuration.config(self.env)
         return {'bindings': [
