@@ -3,6 +3,8 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import select
+import signal
 import sys
 import tempfile
 import unittest
@@ -42,13 +44,79 @@ class SelectionTests(unittest.TestCase):
 
     def test_receipt_wrapper_preserves_explicit_suite(self):
         args = ['verification.py', '--base', 'unknown', '--run', '--online',
-                '--suite', 'rust', '--receipt-dir', '/external/receipts']
+                '--suite', 'rust', '--parallel-contracts', '--receipt-dir', '/external/receipts']
         with patch.object(verification.sys, 'argv', args), patch.object(verification.subprocess, 'run') as run:
             verification.main()
             command = run.call_args.args[0]
             self.assertEqual(command[command.index('--suite', command.index('--') + 1) + 1], 'rust')
             self.assertEqual(command[command.index('--suite') + 1], 'platform-rust')
             self.assertIn('--online', command)
+            self.assertIn('--parallel-contracts', command[command.index('--') + 1:])
+
+    def test_parallel_contracts_overlap_selected_checks_and_join_both_results(self):
+        real_spawn = subprocess.Popen
+        for outcome in ('success', 'contracts-fail', 'selected-fail', 'signal', 'spawn-signal'):
+            with self.subTest(outcome=outcome):
+                ready_read, ready_write = os.pipe()
+                release_read, release_write = os.pipe()
+                processes = []
+                previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+                def spawn(command, **kwargs):
+                    self.assertEqual(command[-1], '--contract-checks')
+                    self.assertTrue(kwargs['start_new_session'])
+                    program = 'import os,sys; os.write(int(sys.argv[1]), b"R"); os.read(int(sys.argv[2]), 1); sys.exit(int(sys.argv[3]))'
+                    process = real_spawn([sys.executable, '-c', program, str(ready_write), str(release_read),
+                                          '7' if outcome == 'contracts-fail' else '0'],
+                                         pass_fds=(ready_write, release_read), **kwargs)
+                    processes.append(process)
+                    if outcome == 'spawn-signal':
+                        os.kill(os.getpid(), signal.SIGTERM)
+                    return process
+                def selected(selection, offline):
+                    self.assertFalse(offline)
+                    self.assertEqual(selection, {'root': True, 'engine': False})
+                    self.assertTrue(select.select([ready_read], [], [], 5)[0], 'contracts did not start before selected checks')
+                    self.assertEqual(os.read(ready_read, 1), b'R')
+                    self.assertIsNone(processes[0].poll(), 'contract lane must still be running')
+                    if outcome == 'selected-fail':
+                        raise RuntimeError('selected checks failed')
+                    if outcome == 'signal':
+                        os.kill(os.getpid(), signal.SIGTERM)
+                    os.write(release_write, b'G')
+                try:
+                    with patch.object(verification.subprocess, 'Popen', side_effect=spawn), patch.object(
+                            verification.subprocess, 'run'), patch.object(verification, 'run_selected_checks', side_effect=selected):
+                        def run():
+                            verification.run_checks({'root': True, 'engine': False}, offline=False, parallel_contracts=True)
+                        if outcome == 'success':
+                            run()
+                        elif outcome == 'contracts-fail':
+                            with self.assertRaises(subprocess.CalledProcessError) as error:
+                                run()
+                            self.assertEqual(error.exception.returncode, 7)
+                        elif outcome == 'selected-fail':
+                            with self.assertRaisesRegex(RuntimeError, 'selected checks failed'):
+                                run()
+                        else:
+                            with self.assertRaises(SystemExit) as error:
+                                run()
+                            self.assertEqual(error.exception.code, 128 + signal.SIGTERM)
+                    self.assertIsNotNone(processes[0].poll(), 'owned contracts must be reaped')
+                    self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+                finally:
+                    for process in processes:
+                        if process.poll() is None:
+                            os.killpg(process.pid, signal.SIGKILL)
+                            process.wait()
+                    for fd in (ready_read, ready_write, release_read, release_write):
+                        os.close(fd)
+
+    def test_parallel_contracts_restore_handlers_when_spawn_fails(self):
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        with patch.object(verification.subprocess, 'Popen', side_effect=OSError('spawn failed')):
+            with self.assertRaisesRegex(OSError, 'spawn failed'), verification.overlapping_contracts():
+                self.fail('selected checks must not run')
+        self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
 
     def test_explicit_platform_suites_execute_even_when_changed_tree_has_no_matching_inputs(self):
         for suite in ('rust', 'browser'):

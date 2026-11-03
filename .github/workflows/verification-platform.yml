@@ -289,7 +289,7 @@ jobs:
             fi
           fi
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online --suite rust --receipt-dir "$RUNNER_TEMP/verification-receipts"
+          python3 enablement/verification.py --base "$BASE" --run --online --suite rust --parallel-contracts --receipt-dir "$RUNNER_TEMP/verification-receipts"
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash

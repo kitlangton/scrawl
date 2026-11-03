@@ -12,7 +12,7 @@ test('uploads retain an R2-verified SHA256, retries validate bytes and preserve 
  const head=await f.bucket.head(original);
  assert.equal(Buffer.from(head.checksums.sha256??[]).toString('hex'),digest('hello'));
  for(const [raw,code] of [['wrong','hash_mismatch'],['hi','size_mismatch'],['longer','size_mismatch']]){
-  const response=await put(raw);assert.equal(response.status,400);assert.equal((await response.json()).error.code,code);
+  const response=await put(raw);assert.equal(response.status,400,raw+": "+await response.clone().text());assert.equal((await response.json()).error.code,code);
  }
  assert.equal((await put('hello')).status,200);
  assert.equal((await f.bucket.list()).objects.length,1);
