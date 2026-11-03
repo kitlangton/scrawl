@@ -11,7 +11,7 @@ const run = { id: 123, repository, head_repository: repository, path: '.github/w
 const artifact = { digest: 'sha256:' + 'e'.repeat(64), id: 456, expired: false, workflow_run: { id: 123 }, name: 'mac-dev-executables-123-2' }
 const job = { name: 'verify / rust (macos-15-intel)', status: 'completed', conclusion: 'success', run_id: 123, run_attempt: 2 }
 test('admits immutable successful trusted producer and exact attempt', () => {
-  assert.deepEqual(admit(run, artifact, [job], '123', '456'), { run: '123', attempt: '2', artifact: '456', digest: artifact.digest })
+  assert.deepEqual(admit(run, artifact, [job], '123', '456'), { kind: 'verified-main', run: '123', attempt: '2', artifact: '456', digest: artifact.digest })
 })
 for (const mutation of [{ conclusion: 'failure' }, { status: 'in_progress' }, { event: 'workflow_dispatch' }, { head_branch: 'feature' }, { repository: { full_name: 'other/repo' } }, { path: '.github/workflows/other.yml' }]) {
   test(`rejects producer ${JSON.stringify(mutation)}`, () => assert.throws(() => admit({ ...run, ...mutation }, artifact, [job], '123', '456')))
@@ -75,4 +75,23 @@ test('download owner authenticates bytes before extracting only fixed regular fi
     assert.deepEqual(readdirSync(directory).sort(), ['apparent', 'apparent-helper', 'manifest.json'])
     assert.throws(() => unpack(good, digest, directory))
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+const focusedRun = { ...run, head_branch: 'candidate', head_sha: 'a'.repeat(40), event: 'workflow_dispatch', status: 'in_progress', conclusion: null }
+const focusedJob = { ...job, name: 'settings-build' }
+const focusedContext = { kind: 'focused-settings-build', run: '123', attempt: '2', sha: 'a'.repeat(40), head: 'a'.repeat(40), tree: 'b'.repeat(40), workflow: 'tryapparent/apparent/.github/workflows/verification-mac.yml@refs/heads/candidate', workflowSha: 'a'.repeat(40), job: 'settings-native', event: 'workflow_dispatch' }
+test('focused build accepts only same active native candidate after successful build', () => fixture((dir, m, expected) => {
+  const identity = admit(focusedRun, artifact, [focusedJob], '123', '456', focusedContext)
+  const focused = { ...m, producer: { ...m.producer, kind: 'focused-settings-build', job: 'settings-build', workflow: focusedContext.workflow, workflow_sha: focusedContext.sha } }
+  verify(dir, focused, expected, identity)
+  assert.throws(() => verify(dir, m, expected, identity), 'main manifest cannot impersonate focused producer')
+  assert.throws(() => verify(dir, focused, expected, admit(run, artifact, [job], '123', '456')), 'focused manifest cannot become full verification')
+  assert.throws(() => verify(dir, { ...focused, producer: { ...focused.producer, workflow_sha: 'f'.repeat(40) } }, expected, identity))
+  assert.throws(() => verify(dir, focused, { ...expected, tree: 'f'.repeat(40) }, identity))
+}))
+test('focused admission rejects cross-run, attempts, refs, source and non-native callers', () => {
+  for (const patch of [{ run: '124' }, { attempt: '1' }, { sha: 'f'.repeat(40) }, { head: 'f'.repeat(40) }, { tree: 'invalid' }, { workflowSha: 'f'.repeat(40) }, { workflow: focusedContext.workflow + '-other' }, { job: 'settings-build' }, { event: 'push' }, { kind: 'unknown' }]) assert.throws(() => admit(focusedRun, artifact, [focusedJob], '123', '456', { ...focusedContext, ...patch }))
+  for (const patch of [{ status: 'completed', conclusion: 'success' }, { conclusion: 'failure' }, { head_sha: 'f'.repeat(40) }, { head_branch: 'main' }, { event: 'workflow_run' }]) assert.throws(() => admit({ ...focusedRun, ...patch }, artifact, [focusedJob], '123', '456', focusedContext))
+  for (const jobs of [[job], [{ ...focusedJob, conclusion: 'failure' }], [{ ...focusedJob, run_attempt: 1 }]]) assert.throws(() => admit(focusedRun, artifact, jobs, '123', '456', focusedContext))
+  assert.throws(() => admit(focusedRun, artifact, [focusedJob], '123', '456'), 'default main kind must still require final automatic main success')
 })

@@ -59,3 +59,21 @@ post-signing executable hashes are saved separately in proof evidence.
 
 A timed-out main producer is not usable even if its build finished. The producer must first complete its existing required work within the cap. No qualifying
 artifact or successful sub-ten-minute native execution has yet been established.
+
+### Focused Settings build inputs
+
+`APPARENT_PREBUILT_KIND` defaults to `verified-main`, preserving final automatic
+main run and Rust-job success. The explicit `focused-settings-build` kind instead
+requires the current `verification-mac.yml` manual candidate workflow and attempt
+to be in progress, with a completed successful job named `settings-build`.
+Only its `settings-native` consumer job may use this admission. The current
+workflow ref, workflow SHA, event SHA, actual HEAD/tree and API run head must agree;
+main-branch, cross-run, cross-attempt and cross-candidate inputs are refused.
+
+The manifest must explicitly identify `producer.kind=focused-settings-build`,
+`producer.job=settings-build` and the exact candidate workflow ref/SHA. Payload,
+immutable artifact ID/digest, configuration, toolchain and runtime checks are
+unchanged. Run/artifact/destination environment names and CLI remain the same.
+This is a build input for the same run's subsequent native test, never a full
+verification, release or successful native receipt. The Settings owner supplies
+its emitter and workflow composition; the consumer adds no candidate build job.
