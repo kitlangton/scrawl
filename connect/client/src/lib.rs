@@ -14,6 +14,7 @@ use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 mod renewal;
+mod transport;
 mod encrypted_transfer;
 mod encryption;
 pub mod settings;
@@ -1188,6 +1189,8 @@ impl Client {
         let timeout = timeout
             .max(Duration::from_millis(1))
             .min(Duration::from_secs(60));
+        let started = Instant::now();
+        let stage = transport::phase(method, route);
         let mut child = Command::new("curl")
             .args([
                 "--disable",
@@ -1199,9 +1202,9 @@ impl Client {
                 "--max-redirs",
                 "0",
                 "--connect-timeout",
-                "5",
-                "--max-time",
             ])
+            .arg(transport::CONNECT_TIMEOUT_SECS.to_string())
+            .arg("--max-time")
             .arg(format!("{:.3}", timeout.as_secs_f64()))
             .args(["--max-filesize", &limit.to_string(), "--output"])
             .arg(output)
@@ -1231,7 +1234,7 @@ impl Client {
                 let _ = child.kill();
                 let _ = child.wait();
                 ensure!(allowed(), "cancelled");
-                bail!("Hosted request timed out");
+                bail!("Hosted request timed out during {stage} (elapsed_ms={}, request_timeout_ms={}, curl_exit=unavailable; child terminated)", started.elapsed().as_millis(), timeout.as_millis());
             }
             if let Some(status) = child.try_wait()? {
                 break status;
@@ -1258,13 +1261,13 @@ impl Client {
                 fs::metadata(output).ok().map(|m| m.len()),
             );
         }
-        ensure!(
-            status.success(),
-            "Hosted transport failed (network, timeout or response limit)"
-        );
+        ensure!(status.success(), "{}", transport::failure(
+            stage, status.code(), code.trim().parse::<u16>().ok().filter(|code| *code <= 599),
+            started.elapsed(), timeout,
+        ));
         ensure!(
             fs::metadata(output)?.len() <= limit,
-            "Hosted response exceeds limit"
+            "Hosted transport response size limit exceeded during {stage} (curl_exit=0, elapsed_ms={}, response_limit_bytes={limit}; client size guard)", started.elapsed().as_millis()
         );
         if !code.starts_with('2') {
             if code.trim() == "401" {

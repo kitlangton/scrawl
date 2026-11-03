@@ -112,6 +112,15 @@ not substitute for root adoption compilation or native/platform proof.
 
 Fresh Linux agents use the [latest published installer](../../capture/agent/docs/installation.md), then `apparent inspect <id>`. `apparent connect login` defaults to read scope, the configured API origin (or the official service), and printing the approval URL/code without opening a local browser. `--browser` opts into opening it. Existing `--server`, `--scope`, `--consent-upload` and `--no-browser` remain supported. CLI read approval enrolls an endpoint key even without the Desktop encryption experiment; encrypted fetch uses that approved key. It changes no upload consent or Desktop encryption flag. A receiver must be included when the sender encrypts; later approval cannot decrypt a previously sealed capture.
 
+Transport failures report a static request stage, curl exit code, numeric HTTP
+status (0 means no HTTP response), elapsed milliseconds and timeout budgets.
+Categories distinguish proxy/host DNS, connection, TLS, timeout and response size.
+Raw curl stderr, response text, URLs and proxy environment values remain hidden.
+Connection establishment gets up to 15 seconds within the existing total request
+deadline; shorter caller deadlines still win. Curl inherits the environment's
+proxy configuration. No automatic authorization-start retry is added. Successful
+unauthenticated GETs do not establish that authorization POSTs will succeed.
+
 ## Opt in on the recording computer
 
 Update Apparent to use `apparent connect`. Older apps with Connect support use
