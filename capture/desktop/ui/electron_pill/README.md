@@ -91,3 +91,14 @@ images and full movie; capture exclusion and receiving-editor delivery remain
 separate gates. Require the producer's exact applicability/release receipt and
 pocket-specific Mac/Linux evidence before merge/installed routing. Missing tests
 on a feature branch are expected under main-only full CI, not a dependency wait.
+
+Before admitting a live take, prepare the scoped VNC/QMP screenshot and input
+route, not just the candidate and scenario. The existing capture recipe's Start
+call begins its portal-consent deadline immediately and blocks while waiting;
+tool discovery or unrelated coordination inside that window can consume the
+take without any native observation. Bind the viewer/input to the new owned
+QEMU process, sockets and fresh dialog geometry before posting input. If Start
+times out without a retained dialog observation, keep consent-versus-backend
+causation unresolved, retain the cold evidence and consumed take identity, and
+fix readiness offline. A new take needs fresh admission; never reuse its spent
+identity or count the launcher/GUI-ready gates as recording or pocket proof.
