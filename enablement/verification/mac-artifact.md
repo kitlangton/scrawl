@@ -14,13 +14,13 @@ Only three fixed raw names are uploaded. Consumers must reject extra files,
 links, unsafe names and hash/mode mismatches, restoring recorded modes because
 Actions artifact transport does not preserve executable permission bits.
 
-The artifact name is `mac-dev-executables-RUN-ATTEMPT`. A future consumer must
+The artifact name is `mac-dev-executables-RUN-ATTEMPT`. The consumer must
 select an explicit immutable artifact ID and run/attempt, independently query
 GitHub final job AND run metadata and require success, verify the expected
 repository/workflow and exact checkout SHA/tree, and validate the entire contract.
 Upload-time success is not final producer success. Workflow event SHA can differ
 from checked-out `inputs.revision`. This manifest grants no test/native/release
-reuse authority. Installer consumption is a separate parent-owned change.
+reuse authority. Installer consumption follows the admission below.
 
 Runtime audit: build.rs adds system Swift and selected-Xcode Swift rpaths. Only
 reviewed rpaths and OS load dependencies are admitted. An @rpath Swift dependency
@@ -39,3 +39,23 @@ and signing. The two files are therefore executable inputs, NOT a complete app.
 Future runtime changes require reviewing this closure contract. Main artifact
 availability, final job success and completion within ten minutes are unverified;
 no native workflow was started for this producer slice.
+
+## Focused proof consumption
+
+The focused Mac workflow accepts explicit `producer_run` and `producer_artifact`
+IDs. Both are required together. `mac-artifact-consumer.ts admit` queries the
+trusted repository's final automatic main Mac run, its exact-attempt Rust job and
+immutable artifact before download. `prepare` downloads the immutable artifact itself, verifies its GitHub archive
+digest, and extracts only three bounded regular files into a fresh directory. It
+additionally checks this checkout's
+SHA/tree, lock/config hashes, fixed regular-file payload, executable hashes/modes,
+toolchain identity and runtime audit before restoring executable permissions.
+The installer uses this route only with a fresh `APPARENT_PREBUILT_DIR`,
+`APPARENT_PREBUILT_RUN` and `APPARENT_PREBUILT_ARTIFACT`; GitHub read access must be
+available through `gh`. Invalid inputs fail without compiling. Ordinary installs
+still build normally. The selected SDK, fresh frontend/Electron, package resources,
+Sparkle, running-app guard and signing are retained. Input manifest and installed
+post-signing executable hashes are saved separately in proof evidence.
+
+A timed-out main producer is not usable even if its build finished. The producer must first complete its existing required work within the cap. No qualifying
+artifact or successful sub-ten-minute native execution has yet been established.

@@ -9,14 +9,29 @@ on:
         type: choice
         options: [worker, share]
         default: worker
+      producer_run:
+        description: 'Optional successful main Mac verification run ID; requires artifact ID'
+        type: string
+        default: ''
+      producer_artifact:
+        description: 'Immutable mac-dev-executables artifact ID for this exact checkout'
+        type: string
+        default: ''
   workflow_call:
     inputs:
       scenario:
         type: string
         default: worker
+      producer_run:
+        type: string
+        default: ''
+      producer_artifact:
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: native-proof-mac-connect-${{ github.ref }}
@@ -68,12 +83,17 @@ jobs:
           xcode-version: '26.0'
       - name: Prepare synthetic media and Metal compiler
         timeout-minutes: 5
+        env:
+          PRODUCER_RUN: ${{ inputs.producer_run }}
         run: |
           command -v ffmpeg && command -v ffprobe || brew install ffmpeg
-          xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+          if [ -z "$PRODUCER_RUN" ]; then
+            xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+          fi
       - uses: dtolnay/rust-toolchain@stable
         timeout-minutes: 2
       - uses: Swatinem/rust-cache@v2
+        if: inputs.producer_run == ''
         timeout-minutes: 3
         with:
           # Match the main platform job's automatic job-id namespace and inputs.
@@ -90,6 +110,14 @@ jobs:
           cache-dependency-path: |
             connect/service/package-lock.json
             capture/desktop/ui/frontend/package-lock.json
+      - name: Admit explicit successful producer before downloading executable inputs
+        if: inputs.producer_run != '' || inputs.producer_artifact != ''
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN: ${{ inputs.producer_run }}
+          PRODUCER_ARTIFACT: ${{ inputs.producer_artifact }}
+        run: node enablement/verification/mac-artifact-consumer.ts admit "$PRODUCER_RUN" "$PRODUCER_ARTIFACT"
       - name: Prepare the checked local Worker with locked dependencies
         timeout-minutes: 5
         working-directory: connect/service
@@ -100,11 +128,20 @@ jobs:
         timeout-minutes: 30
         env:
           APPARENT_NO_LAUNCH: '1'
+          APPARENT_PREBUILT_RUN: ${{ inputs.producer_run }}
+          APPARENT_PREBUILT_ARTIFACT: ${{ inputs.producer_artifact }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           export TMPDIR="$APPARENT_BUILD_TMP"
+          if [ -n "$APPARENT_PREBUILT_RUN" ]; then
+            export APPARENT_PREBUILT_DIR="$RUNNER_TEMP/mac-prebuilt"
+          fi
           bash capture/desktop/scripts/packaging/install-app.sh
           codesign --verify --deep --strict "$APPARENT_APP_DIR"
-          shasum -a 256 "$APPARENT_APP_DIR/Contents/MacOS/apparent" > "$APPARENT_CONNECT_PROOF/evidence/binary.sha256"
+          shasum -a 256 "$APPARENT_APP_DIR/Contents/MacOS/apparent" "$APPARENT_APP_DIR/Contents/MacOS/apparent-helper" > "$APPARENT_CONNECT_PROOF/evidence/binary.sha256"
+          if [ -n "$APPARENT_PREBUILT_RUN" ]; then
+            cp "$APPARENT_PREBUILT_DIR/manifest.json" "$APPARENT_CONNECT_PROOF/evidence/build-inputs.json"
+          fi
       - name: Installed Connect worker restart and encrypted fetch
         if: inputs.scenario != 'share'
         timeout-minutes: 4
