@@ -124,6 +124,8 @@ jobs:
         if: needs.select.outputs.root == 'true' || needs.select.outputs.browser == 'true'
         with:
           node-version: '22'
+          cache: ${{ needs.select.outputs.root == 'true' && 'npm' || '' }}
+          cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
       - uses: oven-sh/setup-bun@v2
         if: needs.select.outputs.browser == 'true'
         with:

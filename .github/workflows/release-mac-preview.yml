@@ -14,7 +14,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  admit:
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    steps:
+      # Check receipts before allocating a Mac, using trusted current main code.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Require Linux/shared and Mac verification of this exact main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 enablement/release_gate.py --platform macos --sha "$GITHUB_SHA"
+
   preview:
+    needs: admit
     if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
     runs-on: macos-latest
     timeout-minutes: 90
