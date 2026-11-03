@@ -523,3 +523,28 @@ or `usr/share/apparent/settings/runtime`; popup packaging adds no second runtime
 when its `main.cjs` exists, alongside the same `dist/` and single `runtime/`. The absent
 share consumer adds no entry or routing. A share owner must verify its installed route
 on both platforms before enabling it; resolver availability alone is not that proof.
+
+### Installed public-copy confirmation (#171)
+
+Completed Copy link opens the independent `electron/share` entry in the one
+shared packaged runtime resolved by `workflow::electron`. It shows only the
+selected capture and the explicit anyone-with-link/non-E2E disclosure. Its
+private parent pipe carries capture name/status and bounded confirm/cancel/deliver
+commands, never a capture path, share URL or account token to the renderer.
+Rust pins the completed bundle path, inode and generation before opening; every
+poll revalidates them, and only the GUI thread may deliver a prepared clipboard
+write. Electron requests delivery only while focused; Rust independently rechecks the current OS foreground owner immediately before clipboard admission. Losing focus between those steps cancels the operation without a clipboard write; close and choose Copy link again to retry. Closing,
+selection changes, new recording and expiry cancel future effects; an admitted
+clipboard write or transmitted data cannot be recalled. A copied result remains
+separate from upload/recipient readiness. No automatic ambiguous-write retry.
+
+The completed pill's ordinary timeout pauses while this capture-bound popup is
+open. New capture/phase transitions still close it; local Paste stays available.
+Disconnected users use the existing General connection setup, then choose Copy
+link again. Missing assets fail with an actionable local-Paste message; there is
+no legacy direct-public-copy fallback. The old direct reservation path is removed.
+Existing hostedSharing and service activation holds are preserved; this adds no
+new experiment. Keep this routing only after macOS/isolated Linux acceptance;
+rollback must restore a verified consent surface, never bypass public-copy consent.
+The development foundation card remains a diagnostic surface, not an installed
+second capture workspace. No #172 ChatGPT-web or deployed-account proof is implied.

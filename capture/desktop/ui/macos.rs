@@ -1454,3 +1454,9 @@ pub(in crate::capture::desktop) fn restore_note_focus(token: u64, owner: u32) {
         }
     }
 }
+
+/// Current OS foreground application, including owned Electron children.
+pub(in crate::capture::desktop) fn share_foreground_pid() -> u32 {
+    objc2_app_kit::NSWorkspace::sharedWorkspace().frontmostApplication()
+        .map_or(0, |app| app.processIdentifier().max(0) as u32)
+}

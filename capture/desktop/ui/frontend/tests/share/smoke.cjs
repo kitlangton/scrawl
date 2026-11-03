@@ -1,0 +1,24 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {chromium,expect}=require('@playwright/test');
+const {spawn}=require('node:child_process');
+const path=require('node:path');
+test('share window requires explicit consent and keeps URLs and other bridges out of renderer',{timeout:30000},async t=>{
+ const child=spawn(require('electron'),['--no-sandbox','--remote-debugging-port=0',path.resolve(__dirname,'../../electron/share/main.cjs')],{stdio:['pipe','pipe','pipe']});
+ let browser,lines='';child.stdout.on('data',b=>lines+=b);
+ t.after(async()=>{await browser?.close().catch(()=>{});child.stdin.end();if(child.exitCode===null)child.kill();});
+ const endpoint=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('No Electron endpoint')),10000);child.stderr.on('data',b=>{const m=b.toString().match(/DevTools listening on (ws:\/\/\S+)/);if(m){clearTimeout(timer);resolve(m[1]);}});});
+ browser=await chromium.connectOverCDP(endpoint);const context=browser.contexts()[0];await expect.poll(()=>context.pages().length).toBe(1);
+ const page=context.pages()[0];const send=state=>child.stdin.write(JSON.stringify({capture:'synthetic.apparent',state})+'\n');
+ send('confirm');
+ await expect(page.getByText('Anyone with this link can view this capture. Shared captures are not end-to-end encrypted.')).toBeVisible();
+ assert.equal(lines,'');
+ assert.deepEqual(await page.evaluate(()=>({require:typeof window.require,process:typeof window.process,other:typeof window.apparent,keys:Object.keys(window.apparentShare).sort()})),{require:'undefined',process:'undefined',other:'undefined',keys:['cancel','confirm','subscribe']});
+ await page.getByRole('button',{name:'Create and copy public link'}).click();
+ await expect.poll(()=>lines).toBe('confirm\n');
+ await expect(page.getByRole('button',{name:'Create and copy public link'})).toBeDisabled();
+ send('preparing');await expect(page.getByRole('status')).toHaveText('Preparing public link…');
+ send('prepared');await page.bringToFront();await expect.poll(()=>lines).toBe('confirm\ndeliver\n');
+ send('copied');await expect(page.getByRole('status')).toContainText('Link copied · upload may still be preparing');
+ await page.getByRole('button',{name:'Close',exact:true}).click();await expect.poll(()=>lines).toBe('confirm\ndeliver\ncancel\n');
+});
