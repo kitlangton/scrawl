@@ -41,6 +41,8 @@ test('sandboxed renderer main-world throws and rejections reach the private sock
   t.after(() => application.close());
   const page = await application.firstWindow();
   await page.waitForLoadState('load');
+  await expect(page.locator('#root')).not.toBeEmpty();
+  assert.equal(await page.evaluate(() => typeof window.apparentExceptions?.exception), 'function');
   await page.evaluate(() => {
     setTimeout(() => { throw new Error('PRIVATE_TOKEN_DO_NOT_SEND'); }, 0);
     setTimeout(() => { void Promise.reject('PRIVATE_PATH_DO_NOT_SEND'); }, 0);
