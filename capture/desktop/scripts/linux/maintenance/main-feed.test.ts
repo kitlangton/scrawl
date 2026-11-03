@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { manifest, mayAdvance } from './main-feed.ts';
@@ -53,6 +53,21 @@ test('feed step fetches immutable tags created after checkout without accepting 
     run(dir, 'clone', '--bare', '--shared', root, remote);
     run(remote, 'config', 'uploadpack.allowFilter', 'true');
     run(dir, 'clone', '--filter=blob:none', '--no-checkout', '--no-tags', `file://${remote}`, checkout);
+    const sparseBlocks = [...workflow.matchAll(/sparse-checkout-cone-mode: false\n          sparse-checkout: \|\n((?:            .*\n)+)/g)];
+    assert.equal(sparseBlocks.length, 2, 'admission and publication use the same bounded checkout');
+    assert.equal(sparseBlocks[0][1], sparseBlocks[1][1]);
+    const patterns = sparseBlocks[0][1].trim().split('\n').map(line => line.trim());
+    run(checkout, 'sparse-checkout', 'set', '--no-cone', ...patterns);
+    run(checkout, 'checkout', 'HEAD');
+    for (const file of ['enablement/release_gate.py', '.github/workflows/release-linux.yml',
+      'capture/desktop/scripts/linux/maintenance/main-feed.ts',
+      'capture/desktop/scripts/linux/maintenance/publish-main-preview.py']) {
+      assert.equal(readFileSync(join(checkout, file), 'utf8'), run(remote, 'show', `HEAD:${file}`) + '\n');
+    }
+    assert.equal(existsSync(join(checkout, 'public/site')), false);
+    execFileSync(process.execPath, ['--experimental-strip-types', '--test',
+      'capture/desktop/scripts/linux/maintenance/signing-bridge.test.ts'], { cwd: checkout, stdio: 'pipe' });
+    execFileSync('python3', ['enablement/release_gate.py', '--help'], { cwd: checkout, stdio: 'pipe' });
     assert.equal(run(checkout, 'config', '--get', 'remote.origin.partialclonefilter'), 'blob:none');
     assert.equal(run(checkout, 'rev-parse', '--is-shallow-repository'), 'false');
     assert.equal(run(checkout, 'rev-list', 'HEAD'), run(remote, 'rev-list', 'HEAD'));

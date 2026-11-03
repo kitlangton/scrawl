@@ -58,6 +58,11 @@ jobs:
           fetch-depth: 0
           # Keep complete ancestry/tags without downloading historical file bodies.
           filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/workflows/release-linux.yml
+            /capture/desktop/scripts/linux/maintenance/
+            /enablement/release_gate.py
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -271,6 +276,11 @@ jobs:
           fetch-depth: 0
           # Feed ordering needs full history, not obsolete historical file bodies.
           filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/workflows/release-linux.yml
+            /capture/desktop/scripts/linux/maintenance/
+            /enablement/release_gate.py
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
