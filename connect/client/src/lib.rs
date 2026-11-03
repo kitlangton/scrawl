@@ -1719,6 +1719,10 @@ impl Client {
                     job.error = Some(
                         if job.size_failure.is_some() {
                             "file_too_large"
+                        } else if error.chain().any(|cause| cause.to_string().starts_with("unsupported_asset")) {
+                            // Encryption adds snapshot context; retain the actionable
+                            // source error without exposing paths or diagnostic text.
+                            "unsupported_asset"
                         } else if text.contains("encryption_pending_recipient") {
                             "encryption_pending_recipient"
                         } else if text.contains("encryption_") || text.contains("encrypted_") {
