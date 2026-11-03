@@ -55,6 +55,7 @@ pub struct Anchor {
 #[derive(Debug)]
 enum Message {
     Open(Anchor),
+    Undo(u32, flume::Sender<bool>),
     Action(CommandMessage),
     Stop,
     BadgePosition([i32; 4]),
@@ -211,6 +212,7 @@ impl Session {
                     break;
                 }
                 let write_pin = match &message {
+                    Message::Undo(pin, _) => Some(*pin),
                     Message::Action(
                         CommandMessage::Save { pin, .. } | CommandMessage::Delete { pin },
                     ) => Some(*pin),
@@ -230,6 +232,13 @@ impl Session {
                                 &stopped,
                                 std::time::Duration::from_secs(2),
                             )?;
+                        }
+                        Message::Undo(pin, reply) => {
+                            let removed = store.undo(pin);
+                            let _ = reply.send(removed.is_ok());
+                            removed?;
+                            if current == Some(pin) { current = None; mode = "badge"; }
+                            let _ = telemetry.ui_sender.try_send(LiveOverlayEvent::RequestSnapshot);
                         }
                         Message::Open(a) => {
                             store.open(a.pin, a.t, a.x, a.y)?;
@@ -402,6 +411,12 @@ impl Session {
             badge_position: None,
         })
     }
+    pub fn undo(&self, pin: u32) -> bool {
+        let (reply, result) = flume::bounded(1);
+        self.sender.try_send(Message::Undo(pin, reply)).is_ok()
+            && result.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or(false)
+    }
+
     pub fn outside(&self) {
         let _ = self.sender.try_send(Message::Action(CommandMessage::Outside));
     }

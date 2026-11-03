@@ -2,6 +2,8 @@
 """Explicit suite entrypoints and advisory dependencies; never a CI skip decision."""
 import argparse
 import json
+import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -11,6 +13,8 @@ import verification as legacy
 ROOT = legacy.ROOT
 LANES = ('capture', 'engine-staged', 'connect-client', 'connect-web',
          'connect-service', 'public-site', 'desktop-ui')
+# Explicit integration is opt-in; advisory selection and desktop-ui stay unchanged.
+EXPLICIT_LANES = LANES + ('desktop-ui-integration',)
 ASSETS = {'public/site/public/assets/' + p for p in (
     'hosted/source-pond-v4.png', 'hosted/agent-pond-v4.png',
     'hosted/agent-reading-v4.png', 'fonts/HostGrotesk-Variable.ttf',
@@ -86,10 +90,48 @@ def summary(report):
 def run_lane(lane, online=False):
     """Manual explicit entrypoints; CI reporting never calls these."""
     mode = '--locked' if online else '--offline'
-    jobs = __import__('os').environ.get('T3_BUILD_JOBS', '3')
+    jobs = os.environ.get('T3_BUILD_JOBS', '3')
     def run(args, directory='.'):
         subprocess.run(args, cwd=ROOT / directory, check=True)
-    if lane in ('capture', 'engine-staged', 'connect-web'):
+    if lane == 'desktop-ui-integration':
+        if sys.platform != 'linux':
+            raise ValueError('desktop-ui-integration requires Linux; native platform gates remain separate')
+        legacy.check_temp_environment()
+        directory = 'capture/desktop/ui/frontend'
+        if not online:
+            # npm offline does not constrain Electron's lazy downloader. Require
+            # an existing external dist that npm ci cannot remove.
+            dist = Path(os.environ.get('ELECTRON_OVERRIDE_DIST_PATH', ''))
+            modules = (ROOT / directory / 'node_modules').resolve()
+            if (not dist.is_absolute() or dist.resolve().is_relative_to(modules)
+                    or not os.access(dist / 'electron', os.X_OK)):
+                raise ValueError('offline integration requires ELECTRON_OVERRIDE_DIST_PATH '
+                                 'pointing to an existing external Linux Electron dist')
+        run(['npm', 'ci', '--no-audit', '--no-fund'] + ([] if online else ['--offline']), directory)
+        run(['npm', 'test'], directory)
+        run(['xvfb-run', '-a', 'npm', 'run', 'test:electron'], directory)
+        # Resolve Electron through its package API (including lazy installation),
+        # never assume node_modules/.bin/electron is the executable.
+        electron = subprocess.run(
+            ['node', '-p', "require('electron')"], cwd=ROOT / directory,
+            capture_output=True, text=True, check=True).stdout.strip()
+        if not Path(electron).is_absolute() or not os.access(electron, os.X_OK):
+            raise ValueError('Electron package did not resolve an absolute executable')
+        env = dict(os.environ, APPARENT_STORAGE_TEST_ELECTRON=electron,
+                   APPARENT_CONNECT_TEST_ELECTRON=electron)
+        try:
+            result = subprocess.run(['cargo', 'test', '-j', jobs, mode, '_electron_rust_roundtrip',
+                                     '--', '--ignored', '--test-threads=1'],
+                                    cwd=ROOT, env=env, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as error:
+            print(error.stdout or '', end='')
+            print(error.stderr or '', end='', file=sys.stderr)
+            raise
+        print(result.stdout, end='')
+        for name in ('connect_settings_electron_rust_roundtrip', 'storage_electron_rust_roundtrip'):
+            if not re.search(r'^test .*::' + name + r' \.\.\. ok$', result.stdout, re.MULTILINE):
+                raise RuntimeError(f'Required Rust bridge test did not pass: {name}')
+    elif lane in ('capture', 'engine-staged', 'connect-web'):
         legacy.run_checks({'root': lane == 'capture', 'engine': lane == 'engine-staged',
                            'browser': lane == 'connect-web', 'focused': []}, offline=not online)
     elif lane == 'connect-client':
@@ -115,7 +157,7 @@ def main():
     parser.add_argument('--head', default='HEAD')
     parser.add_argument('--json', type=Path)
     parser.add_argument('--summary', type=Path)
-    parser.add_argument('--lane', choices=LANES)
+    parser.add_argument('--lane', choices=EXPLICIT_LANES)
     parser.add_argument('--run', action='store_true')
     parser.add_argument('--online', action='store_true')
     args = parser.parse_args()

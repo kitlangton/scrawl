@@ -1585,3 +1585,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "bundle_processing/offline_tests.rs"]
+mod offline_tests;

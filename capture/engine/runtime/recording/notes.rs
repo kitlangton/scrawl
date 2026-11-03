@@ -100,6 +100,10 @@ impl Store {
     }
     pub fn delete(&mut self, pin: u32) -> Result<()> {
         ensure!(self.drafts.contains_key(&pin), "Unknown note");
+        self.undo(pin)
+    }
+    /// Undo also accepts an empty pin whose draft was already dismissed.
+    pub fn undo(&mut self, pin: u32) -> Result<()> {
         let next = self
             .saved
             .iter()
@@ -201,6 +205,35 @@ mod tests {
         std::fs::create_dir(&p).unwrap();
         p
     }
+    #[test]
+    fn failed_undo_keeps_durable_note_and_draft_for_recovery() {
+        let directory = dir();
+        let mut store = Store::new(&directory);
+        store.open(1, 10, 0.5, 0.5).unwrap();
+        store.save(1, "keep".into()).unwrap();
+        let original = store.path.clone();
+        store.path = directory.join("missing").join("notes.json");
+        assert!(store.undo(1).is_err());
+        assert_eq!(store.notes()[0].text, "keep");
+        assert_eq!(store.drafts()[0].pin, 1);
+        assert_eq!(read(&directory).unwrap()[0].pin, 1);
+        store.path = original;
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn undo_removes_saved_note_and_draft_and_accepts_dismissed_pin() {
+        let directory = dir();
+        let mut store = Store::new(&directory);
+        store.open(1, 10, 0.5, 0.5).unwrap();
+        store.save(1, "attached".into()).unwrap();
+        store.undo(1).unwrap();
+        store.undo(2).unwrap();
+        assert!(store.drafts().is_empty());
+        assert!(read(&directory).unwrap().is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn accepted_escaped_notes_round_trip_at_full_capacity() {
         let directory = dir();

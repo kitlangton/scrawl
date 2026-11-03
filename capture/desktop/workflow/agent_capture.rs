@@ -35,6 +35,8 @@ pub enum Action {
     Inspect,
     Stop,
     Cancel,
+    DrawingRead,
+    DrawingUndo,
     ReferenceRead,
     ReferenceCopy,
     PublicShareStart,
@@ -317,6 +319,22 @@ impl Reference {
     }
 }
 
+#[derive(serde::Deserialize, Debug)]
+#[serde(tag = "drawing", rename_all = "lowercase", deny_unknown_fields)]
+enum Drawing {
+    Read { deadline: u64 },
+    Undo { expected: String, deadline: u64 },
+}
+
+
+pub(crate) fn drawing_admission(current: Option<&str>, expected: Option<&str>, expired: bool) -> Result<(), &'static str> {
+    if expired { return Err("admission_expired"); }
+    if let Some(expected) = expected {
+        if current != Some(expected) { return Err("conflict"); }
+    }
+    Ok(())
+}
+
 enum Wire {
     Capture(Option<(Action, String)>, u64),
     PublicShare(Action, String, u64),
@@ -374,6 +392,15 @@ fn parse_request(line: &str) -> Option<Wire> {
         return Some(Wire::Connect(deadline.min(storage_clock_ms() + 3000)));
     }
     if line.starts_with('{') {
+        if let Ok(drawing) = serde_json::from_str::<Drawing>(line) {
+            let (action, expected, deadline) = match drawing {
+                Drawing::Read { deadline } => (Action::DrawingRead, String::new(), deadline),
+                Drawing::Undo { expected, deadline } if valid_revision(&expected) => (Action::DrawingUndo, expected, deadline),
+                _ => return None,
+            };
+            let remaining = deadline.saturating_sub(storage_clock_ms()).min(3000);
+            return Some(Wire::Capture(Some((action, expected)), clock_ms() + remaining));
+        }
         if let Ok(request) = serde_json::from_str::<PublicShareRequest>(line) {
             return request.admission();
         }
@@ -869,7 +896,7 @@ fn command_at(
                 Action::Inspect => "inspect",
                 Action::Stop => "stop",
                 Action::Cancel => "cancel",
-                Action::ReferenceRead | Action::ReferenceCopy | Action::PublicShareStart | Action::PublicShareRead | Action::PublicShareDeliver | Action::PublicShareCancel => bail!("Typed GUI actions require the GUI protocol"),
+                Action::DrawingRead | Action::DrawingUndo | Action::ReferenceRead | Action::ReferenceCopy | Action::PublicShareStart | Action::PublicShareRead | Action::PublicShareDeliver | Action::PublicShareCancel => bail!("Typed GUI actions require the GUI protocol"),
             }
         ),
     };
@@ -988,6 +1015,27 @@ fn execute_with(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn drawing_admission_blocks_stale_idle_and_expired_mutations() {
+        assert_eq!(super::drawing_admission(Some("new"), Some("old"), false), Err("conflict"));
+        assert_eq!(super::drawing_admission(None, Some("old"), false), Err("conflict"));
+        assert_eq!(super::drawing_admission(Some("new"), Some("new"), true), Err("admission_expired"));
+        assert_eq!(super::drawing_admission(Some("new"), Some("new"), false), Ok(()));
+        assert_eq!(super::drawing_admission(None, None, false), Ok(()));
+    }
+
+    #[test]
+    fn drawing_contract_rejects_unbound_undo_and_extra_fields() {
+        assert!(super::parse_request(r#"{"drawing":"read","deadline":1}"#).is_some());
+        assert!(super::parse_request(r#"{"drawing":"undo","expected":"0123456789abcdef","deadline":1}"#).is_some());
+        for invalid in [
+            r#"{"drawing":"undo","deadline":1}"#,
+            r#"{"drawing":"undo","expected":"invalid","deadline":1}"#,
+            r#"{"drawing":"read","deadline":1,"expected":"0123456789abcdef"}"#,
+            r#"{"drawing":"read","deadline":1,"path":"private"}"#,
+        ] { assert!(super::parse_request(invalid).is_none()); }
+    }
+
     #[test]
     fn capture_reference_policy_checks_selection_before_any_clipboard_write() {
         use super::super::super::capture_reference_response as reply;
