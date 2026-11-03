@@ -98,14 +98,20 @@ def find_phrase(words, phrase):
     return matches[0]
 
 
-def native_picker_dismissed(words):
-    if any(w['text'] in ('Windows', 'Outputs', 'Region') for w in words):
+def native_picker_dismissed(words, cleaned_words=()):
+    # Either OCR view seeing chooser headers vetoes thumbnail text. Use the
+    # same outline-removal fallback as normal live-button location.
+    if any(w['text'] in ('Windows', 'Outputs', 'Region')
+           for variant in (words, cleaned_words) for w in variant):
         return False
-    try:
-        find_phrase(words, 'Update now')
-        return True
-    except PhraseMatchError:
-        return False
+    for variant in (words, cleaned_words):
+        try:
+            find_phrase(variant, 'Update now')
+            return True
+        except PhraseMatchError as error:
+            if error.count:
+                return False
+    return False
 
 
 def picker_output_center(image, words):
@@ -265,7 +271,7 @@ class Evidence:
             while True:
                 path = self.frame()
                 words = self.words(path)
-                if native_picker_dismissed(words):
+                if native_picker_dismissed(words, self.words(path, cleaned=True)):
                     break
                 if time.monotonic() >= deadline:
                     raise RuntimeError(f'native picker still covers live update dialog: {path}')

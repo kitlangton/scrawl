@@ -50,6 +50,9 @@ class LocatorTests(unittest.TestCase):
                       block_num=1, par_num=1, line_num=1)
                  for t, x in [('Update', 500), ('now', 545)]]
         self.assertTrue(self.gui.native_picker_dismissed(words))
+        self.assertTrue(self.gui.native_picker_dismissed([], words))
+        self.assertFalse(self.gui.native_picker_dismissed([dict(text='Outputs')], words))
+        self.assertFalse(self.gui.native_picker_dismissed(words, [dict(text='Outputs')]))
         self.assertFalse(self.gui.native_picker_dismissed([]))
         self.assertFalse(self.gui.native_picker_dismissed(words + [dict(text='Outputs')]))
         self.assertFalse(self.gui.native_picker_dismissed(words + [dict(w, line_num=2) for w in words]))
