@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 mod build_version { include!("enablement/build_version.rs"); }
+mod build_cache { include!("enablement/native/build_cache.rs"); }
 
 fn main() {
     build_version::emit();
@@ -223,23 +224,53 @@ fn compile_metal_shader(src_rel: &str, name: &str) {
     let library = output_dir.join(format!("{name}.metallib"));
     println!("cargo:rerun-if-changed={}", source.display());
 
-    let metal = Command::new("xcrun")
-        .args(["--sdk", "macosx", "metal", "-c", "-mmacosx-version-min=15.0"])
-        .arg(&source)
-        .arg("-o")
-        .arg(&air)
-        .status()
-        .expect("xcrun metal is required to build Metal shaders");
-    assert!(metal.success(), "Metal shader compilation failed for {src_rel}");
+    let mut metal = Command::new("xcrun");
+    metal.args(["--sdk", "macosx", "metal", "-c", "-mmacosx-version-min=15.0"])
+        .arg(&source).arg("-o").arg(&air);
+    let mut metallib = Command::new("xcrun");
+    metallib.args(["--sdk", "macosx", "metallib"])
+        .arg(&air).arg("-o").arg(&library);
+    let key = native_key(&[("source", &source)]).and_then(|mut key| {
+        add_command(&mut key, &metal);
+        add_command(&mut key, &metallib);
+        push_field(&mut key, b"metal", &build_cache::tool_identity("metal", &["--version"])?);
+        push_field(&mut key, b"metallib", &build_cache::tool_identity("metallib", &[])?);
+        Some(key)
+    });
+    let cache = output_dir.join(".native-cache").join(name);
+    let outputs = [("shader.air", air.clone(), false), ("shader.metallib", library.clone(), false)];
+    let mut compile = || -> std::io::Result<()> {
+        if !metal.status()?.success() {
+            return Err(std::io::Error::other(format!("Metal shader compilation failed for {src_rel}")));
+        }
+        if !metallib.status()?.success() {
+            return Err(std::io::Error::other(format!("Metal library creation failed for {src_rel}")));
+        }
+        Ok(())
+    };
+    let cached = build_cache::timed(name, || match key {
+        Some(key) => build_cache::reuse_or_build(&cache, &key, &outputs, compile).expect("Metal shader build/cache failed"),
+        None => { let _ = std::fs::remove_file(cache.join("receipt")); compile().expect("Metal shader compilation failed; xcrun metal is required"); false }
+    });
+    println!("cargo:warning=native build {name} cache: {}", if cached { "reused" } else { "compiled" });
+}
 
-    let metallib = Command::new("xcrun")
-        .args(["--sdk", "macosx", "metallib"])
-        .arg(&air)
-        .arg("-o")
-        .arg(&library)
-        .status()
-        .expect("xcrun metallib is required to build Metal shaders");
-    assert!(metallib.success(), "Metal library creation failed for {src_rel}");
+fn push_field(record: &mut Vec<u8>, name: &[u8], value: &[u8]) { build_cache::add_field(record, name, value); }
+
+fn native_key(files: &[(&str, &std::path::Path)]) -> Option<Vec<u8>> {
+    let mut key = build_cache::recipe_identity();
+    build_cache::add_compiler_env(&mut key);
+    for (label, path) in files { if build_cache::add_file(&mut key, label, path).is_err() { return None; } }
+    if let Some(identity) = build_cache::apple_toolchain_identity() { push_field(&mut key, b"apple-toolchain", &identity); } else { return None; }
+    Some(key)
+}
+
+fn add_command(key: &mut Vec<u8>, command: &Command) {
+    let mut argv = Vec::new();
+    for arg in std::iter::once(command.get_program()).chain(command.get_args()) {
+        build_cache::add_field(&mut argv, b"arg", arg.as_encoded_bytes());
+    }
+    build_cache::add_field(key, b"command", &argv);
 }
 
 /// Builds `apparent-helper` (Swift: SpeechAnalyzer, iPhone capture, movie decoding) beside the
@@ -275,15 +306,15 @@ fn compile_helper() {
     for source in &sources {
         println!("cargo:rerun-if-changed={}", source.display());
     }
-    let plist = manifest_dir.join("shared/native/Info.plist");
-    println!("cargo:rerun-if-changed={}", plist.display());
+    let original_plist = manifest_dir.join("shared/native/Info.plist");
+    println!("cargo:rerun-if-changed={}", original_plist.display());
     println!("cargo:rerun-if-env-changed=APPARENT_HELPER_BUNDLE_ID");
     println!("cargo:rerun-if-env-changed=APPARENT_PREVIEW_BUILD");
     // OUT_DIR is target/<profile>/build/apparent-<hash>/out.
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let plist = if let Ok(bundle_id) = std::env::var("APPARENT_HELPER_BUNDLE_ID") {
         assert_eq!(bundle_id, "dev.simonvanlaak.apparent.preview.helper");
-        let source = std::fs::read_to_string(&plist).expect("read helper plist");
+        let source = std::fs::read_to_string(&original_plist).expect("read helper plist");
         let original = "<string>dev.kitlangton.apparent.helper</string>";
         assert!(source.contains(original), "helper bundle ID changed");
         let preview_plist = out_dir.join("preview-helper-Info.plist");
@@ -294,7 +325,7 @@ fn compile_helper() {
         .expect("write preview helper plist");
         preview_plist
     } else {
-        plist
+        original_plist.clone()
     };
     let profile_dir = out_dir
         .ancestors()
@@ -307,7 +338,8 @@ fn compile_helper() {
     }
     .to_owned();
     let built = out_dir.join("apparent-helper");
-    let status = Command::new("xcrun")
+    let mut command = Command::new("xcrun");
+    command
         .args(["swiftc", "-O", "-swift-version", "5", "-target"])
         .arg(format!("{arch}-apple-macos15.0"))
         .args(&sources)
@@ -322,13 +354,27 @@ fn compile_helper() {
             "__info_plist",
             "-Xlinker",
         ])
-        .arg(&plist)
-        .status()
-        .expect("xcrun swiftc is required to build apparent-helper");
-    assert!(
-        status.success(),
-        "apparent-helper failed to compile (needs the macOS 26 SDK; the result runs on macOS 15)"
-    );
+        .arg(&plist);
+    let key = native_key(&sources.iter().map(|p| ("swift-source", p.as_path()))
+        .chain([("original-plist", original_plist.as_path()), ("effective-plist", plist.as_path())])
+        .collect::<Vec<_>>()).and_then(|mut key| {
+            add_command(&mut key, &command);
+            push_field(&mut key, b"swiftc", &build_cache::tool_identity("swiftc", &["--version"])?);
+            Some(key)
+        });
+    let mut compile = || -> std::io::Result<()> {
+        if !command.status()?.success() {
+            return Err(std::io::Error::other("apparent-helper failed to compile (needs the macOS 26 SDK; the result runs on macOS 15)"));
+        }
+        Ok(())
+    };
+    let cache = out_dir.join(".native-cache").join("swift-helper");
+    let outputs = [("apparent-helper", built.clone(), true)];
+    let cached = build_cache::timed("swift-helper", || match key {
+        Some(key) => build_cache::reuse_or_build(&cache, &key, &outputs, compile).expect("Swift helper build/cache failed"),
+        None => { let _ = std::fs::remove_file(cache.join("receipt")); compile().expect("xcrun swiftc is required to build apparent-helper"); false }
+    });
+    println!("cargo:warning=native build swift-helper cache: {}", if cached { "reused" } else { "compiled" });
     let dest = profile_dir.join("apparent-helper");
     let _ = std::fs::remove_file(&dest);
     std::fs::copy(&built, dest).expect("Could not place apparent-helper");

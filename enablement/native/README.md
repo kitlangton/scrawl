@@ -1,5 +1,26 @@
 # Native test infrastructure
 
+## Native compiler outputs
+
+`build_cache.rs` supports the root build script's macOS native output reuse.
+Reuse stays inside the current Cargo `OUT_DIR`; it is separate from executable
+artifact admission and Rust dependency caches. The key covers actual native
+source/plist bytes, compiler recipe, target and environment, and selected Apple
+toolchain identity, including streamed SDK content hashes. SDK hashing runs once
+per build-script process; it does not trust a persistent timestamp-only SDK hash.
+SDK links escaping their root disable reuse. Actual hashing overhead must be
+included in the Darwin timing result. A receipt is reusable only while its output hashes match.
+On each build-script execution, missing, corrupt or mismatched output rebuilds; failed identity discovery runs
+the normal compiler path without admitting a cache entry. Root Git revision and
+dirty labels continue to be calculated on every build-script invocation.
+
+Run `node --test enablement/native/build-cache.test.ts` for the production
+build-script regression with synthetic compilers. Its fixtures establish cache
+decisions and truthful identity behavior, not Darwin compilation or performance.
+Actual Mac compilation, reuse/invalidation and phase timings remain separate
+evidence requirements. Different Cargo output directories do not share outputs,
+and a cold native build still invokes the compilers.
+
 `linux/gui-vm.py` owns disposable Omarchy VM lifecycle, candidate/fixture
 staging, independent expiry and private evidence retention. Its sibling
 `gui-vm-reaper.py` survives controller/worktree loss by being copied into each
