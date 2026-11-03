@@ -38,6 +38,8 @@ requirements still apply; supported platforms remain macOS and Linux.
 
 ### Explicit public-copy admission
 
+`hostedSharing` is available by default. An explicit `experiments.hostedSharing=false` opt-out remains respected. Completed captures show Copy link beside Paste. Availability does not sign in, grant upload consent, publish recordings or change private encryption; each selected public copy still requires the confirmation below. The service must separately permit sharing grants.
+
 `Client::prepare_public_link` is the compatible client integration contract for
 #171. Call it only after the sender explicitly chooses public sharing with:
 “Anyone with this link can view this capture. Shared captures are not end-to-end
