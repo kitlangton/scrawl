@@ -548,3 +548,12 @@ new experiment. Keep this routing only after macOS/isolated Linux acceptance;
 rollback must restore a verified consent surface, never bypass public-copy consent.
 The development foundation card remains a diagnostic surface, not an installed
 second capture workspace. No #172 ChatGPT-web or deployed-account proof is implied.
+
+The scoped hosted macOS native route is `native-proof-mac.yml`, dispatched with
+`scenario=share` against the frozen candidate. The default worker case remains
+unchanged. The share case uses a synthetic full-screen scene, normal capture
+start/stop, the installed completed-pill action, native owned-window OCR/input,
+explicit consent/cancel/repeated clipboard delivery, and the actual loopback
+Worker. It retains synthetic screenshots/bundle and available decodable video;
+it does not edit TCC or establish deployed-account/ChatGPT acceptance. A long
+open confirmation pauses completion dismissal; closing grants a fresh retry interval.

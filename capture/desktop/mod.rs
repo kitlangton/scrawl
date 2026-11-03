@@ -2809,7 +2809,13 @@ impl ApparentCoordinator {
                                 coord.completed_note = Some("Link copied · upload may still be preparing".into());
                                 coord.sync_native_pill(); cx.notify();
                             }
-                            if !alive { coord.public_popup.take(); return false; }
+                            if !alive {
+                                coord.public_popup.take();
+                                if let IslandPhase::Completed { finished_at, .. } = &mut coord.island_phase {
+                                    *finished_at = Instant::now();
+                                }
+                                return false;
+                            }
                             true
                         }).unwrap_or(false);
                         if !keep { break; }
