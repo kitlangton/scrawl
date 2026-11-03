@@ -45,8 +45,16 @@ must be available. CLI commands/tests never install the global reporter.
 Live ingestion, grouping and alerts require bounded synthetic verification in an
 isolated project before release; local HTTP tests are not that proof.
 
-The payload allows only a static failure category, version/build, OS/architecture
-and repo-relative source call site. No raw error/panic text, logs, recordings,
+Reports include a fixed failure category, version/build, OS/architecture and
+repo-relative source call site. Operation errors also include typed processing
+breadcrumbs (step and source line), OS error kind/number, JSON error category and
+position when present, and bounded error-chain depth. Finalization failures include
+capture mode, dimensions/scale, duration, candidate-frame count, video/microphone
+presence when known, pending-notes status and stroke/interaction counts. These
+describe reproduction inputs, not their contents. Unknown third-party messages
+remain local; diagnostics never format an arbitrary error. Error groups distinguish
+the deepest known step and OS error kind per platform; breadcrumb frames are
+synthetic failure boundaries, not an unwound stack. No raw error/panic text, logs, recordings,
 screenshots, transcripts, clipboard contents, window/device names, capture IDs,
 share URLs or user paths. Each event gets a random identity; person profiles and
 geolocation are disabled. No session replay/usage tracking. The receiving service

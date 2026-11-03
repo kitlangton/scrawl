@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::diagnostics::{Diagnose, Step};
 use anyhow::{Context, Result};
 
 use crate::capture::engine::runtime::audio::audio::RecordedAudio;
@@ -323,7 +324,7 @@ pub fn finalize_capture_bundle(
 ) -> Result<(PathBuf, ApparentBundle, String)> {
     publication::publish_after(bundle_dir, || {
         let mut events = events;
-        merge_capture_notes(bundle_dir, &mut events)?;
+        merge_capture_notes(bundle_dir, &mut events).diagnostic(Step::NotesRead)?;
         let started_at = activity
             .stop_started
             .unwrap_or_else(std::time::Instant::now);
@@ -338,24 +339,30 @@ pub fn finalize_capture_bundle(
             // The MP4 stream can succeed even when every screenshot fails. Do not turn
             // it into keyframes here: the sampler drops screenshots while a system
             // permission prompt is visible, but the movie may still contain it.
-            recover::mark_unsafe_video(bundle_dir)?;
+            recover::mark_unsafe_video(bundle_dir).diagnostic(Step::NoScreenFrames)?;
             let message = "No screen frames were captured. Choose a screen in the sharing dialog and try again.";
             if let Some(ref video) = video_path {
-                anyhow::bail!("{message} The raw video was kept at {}.", video.display());
+                return Err(anyhow::anyhow!(
+                    "{message} The raw video was kept at {}.",
+                    video.display()
+                ))
+                .diagnostic(Step::NoScreenFrames);
             }
-            anyhow::bail!("{message}");
+            return Err(anyhow::anyhow!("{message}")).diagnostic(Step::NoScreenFrames);
         }
         if let Some(ref audio) = recorded_audio {
             // The incremental recorder owns any persisted prefix; never replace it.
             if !bundle_dir.join("audio.wav").exists() {
                 publication::write(bundle_dir, "audio.wav", &audio.wav_bytes)
-                    .context("Could not persist captured audio")?;
+                    .context("Could not persist captured audio")
+                    .diagnostic(Step::AudioPersist)?;
             }
         }
         let wav_path = bundle_dir.join("audio.wav");
         let has_wav = wav_path.exists();
         let wav_required = recorded_audio.is_some() || has_wav;
-        publication::preflight_sources(bundle_dir, video_path.as_deref())?;
+        publication::preflight_sources(bundle_dir, video_path.as_deref())
+            .diagnostic(Step::SourcePreflight)?;
         recover::write(
             bundle_dir,
             &recover::Unfinished {
@@ -373,7 +380,8 @@ pub fn finalize_capture_bundle(
                 windows: activity.windows.clone(),
                 cursor: activity.cursor.clone(),
             },
-        )?;
+        )
+        .diagnostic(Step::RecoveryJournal)?;
         let crop_settings = (target.mode == CaptureMode::Display)
             .then(autocrop::Settings::configured)
             .flatten();
@@ -466,11 +474,13 @@ pub fn finalize_capture_bundle(
                 ..SourceExtras::default()
             },
         );
-        let built = built?;
-        anyhow::ensure!(
-            !wav_required || built.1.audio.as_deref() == Some("audio.wav"),
-            "captured audio disappeared during bundle construction"
-        );
+        let built = built.diagnostic(Step::BundleBuild)?;
+        if wav_required && built.1.audio.as_deref() != Some("audio.wav") {
+            return Err(anyhow::anyhow!(
+                "captured audio disappeared during bundle construction"
+            ))
+            .diagnostic(Step::AudioMissing);
+        }
         Ok(built)
     })
 }
@@ -580,7 +590,7 @@ pub fn build_bundle_from_parts(
 ) -> Result<(PathBuf, ApparentBundle, String)> {
     publication::publish_after(bundle_dir, || {
         let mut events = events;
-        merge_capture_notes(bundle_dir, &mut events)?;
+        merge_capture_notes(bundle_dir, &mut events).diagnostic(Step::NotesRead)?;
         // Existing journals retain all unrelated fields and events. Only durable typed
         // notes are reconciled, under the same publication writer lease.
         if bundle_dir.join("notes.json").try_exists()?
@@ -603,7 +613,8 @@ pub fn build_bundle_from_parts(
             .timings
             .started_at
             .unwrap_or_else(std::time::Instant::now);
-        publication::preflight_sources(bundle_dir, video_path.as_deref())?;
+        publication::preflight_sources(bundle_dir, video_path.as_deref())
+            .diagnostic(Step::SourcePreflight)?;
         let mut marks = marks_of(&strokes);
         for (i, &t) in extras.flags.iter().enumerate() {
             marks.push(Mark {
@@ -826,53 +837,60 @@ pub fn build_bundle_from_parts(
         };
         let summary = summary_markdown(&bundle, bundle_dir);
 
-        match output {
-            BundleOutput::Prepared(prep) => {
-                let root = publication::Directory::open(bundle_dir, true)?;
-                root.write(&bundle.contact_sheet, &prep.contact_sheet_png)?;
-                for (rel, bytes) in &prep.frame_pngs {
-                    root.write(rel, bytes)?;
-                }
-                if let (Some(info), Some(full_sheet_png)) = (&bundle.autocrop, &prep.full_sheet_png)
-                {
-                    root.write(&info.full_contact_sheet, full_sheet_png)?;
-                    for (name, bytes) in &prep.full_frame_pngs {
-                        root.write(&format!("{}/{name}", info.full_frames), bytes)?;
+        (|| -> Result<()> {
+            match output {
+                BundleOutput::Prepared(prep) => {
+                    let root = publication::Directory::open(bundle_dir, true)?;
+                    root.write(&bundle.contact_sheet, &prep.contact_sheet_png)?;
+                    for (rel, bytes) in &prep.frame_pngs {
+                        root.write(rel, bytes)?;
                     }
-                }
-                let manifest_bytes = serde_json::to_vec_pretty(&bundle)?;
-                root.write("apparent.json", &manifest_bytes)?;
-                root.write("summary.md", summary.as_bytes())?;
-            }
-            BundleOutput::Rendered {
-                annotated,
-                cropped,
-                full_sheet,
-                contact_sheet,
-            } => {
-                std::thread::scope(|scope| -> Result<()> {
-                    let full_write = match (&cropped, &full_sheet) {
-                        (Some((info, full)), Some(sheet)) => Some(
-                            scope.spawn(|| publication::write_full(bundle_dir, info, full, sheet)),
-                        ),
-                        _ => None,
-                    };
-                    publication::write_artifacts(
-                        bundle_dir,
-                        &bundle,
-                        &annotated,
-                        &contact_sheet,
-                        &summary,
-                    )?;
-                    if let Some(handle) = full_write {
-                        handle
-                            .join()
-                            .map_err(|_| anyhow::anyhow!("Full-frame writer panicked"))??;
+                    if let (Some(info), Some(full_sheet_png)) =
+                        (&bundle.autocrop, &prep.full_sheet_png)
+                    {
+                        root.write(&info.full_contact_sheet, full_sheet_png)?;
+                        for (name, bytes) in &prep.full_frame_pngs {
+                            root.write(&format!("{}/{name}", info.full_frames), bytes)?;
+                        }
                     }
-                    Ok(())
-                })?;
+                    let manifest_bytes = serde_json::to_vec_pretty(&bundle)?;
+                    root.write("apparent.json", &manifest_bytes)?;
+                    root.write("summary.md", summary.as_bytes())?;
+                }
+                BundleOutput::Rendered {
+                    annotated,
+                    cropped,
+                    full_sheet,
+                    contact_sheet,
+                } => {
+                    std::thread::scope(|scope| -> Result<()> {
+                        let full_write =
+                            match (&cropped, &full_sheet) {
+                                (Some((info, full)), Some(sheet)) => Some(scope.spawn(|| {
+                                    publication::write_full(bundle_dir, info, full, sheet)
+                                })),
+                                _ => None,
+                            };
+                        publication::write_artifacts(
+                            bundle_dir,
+                            &bundle,
+                            &annotated,
+                            &contact_sheet,
+                            &summary,
+                        )?;
+                        if let Some(handle) = full_write {
+                            handle
+                                .join()
+                                .map_err(|_| anyhow::anyhow!("Full-frame writer panicked"))??;
+                        }
+                        Ok(())
+                    })?;
+                }
             }
-        }
+
+            Ok(())
+        })()
+        .diagnostic(Step::ArtifactWrite)?;
 
         let finished = std::time::Instant::now();
         let select_ms = (select_only_at - started).as_millis() as u64;
@@ -936,7 +954,7 @@ pub fn build_bundle_from_parts(
             }
         }
 
-        mark_transcript_pending(bundle_dir, &bundle)?;
+        mark_transcript_pending(bundle_dir, &bundle).diagnostic(Step::TranscriptPending)?;
         Ok((bundle_dir.to_path_buf(), bundle, summary))
     })
 }

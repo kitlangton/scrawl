@@ -1,5 +1,6 @@
 //! In-process media teardown and bundle finalization, run only on the background executor.
 
+use crate::capture::engine::bundle::diagnostics::{CaptureFacts, Diagnose, Step};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -21,6 +22,55 @@ pub(in crate::capture::desktop) fn finalize(
     final_whiteboard: whiteboard::Board,
     notes_finished: Option<flume::Receiver<Result<(), String>>>,
 ) -> (CaptureResult, u64) {
+    let (candidate_frames, microphone_recorded) = match &source {
+        CaptureSource::Screen { audio, .. } => (None, Some(audio.is_some())),
+        CaptureSource::Phone(_) => (None, None),
+        CaptureSource::Lab => (None, Some(false)),
+    };
+    let mut facts = CaptureFacts {
+        width: target.frame.width,
+        height: target.frame.height,
+        scale: target.frame.scale,
+        mode: target.mode,
+        duration_ms: None,
+        candidate_frames,
+        has_video: None,
+        microphone_recorded,
+        notes_pending: notes_finished.is_some(),
+        strokes: strokes.len(),
+        interactions: events.len(),
+    };
+    let (result, duration_ms) = finalize_inner(
+        source,
+        target,
+        bundle_dir,
+        events,
+        strokes,
+        final_whiteboard,
+        notes_finished,
+        &mut facts,
+    );
+    // Phone stop does not expose a duration on failure; zero would be false evidence.
+    facts.duration_ms =
+        if facts.mode == crate::shared::model::CaptureMode::Device && result.is_err() {
+            None
+        } else {
+            Some(duration_ms)
+        };
+    (result.map_err(|error| facts.attach(error)), duration_ms)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finalize_inner(
+    source: CaptureSource,
+    target: TargetInfo,
+    bundle_dir: PathBuf,
+    events: Vec<InteractionEvent>,
+    strokes: Vec<Stroke>,
+    final_whiteboard: whiteboard::Board,
+    notes_finished: Option<flume::Receiver<Result<(), String>>>,
+    facts: &mut CaptureFacts,
+) -> (CaptureResult, u64) {
     let (screen_session, audio_recorder, window_log) = match source {
         CaptureSource::Screen {
             session,
@@ -29,17 +79,20 @@ pub(in crate::capture::desktop) fn finalize(
         } => (session, audio, windows),
         CaptureSource::Phone(session) => {
             // Stop the producer before waiting for a possibly contended writer lease.
-            let finalized = session.stop().and_then(|recording| {
-                complete_bundle(&bundle_dir, &final_whiteboard, || {
-                    crate::capture::engine::runtime::phone::finalize_live_capture(
-                        &bundle_dir,
-                        recording,
-                        events,
-                        strokes,
-                        None,
-                    )
-                })
-            });
+            let finalized = session
+                .stop()
+                .diagnostic(Step::PhoneStop)
+                .and_then(|recording| {
+                    complete_bundle(&bundle_dir, &final_whiteboard, || {
+                        crate::capture::engine::runtime::phone::finalize_live_capture(
+                            &bundle_dir,
+                            recording,
+                            events,
+                            strokes,
+                            None,
+                        )
+                    })
+                });
             // Only the outer publication result may enqueue native movie shrinking.
             let finalized = after_publication(
                 finalized,
@@ -72,10 +125,12 @@ pub(in crate::capture::desktop) fn finalize(
     });
     activity.stop_started = Some(stop_started);
     activity.stop_ms = Some(stop_started.elapsed().as_millis() as u64);
+    facts.candidate_frames = Some(recording.frames.len());
+    facts.has_video = Some(recording.video.is_some());
     let duration_ms = recording.duration_ms;
     let recorded_audio = match recorded_audio {
         Ok(audio) => audio,
-        Err(error) => return (Err(error), duration_ms),
+        Err(error) => return (Err(error).diagnostic(Step::AudioStop), duration_ms),
     };
     let finalized = complete_bundle(&bundle_dir, &final_whiteboard, || {
         if let Some(receipt) = notes_finished {
@@ -103,7 +158,7 @@ pub(in crate::capture::desktop) fn finalize(
                         cursor: activity.cursor,
                     },
                 )?;
-                return Err(anyhow::anyhow!(error));
+                return Err(anyhow::anyhow!(error)).diagnostic(Step::NotesFinish);
             }
         }
         crate::capture::engine::bundle::bundle_processing::finalize_capture_bundle(
@@ -153,6 +208,7 @@ fn complete_bundle_with(
         let (bundle, summary) = finish(&dir, bundle, summary);
         Ok((dir, bundle, summary))
     })
+    .diagnostic(Step::Publication)
 }
 
 #[cfg(test)]

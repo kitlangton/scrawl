@@ -627,7 +627,7 @@ fn start_video_export() {
                 Ok(None) => say(Some("Export cancelled".into())),
                 Err(error) => {
                     apparent_log(format!("Video export failed: {error:#}"));
-                    workflow::error_reporting::report(workflow::error_reporting::Failure::VideoExport);
+                    workflow::error_reporting::report_error(workflow::error_reporting::Failure::VideoExport, &error);
                     #[cfg(target_os = "linux")]
                     {
                         let detail = format!("{error:#}");
@@ -3262,7 +3262,7 @@ impl ApparentCoordinator {
         let bundle_dir = root.join(format!("{id}.apparent"));
         if let Err(error) = crate::capture::engine::bundle::recover::begin_screen_capture(&bundle_dir) {
             apparent_log(format!("Capture could not protect raw video: {error:#}"));
-            workflow::error_reporting::report(workflow::error_reporting::Failure::ProtectRecording);
+            workflow::error_reporting::report_error(workflow::error_reporting::Failure::ProtectRecording, &error);
             self.cancel_recording(cx);
             if let Ok(mut status) = CAPTURE_STATUS.lock() {
                 *status = Some("Capture failed — could not protect raw video".into());
@@ -3374,7 +3374,7 @@ impl ApparentCoordinator {
             Ok(recorder) => Some(recorder),
             Err(error) => {
                 let message = format!("Capture refused: narration could not be saved: {error:#}");
-                workflow::error_reporting::report(workflow::error_reporting::Failure::AudioStart);
+                workflow::error_reporting::report_error(workflow::error_reporting::Failure::AudioStart, &error);
                 apparent_log(&message);
                 self.cancel_recording(cx);
                 if let Ok(mut status) = CAPTURE_STATUS.lock() { *status = Some(message); }
@@ -3391,7 +3391,7 @@ impl ApparentCoordinator {
             Ok(session) => session,
             Err(error) => {
                 apparent_log(format!("Capture refused: {error:#}"));
-                workflow::error_reporting::report(workflow::error_reporting::Failure::ScreenStart);
+                workflow::error_reporting::report_error(workflow::error_reporting::Failure::ScreenStart, &error);
                 if let Err(cleanup) = crate::capture::engine::bundle::recover::abandon_start(&bundle_dir, || drop(audio_recorder)) {
                     apparent_log(format!("Failed capture startup cleanup at {}: {cleanup:#}", bundle_dir.display()));
                 }
@@ -3562,7 +3562,7 @@ impl ApparentCoordinator {
                 Ok(session) => session,
                 Err(error) => {
                     apparent_log(format!("iPhone capture could not start: {error:#}"));
-                    workflow::error_reporting::report(workflow::error_reporting::Failure::PhoneStart);
+                    workflow::error_reporting::report_error(workflow::error_reporting::Failure::PhoneStart, &error);
                     #[cfg(any(target_os = "macos", target_os = "linux"))]
                     {
                         if let Some(id) = self.agent_capture_id.take() {

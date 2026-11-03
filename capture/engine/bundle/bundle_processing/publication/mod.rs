@@ -6,6 +6,7 @@ mod fs;
 mod movie;
 mod validate;
 
+use crate::capture::engine::bundle::diagnostics::{Diagnose, Step};
 use crate::shared::model::ApparentBundle;
 use anyhow::{Context, Result, ensure};
 pub(crate) use fs::Directory;
@@ -128,7 +129,7 @@ pub fn publish_after(path: &Path, build: impl FnOnce() -> Result<Built>) -> Resu
             fs::absolute(&built.0)? == fs::absolute(path)?,
             "finalizer returned another bundle path"
         );
-        checked(path, &built.1, &built.2)?;
+        checked(path, &built.1, &built.2).diagnostic(Step::PublicationValidate)?;
         Ok(built)
     });
     if result.is_err() {
@@ -235,15 +236,24 @@ pub(crate) fn preflight_sources(path: &Path, video: Option<&Path>) -> Result<()>
 pub(crate) fn write_artifacts(
     path: &Path,
     bundle: &ApparentBundle,
-    frames: &[(crate::shared::model::Keyframe, crate::shared::model::RgbaFrame)],
+    frames: &[(
+        crate::shared::model::Keyframe,
+        crate::shared::model::RgbaFrame,
+    )],
     sheet: &crate::shared::model::RgbaFrame,
     summary: &str,
 ) -> Result<()> {
     let root = Directory::open(path, true)?;
     for (key, frame) in frames {
-        root.write(&key.file, &crate::capture::engine::render::encode_png(frame)?)?;
+        root.write(
+            &key.file,
+            &crate::capture::engine::render::encode_png(frame)?,
+        )?;
     }
-    root.write(&bundle.contact_sheet, &crate::capture::engine::render::encode_png(sheet)?)?;
+    root.write(
+        &bundle.contact_sheet,
+        &crate::capture::engine::render::encode_png(sheet)?,
+    )?;
     root.write("apparent.json", &serde_json::to_vec_pretty(bundle)?)?;
     root.write("summary.md", summary.as_bytes())
 }
@@ -251,7 +261,10 @@ pub(crate) fn write_artifacts(
 pub(crate) fn write_full(
     path: &Path,
     info: &crate::shared::model::AutocropInfo,
-    frames: &[(crate::shared::model::Keyframe, crate::shared::model::RgbaFrame)],
+    frames: &[(
+        crate::shared::model::Keyframe,
+        crate::shared::model::RgbaFrame,
+    )],
     sheet: &crate::shared::model::RgbaFrame,
 ) -> Result<()> {
     let root = Directory::open(path, true)?;
@@ -266,7 +279,10 @@ pub(crate) fn write_full(
             &crate::capture::engine::render::encode_png(frame)?,
         )?;
     }
-    root.write(&info.full_contact_sheet, &crate::capture::engine::render::encode_png(sheet)?)
+    root.write(
+        &info.full_contact_sheet,
+        &crate::capture::engine::render::encode_png(sheet)?,
+    )
 }
 
 #[cfg(test)]
