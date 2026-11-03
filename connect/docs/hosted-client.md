@@ -131,7 +131,10 @@ apparent connect logout
 The manually invoked `native-proof-mac.yml` workflow builds/installs only the candidate
 and runs `service/test/native/desktop-worker.mjs` against
 the signed installed app and actual local Worker/D1/R2. Dispatch it with
-`gh workflow run native-proof-mac.yml --ref <candidate-branch>`; inspect the exact
+`gh workflow run verification-mac.yml --ref <candidate-branch> -f connect_worker_proof=true`;
+the existing registered dispatcher calls this focused route only on a manually
+selected non-main branch. The full verification job keeps its main-only guard.
+Inspect the exact
 run SHA and `mac-connect-worker-native` artifact, including candidate identity,
 scenario report and cleanup receipt. This focused route runs no full suites,
 produces no release receipt and does not replace main-only verification. It is

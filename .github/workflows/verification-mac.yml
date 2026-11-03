@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      connect_worker_proof:
+        description: 'Run only installed Connect worker proof on a candidate branch'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -20,3 +25,7 @@ jobs:
     with:
       # General Mac CI can use Intel capacity; arm64 packaging stays on Apple Silicon.
       runner: macos-15-intel
+
+  connect-native:
+    if: github.ref != 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.connect_worker_proof
+    uses: ./.github/workflows/native-proof-mac.yml

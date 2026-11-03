@@ -16,7 +16,7 @@ class NativeProofMacTests(unittest.TestCase):
     def test_manual_standard_runner_read_only_and_bounded(self):
         workflow = WORKFLOW.read_text()
         self.assertRegex(workflow, r'(?m)^on:\n  workflow_dispatch:\s*\n')
-        self.assertNotRegex(workflow, r'(?m)^  (push|pull_request|schedule|workflow_call):')
+        self.assertNotRegex(workflow, r'(?m)^  (push|pull_request|schedule):')
         self.assertIn('runs-on: macos-15-intel\n', workflow)
         self.assertIn('permissions:\n  contents: read\n', workflow)
         self.assertNotIn('secrets.', workflow)
@@ -41,6 +41,19 @@ class NativeProofMacTests(unittest.TestCase):
         self.assertIn('path: ${{ runner.temp }}/apparent-connect-native/evidence/', workflow)
         self.assertIn("for name in ('report.json', 'desktop.log'):", workflow)
         self.assertNotIn('include-hidden-files: true', workflow)
+
+    def test_registered_dispatcher_keeps_full_ci_main_only(self):
+        dispatcher = (ROOT / '.github/workflows/verification-mac.yml').read_text()
+        full = dispatcher.split('  verify:\n', 1)[1].split('  connect-native:', 1)[0]
+        self.assertIn("if: github.ref == 'refs/heads/main'\n", full)
+        self.assertIn('uses: ./.github/workflows/verification-platform.yml', full)
+        focused = dispatcher.split('  connect-native:\n', 1)[1]
+        self.assertIn("github.ref != 'refs/heads/main'", focused)
+        self.assertIn("github.event_name == 'workflow_dispatch'", focused)
+        self.assertIn('&& inputs.connect_worker_proof', focused)
+        self.assertIn('uses: ./.github/workflows/native-proof-mac.yml', focused)
+        self.assertIn('type: boolean\n        default: false', dispatcher)
+        self.assertIn('  workflow_call:', WORKFLOW.read_text())
 
     def run_cleanup(self, *, owned=False, unsafe=False):
         script = re.search(r'      - name: Verify owned cleanup.*?python3 - <<\'PY\'\n(.*?)^          PY',

@@ -3,6 +3,7 @@ name: Focused Mac Connect native proof
 # Deliberately separate from full main verification and release admission.
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
