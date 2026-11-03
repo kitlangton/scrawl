@@ -43,8 +43,10 @@ Pages, Worker and the Mac appcast compare source ancestry against the published
 revision; equal/older candidates never replace newer deployments. Automatic Linux
 packaging jobs cancel older automatic builds per architecture after exact-SHA
 admission of a newer Linux-verified candidate. Manual/tag and verification-only
-builds use separate groups. Publication jobs retain a noncanceling shared lock,
-so cancellation cannot interrupt update-feed replacement. Unknown or
+builds use separate groups. One publication job retains a noncanceling lock around immutable assets and feed
+repair together; pending transactions may coalesce, but running feed replacement
+cannot be interrupted by a newer build. This uses the concurrency syntax accepted
+by pinned actionlint 1.7.12. Unknown or
 divergent identities fail closed. Mac also retains its monotonic Sparkle build
 number check. All writers must use these workflow locks; out-of-band deployment
 is not coordinated by Actions. Activation variables, schema and consent
