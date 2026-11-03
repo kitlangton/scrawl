@@ -5,6 +5,13 @@ from pathlib import Path
 import re
 
 
+def worker_name(env):
+    name = env.get('HOSTED_WORKER_NAME', '')
+    if re.fullmatch('[a-z0-9][a-z0-9-]{1,61}[a-z0-9]', name) is None:
+        raise ValueError('Missing or invalid HOSTED_WORKER_NAME')
+    return name
+
+
 def config(env):
     def value(name, pattern):
         result = env.get(name, '')
@@ -17,18 +24,20 @@ def config(env):
     if database == '00000000-0000-0000-0000-000000000000':
         raise ValueError('Placeholder D1 ID')
     bucket = value('HOSTED_R2_BUCKET', '[a-z0-9][a-z0-9-]{1,61}[a-z0-9]')
-    client = value('HOSTED_GOOGLE_CLIENT_ID', '[A-Za-z0-9_-]+\\.apps\\.googleusercontent\\.com')
+    database_name = value('HOSTED_D1_NAME', '[a-z0-9][a-z0-9-]{1,61}[a-z0-9]')
     return {
-        'name': 'apparent-hosted', 'account_id': account,
+        'name': worker_name(env), 'account_id': account,
         'main': 'dist/worker.js', 'compatibility_date': '2026-02-05',
         'compatibility_flags': ['nodejs_compat'],
         'workers_dev': False, 'preview_urls': False,
-        'routes': [{'pattern': 'hosted.tryapparent.com', 'custom_domain': True}],
+        'routes': [{'pattern': 'hosted.tryapparent.com/' + path + '/*', 'zone_name': 'tryapparent.com'}
+                   for path in ('auth', 'v1')],
+        # Keep existing provider-managed plain variables and all secret bindings.
+        'keep_vars': True,
         'vars': {'API_ORIGIN': 'https://hosted.tryapparent.com',
                  'SITE_ORIGIN': 'https://app.tryapparent.com',
-                 'LEGACY_SITE_ORIGIN': 'https://hosted.tryapparent.com',
-                 'GOOGLE_CLIENT_ID': client},
-        'd1_databases': [{'binding': 'DB', 'database_name': 'apparent-hosted',
+                 'LEGACY_SITE_ORIGIN': 'https://hosted.tryapparent.com'},
+        'd1_databases': [{'binding': 'DB', 'database_name': database_name,
                           'database_id': database, 'migrations_dir': 'migrations'}],
         'r2_buckets': [{'binding': 'BUCKET', 'bucket_name': bucket}],
         'triggers': {'crons': ['*/15 * * * *']}, 'observability': {'enabled': False},

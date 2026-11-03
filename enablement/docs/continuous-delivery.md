@@ -144,7 +144,7 @@ inert coordination inode; there is no active capture website behind it.
 
 ## Hosted activation (separate operator gate)
 
-Complete [`../connect/service/README.md`](../connect/service/README.md)'s deployment prerequisites
+Complete [`../../connect/service/README.md`](../../connect/service/README.md)'s deployment prerequisites
 first: approved Free-plan configuration and CPU proof, existing private Standard
 R2 bucket, initialized D1/ledger, live Google/cookie/device/cron proof and security
 review. A green local workerd suite is not those proofs. Do not activate this job
@@ -155,19 +155,33 @@ Configure `hosted-production`, limited to `main`, with:
 | Kind | Name | Meaning |
 | --- | --- | --- |
 | Variable | `CLOUDFLARE_ACCOUNT_ID` | Approved account ID |
+| Variable | `HOSTED_WORKER_NAME` | Exact existing approved Worker service name; no template fallback |
+| Variable | `HOSTED_D1_NAME` | Exact existing database name |
 | Variable | `HOSTED_D1_ID` | Existing initialized database UUID |
 | Variable | `HOSTED_R2_BUCKET` | Existing private Standard bucket name |
-| Variable | `HOSTED_GOOGLE_CLIENT_ID` | Approved Google OAuth client ID (public) |
 | Secret | `CLOUDFLARE_API_TOKEN` | Least-privilege token for this Worker/deployment and binding reads |
 
-The existing Worker's `GOOGLE_CLIENT_SECRET` and `TOKEN_ENCRYPTION_KEY` stay in
-Cloudflare. They are never supplied to Actions or rotated by CD. Restrict the token
+The existing Worker's `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+`BETTER_AUTH_SECRET` and `TOKEN_ENCRYPTION_KEY` stay in Cloudflare. They are never supplied to Actions or rotated by CD. Restrict the token
 as far as Cloudflare permits and review its actual access before activation.
 `hosted_config.py` validates the required public identifiers and writes an ignored
 `connect/service/wrangler.cd.json` next to the existing entrypoint. The fixed production
 origins retain hosted API/auth/callback and legacy transition CORS; the UI stays
-on app. Observability, workers.dev and preview URLs remain off. No CPU override,
+on app. Only the existing `/auth/*` and `/v1/*` Worker routes are declared; the
+publisher does not claim the whole hostname, Pages/legacy UI or a public-share
+route. `keep_vars` preserves other writers' plain variables; provider secret
+bindings are not rendered, replaced or rotated. Preflight reads the selected
+existing service and refuses missing service, different D1/R2/origin bindings,
+missing/malformed settings, missing auth-secret names, route/cron drift or
+additional non-variable bindings it would discard.
+No token permission or provider setting is changed by this admission check. Observability, workers.dev and preview URLs remain off. No CPU override,
 resource creation command, database migration or ledger initializer is run.
+
+A descriptive readback User-Agent avoids confusing edge rejection of a library
+default with Worker failure; it is not authentication. Unknown/legacy publication
+tags still fail source-order admission. Do not truncate, guess or rewrite them to
+enable CD: the separately approved initial cutover must establish its full source
+identity and retain the previous provider version/rollback record first.
 
 After separate approval, set repository variable `HOSTED_CD_ENABLED=true` and
 dispatch `main`. Wrangler uses strict deployment and tags the version with the

@@ -140,7 +140,14 @@ private. Issue #337 remains the acceptance tracker until the full outcome is met
 
 1. **Read-only inventory first:** record exact account/environment/Worker version,
    D1 migration ledger/schema and spent `r2_budget`, private Standard bucket/plan,
-   route/CORS/Google callback and old writer/client compatibility. Record absent
+   route/CORS/Google callback and old writer/client compatibility. Use the actual
+   existing service name, not `wrangler.toml`'s template name. Deployment config
+   and readback require the same explicit `HOSTED_WORKER_NAME`; initial CD admission
+   compares complete existing D1/R2/origin/secret metadata, route set and cron
+   schedule before source ordering. A legacy
+   non-SHA version tag remains an operator baseline decision, not an automatic
+   ordering exception. Preserve API-only routes and existing variable/secret types.
+   Record absent
    access as unknown, not empty resources, zero spend or successful readiness.
 2. **Rehearse locally:** run the focused OAuth/renewal/encryption and Free-budget
    tests against the checked Worker. Generate deployment config with synthetic
@@ -151,7 +158,11 @@ private. Issue #337 remains the acceptance tracker until the full outcome is met
    The local rehearsal also tests `0005` to prepare the encryption candidate;
    applying that additive encryption migration is a distinct held action, not
    part of authentication cutover. Do not replay `0001`–`0003`, reseed budgets or rewrite
-   existing plaintext. Legacy native/browser credentials require explicit reapproval.
+   existing plaintext. Current `0006` is the separate analytics schema: do not
+   use an unfiltered all-pending migration command to bundle it with `0005`. Prepare
+   a hash-checked migration directory containing only the approved prefix through
+   `0005`; the existing ledger must skip its already-applied entries. Legacy
+   native/browser credentials require explicit reapproval.
 3. **Prepare rollback before requesting cutover:** identify the previous Worker
    and a verified pre-cutover database backup/restore procedure, stop old writers,
    then apply only approved migrations through their ledger and verify preserved
