@@ -1925,20 +1925,23 @@ impl ApparentCoordinator {
     fn reveal_activity(&self) -> usize {
         use std::sync::PoisonError;
         let t = &self.telemetry;
-        t.events
+        // Each guard must end before taking the next lock. Input commits a
+        // finished stroke concurrently with this GUI activity snapshot.
+        let events = t.events
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .len()
-            + t.strokes
+            .len();
+        let strokes = t.strokes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len();
+        let live_ink = usize::from(
+            t.live_ink
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .len()
-            + usize::from(
-                t.live_ink
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .is_some(),
-            )
+                .is_some(),
+        );
+        events + strokes + live_ink
     }
 
     /// The recording just started from a tap: the capsule opens onto the switch chips.
@@ -7010,6 +7013,42 @@ pub fn run_app(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reveal_activity_releases_strokes_before_waiting_for_live_ink() {
+        let (sender, _) = flume::unbounded();
+        let telemetry = SharedCaptureTelemetry::new(sender);
+        let writer_telemetry = telemetry.clone();
+        let (ready, started) = flume::bounded(1);
+        let (commit, proceed) = flume::bounded(1);
+        let writer = std::thread::spawn(move || {
+            // Shift release retains live ink until its saved stroke is committed.
+            let _ink = writer_telemetry.live_ink.lock().unwrap();
+            ready.send(()).unwrap();
+            proceed.recv_timeout(Duration::from_secs(3)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if let Ok(_strokes) = writer_telemetry.strokes.try_lock() { return true; }
+                if Instant::now() >= deadline { return false; }
+                std::thread::yield_now();
+            }
+        });
+        started.recv_timeout(Duration::from_secs(3)).unwrap();
+        let reader_telemetry = telemetry.clone();
+        let reader = std::thread::spawn(move || {
+            ApparentCoordinator::new(reader_telemetry, None).reveal_activity()
+        });
+        // Give the old snapshot a chance to retain strokes while awaiting ink.
+        // The corrected snapshot releases it; either way the test can unwind.
+        let deadline = Instant::now() + Duration::from_millis(100);
+        while telemetry.strokes.try_lock().is_ok() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        commit.send(()).unwrap();
+        let committed = writer.join().unwrap();
+        assert_eq!(reader.join().unwrap(), 0);
+        assert!(committed, "activity snapshot retained strokes while waiting for live ink");
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
