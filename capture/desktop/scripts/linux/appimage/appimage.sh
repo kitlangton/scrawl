@@ -17,7 +17,8 @@ tools="$out/tools"
 appdir="$out/AppDir"
 mkdir -p "$tools"
 rm -rf "$appdir"
-python3 "$root/capture/desktop/scripts/packaging/stage-settings.py" "$appdir/usr/share/apparent/settings"
+python3 "$root/capture/desktop/scripts/packaging/stage-settings.py" "$appdir/usr/share/apparent/settings" \
+  --popups-destination "$appdir/usr/lib/apparent/note-ui"
 
 fetch() {
   [ -s "$tools/$2" ] || curl -fsSL -o "$tools/$2" "$1"
@@ -44,7 +45,6 @@ done
 
 cd "$out"
 install -Dm755 "$root/capture/desktop/scripts/support/apparent-restore-clipboard.py" "$appdir/usr/bin/apparent-restore-clipboard.py"
-node "$root/capture/desktop/ui/frontend/scripts/package-notes.mjs" "$appdir/usr/lib/apparent/note-ui"
 LDAI_OUTPUT="Apparent-$arch.AppImage" linuxdeploy \
   --appdir "$appdir" \
   --executable "$binary" \

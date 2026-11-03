@@ -88,19 +88,25 @@ export async function captureRoutes(request: Request,env: Env,url: URL) {
    try {
     // R2 verifies SHA256 natively, including retries. Each attempt uses a new key;
     // a retry can never replace the original object, even before validation ends.
-    const fixed=new FixedLengthStream(f.size),writer=fixed.writable.getWriter();
-    const reader=request.body?.getReader();
-    const cancel=(e: unknown)=>{void writer.abort(e).catch(()=>{});if(reader)void reader.cancel(e).catch(()=>{});void fixed.readable.cancel(e).catch(()=>{});};
-    const write=receive(reader,f,writer).catch(e=>{cancel(e);throw e;});
+    // Keep bytes in workerd's native stream pump rather than spending the Free
+    // CPU allowance on a JS read/write callback for every chunk. FixedLengthStream
+    // enforces both short and oversized bodies without per-chunk JS callbacks.
+    const fixed=new FixedLengthStream(f.size),abort=new AbortController();
+    const cancel=(e: unknown)=>abort.abort(e);
+    const write=(request.body?request.body.pipeTo(fixed.writable,{signal:abort.signal}):fixed.writable.getWriter().close()).catch(e=>{cancel(e);throw e;});
     const put=Promise.resolve().then(()=>attempt.put(fixed.readable)).catch(e=>{cancel(e);throw e;});
     // allSettled keeps both promises observed when either stream end fails.
     const results=await Promise.allSettled([write,put]);
     await settledAttempt(env,key);terminal=1;
-    if(results[0].status==='rejected')throw results[0].reason;if(results[1].status==='rejected'){
+    // Native piping may surface the length failure at either end of the pump.
+    // Preserve the API's size error; runtime/provider text is never exported.
+    for(const result of results)if(result.status==='rejected'&&result.reason instanceof Error&&/^(Attempt to write too many bytes through a FixedLengthStream|FixedLengthStream did not see all expected bytes before close\(\))/.test(result.reason.message))fail('size_mismatch');
+    if(results[1].status==='rejected'){
      // Provider text is used only for classification, never returned or logged.
      if(/(?:sha-?256|checksum|digest).*(?:match|invalid)|(?:match|invalid).*(?:sha-?256|checksum|digest)/i.test(String(results[1].reason?.message)))fail('hash_mismatch');
      throw results[1].reason;
     }
+    if(results[0].status==='rejected')throw results[0].reason;
     if(!verified(results[1].value,f))fail('hash_mismatch');
     if(f.object_key||c.status==='ready') {await capture(env,id,a.account_id);await deleteAttempts(env,[{key,terminal}]);return json({ok:true});}
     const changed=await stmt(env,`UPDATE files SET object_key=? WHERE capture_id=? AND path=? AND object_key IS NULL AND EXISTS(SELECT 1 FROM captures WHERE id=? AND status='pending' AND ${live})`,key,id,path,id,Date.now(),Date.now()).run();
@@ -112,14 +118,6 @@ export async function captureRoutes(request: Request,env: Env,url: URL) {
  fail('not_found',404);
 }
 function verified(object: R2Object | null,file: ManifestFile) {return object?.size===file.size&&object.checksums?.sha256&&hex(new Uint8Array(object.checksums.sha256))===file.sha256;}
-async function receive(reader: ReadableStreamDefaultReader<Uint8Array> | undefined,file: ManifestFile,writer: WritableStreamDefaultWriter<Uint8Array>) {
- let count=0;
- try{
-  if(reader)for(;;){const {done,value}=await reader.read();if(done)break;count+=value.length;if(count>file.size)fail('size_mismatch');await writer.write(value);}
-  if(count!==file.size)fail('size_mismatch');
-  await writer.close();
- }catch(e){void writer.abort(e).catch(()=>{});if(reader)void reader.cancel(e).catch(()=>{});throw e;}finally{reader?.releaseLock();}
-}
 function mime(path: string){if(path.endsWith('.age'))return 'application/octet-stream';if(path.endsWith('.png'))return 'image/png';if(path.endsWith('.mp4'))return 'video/mp4';if(path.endsWith('.mov'))return 'video/quicktime';if(path.endsWith('.wav'))return 'audio/wav';if(path.endsWith('.json'))return 'application/json';return 'text/plain; charset=utf-8';}
 export async function cleanup(env: Env) {
  const now=Date.now();

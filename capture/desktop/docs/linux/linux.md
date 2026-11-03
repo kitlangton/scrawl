@@ -39,6 +39,12 @@ Verified in an Ubuntu 24.04 arm64 VM with GNOME 46 (Wayland and X11) and Plasma 
 
 ### Clicks and ink on Wayland
 
+Installed Electron Connect/Storage Settings explicitly uses X11/XWayland, like
+GPUI and the note editor. This keeps Settings under the same Shift-overlay input
+and window-stacking route while giving feedback; a native Wayland Settings window
+can otherwise receive the click underneath that overlay. The compositor socket
+remains available to portal/native helpers. The Mac launch route is unchanged.
+
 `apparent record --duration N` is a separate timed recorder, not a shortcut-driven app session. Even with input access it does not collect click or Shift ink events; its manifest and summary explicitly mark that interaction-telemetry gap. Use `apparent shortcut record` with the app to start and finish when those events matter. The permission and pointer-position limits below still apply to the shortcut path.
 
 `apparent export <bundle> --out movie.mp4` renders a saved Linux capture as an MP4 with ink, pins, click ripples and the saved WAV when those tracks exist. Install `ffmpeg` and `ffprobe` with H.264/AAC encoders; HEVC export needs `libx265`. Export uses FFmpeg decoding even if the capture's GStreamer full-quality keyframe decoder fell back to candidate images. By default the tray also offers **Export Last Capture as Video…**, a native SaveFile destination dialog, visible busy/progress and error states, and retry after cancellation or failure. It needs a FileChooser portal backend such as GTK or KDE. Top-level `"videoExport": false` hides the action; see [Linux tray export](../../../engine/docs/export-and-retention.md#linux-tray-export). A timed CLI capture has no click/ink telemetry to burn into the movie; use the app shortcut for an annotated recording. See `capture/engine/docs/export-and-retention.md`.

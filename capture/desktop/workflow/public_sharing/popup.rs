@@ -22,6 +22,7 @@ pub(crate) struct Popup {
 }
 impl Popup {
     pub fn open(bundle: PathBuf, generation: u64, controller: Controller) -> anyhow::Result<Self> {
+        crate::capture::engine::runtime::apparent_log("public-share resolve-runtime");
         let resources = crate::capture::desktop::workflow::electron::resolve()?;
         let entry = resources.root.join("electron/share/main.cjs");
         anyhow::ensure!(entry.is_file(), "Public sharing UI is not packaged");
@@ -32,6 +33,7 @@ impl Popup {
             .ok_or_else(|| anyhow::anyhow!("Invalid capture name"))?
             .to_owned();
         let mut command = Command::new(resources.executable);
+        crate::capture::engine::runtime::apparent_log("public-share spawn-start");
         #[cfg(target_os = "linux")]
         command.arg("--ozone-platform=x11");
         let mut child = command
@@ -41,6 +43,7 @@ impl Popup {
             .stderr(Stdio::null())
             .spawn()?;
         let owner = child.id();
+        crate::capture::engine::runtime::apparent_log(format!("public-share spawned pid={owner}"));
         let input = child.stdin.take();
         let output = child.stdout.take().unwrap();
         let (tx, commands) = mpsc::sync_channel(8);
@@ -75,6 +78,7 @@ impl Popup {
             state: "confirm".into(),
         };
         popup.publish("confirm")?;
+        crate::capture::engine::runtime::apparent_log("public-share initial-state-sent");
         Ok(popup)
     }
     pub fn copied(&self) -> bool {
@@ -123,8 +127,21 @@ impl Popup {
             || self
                 .child
                 .as_mut()
-                .is_none_or(|c| !matches!(c.try_wait(), Ok(None)))
+                .is_none_or(|c| match c.try_wait() {
+                    Ok(None) => false,
+                    Ok(Some(status)) => {
+                        use std::os::unix::process::ExitStatusExt;
+                        crate::capture::engine::runtime::apparent_log(format!(
+                            "public-share child-exit code={:?} signal={:?}", status.code(), status.signal()));
+                        true
+                    }
+                    Err(_) => {
+                        crate::capture::engine::runtime::apparent_log("public-share child-wait-failed");
+                        true
+                    }
+                })
         {
+            crate::capture::engine::runtime::apparent_log("public-share child-closed-or-capture-invalidated");
             return false;
         }
         while let Ok(command) = self.commands.try_recv() {

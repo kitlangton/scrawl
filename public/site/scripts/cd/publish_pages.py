@@ -93,6 +93,33 @@ class CanonicalPropagationPending(ValueError):
     """Immutable deployment passed, but the public hostname still differs."""
 
 
+class ReadbackTransferIncomplete(OSError):
+    """The HTTP body ended before its advertised Content-Length."""
+
+
+def difference_metadata(expected, actual):
+    """Locate a changed span without exposing either response's contents."""
+    prefix = 0
+    limit = min(len(expected), len(actual))
+    while prefix < limit and expected[prefix] == actual[prefix]:
+        prefix += 1
+    suffix = 0
+    while suffix < limit - prefix and expected[-suffix - 1] == actual[-suffix - 1]:
+        suffix += 1
+    changed = actual[prefix:len(actual) - suffix]
+    return {'common_prefix_bytes': prefix, 'common_suffix_bytes': suffix,
+            'expected_changed_bytes': len(expected) - prefix - suffix,
+            'actual_changed_bytes': len(changed),
+            'actual_changed_sha256': hashlib.sha256(changed).hexdigest(),
+            'edge_markers': {name: marker in changed for name, marker in {
+                'speculationrules': b'type="speculationrules"',
+                'cloudflare_beacon': b'static.cloudflareinsights.com',
+                'cloudflare_challenge': b'/cdn-cgi/challenge-platform/',
+                'rocket_loader': b'rocket-loader.min.js',
+                'email_obfuscation': b'email-decode.min.js',
+            }.items()}}
+
+
 def verify(sha, package):
     project = api(f'/accounts/{ACCOUNT}/pages/projects/{PROJECT}')
     deployment = project['canonical_deployment']
@@ -131,7 +158,8 @@ def verify(sha, package):
                 # body, cookies, request credentials or complete header sets.
                 detail = {**response_meta, 'actual_sha256': actual_hash,
                           'expected_sha256': expected_hash, 'actual_bytes': len(body),
-                          'expected_bytes': (package / path).stat().st_size}
+                          'expected_bytes': (package / path).stat().st_size,
+                          **difference_metadata((package / path).read_bytes(), body)}
                 raise mismatch(f'Pages served different bytes: {origin}{route} ' + json.dumps(detail, sort_keys=True))
         media = manifest['movie']
         actual = hashlib.sha256()
@@ -152,9 +180,12 @@ def verify(sha, package):
             while data := response.read(256 * 1024):
                 actual.update(data)
                 actual_bytes += len(data)
+        detail = {**response_meta, 'actual_sha256': actual.hexdigest(),
+                  'expected_sha256': media['sha256'], 'actual_bytes': actual_bytes}
+        length = response_meta['content_length']
+        if length is not None and actual_bytes != int(length):
+            raise ReadbackTransferIncomplete(f'Pages movie transfer incomplete: {origin}{media["path"]} ' + json.dumps(detail, sort_keys=True))
         if actual.hexdigest() != media['sha256']:
-            detail = {**response_meta, 'actual_sha256': actual.hexdigest(),
-                      'expected_sha256': media['sha256'], 'actual_bytes': actual_bytes}
             raise mismatch(f'Pages served different movie bytes: {origin}{media["path"]} ' + json.dumps(detail, sort_keys=True))
     return {'revision': sha, 'project': PROJECT, 'deployment_id': deployment['id'],
             'url': deployment['url'], 'public_url': 'https://app.tryapparent.com',
@@ -163,13 +194,13 @@ def verify(sha, package):
 
 def verify_ready(sha, package):
     # A successful deployment can precede Function/asset propagation. Retry
-    # temporary HTTP failures and canonical propagation after the immutable
+    # temporary HTTP/short-transfer failures and canonical propagation after the immutable
     # deployment passes. Identity, immutable integrity and privacy failures fail
     # immediately; canonical bytes must still match exactly before success.
     for attempt in range(5):
         try:
             return verify(sha, package)
-        except CanonicalPropagationPending:
+        except (CanonicalPropagationPending, ReadbackTransferIncomplete):
             if attempt == 4:
                 raise
             time.sleep(2 ** attempt)

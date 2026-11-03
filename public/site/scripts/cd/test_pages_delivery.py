@@ -14,6 +14,23 @@ spec.loader.exec_module(pages)
 
 
 class PagesDeliveryTests(unittest.TestCase):
+    def test_difference_metadata_locates_insertion_replacement_and_deletion_privately(self):
+        prefix, suffix = b'<body>approved', b'</body>'
+        inserted = b'<script type="speculationrules">private-body-sentinel</script>'
+        detail = pages.difference_metadata(prefix + suffix, prefix + inserted + suffix)
+        self.assertEqual(detail['common_prefix_bytes'], len(prefix) + 1)
+        self.assertEqual(detail['expected_changed_bytes'], 0)
+        self.assertEqual(detail['actual_changed_bytes'], len(inserted))
+        self.assertTrue(detail['edge_markers']['speculationrules'])
+        self.assertFalse(detail['edge_markers']['cloudflare_beacon'])
+        self.assertNotIn('private-body-sentinel', str(detail))
+        for expected, actual, sizes in [(b'abc', b'axc', (1, 1)),
+                                        (b'abc', b'ac', (1, 0)),
+                                        (b'', b'abc', (0, 3)),
+                                        (b'abc', b'abc', (0, 0))]:
+            result = pages.difference_metadata(expected, actual)
+            self.assertEqual((result['expected_changed_bytes'], result['actual_changed_bytes']), sizes)
+
     def test_publisher_checks_deployed_revision_instead_of_requiring_main_tip(self):
         project = {'canonical_deployment': {'deployment_trigger': {'metadata': {'commit_hash': 'b' * 40}}}}
         with patch.object(pages, 'api', return_value=project), patch.dict(pages.os.environ, {'GITHUB_REPOSITORY': 'example/project'}):
@@ -82,6 +99,10 @@ class PagesDeliveryTests(unittest.TestCase):
 
     def test_readback_requires_exact_html_assets_movie_and_privacy_at_both_origins(self):
         from urllib.parse import urlsplit
+        from http.client import HTTPResponse
+        class WireSocket:
+            def makefile(self, *args):
+                return BytesIO(b'HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: 13\r\n\r\nchecked mo')
         sha = 'a' * 40
         project = {'canonical_deployment': {'id': 'deployment', 'url': 'https://deployment.apparent-capture.pages.dev',
                    'latest_stage': {'status': 'success'}, 'deployment_trigger': {'metadata': {'commit_hash': sha}}}}
@@ -97,17 +118,46 @@ class PagesDeliveryTests(unittest.TestCase):
             visited = set()
             bad_path = None
             bad_origin = None
+            short_movie_reads = 0
+            corrupt_movie = False
             def fetch(request, timeout):
+                nonlocal short_movie_reads
                 url = urlsplit(request.full_url)
                 visited.add(url.netloc)
                 if url.path == bad_path and (bad_origin is None or url.netloc == bad_origin):
                     return Response(b'unexpected response body sentinel')
                 if url.path.endswith('.mp4'):
-                    return Response(b'checked movie')
+                    body = b'checked movie'
+                    if short_movie_reads:
+                        short_movie_reads -= 1
+                        response = HTTPResponse(WireSocket())
+                        response.begin()
+                        return response
+                    if corrupt_movie:
+                        body = b'x' * len(body)
+                    response = Response(body)
+                    response.headers = {**Response.headers, 'Content-Length': str(len(b'checked movie'))}
+                    return response
                 return Response((package / paths[url.path]).read_bytes())
             with patch.object(pages, 'api', return_value=project), patch.object(pages, 'urlopen', side_effect=fetch):
                 self.assertEqual(pages.verify(sha, package)['deployment_id'], 'deployment')
                 self.assertEqual(visited, {'deployment.apparent-capture.pages.dev', 'app.tryapparent.com'})
+                short_movie_reads = 1
+                with patch.object(pages.time, 'sleep') as sleep:
+                    self.assertEqual(pages.verify_ready(sha, package)['deployment_id'], 'deployment')
+                    sleep.assert_called_once_with(1)
+                short_movie_reads = 5
+                with patch.object(pages.time, 'sleep') as sleep:
+                    with self.assertRaises(pages.ReadbackTransferIncomplete):
+                        pages.verify_ready(sha, package)
+                    self.assertEqual([call.args for call in sleep.call_args_list], [(1,), (2,), (4,), (8,)])
+                short_movie_reads = 0
+                corrupt_movie = True
+                with patch.object(pages.time, 'sleep') as sleep:
+                    with self.assertRaisesRegex(ValueError, 'different movie'):
+                        pages.verify_ready(sha, package)
+                    sleep.assert_not_called()
+                corrupt_movie = False
                 for bad_path in paths:
                     with self.assertRaisesRegex(ValueError, 'different bytes') as error:
                         pages.verify(sha, package)

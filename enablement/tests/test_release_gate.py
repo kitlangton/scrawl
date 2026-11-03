@@ -61,7 +61,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertIn("if: github.ref == 'refs/heads/main'\n", verify)
             self.assertIn('uses: ./.github/workflows/verification-platform.yml', verify)
         workflow = (root / '.github/workflows/verification-platform.yml').read_text()
-        for job in ('desktop-ui', 'connect-client', 'rust'):
+        for job in ('desktop-ui', 'connect-client', 'connect-web', 'rust'):
             section = re.search(r'^  ' + job + r':\n(.*?)(?=^  [a-z]|\Z)', workflow, re.M | re.S)[1]
             self.assertIn("if: github.ref == 'refs/heads/main'\n", section)
             self.assertNotIn('workflow_dispatch', section.split('    steps:', 1)[0])
@@ -101,6 +101,7 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('runner: macos-15-intel', workflow.read_text())
         names = ['verify / select', 'verify / desktop-ui (macos-15-intel)',
                  'verify / rust (macos-15-intel)', 'verify / connect-client (macos-15-intel)',
+                 'verify / connect-web (macos-15-intel)',
                  'verify / Release verification']
         self.jobs['macos'] = [dict(name=name, status='completed', conclusion='success')
                               for name in names]
@@ -134,7 +135,23 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('node enablement/verification/client-suite.ts --state', client)
         rust = workflow.split('\n  rust:\n')[1].split('\n  release-ready:\n')[0]
         self.assertNotIn('client-suite.ts', rust)
-        self.assertIn('needs: [select, desktop-ui, connect-client, rust]', workflow)
+        self.assertIn('needs: [select, desktop-ui, connect-client, connect-web, rust]', workflow)
+
+    def test_browser_stream_is_required_and_separated_from_rust(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/verification-platform.yml').read_text()
+        for platform, runner in [('linux', 'ubuntu-24.04'), ('macos', 'macos-15-intel')]:
+            self.assertIn(f'verify / connect-web ({runner})', gate.REQUIRED[platform])
+        browser = workflow.split('\n  connect-web:\n')[1].split('\n  rust:\n')[0]
+        self.assertIn('needs: select', browser)
+        self.assertIn('ref: ${{ inputs.revision || github.sha }}', browser)
+        self.assertIn('--suite browser', browser)
+        self.assertIn('TMPDIR: ${{ runner.temp }}', browser)
+        self.assertIn('CONNECT_EVIDENCE: ${{ runner.temp }}/connect-web-evidence', browser)
+        self.assertIn('browser-actions/setup-chrome@', browser)
+        rust = workflow.split('\n  rust:\n')[1].split('\n  release-ready:\n')[0]
+        self.assertIn('--suite rust', rust)
+        self.assertNotIn('browser-actions/setup-chrome@', rust)
+        self.assertNotIn('oven-sh/setup-bun@', rust)
 
     def test_linux_checks_can_publish_without_a_mac_receipt(self):
         self.runs['macos'].update(status='queued', conclusion=None)

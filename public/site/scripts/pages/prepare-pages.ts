@@ -34,5 +34,6 @@ writeFileSync(join(output, '_redirects'), [
   '/hosted/device /connect/device 302', '/hosted/device/ /connect/device 302',
   '/hosted/shares /connect/shares 302', '/hosted/shares/ /connect/shares 302',
   '/hosted /connect 302', '/hosted/ /connect 302', ''].join('\n'))
-writeFileSync(join(output, '_headers'), '/*\n  Cache-Control: no-cache\n  X-Apparent-Publisher: cloudflare-pages\n/connect*\n  Cache-Control: no-store\n  X-Robots-Tag: noindex, nofollow\n/hosted*\n  Cache-Control: no-store\n  X-Robots-Tag: noindex, nofollow\n')
+// Preserve sealed bytes through edge transformations, including automatic RUM injection.
+writeFileSync(join(output, '_headers'), '/*\n  Cache-Control: no-cache, no-transform\n  X-Apparent-Publisher: cloudflare-pages\n/connect*\n  Cache-Control: no-store, no-transform\n  X-Robots-Tag: noindex, nofollow\n/hosted*\n  Cache-Control: no-store, no-transform\n  X-Robots-Tag: noindex, nofollow\n')
 console.log(`Pages public package: ${actual.length} source-built files; fresh Connect; unknown paths denied`)

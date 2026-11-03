@@ -10,9 +10,11 @@ import json
 import os
 import re
 import stat
+import signal
 import sys
 from pathlib import Path
 import subprocess
+from contextlib import contextmanager
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -201,16 +203,60 @@ def run_pr_checks():
                         "-p", pattern], cwd=ROOT, check=True)
 
 
-def run_checks(selection, offline=True):
-    if selection["root"] or selection["engine"]:
-        check_temp_environment()
-    subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
+def run_contract_checks():
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_*push*.py"], cwd=ROOT, check=True)
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_verification.py"], cwd=ROOT, check=True)
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_temp_preflight.py"], cwd=ROOT, check=True)
+
+
+@contextmanager
+def overlapping_contracts():
+    """Own one isolated contract process group until both verification paths finish."""
+    process = None
+    cancelled = None
+    def interrupted(signum, _frame):
+        nonlocal cancelled
+        cancelled = 128 + signum
+        if process is not None:
+            raise SystemExit(cancelled)
+    previous = {sig: signal.signal(sig, interrupted)
+                for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    try:
+        process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--contract-checks'],
+                                   cwd=ROOT, start_new_session=True)
+        if cancelled is not None:
+            raise SystemExit(cancelled)
+        yield
+        status = process.wait()
+        if status:
+            raise subprocess.CalledProcessError(status, process.args)
+    finally:
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def run_checks(selection, offline=True, parallel_contracts=False):
+    if selection["root"] or selection["engine"]:
+        check_temp_environment()
+    subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
+    if parallel_contracts:
+        with overlapping_contracts():
+            run_selected_checks(selection, offline)
+    else:
+        run_contract_checks()
+        run_selected_checks(selection, offline)
+
+
+def run_selected_checks(selection, offline=True):
     cargo = ["cargo"]
     if subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
         cargo = ["taskpolicy", "-c", "utility", "cargo"]
@@ -244,6 +290,42 @@ def run_checks(selection, offline=True):
             subprocess.run(command, cwd=browser, check=True)
 
 
+def hook_budget(seconds, command):
+    """Bound the whole hook, including descendants, on macOS and Linux."""
+    process = None
+    cancelled = None
+    def interrupted(signum, _frame):
+        nonlocal cancelled
+        cancelled = 128 + signum
+        # Popen may already have created the child before returning its handle.
+        # Record cancellation until we can kill/reap that owned process group.
+        if process is not None:
+            raise SystemExit(cancelled)
+
+    previous = {sig: signal.signal(sig, interrupted)
+                for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    try:
+        process = subprocess.Popen(command, start_new_session=True)
+        if cancelled is not None:
+            return cancelled
+        return process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        print(f"Verification exceeded {seconds:g}s. Optimize the tests: the agent "
+              "whose run hit this limit owns the optimization and successful rerun. "
+              "Do not raise or bypass the limit.", file=sys.stderr, flush=True)
+        return 124
+    finally:
+        # A successful parent must not leave background verification running.
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
@@ -251,8 +333,12 @@ def main():
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--receipt-dir", type=Path, help="Write observation-only receipts outside the checkout (Node 22 required)")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--suite", choices=("all", "rust", "browser"), default="all",
+                        help="Execute a full platform suite; default runs all changed-tree selections")
     parser.add_argument("--pr", action="store_true", help="Hook/CI: cheap PR contract checks")
     parser.add_argument("--online", action="store_true", help="CI: use locked graph instead of offline cache")
+    parser.add_argument("--parallel-contracts", action="store_true",
+                        help="Overlap isolated Python contracts with selected checks; require both to succeed")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     if args.preflight:
@@ -263,12 +349,20 @@ def main():
         command = ['python3', str(Path(__file__).resolve()), '--base', args.base, '--head', args.head]
         if args.github_output:
             command += ['--github-output', str(args.github_output.resolve())]
+        command += ['--suite', args.suite]
+        if args.parallel_contracts:
+            command += ['--parallel-contracts']
         command += [flag for flag, enabled in [('--pr', args.pr), ('--run', args.run), ('--online', args.online)] if enabled]
+        label = ('changed-tree' if args.suite == 'all' else 'platform-' + args.suite) if args.run else 'pr-contracts'
         subprocess.run(['node', str(ROOT / 'enablement/verification/receipt.ts'),
-                        '--suite', 'changed-tree' if args.run else 'pr-contracts',
+                        '--suite', label,
                         '--output', str(args.receipt_dir.resolve()), '--', *command], cwd=ROOT, check=True)
         return
     selection = plan(args.base, args.head)
+    if args.suite == 'rust':
+        selection.update(root=True, engine=True, browser=False, focused=[])
+    elif args.suite == 'browser':
+        selection.update(root=False, engine=False, browser=True, focused=[])
     print(json.dumps(selection, sort_keys=True), flush=True)
     if args.github_output:
         with args.github_output.open("a") as output:
@@ -277,8 +371,13 @@ def main():
     if args.pr:
         run_pr_checks()
     if args.run:
-        run_checks(selection, offline=not args.online)
+        run_checks(selection, offline=not args.online, parallel_contracts=args.parallel_contracts)
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ['--contract-checks']:
+        run_contract_checks()
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "--hook-budget":
+        sys.exit(hook_budget(float(sys.argv[2]), sys.argv[3:]))
     main()

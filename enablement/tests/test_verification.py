@@ -3,6 +3,9 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import select
+import signal
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -24,6 +27,107 @@ class SelectionTests(unittest.TestCase):
         result = verification.select(["enablement/refactor.md", "AGENTS.md", "docs/capture.md"])
         self.assertFalse(result["root"])
         self.assertFalse(result["engine"])
+
+    def test_explicit_platform_suite_executes_only_its_commands_and_default_keeps_all(self):
+        for suite, cargo, browser in [('all', True, True), ('rust', True, False), ('browser', False, True)]:
+            args = ['verification.py', '--base', 'unknown', '--run']
+            if suite != 'all': args += ['--suite', suite]
+            with self.subTest(suite=suite), patch.object(verification.sys, 'argv', args), patch.object(
+                    verification, 'plan', return_value=verification.select(['build.rs', 'connect/web/package.json'])), patch.object(
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                verification.main()
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(any('cargo' in command for command in commands), cargo)
+                self.assertEqual(any(command[0] == 'bun' for command in commands), browser)
+                self.assertEqual(['node', 'scripts/test-browser.mjs'] in commands, browser)
+                self.assertEqual(any('capture/engine/Cargo.toml' in command for command in commands), cargo)
+
+    def test_receipt_wrapper_preserves_explicit_suite(self):
+        args = ['verification.py', '--base', 'unknown', '--run', '--online',
+                '--suite', 'rust', '--parallel-contracts', '--receipt-dir', '/external/receipts']
+        with patch.object(verification.sys, 'argv', args), patch.object(verification.subprocess, 'run') as run:
+            verification.main()
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index('--suite', command.index('--') + 1) + 1], 'rust')
+            self.assertEqual(command[command.index('--suite') + 1], 'platform-rust')
+            self.assertIn('--online', command)
+            self.assertIn('--parallel-contracts', command[command.index('--') + 1:])
+
+    def test_parallel_contracts_overlap_selected_checks_and_join_both_results(self):
+        real_spawn = subprocess.Popen
+        for outcome in ('success', 'contracts-fail', 'selected-fail', 'signal', 'spawn-signal'):
+            with self.subTest(outcome=outcome):
+                ready_read, ready_write = os.pipe()
+                release_read, release_write = os.pipe()
+                processes = []
+                previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+                def spawn(command, **kwargs):
+                    self.assertEqual(command[-1], '--contract-checks')
+                    self.assertTrue(kwargs['start_new_session'])
+                    program = 'import os,sys; os.write(int(sys.argv[1]), b"R"); os.read(int(sys.argv[2]), 1); sys.exit(int(sys.argv[3]))'
+                    process = real_spawn([sys.executable, '-c', program, str(ready_write), str(release_read),
+                                          '7' if outcome == 'contracts-fail' else '0'],
+                                         pass_fds=(ready_write, release_read), **kwargs)
+                    processes.append(process)
+                    if outcome == 'spawn-signal':
+                        os.kill(os.getpid(), signal.SIGTERM)
+                    return process
+                def selected(selection, offline):
+                    self.assertFalse(offline)
+                    self.assertEqual(selection, {'root': True, 'engine': False})
+                    self.assertTrue(select.select([ready_read], [], [], 5)[0], 'contracts did not start before selected checks')
+                    self.assertEqual(os.read(ready_read, 1), b'R')
+                    self.assertIsNone(processes[0].poll(), 'contract lane must still be running')
+                    if outcome == 'selected-fail':
+                        raise RuntimeError('selected checks failed')
+                    if outcome == 'signal':
+                        os.kill(os.getpid(), signal.SIGTERM)
+                    os.write(release_write, b'G')
+                try:
+                    with patch.object(verification.subprocess, 'Popen', side_effect=spawn), patch.object(
+                            verification.subprocess, 'run'), patch.object(verification, 'run_selected_checks', side_effect=selected):
+                        def run():
+                            verification.run_checks({'root': True, 'engine': False}, offline=False, parallel_contracts=True)
+                        if outcome == 'success':
+                            run()
+                        elif outcome == 'contracts-fail':
+                            with self.assertRaises(subprocess.CalledProcessError) as error:
+                                run()
+                            self.assertEqual(error.exception.returncode, 7)
+                        elif outcome == 'selected-fail':
+                            with self.assertRaisesRegex(RuntimeError, 'selected checks failed'):
+                                run()
+                        else:
+                            with self.assertRaises(SystemExit) as error:
+                                run()
+                            self.assertEqual(error.exception.code, 128 + signal.SIGTERM)
+                    self.assertIsNotNone(processes[0].poll(), 'owned contracts must be reaped')
+                    self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+                finally:
+                    for process in processes:
+                        if process.poll() is None:
+                            os.killpg(process.pid, signal.SIGKILL)
+                            process.wait()
+                    for fd in (ready_read, ready_write, release_read, release_write):
+                        os.close(fd)
+
+    def test_parallel_contracts_restore_handlers_when_spawn_fails(self):
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        with patch.object(verification.subprocess, 'Popen', side_effect=OSError('spawn failed')):
+            with self.assertRaisesRegex(OSError, 'spawn failed'), verification.overlapping_contracts():
+                self.fail('selected checks must not run')
+        self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+
+    def test_explicit_platform_suites_execute_even_when_changed_tree_has_no_matching_inputs(self):
+        for suite in ('rust', 'browser'):
+            args = ['verification.py', '--base', 'unknown', '--run', '--suite', suite]
+            with self.subTest(suite=suite), patch.object(verification.sys, 'argv', args), patch.object(
+                    verification, 'plan', return_value=verification.select(['README.md'])), patch.object(
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                verification.main()
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(['node', 'scripts/test-browser.mjs'] in commands, suite == 'browser')
+                self.assertEqual(any('cargo' in command for command in commands), suite == 'rust')
 
     def test_engine_tests_compile_and_test_package(self):
         result = verification.select(["capture/engine/tests/process.rs"])
@@ -324,6 +428,90 @@ class SelectionTests(unittest.TestCase):
                     git("update-index", "--add", "--cacheinfo", "100644", oid, "README.md")
                     documented = commit()
                     self.assertEqual(verification.plan(base, documented)["focused"], sorted(reviewed["tests"]))
+
+
+class RuntimeBudgetTests(unittest.TestCase):
+    def test_budget_preserves_status_and_stdin(self):
+        result = subprocess.run(['python3', str(SCRIPT), '--hook-budget', '2',
+                                 'sh', '-c', 'cat; exit 7'], input='refs\n',
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(result.stdout, 'refs\n')
+
+    def test_budget_kills_descendants_and_assigns_optimization(self):
+        # Inherited pipes stay open if the descendant escapes cleanup.
+        result = subprocess.run(['python3', str(SCRIPT), '--hook-budget', '.1',
+                                 'sh', '-c', 'sleep 30 & wait'],
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 124)
+        self.assertIn('Optimize the tests', result.stderr)
+        self.assertIn('agent whose run hit this limit owns', result.stderr)
+
+    def test_cancelled_watchdog_cleans_up_process_group(self):
+        import select
+        import signal
+        # Hold Popen after the real child exists but before the watchdog owns
+        # its return value. Child output is not watchdog-handler readiness.
+        driver = '''
+import runpy, subprocess, sys
+watchdog = runpy.run_path(sys.argv[1])['hook_budget']
+spawn = subprocess.Popen
+def held_spawn(*args, **kwargs):
+    child = spawn(*args, **kwargs)
+    print(child.pid, flush=True)
+    sys.stdin.readline()
+    return child
+if sys.argv[2] == 'spawn':
+    subprocess.Popen = held_spawn
+    command = 'sleep 30 & wait'
+else:
+    command = 'sleep 30 & echo $$; wait'
+sys.exit(watchdog(30, ['sh', '-c', command]))
+'''
+        for phase in ('spawn', 'running'):
+            for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+                with self.subTest(phase=phase, signal=sig):
+                    child_group = None
+                    with subprocess.Popen([sys.executable, '-c', driver, str(SCRIPT), phase],
+                                          text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                          stderr=subprocess.PIPE, start_new_session=True) as process:
+                        try:
+                            self.assertTrue(select.select([process.stdout], [], [], 5)[0], 'child did not start')
+                            child_group = int(process.stdout.readline())
+                            process.send_signal(sig)
+                            # EOF must include the whole child group, not just
+                            # the watchdog. Keep the original five-second bound.
+                            stdout, stderr = process.communicate(input='release\n', timeout=5)
+                            self.assertEqual(process.returncode, 128 + sig, stderr)
+                            self.assertEqual(stdout, '')
+                        finally:
+                            # Bound failure cleanup even when the watchdog has
+                            # exited but descendants still hold captured pipes.
+                            if child_group is not None:
+                                try: os.killpg(child_group, signal.SIGKILL)
+                                except ProcessLookupError: pass
+                            if process.poll() is None:
+                                process.kill()
+                            process.communicate(timeout=5)
+
+    def test_watchdog_restores_handlers_when_spawn_fails(self):
+        import signal
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        with patch.object(verification.subprocess, 'Popen', side_effect=OSError('synthetic launch failure')):
+            with self.assertRaisesRegex(OSError, 'synthetic launch failure'):
+                verification.hook_budget(30, ['synthetic-command'])
+        self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+
+    def test_supported_ci_jobs_have_ten_minute_execution_budget(self):
+        import re
+        for workflow in (SCRIPT.parents[1] / '.github/workflows').glob('*.yml'):
+            if workflow.name == 'release-windows.yml':
+                continue  # Retired platform is outside the supported CI contract.
+            for job in re.split(r'^  [\w-]+:\n', workflow.read_text(), flags=re.M)[1:]:
+                if re.search(r'^    runs-on:', job, re.M):
+                    self.assertIn('    timeout-minutes: 10\n', job, str(workflow))
+                    if '    name: Workflow runtime budget\n' not in job:
+                        self.assertIn('agent whose run hits the limit owns optimization', job)
 
 
 if __name__ == "__main__":

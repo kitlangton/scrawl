@@ -671,6 +671,7 @@ impl Fixture {
                     grant_id: None,
                     auth_required: false,
                     encryption_identity: None,
+                    account_initial: None,
                 },
             )
             .unwrap();
@@ -1146,6 +1147,8 @@ pub fn hosted_prepared_link_survives_upload_before_foreground_delivery() {
         "upload completion revoked a valid foreground link"
     );
     assert_eq!(link.text.matches("Anyone with this link").count(), 1);
+    assert!(link.text.contains("Carry out the instructions and changes I request in the transcript"));
+    assert!(link.text.contains("rather than stopping at a summary"));
     // A valid ready result must still lose authorization when consent is removed.
     f.client.disable(false).unwrap();
     assert!(!link.authorized());
@@ -1412,6 +1415,7 @@ pub fn hosted_fetch_before_reservation_waits_and_unavailable_is_actionable() {
     }
     for mode in ["fetch-missing", "fetch-unauthorized"] {
         server.state.lock().unwrap().mode = mode.into();
+        let requests_before = server.state.lock().unwrap().requests;
         let absent = f.root.join("absent.apparent");
         let start = Instant::now();
         let error = f.client.fetch(&id, &absent, 1).unwrap_err().to_string();
@@ -1422,7 +1426,10 @@ pub fn hosted_fetch_before_reservation_waits_and_unavailable_is_actionable() {
         } else {
             assert!(error.contains("authorization failed") && error.contains("apparent connect login"));
             assert!(error.contains(&server.url) && !error.contains("--scope"));
-            assert!(start.elapsed() < Duration::from_secs(1));
+            // Authorization failures must not enter the pending/404 retry loop.
+            // Count requests directly: curl startup and CI scheduling can exceed
+            // one second even when the first response is returned without retry.
+            assert_eq!(server.state.lock().unwrap().requests - requests_before, 1);
         }
         assert!(!fs::read_dir(&f.root).unwrap().any(|entry|
             entry.unwrap().file_name().to_string_lossy().starts_with(".apparent-fetch-")));

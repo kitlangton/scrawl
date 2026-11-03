@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 # Never cancel a deployment halfway through publication. Every publisher also
 # checks ancestry against the deployed revision while this lock is held.
@@ -23,9 +24,14 @@ jobs:
       contents: read
       actions: read
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       sha: ${{ steps.gate.outputs.sha }}
     steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       # Admission code comes from trusted main, never an unchecked event SHA.
       - uses: actions/checkout@v4
         with:
@@ -48,13 +54,17 @@ jobs:
     needs: admit
     if: needs.admit.outputs.sha != ''
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       PUBLIC_POSTHOG_ENABLED: ${{ vars.PUBLIC_POSTHOG_ENABLED || 'true' }}
       PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
       PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
       PUBLIC_POSTHOG_ENVIRONMENT: production
     steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -153,8 +163,12 @@ jobs:
       name: website-production
       url: https://app.tryapparent.com
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -197,8 +211,13 @@ jobs:
       HOSTED_D1_ID: ${{ vars.HOSTED_D1_ID }}
       HOSTED_R2_BUCKET: ${{ vars.HOSTED_R2_BUCKET }}
       POSTHOG_ENABLED: ${{ vars.POSTHOG_ENABLED || 'true' }}
+      SHARING_ENABLED: ${{ vars.SHARING_ENABLED || 'true' }}
       WRANGLER_SEND_METRICS: 'false'
     steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -236,3 +255,19 @@ jobs:
           name: hosted-deployment-receipt
           path: connect-service-receipt.json
           if-no-files-found: ignore
+
+  runtime-budget:
+    if: always()
+    needs: [admit, verify, website, hosted]
+    permissions:
+      contents: read
+      actions: read
+    name: Workflow runtime budget
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/runtime-budget

@@ -65,7 +65,7 @@ export type ConnectView = {
   buttons: ConnectButton[]; note: string;
   presentation?: { tone: 'neutral' | 'success' | 'progress' | 'warning' | 'failure';
     headline: string; detail: string; note: string; artwork: boolean; compact: boolean;
-    accountMenu: boolean; buttons: ConnectButton[]; menuActions: ConnectAction[]; sharedLinksUrl: string | null };
+    accountMenu: boolean; accountInitial?: string; buttons: ConnectButton[]; menuActions: ConnectAction[]; sharedLinksUrl: string | null };
 };
 export type ConnectButton = { command: ConnectAction; title: string; enabled: boolean };
 export type ConnectSettings =

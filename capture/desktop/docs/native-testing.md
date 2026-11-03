@@ -183,6 +183,12 @@ and cleanup cancels that owned pending/recording ID. It does not retry Start or
 spend a third take. Consent-versus-backend causation remains unresolved until
 native observation/logs distinguish them.
 
+For a scoped native input check, the existing recipe accepts `--save-seconds N`
+(1..180, default 4) and `--silent` to disable microphone capture in its isolated
+config. Keep the hold within the runner's scenario/job deadlines. The longer hold
+alone is not input proof: retain the observed interaction, saved notes and bundle
+inspection separately. The ordinary recipe defaults remain unchanged.
+
 The recipe waits for the owned `recording` receipt **and** matching recording
 state, records four seconds, sends Stop once and waits up to 60 seconds for that
 ID's production `saved` receipt. It verifies the same saved path via Inspect,

@@ -45,7 +45,7 @@ impl Drop for Fixture { fn drop(&mut self) { std::fs::remove_dir_all(&self.dir).
 fn fake() -> (Arc<Fake>, mpsc::Receiver<Allowed>, mpsc::Sender<()>) {
     let (login, started) = mpsc::channel();
     let (release, wait) = mpsc::channel();
-    (Arc::new(Fake { state: Mutex::new(Snapshot { server: None, connected: false, uploads_enabled: false, reauthorization_required: false }),
+    (Arc::new(Fake { state: Mutex::new(Snapshot { server: None, connected: false, uploads_enabled: false, reauthorization_required: false, renewal_required: false, account_initial: None }),
         login, release: Mutex::new(wait), disables: AtomicUsize::new(0), completed: AtomicUsize::new(0) }), started, release)
 }
 fn start(config: &Path, backend: Arc<dyn Backend>, lease: Duration) -> (BufReader<UnixStream>, std::thread::JoinHandle<()>, Arc<AtomicUsize>) {

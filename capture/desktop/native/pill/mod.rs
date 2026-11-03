@@ -823,6 +823,9 @@ impl PillRuntimeState {
         }
 
         if mouse_down && !self.was_mouse_down {
+            if matches!(self.model.pres, Pres::Completed { .. }) {
+                crate::capture::engine::runtime::apparent_log(format!("completed-controls down inside={inside_island}"));
+            }
             let hit = pos_opt.and_then(|[x, y]| self.model.hit_element(x, y));
             self.press_down_elem = hit;
             if hit == Some(ElemId::Lead)
@@ -869,6 +872,9 @@ impl PillRuntimeState {
                 }
             }
         } else if !mouse_down && self.was_mouse_down {
+            if matches!(self.model.pres, Pres::Completed { .. }) {
+                crate::capture::engine::runtime::apparent_log(format!("completed-controls up inside={inside_island}"));
+            }
             self.drag = None;
             if let Some(down_elem) = self.press_down_elem.take() {
                 let up_elem = pos_opt.and_then(|[x, y]| self.model.hit_element(x, y));
@@ -939,7 +945,11 @@ impl PillRuntimeState {
             ElemId::Route1 => PillAction::Route(1),
             _ => return,
         };
-        let _ = self.action_tx.try_send(action);
+        let copy_link = elem == ElemId::CopyLink;
+        let sent = self.action_tx.try_send(action).is_ok();
+        if copy_link {
+            crate::capture::engine::runtime::apparent_log(format!("public-share native-action sent={sent}"));
+        }
     }
 
     fn emit_trace(&self, frame: &FrameState) {

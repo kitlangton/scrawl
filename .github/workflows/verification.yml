@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 # Finish the running candidate; replace only pending work. Mac never holds this lane.
 concurrency:
@@ -19,3 +20,19 @@ jobs:
     uses: ./.github/workflows/verification-platform.yml
     with:
       runner: ubuntu-24.04
+
+  runtime-budget:
+    if: always()
+    needs: [verify]
+    permissions:
+      contents: read
+      actions: read
+    name: Workflow runtime budget
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/runtime-budget

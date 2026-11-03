@@ -1,10 +1,12 @@
-# Apparent Connect desktop client and remote CLI (candidate)
+# Apparent Connect desktop client and remote CLI
 
-## Endpoint encryption candidate
+## Private Connect availability and consent
 
-`experiments.hostedEncryption` is off by default. The candidate keeps local bundles ordinary and uses the existing any-browser link/sign-in/approve journey for grant-bound endpoint public keys. Account authorization is trusted; a compromised authorization service can substitute recipients. This is not Better Auth's token encryption and is not independent device pairing. No production enablement, plaintext migration or recovery guarantee is implied. See [the exact trust, wire, consent and remaining policy contract](hosted-encryption.md). Desktop encryption remains controlled by the experiment. CLI read approval enrolls a receiving key without changing that flag; encrypted fetch requires the original approved private endpoint identity; public/server-rendered sharing is rejected. Legacy plaintext remains explicitly identified and is not automatically migrated.
+`hostedSync` and `hostedEncryption` are available by default. Set either key to `false` in the existing `experiments` object for an explicit opt-out; file changes apply at the next client check. Availability does not sign in, enable uploads or grant consent. `cloud.enabled` and `cloud.uploadConsent` remain separate explicit choices, both false without a saved choice. Opening Settings reads local state and does not scan or upload history.
 
-Shared macOS/Linux implementation, default-off `hostedSync` experiment. This is an implementation candidate, not a deployed service or proof of native GUI behavior. No Windows support. See [hosted-api.md](hosted-api.md) for the v1 protocol and hosting prerequisites.
+Endpoint encryption keeps local bundles ordinary and uses the existing any-browser link/sign-in/approve journey for grant-bound endpoint public keys. Account authorization is trusted; a compromised authorization service can substitute recipients. This is not Better Auth's token encryption and is not independent device pairing. No production enablement, plaintext migration or recovery guarantee is implied. See [the exact trust, wire, consent and remaining policy contract](hosted-encryption.md). Desktop sender encryption follows its explicit feature opt-out. CLI read approval enrolls a receiving key without changing that flag; encrypted fetch requires the original approved private endpoint identity; public/server-rendered sharing is rejected. Legacy plaintext remains explicitly identified and is not automatically migrated.
+
+Shared macOS/Linux implementation. Source availability alone is not a deployed-service or native acceptance receipt. No Windows support. See [hosted-api.md](hosted-api.md) for the v1 protocol and hosting prerequisites.
 
 Readiness evidence, action-scoped holds and cutover preparation are authoritative
 in [Deployment prerequisites](hosted-api.md#deployment-prerequisites). A deployment
@@ -20,9 +22,10 @@ renewal, queue cancellation and config writer as the CLI. There is no Connect
 onboarding step. The Settings controller is owned by Desktop; the client's
 secret-free presentation API supplies fresh local state, a validated public
 verification URL/code and explicit bounded health checks, never raw responses.
-See [Settings](../../capture/desktop/docs/onboarding-and-settings.md#apparent-connect-experiment)
-for consent, cancellation, disable/disconnect and recovery behavior. This candidate
-does not claim live account approval, deployment or platform proof from compilation.
+See [Settings](../../capture/desktop/docs/onboarding-and-settings.md#apparent-connect)
+for consent, cancellation, disable/disconnect and recovery behavior. Compilation
+alone does not prove account approval, deployment or native behavior; the readiness
+map records the separately executed bounded beta acceptance and its limits.
 
 `connect/client` is the production `apparent-connect-client` library, not a
 protocol-only staging package. It owns transfer, device auth, credentials, queue
@@ -33,7 +36,21 @@ plus the candidate's pinned age, ed25519-dalek and zeroize dependencies. It does
 GStreamer, Swift helper or root build script. Runtime curl and system SHA-256
 requirements still apply; supported platforms remain macOS and Linux.
 
+Local Settings distinguishes expired renewable access from reauthorization:
+`renewal_required` offers Check connection without another login, while
+`reauthorization_required` remains reserved for unusable refresh/legacy grants.
+The local snapshot still does not certify renewal or enable uploads on an expired
+access token. The explicit health action performs renewal through normal transport.
+Successful device approval and refresh responses include only `accountInitial`,
+derived from the verified email of that grant's user. The client stores this bounded
+display hint with its private credential and exposes it only in the secret-free
+Settings snapshot for a usable grant; it never exposes the email. Older credentials,
+older service responses and missing identity use a neutral person icon. This value
+is display metadata and grants no authority.
+
 ### Explicit public-copy admission
+
+`hostedSharing` is available by default. An explicit `experiments.hostedSharing=false` opt-out remains respected. Completed captures show Copy link beside Paste. Availability does not sign in, grant upload consent, publish recordings or change private encryption; each selected public copy still requires the confirmation below. The service must separately permit sharing grants.
 
 `Client::prepare_public_link` is the compatible client integration contract for
 #171. Call it only after the sender explicitly chooses public sharing with:
@@ -42,6 +59,11 @@ encrypted.” The completed-capture Copy link action reaches this method through
 its capture-bound Rust controller after the Electron confirmation. Other
 `prepare_link` callers retain the encrypted-sharing refusal. The installed
 sender's native acceptance and existing activation holds remain separate gates.
+
+Copied links ask the receiving agent to carry out the sender's instructions and
+changes in the transcript, using the recording and images as context, rather than
+stopping at a summary. The recipient viewer's Copy for agent uses the same intent.
+Incidental screen text remains evidence; existing permission and approval gates apply.
 
 The explicit method persists a separate `publicCopy` job, plaintext manifest and
 fresh capture ID under the current upload grant. It never edits/cancels the

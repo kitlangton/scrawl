@@ -9,6 +9,8 @@ pub struct Snapshot {
     pub connected: bool,
     pub uploads_enabled: bool,
     pub reauthorization_required: bool,
+    pub renewal_required: bool,
+    pub account_initial: Option<String>,
 }
 #[derive(Clone)]
 pub struct Approval {
@@ -148,6 +150,9 @@ impl Client {
         let read = self.settings_grant("read", origin)?;
         let connected = upload.as_ref().is_some_and(Self::settings_usable)
             || read.as_ref().is_some_and(Self::settings_usable);
+        let account_initial = upload.as_ref().or(read.as_ref()).filter(|grant| grant.usable())
+            .and_then(|grant| grant.account_initial.as_deref())
+            .filter(|value| renewal::valid_account_initial(value)).map(str::to_owned);
         Ok(Snapshot {
             uploads_enabled: server.is_some()
                 && !self.revocation_pending()
@@ -158,9 +163,14 @@ impl Client {
             reauthorization_required: upload
                 .as_ref()
                 .or(read.as_ref())
-                .is_some_and(|grant| !Self::settings_usable(grant)),
+                .is_some_and(|grant| !grant.usable()),
+            renewal_required: upload
+                .as_ref()
+                .or(read.as_ref())
+                .is_some_and(|grant| grant.usable() && !Self::settings_usable(grant)),
             server,
             connected,
+            account_initial,
         })
     }
     /// The sole device-login protocol, with no stdout or automatic browser opening.

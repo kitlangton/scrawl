@@ -121,11 +121,14 @@ and permission-repair windows retain their existing behavior.
 
 ## Settings (`capture/desktop/settings/settings.rs`, `capture/desktop/native/Settings.swift`)
 
-### Apparent Connect (experiment)
+### Apparent Connect
 
 **General → Connect** appears by default above Launch at login on
 macOS and Linux. Opening it does not sign in, grant upload consent or enable
-uploads. To hide the controls, set `"connectSettings": false` in the existing
+uploads. Private Connect and endpoint encryption are available by default; explicit
+`experiments.hostedSync=false` or `experiments.hostedEncryption=false` retains an
+opt-out. Availability never changes `cloud.enabled` or `cloud.uploadConsent`, and
+onboarding practice remains local-only. To hide the controls, set `"connectSettings": false` in the existing
 `experiments` object in `~/.config/apparent/config.json`, then close and reopen
 Settings. It adds no onboarding step and does not require `hostedSharing`. Without a configured `cloud.server`, sign-in uses
 `https://hosted.tryapparent.com`; an existing valid custom origin is preserved.
@@ -159,6 +162,12 @@ already uploaded data. Cancelled jobs cannot silently resume after a later login
 **Check connection** performs a bounded authenticated background probe; ordinary
 Settings refresh reads local state only. Offline, reauthorization, denied/expired
 approval and local storage failures retain local capture and offer recovery.
+An expired access token with a valid refresh grant shows **Connection needs a
+refresh**, with **Check connection** directly on the card. It does not ask for
+another sign-in or claim that renewal has completed. Checking renews access
+through the existing client; expired refresh grants and revoked authorization
+still require sign-in. Reopening Settings or updating the app preserves this
+distinction without making a network request merely to display the page.
 If a disable/disconnect could not finish because local state was busy, uploads
 remain blocked across restart. Use Disable uploads or Disconnect again to finish;
 do not delete the client's pending revocation files. Failed state writes are not
@@ -168,9 +177,10 @@ raw errors, tokens and device secrets never enter its presentation contract.
 
 Connect uses the accepted Paper card and the shared frog artwork, without a separate
 section heading. The invitation reads “Help others see what you mean.”; successful
-local activation becomes a compact confirmation. The top-right A opens connection
-controls, not an asserted account identity: the current Desktop contract has no
-verified email. Disable and disconnect first show a local confirmation; declining
+local activation becomes a compact confirmation. The top-right account control shows
+the initial derived from the verified email on the active local grant, without
+exposing the email to Desktop. Older credentials and unavailable identity use a
+neutral person icon. Disable and disconnect first show a local confirmation; declining
 it does not revoke or cancel anything. Confirmed commands retain the existing
 revocation and pending-login cancellation semantics. Shared-link management is
 available only through its existing feature gate and validated credential site.
@@ -217,6 +227,16 @@ On Omarchy, Hyprland's `code:201` is the Copilot key. At launch Apparent reads t
 Recording without speech: `microphoneEnabled` in `~/.config/apparent/config.json` defaults to `true`. The app menu’s **Microphone for next capture** and the Electron Recording control persist the same preference, preserving the selected input. A capture freezes that preference at permission admission: switching it during recording applies to the next capture. With it off, microphone permission is not required, no input is opened and no no-audio warning is emitted. The other capture permissions still apply. A capture-local `microphone-off` marker preserves that intent through recovery; bundle context records `microphoneCapture: "off"`.
 
 Shift-click opens an Electron note near the click on release; Shift-drag still draws. Enter/Attach saves, Shift+Enter inserts a newline, and empty Enter closes without saving or erasing a saved note. Escape or clicking outside closes while keeping a draft for this capture. The counter follows the recording capsule, opens the compact notes list, and counts only durable saves. Notes can be edited or deleted from the list. Finish waits for already submitted saves; a failed receipt retains recording assets for recovery. Drafts are not exported as note metadata or summary text. Linux display video includes the popup while visible, including text not yet attached. This notes surface uses Electron by default; the existing capture controls and platform input adapters remain in use. Packaging includes its runtime. Removing this routing requires restoring an accepted notes surface, not silently dropping typed feedback. See the frontend README for routing and native acceptance gates.
+
+On Linux, Shift-click also annotates the native and Electron Settings windows
+during a capture. Only those live Settings surfaces opt in; ordinary clicks on
+Apparent, the recording pill and the notes editor retain their input exclusions.
+Electron Settings uses XWayland, matching capture's overlay and note editor, so
+the Shift overlay owns the pointer before a Settings control can act. Native
+window/process lifetime guards remove admission when Settings closes or its child
+exits. macOS's own-window input route is unchanged and still excludes Settings
+self-annotation. Reverting this admission restores the old Settings exclusion;
+the shared Electron editor and already saved notes remain compatible.
 
 Recording › Microphone (`capture/engine/runtime/audio/mic.rs`): `"microphone": {"id","name"}` holds an input id in `~/.config/apparent/config.json`; the name only labels a missing device. Absent = System default. Mac uses CoreAudio UIDs (also `AVCaptureDevice.uniqueID`). Linux with a PulseAudio-compatible server (including PipeWire) and `pactl` lists source names as `pulse:<name>`; `capture/desktop/linux/microphone.rs` opens the chosen source with GStreamer's `pulsesrc`, converting it to 16 kHz mono samples for the same capture buffer and Settings meter. A new capture waits for its first sample before accepting the source; a disconnected or unopenable choice falls back to the Pulse default shown in Settings, then to CPAL only if that default cannot open. It never changes the system default. Linux without a working Pulse server / `pactl` falls back to CPAL's available inputs; this may expose only the shared `default` or `pipewire` device, so distinct microphones cannot be selected there. Windows is unsupported; retained code is not a parity target. `mic::Watch` re-lists inputs while Settings is open: CoreAudio listeners on Mac, one-second checks elsewhere. `AudioRecorder` opens the chosen input on its worker thread, otherwise the current system default; a disconnected or unopenable choice remains saved but does not stop a new capture (`mic::Pick` explains the fallback in Settings and `note_pick` logs once). An error partway through a capture keeps samples heard so far. Mac's helper `MicMeter` uses AVCaptureSession; Linux GPUI Settings starts a separate input stream, stops it when leaving Recording, and expires stale level readings after 300 ms. The meter shows input samples, not recognized words or speaker identity; #16 owns no-transcript messaging. `apparent mic list|set <id|default>|watch` reports and changes the same saved selection.
 

@@ -1925,20 +1925,23 @@ impl ApparentCoordinator {
     fn reveal_activity(&self) -> usize {
         use std::sync::PoisonError;
         let t = &self.telemetry;
-        t.events
+        // Each guard must end before taking the next lock. Input commits a
+        // finished stroke concurrently with this GUI activity snapshot.
+        let events = t.events
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .len()
-            + t.strokes
+            .len();
+        let strokes = t.strokes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len();
+        let live_ink = usize::from(
+            t.live_ink
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .len()
-            + usize::from(
-                t.live_ink
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .is_some(),
-            )
+                .is_some(),
+        );
+        events + strokes + live_ink
     }
 
     /// The recording just started from a tap: the capsule opens onto the switch chips.
@@ -2838,11 +2841,15 @@ impl ApparentCoordinator {
     }
 
     pub fn copy_completed_link(&mut self, cx: &mut Context<Self>) {
+        apparent_log(format!("public-share action completed={} online={} pending={} bundle={}",
+            matches!(self.island_phase, IslandPhase::Completed { .. }), self.share_online,
+            self.share_pending.is_some(), self.completed_dir.is_some()));
         if !crate::shared::handoff::experiment(crate::connect::hosted::HOSTED_SHARING)
             || !matches!(self.island_phase, IslandPhase::Completed { .. })
             || !self.share_online || self.share_pending.is_some() { return; }
         let Some(bundle) = self.completed_dir.clone() else { return };
         if !crate::connect::hosted::sharing_connected() {
+            apparent_log("public-share connect-required");
             self.completed_note = Some("Connect in Settings, then choose Copy link again".into());
             self.open_settings(Some(crate::capture::desktop::settings::Pane::General));
             self.sync_native_pill(); cx.notify(); return;
@@ -2850,6 +2857,7 @@ impl ApparentCoordinator {
         self.public_popup.take();
         match crate::capture::desktop::workflow::public_sharing::popup::Popup::open(bundle, self.capture_generation, self.public_share.clone()) {
             Ok(popup) => {
+                apparent_log("public-share popup-opened");
                 let id = popup.id.clone();
                 self.public_popup = Some(popup);
                 cx.spawn(async move |entity, cx| {
@@ -2876,7 +2884,10 @@ impl ApparentCoordinator {
                     }
                 }).detach();
             }
-            Err(_) => self.completed_note = Some("Sharing window unavailable · Local Paste remains available".into()),
+            Err(_) => {
+                apparent_log("public-share popup-open-failed");
+                self.completed_note = Some("Sharing window unavailable · Local Paste remains available".into());
+            }
         }
         self.sync_native_pill();
         cx.notify();
@@ -2976,6 +2987,7 @@ impl ApparentCoordinator {
                 Some("Saved · paste manually" | "Saved · open bundle (copy failed)")
             )
         {
+            apparent_log("completed-controls timeout-dismissal");
             self.set_island_phase(IslandPhase::Dismissing);
         }
 
@@ -6425,6 +6437,13 @@ fn ensure_hud_pill_open(coord_entity: &Entity<ApparentCoordinator>, cx: &mut App
     {
         coord_entity.update(cx, |coord, _| coord.ensure_electron_pill());
         if coord_entity.read(cx).electron_pill_routed { return; }
+        // Linux reserves presentation for the launching renderer. The tick
+        // restores GPUI only on a real launch/readiness failure, avoiding a
+        // native pill flashing before the healthy Electron surface arrives.
+        #[cfg(target_os = "linux")]
+        if coord_entity.read(cx).electron_pill.as_ref().is_some_and(|session| session.healthy()) {
+            return;
+        }
     }
     if crate::shared::handoff::native_pill() {
         let _ = coord_entity.update(cx, |coord, _| {
@@ -6803,6 +6822,10 @@ pub fn run_app(
         }
         let has_initial = initial_bundle.is_some();
         let coordinator = cx.new(|_| ApparentCoordinator::new(telemetry, initial_bundle));
+        // Warm the hidden Linux controls before the first capture. Capture
+        // admission and shortcuts do not wait for renderer startup.
+        #[cfg(target_os = "linux")]
+        coordinator.update(cx, |coord, _| coord.ensure_electron_pill());
         set_status_inbox_count(coordinator.read(cx).inbox.len());
         #[cfg(target_os = "linux")]
         if let Err(error) = crate::capture::desktop::linux::update::mark_relaunch_ready() {
@@ -7020,6 +7043,42 @@ pub fn run_app(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reveal_activity_releases_strokes_before_waiting_for_live_ink() {
+        let (sender, _) = flume::unbounded();
+        let telemetry = SharedCaptureTelemetry::new(sender);
+        let writer_telemetry = telemetry.clone();
+        let (ready, started) = flume::bounded(1);
+        let (commit, proceed) = flume::bounded(1);
+        let writer = std::thread::spawn(move || {
+            // Shift release retains live ink until its saved stroke is committed.
+            let _ink = writer_telemetry.live_ink.lock().unwrap();
+            ready.send(()).unwrap();
+            proceed.recv_timeout(Duration::from_secs(3)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if let Ok(_strokes) = writer_telemetry.strokes.try_lock() { return true; }
+                if Instant::now() >= deadline { return false; }
+                std::thread::yield_now();
+            }
+        });
+        started.recv_timeout(Duration::from_secs(3)).unwrap();
+        let reader_telemetry = telemetry.clone();
+        let reader = std::thread::spawn(move || {
+            ApparentCoordinator::new(reader_telemetry, None).reveal_activity()
+        });
+        // Give the old snapshot a chance to retain strokes while awaiting ink.
+        // The corrected snapshot releases it; either way the test can unwind.
+        let deadline = Instant::now() + Duration::from_millis(100);
+        while telemetry.strokes.try_lock().is_ok() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        commit.send(()).unwrap();
+        let committed = writer.join().unwrap();
+        assert_eq!(reader.join().unwrap(), 0);
+        assert!(committed, "activity snapshot retained strokes while waiting for live ink");
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

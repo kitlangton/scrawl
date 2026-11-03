@@ -51,6 +51,17 @@ class HostedDeliveryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             configuration.config({**self.env, 'POSTHOG_ENABLED': 'invalid'})
 
+    def test_sharing_default_preserves_explicit_stop_and_existing_public_routes(self):
+        rendered = configuration.config(self.env)
+        self.assertEqual(rendered['vars']['SHARING_ENABLED'], 'true')
+        stopped = configuration.config({**self.env, 'SHARING_ENABLED': 'false'})
+        self.assertEqual(stopped['vars']['SHARING_ENABLED'], 'false')
+        self.assertEqual(stopped['routes'], rendered['routes'])
+        self.assertTrue(stopped['keep_vars'])
+        for value in ('', 'TRUE', 'invalid'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                configuration.config({**self.env, 'SHARING_ENABLED': value})
+
     def test_existing_service_need_not_already_have_new_analytics_variables(self):
         settings = self.existing_settings()
         settings['bindings'] = [b for b in settings['bindings'] if not b['name'].startswith('POSTHOG_')]
@@ -101,7 +112,7 @@ class HostedDeliveryTests(unittest.TestCase):
         drift[1][0]['script'] = 'another-writer'
         cases.append(drift)
         extra = copy.deepcopy(self.route_readback())
-        extra[1].append({'pattern': 'hosted.tryapparent.com/s/*', 'script': self.env['HOSTED_WORKER_NAME']})
+        extra[1].append({'pattern': 'hosted.tryapparent.com/unapproved/*', 'script': self.env['HOSTED_WORKER_NAME']})
         cases.append(extra)
         for routes in cases:
             with patch.object(worker, 'api', side_effect=[self.existing_settings(), {'schedules': [{'cron': '*/15 * * * *'}]}]), patch.object(worker, 'provider_api', side_effect=routes), patch.object(worker, 'publication_needed') as order:
@@ -164,7 +175,7 @@ class HostedDeliveryTests(unittest.TestCase):
         self.assertEqual(result['vars']['API_ORIGIN'], 'https://hosted.tryapparent.com')
         self.assertEqual(result['vars']['SITE_ORIGIN'], 'https://app.tryapparent.com')
         self.assertEqual(result['name'], self.env['HOSTED_WORKER_NAME'])
-        self.assertEqual(result['routes'], [{'pattern': 'hosted.tryapparent.com/' + path + '/*', 'zone_name': 'tryapparent.com'} for path in ('auth', 'v1')])
+        self.assertEqual(result['routes'], [{'pattern': 'hosted.tryapparent.com/' + path, 'zone_name': 'tryapparent.com'} for path in ('auth/*', 'v1/*', 's/*', 'share-view.js', 'share-view.css', 'share-wordmark.svg', 'share-font.ttf')])
         self.assertTrue(result['keep_vars'])
         self.assertNotIn('GOOGLE_CLIENT_ID', result['vars'])
         self.assertEqual(result['d1_databases'][0]['database_name'], self.env['HOSTED_D1_NAME'])

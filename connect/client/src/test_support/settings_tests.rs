@@ -81,7 +81,7 @@ fn settings_snapshot_is_fresh_local_and_read_does_not_enable_upload() {
             server: None,
             connected: false,
             uploads_enabled: false,
-            reauthorization_required: false,
+            reauthorization_required: false, renewal_required: false, account_initial: None,
         }
     );
     f.authorize(&server.url);
