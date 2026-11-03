@@ -186,6 +186,7 @@ jobs:
       HOSTED_D1_NAME: ${{ vars.HOSTED_D1_NAME }}
       HOSTED_D1_ID: ${{ vars.HOSTED_D1_ID }}
       HOSTED_R2_BUCKET: ${{ vars.HOSTED_R2_BUCKET }}
+      POSTHOG_ENABLED: ${{ vars.POSTHOG_ENABLED || 'true' }}
       WRANGLER_SEND_METRICS: 'false'
     steps:
       - uses: actions/checkout@v4
