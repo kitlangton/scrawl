@@ -251,6 +251,7 @@ fn asset_path(path: &str) -> bool {
             *name,
             "summary.md"
                 | "apparent.json"
+                | "notes.json"
                 | "contact-sheet.png"
                 | "contact-sheet-full.png"
                 | "recording.mp4"
@@ -1702,6 +1703,10 @@ impl Client {
                     job.error = Some(
                         if job.size_failure.is_some() {
                             "file_too_large"
+                        } else if error.chain().any(|cause| cause.to_string().starts_with("unsupported_asset")) {
+                            // Encryption adds snapshot context; retain the actionable
+                            // source error without exposing paths or diagnostic text.
+                            "unsupported_asset"
                         } else if text.contains("encryption_pending_recipient") {
                             "encryption_pending_recipient"
                         } else if text.contains("encryption_") || text.contains("encrypted_") {
@@ -2082,9 +2087,23 @@ fn snapshot(bundle: &Path, stage: &Path) -> Result<Vec<Asset>> {
             .file_name()
             .into_string()
             .map_err(|_| anyhow::anyhow!("Invalid asset name"))?;
-        if name == ".publication.lock" {
-            // Engine keeps this empty coordination inode after publication. It
-            // is local machinery, never capture evidence or a remotely served asset.
+        if name == "notes-ui.log" {
+            // Existing Desktop captures retain this local Electron diagnostic.
+            // It is not semantic capture data and must never enter either transfer.
+            let metadata = fs::symlink_metadata(entry.path())?;
+            ensure!(
+                metadata.is_file()
+                    && metadata.uid() == unsafe { libc::geteuid() }
+                    && metadata.mode() & 0o077 == 0
+                    && metadata.nlink() == 1,
+                "Unsafe local notes diagnostic"
+            );
+            continue;
+        }
+        if matches!(name.as_str(), ".publication.lock" | "microphone-off") {
+            // Engine retains empty local coordination/recording-intent markers.
+            // microphoneCapture in apparent.json already carries the semantic
+            // microphone choice; neither marker is a remotely served asset.
             let metadata = fs::symlink_metadata(entry.path())?;
             ensure!(
                 metadata.is_file()
@@ -2092,7 +2111,11 @@ fn snapshot(bundle: &Path, stage: &Path) -> Result<Vec<Asset>> {
                     && metadata.mode() & 0o022 == 0
                     && metadata.nlink() == 1
                     && metadata.len() == 0,
-                "Unsafe bundle publication lock"
+                if name == "microphone-off" {
+                    "Unsafe local microphone-off marker"
+                } else {
+                    "Unsafe bundle publication lock"
+                }
             );
             continue;
         }
@@ -2254,12 +2277,15 @@ mod tests {
             "frames/.credential",
             "frames/a\\b.png",
             "credentials.json",
+            "notes-ui.log",
+            "microphone-off",
         ] {
             assert!(!asset_path(path), "accepted {path}");
         }
         for path in [
             "summary.md",
             "apparent.json",
+            "notes.json",
             "contact-sheet.png",
             "frames/frame-01.png",
             "frames-full/frame-01.png",

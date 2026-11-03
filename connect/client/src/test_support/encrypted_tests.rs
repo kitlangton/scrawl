@@ -95,6 +95,43 @@ fn no_media(server: &Server) {
             .any(|r| r.starts_with("PUT ") || r.ends_with("/complete"))
     );
 }
+
+#[test]
+fn encrypted_unknown_asset_reports_snapshot_cause_without_uploading() {
+    let f = Fixture::new();
+    let server = encryption_server("");
+    pair(&f, &server);
+    let bundle = f.bundle();
+    fs::write(bundle.join("unexpected.svg"), b"private unknown asset").unwrap();
+    f.client.enqueue(&bundle).unwrap();
+    f.client.process_once().unwrap();
+    assert_eq!(job(&f).error.as_deref(), Some("unsupported_asset"));
+    no_media(&server);
+    assert!(!server.state.lock().unwrap().request_routes.iter()
+        .any(|route| route.starts_with("POST /v1/captures/")));
+}
+
+#[test]
+fn encrypted_notes_bundle_roundtrip_keeps_notes_and_excludes_local_diagnostic() {
+    let f = Fixture::new();
+    let server = encryption_server("");
+    pair(&f, &server);
+    let bundle = f.bundle();
+    let notes = br#"{"version":1,"notes":[{"text":"synthetic saved note"}]}"#;
+    fs::write(bundle.join("notes.json"), notes).unwrap();
+    OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .open(bundle.join("notes-ui.log")).unwrap()
+        .write_all(b"private local diagnostic").unwrap();
+    let id = f.client.enqueue(&bundle).unwrap();
+    f.client.process_once().unwrap();
+    assert_ready(&f);
+    let out = f.root.join("notes-restored.apparent");
+    f.client.fetch(&id, &out, 0).unwrap();
+    assert_bundle(&bundle, &out);
+    assert_eq!(fs::read(out.join("notes.json")).unwrap(), notes);
+    assert!(!out.join("notes-ui.log").exists());
+    assert!(bundle.join("notes-ui.log").exists());
+}
 fn assert_bundle(source: &Path, out: &Path) {
     let stage = Scratch::new_output(out.parent().unwrap()).unwrap();
     let files = snapshot(source, &stage.0).unwrap();

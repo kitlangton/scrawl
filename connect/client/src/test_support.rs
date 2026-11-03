@@ -1717,6 +1717,75 @@ pub fn hosted_paths_symlinks_oversize_and_unknown_assets() {
 }
 
 #[cfg_attr(test, test)]
+pub fn hosted_notes_assets_preserve_semantics_and_exclude_local_ui_log() {
+    let f = Fixture::new();
+    let bundle = f.bundle();
+    let notes = br#"{"version":1,"notes":[{"pin":1,"t":25,"x":0.5,"y":0.5,"text":"synthetic saved note"}]}"#;
+    let log = bundle.join("notes-ui.log");
+    OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .open(&log).unwrap().write_all(b"synthetic local diagnostic; never share").unwrap();
+    let stage = Scratch::new(&f.client.state).unwrap();
+    let files = snapshot(&bundle, &stage.0).expect("normal capture must exclude the local UI diagnostic");
+    assert!(!files.iter().any(|file| file.path == "notes-ui.log"));
+    fs::write(bundle.join("notes.json"), notes).unwrap();
+    let stage = Scratch::new(&f.client.state).unwrap();
+    let files = snapshot(&bundle, &stage.0).expect("saved notes must transfer as semantic capture data");
+    assert!(files.iter().any(|file| file.path == "notes.json"));
+    assert_eq!(fs::read(stage.0.join("notes.json")).unwrap(), notes);
+    assert!(!files.iter().any(|file| file.path == "notes-ui.log"));
+    assert!(!stage.0.join("notes-ui.log").exists());
+    fs::remove_file(&log).unwrap();
+    let outside = f.root.join("private-log");
+    fs::write(&outside, b"private").unwrap();
+    std::os::unix::fs::symlink(&outside, &log).unwrap();
+    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
+    fs::remove_file(&log).unwrap();
+    fs::hard_link(&outside, &log).unwrap();
+    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
+    fs::remove_file(&log).unwrap();
+    OpenOptions::new().write(true).create_new(true).mode(0o600).open(&log).unwrap();
+    fs::set_permissions(&log, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
+    fs::remove_file(&log).unwrap();
+    fs::create_dir(&log).unwrap();
+    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
+}
+
+#[cfg_attr(test, test)]
+pub fn hosted_microphone_off_marker_is_local_and_strictly_validated() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let f = Fixture::new();
+    let bundle = f.bundle();
+    let marker = bundle.join("microphone-off");
+    fs::write(&marker, b"").unwrap();
+    fs::set_permissions(&marker, fs::Permissions::from_mode(0o644)).unwrap();
+    let stage = Scratch::new(&f.client.state).unwrap();
+    let files = snapshot(&bundle, &stage.0).expect("normal microphone-off capture must transfer");
+    assert!(!files.iter().any(|file| file.path == "microphone-off"));
+    assert!(!stage.0.join("microphone-off").exists());
+    assert_eq!(fs::read(stage.0.join("apparent.json")).unwrap(), fs::read(bundle.join("apparent.json")).unwrap());
+    fs::write(&marker, b"unexpected private bytes").unwrap();
+    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
+    fs::write(&marker, b"").unwrap();
+    fs::set_permissions(&marker, fs::Permissions::from_mode(0o666)).unwrap();
+    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
+    fs::remove_file(&marker).unwrap();
+    let outside = f.root.join("outside-marker");
+    fs::write(&outside, b"").unwrap();
+    symlink(&outside, &marker).unwrap();
+    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
+    fs::remove_file(&marker).unwrap();
+    fs::hard_link(&outside, &marker).unwrap();
+    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
+    fs::remove_file(&marker).unwrap();
+    fs::create_dir(&marker).unwrap();
+    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
+    fs::remove_dir(&marker).unwrap();
+    fs::write(bundle.join("microphone-off.log"), b"unknown neighbour").unwrap();
+    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
+}
+
+#[cfg_attr(test, test)]
 pub fn hosted_oversized_upload_retains_actionable_details_across_restart() {
     for asset in ["recording.mov", "audio.wav"] {
         let f = Fixture::new();

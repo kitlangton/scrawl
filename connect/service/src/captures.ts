@@ -3,7 +3,7 @@ import {DAY,hex,json,fail,stmt,body,bearer,usage,isRecord} from './common.ts';
 import {checkedHeads,getObject,uploadAttempt,settledAttempt,deleteAttempts} from './storage.ts';
 const live="status!='deleted' AND expires_at>? AND (status='ready' OR pending_until>?)";
 export function validPath(path: unknown): path is string {
- return typeof path==='string'&&path.length<=128&&/^(apparent\.json|summary\.md|contact-sheet(?:-full)?\.png|audio\.wav|recording\.(mp4|mov)|finish-trace\.json|timeline\.json|frames(?:-full)?\/frame-[0-9]+\.png)$/.test(path);
+ return typeof path==='string'&&path.length<=128&&/^(apparent\.json|notes\.json|summary\.md|contact-sheet(?:-full)?\.png|audio\.wav|recording\.(mp4|mov)|finish-trace\.json|timeline\.json|frames(?:-full)?\/frame-[0-9]+\.png)$/.test(path);
 }
 function transportPath(path:unknown,format:CaptureRow['format']): path is string {
  return format==='plaintext-v1'?validPath(path):typeof path==='string'&&/^(envelope\.json|sealed\/part-[0-9]{6}\.age)$/.test(path);
