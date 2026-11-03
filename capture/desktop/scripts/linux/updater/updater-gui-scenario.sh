@@ -183,7 +183,13 @@ PY
 baseline_pid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["running"]["pid"])' "$out/baseline.json")"
 tr '\0' '\n' < "/proc/$baseline_pid/environ" | grep -Fx "APPIMAGE=$image" > "$out/running-image.txt"
 printf '%s\n' "$original_inode" > "$out/original-inode.txt"
+retry_marker="$(dirname "$image")/.$(basename "$image").update-retry"
+expire_retry() {
+  # Only this synthetic guest installation: advance persisted retry time.
+  if [[ -f "$retry_marker" ]]; then printf '0' > "$retry_marker"; fi
+}
 manual() {
+  expire_retry
   control "$1" true
   ui "{\"op\":\"click\",\"text\":\"Check for Updates\",\"label\":\"$1-click\"}"
   wait_file "$out/request-started"
@@ -198,6 +204,11 @@ ui '{"op":"click","text":"OK","label":"dismiss-current"}'
 manual error
 ui '{"op":"assert","text":"Update check failed","label":"network-error"}'
 ui '{"op":"click","text":"OK","label":"dismiss-error"}'
+requests_before="$(wc -l < "$out/requests.jsonl")"
+ui '{"op":"click","text":"Check for Updates","label":"cooldown-click"}'
+ui '{"op":"assert","text":"Update check failed","label":"cooldown-result"}'
+[[ "$(wc -l < "$out/requests.jsonl")" == "$requests_before" ]]
+ui '{"op":"click","text":"OK","label":"cooldown-dismiss"}'
 manual current
 ui '{"op":"assert","text":"No update available","label":"retry-succeeded"}'
 ui '{"op":"click","text":"OK","label":"dismiss-retry"}'
@@ -213,7 +224,7 @@ ui '{"op":"assert","text":"Update check failed","label":"checksum-error"}'
 [[ "$(sha256sum "$image" | cut -d' ' -f1)" == "$original_hash" ]]
 [[ "$(stat -c %i "$image")" == "$original_inode" ]]
 [[ ! -e "$image.apparent-update.json" ]]
-[[ -z "$(find "$(dirname "$image")" -maxdepth 1 -name '.*.download-*' -o -name '.*.update-*')" ]]
+[[ -z "$(find "$(dirname "$image")" -maxdepth 1 \( -name '.*.download-*' -o -name '.*.update-*' \) ! -name '.*.update-retry')" ]]
 status checksum-error
 ui '{"op":"click","text":"OK","label":"dismiss-checksum"}'
 manual available
@@ -357,7 +368,7 @@ from collections import Counter
 import json,os,sys
 requests=[json.loads(line) for line in open(sys.argv[1])]
 main=os.environ['UPDATER_CHANNEL']=='main'
-metadata='/repos/tryapparent/apparent/releases?per_page=10&page=1' if main else '/repos/tryapparent/apparent/releases/latest'
+metadata='/repos/tryapparent/apparent/releases?per_page=100&page=1' if main else '/repos/tryapparent/apparent/releases/latest'
 counts=Counter(r['control']['serial'] for r in requests if r['control']['gate'] and r['path']==metadata)
 assert counts == ({2:1,3:1,4:1,5:1,6:1,7:1,9:1} if main else {2:1,3:1,4:1,5:1,6:1}), counts
 downloads=[r for r in requests if r['path'].endswith('.AppImage')]

@@ -271,7 +271,7 @@ class FixtureTests(unittest.TestCase):
     def test_main_pagination_canonical_assets_and_current_identity(self):
         source = 'a' * 40
         control = {'channel': 'main', 'source_head': source, 'version': '1.2.3', 'mode': 'current'}
-        base = '/repos/tryapparent/apparent/releases?per_page=10&page='
+        base = '/repos/tryapparent/apparent/releases?per_page=100&page='
         first = json.loads(self.fixture.response(control, base + '1', b'x')[1])
         self.assertFalse(first[0]['prerelease'])
         release = json.loads(self.fixture.response(control, base + '2', b'x')[1])[0]

@@ -346,7 +346,7 @@ fn latest_main_candidate(arch: &str) -> Result<Candidate> {
     // GitHub pages by creation date, not publication date: inspect all pages before choosing.
     let mut releases = Vec::new();
     for page in 1.. {
-        let body = get(&format!("https://api.github.com/repos/{REPO}/releases?per_page=10&page={page}"), None)?;
+        let body = get_bounded(&format!("https://api.github.com/repos/{REPO}/releases?per_page=100&page={page}"), None, "2621440")?;
         let page_releases: Vec<Release> = serde_json::from_slice(&body).context("invalid release list")?;
         if page_releases.is_empty() { break; }
         releases.extend(page_releases);
@@ -361,6 +361,10 @@ fn validate_hash(hash: &str) -> Result<()> {
 }
 
 fn get(url: &str, out: Option<&Path>) -> Result<Vec<u8>> {
+    get_bounded(url, out, "262144")
+}
+
+fn get_bounded(url: &str, out: Option<&Path>, metadata_limit: &str) -> Result<Vec<u8>> {
     ensure!(url.starts_with("https://"), "update URL must use HTTPS");
     let mut cmd = Command::new("curl");
     cmd.args(["--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "10", "--max-time", "300", "--user-agent", "Apparent", "--url", url]);
@@ -368,7 +372,7 @@ fn get(url: &str, out: Option<&Path>) -> Result<Vec<u8>> {
         cmd.args(["--max-filesize", "1073741824"]);
         cmd.arg("--output").arg(path);
     } else {
-        cmd.args(["--max-filesize", "262144"]);
+        cmd.args(["--max-filesize", metadata_limit]);
     }
     let result = cmd.output().context("curl is required for updates")?;
     ensure!(result.status.success(), "download failed: {}", String::from_utf8_lossy(&result.stderr));
@@ -585,6 +589,19 @@ fn check() -> Result<bool> {
     // CLI processes and the GUI's hourly/manual worker share this lock. Acquire
     // before reading identity or discovering a release; hold through the swap.
     let _transaction = transaction_lock(&image)?;
+    let name = image.file_name().context("AppImage has no name")?.to_string_lossy();
+    let retry = image.with_file_name(format!(".{name}.update-retry"));
+    let remaining = super::retry::remaining(&retry, super::retry::now()?)?;
+    ensure!(remaining == 0, "previous update check failed; retry in {remaining} seconds");
+    let result = check_locked(&image);
+    if result.is_err() {
+        super::retry::failed(&retry, super::retry::now()?)
+            .context("cannot persist update failure cooldown")?;
+    }
+    result
+}
+
+fn check_locked(image: &Path) -> Result<bool> {
     let status = status()?;
     let arch = arch().context("no AppImage for this CPU")?;
     let candidate = if status["channel"] == "main" {

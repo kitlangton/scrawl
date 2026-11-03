@@ -13,7 +13,7 @@ import ssl
 import time
 
 API = '/repos/tryapparent/apparent/releases/latest'
-MAIN_API = '/repos/tryapparent/apparent/releases?per_page=10&page='
+MAIN_API = '/repos/tryapparent/apparent/releases?per_page=100&page='
 CANDIDATE_SHA = 'b' * 40
 LEGACY_SHA = 'a5cf47d7dc7d0f89b1552cfb2d5e4b0ab489526a'
 BRIDGE_SHA = 'f' * 40
@@ -24,6 +24,8 @@ def metadata_path(control):
 
 
 def response(control, path, payload):
+    # Preserve old-client bridge fixtures alongside current larger pages.
+    path = path.replace("releases?per_page=10&page=", "releases?per_page=100&page=")
     mode = control['mode']
     version = control['version'] if mode == 'current' else '999.0.0'
     main = control.get('channel', 'stable') == 'main'

@@ -209,3 +209,33 @@ bytes. Assertions bind the old/new running revisions, all three installed marker
 request counts and both restart receipts. This proves the packaged compatibility
 protocol in isolation; production signing, publication and asset reachability
 remain separate checks.
+
+### Failed-check cooldown
+
+Failed discovery, validation or installation checks persist a one-hour cooldown
+in `.APPIMAGE_NAME.update-retry` beside the owned AppImage, under its transaction
+lock. Startup, Settings and CLI checks share it across process restarts. Checks
+within that interval fail explicitly with remaining seconds; they do not report
+“up to date” or request metadata again. A backwards clock adjustment discards a
+future timestamp. This is runtime retry state, not a user preference. Successful
+checks keep the existing hourly cadence. Native acceptance must exercise a failed
+check, a second Settings check and a restarted app against the fixture, verifying
+no additional requests during cooldown, then expiry and successful installation.
+
+Proposed next producer contract (not implemented or deployed): publish
+`https://tryapparent.com/updates/linux/main.json` atomically only after Linux
+release admission, with `schemaVersion: 1`, the complete GitHub `Release` object
+already consumed by `main_candidate`, and its exact checksum text. Keep the
+immutable GitHub artifact URLs, CPU filename binding and SHA-256 verification.
+This removes release-list pagination; it does not by itself remove the ancestry
+API calls. Do not replace ancestry with timestamps. A further authenticated
+ancestry proof design must cover the permanent legacy bridge and v2 namespace
+before claiming an API-independent update path. Retain both existing publication
+namespaces for late upgraders. Workflow/feed publication belongs to the central
+release owner; this cooldown patch requires no workflow changes.
+
+Current Main discovery requests 100 releases per page (formerly ten), with a
+2.5 MiB response bound for those pages only. It still scans through the empty
+terminal page and sorts by publication date, preserving older-created releases
+published later. Other metadata retains its 256 KiB bound. Fixture routes retain
+ten-entry requests for old-client bridge tests as well as the current route.
