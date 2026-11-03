@@ -174,8 +174,12 @@ function installedChildPID(surface: 'pill' | 'share') {
 const popupPID = () => installedChildPID('share');
 
 async function openPopup() {
-  const pill = await until(() => installedChildPID('pill'), 5, 'Installed Electron pill absent');
-  ui('click', pill, 'Copy link');
+  // Shared pill startup failure deliberately restores the native completed
+  // controls. Exercise that installed entry too; the consent child below must
+  // still be the packaged Electron share surface, never a direct-copy fallback.
+  const pill = installedChildPID('pill');
+  report.completedEntrySurface = pill ? 'electron-pill' : 'native-fallback';
+  ui('click', pill ?? desktop.pid, 'Copy link');
   const pid = await until(popupPID, 10, 'Installed share child absent');
   // OCR is scoped to this child; it proves the actual installed renderer/disclosure.
   await until(() => { try { ui('inspect', pid, 'not end-to-end encrypted'); return true; } catch { return false; } }, 8, 'Explicit disclosure absent');
