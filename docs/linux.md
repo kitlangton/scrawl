@@ -28,7 +28,7 @@ Verified in an Ubuntu 24.04 arm64 VM with GNOME 46 (Wayland and X11) and Plasma 
 
 ### Clicks and ink on Wayland
 
-Wayland tells no app where the pointer is over another app's window. Scrawl reads buttons and keys from the input devices. In onboarding or Settings › Permissions, **Copy command** copies `sudo usermod -aG input "$USER"`. Run it in a terminal, then log out and back in. Scrawl checks whether it can open actual keyboard/mouse devices, rather than trusting group membership; it retries devices when access changes. This is the **Input devices** row (the Accessibility row on macOS).
+Wayland tells no app where the pointer is over another app's window. Scrawl reads buttons and keys from the input devices. In onboarding or Settings › Permissions, **Copy command** copies `sudo usermod -aG input "$USER"`. Run it in a terminal, then log out and back in. Scrawl checks whether it can open actual keyboard/mouse devices, rather than trusting group membership; it retries devices when access changes, and looks at `/dev/input` again every 2 s for devices plugged in or paired since (a Bluetooth mouse can connect after login). This is the **Input devices** row (the Accessibility row on macOS).
 
 While ⇧ is held, the ink overlay takes the pointer (`linux::overlay::take_pointer`), so XWayland reports where it is and the ink follows it; a click while ⇧ is held lands on the overlay, not the app. On KDE Wayland, Scrawl hides the recording overlay between strokes because KWin 5 otherwise blocks clicks into native apps even with an empty X input shape. Ink remains in the bundle, but disappears from the desktop when ⇧ is released.
 
