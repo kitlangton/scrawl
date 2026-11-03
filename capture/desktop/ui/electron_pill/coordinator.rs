@@ -109,8 +109,10 @@ impl ApparentCoordinator {
             self.electron_pill_failed = true;
             self.electron_pill_routed = false;
             apparent_log("Electron recording controls unavailable; restoring native controls");
-            let coordinator = cx.entity().clone();
-            cx.defer(move |cx| super::super::super::ensure_hud_pill_open(&coordinator, cx));
+            if !matches!(self.island_phase, IslandPhase::Hidden | IslandPhase::Dismissing) {
+                let coordinator = cx.entity().clone();
+                cx.defer(move |cx| super::super::super::ensure_hud_pill_open(&coordinator, cx));
+            }
             return;
         }
         if !self.electron_pill.as_ref().is_some_and(Session::ready) {
