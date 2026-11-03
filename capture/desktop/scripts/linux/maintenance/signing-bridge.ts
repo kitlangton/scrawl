@@ -147,8 +147,10 @@ function publish(bridge: string): void {
       '--verify-tag', '--draft', '--prerelease', '--latest=false',
       '--title', 'Linux Main signing migration', '--notes',
       `Compatibility bridge only. Exact unchanged assets from linux-main-v2-${source}. Main retains corrected signed history.`);
-    const draft = api(`releases/tags/${tag}`);
-    if (!draft.draft || draft.target_commitish !== bridge && draft.target_commitish !== 'main')
+    // GitHub's by-tag endpoint exposes published releases only. The
+    // authenticated release list includes our private draft and its assets.
+    const draft = history().find(r => r.tag_name === tag);
+    if (!draft?.draft || draft.target_commitish !== bridge && draft.target_commitish !== 'main')
       throw new Error('Unexpected bridge draft');
     checkAssets(directory, draft.assets);
     coversLegacy(bridge); // A late old publisher must not be silently stranded.
