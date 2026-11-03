@@ -240,7 +240,7 @@ class PublicationProgressTests(unittest.TestCase):
 
     def test_ineligible_completions_cannot_evict_good_pending_candidates(self):
         root = Path(__file__).resolve().parents[2]
-        for name in ('verification-mac.yml', 'web-delivery.yml', 'release-linux.yml'):
+        for name in ('verification-mac.yml', 'web-delivery.yml'):
             workflow = (root / '.github/workflows' / name).read_text()
             group = workflow.split('\nconcurrency:\n')[1].split('  group: ')[1].splitlines()[0]
             def key(**overrides):
@@ -266,7 +266,22 @@ class PublicationProgressTests(unittest.TestCase):
                                      ('github.event.workflow_run.head_repository.full_name', 'fork/project')]:
                     self.assertNotEqual(good, key(**{field: value}))
 
-    def test_workflow_scheduling_keeps_running_work_and_matching_candidates(self):
+    def test_automatic_linux_build_supersedes_without_interrupting_publication(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/release-linux.yml').read_text()
+        self.assertNotIn('\nconcurrency:', workflow)
+        build = workflow.split('\n  linux:\n')[1].split('\n  attach-release:')[0]
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'workflow_run' }}", build)
+        self.assertIn("matrix.arch", build)
+        self.assertIn("github.event_name == 'workflow_run' && 'automatic' || github.run_id", build)
+        self.assertIn('needs: [admit, preview-needed]', build)
+        for name in ('attach-release', 'main-preview', 'main-feed', 'signing-bridge'):
+            job = re.split(r'\n  [a-z][a-z-]*:', workflow.split(f'\n  {name}:\n')[1])[0]
+            self.assertIn('group: release-linux-publication', job)
+            self.assertIn('queue: max', job)
+            self.assertIn('cancel-in-progress: false', job)
+
+    def test_verification_scheduling_keeps_running_work_and_matching_candidates(self):
         root = Path(__file__).resolve().parents[2]
         linux = (root / gate.WORKFLOWS['linux']).read_text()
         mac = (root / gate.WORKFLOWS['macos']).read_text()

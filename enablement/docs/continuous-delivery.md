@@ -37,10 +37,14 @@ PR/manual checks, skipped jobs, failed/cancelled runs, legacy combined receipts
 and another platform's receipt cannot substitute for the required proof.
 
 Verified main ancestors may publish while newer main commits are still testing.
-Every checkout and artifact uses the admitted SHA. Existing publication locks
-finish running work and coalesce pending work. Under those locks, Linux previews,
+Every checkout and artifact uses the admitted SHA. Publication locks serialize
+writers without interrupting publication. Under those locks, Linux previews,
 Pages, Worker and the Mac appcast compare source ancestry against the published
-revision; equal/older candidates never replace newer deployments. Unknown or
+revision; equal/older candidates never replace newer deployments. Automatic Linux
+packaging jobs cancel older automatic builds per architecture after exact-SHA
+admission of a newer Linux-verified candidate. Manual/tag and verification-only
+builds use separate groups. Publication jobs retain a noncanceling shared lock,
+so cancellation cannot interrupt update-feed replacement. Unknown or
 divergent identities fail closed. Mac also retains its monotonic Sparkle build
 number check. All writers must use these workflow locks; out-of-band deployment
 is not coordinated by Actions. Activation variables, schema and consent

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Publish checked main ancestors without superseding a newer checked preview.
 
-The workflow serializes builds/publication without canceling the running release.
+Publication jobs serialize without cancellation; automatic builds supersede old builds.
 Ancestry, not completion time or version numbers, orders Main previews.
 """
 
