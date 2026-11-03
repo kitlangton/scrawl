@@ -260,6 +260,7 @@ jobs:
         env:
           APPARENT_CONNECT_NATIVE_CI: '1'
         run: |
+          (cd connect/service && npm ci --no-audit --no-fund && npm run build)
           app="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
           node connect/service/test/native/desktop-worker.mjs "$GITHUB_WORKSPACE" \
             "$app/Contents/MacOS/apparent" "$RUNNER_TEMP/apparent-connect-native"

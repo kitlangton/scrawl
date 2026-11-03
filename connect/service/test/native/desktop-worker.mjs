@@ -7,7 +7,6 @@ import {mkdir, mkdtemp, readFile, writeFile, readdir, realpath, rm} from 'node:f
 import {openSync, closeSync, existsSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
-import {fixture} from '../helpers.mjs';
 assert.equal(process.env.APPARENT_CONNECT_NATIVE_CI, '1', 'Explicit native proof opt-in required');
 assert(['darwin', 'linux'].includes(process.platform));
 if (process.platform === 'darwin') {
@@ -47,6 +46,8 @@ async function stop(p) {
   children.delete(p);
 }
 try {
+// Load platform-native Worker dependencies after establishing failure evidence.
+const {fixture} = await import('../helpers.mjs');
 server = createServer(async (req, res) => {
   try {
     assert(req.url.startsWith('/v1/'), 'Only local native API routes admitted');
