@@ -22,7 +22,7 @@ class NativeProofMacTests(unittest.TestCase):
         self.assertNotIn('secrets.', workflow)
         self.assertNotIn('write\n', workflow)
         self.assertIn("github.event_name == 'workflow_dispatch'", workflow)
-        self.assertIn('    timeout-minutes: 70\n', workflow)
+        self.assertIn('    timeout-minutes: 10\n', workflow)
         self.assertIn('timeout-minutes: 4\n', workflow)
         self.assertIn('persist-credentials: false', workflow)
 
@@ -76,18 +76,32 @@ class NativeProofMacTests(unittest.TestCase):
             self.assertIn('if: always()\n', step)
             self.assertIn('timeout-minutes: 2\n', step)
 
-    def test_step_caps_preserve_post_action_reserve(self):
+    def test_job_budget_bounds_steps_and_keeps_cleanup_required(self):
         workflow = WORKFLOW.read_text()
         job_cap = int(re.search(r'^    timeout-minutes: (\d+)$', workflow, re.M)[1])
+        self.assertEqual(job_cap, 10)
         steps = re.split(r'^      - ', workflow.split('    steps:\n', 1)[1], flags=re.M)[1:]
-        caps = []
+        self.assertTrue(steps[0].startswith('name: Verification runtime budget and ownership\n'))
         for step in steps:
+            if step.startswith('name: Verification runtime budget and ownership\n'):
+                # The notice runs inside the job budget, before setup.
+                self.assertIn('runner queue excluded', step)
+                self.assertIn('agent whose run hits the limit owns optimization', step)
+                self.assertIn('do not raise or bypass the limit', step)
+                continue
             cap = re.search(r'^        timeout-minutes: (\d+)$', step, re.M)
             self.assertIsNotNone(cap, step.splitlines()[0])
-            caps.append(int(cap[1]))
-        # Worker/share scenarios are mutually exclusive; reserve the larger cap.
-        self.assertEqual(sum(caps) - min(4, 8), 62)
-        self.assertGreaterEqual(job_cap - (sum(caps) - min(4, 8)), 7)
+            self.assertGreater(int(cap[1]), 0)
+        # Step caps are ceilings, not additive allocations: the job's 10m
+        # deadline wins. They cannot prove a cleanup reserve. The package/cache
+        # optimization must leave time for these mandatory final steps; a job
+        # timeout is failed proof, never evidence of successful cleanup.
+        cleanup_names = ('Verify owned cleanup and retain only allowlisted evidence',
+                         'Retain synthetic proof evidence including failures')
+        for step, name in zip(steps[-2:], cleanup_names):
+            self.assertTrue(step.startswith('name: ' + name + '\n'))
+            self.assertIn('        if: always()\n', step)
+            self.assertIn('        timeout-minutes: 2\n', step)
 
     def test_share_scenario_is_explicit_and_cannot_run_worker_case(self):
         workflow = WORKFLOW.read_text()

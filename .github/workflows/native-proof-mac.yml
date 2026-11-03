@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: native-proof-mac-connect-${{ github.ref }}
@@ -38,7 +39,7 @@ jobs:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute execution limit (runner queue excluded). If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         timeout-minutes: 1
         with:
@@ -177,3 +178,11 @@ jobs:
           path: ${{ runner.temp }}/apparent-connect-native/evidence/
           if-no-files-found: error
           retention-days: 7
+
+  runtime-budget:
+    if: always()
+    needs: [connect-worker]
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/runtime-budget.yml

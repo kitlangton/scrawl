@@ -1,0 +1,26 @@
+name: Whole-workflow runtime budget
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    name: Workflow runtime budget
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Enforce ten minutes across the complete workflow attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types enablement/verification/workflow-budget.ts
