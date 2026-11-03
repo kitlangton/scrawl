@@ -27,6 +27,11 @@ jobs:
           ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verification receipt contracts
+        run: node --test enablement/verification/*.test.ts
       - name: Selector and hook contracts (no native proof)
         run: |
           python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
@@ -82,15 +87,24 @@ jobs:
       - name: Linux Electron dependencies
         if: runner.os == 'Linux'
         run: npx --no-install playwright install-deps chromium
-      - run: npm test
+      - name: Renderer test receipt (not native acceptance)
+        run: node ../../../../enablement/verification/receipt.ts --suite desktop-unit --output "$RUNNER_TEMP/verification-receipts" -- npm test
       - name: Electron bridge and renderer smoke (synthetic socket, not native acceptance)
         shell: bash
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
-            xvfb-run -a npm run test:electron
+            node ../../../../enablement/verification/receipt.ts --suite desktop-electron --output "$RUNNER_TEMP/verification-receipts" -- xvfb-run -a npm run test:electron
           else
-            npm run test:electron
+            node ../../../../enablement/verification/receipt.ts --suite desktop-electron --output "$RUNNER_TEMP/verification-receipts" -- npm run test:electron
           fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-receipts-desktop-${{ inputs.runner }}
+          path: ${{ runner.temp }}/verification-receipts/
+          if-no-files-found: warn
+          retention-days: 14
 
   rust:
     needs: select
@@ -171,7 +185,7 @@ jobs:
             fi
           fi
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online
+          python3 enablement/verification.py --base "$BASE" --run --online --receipt-dir "$RUNNER_TEMP/verification-receipts"
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash
@@ -313,6 +327,14 @@ jobs:
             ${{ runner.temp }}/apparent-storage-native/*.log
           if-no-files-found: error
           retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-receipts-rust-${{ inputs.runner }}
+          path: ${{ runner.temp }}/verification-receipts/
+          if-no-files-found: warn
+          retention-days: 14
 
   release-ready:
     name: ${{ inputs.revision && format('Release verification ({0})', inputs.revision) || 'Release verification' }}
