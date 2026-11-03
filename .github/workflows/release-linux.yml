@@ -9,6 +9,10 @@ on:
     - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
+      candidate_sha:
+        description: Exact Linux-verified main SHA for a Main preview or feed repair (empty selects dispatch commit).
+        required: false
+        default: ""
       bridge_commit:
         description: One-time signed compatibility bridge commit; aliases already verified v2 assets.
         required: false
@@ -55,14 +59,18 @@ jobs:
       - id: gate
         env:
           GH_TOKEN: ${{ github.token }}
-          REQUEST_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          REQUEST_SHA: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha || github.sha }}
           VERIFY_RUN_ID: ${{ github.event.workflow_run.id }}
           TAG: ${{ inputs.tag }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
           BRIDGE_COMMIT: ${{ inputs.bridge_commit }}
+          SELECTED_SHA: ${{ inputs.candidate_sha }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -n "$SELECTED_SHA" ]]; then
+            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main && -z "$TAG" && "$VERIFY_ONLY" != true && -z "$BRIDGE_COMMIT" ]]
+          fi
           if [[ -n "$BRIDGE_COMMIT" ]]; then
             [[ "$GITHUB_REF" == refs/heads/main && -z "$TAG" && "$VERIFY_ONLY" != true ]]
             REQUEST_SHA=$(node --experimental-strip-types capture/desktop/scripts/linux/maintenance/signing-bridge.ts inspect "$BRIDGE_COMMIT")
@@ -283,7 +291,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
-        run: node --experimental-strip-types capture/desktop/scripts/linux/maintenance/main-feed.ts "$CANDIDATE_SHA"
+        run: |
+          # The preceding publisher creates its immutable tag after checkout.
+          # Refresh all release tags for candidate identity and ancestry checks.
+          git fetch --tags origin
+          node --experimental-strip-types capture/desktop/scripts/linux/maintenance/main-feed.ts "$CANDIDATE_SHA"
 
       - name: Publish unchanged verified assets for legacy updaters
         if: env.BRIDGE_COMMIT != '' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
