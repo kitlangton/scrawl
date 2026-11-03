@@ -143,6 +143,16 @@ struct Asset {
     sha256: String,
 }
 
+/// Queue intent is explicit: numeric failure facts never grant sharing consent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UploadQueueKind { Private, PublicCopy }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UploadSizeFailure {
+    pub kind: UploadQueueKind,
+    pub size: u64,
+    pub limit: u64,
+}
+
 /// Local-only, allowlisted asset details for a permanent size rejection.
 /// Keep this typed through anyhow's error chain; never parse an error message
 /// or send these details to progress endpoints or telemetry.
@@ -2323,6 +2333,18 @@ impl Client {
                     || error.to_string().starts_with("auth_required:")
             }
         }
+    }
+
+    /// Latest job for this exact canonical capture and requested intent only.
+    /// No filesystem paths, credentials or capture contents leave this projection.
+    pub fn upload_size_failure(&self, bundle: &Path, kind: UploadQueueKind) -> Option<UploadSizeFailure> {
+        let canonical = fs::canonicalize(bundle).ok()?;
+        let job = self.jobs().ok()?.into_iter()
+            .filter(|job| job.bundle == canonical && job.public_copy == (kind == UploadQueueKind::PublicCopy))
+            .max_by_key(|job| job.created)?;
+        if job.status != "failed" || (kind == UploadQueueKind::PublicCopy && (!job.shared || job.encrypted)) { return None; }
+        let failure = job.size_failure?;
+        Some(UploadSizeFailure { kind, size: failure.size, limit: failure.limit })
     }
 
     pub fn sharing_progress(&self, bundle: &Path) -> String {

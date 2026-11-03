@@ -4,7 +4,7 @@
 @font-face { font-family:'Host Grotesk';font-style:normal;font-weight:300 800;font-display:swap;src:url('../../../../../../shared/assets/fonts/HostGrotesk-Variable.ttf') format('truetype'); }
 html,body,#root { margin:0;width:max-content;background:transparent;overflow:hidden; }
 body { font-family:'Host Grotesk',system-ui,sans-serif; }
-.pill { box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-height:56px;width:max-content;max-width:var(--pill-limit,1200px);padding:6px 10px;border:1px solid var(--apparent-border);border-radius:28px;background:var(--apparent-background);color:var(--apparent-foreground);user-select:none;overflow:hidden; }
+.pill-row { box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-height:56px;width:max-content;max-width:var(--pill-limit,1200px);padding:6px 10px;border:1px solid var(--apparent-border);border-radius:28px;background:var(--apparent-background);color:var(--apparent-foreground);user-select:none;overflow:hidden; }
 .lead { display:flex;align-items:center;gap:8px;flex-shrink:0;padding-inline:6px; }
 .movable { -webkit-app-region:drag;cursor:grab; }
 .manual-drag { -webkit-app-region:no-drag; }
@@ -32,3 +32,18 @@ body { font-family:'Host Grotesk',system-ui,sans-serif; }
 .controls button[data-primary=false]:hover { background:var(--apparent-muted); }
 
 .notice { max-width:200px;font-size:14px;line-height:18px; }
+
+.pill { width:max-content;max-width:var(--pill-limit,1200px);color:var(--apparent-foreground); }
+.pocket-shell { display:flex;flex-direction:column;gap:4px;width:max-content;max-width:var(--pill-limit,1200px); }
+.pill[data-pocket-side=up] .pocket-shell { flex-direction:column-reverse; }
+.upload-pocket { width:0;min-width:100%;box-sizing:border-box;max-height:260px;overflow:auto;-webkit-app-region:no-drag; }
+.upload-pocket[data-state=closed] { display:none; }
+.pocket-alert { box-sizing:border-box;border-radius:16px;padding:14px 18px;background:var(--apparent-background);color:var(--apparent-foreground);font-size:14px;line-height:20px; }
+.pocket-alert[data-tone=failure] { border-color:var(--apparent-destructive); }
+.pocket-title { font-weight:600; }
+.pocket-actions { display:flex;gap:8px;margin-top:10px; }
+.indicator-slot { position:relative;display:flex;align-items:center;justify-content:center;width:10px;flex-shrink:0; }
+.indicator-slot.completed { width:22px; }
+.pocket-trigger { position:absolute;left:50%;transform:translateX(-50%);width:28px;min-width:28px;height:32px;padding:0;-webkit-app-region:no-drag; }
+
+.pill .pocket-alert[role=alert] { max-width:none;font-size:14px; }

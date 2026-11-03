@@ -137,10 +137,40 @@ fn electron_pill_warning_keeps_finish_without_competing_accent() {
     assert!(view.admit(command(1, "copy-link")).is_none());
 }
 
+#[cfg(target_os = "linux")]
+fn pipe_sandbox_preflight(root_suid_helper: bool, namespace_available: bool) -> Result<(), &'static str> {
+    if root_suid_helper || namespace_available { return Ok(()); }
+    Err("ENVIRONMENT: production Electron sandbox is unavailable here; no candidate was launched. Use the isolated Omarchy gui-vm.py route in capture/desktop/docs/native-testing.md with an owned candidate and current resource/take admission. Preserve any earlier failed pipe evidence; do not use --no-sandbox, change host policy, or infer candidate failure/native acceptance from this preflight.")
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn electron_pill_pipe_preflight_names_supported_route_without_waiving_failure() {
+    let refusal = pipe_sandbox_preflight(false, false).unwrap_err();
+    assert!(refusal.starts_with("ENVIRONMENT:"));
+    assert!(refusal.contains("gui-vm.py"));
+    assert!(refusal.contains("resource/take admission"));
+    assert!(pipe_sandbox_preflight(true, false).is_ok());
+    assert!(pipe_sandbox_preflight(false, true).is_ok());
+}
+
 #[test]
 #[ignore = "requires the built Electron frontend and an isolated Xvfb/disposable desktop"]
 fn electron_pill_real_pipe_roundtrip() {
     use std::{os::unix::fs::PermissionsExt, process::Command as Process};
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let helper = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capture/desktop/ui/frontend/node_modules/electron/dist/chrome-sandbox");
+        let root_suid = std::fs::metadata(helper).is_ok_and(|m| m.uid() == 0 && m.permissions().mode() & 0o4000 != 0);
+        // Admission only: a successful namespace probe is not sandbox/native proof.
+        // Refuse before spawning Session or consuming a desktop attempt on unsupported hosts.
+        let namespace = root_suid || Process::new("unshare")
+            .args(["--user", "--map-root-user", "true"])
+            .output().is_ok_and(|output| output.status.success());
+        if let Err(reason) = pipe_sandbox_preflight(root_suid, namespace) { panic!("{reason}"); }
+    }
     let directory = std::env::temp_dir().join(format!(
         "pill-pipe-{}",
         crate::capture::desktop::workflow::agent_capture::new_id().unwrap()
@@ -267,4 +297,66 @@ fn electron_pill_requires_an_explicit_capture_for_handoff() {
         view.admit(command(1, "dismiss")),
         Some(PillAction::DismissCompleted)
     ));
+}
+
+#[test]
+fn electron_pill_pocket_projects_without_paths_or_new_authority() {
+    let recording = View::new(&snapshot(Pres::RecordingWarning { chips: false, has_iphone: false }), 12, true);
+    assert_eq!(recording.pocket.as_ref().unwrap().tone, "warning");
+    assert!(recording.clone().with_size_failure(6_000_000_000, 5_000_000_000).pocket.unwrap().action_ids.is_empty());
+    let completed = View::new(&snapshot(Pres::Completed { label: "Saved".into(), routes: vec![], warning: false, share: Some(false) }), 15, false)
+        .with_handoff(true, false).with_size_failure(6_000_000_000, 5_000_000_000);
+    let pocket = completed.pocket.as_ref().unwrap();
+    assert_eq!(pocket.title, "Too large to upload");
+    assert!(pocket.description.contains("6.0 GB · limit 5.0 GB"));
+    assert_eq!(pocket.action_ids, ["paste"]);
+    assert!(matches!(completed.admit(command(15, "paste")), Some(PillAction::Paste(None))));
+    assert!(completed.admit(command(14, "paste")).is_none());
+    assert!(completed.admit(command(15, "copy-link")).is_none());
+    let unavailable = View::new(&snapshot(Pres::Completed { label: "Saved".into(), routes: vec![], warning: false, share: None }), 16, false)
+        .with_handoff(false, false).with_size_failure(u64::MAX, 5_000_000_000);
+    assert!(unavailable.pocket.unwrap().action_ids.is_empty());
+}
+
+#[test]
+fn electron_pill_completion_notice_keeps_saved_row_short() {
+    let mut view = View::new(&snapshot(Pres::Completed { label: "Link copied · uploading · Estimating…".into(), routes: vec![], warning: false, share: Some(true) }), 4, false)
+        .with_completion_notice(Some("Link copied · uploading · Estimating…"));
+    assert_eq!(view.label, "Saved");
+    assert!(view.pocket.as_ref().unwrap().description.contains("uploading"));
+    assert!(view.consume(command(4, "shell"), true).is_none());
+    assert_eq!(view.pocket.unwrap().title, "Control changed");
+}
+
+#[test]
+fn electron_pill_bounds_notification_unicode_and_size_precision() {
+    let text = bounded_text(&"😀".repeat(300), 300);
+    assert_eq!(text.encode_utf16().count(), 300);
+    assert_eq!(upload_size(90_000_001, true), "91 MB");
+    assert_eq!(upload_size(90_000_000, false), "90 MB");
+    assert!(!upload_size(u64::MAX, true).is_empty());
+}
+
+#[test]
+fn electron_pill_pocket_keeps_authoritative_notice_with_recording_warning() {
+    let mut view = View::new(&snapshot(Pres::RecordingWarning { chips: false, has_iphone: false }), 8, true);
+    assert!(view.consume(command(8, "finish"), false).is_none());
+    let text = &view.pocket.as_ref().unwrap().description;
+    assert!(view.notice.as_ref().unwrap().contains("expired"), "authoritative rejection must be retained");
+    assert!(text.contains("No words recognized"), "recording warning must remain available");
+}
+
+#[test]
+fn electron_pill_pocket_keeps_audio_outcome_with_size_failure() {
+    let view = View::new(&snapshot(Pres::Completed {
+        label: "Saved · No audio recorded".into(), routes: vec![], warning: true, share: Some(false),
+    }), 9, false).with_size_failure(90_000_001, 90_000_000);
+    let pocket = view.pocket.as_ref().unwrap();
+    assert_eq!(pocket.title, "Too large to upload");
+    assert!(pocket.description.contains("No audio recorded"), "size failure must preserve the audio outcome");
+    assert!(pocket.description.encode_utf16().count() <= 300);
+    let long = View::new(&snapshot(Pres::Completed {
+        label: "😀".repeat(300), routes: vec![], warning: true, share: None,
+    }), 10, false).with_size_failure(90_000_001, 90_000_000);
+    assert!(long.pocket.unwrap().description.encode_utf16().count() <= 300);
 }
