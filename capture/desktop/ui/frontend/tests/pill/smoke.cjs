@@ -126,9 +126,13 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  await publish({...completed,pocket:{tone:'failure',title:'Too large to upload',description:'6.0 GB · limit 5.0 GB. Your recording is saved. Paste it locally.',actionIds:['paste']}});
  await expect(page.getByText('Too large to upload',{exact:true})).toBeVisible();
  await expect(page.locator('main')).toHaveAttribute('data-pocket-side','up');
- const expandedBounds=await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getBounds());
- const row=await page.locator('.pill-row').boundingBox();
- assert.equal(expandedBounds.width,anchor.width);assert.equal(expandedBounds.y+row.y,anchor.y);
+ // Main publishes the pocket side before applying the asynchronous native
+ // bounds update. Wait for that update, retaining the exact anchor contract.
+ await expect.poll(async()=>{
+  const bounds=await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getBounds());
+  const row=await page.locator('.pill-row').boundingBox();
+  return {width:bounds.width,anchorY:bounds.y+row.y};
+ }).toEqual({width:anchor.width,anchorY:anchor.y});
  assert.equal(sent.filter(x=>x.action==='paste').length,0);
  if(evidence)await snapshot('size-failure-up.png');
  await page.locator('.pocket-actions').getByRole('button',{name:'Paste',exact:true}).click();
