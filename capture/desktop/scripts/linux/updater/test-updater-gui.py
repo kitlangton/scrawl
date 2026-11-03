@@ -377,6 +377,26 @@ class FixtureTests(unittest.TestCase):
                 trusted = subprocess.run(curl + ['--cacert', str(directory / 'cert.pem'), url],
                                          check=True, capture_output=True)
                 self.assertEqual(json.loads(trusted.stdout)['tag_name'], 'v1.2.3')
+                self.assertFalse((directory / 'startup-complete').exists())
+                control = {'version': '1.2.3', 'mode': 'error', 'serial': 1,
+                           'channel': 'main', 'source_head': 'a'*40, 'api_unavailable': True}
+                (directory / 'control.json').write_text(json.dumps(control))
+                feed_url = 'https://github.com' + self.fixture.MAIN_FEED
+                failed = subprocess.run(curl + ['--cacert', str(directory / 'cert.pem'), feed_url],
+                                        capture_output=True)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertFalse((directory / 'startup-complete').exists())
+                control['mode'] = 'current'
+                (directory / 'control.json').write_text(json.dumps(control))
+                feed = subprocess.run(curl + ['--cacert', str(directory / 'cert.pem'), feed_url],
+                                      check=True, capture_output=True)
+                self.assertEqual(json.loads(feed.stdout)['source'], 'a'*40)
+                deadline = time.monotonic() + 2
+                while not (directory / 'startup-complete').exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue((directory / 'startup-complete').exists())
+                requests = [json.loads(line) for line in (directory / 'requests.jsonl').read_text().splitlines()]
+                self.assertFalse(any(r['path'].endswith('.sha256') for r in requests))
                 foreign = subprocess.run(curl + ['--cacert', str(directory / 'cert.pem'), 'https://foreign.invalid/'],
                                          capture_output=True)
                 self.assertNotEqual(foreign.returncode, 0)

@@ -137,7 +137,8 @@ def serve(directory, payload, port=8443):
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-            if control['serial'] == 1 and self.path.endswith('.sha256'):
+            if control['serial'] == 1 and status == 200 and (
+                    self.path.endswith('.sha256') or self.path == MAIN_FEED):
                 (directory / 'startup-complete').touch()
 
         def log_message(self, format, *args):

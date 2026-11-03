@@ -171,7 +171,7 @@ done
 "$image" app >> "$out/app.log" 2>&1
 ui '{"op":"click","text":"About","label":"open-about"}'
 ui '{"op":"assert","text":"Check for Updates","label":"baseline"}'
-# Acknowledged startup checksum, not a boot-time sleep or the first request alone.
+# Wait for the complete startup manifest/checksum response before manual cases.
 wait_file "$out/startup-complete"
 status baseline
 python3 - "$out/baseline.json" <<'PY'
