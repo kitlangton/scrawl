@@ -61,7 +61,7 @@
       "id": "typed-capture-notes",
       "group": "record",
       "name": "Shift-click typed notes",
-      "says": "Shift-click opens a compact Electron note field. Enter or Attach saves text; empty Enter keeps the pin. Escape retains an in-capture draft; Shift-move outside the editor resumes drawing. A compact Notes control offers editing and deletion, with a save animation that respects reduced motion. Typed notes retain click-time anchors and appear alongside speech in the handoff timeline.",
+      "says": "Shift-click opens a compact Electron note field. Enter or Attach saves text; empty Enter keeps the pin. Escape retains an in-capture draft; Shift-move outside the editor resumes drawing. The Electron recording pill shows a note icon and saved count in a flush lilac extension, hidden at zero without moving recording controls. It opens the existing notes list; native fallback retains its compact Notes control. Typed notes retain click-time anchors and appear alongside speech in the handoff timeline.",
       "status": "main",
       "added": "2026-11-02",
       "platforms": [

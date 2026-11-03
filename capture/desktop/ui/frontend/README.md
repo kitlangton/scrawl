@@ -558,6 +558,17 @@ avoiding overlapping Electron profiles during asynchronous retirement.
 
 ## Shift-click notes
 
+While the Electron recording pill is routed, its flush Lilac right extension
+shows a shared Lucide note icon and the durable saved count, hidden at zero.
+The main row stays at fixed coordinates across count changes; its transparent
+72px native reserve is not an input target at zero. The extension opens the
+existing list, without changing the editor. Native fallback retains the separate
+Notes control. Reverting the count integration restores that control; remove its
+fallback only when the native pill routing and package consumers are retired.
+Shared Linux coverage checks count transitions, screen coordinates, hit shapes,
+themes, revision-scoped list actions and the real Rust note authority. Native
+window shaping/placement and popup ownership are the affected platform seams.
+
 The default-available notes surface runs `electron/notes/main.cjs`, launched by
 Rust for a screen capture. It renders only the nearby text popup and a small
 compact Notes control/list beside the existing capture controls; picker, ink and

@@ -15,6 +15,26 @@ test('pill projects state and rejects malformed or unbounded controls',()=>{
  {actions:[...state.actions,...state.actions]},{actions:[{...state.actions[0],id:'shell'}]}])assert.throws(()=>view({...state,...change}));
 });
 const geometry=require('../../electron/pill/geometry.cjs');
+test('count is bounded and notes require current action authority',()=>{
+ const notes={id:'notes',label:'Open notes',enabled:true,selected:false,primary:false};
+ assert.equal(view(state).noteCount,0);
+ for(const noteCount of [-1,1.5,101,'1'])assert.throws(()=>view({...state,noteCount}));
+ assert.throws(()=>view({...state,phase:'completed',noteCount:1}));
+ const current=view({...state,noteCount:12,actions:[...state.actions,notes]});
+ assert.deepEqual(command(current,12,'notes'),{revision:12,action:'notes'});
+ assert.throws(()=>command(current,11,'notes'));
+ assert.throws(()=>command(view(state),12,'notes'));
+});
+test('transparent count reserve cannot catch clicks at zero and row anchor stays fixed',()=>{
+ const area={x:0,y:0,width:1000,height:700};
+ const before={x:300,y:30,width:480,height:58};
+ const next=geometry.layout(before,area,480,58,58,0,408,408);
+ assert.deepEqual(next.bounds,before);
+ assert.equal(geometry.contains({x:750,y:59},before,0,58,408,408),false);
+ assert.equal(geometry.contains({x:750,y:59},before,0,58,480,408),true);
+ const zero=geometry.shape(480,58,0,58,408,408);
+ assert.ok(zero.every(rect=>rect.x+rect.width<=408));
+});
 test('pill input silhouette lets transparent corners through and clamps to negative-origin displays',()=>{
  const bounds={x:-100,y:30,width:600,height:58};
  assert.equal(geometry.contains({x:-100,y:30},bounds),false);

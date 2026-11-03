@@ -1,5 +1,5 @@
 'use strict';
-const actions = new Set(['record','cancel','finish','whiteboard','paste','copy-link','inspect','dismiss',
+const actions = new Set(['record','cancel','finish','whiteboard','notes','paste','copy-link','inspect','dismiss',
   'select-area','select-screen','select-iphone','switch-area','switch-screen','switch-iphone']);
 function view(value) {
   if (!value || !Number.isSafeInteger(value.revision) || value.revision < 0 ||
@@ -11,6 +11,8 @@ function view(value) {
       !(value.notice == null || typeof value.notice === 'string' && value.notice.length<=120) ||
       typeof value.reducedMotion !== 'boolean' || typeof value.draggable !== 'boolean' ||
       !Array.isArray(value.actions) || value.actions.length > 10) throw Error('Invalid pill state');
+  const noteCount=value.noteCount??0;
+  if(!Number.isSafeInteger(noteCount)||noteCount<0||noteCount>100||noteCount>0&&value.phase!=='recording')throw Error('Invalid note count');
   const seen = new Set();
   const controls = value.actions.map(a => {
     if (!a || !actions.has(a.id) || seen.has(a.id) || typeof a.label !== 'string' || a.label.length > 60 ||
@@ -27,7 +29,7 @@ function view(value) {
     pocket={tone:p.tone,title:p.title,description:p.description,actionIds:[...p.actionIds]};
   }
   return {revision:value.revision,phase:value.phase,clock:value.clock,label:value.label,warning:value.warning,notice:value.notice??null,
-    reducedMotion:value.reducedMotion,draggable:value.draggable,inputLevel:value.inputLevel??null,pocket,actions:controls};
+    reducedMotion:value.reducedMotion,draggable:value.draggable,inputLevel:value.inputLevel??null,noteCount,pocket,actions:controls};
 }
 function command(current, revision, action) {
   if (!current || revision !== current.revision || !actions.has(action) ||

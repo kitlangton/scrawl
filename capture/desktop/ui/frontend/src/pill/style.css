@@ -47,3 +47,18 @@ body { font-family:'Host Grotesk',system-ui,sans-serif; }
 .pocket-trigger { position:absolute;left:50%;transform:translateX(-50%);width:28px;min-width:28px;height:32px;padding:0;-webkit-app-region:no-drag; }
 
 .pill .pocket-alert[role=alert] { max-width:none;font-size:14px; }
+
+/* The main row never participates in count layout. Reserve native footprint,
+   not a visible gap or pointer target, for the right-hand extension. */
+.pill-surface { position:relative;width:max-content;max-width:var(--pill-limit,1200px); }
+.pill[data-phase=recording] .pill-surface { padding-right:72px; }
+.pill-surface .pill-row { position:relative;z-index:1; }
+.pill[data-phase=recording] .pill-row { max-width:calc(var(--pill-limit,1200px) - 72px); }
+.pill[data-phase=recording] .controls { min-width:0;max-width:100%;flex-shrink:1;flex-wrap:wrap; }
+.pill-notes-layer { position:absolute;inset:0 0 0 28px;border:1px solid var(--apparent-border);border-radius:28px;background:var(--apparent-brand);pointer-events:none; }
+.pill-notes { position:absolute;right:0;top:0;width:71px;height:100%;border-radius:0 28px 28px 0;background:transparent;color:var(--apparent-brand-foreground);justify-content:flex-start;padding:0 12px 0 8px;gap:6px;font-family:inherit;font-size:18px;font-weight:500;line-height:24px;font-variant-numeric:tabular-nums;pointer-events:auto; }
+.pill-notes:hover { background:var(--apparent-brand); }
+.pill-notes > svg { width:18px;height:18px; }
+.pill-notes > span { text-align:left; }
+.pill-notes:focus-visible { outline:2px solid var(--apparent-brand-foreground);outline-offset:-4px; }
+.pill[data-phase=recording] .upload-pocket { min-width:calc(100% - 72px); }

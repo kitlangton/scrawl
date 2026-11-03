@@ -1,6 +1,12 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { validCommand, validSnapshot, popupBounds, badgeBounds, flightBounds } = require('../../electron/notes/protocol.cjs');
+const { validCommand, validSnapshot, popupBounds, badgeBounds, embeddedBadgeBounds, flightBounds } = require('../../electron/notes/protocol.cjs');
+test('embedded flight target follows physical scale and the leading row rather than the pocket', () => {
+ for (const scale of [1,1.25,2]) {
+  const rect=[-500*scale,34*scale,484*scale,58*scale];
+  assert.deepEqual(embeddedBadgeBounds(rect,scale),{x:-88*scale,y:34*scale,width:72*scale,height:58*scale});
+ }
+});
 test('notes bridge accepts only bounded note actions, never renderer paths or window commands', () => {
   assert.equal(validCommand({ action: 'save', pin: 1, text: 'Change this\nnot that' }), true);
   for (const message of [{ action: 'save', pin: 1, text: 'x', path: '/tmp/private' },
@@ -13,6 +19,8 @@ test('notes snapshot retains an exact click time and validates draft and saved t
   const n = { pin: 1, t: 1234, x: .25, y: .5, text: 'Keep me' };
   const s = { mode: 'editor', current: 1, position: [-300, 42], notes: [], drafts: [n], error: null };
   assert.equal(validSnapshot(s), true);
+  assert.equal(validSnapshot({ ...s, embedded: true }), true);
+  assert.equal(validSnapshot({ ...s, embedded: 'true' }), false);
   assert.equal(validSnapshot({ ...s, drafts: [{ ...n, x: NaN }] }), false);
   assert.equal(validSnapshot({ ...s, notes: [{ ...n, text: '\0' }] }), false);
 });

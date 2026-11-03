@@ -6,7 +6,7 @@ const suppliedProfile = process.argv.find(v => v.startsWith('--notes-profile='))
 const profile = suppliedProfile || fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'apparent-note-ui-'));
 const { pathToFileURL } = require('node:url');
 const readline = require('node:readline');
-const { validCommand, validSnapshot, popupBounds, badgeBounds, BADGE_WIDTH, BADGE_HEIGHT, flightBounds } = require('./protocol.cjs');
+const { validCommand, validSnapshot, popupBounds, badgeBounds, embeddedBadgeBounds, BADGE_WIDTH, BADGE_HEIGHT, flightBounds } = require('./protocol.cjs');
 app.setName('Apparent Notes');
 nativeTheme.themeSource = 'system';
 app.setPath('userData', profile);
@@ -121,9 +121,13 @@ app.whenReady().then(() => {
       const openingBadge = !badge.isVisible();
       if (state.badgeRect) {
         const rect = state.badgeRect;
-        const work = screen.getDisplayNearestPoint({ x: Math.round(rect[0] + rect[2] / 2), y: Math.round(rect[1] + rect[3] / 2) }).workArea;
-        const bounds = badgeBounds(rect, work);
-        requestedBadge = { ...bounds, width: BADGE_WIDTH, height: BADGE_HEIGHT };
+        const centre = { x: Math.round(rect[0] + rect[2] / 2), y: Math.round(rect[1] + rect[3] / 2) };
+        const display = screen.getDisplayNearestPoint(process.platform === 'linux' && state.embedded ? screen.screenToDipPoint(centre) : centre);
+        const work = display.workArea;
+        const bounds = state.embedded
+          ? embeddedBadgeBounds(rect, process.platform === 'linux' ? display.scaleFactor : 1)
+          : badgeBounds(rect, work);
+        requestedBadge = state.embedded ? bounds : { ...bounds, width: BADGE_WIDTH, height: BADGE_HEIGHT };
         setRequestedBounds(badge, requestedBadge, openingBadge);
       }
       const point = { x: Math.round(state.position[0]), y: Math.round(state.position[1]) };
@@ -144,7 +148,7 @@ app.whenReady().then(() => {
         cancelFlight();
         if (!flyToCounter(requestedBadge)) { popup.hide(); send({ action: 'hidden' }); }
       } else if (!flight) { popup.hide(); if (previous && previous.mode !== 'badge') send({ action: 'hidden' }); }
-      if (requestedBadge) {
+      if (requestedBadge && !state.embedded) {
         if (openingBadge) badge.showInactive();
         placeSurface(badge, false, openingBadge, requestedBadge);
       } else { badge.hide(); }

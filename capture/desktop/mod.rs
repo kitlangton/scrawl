@@ -2727,6 +2727,11 @@ impl ApparentCoordinator {
                 cx.defer(move |cx| whiteboard::open(&coord, cx));
             }
             PillAction::Finish => self.finish_recording(cx),
+            PillAction::Notes => {
+                if self.is_recording() {
+                    if let Some(ui) = &self.note_ui { ui.show_list(); }
+                }
+            }
             PillAction::Paste(target) => self.paste_completed_bundle(target, cx),
             PillAction::CopyLink => self.copy_completed_link(cx),
             PillAction::Inspect => self.inspect_completed_bundle(cx),
@@ -2917,6 +2922,8 @@ impl ApparentCoordinator {
             platform::tick_pill_drag();
         }
         if self.note_ui.is_some() {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            if let Some(ui) = self.note_ui.as_mut() { ui.set_embedded(self.electron_pill_routed); }
             let anchor = self.native_pill.as_ref().and_then(|p| p.note_badge_anchor());
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             let anchor = self.electron_pill.as_ref().filter(|_| self.electron_pill_routed)
