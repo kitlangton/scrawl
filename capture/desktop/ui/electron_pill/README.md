@@ -60,3 +60,34 @@ that surface retains its own owner and error handling. No retry, compression, co
 Installed routing/rollback and the native fallback stay under the producer's
 existing acceptance hold. Remove donors only after accepted platform replacement;
 this slice does not activate experiments or retire native presentations.
+
+## Proof route and preflight
+
+The synthetic Electron fixtures and production Rust pipe test have different
+sandbox prerequisites. Before the ignored `electron_pill_real_pipe_roundtrip`
+fixture starts a child, its Linux preflight requires either the development
+runtime's valid root-owned SUID helper or a successful unprivileged user-namespace
+probe. A refusal is an **environment** failure before candidate launch, not a
+product verdict or a skip/pass. A positive probe still requires actual sandboxed
+execution; it proves neither compositor visibility nor native acceptance. Retain
+an earlier “No usable sandbox” failure instead of relabelling it.
+
+On a restricted host, continue offline with build/package, renderer/geometry
+checks and scenario preparation. The supported live Linux route is
+[`gui-vm.py` with the existing capture-smoke scenario](../../docs/native-testing.md),
+using a sanitized stopped template, test identity, a new private overlay/results
+path, isolated networking and the exact packaged candidate. Check current QEMU,
+slot owner, frozen candidate and consumed take/admission constraints before boot;
+another worker's guest or a persistent VM is never a fallback. Follow the
+runner's documented KVM group route rather than changing device permissions.
+A failed host probe does not establish that this guest route is blocked.
+
+For the pocket, prepare the existing save/cancel scenario plus native observation
+of a real warning pocket: disclosure open/close at constant row width, upward
+placement near the bottom, row anchor, rounded corner/gap click-through, current
+capture authority, focus and actual local Paste into a receiving editor. Keep
+renderer-only injected states labelled synthetic. Inspect saved bundle text,
+images and full movie; capture exclusion and receiving-editor delivery remain
+separate gates. Require the producer's exact applicability/release receipt and
+pocket-specific Mac/Linux evidence before merge/installed routing. Missing tests
+on a feature branch are expected under main-only full CI, not a dependency wait.

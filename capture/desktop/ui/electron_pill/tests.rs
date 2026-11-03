@@ -137,10 +137,40 @@ fn electron_pill_warning_keeps_finish_without_competing_accent() {
     assert!(view.admit(command(1, "copy-link")).is_none());
 }
 
+#[cfg(target_os = "linux")]
+fn pipe_sandbox_preflight(root_suid_helper: bool, namespace_available: bool) -> Result<(), &'static str> {
+    if root_suid_helper || namespace_available { return Ok(()); }
+    Err("ENVIRONMENT: production Electron sandbox is unavailable here; no candidate was launched. Use the isolated Omarchy gui-vm.py route in capture/desktop/docs/native-testing.md with an owned candidate and current resource/take admission. Preserve any earlier failed pipe evidence; do not use --no-sandbox, change host policy, or infer candidate failure/native acceptance from this preflight.")
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn electron_pill_pipe_preflight_names_supported_route_without_waiving_failure() {
+    let refusal = pipe_sandbox_preflight(false, false).unwrap_err();
+    assert!(refusal.starts_with("ENVIRONMENT:"));
+    assert!(refusal.contains("gui-vm.py"));
+    assert!(refusal.contains("resource/take admission"));
+    assert!(pipe_sandbox_preflight(true, false).is_ok());
+    assert!(pipe_sandbox_preflight(false, true).is_ok());
+}
+
 #[test]
 #[ignore = "requires the built Electron frontend and an isolated Xvfb/disposable desktop"]
 fn electron_pill_real_pipe_roundtrip() {
     use std::{os::unix::fs::PermissionsExt, process::Command as Process};
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let helper = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capture/desktop/ui/frontend/node_modules/electron/dist/chrome-sandbox");
+        let root_suid = std::fs::metadata(helper).is_ok_and(|m| m.uid() == 0 && m.permissions().mode() & 0o4000 != 0);
+        // Admission only: a successful namespace probe is not sandbox/native proof.
+        // Refuse before spawning Session or consuming a desktop attempt on unsupported hosts.
+        let namespace = root_suid || Process::new("unshare")
+            .args(["--user", "--map-root-user", "true"])
+            .output().is_ok_and(|output| output.status.success());
+        if let Err(reason) = pipe_sandbox_preflight(root_suid, namespace) { panic!("{reason}"); }
+    }
     let directory = std::env::temp_dir().join(format!(
         "pill-pipe-{}",
         crate::capture::desktop::workflow::agent_capture::new_id().unwrap()
