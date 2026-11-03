@@ -353,6 +353,10 @@ fn previously_failed(marker: &Path, candidate: &Candidate) -> bool {
 }
 
 fn newer(candidate: &Candidate, installed: Option<(String, String)>) -> bool {
+    newer_with_revision(candidate, installed, option_env!("GITHUB_SHA"))
+}
+
+fn newer_with_revision(candidate: &Candidate, installed: Option<(String, String)>, compiled: Option<&str>) -> bool {
     let version = |s: &str| {
         s.trim_start_matches('v').split('.').map(str::parse::<u32>).collect::<Result<Vec<_>, _>>()
     };
@@ -370,7 +374,7 @@ fn newer(candidate: &Candidate, installed: Option<(String, String)>) -> bool {
         return matches!((version(&candidate.id), version(env!("CARGO_PKG_VERSION"))), (Ok(r), Ok(c)) if r > c);
     }
     // Old AppImages have no revision embedded; opt-in Main replaces them once.
-    true
+    compiled != Some(candidate.id.as_str())
 }
 
 fn target() -> Result<Option<PathBuf>> {
@@ -542,6 +546,18 @@ pub fn start() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_main_install_decision_uses_embedded_revision_without_blocking_channel_switch() {
+        let bytes = serde_json::to_vec(&super::super::feed::tests::fixture()).unwrap();
+        let revision = "b".repeat(40);
+        let candidate = super::super::feed::candidate(&bytes, "x86_64", Some(&revision), Some(&revision)).unwrap();
+        assert!(!newer_with_revision(&candidate, None, Some(&revision)));
+        assert!(newer_with_revision(&candidate, None, Some(&"a".repeat(40))));
+        assert!(newer_with_revision(&candidate, None, None));
+        assert!(newer_with_revision(&candidate, Some(("stable".into(), "v0.3.13".into())), Some(&revision)));
+        assert!(!newer_with_revision(&candidate, Some(("main".into(), revision)), None));
+    }
 
     #[test]
     fn update_transaction_lock_child() {
