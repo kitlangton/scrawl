@@ -108,6 +108,50 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  connect-client:
+    needs: select
+    if: github.ref == 'refs/heads/main'
+    name: connect-client (${{ inputs.runner }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: connect-client
+          workspaces: connect/client -> ../../target/ci-connect-client
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Identify the bounded client verifier cache
+        id: client-plan
+        run: node enablement/verification/client-suite.ts --namespace >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/client-proof/
+          key: ${{ steps.client-plan.outputs.namespace }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ steps.client-plan.outputs.namespace }}-
+      - name: Verify the independent Connect client package with gated reuse
+        run: node enablement/verification/client-suite.ts --state "$RUNNER_TEMP/client-proof/proof.json"
+      # Save failed audit tombstones too. Only automatic main runs can seed proof;
+      # diagnostic dispatches cannot displace automatic candidate evidence.
+      - uses: actions/cache/save@v4
+        if: always() && steps.client-plan.outputs.namespace != '' && (github.event_name == 'push' || github.event_name == 'workflow_run')
+        with:
+          path: ${{ runner.temp }}/client-proof/
+          key: ${{ steps.client-plan.outputs.namespace }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.client-plan.outputs.namespace != ''
+        with:
+          name: connect-client-proof-${{ inputs.runner }}
+          path: ${{ runner.temp }}/client-proof/proof.json
+          if-no-files-found: warn
+          retention-days: 14
+
   rust:
     needs: select
     if: github.ref == 'refs/heads/main'
@@ -142,7 +186,6 @@ jobs:
           workspaces: |
             . -> target
             capture/engine -> target
-            connect/client -> target
       - uses: actions/setup-node@v4
         if: needs.select.outputs.root == 'true' || needs.select.outputs.browser == 'true'
         with:
@@ -156,33 +199,6 @@ jobs:
       - uses: browser-actions/setup-chrome@v1
         if: needs.select.outputs.browser == 'true'
         id: chrome
-      - name: Identify the bounded client verifier cache
-        id: client-plan
-        if: needs.select.outputs.root == 'true'
-        run: node enablement/verification/client-suite.ts --namespace >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        if: needs.select.outputs.root == 'true'
-        with:
-          path: ${{ runner.temp }}/client-proof/
-          key: ${{ steps.client-plan.outputs.namespace }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: ${{ steps.client-plan.outputs.namespace }}-
-      - name: Verify the independent Connect client package with gated reuse
-        if: needs.select.outputs.root == 'true'
-        run: node enablement/verification/client-suite.ts --state "$RUNNER_TEMP/client-proof/proof.json"
-      # Save failed audit tombstones too. Only automatic main runs can seed proof;
-      # diagnostic dispatches cannot displace automatic candidate evidence.
-      - uses: actions/cache/save@v4
-        if: always() && steps.client-plan.outputs.namespace != '' && (github.event_name == 'push' || github.event_name == 'workflow_run')
-        with:
-          path: ${{ runner.temp }}/client-proof/
-          key: ${{ steps.client-plan.outputs.namespace }}-${{ github.run_id }}-${{ github.run_attempt }}
-      - uses: actions/upload-artifact@v4
-        if: always() && steps.client-plan.outputs.namespace != ''
-        with:
-          name: connect-client-proof-${{ inputs.runner }}
-          path: ${{ runner.temp }}/client-proof/proof.json
-          if-no-files-found: warn
-          retention-days: 14
       - name: Execute the same changed-tree checks (not GUI acceptance)
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
@@ -362,7 +378,7 @@ jobs:
 
   release-ready:
     name: ${{ inputs.revision && format('Release verification ({0})', inputs.revision) || 'Release verification' }}
-    needs: [select, desktop-ui, rust]
+    needs: [select, desktop-ui, connect-client, rust]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:

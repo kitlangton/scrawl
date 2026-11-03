@@ -61,8 +61,13 @@ does not remove configured jobs, implement automatic selection or turn skipped
 checks into passes; existing executable admission remains in force.
 
 Manual/tag Linux releases require the same exact Linux/shared receipt; manual Mac
-previews require both receipts. Their optional `candidate_sha` selects an exact
-verified main ancestor; empty retains the dispatch commit. The selected SHA flows
+previews require both receipts. For Linux Main previews and Mac previews, optional
+`candidate_sha` selects an exact verified main ancestor; empty retains the dispatch
+commit. Linux selection excludes tag, bridge and verification-only modes. When
+that immutable Linux release already exists, Main publication skips packaging
+and repairs the feed using its checked assets. Publication refreshes remote tags
+before feed identity/ancestry validation, including tags created after checkout.
+The selected SHA flows
 through checkout, tags, admission and feed ordering. Linux `verify_only` still permits isolated branch
 packaging without publication. Failed required verification leaves that platform's
 last published version available; fix or revert main and verify the next candidate.
@@ -327,8 +332,16 @@ setup, or the entire platform workflow. No speedup is claimed from instrumentati
 
 ## Bounded Connect client reuse pilot
 
-The independent Connect client build/test step uses
-`enablement/verification/client-suite.ts`. Reuse is eligible only on identified
+The independent Connect client build/test job uses
+`enablement/verification/client-suite.ts`. It runs alongside Desktop UI and root
+Rust verification after selector contracts pass, on the exact candidate checkout.
+Both the terminal verification job and publication admission require its successful
+`connect-client (<runner>)` result; older runs without that job cannot admit
+publication. Its dedicated Rust dependency cache targets `target/ci-connect-client`,
+matching the verifier, separately from root build outputs. This scheduling split
+does not enable owner-report skipping or broaden result reuse.
+
+Reuse is eligible only on identified
 GitHub-hosted **Linux** images; Mac and local runs still execute the suite. Root
 Rust checks, real-provider consumer tests and native/platform proof always remain
 required. This pilot does not cache any GUI/native acceptance or release artifacts.

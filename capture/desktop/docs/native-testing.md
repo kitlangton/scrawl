@@ -1,5 +1,9 @@
 # Desktop verification
 
+Reusable VM lifecycle, expiry and evidence retention live in
+[enablement/native](../../../enablement/native/README.md). Desktop keeps the
+behavior-specific scenarios and acceptance recipes below.
+
 Shared Electron UI is verified primarily on Linux. Mac execution covers affected
 OS boundaries and a short packaged integration smoke, rather than a second full
 workflow matrix. This policy supersedes blanket two-platform walkthrough gates
@@ -65,7 +69,7 @@ Linux/web publication under their own existing gates.
 ## Linux native capture smoke recipe
 
 This is one supported **guest scenario**, not another VM controller:
-`capture/desktop/scripts/linux/gui/capture-smoke.py`, run by `capture/desktop/scripts/linux/gui/gui-vm.py`. It starts the
+`capture/desktop/scripts/linux/gui/capture-smoke.py`, run by `enablement/native/linux/gui-vm.py`. It starts the
 candidate GUI, creates a changing synthetic X11 window, saves one normal GUI
 screen capture, then starts and cancels a second. Both requests use persisted,
 32-hex-character request IDs; all stop/cancel/inspect calls use those IDs only.
@@ -110,9 +114,9 @@ The baseline runner has no `doctor` subcommand. These are the exact launch-free
 preflight commands; do not treat an unknown `doctor` argument as a health pass:
 
 ```sh
-python3 capture/desktop/scripts/linux/gui/test-gui-vm.py
+python3 enablement/native/linux/test-gui-vm.py
 python3 capture/desktop/scripts/linux/gui/test-capture-smoke.py
-python3 capture/desktop/scripts/linux/gui/gui-vm.py --help
+python3 enablement/native/linux/gui-vm.py --help
 for tool in qemu-system-x86_64 qemu-img ssh scp systemd-run python3; do
   command -v "$tool" || exit 1
 done
@@ -148,7 +152,7 @@ speaker stimulus is used. This recipe makes no microphone-quality claim.
 ## Run and native consent
 
 ```sh
-python3 capture/desktop/scripts/linux/gui/gui-vm.py \
+python3 enablement/native/linux/gui-vm.py \
   --template "$GUI_TEMPLATE/system.qcow2" \
   --ovmf-vars "$GUI_TEMPLATE/OVMF_VARS.fd" \
   --ssh-user "$GUI_TEST_USER" --ssh-key "$GUI_TEST_KEY" \

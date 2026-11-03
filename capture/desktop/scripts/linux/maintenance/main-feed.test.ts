@@ -1,8 +1,37 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { manifest, mayAdvance } from './main-feed.ts';
 const source = 'b'.repeat(40), previous = 'a'.repeat(40);
+test('feed step fetches immutable tags created after checkout without accepting moved tags', () => {
+  const workflow = readFileSync(new URL('../../../../../.github/workflows/release-linux.yml', import.meta.url), 'utf8');
+  const step = workflow.split('- name: Publish admitted immutable artifact identities and complete ancestry')[1]
+    .split('- name: Publish unchanged verified assets')[0];
+  assert.ok(step.indexOf('git fetch --tags origin') < step.indexOf('node --experimental-strip-types'));
+  assert.ok(step.includes('git fetch --tags origin'));
+  const dir = mkdtempSync(join(tmpdir(), 'apparent-feed-tags-'));
+  const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  try {
+    const root = run(process.cwd(), 'rev-parse', '--show-toplevel');
+    const remote = join(dir, 'origin.git'), checkout = join(dir, 'checkout');
+    run(dir, 'clone', '--bare', '--shared', root, remote);
+    run(dir, 'clone', '--shared', '--no-checkout', '--no-tags', remote, checkout);
+    const head = run(checkout, 'rev-parse', 'HEAD'), tag = `refs/tags/linux-main-v2-${head}`;
+    assert.throws(() => run(checkout, 'rev-parse', '--verify', `${tag}^{commit}`));
+    run(remote, 'update-ref', tag, head); // Simulate the preceding release publisher.
+    const fetch = step.match(/^          (git fetch --tags origin)$/m)![1].split(' ');
+    run(checkout, ...fetch.slice(1));
+    assert.equal(run(checkout, 'rev-parse', `${tag}^{commit}`), head);
+    // Refuse an upstream tag move instead of overwriting the checked identity.
+    run(remote, 'update-ref', tag, run(checkout, 'rev-parse', 'HEAD^'));
+    assert.throws(() => run(checkout, ...fetch.slice(1)));
+    assert.equal(run(checkout, 'rev-parse', `${tag}^{commit}`), head);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 function fixture() {
   const tag = 'linux-main-v2-' + source;
   const checksums: Record<string,string> = {};
