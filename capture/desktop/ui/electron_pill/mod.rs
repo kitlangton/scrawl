@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 mod coordinator;
 mod session;
+#[cfg(target_os = "linux")]
+mod pin;
 use crate::capture::desktop::{
     SelectionMode,
     native::pill::{PillAction, PillSnapshot, model::Pres},
