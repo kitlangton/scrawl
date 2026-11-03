@@ -6,6 +6,11 @@
 
 Shared macOS/Linux implementation, default-off `hostedSync` experiment. This is an implementation candidate, not a deployed service or proof of native GUI behavior. No Windows support. See [hosted-api.md](hosted-api.md) for the v1 protocol and hosting prerequisites.
 
+Readiness evidence, action-scoped holds and cutover preparation are authoritative
+in [Deployment prerequisites](hosted-api.md#deployment-prerequisites). A deployment
+hold does not stop local tests, read-only investigation or candidate preparation;
+those do not authorize activation or turn synthetic proof into live acceptance.
+
 ## Implementation ownership
 
 Desktop account controls appear by default in **Settings → General**. The

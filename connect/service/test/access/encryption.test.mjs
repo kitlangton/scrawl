@@ -159,14 +159,33 @@ test('encrypted sharing refuses mutations and every public read without R2 work 
  }finally{await f.close();}
 });
 
-test('0005 preserves existing capture/grant/ledger and replay errors without resetting spent budget',async()=>{
+test('0003 to 0005 cutover preserves incumbent data, grants and spent ledger; replay cannot reseed',async()=>{
  const mf=new Miniflare({modules:[{type:'ESModule',path:'migration.mjs',contents:'export default {}'}],d1Databases:['DB']});try{
  const db=await mf.getD1Database('DB'),migrate=async n=>db.exec((await readFile('migrations/'+n+'.sql','utf8')).replace(/^--.*$/gm,'').replaceAll('\n',' '));
- for(const n of ['0001','0002','0003','0004'])await migrate(n);
- await db.prepare("INSERT INTO accounts VALUES(?,?,'active',1,123)").bind('synthetic','synthetic@example.com').run();
- await db.prepare("INSERT INTO captures(id,account_id,manifest,bytes,expires_at,pending_until) VALUES(?,'synthetic','[]',0,9999999999999,9999999999999)").bind(id(195)).run();
- await db.exec('UPDATE r2_budget SET a_used=7,b_used=9');const before=await db.prepare('SELECT * FROM r2_budget').first(),capture=await db.prepare('SELECT * FROM captures').first();
- await migrate('0005');assert.deepEqual(await db.prepare('SELECT * FROM captures').first(),{...capture,format:'plaintext-v1'});assert.deepEqual(await db.prepare('SELECT * FROM r2_budget').first(),before);
- await assert.rejects(migrate('0005'));assert.deepEqual(await db.prepare('SELECT * FROM r2_budget').first(),before);
+ for(const n of ['0001','0002','0003'])await migrate(n);
+ const capture=id(195);
+ await db.prepare("INSERT INTO accounts VALUES('synthetic','synthetic@example.com','active',1,123)").run();
+ await db.prepare("INSERT INTO captures(id,account_id,manifest,bytes,expires_at,pending_until) VALUES(?,'synthetic','[]',17,9999999999999,9999999999999)").bind(capture).run();
+ await db.prepare("INSERT INTO files VALUES(?,'summary.md',17,?,'synthetic-object')").bind(capture,'a'.repeat(64)).run();
+ await db.prepare("INSERT INTO shares VALUES('synthetic-share',?,'synthetic',?,'synthetic-envelope',123,NULL,'paused')").bind(capture,'b'.repeat(64)).run();
+ await db.prepare("INSERT INTO attempts VALUES('synthetic-attempt',?,123,0,17,0,0)").bind(capture).run();
+ await db.prepare("INSERT INTO tokens VALUES('legacy-token','synthetic','read',9999999999999)").run();
+ await db.exec('UPDATE r2_budget SET a_used=7,b_used=9,physical_used=17');
+ const tables=['accounts','captures','files','shares','attempts','r2_budget'];
+ const snapshot=async()=>Object.fromEntries(await Promise.all(tables.map(async table=>[table,(await db.prepare('SELECT * FROM '+table).all()).results])));
+ const before=await snapshot();
+ await migrate('0004');assert.deepEqual(await snapshot(),before);
+ for(const table of ['tokens','devices','sessions','oauth_states'])assert.equal(await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").bind(table).first(),null);
+ // Include both scopes and a tombstoned grant: 0005 must not mint keys or revive authority.
+ for(const [name,scope,revoked] of [['reader','read',null],['writer','upload',null],['revoked','upload',456]])
+  await db.prepare("INSERT INTO auth_grants(id,client_id,device_hash,user_code,scope,account_id,expires_at,revoked_at) VALUES(?,?,?,?,?,'synthetic',9999999999999,?)").bind(name,name,name,name,scope,revoked).run();
+ const grants=(await db.prepare('SELECT * FROM auth_grants ORDER BY id').all()).results;
+ await migrate('0005');
+ const after=await snapshot();assert.deepEqual(after,{...before,captures:before.captures.map(c=>({...c,format:'plaintext-v1'}))});
+ assert.deepEqual((await db.prepare('SELECT * FROM auth_grants ORDER BY id').all()).results,grants.map(g=>({...g,approved_at:null})));
+ assert.equal((await db.prepare('SELECT count(*) AS n FROM encryption_keys').first()).n,0,'cutover must not enroll incumbent grants');
+ for(const migration of ['0004','0005'])await assert.rejects(migrate(migration));
+ assert.deepEqual(await snapshot(),after);
+ assert.deepEqual((await db.prepare('SELECT * FROM auth_grants ORDER BY id').all()).results,grants.map(g=>({...g,approved_at:null})));
  }finally{await mf.dispose();}
 });

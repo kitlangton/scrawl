@@ -38,6 +38,7 @@ class HostedDeliveryTests(unittest.TestCase):
         self.assertEqual(result['vars']['API_ORIGIN'], 'https://hosted.tryapparent.com')
         self.assertEqual(result['vars']['SITE_ORIGIN'], 'https://app.tryapparent.com')
         self.assertEqual(result['routes'], [{'pattern': 'hosted.tryapparent.com', 'custom_domain': True}])
+        self.assertEqual(result['compatibility_flags'], ['nodejs_compat'])
         self.assertFalse(result['workers_dev'])
         self.assertFalse(result['observability']['enabled'])
         self.assertNotIn('limits', result)
