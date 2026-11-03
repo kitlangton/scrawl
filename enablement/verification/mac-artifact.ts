@@ -94,7 +94,7 @@ export function produce(root: string, output: string, env: NodeJS.ProcessEnv, pr
   const cargo = requireMatch(q('cargo', '-V'), /^cargo \d+\.\d+\.\d+ /)
   const developer = requireMatch(q('xcode-select', '-p'), /^\/Applications\/Xcode[^/]*\.app\/Contents\/Developer$/)
   if (env.DEVELOPER_DIR && env.DEVELOPER_DIR !== developer) throw new Error('Developer directory override')
-  const xcode = requireMatch(q('xcodebuild', '-version'), /^Xcode 26\.0\nBuild version [A-Za-z0-9]+$/)
+  const xcode = requireMatch(q('xcodebuild', '-version'), /^Xcode 26\.0(?:\.1)?\nBuild version [A-Za-z0-9]+$/)
   const sdk = requireMatch(q('xcrun', '--sdk', 'macosx', '--show-sdk-version'), /^26\.0$/)
   const sdkPath = q('xcrun', '--sdk', 'macosx', '--show-sdk-path')
   if (!sdkPath.startsWith(`${developer}/Platforms/MacOSX.platform/Developer/SDKs/`) || sdkPath.includes('..')) throw new Error('Unexpected SDK')

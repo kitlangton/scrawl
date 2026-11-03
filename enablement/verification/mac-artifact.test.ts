@@ -114,3 +114,18 @@ for (const kind of ['focused-settings-build', 'focused-share-build'] as const) t
   const identity = admit(upstream, artifact, [job], '123', '456', { kind, run: '123', attempt: '1', sha: manifest.source.sha, head: manifest.source.sha, tree: manifest.source.tree, workflow: manifest.producer.workflow, workflowSha: manifest.source.sha, job: sharing ? 'connect-worker' : 'settings-native', event: 'workflow_dispatch' })
   verify(join(root, 'payload'), manifest, { sha: manifest.source.sha, tree: manifest.source.tree, lock: manifest.cargo_lock_sha256, config: manifest.config_sha256 }, identity)
 }))
+
+test('selected Xcode 26.0.1 retains its exact patch/build identity', () => fixture(run => {
+  const selected = '/Applications/Xcode_26.0.1.app/Contents/Developer'
+  const manifest = run({
+    'xcodebuild -version': 'Xcode 26.0.1\nBuild version 17A400',
+    'xcode-select -p': selected,
+    'xcrun --sdk macosx --show-sdk-path': `${selected}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk`,
+  })
+  assert.equal(manifest.toolchain.xcode, 'Xcode 26.0.1\nBuild version 17A400')
+  assert.equal(manifest.toolchain.developer, selected)
+  assert.equal(manifest.toolchain.sdk, '26.0')
+}))
+for (const version of ['26.0.2', '26.1', '27.0', '26.0 beta']) test(`rejects unreviewed Xcode ${version}`, () => fixture(run => {
+  assert.throws(() => run({ 'xcodebuild -version': `Xcode ${version}\nBuild version 17A400` }))
+}))
