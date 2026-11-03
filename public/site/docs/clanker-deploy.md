@@ -4,9 +4,9 @@ Production publication now uses the `apparent-capture` Cloudflare Pages project
 through main-branch GitHub Actions. See [`pages-deploy.md`](pages-deploy.md).
 The old capture-site serving block, release symlink and historical release
 directories have been removed after canonical acceptance. Do not recreate them
-or restore the old DNS A record. `public/site/scripts/cd/publish_site.py` refuses production
-publication; Actions does not use SSH or the retired release tree. Recovery stays
-inside Pages, not Clanker.
+or restore the old DNS A record. The retired publisher and symlink activators
+have been deleted; Actions does not use SSH or the retired release tree.
+Recovery stays inside Pages.
 
 For checked main-branch delivery, activation gates, deployment credentials and
 Pages rollback, see [`../../../enablement/docs/continuous-delivery.md`](../../../enablement/docs/continuous-delivery.md).
@@ -19,9 +19,9 @@ Cloudflare. That container also serves unrelated sites. It and its volumes,
 deployment services remain unchanged except for removing the capture site's
 serving block. Never remove the shared proxy as capture-site cleanup.
 
-The former manual publication and symlink-rollback procedure is intentionally
-removed. The accepted public snapshot is now source-controlled; follow
-`pages-deploy.md` to reconcile an overlay without losing approved homepage bytes.
+The former manual publication and symlink-rollback procedure is removed.
+The homepage builds directly from TypeScript/React source; follow
+`pages-deploy.md` for verified artifact publication and Pages rollback.
 
 ## Homepage marker guard
 
@@ -76,7 +76,6 @@ For layout changes, run `node scripts/browser-proof/verify-page-density-browser.
 against the packaged page. It checks the download gap, shorter hero, uncropped
 movie, and visible, reachable playback/chapter controls at seven desktop and
 phone sizes, including a 600px-tall desktop. The movie width follows viewport
-height so its controls do not fall below the screen. Keep the belief section's
-scroll runway below its content: the marks must still complete before the page
-ends, and the frog's jump must stay below the heading. Run the belief browser
-regression from `belief-release.md` after changing those gaps.
+height so its controls do not fall below the screen. The accepted belief
+statement and photos are source-owned; use the responsive homepage regression
+in `scripts/pages/test-public-homepage.ts` after changing their layout.

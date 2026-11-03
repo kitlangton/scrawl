@@ -122,7 +122,7 @@ The active website job now publishes only the sealed source-built `dist-apparent
 `apparent-capture` Pages project, using `public/site/scripts/cd/publish_pages.py` and
 `public/site/wrangler.pages.jsonc`. It does not execute `public/site/wrangler.jsonc`, deploy the
 hosted Worker, or connect to Clanker. See
-[`../public/site/docs/pages-deploy.md`](../public/site/docs/pages-deploy.md) for the current build,
+[`../../public/site/docs/pages-deploy.md`](../../public/site/docs/pages-deploy.md) for the current build,
 accepted-homepage reconciliation, video limits, exact hostname cutover and rollback.
 Set `WEBSITE_PAGES_API_TOKEN` in `website-production`; the existing
 `WEBSITE_CD_ENABLED=true` gate enables only Pages. Remove obsolete SSH settings
@@ -133,8 +133,8 @@ when present; they are no longer read. The hosted activation gate is unchanged.
 After canonical Pages acceptance, the capture site's Caddy serving block,
 release symlink and historical release directories were removed. Do not restore
 the old DNS A record, configure website SSH credentials, recreate that release
-tree or run historical overlay activators. Production `publish_site.py` already
-rejects this root; its temporary-filesystem tests are not a deployment procedure.
+tree or run historical overlay activators. The retired publisher, activators
+and their obsolete protocol tests have been deleted.
 Use only the Pages rollback in `public/site/docs/pages-deploy.md`.
 
 The proxy is shared. Its container, volumes, unrelated sites and separate
