@@ -248,10 +248,11 @@ test('stdin accepts fragmented lines and rejects oversized individual lines',()=
     let bridge;
     const electron = {
       ipcRenderer: { on: (_channel, listener) => { receive = listener; }, invoke: () => Promise.resolve() },
-      contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } },
+      contextBridge: { exposeInMainWorld: (name, value) => { if (name !== 'apparentExceptions') bridge = value; } },
     };
     vm.runInNewContext(fs.readFileSync(require.resolve('../electron/onboarding-preload.cjs'), 'utf8'), {
       require: name => { assert.equal(name, 'electron'); return electron; },
+      window: { addEventListener() {} },
     });
     receive({}, { type: 'shortcut', label: 'Alt+Shift+S' });
     receive({}, { type: 'state', step: 'try-it' });
@@ -269,6 +270,52 @@ test('stdin accepts fragmented lines and rejects oversized individual lines',()=
     assert.equal(replay.length, 2);
     assert.equal(replay[0].label, 'Ctrl+Alt+K');
     assert.equal(replay[1].step, 'done');
+  });
+}
+
+test('unhandled reports send only fixed codes and bounded deadlines', async t => {
+  const f = await fixture(t, '{"accepted":true}\n');
+  const { reportException } = require('../electron/runtime.cjs');
+  await reportException(f.home, 'renderer_rejection');
+  await reportException(f.home, 'private-token-in-error');
+  assert.equal(f.requests.length, 1);
+  const request = JSON.parse(f.requests[0]);
+  assert.deepEqual(Object.keys(request).sort(), ['deadline', 'errorReporting', 'kind']);
+  assert.equal(request.kind, 'renderer_rejection');
+  assert.equal(request.errorReporting, 'exception');
+  assert.equal(typeof request.deadline, 'number');
+});
+
+test('ordinary development hosts do not install exception hooks', () => {
+  const { spawnSync } = require('node:child_process');
+  const script = `
+    delete process.env.APPARENT_DESKTOP_REPORTING;
+    const { EventEmitter } = require('node:events');
+    const app = new EventEmitter();
+    require(${JSON.stringify(require.resolve('../electron/runtime.cjs'))}).installExceptionReporting({app});
+    if (process.listenerCount('uncaughtException') || process.listenerCount('unhandledRejection') || app.eventNames().length) process.exit(1);
+  `;
+  assert.equal(spawnSync(process.execPath, ['-e', script]).status, 0);
+});
+
+for (const kind of ['main_exception', 'main_rejection']) {
+  test(`real unhandled ${kind} reports then exits unsuccessfully`, async t => {
+    const f = await fixture(t, '{"accepted":true}\n');
+    const { spawn } = require('node:child_process');
+    const script = `
+      const {EventEmitter} = require('node:events');
+      process.env.APPARENT_DESKTOP_REPORTING = '1';
+      const app = new EventEmitter(); app.exit = code => process.exit(code);
+      require(${JSON.stringify(require.resolve('../electron/runtime.cjs'))}).installExceptionReporting({app}, process.argv[1]);
+      ${kind === 'main_exception' ? "setImmediate(() => { throw new Error('private-token'); });" : "Promise.reject(new Error('private-token'));"}
+    `;
+    const child = spawn(process.execPath, ['-e', script, f.home], { stdio: 'ignore' });
+    t.after(() => child.kill());
+    const exit = await new Promise(resolve => child.once('exit', resolve));
+    assert.equal(exit, 1);
+    assert.equal(f.requests.length, 1);
+    assert.equal(JSON.parse(f.requests[0]).kind, kind);
+    assert.ok(!f.requests[0].includes('private-token'));
   });
 }
 

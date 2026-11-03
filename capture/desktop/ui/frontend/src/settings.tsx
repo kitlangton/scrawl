@@ -1,3 +1,4 @@
+import './runtime/exceptions';
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Storage } from './storage';

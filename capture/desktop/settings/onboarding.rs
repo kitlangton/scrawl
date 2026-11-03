@@ -1028,7 +1028,9 @@ impl Session {
             }
         };
         let attempted = electron.and_then(|(app, runtime)| {
-            Self::spawn_transport(std::process::Command::new(runtime).arg(app).arg("--onboarding"), events.clone()).ok()
+            let mut command = std::process::Command::new(runtime);
+            crate::capture::desktop::workflow::error_reporting::configure_child(&mut command);
+            Self::spawn_transport(command.arg(app).arg("--onboarding"), events.clone()).ok()
         });
         let (transport, fallback) = match attempted {
             Some(transport) => (transport, Some(Box::new(native) as Box<dyn Fn() -> anyhow::Result<Transport>>)),

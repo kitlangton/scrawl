@@ -99,7 +99,7 @@
       "id": "desktop-error-reporting",
       "group": "settings",
       "name": "Technical error reports",
-      "says": "A small General setting controls default-on, content-free desktop failure reports. Requires a packaged EU PostHog project token. Reports include failure steps and source lines, OS error codes, JSON error category and position, app build, OS/architecture and capture setup/counts for reproduction, without recordings, logs or raw error text. No session replay or persistent user identity.",
+      "says": "A small General setting controls default-on, content-free desktop failure reports. Includes Rust panics and Electron unhandled exceptions/rejections. Requires a packaged EU PostHog project token. Reports include failure steps and source lines, OS error codes, JSON error category and position, app build, OS/architecture and capture setup/counts for reproduction, without recordings, logs or raw error text. No session replay or persistent user identity.",
       "status": "main",
       "added": "2026-11-02",
       "platforms": ["mac", "linux"],

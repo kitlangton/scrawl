@@ -367,18 +367,46 @@ impl SettingsRequest {
 enum ErrorReportingRequest {
     Read { deadline: u64 },
     Set { enabled: bool, deadline: u64 },
+    Exception { kind: ExceptionKind, deadline: u64 },
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+enum ExceptionKind { MainException, MainRejection, RendererException, RendererRejection }
+
+#[test]
+fn exception_request_rejects_arbitrary_payloads() {
+    for kind in ["main_exception", "main_rejection", "renderer_exception", "renderer_rejection"] {
+        let request = serde_json::json!({"errorReporting":"exception", "kind":kind, "deadline":1});
+        assert!(matches!(parse_request(&request.to_string()), Some(Wire::ErrorReporting(_))));
+        let mut with_text = request.clone();
+        with_text["message"] = serde_json::json!("private token and path");
+        assert!(parse_request(&with_text.to_string()).is_none());
+    }
+    assert!(parse_request(r#"{"errorReporting":"exception","kind":"raw error","deadline":1}"#).is_none());
 }
 
 impl ErrorReportingRequest {
     fn deadline(&self) -> u64 {
-        match self { Self::Read { deadline } | Self::Set { deadline, .. } => *deadline }
+        match self { Self::Read { deadline } | Self::Set { deadline, .. } | Self::Exception { deadline, .. } => *deadline }
     }
 
     fn execute(&self, config: &std::path::Path, deadline: u64) -> serde_json::Value {
         if storage_clock_ms() >= deadline { return serde_json::json!({"error":"admission_expired"}); }
+        if let Self::Exception { kind, .. } = self {
+            use super::error_reporting::{Failure, report_exception};
+            report_exception(match kind {
+                ExceptionKind::MainException => Failure::ElectronMainException,
+                ExceptionKind::MainRejection => Failure::ElectronMainRejection,
+                ExceptionKind::RendererException => Failure::ElectronRendererException,
+                ExceptionKind::RendererRejection => Failure::ElectronRendererRejection,
+            });
+            return serde_json::json!({"accepted":true});
+        }
         let (operation, enabled) = match self {
             Self::Read { .. } => ("read", None),
             Self::Set { enabled, .. } => ("set", Some(*enabled)),
+            Self::Exception { .. } => unreachable!(),
         };
         match crate::capture::desktop::workflow::error_reporting::error_reporting_bridge_in(config, operation, enabled, || storage_clock_ms() < deadline) {
             Ok(enabled) => serde_json::json!({"errorReporting":{"enabled":enabled}}),
@@ -1269,6 +1297,11 @@ mod tests {
         };
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(call(serde_json::json!({"errorReporting":"read","deadline":storage_clock_ms()+3000})), serde_json::json!({"errorReporting":{"enabled":true}}));
+        for kind in ["main_exception", "main_rejection", "renderer_exception", "renderer_rejection"] {
+            assert_eq!(call(serde_json::json!({"errorReporting":"exception","kind":kind,"deadline":storage_clock_ms()+3000})), serde_json::json!({"accepted":true}));
+            assert_eq!(call(serde_json::json!({"errorReporting":"exception","kind":kind,"deadline":1}))["error"], "admission_expired");
+            assert_eq!(call(serde_json::json!({"errorReporting":"exception","kind":kind,"message":"private text","deadline":storage_clock_ms()+3000}))["error"], "invalid_request");
+        }
         for invalid in [
             serde_json::json!({"errorReporting":"set","deadline":1}),
             serde_json::json!({"errorReporting":"set","enabled":"false","deadline":1}),

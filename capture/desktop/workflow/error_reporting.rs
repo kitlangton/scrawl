@@ -12,6 +12,12 @@ const ENDPOINT: &str = "https://eu.i.posthog.com/i/v0/e/";
 const QUEUE_SIZE: usize = 16;
 static REPORTER: OnceLock<Reporter> = OnceLock::new();
 
+/// Production child launches only. Ordinary npm/dev/test hosts must not send
+/// their failures under the installed application's production build identity.
+pub(crate) fn configure_child(command: &mut Command) {
+    command.env("APPARENT_DESKTOP_REPORTING", if REPORTER.get().is_some() && !cfg!(debug_assertions) { "1" } else { "0" });
+}
+
 /// Only reviewed, static failure categories can enter the reporting boundary.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Failure {
@@ -22,6 +28,10 @@ pub(crate) enum Failure {
     FinalizeCapture,
     VideoExport,
     RustPanic,
+    ElectronMainException,
+    ElectronMainRejection,
+    ElectronRendererException,
+    ElectronRendererRejection,
 }
 
 impl Failure {
@@ -34,6 +44,10 @@ impl Failure {
             Self::FinalizeCapture => "capture_finalization_failed",
             Self::VideoExport => "video_export_failed",
             Self::RustPanic => "rust_panic",
+            Self::ElectronMainException => "electron_main_exception",
+            Self::ElectronMainRejection => "electron_main_rejection",
+            Self::ElectronRendererException => "electron_renderer_exception",
+            Self::ElectronRendererRejection => "electron_renderer_rejection",
         }
     }
 }
@@ -200,7 +214,7 @@ impl Report {
                 "$exception_list": [{
                     "type": if matches!(self.failure, Failure::RustPanic) { "RustPanic" } else { "DesktopOperationError" },
                     "value": code,
-                    "mechanism": { "type":"generic", "handled": !matches!(self.failure, Failure::RustPanic), "synthetic": true },
+                    "mechanism": { "type":"generic", "handled": !matches!(self.failure, Failure::RustPanic | Failure::ElectronMainException | Failure::ElectronMainRejection | Failure::ElectronRendererException | Failure::ElectronRendererRejection), "synthetic": true },
                     "stacktrace": { "type":"raw", "frames":[frame] }
                 }]
             }
@@ -428,6 +442,13 @@ fn install_reporter(reporter: Reporter) {
         }
         previous(info);
     }));
+}
+
+#[track_caller]
+pub(crate) fn report_exception(failure: Failure) {
+    if let Some(reporter) = REPORTER.get() {
+        reporter.capture_error(failure, std::panic::Location::caller(), None);
+    }
 }
 
 #[track_caller]

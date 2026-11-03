@@ -47,6 +47,7 @@ fn open_mode(events: Arc<dyn Fn(Event) + Send + Sync>, connect: Option<super::co
     let (app, runtime) = assets().ok_or_else(|| anyhow::anyhow!("Packaged Settings unavailable"))?;
     anyhow::ensure!(connect.is_none() || app.join("electron/preloads/connect.cjs").is_file(), "Packaged Connect Settings unavailable");
     let mut process = Command::new(runtime);
+    crate::capture::desktop::workflow::error_reporting::configure_child(&mut process);
     prepare_electron_environment(&mut process);
     // Settings must share capture's XWayland input/stacking route: a native
     // Wayland window can receive a Shift-click underneath the X11 ink overlay.
