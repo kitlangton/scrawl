@@ -38,7 +38,7 @@ Saved browser permission is reused only while the preference store remains writa
 
 ## Delivery and operations
 
-The bounded outbox has a 10,000-row limit, a 24-hour queue lifetime and bounded batches. Overflow/expiry is disclosed through the aggregate drop counter, not invented complete coverage. Requests require a successful HTTP result plus exact provider acknowledgment `status: "Ok"` or legacy numeric `1`. Ambiguous acknowledgments retain stable UUIDs for retry. Provider retries may duplicate raw rows; reporting must deduplicate explicitly.
+The outbox has a 10,000-row limit and batches of at most 100. Enabled export attempts drop rows older than 90 days; an unconfigured or disabled collector does not run this expiry, so this is not an independent physical-deletion deadline. Withdrawal still clears that account's pending rows through the consent trigger. Overflow/expiry is disclosed through the aggregate drop counter, not invented complete coverage. Requests require a successful HTTP result plus exact provider acknowledgment `status: "Ok"` or legacy numeric `1`. Ambiguous acknowledgments retain stable UUIDs for retry. Provider retries may duplicate raw rows; reporting must deduplicate explicitly.
 
 PostHog's existing-plan retention defaults apply. The free query window is not a physical-deletion promise. Local queue expiry is separate. Exact-target provider deletion is asynchronous; accepted deletion or absent person records do not prove event erasure. Keep the earlier synthetic-erasure follow-up owned without re-submitting it or making provider latency an unrelated deployment blocker. Do not infer deletion-write authority from read-only plus Dashboard/Insight write scopes.
 
