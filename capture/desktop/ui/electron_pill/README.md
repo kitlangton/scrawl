@@ -102,3 +102,25 @@ times out without a retained dialog observation, keep consent-versus-backend
 causation unresolved, retain the cold evidence and consumed take identity, and
 fix readiness offline. A new take needs fresh admission; never reuse its spent
 identity or count the launcher/GUI-ready gates as recording or pocket proof.
+
+## Shared control presentation
+
+The pill reuses the shared shadcn Button, Collapsible and Alert with Lucide React
+icons. Source and workflow actions retain text labels; cancel/dismiss use an
+accessible named X at the end of Rust's existing action list. Processing displays
+`Processing…`; completion keeps Rust's label. Recording input levels still come
+from Rust, with the same gain/height profile and a fixed-width meter.
+
+Notification controls reserve their complete 44px target, leaving at least 8px
+before the clock in hover and keyboard focus. Warning and row outlines use the
+same canonical border token; failures retain their semantic failure border.
+The existing 56px row minimum and four-point pocket gap match the native input
+silhouette. The window host, protocol, action revisions, paste gestures, drag,
+focus/stacking, capture exclusions and runtime/packaging routes are unchanged.
+Linux shared Electron behavior and the real Rust pipe remain applicable checks;
+the renderer styling does not establish fresh Mac native proof. Existing native
+seam proof remains attached to its original candidates and must be checked for
+publication applicability under the Desktop verification policy. No experiment
+is enabled, fallback removed or installed routing changed by this presentation.
+Rollback reverts these renderer assets and the icon dependency; native donors
+remain until their existing platform acceptance/removal conditions are met.
