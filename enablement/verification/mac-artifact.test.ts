@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, read
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import { admit, verify } from './mac-artifact-consumer.ts'
 import { produce, audit, producerOptions } from './mac-artifact.ts'
 const developer = '/Applications/Xcode_26.0.app/Contents/Developer'
@@ -95,6 +96,7 @@ test('main Mac producer selects the tested compiler before cache restore without
   const rust = workflow.split('\n  rust:\n')[1].split('\n  all:')[0]
   const setup = rust.split('      - uses: Swatinem/rust-cache@v2')[0]
   assert.match(setup, /uses: dtolnay\/rust-toolchain@stable/)
+  assert.match(setup, /uses: \.\/\.github\/actions\/mac-rust-cache/)
   assert.ok(setup.includes("toolchain: ${{ runner.os == 'macOS' && '1.99.1' || 'stable' }}"))
   assert.ok(setup.includes("test \"$(rustc -V)\" = 'rustc 1.99.1 (58cf8f9c3 2026-10-13)'"))
   assert.ok(setup.includes("if: runner.os == 'macOS' && (needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true')"))
@@ -103,6 +105,63 @@ test('main Mac producer selects the tested compiler before cache restore without
   assert.doesNotMatch(cache, /save-if:|lookup-only:|add-rust-environment-hash-key:/)
   assert.doesNotMatch(rust, /cache-hit/)
   assert.match(rust, /verification\.py --base "\$BASE" --run --online --suite rust/)
+})
+
+const selectedCompiler = '1.99.1-x86_64-apple-darwin'
+const legacyCompiler = 'stable-x86_64-apple-darwin'
+const testedCompiler = 'release: 1.99.1\nhost: x86_64-apple-darwin\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67'
+const oldCompiler = 'release: 1.98.0\nhost: x86_64-apple-darwin\ncommit-hash: 88d9e12ae178fab0fb5cc050a94da85685d449ea'
+const inventoryCases = [
+  { name: 'known unused stable is removed', pass: true, removed: true },
+  { name: 'already normalized', pass: true, inventory: selectedCompiler },
+  { name: 'same compiler alias retained', pass: true, stable: testedCompiler },
+  { name: 'extra toolchain', inventory: `${selectedCompiler}\n${legacyCompiler}\nnightly-x86_64-apple-darwin` },
+  { name: 'missing selected', inventory: legacyCompiler },
+  { name: 'duplicate entry', inventory: `${selectedCompiler}\n${selectedCompiler}` },
+  { name: 'malformed inventory', inventory: `${selectedCompiler}\n\n${legacyCompiler}` },
+  { name: 'wrong active name', active: legacyCompiler },
+  { name: 'wrong host', compiler: testedCompiler.replace('x86_64', 'aarch64') },
+  { name: 'wrong active commit', compiler: testedCompiler.replace('58cf8f9c35b355199727627d07ae34a4e2846d67', 'bad') },
+  { name: 'unexpected stable version', stable: oldCompiler.replace('1.98.0', '1.97.0') },
+  { name: 'wrong stable commit', stable: oldCompiler.replace('88d9e12ae178fab0fb5cc050a94da85685d449ea', 'bad') },
+  { name: 'self hosted runner', runner: 'self-hosted' },
+  { name: 'wrong OS', os: 'Linux' },
+  { name: 'wrong architecture', arch: 'ARM64' },
+  { name: 'failed uninstall', mode: 'fail', removed: true },
+  { name: 'partial uninstall', mode: 'partial', removed: true },
+]
+for (const scenario of inventoryCases) test(`actual Mac inventory shell: ${scenario.name}`, () => {
+  const root = mkdtempSync(join(tmpdir(), 'mac-toolchains-'))
+  try {
+    const action = readFileSync('.github/actions/mac-rust-cache/action.yml', 'utf8')
+    const shell = action.split('      run: |\n')[1].split('\n').map(line => line.replace(/^        /, '')).join('\n')
+    writeFileSync(join(root, 'inventory'), scenario.inventory ?? `${selectedCompiler}\n${legacyCompiler}`)
+    writeFileSync(join(root, 'rustc'), '#!/bin/bash\nprintf "%s\\n" "$FIXTURE_COMPILER"\n', { mode: 0o755 })
+    writeFileSync(join(root, 'rustup'), `#!/bin/bash
+set -eu
+case "$*" in
+  'show active-toolchain') printf '%s (default)\\n' "$FIXTURE_ACTIVE" ;;
+  'toolchain list --quiet') cat "$FIXTURE_ROOT/inventory" ;;
+  'run ${selectedCompiler} rustc -vV') printf '%s\\n' "$FIXTURE_COMPILER" ;;
+  'run ${legacyCompiler} rustc -vV') printf '%s\\n' "$FIXTURE_STABLE" ;;
+  'toolchain uninstall ${legacyCompiler}')
+    printf '%s\\n' "$*" >> "$FIXTURE_ROOT/mutations"
+    test "$FIXTURE_MODE" != fail
+    if [ "$FIXTURE_MODE" != partial ]; then printf '%s' '${selectedCompiler}' > "$FIXTURE_ROOT/inventory"; fi ;;
+  *) exit 91 ;;
+esac
+`, { mode: 0o755 })
+    const result = spawnSync('bash', ['-c', shell], { encoding: 'utf8', env: {
+      ...process.env, PATH: `${root}:${process.env.PATH}`, GITHUB_ACTIONS: 'true',
+      RUNNER_ENVIRONMENT: scenario.runner ?? 'github-hosted', RUNNER_OS: scenario.os ?? 'macOS', RUNNER_ARCH: scenario.arch ?? 'X64',
+      FIXTURE_ROOT: root, FIXTURE_ACTIVE: scenario.active ?? selectedCompiler,
+      FIXTURE_COMPILER: scenario.compiler ?? testedCompiler, FIXTURE_STABLE: scenario.stable ?? oldCompiler,
+      FIXTURE_MODE: scenario.mode ?? 'normal',
+    } })
+    assert.equal(result.status === 0, scenario.pass === true, result.stdout + result.stderr)
+    assert.equal(existsSync(join(root, 'mutations')), scenario.removed === true)
+    if (scenario.removed) assert.equal(readFileSync(join(root, 'mutations'), 'utf8'), `toolchain uninstall ${legacyCompiler}\n`)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 test('share build kind is bound to its own workflow and job without changing Settings', () => fixture((run) => {
