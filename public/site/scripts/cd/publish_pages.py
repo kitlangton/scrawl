@@ -89,6 +89,10 @@ def verify_artifact(sha, artifact):
     return manifest
 
 
+class CanonicalPropagationPending(ValueError):
+    """Immutable deployment passed, but the public hostname still differs."""
+
+
 def verify(sha, package):
     project = api(f'/accounts/{ACCOUNT}/pages/projects/{PROJECT}')
     deployment = project['canonical_deployment']
@@ -101,7 +105,8 @@ def verify(sha, package):
     # Check emitted code as well as HTML, at both immutable and public origins.
     paths += [(path.removeprefix('dist-apparent/'), '/' + path.removeprefix('dist-apparent/'))
               for path in manifest['files'] if path.startswith('dist-apparent/assets/') and path.endswith(('.js', '.css'))]
-    for origin in dict.fromkeys([deployment['url'], 'https://app.tryapparent.com']):
+    for origin_index, origin in enumerate(dict.fromkeys([deployment['url'], 'https://app.tryapparent.com'])):
+        mismatch = CanonicalPropagationPending if origin_index else ValueError
         for path, route in paths:
             request = Request(origin + route, headers={'Cache-Control': 'no-cache', 'User-Agent': 'Apparent-CD/1.0'})
             with urlopen(request, timeout=60) as response:
@@ -113,7 +118,7 @@ def verify(sha, package):
                         not {'noindex', 'nofollow'} <= set(response.headers.get('X-Robots-Tag', '').lower().replace(',', ' ').split())):
                     raise ValueError('Missing Connect privacy headers')
             if hashlib.sha256(body).hexdigest() != manifest['files']['dist-apparent/' + path]:
-                raise ValueError('Pages served different bytes: ' + path)
+                raise mismatch(f'Pages served different bytes: {origin}/{path}')
         media = manifest['movie']
         actual = hashlib.sha256()
         request = Request(origin + media['path'], headers={'Cache-Control': 'no-cache', 'User-Agent': 'Apparent-CD/1.0'})
@@ -123,7 +128,7 @@ def verify(sha, package):
             while data := response.read(256 * 1024):
                 actual.update(data)
         if actual.hexdigest() != media['sha256']:
-            raise ValueError('Pages served different movie bytes')
+            raise mismatch(f'Pages served different movie bytes: {origin}{media["path"]}')
     return {'revision': sha, 'project': PROJECT, 'deployment_id': deployment['id'],
             'url': deployment['url'], 'public_url': 'https://app.tryapparent.com',
             'manifest_sha256': hashlib.sha256((package.parent / 'manifest.json').read_bytes()).hexdigest()}
@@ -131,10 +136,16 @@ def verify(sha, package):
 
 def verify_ready(sha, package):
     # A successful deployment can precede Function/asset propagation. Retry
-    # only temporary HTTP readiness failures, never identity or hash failures.
+    # temporary HTTP failures and canonical propagation after the immutable
+    # deployment passes. Identity, immutable integrity and privacy failures fail
+    # immediately; canonical bytes must still match exactly before success.
     for attempt in range(5):
         try:
             return verify(sha, package)
+        except CanonicalPropagationPending:
+            if attempt == 4:
+                raise
+            time.sleep(2 ** attempt)
         except HTTPError as error:
             if error.code not in (404, 500, 502, 503, 504) or attempt == 4:
                 raise

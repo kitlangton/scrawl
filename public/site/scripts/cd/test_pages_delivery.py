@@ -95,10 +95,11 @@ class PagesDeliveryTests(unittest.TestCase):
                      '/connect/shares/': 'connect/shares/index.html', '/assets/index-test.js': 'assets/index-test.js'}
             visited = set()
             bad_path = None
+            bad_origin = None
             def fetch(request, timeout):
                 url = urlsplit(request.full_url)
                 visited.add(url.netloc)
-                if url.path == bad_path:
+                if url.path == bad_path and (bad_origin is None or url.netloc == bad_origin):
                     return Response(b'different bytes')
                 if url.path.endswith('.mp4'):
                     return Response(b'checked movie')
@@ -111,6 +112,11 @@ class PagesDeliveryTests(unittest.TestCase):
                         pages.verify(sha, package)
                 bad_path = '/Apparent-ghost-demo-v4-lilac.mp4'
                 with self.assertRaisesRegex(ValueError, 'different movie'):
+                    pages.verify(sha, package)
+                bad_path = None
+                bad_origin = 'app.tryapparent.com'
+                bad_path = '/'
+                with self.assertRaises(pages.CanonicalPropagationPending):
                     pages.verify(sha, package)
                 bad_path = None
                 for missing in ['X-Apparent-Publisher', 'Cache-Control', 'X-Robots-Tag']:
@@ -156,6 +162,15 @@ class PagesDeliveryTests(unittest.TestCase):
 
     def test_readiness_retry_is_bounded_and_never_masks_integrity_or_auth_failures(self):
         from urllib.error import HTTPError
+        with patch.object(pages, 'verify', side_effect=[pages.CanonicalPropagationPending('canonical bytes differ'), {'deployment_id': 'ready'}]) as verify, patch.object(pages.time, 'sleep') as sleep:
+            self.assertEqual(pages.verify_ready('a' * 40, Path('checked')), {'deployment_id': 'ready'})
+            self.assertEqual(verify.call_count, 2)
+            sleep.assert_called_once_with(1)
+        with patch.object(pages, 'verify', side_effect=pages.CanonicalPropagationPending('canonical bytes differ')) as verify, patch.object(pages.time, 'sleep') as sleep:
+            with self.assertRaises(pages.CanonicalPropagationPending):
+                pages.verify_ready('a' * 40, Path('checked'))
+            self.assertEqual(verify.call_count, 5)
+            self.assertEqual([call.args for call in sleep.call_args_list], [(1,), (2,), (4,), (8,)])
         for code in (404, 500, 502, 503, 504):
             with self.subTest(code=code), patch.object(pages, 'verify', side_effect=[HTTPError('https://example.test', code, 'temporary', Message(), None), {'deployment_id': 'ready'}]) as verify, patch.object(pages.time, 'sleep') as sleep:
                 self.assertEqual(pages.verify_ready('a' * 40, Path('checked')), {'deployment_id': 'ready'})

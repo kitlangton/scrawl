@@ -661,6 +661,21 @@ pub fn place(id: u32, rect: [f64; 4]) {
     }
 }
 
+/// Move a variable-sized UI surface without racing its renderer's resize.
+pub fn move_origin(id: u32, point: [f64; 2]) {
+    if let Some(x) = x() {
+        let [px, py] = point.map(|v| v.round() as i32);
+        let changed = x.conn.get_geometry(id).ok().and_then(|c| c.reply().ok())
+            .is_some_and(|g| i32::from(g.x) != px || i32::from(g.y) != py);
+        let remap = super::super::hyprland() && changed;
+        if remap { let _ = x.conn.unmap_window(id); }
+        let _ = x.conn.configure_window(id, &ConfigureWindowAux::new().x(px).y(py));
+        if remap { let _ = x.conn.map_window(id); }
+        raise_on(x, id);
+        x.flush();
+    }
+}
+
 /// Whether the window already has this geometry (global pixels).
 fn at(x: &X, id: u32, rect: [f64; 4]) -> bool {
     x.conn

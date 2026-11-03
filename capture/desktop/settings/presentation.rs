@@ -45,7 +45,7 @@ pub(super) fn open_connect(events: Arc<dyn Fn(Event) + Send + Sync>, command: su
 fn open_mode(events: Arc<dyn Fn(Event) + Send + Sync>, connect: Option<super::connect::Command>) -> anyhow::Result<Transport> {
     use std::io::BufRead;
     let (app, runtime) = assets().ok_or_else(|| anyhow::anyhow!("Packaged Settings unavailable"))?;
-    anyhow::ensure!(connect.is_none() || app.join("electron/connect-preload.cjs").is_file(), "Packaged Connect Settings unavailable");
+    anyhow::ensure!(connect.is_none() || app.join("electron/preloads/connect.cjs").is_file(), "Packaged Connect Settings unavailable");
     let mut process = Command::new(runtime);
     prepare_electron_environment(&mut process);
     process.arg(app).arg(if connect.is_some() { "--settings-connect" } else { "--settings-storage" }).arg("--settings-parent");

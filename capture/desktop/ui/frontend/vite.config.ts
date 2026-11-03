@@ -13,5 +13,5 @@ for (const file of ['button.tsx', 'tabs.tsx', 'utils.ts', 'theme.css', 'tokens.c
 export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss()],
-  build: { rollupOptions: { input: { foundation: 'index.html', settings: 'settings.html', onboarding: 'onboarding.html' } } },
+  build: { rollupOptions: { input: { foundation: 'index.html', settings: 'settings.html', onboarding: 'onboarding.html', pill: 'pill/index.html' } } },
 });
