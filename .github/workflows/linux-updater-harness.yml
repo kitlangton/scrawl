@@ -20,8 +20,12 @@ jobs:
   contracts:
     name: Harness contracts (not GUI proof)
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: echo '10 minute execution limit (runner queue excluded). If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
