@@ -11,9 +11,12 @@ coalescing superseded runs within its own platform. Both call the same reusable
 `verification-platform.yml`, preserving the full Rust, Engine/client, browser,
 Electron and applicable native checks. Each checks the entire tree, not just the
 latest push delta: changes from a cancelled earlier run cannot escape verification.
-Explicit `workflow_dispatch` on a feature branch runs the same full test jobs.
-Feature dispatch does not emit the main-only `Release verification` receipt and
-cannot authorize publication; automatic execution remains main-only.
+Full verification is main-only, including explicit `workflow_dispatch`; a dispatch
+on another ref skips the reusable workflow before allocating its runners. PRs use
+focused checks, independent review, current-base integration checks and required
+native/platform proof before merge. Do not dispatch or wait for full branch CI as
+a merge gate. After merge, full verification of the exact main commit gates
+publication; a failed platform leaves its last verified release available.
 Each caller's `verify / Release verification` job is its platform receipt.
 General Mac verification uses `macos-15-intel` so it does not depend on the
 standard Apple Silicon runner pool. The required Xcode/macOS SDK remains selected
@@ -47,6 +50,36 @@ release gate.
 `.github/workflows/web-delivery.yml` retains the existing independent website and
 hosted production environments and activation variables. This policy does not
 enable a disabled publisher, provision resources or apply migrations.
+
+## Local commit signing
+
+Activate the versioned hooks in each clone with `git config --local core.hooksPath
+.githooks`. This common-repository setting also applies to linked worktrees;
+cloning or pulling does not activate hooks automatically. Keep the existing
+pre-commit directory-width check and pre-push verification enabled.
+
+`.githooks/reference-transaction` requires `git verify-commit` to accept every
+new commit introduced by a local branch or detached HEAD update. It runs before
+refs move, so unsigned initial commits, ordinary commits, amendments, merges,
+and batched updates fail even with `--no-gpg-sign`, `commit.gpgsign=false` or
+`--no-verify`. It imposes no author/committer identity restriction. Commits
+already reachable from local refs/HEAD are excluded: existing history, fetched
+commits, branch switches, resets, remote-tracking refs, tags and deletions are
+not revalidated. This is local creation policy, not a historical or push audit.
+
+Set `commit.gpgsign=true`, choose `user.signingkey` and `gpg.format`, and configure
+verification trust. SSH signing requires `gpg.ssh.allowedSignersFile` containing
+the trusted public signing keys; GPG uses the local keyring. A signature that
+cannot be verified fails closed. GitHub's Verified badge separately requires
+registering the signing public key with GitHub; local verification does not
+prove registration. No private keys belong in this repository.
+
+Local hooks are bypassable by changing `core.hooksPath`, changing the hook or
+using another clone. For activation across worktrees before the source change
+lands, a pinned copy of the tested hook set can live under the Git common
+directory with `core.hooksPath` pointing there. Restore the previous hooks path
+to roll that installation back; switch to `.githooks` after all active worktrees
+contain the new hook. Server-side policy is separate.
 
 ## Checks and artifact identity
 

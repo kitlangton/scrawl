@@ -109,7 +109,10 @@ class PreviewReleaseTest(unittest.TestCase):
         for asset in ('menubar-icon@2x.png', 'menubar-light@2x.png'):
             self.assertIn(f'include_bytes!("../../../capture/desktop/assets/{asset}")', source)
         self.assertIn('image.setTemplate(false)', source)
-        self.assertIn('button.effectiveAppearance()', source)
+        self.assertIn('appearance_app.effectiveAppearance()', source)
+        self.assertNotIn('button.effectiveAppearance()', source)
+        self.assertIn('msg_send![&*appearance_app, addObserver:', source)
+        self.assertIn('msg_send![&*self._appearance_app, removeObserver:', source)
         self.assertIn('bestMatchFromAppearancesWithNames:', source)
         self.assertIn('addObserver:', source)
         self.assertIn('removeObserver:', source)

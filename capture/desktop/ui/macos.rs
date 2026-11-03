@@ -745,15 +745,14 @@ struct StatusBarController {
     _item: Retained<NSStatusItem>,
     _menu: Retained<NSMenu>,
     _target: Retained<ApparentMenuTarget>,
+    _appearance_app: Retained<NSApplication>,
 }
 
 impl Drop for StatusBarController {
     fn drop(&mut self) {
-        if let Some(button) = self._item.button(self._target.mtm()) {
-            unsafe {
-                let _: () = msg_send![&*button, removeObserver: &*self._target,
-                    forKeyPath: &*NSString::from_str("effectiveAppearance")];
-            }
+        unsafe {
+            let _: () = msg_send![&*self._appearance_app, removeObserver: &*self._target,
+                forKeyPath: &*NSString::from_str("effectiveAppearance")];
         }
     }
 }
@@ -762,14 +761,15 @@ fn refresh_status_bar_icon(item: &NSStatusItem, mtm: MainThreadMarker) {
     let Some(button) = item.button(mtm) else {
         return;
     };
-    // The status button's appearance can differ from the app's (for example
-    // with a wallpaper-tinted menu bar). Observe the actual surface, not a
-    // stored user preference or a one-time launch check.
+    // Full-screen menu bars can stay dark even while the system is light.
+    // Follow the application's inherited system appearance so the two brand
+    // variants switch with Light/Dark mode in either window context.
     let names = NSArray::from_retained_slice(&[
         NSString::from_str("NSAppearanceNameAqua"),
         NSString::from_str("NSAppearanceNameDarkAqua"),
     ]);
-    let appearance = button.effectiveAppearance();
+    let appearance_app = NSApplication::sharedApplication(mtm);
+    let appearance = appearance_app.effectiveAppearance();
     let best: Option<Retained<NSString>> = unsafe {
         msg_send![&*appearance, bestMatchFromAppearancesWithNames: &*names]
     };
@@ -841,12 +841,11 @@ pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receive
 
     let item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
     refresh_status_bar_icon(&item, mtm);
-    if let Some(button) = item.button(mtm) {
-        unsafe {
-            let _: () = msg_send![&*button, addObserver: &*target,
-                forKeyPath: &*NSString::from_str("effectiveAppearance"),
-                options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
-        }
+    let appearance_app = NSApplication::sharedApplication(mtm);
+    unsafe {
+        let _: () = msg_send![&*appearance_app, addObserver: &*target,
+            forKeyPath: &*NSString::from_str("effectiveAppearance"),
+            options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
     }
     let app_bytes = include_bytes!("../../../capture/desktop/assets/app-icon.png");
     let app_data = NSData::with_bytes(app_bytes);
@@ -862,6 +861,7 @@ pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receive
             _item: item,
             _menu: menu,
             _target: target,
+            _appearance_app: appearance_app,
         });
     });
     Some(receiver)

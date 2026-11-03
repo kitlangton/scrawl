@@ -143,6 +143,32 @@ struct Asset {
     sha256: String,
 }
 
+/// Local-only, allowlisted asset details for a permanent size rejection.
+/// Keep this typed through anyhow's error chain; never parse an error message
+/// or send these details to progress endpoints or telemetry.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct SizeFailure {
+    path: String,
+    size: u64,
+    limit: u64,
+}
+
+impl std::fmt::Display for SizeFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "file_too_large: {} is {} bytes; per-file limit {} bytes; no files were omitted",
+            self.path, self.size, self.limit)
+    }
+}
+
+impl std::error::Error for SizeFailure {}
+
+fn check_file_size(path: &str, size: u64) -> Result<()> {
+    if size > MAX_FILE_BYTES {
+        return Err(SizeFailure { path: path.into(), size, limit: MAX_FILE_BYTES }.into());
+    }
+    Ok(())
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Job {
@@ -155,6 +181,8 @@ struct Job {
     next_attempt: u64,
     status: String,
     error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    size_failure: Option<SizeFailure>,
     #[serde(default)]
     files: Vec<Asset>,
     #[serde(default)]
@@ -247,13 +275,10 @@ fn validate_assets(files: &[Asset]) -> Result<()> {
     let mut size = 0u64;
     for file in files {
         ensure!(
-            file.size <= MAX_FILE_BYTES,
-            "file_too_large: an asset exceeds the v1 90,000,000-byte per-file limit; no files were omitted"
-        );
-        ensure!(
             asset_path(&file.path) && hex_digest(&file.sha256) && names.insert(file.path.clone()),
             "invalid_manifest: unsafe or duplicate file"
         );
+        check_file_size(&file.path, file.size)?;
         size = size
             .checked_add(file.size)
             .context("invalid_manifest: size overflow")?;
@@ -1077,6 +1102,7 @@ impl Client {
             next_attempt: 0,
             status: if public_copy { "awaiting_share" } else { "pending" }.into(),
             error: None,
+            size_failure: None,
             files: Vec::new(),
             shared: public_copy,
             public_copy,
@@ -1631,6 +1657,7 @@ impl Client {
                 job.next_attempt = 0;
                 job.status = "pending".into();
                 job.error = None;
+                job.size_failure = None;
                 self.save_job(&job)?;
             }
         }
@@ -1667,11 +1694,15 @@ impl Client {
                 Ok(()) => {
                     job.status = "ready".into();
                     job.error = None;
+                    job.size_failure = None;
                 }
                 Err(error) => {
+                    job.size_failure = error.downcast_ref::<SizeFailure>().cloned();
                     let text = error.to_string();
                     job.error = Some(
-                        if text.contains("encryption_pending_recipient") {
+                        if job.size_failure.is_some() {
+                            "file_too_large"
+                        } else if text.contains("encryption_pending_recipient") {
                             "encryption_pending_recipient"
                         } else if text.contains("encryption_") || text.contains("encrypted_") {
                             "encryption_action_required"
@@ -1960,7 +1991,7 @@ impl Client {
         let mut result = json!({"server": settings.server, "enabled": self.enabled(), "uploadConsent": settings.upload_consent,
             "readSignedIn": self.credential("read", &settings.server).is_ok_and(|c| c.usable()), "uploadSignedIn": self.credential("upload", &settings.server).is_ok_and(|c| c.usable()),
             "encryption": self.provider.experiment(HOSTED_ENCRYPTION),
-            "queuePath": self.state, "queue": jobs.iter().map(|j| json!({"id":j.id,"bundle":j.bundle,"status":j.status,"encrypted":j.encrypted,"attempts":j.attempts,"nextAttempt":j.next_attempt,"error":j.error})).collect::<Vec<_>>()});
+            "queuePath": self.state, "queue": jobs.iter().map(|j| json!({"id":j.id,"bundle":j.bundle,"status":j.status,"encrypted":j.encrypted,"attempts":j.attempts,"nextAttempt":j.next_attempt,"error":j.error,"sizeFailure":j.size_failure})).collect::<Vec<_>>()});
         if account {
             let credential = self
                 .credential("upload", &settings.server)
@@ -2083,10 +2114,7 @@ fn snapshot(bundle: &Path, stage: &Path) -> Result<Vec<Asset>> {
             .open(bundle.join(&path))?;
         let metadata = source.metadata()?;
         ensure!(metadata.is_file(), "Non-regular asset refused");
-        ensure!(
-            metadata.len() <= MAX_FILE_BYTES,
-            "file_too_large: an asset exceeds the v1 90,000,000-byte per-file limit; no files were omitted"
-        );
+        check_file_size(&path, metadata.len())?;
         total = total
             .checked_add(metadata.len())
             .context("Asset size overflow")?;

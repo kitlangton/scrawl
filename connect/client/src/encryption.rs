@@ -360,7 +360,7 @@ fn stage_assets(stage: &Path) -> Result<Vec<Asset>> {
             .custom_flags(libc::O_NOFOLLOW)
             .open(stage.join(&path))?;
         let size = file.metadata()?.len();
-        ensure!(size <= super::MAX_FILE_BYTES, "file_too_large");
+        super::check_file_size(&path, size)?;
         total = total.checked_add(size).context("quota_exceeded")?;
         ensure!(total <= MAX_BYTES, "quota_exceeded");
         files.push(Asset {
