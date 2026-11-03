@@ -1,22 +1,36 @@
 """Read back the deployed Worker version and anonymous cookie/CORS boundary."""
 import json
 import os
+import re
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "enablement"))
 from release_gate import publication_needed
+from hosted_config import config, worker_name
 from urllib.request import Request, urlopen
 
 
-def api(path):
-    request = Request('https://api.cloudflare.com/client/v4/accounts/' +
-                      os.environ['CLOUDFLARE_ACCOUNT_ID'] + '/workers/scripts/apparent-hosted/' + path,
-                      headers={'Authorization': 'Bearer ' + os.environ['CLOUDFLARE_API_TOKEN']})
+def provider_api(path):
+    request = Request('https://api.cloudflare.com/client/v4/' + path,
+                      headers={'Authorization': 'Bearer ' + os.environ['CLOUDFLARE_API_TOKEN'],
+                               'User-Agent': 'apparent-connect-cd/1'})
     with urlopen(request, timeout=30) as response:
         result = json.load(response)
-    if not result.get('success'):
+    if not isinstance(result, dict) or result.get('success') is not True or 'result' not in result:
         raise ValueError('Cloudflare readback failed')
     return result['result']
+
+
+def account_id():
+    account = os.environ.get('CLOUDFLARE_ACCOUNT_ID', '')
+    if re.fullmatch('[0-9a-f]{32}', account) is None:
+        raise ValueError('Missing or invalid CLOUDFLARE_ACCOUNT_ID')
+    return account
+
+
+def api(path):
+    return provider_api('accounts/' + account_id() + '/workers/scripts/' +
+                        worker_name(os.environ) + '/' + path)
 
 
 def deployed_revision():
@@ -34,7 +48,8 @@ def verify(sha):
     if version.get('annotations', {}).get('workers/tag') != sha:
         raise ValueError('Deployed Worker is not the checked commit')
     request = Request('https://hosted.tryapparent.com/v1/session',
-                      headers={'Origin': 'https://app.tryapparent.com'})
+                      headers={'Origin': 'https://app.tryapparent.com',
+                               'User-Agent': 'apparent-connect-cd/1'})
     with urlopen(request, timeout=30) as response:
         session = json.load(response)
         if session.get('authenticated') is not False:
@@ -46,7 +61,61 @@ def verify(sha):
     print(json.dumps({'sha': sha, 'deployment': latest['id'], 'version': version['id']}))
 
 
+def preflight():
+    # Existing-service admission only. Never create a replacement or silently
+    # rebind a live service to another database/bucket or discard a writer's binding.
+    desired = config(os.environ)
+    settings = api('settings')
+    if not isinstance(settings, dict) or not isinstance(settings.get('bindings'), list):
+        raise ValueError('Incomplete existing Worker settings')
+    bindings = settings['bindings']
+    if any(not isinstance(b, dict) or not isinstance(b.get('name'), str) or
+           not isinstance(b.get('type'), str) for b in bindings):
+        raise ValueError('Malformed existing Worker bindings')
+    if len({b['name'] for b in bindings}) != len(bindings):
+        raise ValueError('Duplicate existing Worker binding')
+    by_name = {binding['name']: binding for binding in bindings}
+    expected = [('DB', 'd1', 'id', desired['d1_databases'][0]['database_id']),
+                ('BUCKET', 'r2_bucket', 'bucket_name', desired['r2_buckets'][0]['bucket_name'])]
+    for name, kind, field, value in expected:
+        binding = by_name.get(name, {})
+        if binding.get('type') != kind or binding.get(field) != value:
+            raise ValueError('Existing ' + name + ' binding differs from approved input')
+    for name, value in desired['vars'].items():
+        binding = by_name.get(name, {})
+        if binding.get('type') != 'plain_text' or binding.get('text') != value:
+            raise ValueError('Existing origin binding differs from approved input')
+    for name in ('GOOGLE_CLIENT_SECRET', 'BETTER_AUTH_SECRET', 'TOKEN_ENCRYPTION_KEY'):
+        if by_name.get(name, {}).get('type') != 'secret_text':
+            raise ValueError('Required existing secret binding is absent')
+    if by_name.get('GOOGLE_CLIENT_ID', {}).get('type') not in ('plain_text', 'secret_text'):
+        raise ValueError('Required existing Google client binding is absent')
+    if any(b.get('type') not in ('plain_text', 'secret_text') and b.get('name') not in ('DB', 'BUCKET') for b in bindings):
+        raise ValueError('Unreviewed existing binding would be removed')
+
+    schedules = api('schedules')
+    if (not isinstance(schedules, dict) or not isinstance(schedules.get('schedules'), list) or
+            any(not isinstance(s, dict) or not isinstance(s.get('cron'), str)
+                for s in schedules['schedules']) or
+            sorted(s['cron'] for s in schedules['schedules']) != sorted(desired['triggers']['crons'])):
+        raise ValueError('Existing cron schedule differs from approved input')
+    zones = provider_api('zones?name=tryapparent.com')
+    if (not isinstance(zones, list) or len(zones) != 1 or not isinstance(zones[0], dict) or
+            zones[0].get('name') != 'tryapparent.com' or
+            zones[0].get('account', {}).get('id') != account_id() or
+            re.fullmatch('[0-9a-f]{32}', zones[0].get('id', '')) is None):
+        raise ValueError('Existing route zone is not established')
+    routes = provider_api('zones/' + zones[0]['id'] + '/workers/routes')
+    if (not isinstance(routes, list) or
+            any(not isinstance(r, dict) or not isinstance(r.get('pattern'), str) for r in routes)):
+        raise ValueError('Incomplete existing route readback')
+    selected = sorted(r['pattern'] for r in routes if r.get('script') == desired['name'])
+    if selected != sorted(r['pattern'] for r in desired['routes']):
+        raise ValueError('Existing Worker routes differ from approved input')
+
+
 def can_publish(sha):
+    preflight()
     _, version = deployed_revision()
     # Unknown/mixed deployment identities fail closed, never silently replace.
     published = version.get('annotations', {}).get('workers/tag', '')
