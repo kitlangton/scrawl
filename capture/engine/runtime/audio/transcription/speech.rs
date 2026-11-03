@@ -480,11 +480,15 @@ mod tests {
     #[test]
     #[ignore]
     fn downloads_and_runs_parakeet() {
+        let started = std::time::Instant::now();
+        let phase = |name| eprintln!("speech smoke phase={name} elapsed_ms={}", started.elapsed().as_millis());
         let kept = std::env::var_os("APPARENT_TEST_MODEL_DIR").map(PathBuf::from);
         let dir = kept.clone().unwrap_or_else(|| temp_dir("parakeet"));
         let fresh = !dir.join(PARAKEET.filename).is_file();
         let mut last = 0.0;
+        phase("download_verify_start");
         let model = download(&PARAKEET, &dir, &mut |done| last = done).unwrap();
+        phase("download_verify_complete");
         if fresh {
             assert_eq!(last, 1.0);
         }
@@ -499,10 +503,12 @@ mod tests {
             assert!(std::arch::is_x86_feature_detected!("avx512vnni"));
         }
         init_backends().unwrap();
+        phase("backends_ready");
         for device in transcribe_cpp::devices() {
             eprintln!("device: {} ({})", device.name, device.description);
         }
         let model = Model::load(&model).unwrap();
+        phase("model_loaded");
         let pcm: Vec<f32> = (0..32_000)
             .map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / 16_000.0).sin() * 0.1)
             .collect();
@@ -511,6 +517,7 @@ mod tests {
             .unwrap()
             .run(&pcm, &RunOptions::default())
             .unwrap();
+        phase("inference_complete");
         if kept.is_none() {
             let _ = std::fs::remove_dir_all(&dir);
         }
