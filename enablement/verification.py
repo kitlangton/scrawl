@@ -244,39 +244,40 @@ def overlapping_contracts():
             signal.signal(sig, handler)
 
 
-def run_checks(selection, offline=True, parallel_contracts=False):
+def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=False):
     if selection["root"] or selection["engine"]:
         check_temp_environment()
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
     if parallel_contracts:
         with overlapping_contracts():
-            run_selected_checks(selection, offline)
+            run_selected_checks(selection, offline, cargo_timings)
     else:
         run_contract_checks()
-        run_selected_checks(selection, offline)
+        run_selected_checks(selection, offline, cargo_timings)
 
 
-def run_selected_checks(selection, offline=True):
+def run_selected_checks(selection, offline=True, cargo_timings=False):
     cargo = ["cargo"]
     if subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
         cargo = ["taskpolicy", "-c", "utility", "cargo"]
     jobs = os.environ.get("T3_BUILD_JOBS", "3")
     dependency_mode = "--offline" if offline else "--locked"
+    diagnostics = ["--timings"] if cargo_timings else []
     if selection["root"]:
-        subprocess.run(cargo + ["build", "-j", jobs, dependency_mode], cwd=ROOT, check=True)
+        subprocess.run(cargo + ["build", "-j", jobs, dependency_mode] + diagnostics, cwd=ROOT, check=True)
         if selection.get("focused"):
             for test_filter in selection["focused"]:
-                result = subprocess.run(cargo + ["test", "-j", jobs, dependency_mode, test_filter,
+                result = subprocess.run(cargo + ["test", "-j", jobs, dependency_mode] + diagnostics + [test_filter,
                                                 "--", "--test-threads=2"], cwd=ROOT,
                                         stdout=subprocess.PIPE, text=True, check=True)
                 print(result.stdout, flush=True)
                 if not any(int(n) > 0 for n in re.findall(r"test result: ok\. (\d+) passed", result.stdout)):
                     raise RuntimeError(f"Focused filter selected no passing tests: {test_filter}")
         else:
-            subprocess.run(cargo + ["test", "-j", jobs, dependency_mode, "--", "--test-threads=2"], cwd=ROOT, check=True)
+            subprocess.run(cargo + ["test", "-j", jobs, dependency_mode] + diagnostics + ["--", "--test-threads=2"], cwd=ROOT, check=True)
     if selection["engine"]:
         for command in ("build", "test"):
-            args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode]
+            args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + diagnostics
             if command == "test":
                 args += ["--", "--test-threads=2"]
             subprocess.run(args, cwd=ROOT, check=True)
@@ -339,6 +340,7 @@ def main():
     parser.add_argument("--online", action="store_true", help="CI: use locked graph instead of offline cache")
     parser.add_argument("--parallel-contracts", action="store_true",
                         help="Overlap isolated Python contracts with selected checks; require both to succeed")
+    parser.add_argument("--cargo-timings", action="store_true", help="Record Cargo unit timings for existing builds/tests")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     if args.preflight:
@@ -352,6 +354,8 @@ def main():
         command += ['--suite', args.suite]
         if args.parallel_contracts:
             command += ['--parallel-contracts']
+        if args.cargo_timings:
+            command += ['--cargo-timings']
         command += [flag for flag, enabled in [('--pr', args.pr), ('--run', args.run), ('--online', args.online)] if enabled]
         label = ('changed-tree' if args.suite == 'all' else 'platform-' + args.suite) if args.run else 'pr-contracts'
         subprocess.run(['node', str(ROOT / 'enablement/verification/receipt.ts'),
@@ -371,7 +375,7 @@ def main():
     if args.pr:
         run_pr_checks()
     if args.run:
-        run_checks(selection, offline=not args.online, parallel_contracts=args.parallel_contracts)
+        run_checks(selection, offline=not args.online, parallel_contracts=args.parallel_contracts, cargo_timings=args.cargo_timings)
 
 
 if __name__ == "__main__":

@@ -271,8 +271,16 @@ jobs:
           verification_tmp="$(mktemp -d "$HOME/.apparent-verification.XXXXXX")"
           readonly verification_tmp
           export TMPDIR="$verification_tmp"
+          verification_complete=false
           cleanup() {
             local status=$?
+            # Cancellation of the outer shell does not prove detached workers
+            # stopped. Leave their private TMPDIR to hosted-runner teardown.
+            if [ "$verification_complete" != true ]; then
+              echo 'Verification did not complete; retaining its private temporary tree until runner teardown.' >&2
+              if [ "$status" -eq 0 ]; then status=1; fi
+              exit "$status"
+            fi
             if ! rm -rf -- "$verification_tmp"; then
               echo '::error::Could not remove the owned verification temporary tree' >&2
               if [ "$status" -eq 0 ]; then status=1; fi
@@ -282,14 +290,15 @@ jobs:
           trap cleanup EXIT
           # Reproduce the CI-sensitive fixtures before the full affected suites.
           if [ "${{ needs.select.outputs.root }}" = true ]; then
-            cargo test -j 3 --locked capture::desktop::settings::settings::tests::the_command_line_row_ -- --test-threads=2
+            cargo test -j 3 --locked --timings capture::desktop::settings::settings::tests::the_command_line_row_ -- --test-threads=2
             cargo test -j 3 --locked capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket -- --exact
             if [ "$RUNNER_OS" = macOS ]; then
               cargo test -j 3 --locked connect::hosted::hosted_tests::hosted_security_darwin_acl_grants_fail_closed -- --exact
             fi
           fi
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online --suite rust --parallel-contracts --receipt-dir "$RUNNER_TEMP/verification-receipts"
+          python3 enablement/verification.py --base "$BASE" --run --online --suite rust --parallel-contracts --cargo-timings --receipt-dir "$RUNNER_TEMP/verification-receipts"
+          verification_complete=true
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash
@@ -439,6 +448,17 @@ jobs:
           path: ${{ runner.temp }}/verification-receipts/
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Retain Cargo unit timings, including incomplete verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings-${{ inputs.runner }}
+          path: |
+            target/cargo-timings/*.html
+            capture/engine/target/cargo-timings/*.html
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Retain verified Intel Mac development executables
         if: success() && runner.os == 'macOS' && runner.arch == 'X64' && needs.select.outputs.root == 'true'

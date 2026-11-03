@@ -108,6 +108,26 @@ test('main Mac producer selects the tested compiler before cache restore without
 })
 
 const selectedCompiler = '1.99.1-x86_64-apple-darwin'
+for (const outcome of ['success', 'failure', 'incomplete', 'signal']) test(`actual verification TMPDIR cleanup: ${outcome}`, () => {
+  const root = mkdtempSync(join(tmpdir(), 'verification-cleanup-'))
+  try {
+    const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
+    const step = workflow.split('      - name: Execute Rust changed-tree checks (not GUI acceptance)\n')[1]
+    const prefix = step.split('        run: |\n')[1].split('          # Reproduce the CI-sensitive fixtures')[0]
+      .split('\n').map(line => line.replace(/^          /, '')).join('\n')
+    const finish = outcome === 'success' ? 'verification_complete=true; exit 0' : outcome === 'failure' ? 'exit 7' : outcome === 'signal' ? 'kill -TERM $$' : 'exit 0'
+    const result = spawnSync('bash', ['-c', prefix + '\nprintf "%s\\n" "$TMPDIR"\n' + finish], {
+      encoding: 'utf8', env: { ...process.env, HOME: root },
+    })
+    const owned = result.stdout.trim()
+    assert.ok(owned.startsWith(root + '/.apparent-verification.'))
+    assert.equal(existsSync(owned), outcome !== 'success')
+    if (outcome === 'success') assert.equal(result.status, 0, result.stderr)
+    else assert.ok(result.status !== 0 || result.signal !== null, 'unfinished verification must not succeed')
+    if (outcome === 'failure') assert.equal(result.status, 7)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 const legacyCompiler = 'stable-x86_64-apple-darwin'
 const testedCompiler = 'release: 1.99.1\nhost: x86_64-apple-darwin\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67'
 const oldCompiler = 'release: 1.98.0\nhost: x86_64-apple-darwin\ncommit-hash: 88d9e12ae178fab0fb5cc050a94da85685d449ea'
