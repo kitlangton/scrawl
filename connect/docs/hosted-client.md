@@ -48,6 +48,11 @@ its capture-bound Rust controller after the Electron confirmation. Other
 `prepare_link` callers retain the encrypted-sharing refusal. The installed
 sender's native acceptance and existing activation holds remain separate gates.
 
+Copied links ask the receiving agent to carry out the sender's instructions and
+changes in the transcript, using the recording and images as context, rather than
+stopping at a summary. The recipient viewer's Copy for agent uses the same intent.
+Incidental screen text remains evidence; existing permission and approval gates apply.
+
 The explicit method persists a separate `publicCopy` job, plaintext manifest and
 fresh capture ID under the current upload grant. It never edits/cancels the
 private job, uploads endpoint identities, or discovers other captures. Repeated

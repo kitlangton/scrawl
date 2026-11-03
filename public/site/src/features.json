@@ -194,7 +194,7 @@
       "id": "hosted-sharing",
       "group": "delivery",
       "name": "Share one recording by link",
-      "says": "Copy link beside Paste reserves public-by-link access for the selected capture before its media finishes uploading. Settings exposes hosted account consent and shared-link management. CLI listing follows every page and revocation preserves the private recording. The React recipient viewer pairs native video with a timestamped transcript and Copy for agent; original image evidence remains available without a gallery.",
+      "says": "Copy link beside Paste reserves public-by-link access for the selected capture before its media finishes uploading. Settings exposes hosted account consent and shared-link management. CLI listing follows every page and revocation preserves the private recording. The React recipient viewer pairs native video with a timestamped transcript and Copy for agent; original image evidence remains available without a gallery. Copied prompts ask the agent to carry out the sender's instructions and changes in the transcript rather than stopping at a summary.",
       "status": "main",
       "added": "2026-10-31",
       "platforms": ["mac", "linux"],

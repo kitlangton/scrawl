@@ -1146,6 +1146,8 @@ pub fn hosted_prepared_link_survives_upload_before_foreground_delivery() {
         "upload completion revoked a valid foreground link"
     );
     assert_eq!(link.text.matches("Anyone with this link").count(), 1);
+    assert!(link.text.contains("Carry out the instructions and changes I request in the transcript"));
+    assert!(link.text.contains("rather than stopping at a summary"));
     // A valid ready result must still lose authorization when consent is removed.
     f.client.disable(false).unwrap();
     assert!(!link.authorized());
