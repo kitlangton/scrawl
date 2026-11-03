@@ -11,5 +11,6 @@ function run(command, args, env = {}) {
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed: ${result.error || result.status}`)
 }
 // Separate output keeps the production artifact free of loopback configuration.
-run('npm', ['run', 'build'], { VITE_HOSTED_API_ORIGIN: origin, CONNECT_BUILD_DIR: 'dist-test' })
+run('npm', ['run', 'build'], { VITE_HOSTED_API_ORIGIN: origin, CONNECT_BUILD_DIR: 'dist-test', PUBLIC_POSTHOG_ENABLED: 'false' })
 run('node', ['test/browser.mjs'], { VITE_HOSTED_API_ORIGIN: origin, HOSTED_TEST_API_ORIGIN: origin, CONNECT_ARTIFACT: 'dist-test' })
+run('node', ['test/analytics-consent.browser.ts'], { HOSTED_TEST_API_ORIGIN: origin, CONNECT_ARTIFACT: 'dist-test' })
