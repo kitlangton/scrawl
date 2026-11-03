@@ -301,6 +301,35 @@ PY
   timeout 12 "$image" capture state > "$out/capture-guard-before-state.json" 2> "$out/capture-guard-before-state.stderr"
   python3 "$out/assert-owned-capture.py" "$capture_id" "$out/capture-start.json" "$out/capture-guard-before-state.json"
   python3 "$out/assert-owned-capture.py" "$capture_id" "$out/capture-guard-before.json" "$out/capture-guard-before-state.json"
+  # The native chooser covers Settings: its thumbnail is not the live dialog.
+  hyprctl monitors -j > "$out/capture-monitors.json"
+  python3 - "$out/capture-monitors.json" <<'PYMON'
+import json,sys
+m=json.load(open(sys.argv[1]))
+assert len(m)==1 and m[0]['width']==1280 and m[0]['height']==800, m
+PYMON
+  ui '{"op":"hold","seconds":1,"label":"picker-render"}'
+  ui '{"op":"select-native-output","label":"select-owned-native-output"}'
+  capture_ready_deadline=$((SECONDS + 20))
+  while (( SECONDS < capture_ready_deadline )); do
+    timeout 3 "$image" capture inspect "$capture_id" > "$out/capture-selected.json" 2> "$out/capture-selected.stderr"
+    if python3 - "$out/capture-selected.json" "$capture_id" <<'PYREADY'
+import json,sys
+r=json.load(open(sys.argv[1]))
+sys.exit(0 if r['capture_id']==sys.argv[2] and r['status']=='recording' and not r.get('error') else 1)
+PYREADY
+    then break; fi
+    sleep .1
+  done
+  python3 - "$out/capture-selected.json" "$capture_id" <<'PYREADY'
+import json,sys
+r=json.load(open(sys.argv[1]))
+assert r['capture_id']==sys.argv[2] and r['status']=='recording' and not r.get('error'), r
+PYREADY
+  # Full-size live dialog must be visible again after native source selection.
+  timeout 3 "$image" capture state > "$out/capture-selected-state.json"
+  python3 "$out/assert-owned-capture.py" "$capture_id" "$out/capture-selected.json" "$out/capture-selected-state.json"
+  ui '{"op":"assert-native-picker-dismissed","label":"picker-dismissed-live-update"}'
   click_update_guard() {
     # Starting capture can move focus to the capsule. An inactive-window click
     # may only focus Settings; require an actual coordinator acknowledgment.

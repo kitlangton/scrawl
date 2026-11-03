@@ -26,6 +26,34 @@ class LocatorTests(unittest.TestCase):
     def setUp(self):
         self.gui = load('updater-gui')
 
+    def test_native_output_selection_refuses_changed_or_ambiguous_picker(self):
+        from PIL import Image
+        image = Image.new('RGB', (1280, 800))
+        for point in ((144, 154), (1134, 154), (144, 644), (1134, 644)):
+            image.putpixel(point, (122, 162, 247))
+        for point in ((340, 233), (640, 232), (640, 604)):
+            image.putpixel(point, (17, 17, 17))
+        words = [dict(text=text, left=left, top=185)
+                 for text, left in zip(('Windows', 'Outputs', 'Region'), (178, 261, 343))]
+        self.assertEqual(self.gui.picker_output_center(image, words), (640, 400))
+        for invalid in ([], words + [words[1]], [dict(w, top=200) for w in words]):
+            with self.assertRaises(ValueError):
+                self.gui.picker_output_center(image, invalid)
+        with self.assertRaises(ValueError):
+            self.gui.picker_output_center(image.resize((640, 400)), words)
+        image.putpixel((640, 604), (0, 0, 0))
+        with self.assertRaises(ValueError):
+            self.gui.picker_output_center(image, words)
+
+    def test_picker_preview_text_cannot_establish_live_dialog(self):
+        words = [dict(text=t, left=x, top=400, width=40, height=12,
+                      block_num=1, par_num=1, line_num=1)
+                 for t, x in [('Update', 500), ('now', 545)]]
+        self.assertTrue(self.gui.native_picker_dismissed(words))
+        self.assertFalse(self.gui.native_picker_dismissed([]))
+        self.assertFalse(self.gui.native_picker_dismissed(words + [dict(text='Outputs')]))
+        self.assertFalse(self.gui.native_picker_dismissed(words + [dict(w, line_num=2) for w in words]))
+
     def test_phrase_uses_visible_word_bounds(self):
         words = [{'text': t, 'left': x, 'top': 10, 'width': w, 'height': 12,
                   'block_num': 1, 'par_num': 1, 'line_num': 1}
