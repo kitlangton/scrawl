@@ -326,6 +326,13 @@ These choices cannot become empty successes from changed-tree selection. Omittin
 Receipt wrapping forwards the explicit choice and labels it `platform-rust` or
 `platform-browser`; the default remains `changed-tree`.
 
+The platform Rust job uses `--parallel-contracts` to overlap the existing isolated
+Python selector/hook/temp contracts with the selected build/test sequence. Cargo
+commands remain sequential with their existing worker limit. Both paths must
+succeed before the receipt succeeds; failure or cancellation terminates and reaps
+the owned contract process group. The receipt wrapper forwards this option.
+Local invocations remain sequential unless the option is explicitly supplied.
+
 `verification.py --run|--pr --receipt-dir <external-directory>` and
 `owner_lanes.py --lane <name> --run --receipt-dir <external-directory>` record
 observation-only JSON through `enablement/verification/receipt.ts` (Node 22).
