@@ -951,6 +951,7 @@ pub struct ApparentCoordinator {
     share_waiting_account: bool,
     share_login: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     share_copied: Option<PathBuf>,
+    completed_upload_size_failure: Option<(PathBuf, u64, crate::connect::hosted::UploadSizeFailure)>,
     /// When this Mac last finished a capture, so ⌥⇧V prefers it over older inbox items.
     last_local_capture_ms: u64,
     inbox: crate::capture::desktop::workflow::inbox::Inbox,
@@ -1071,6 +1072,7 @@ impl ApparentCoordinator {
             share_waiting_account: false,
             share_login: None,
             share_copied: None,
+            completed_upload_size_failure: None,
             last_local_capture_ms: 0,
             inbox: crate::capture::desktop::workflow::inbox::Inbox::load_default(),
             last_mode: SelectionMode::load_last_used(),
@@ -2774,29 +2776,45 @@ impl ApparentCoordinator {
     }
 
     fn tick_hosted_sharing(&mut self, cx: &mut Context<Self>) {
-        if !crate::shared::handoff::experiment(crate::connect::hosted::HOSTED_SHARING)
+        if self.completed_upload_size_failure.as_ref().is_some_and(|(bundle, generation, _)|
+            *generation != self.capture_generation || self.completed_dir.as_ref() != Some(bundle)
+            || !matches!(self.island_phase, IslandPhase::Completed { .. })) {
+            self.completed_upload_size_failure = None;
+        }
+        let sharing = crate::shared::handoff::experiment(crate::connect::hosted::HOSTED_SHARING);
+        if (!sharing && !crate::shared::handoff::experiment(crate::connect::hosted::HOSTED_SYNC))
             || !matches!(self.island_phase, IslandPhase::Completed { .. })
             || self.share_probe_at.is_some_and(|at| at.elapsed() < Duration::from_secs(5)) {
             return;
         }
         self.share_probe_at = Some(Instant::now());
         let generation = self.capture_generation;
-        let copied = self.share_copied.clone();
+        let completed = self.completed_dir.clone();
+        let copied = self.share_copied.clone().filter(|bundle| self.completed_dir.as_ref() == Some(bundle));
         cx.spawn(async move |entity, cx| {
-            let (online, progress) = cx.background_executor().spawn(async move {
-                (crate::connect::hosted::sharing_online(), copied.as_deref().map(crate::connect::hosted::sharing_progress))
+            let selected = completed.clone();
+            let copied_capture = copied.clone();
+            let (online, progress, failure) = cx.background_executor().spawn(async move {
+                use crate::connect::hosted::{self, UploadQueueKind};
+                // Local queue inspection works offline; private uploads never probe public admission.
+                let kind = if copied.is_some() { UploadQueueKind::PublicCopy } else { UploadQueueKind::Private };
+                let failure = selected.as_deref().and_then(|bundle| hosted::upload_size_failure(bundle, kind));
+                (sharing.then(hosted::sharing_online), copied.as_deref().map(hosted::sharing_progress), failure)
             }).await;
             let _ = entity.update(cx, |coord, cx| {
-                if coord.capture_generation != generation || !matches!(coord.island_phase, IslandPhase::Completed { .. }) { return; }
-                coord.share_online = online;
+                if coord.capture_generation != generation || coord.completed_dir != completed
+                    || coord.share_copied != copied_capture
+                    || !matches!(coord.island_phase, IslandPhase::Completed { .. }) { return; }
+                if let Some(online) = online { coord.share_online = online; }
                 if coord.share_pending.is_none() {
+                    coord.completed_upload_size_failure = completed.clone().zip(failure).map(|(bundle, failure)| (bundle, generation, failure));
                     if let Some(progress) = progress {
                         coord.completed_note = Some(progress);
-                    } else if !online {
+                    } else if online == Some(false) {
                         coord.completed_note = Some(if crate::connect::hosted::sharing_server().is_none() {
                             "Configure Hosted account in Settings"
                         } else { "Connect to the internet to share" }.into());
-                    } else if coord.completed_note.as_deref() == Some("Connect to the internet to share") {
+                    } else if online == Some(true) && coord.completed_note.as_deref() == Some("Connect to the internet to share") {
                         coord.completed_note = None;
                     }
                 }

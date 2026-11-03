@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 pub use apparent_connect_client::{
     AccountView, CloudConfig, ConnectCommand, HOSTED_SHARING, HOSTED_SYNC, PreparedLink,
-    SharesCommand,
+    SharesCommand, UploadQueueKind, UploadSizeFailure,
 };
 use apparent_connect_client::{Client, ConfigProvider};
 // Package call sites own the concrete flags; this adapter preserves override semantics.
@@ -159,6 +159,9 @@ pub fn connect_sharing(allowed: &dyn Fn() -> bool) -> Result<()> {
     let server = sharing_server()
         .context("Configure the hosted API server with apparent connect login first")?;
     client().login_allowed(&server, "upload", true, true, allowed)
+}
+pub fn upload_size_failure(bundle: &Path, kind: UploadQueueKind) -> Option<UploadSizeFailure> {
+    client().upload_size_failure(bundle, kind)
 }
 pub fn sharing_progress(bundle: &Path) -> String {
     client().sharing_progress(bundle)

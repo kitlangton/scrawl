@@ -5,13 +5,21 @@ use gpui::Context;
 
 impl ApparentCoordinator {
     fn electron_pill_view(&self, revision: u64) -> View {
-        View::new(
+        let view = View::new(
             &self.pill_snapshot(),
             revision,
             crate::shared::handoff::experiment("movableRecordingControls"),
         )
         .with_handoff(self.completed_dir.is_some(), self.review_bundle.is_some())
-        .with_completion_notice(self.completed_note.as_deref())
+        .with_completion_notice(self.completed_note.as_deref());
+        let kind = if self.share_copied.as_ref() == self.completed_dir.as_ref() && self.completed_dir.is_some() {
+            crate::connect::hosted::UploadQueueKind::PublicCopy
+        } else { crate::connect::hosted::UploadQueueKind::Private };
+        match &self.completed_upload_size_failure {
+            Some((bundle, generation, failure)) if *generation == self.capture_generation
+                && self.completed_dir.as_ref() == Some(bundle) && failure.kind == kind => view.with_size_failure(failure.size, failure.limit),
+            _ => view,
+        }
     }
     fn electron_pill_selection(&self) -> super::session::Selection {
         (
@@ -151,5 +159,36 @@ impl ApparentCoordinator {
         if matches!(self.island_phase, IslandPhase::Hidden) {
             self.sync_electron_pill();
         }
+    }
+}
+
+#[cfg(test)]
+mod upload_projection_tests {
+    use super::*;
+    use crate::connect::hosted::{UploadQueueKind, UploadSizeFailure};
+    #[test]
+    fn electron_pill_upload_cache_requires_current_capture_generation_phase_and_intent() {
+        let (sender, _receiver) = flume::unbounded();
+        let mut coord = ApparentCoordinator::new(crate::capture::desktop::SharedCaptureTelemetry::new(sender), None);
+        let bundle = std::path::PathBuf::from("/synthetic/selected.apparent");
+        coord.completed_dir = Some(bundle.clone());
+        coord.capture_generation = 7;
+        coord.island_phase = IslandPhase::Completed { finished_at: std::time::Instant::now(), frame_count: 1, duration_ms: 1000, inbox_count: 1 };
+        let failure = UploadSizeFailure { kind: UploadQueueKind::Private, size: 90_000_001, limit: 90_000_000 };
+        coord.completed_upload_size_failure = Some((bundle.clone(), 7, failure));
+        assert_eq!(coord.electron_pill_view(1).pocket.unwrap().title, "Too large to upload");
+        coord.capture_generation = 8;
+        assert!(coord.electron_pill_view(2).pocket.is_none());
+        coord.capture_generation = 7;
+        coord.completed_dir = Some("/synthetic/other.apparent".into());
+        assert!(coord.electron_pill_view(3).pocket.is_none());
+        coord.completed_dir = Some(bundle.clone());
+        coord.island_phase = IslandPhase::Hidden;
+        assert!(coord.electron_pill_view(4).pocket.is_none());
+        coord.island_phase = IslandPhase::Completed { finished_at: std::time::Instant::now(), frame_count: 1, duration_ms: 1000, inbox_count: 1 };
+        coord.share_copied = Some(bundle);
+        assert!(coord.electron_pill_view(5).pocket.is_none(), "private failure cannot become public-copy admission feedback");
+        coord.completed_upload_size_failure.as_mut().unwrap().2.kind = UploadQueueKind::PublicCopy;
+        assert_eq!(coord.electron_pill_view(6).pocket.unwrap().title, "Too large to upload");
     }
 }

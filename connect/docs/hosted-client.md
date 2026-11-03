@@ -246,3 +246,12 @@ it is not live Google, deployed Worker, Electron routing or native platform proo
 `cargo test -j 3 --offline hosted_ -- --test-threads=2` exercises the production curl subprocess against an isolated loopback HTTP server, synthetic device auth, complete bundle upload/fetch, restart queue recovery, pending pointers, quota/disable/logout, pending/transport deadlines, corruption, path and symlink rejection and v1 bounds. Tests use private synthetic config/bundle directories, not the user's credentials/captures. Native capture/paste and macOS tooling still require platform proof; a Linux build is not GUI proof.
 
 The independent package tests also exercise renewable account/upload/fetch/share/progress calls, proactive expiry and unexpected 401, separate-process single ownership, transient/permanent refresh failures, scope/grant mismatch, delayed refresh versus disable/logout/new generation, secret-free status, expired-grant revocation, offline logout and process exit after durable response before credential publication. These are synthetic protocol tests, not Better Auth/browser integration evidence; candidate backend-client integration and macOS/Linux native GUI checks remain separate gates.
+
+The desktop presentation adapter may read
+`Client::upload_size_failure(bundle, UploadQueueKind::{Private,PublicCopy})`.
+It returns only the requested queue intent and numeric byte size/limit from the
+latest failed job for that exact canonical bundle. It grants no upload or public
+sharing permission, exposes no asset path, and makes no network request. Retry,
+ready and cancelled states return no size failure. Desktop caches it with the
+completed capture path/generation internally and rechecks that binding before
+rendering a bounded notification; those identifiers never cross the pill pipe.

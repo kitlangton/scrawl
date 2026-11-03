@@ -45,9 +45,18 @@ coordinates. Synthetic Electron and geometry checks do not establish native
 compositor, drag, capture exclusion, focus or receiving-editor acceptance.
 
 `with_size_failure(size, limit)` projects numeric facts into a local Paste fallback.
-Live upload-state caching/admission remains a separate integration hunk coordinated
-with the public-sharing owner; this helper alone does not display a real queue
-failure. No retry, compression, consent, clipboard or upload policy changes.
+`Client::upload_size_failure(bundle, UploadQueueKind)` returns only kind, size and
+limit for the latest failed job of that intent. Private encrypted jobs cannot
+populate PublicCopy facts. Desktop caches those facts with the exact completed
+bundle and capture generation; phase, selection, generation and current intent
+must still match before projection. Background results also require unchanged
+clipboard-delivery identity. Capture changes invalidate the cache.
+
+The existing five-second sharing tick inspects local private queue failures when
+hostedSync is already enabled, without probing public admission. After actual
+public-link clipboard delivery it inspects the separate PublicCopy queue instead.
+This does not change public-copy preparation failures inside the consent popup;
+that surface retains its own owner and error handling. No retry, compression, consent, clipboard or upload policy changes.
 Installed routing/rollback and the native fallback stay under the producer's
 existing acceptance hold. Remove donors only after accepted platform replacement;
 this slice does not activate experiments or retire native presentations.
