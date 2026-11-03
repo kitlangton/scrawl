@@ -7,6 +7,38 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { manifest, mayAdvance } from './main-feed.ts';
 const source = 'b'.repeat(40), previous = 'a'.repeat(40);
+test('publisher reuses immutable comparisons while refreshing publication authority', () => {
+  execFileSync('python3', ['-c', `
+import importlib.util, json
+spec = importlib.util.spec_from_file_location('publisher', 'capture/desktop/scripts/linux/maintenance/publish-main-preview.py')
+publisher = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(publisher)
+old, candidate, newer, main = [letter * 40 for letter in 'abcd']
+calls = []
+published = [old]
+def fake_gh(*args):
+    calls.append(args)
+    endpoint = args[1]
+    if endpoint.endswith('/git/ref/heads/main'):
+        return json.dumps({'object': {'sha': main}})
+    if endpoint.endswith('/releases?per_page=100'):
+        return json.dumps([[{'tag_name': 'linux-main-v2-' + sha, 'draft': False, 'prerelease': True} for sha in published]])
+    pair = endpoint.split('/compare/')[1].split('...')
+    return json.dumps({'status': 'ahead' if pair[0] < pair[1] else 'behind'})
+publisher.gh = fake_gh
+assert publisher.publication_needed('example/repo', candidate)
+assert publisher.publication_needed('example/repo', candidate)
+comparisons = [call for call in calls if '/compare/' in call[1]]
+assert len(comparisons) == 3
+assert len([call for call in calls if '/git/ref/' in call[1]]) == 2
+assert len([call for call in calls if '/releases?' in call[1]]) == 2
+published.append(newer)
+assert not publisher.publication_needed('example/repo', candidate)
+main = 'e' * 40
+assert not publisher.publication_needed('example/repo', candidate)
+assert any(candidate + '...' + main in call[1] for call in calls)
+`], { stdio: 'pipe' });
+});
 test('feed step fetches immutable tags created after checkout without accepting moved tags', () => {
   const workflow = readFileSync(new URL('../../../../../.github/workflows/release-linux.yml', import.meta.url), 'utf8');
   const step = workflow.split('- name: Publish admitted immutable artifact identities and complete ancestry')[1]

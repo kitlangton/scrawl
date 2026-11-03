@@ -6,6 +6,7 @@ Ancestry, not completion time or version numbers, orders Main previews.
 """
 
 import hashlib
+from functools import cache
 import json
 import os
 from pathlib import Path
@@ -34,7 +35,10 @@ def checked_sha(value):
     return value
 
 
+@cache
 def comparison(repo, base, tip):
+    # Immutable SHA pairs retain their ancestry across both admission checks.
+    # Current main and release history are still fetched afresh each time.
     status = json.loads(gh("api", f"repos/{repo}/compare/{base}...{tip}"))["status"]
     if status not in ("ahead", "behind", "identical", "diverged"):
         raise RuntimeError(f"Unknown ancestry comparison: {status!r}")
