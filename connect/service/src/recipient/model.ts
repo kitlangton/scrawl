@@ -11,7 +11,9 @@ export function viewerModel(input: ShareModel) {
   const ready = status === 'ready'
   const files = ready && url && Array.isArray(input.files) ? input.files.filter(file => {
     try { return new URL(file.url).href === `${url}/files/${file.path.split('/').map(encodeURIComponent).join('/')}` } catch { return false }
-  }).map(({ path, size, sha256, url }) => ({ path, size, sha256, url })) : []
+  }).map(({ path, size, sha256, url, timestampMs }) => ({ path, size, sha256, url,
+    timestampMs: /^frames\/frame-\d+\.png$/.test(path) && Number.isSafeInteger(timestampMs) && timestampMs! >= 0 ? timestampMs : undefined,
+  })) : []
   const passages = ready && Array.isArray(input.transcriptSegments) ? input.transcriptSegments.filter(p => Number.isSafeInteger(p.startMs) && Number.isSafeInteger(p.endMs) && p.startMs >= 0 && p.endMs >= p.startMs && typeof p.text === 'string') : []
   return {
     url, status, ready, files, passages,

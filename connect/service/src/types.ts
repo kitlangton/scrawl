@@ -44,7 +44,7 @@ export interface ShareRow {
  created_at: number; revoked_at: number | null; upload_state: 'uploading' | 'paused' | 'failed';
  status: CaptureRow['status']; expires_at: number; pending_until: number; bytes: number;
 }
-export interface SharedFile extends ManifestFile { url: string }
+export interface SharedFile extends ManifestFile { url: string; timestampMs?: number }
 export interface ShareModel {
  url: string; status: ShareState; title: string; createdAt: string; expiresAt: string;
  uploadedBytes: number; totalBytes: number; files: SharedFile[]; thumbnailUrl: string | null;
