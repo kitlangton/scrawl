@@ -165,22 +165,21 @@ pub fn start() -> bool {
     if *started {
         return true;
     }
-    let fds: Vec<OwnedFd> = event_devices()
-        .iter()
-        .filter_map(|p| open(p))
-        .filter(interesting)
+    let devices: Vec<Device> = event_devices()
+        .into_iter()
+        .filter_map(Device::open)
         .collect();
-    if fds.is_empty() {
+    if devices.is_empty() {
         return false;
     }
-    crate::capture::scrawl_log(format!("input devices: reading {}", fds.len()));
+    crate::capture::scrawl_log(format!("input devices: reading {}", devices.len()));
     READER.get_or_init(|| Reader {
         held: Mutex::new(Held::default()),
         pressed: Mutex::new(HashSet::new()),
     });
     *started = std::thread::Builder::new()
         .name("scrawl-evdev".into())
-        .spawn(move || read_loop(fds))
+        .spawn(move || read_loop(devices))
         .is_ok();
     *started
 }
@@ -219,32 +218,84 @@ pub fn held() -> Option<Held> {
     })
 }
 
-fn read_loop(fds: Vec<OwnedFd>) {
+/// A keyboard or mouse being read.
+struct Device {
+    path: std::path::PathBuf,
+    fd: OwnedFd,
+    axes: Option<[(i32, i32); 2]>,
+}
+
+impl Device {
+    fn open(path: std::path::PathBuf) -> Option<Self> {
+        let fd = open(&path).filter(interesting)?;
+        let axes = absolute_axes(&fd);
+        Some(Self { path, fd, axes })
+    }
+}
+
+/// How often `/dev/input` is looked at again for devices plugged in (or paired) since.
+const RESCAN: Duration = Duration::from_secs(2);
+
+fn read_loop(mut devices: Vec<Device>) {
     // struct input_event on 64-bit Linux: timeval (16), type (2), code (2), value (4).
     const SIZE: usize = 24;
-    let axes: Vec<Option<[(i32, i32); 2]>> = fds.iter().map(absolute_axes).collect();
-    let mut polls: Vec<libc::pollfd> = fds
-        .iter()
-        .map(|fd| libc::pollfd {
-            fd: fd.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        })
-        .collect();
+    // Nodes that opened but aren't keyboards or mice, so they aren't opened again every rescan.
+    let mut skipped: HashSet<std::path::PathBuf> = HashSet::new();
+    let mut last_scan = std::time::Instant::now();
     let mut buffer = [0_u8; SIZE * 64];
     loop {
+        if last_scan.elapsed() >= RESCAN {
+            last_scan = std::time::Instant::now();
+            let present = event_devices();
+            skipped.retain(|p| present.contains(p));
+            let before = devices.len();
+            for path in present {
+                if skipped.contains(&path) || devices.iter().any(|d| d.path == path) {
+                    continue;
+                }
+                match Device::open(path.clone()) {
+                    Some(device) => devices.push(device),
+                    // Unopenable nodes are retried: udev may not have granted access yet.
+                    None if open(&path).is_some() => {
+                        skipped.insert(path);
+                    }
+                    None => {}
+                }
+            }
+            if devices.len() > before {
+                crate::capture::scrawl_log(format!("input devices: reading {}", devices.len()));
+            }
+        }
+        let mut polls: Vec<libc::pollfd> = devices
+            .iter()
+            .map(|d| libc::pollfd {
+                fd: d.fd.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect();
         // SAFETY: `polls` outlives the call and its length is passed with it.
         let ready = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as _, 1_000) };
         if ready < 0 {
             std::thread::sleep(Duration::from_millis(100));
             continue;
         }
-        for (poll, axes) in polls.iter_mut().zip(&axes) {
+        let mut gone = Vec::new();
+        for (i, (poll, device)) in polls.iter().zip(&devices).enumerate() {
+            let axes = &device.axes;
+            if poll.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+                gone.push(i);
+                continue;
+            }
             if poll.revents & libc::POLLIN == 0 {
                 continue;
             }
             // SAFETY: reads into `buffer`, at most its length.
             let n = unsafe { libc::read(poll.fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+            if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENODEV) {
+                gone.push(i);
+                continue;
+            }
             if n <= 0 {
                 continue;
             }
@@ -283,6 +334,11 @@ fn read_loop(fds: Vec<OwnedFd>) {
                     _ => {}
                 }
             }
+        }
+        // Unplugged (or unpaired): its node is gone, and a device that takes its place is new.
+        // ponytail: keys it held stay held until pressed again; track per device if that bites.
+        for i in gone.into_iter().rev() {
+            devices.remove(i);
         }
     }
 }

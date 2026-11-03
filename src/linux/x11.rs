@@ -140,7 +140,8 @@ fn intersect(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
     (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
 }
 
-/// The scale GPUI draws Scrawl's windows at: `GPUI_X11_SCALE_FACTOR`, else `Xft.dpi` / 96.
+/// The scale GPUI draws Scrawl's windows at: `GPUI_X11_SCALE_FACTOR`, else `Xft.dpi` / 96, else
+/// the primary monitor's DPI as GPUI works it out (`randr_scale`).
 pub fn ui_scale() -> f64 {
     if let Some(scale) = std::env::var("GPUI_X11_SCALE_FACTOR")
         .ok()
@@ -160,7 +161,42 @@ pub fn ui_scale() -> f64 {
             (key.trim() == "Xft.dpi").then(|| value.trim().parse::<f64>().ok())?
         })
         .filter(|dpi| *dpi > 0.0)
-        .map_or(1.0, |dpi| dpi / 96.0)
+        .map(|dpi| dpi / 96.0)
+        .or_else(|| randr_scale(x))
+        .unwrap_or(1.0)
+}
+
+/// GPUI's fallback without `Xft.dpi`: the primary (else first) RandR monitor's pixels per inch
+/// over 96, in twelfths, at least 1. Hyprland's XWayland, for one, sets no `Xft.dpi`.
+fn randr_scale(x: &X) -> Option<f64> {
+    let monitors = x
+        .conn
+        .randr_get_monitors(x.root, true)
+        .ok()?
+        .reply()
+        .ok()?
+        .monitors;
+    let sized = |m: &&x11rb::protocol::randr::MonitorInfo| {
+        m.width_in_millimeters > 0 && m.height_in_millimeters > 0
+    };
+    let m = monitors
+        .iter()
+        .filter(sized)
+        .find(|m| m.primary)
+        .or_else(|| monitors.iter().find(sized))?;
+    Some(dpi_scale(
+        [f64::from(m.width), f64::from(m.height)],
+        [
+            f64::from(m.width_in_millimeters),
+            f64::from(m.height_in_millimeters),
+        ],
+    ))
+}
+
+fn dpi_scale([w, h]: [f64; 2], [w_mm, h_mm]: [f64; 2]) -> f64 {
+    let per_mm = (w * h / (w_mm * h_mm)).sqrt();
+    let scale = ((per_mm * 12.0 * 25.4 / 96.0).round() / 12.0).max(1.0);
+    if scale <= 20.0 { scale } else { 1.0 }
 }
 
 /// Every display, the primary first.
@@ -532,7 +568,8 @@ pub fn activate(id: isize) {
 /// Takes one of Scrawl's GPUI windows out of the window manager's hands (no frame, no
 /// placement, above ordinary windows, not in the taskbar), places it over `rect` (global
 /// pixels) and shows it. GPUI has mapped it already, so it is unmapped and mapped again.
-pub fn float(id: u32, rect: [f64; 4]) {
+/// `clicks`: it takes clicks (the pill, the picker), rather than letting them through.
+pub fn float(id: u32, rect: [f64; 4], clicks: bool) {
     let Some(x) = x() else {
         return;
     };
@@ -585,6 +622,25 @@ pub fn float(id: u32, rect: [f64; 4]) {
             x.atom("_NET_WM_STATE_SKIP_PAGER"),
         ],
     );
+    // Hyprland never gives the pointer to an override-redirect notification (GPUI's type for
+    // popups); a toolbar gets it, without taking the keyboard when it's mapped. A class keeps
+    // it out of the stock "no_focus for XWayland windows without class or title" rule.
+    if clicks && super::hyprland::running() {
+        let _ = x.conn.change_property32(
+            PropMode::REPLACE,
+            id,
+            x.atom("_NET_WM_WINDOW_TYPE"),
+            AtomEnum::ATOM,
+            &[x.atom("_NET_WM_WINDOW_TYPE_TOOLBAR")],
+        );
+        let _ = x.conn.change_property8(
+            PropMode::REPLACE,
+            id,
+            AtomEnum::WM_CLASS,
+            AtomEnum::STRING,
+            b"dev.kitlangton.scrawl\0dev.kitlangton.scrawl\0",
+        );
+    }
     configure(x, id, rect);
     let _ = x.conn.map_window(id);
     raise_on(x, id);
@@ -832,5 +888,12 @@ mod tests {
             Some([0.0, 32.0, 1920.0, 1048.0])
         );
         assert_eq!(intersect([1920.0, 0.0, 1920.0, 1080.0], [0.0, 0.0, 1920.0, 1080.0]), None);
+    }
+
+    #[test]
+    fn randr_scale_matches_gpui() {
+        // A 27" 4K monitor, as XWayland reports it under Hyprland's force_zero_scaling.
+        assert_eq!(dpi_scale([3840.0, 2160.0], [600.0, 340.0]), 20.0 / 12.0);
+        assert_eq!(dpi_scale([1920.0, 1080.0], [530.0, 300.0]), 1.0);
     }
 }
