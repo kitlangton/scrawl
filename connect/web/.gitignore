@@ -2,5 +2,6 @@ node_modules
 public/
 dist/
 dist-test/
+dist-analytics-test/
 dist-ssr/
 *.tsbuildinfo

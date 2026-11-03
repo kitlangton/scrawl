@@ -39,8 +39,9 @@ test('runtime and SSR graph cannot import the legacy site implementation', async
   for (const name of await readdir('src')) {
     if (!/\.(tsx?|css)$/.test(name)) continue
     const raw = await readFile(`src/${name}`, 'utf8')
-    // The canonical framework-independent theme is the only cross-owner CSS import.
-    const source = name === 'base.css' ? raw.replace('@import "../../../shared/ui/src/tokens.css";', '') : raw
+    // Only the canonical theme and framework-independent analytics broker may cross owners.
+    const source = (name === 'base.css' ? raw.replace('@import "../../../shared/ui/src/tokens.css";', '') : raw)
+      .replaceAll('from "../../../shared/analytics/browser"', 'from "approved-shared-analytics"')
     assert.doesNotMatch(source, /(?:from\s*|import\s*)["'][^"']*(?:site\/|\.\.\/)/)
     assert.doesNotMatch(source, /localStorage|sessionStorage|console\./)
   }

@@ -19,3 +19,7 @@ const app = (
 // scripts/site-build/prerender.ts fills #root at build time; the dev server serves it empty.
 if (root.firstElementChild) hydrateRoot(root, app)
 else createRoot(root).render(app)
+
+declare const __APPARENT_ANALYTICS_ENABLED__: boolean
+declare const __APPARENT_ANALYTICS_CONFIG__: { enabled: boolean; token: string; host: string; environment: string }
+if (__APPARENT_ANALYTICS_ENABLED__) void import("../../../shared/analytics/browser").then(({ startAnalytics }) => startAnalytics(__APPARENT_ANALYTICS_CONFIG__))
