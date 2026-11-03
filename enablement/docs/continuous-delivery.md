@@ -332,8 +332,16 @@ setup, or the entire platform workflow. No speedup is claimed from instrumentati
 
 ## Bounded Connect client reuse pilot
 
-The independent Connect client build/test step uses
-`enablement/verification/client-suite.ts`. Reuse is eligible only on identified
+The independent Connect client build/test job uses
+`enablement/verification/client-suite.ts`. It runs alongside Desktop UI and root
+Rust verification after selector contracts pass, on the exact candidate checkout.
+Both the terminal verification job and publication admission require its successful
+`connect-client (<runner>)` result; older runs without that job cannot admit
+publication. Its dedicated Rust dependency cache targets `target/ci-connect-client`,
+matching the verifier, separately from root build outputs. This scheduling split
+does not enable owner-report skipping or broaden result reuse.
+
+Reuse is eligible only on identified
 GitHub-hosted **Linux** images; Mac and local runs still execute the suite. Root
 Rust checks, real-provider consumer tests and native/platform proof always remain
 required. This pilot does not cache any GUI/native acceptance or release artifacts.

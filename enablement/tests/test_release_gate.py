@@ -61,7 +61,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertIn("if: github.ref == 'refs/heads/main'\n", verify)
             self.assertIn('uses: ./.github/workflows/verification-platform.yml', verify)
         workflow = (root / '.github/workflows/verification-platform.yml').read_text()
-        for job in ('desktop-ui', 'rust'):
+        for job in ('desktop-ui', 'connect-client', 'rust'):
             section = re.search(r'^  ' + job + r':\n(.*?)(?=^  [a-z]|\Z)', workflow, re.M | re.S)[1]
             self.assertIn("if: github.ref == 'refs/heads/main'\n", section)
             self.assertNotIn('workflow_dispatch', section.split('    steps:', 1)[0])
@@ -100,13 +100,41 @@ class AdmissionTests(unittest.TestCase):
         workflow = Path(__file__).resolve().parents[2] / gate.WORKFLOWS['macos']
         self.assertIn('runner: macos-15-intel', workflow.read_text())
         names = ['verify / select', 'verify / desktop-ui (macos-15-intel)',
-                 'verify / rust (macos-15-intel)', 'verify / Release verification']
+                 'verify / rust (macos-15-intel)', 'verify / connect-client (macos-15-intel)',
+                 'verify / Release verification']
         self.jobs['macos'] = [dict(name=name, status='completed', conclusion='success')
                               for name in names]
         self.assertEqual(self.admit('macos'), self.sha)
         for job in self.jobs['macos']:
             job['name'] = job['name'].replace('macos-15-intel', 'macos-latest')
         with self.assertRaises(ValueError): self.admit('macos')
+
+    def test_independent_client_is_required_even_with_legacy_success_receipts(self):
+        for platform, runner in [('linux', 'ubuntu-24.04'), ('macos', 'macos-15-intel')]:
+            name = f'verify / connect-client ({runner})'
+            self.assertIn(name, gate.REQUIRED[platform])
+            original = copy.deepcopy(self.jobs[platform])
+            for outcome in ('failure', 'skipped', 'cancelled', None):
+                self.jobs[platform] = [j for j in copy.deepcopy(original) if j['name'] != name]
+                self.jobs[platform].append(dict(name=name, status='completed', conclusion=outcome))
+                with self.subTest(platform=platform, outcome=outcome), self.assertRaises(ValueError):
+                    self.admit(platform)
+            self.jobs[platform] = [j for j in original if j['name'] != name]
+            with self.assertRaises(ValueError): self.admit(platform)
+            self.jobs[platform] = original
+
+    def test_client_runs_parallel_and_terminal_receipt_waits_for_it(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/verification-platform.yml').read_text()
+        client = workflow.split('\n  connect-client:\n')[1].split('\n  rust:\n')[0]
+        self.assertIn('needs: select', client)
+        self.assertNotIn('needs: rust', client)
+        self.assertIn('ref: ${{ inputs.revision || github.sha }}', client)
+        self.assertIn('connect/client -> ../../target/ci-connect-client', client)
+        self.assertIn('key: connect-client', client)
+        self.assertIn('node enablement/verification/client-suite.ts --state', client)
+        rust = workflow.split('\n  rust:\n')[1].split('\n  release-ready:\n')[0]
+        self.assertNotIn('client-suite.ts', rust)
+        self.assertIn('needs: [select, desktop-ui, connect-client, rust]', workflow)
 
     def test_linux_checks_can_publish_without_a_mac_receipt(self):
         self.runs['macos'].update(status='queued', conclusion=None)
