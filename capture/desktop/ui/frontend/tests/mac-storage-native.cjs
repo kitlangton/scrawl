@@ -52,6 +52,7 @@ on run argv
       if (count of windows) is 0 then error "Owned process has no AX windows"
       set outerWindow to window 1
       set picker to outerWindow
+      set parentPicker to missing value
       set depth to 0
       set trace to ""
       repeat
@@ -69,6 +70,7 @@ on run argv
         set childSheets to sheets of picker
         if (count of childSheets) is 0 then exit repeat
         if (count of childSheets) is not 1 or depth is 4 then error "Unsupported owned AX sheet tree: " & trace
+        set parentPicker to picker
         set picker to item 1 of childSheets
         set depth to depth + 1
       end repeat
@@ -97,6 +99,28 @@ on run argv
       if panelRole is not "AXSheet" and panelRole is not "AXWindow" then error "Unexpected picker role: " & trace
       -- A sheet can have no title. A named picker must expose the shipped title.
       if panelName is not "" and panelName is not "Choose capture location" then error "Unexpected picker title: " & trace
+      -- Go to Folder is a blocking child of the verified native chooser.
+      -- Observe only its immediate controls; never descend the file browser.
+      if operation is "go-ready" or operation is "go-fill" or operation is "go-readback" or operation is "go-commit" then
+        if depth is not 2 or panelRole is not "AXSheet" or panelName is not "" then error "Unsupported Go to Folder sheet: " & trace
+        if (role of parentPicker as text) is not "AXSheet" then error "Unexpected Go to Folder parent role: " & trace
+        if (count of buttons of parentPicker) > 16 then error "Oversized Go to Folder parent footer: " & trace
+        if (count of buttons of parentPicker whose name is "Choose") is not 1 or (count of buttons of parentPicker whose name is "Cancel") is not 1 then error "Go to Folder has no unique chooser parent: " & trace
+        set children to UI elements of picker
+        if (count of children) is not 4 then error "Unsupported Go to Folder controls: " & trace
+        if (role of item 1 of children as text) is not "AXStaticText" or (role of item 2 of children as text) is not "AXButton" or (role of item 3 of children as text) is not "AXTextField" or (role of item 4 of children as text) is not "AXScrollArea" then error "Unsupported Go to Folder roles: " & trace
+        set pathField to item 3 of children
+        if not frontmost or not (enabled of pathField) or not (focused of pathField) then error "Go to Folder field is not ready/focused: " & trace
+        if operation is "go-fill" then
+          -- Set the OS field directly, avoiding lost keystrokes/autocomplete races.
+          set value of pathField to item 2 of argv
+        end if
+        if operation is not "go-ready" then
+          if (value of pathField as text) is not (item 2 of argv) then error "Go to Folder path readback mismatch: " & trace
+        end if
+        if operation is "go-commit" then key code 36
+        return trace & "go-field=" & operation
+      end if
       -- Observed macOS 26 NSOpenPanel: one AXSplitGroup immediately under the
       -- sheet, with the footer buttons directly under that group. Do not walk
       -- the file-browser descendants (which can expose an entire volume).
@@ -132,11 +156,7 @@ on run argv
         if not frontmost then error "Owned Electron process is not frontmost"
         if operation is "go" then
           keystroke "g" using {command down, shift down}
-          delay 0.4
-          if not frontmost then error "Focus left owned Electron process"
-          -- argv, not script interpolation: spaces, quotes and accents remain data.
-          keystroke (item 2 of argv)
-          key code 36
+          -- Readiness, path readback and confirmation occur in separate phases.
         else if operation is "choose" then
           click chooseButton
         else
@@ -430,7 +450,12 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     await change.click({ timeout: budget() });
     report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');
     // Only the OS picker receives the path. Never pass it through renderer/IPC.
-    await osa(panelScript, [String(electronChild.pid), selected, 'go']);
+    const goPanel = operation => osa(panelScript, [String(electronChild.pid), selected, operation]);
+    await goPanel('go');
+    report.nativeGoReady = await poll(() => goPanel('go-ready'), 'Go to Folder field readiness');
+    report.nativeGoFilled = await goPanel('go-fill');
+    report.nativeGoReadback = await poll(() => goPanel('go-readback'), 'Go to Folder exact path readback');
+    report.nativeGoCommit = await goPanel('go-commit');
     report.nativeBeforeChoose = await poll(() => panel('inspect'), 'Picker after Go to Folder');
     // Optional evidence: bounded rectangle of our verified Electron window only.
     const bounds = report.nativeBeforeChoose.match(/bounds=(-?\d+),(-?\d+),(\d+),(\d+)$/);
