@@ -106,7 +106,7 @@ retain the build/package logs alongside the evidence.
 
 `--channel main` persists Main in the private config and keeps the same loading,
 HTTP failure/retry, checksum, staging, Later, Escape and restart assertions.
-Startup advertises `linux-main-<source HEAD>` matching the embedded revision;
+Startup advertises `linux-main-v2-<source HEAD>` matching the embedded revision;
 no AppImage may be downloaded. The fixture serves the canonical paginated
 GitHub releases API: an unrelated stable release on page 1, the usable Main
 prerelease on page 2, and an empty page 3. Asset URLs retain the canonical GitHub
@@ -194,3 +194,18 @@ Distinguish harness/environment failure from a reproduced app defect before
 changing runtime code. Fix concrete harness issues and repeat against the same
 image hash; do not hide failed attempts or manufacture an updater change merely
 to give this acceptance work a runtime diff.
+
+### Signing migration variant
+
+Add `--channel main --legacy-appimage /private/path/legacy.AppImage` to the
+controller command to exercise the November 2026 signing-history migration. The
+controller accepts only the published x86_64 `a5cf47d` asset digest and stages it
+as a separate fixture file. The guest first runs that real old AppImage, discovers
+the synthetic permanent v1 bridge despite a later v2 release, and uses actual
+Settings clicks to stage and restart into the exact packaged candidate. It then
+checks the same-source v2 feed, stages a later synthetic v2 identity, defers and
+rechecks before restarting again. Both payload downloads use the exact candidate
+bytes. Assertions bind the old/new running revisions, all three installed markers,
+request counts and both restart receipts. This proves the packaged compatibility
+protocol in isolation; production signing, publication and asset reachability
+remain separate checks.

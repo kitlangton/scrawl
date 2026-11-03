@@ -260,6 +260,7 @@ def main():
     parser.add_argument("--ssh-user", required=True)
     parser.add_argument("--scenario", type=Path, required=True, help="guest bash script; runs after Hyprland starts")
     parser.add_argument("--audio-file", type=Path, help="optional WAV stimulus staged inside the guest")
+    parser.add_argument("--fixture-file", type=Path, action="append", default=[], help="additional isolated scenario input")
     parser.add_argument("--binary", type=Path, required=True, help="candidate executable (sibling .so files are staged too)")
     parser.add_argument("--results", type=Path, required=True, help="new directory; retained after the run")
     parser.add_argument("--memory", type=int, default=3072, help="guest MiB (default: 3072)")
@@ -306,7 +307,7 @@ def main():
     try:
         write_result(directory, status)
         validate_socket_paths(directory)
-        for path in (args.template, args.ovmf_vars, args.ssh_key, args.scenario, args.binary, args.audio_file):
+        for path in (args.template, args.ovmf_vars, args.ssh_key, args.scenario, args.binary, args.audio_file, *args.fixture_file):
             if path is not None and not path.is_file():
                 raise RuntimeError(f'missing file: {path}')
         if not re.fullmatch(r'[a-z_][a-z0-9_-]*', args.ssh_user):
@@ -355,7 +356,9 @@ def main():
             guest_output = "/home/" + args.ssh_user + "/scrawl-gui-output-" + uuid.uuid4().hex
             guest_bin = "/home/" + args.ssh_user + "/scrawl-gui-bin-" + uuid.uuid4().hex
             call(prefix + ["mkdir -p " + shlex.quote(guest_bin)], timeout=10)
-            files = [args.binary.resolve()] + sorted(args.binary.parent.glob("lib*.so*"))
+            files = [args.binary.resolve()] + sorted(args.binary.parent.glob("lib*.so*")) + [path.resolve() for path in args.fixture_file]
+            if len({path.name for path in files}) != len(files):
+                raise RuntimeError('fixture filenames must not replace candidate inputs')
             transfer = ["scp", "-q", "-P", str(port), "-i", str(args.ssh_key.resolve()),
                         "-o", "StrictHostKeyChecking=accept-new",
                         "-o", "UserKnownHostsFile=" + str(directory / "known_hosts")]

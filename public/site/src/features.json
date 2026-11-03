@@ -1295,6 +1295,7 @@
       "id": "linux-appimage-updates",
       "group": "install",
       "name": "Linux AppImage update channels",
+      "note": "Signing-history migration uses a permanent legacy bridge release and a separate v2 Main feed. Old ancestry stays outside Main. Publication and packaged old-to-bridge-to-v2 acceptance remain required before claiming recovery is live.",
       "says": "Installed AppImages check at launch and hourly, and stage verified updates for the next launch. Main publishes checked builds after pushes/merges without version bumps; failed builds preserve the last good release. Settings and CLI offer Stable or Main, manual check results and live version status. Update now waits until capture is idle.",
       "status": "main",
       "added": "2026-10-28",

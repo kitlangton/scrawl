@@ -357,3 +357,11 @@ freshness without failing the successful commit. No background worker is started
 other worktrees are untouched. Existing worktrees acquire the hook when they
 integrate this change; frozen evidence checkouts need not be updated. Local hook
 checks do not replace current-main integration and review before merge.
+
+Linux Main's signing-history migration uses the v2 release namespace. The one-time
+`bridge_commit` dispatch shares the Linux publication lock and aliases verified
+canonical v2 assets; it never admits an unverified branch build. The signed bridge
+tag retains legacy ancestry outside Main, with an identical canonical source tree.
+Keep that permanent v1 release for late upgraders and never resume v1 publication.
+Preparation, exact evidence and rollback constraints are in
+[`Linux signing-history migration`](../../capture/desktop/docs/linux/linux.md#signing-history-migration-november-2026).

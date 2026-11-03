@@ -20,7 +20,7 @@ OTHER_SHA = "d" * 40
 
 
 def preview(sha):
-    return dict(tag_name=f"linux-main-{sha}", draft=False, prerelease=True)
+    return dict(tag_name=f"linux-main-v2-{sha}", draft=False, prerelease=True)
 
 
 class LinuxPreviewPublicationTest(unittest.TestCase):
@@ -138,7 +138,7 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
         self.assertLess(next(i for i, c in enumerate(calls) if c[:2] == ["release", "view"]),
                         next(i for i, c in enumerate(calls) if c[:2] == ["release", "edit"]))
         create = next(c for c in calls if c[:2] == ["release", "create"])
-        self.assertEqual(create[2], f"linux-main-{SHA}")
+        self.assertEqual(create[2], f"linux-main-v2-{SHA}")
         self.assertEqual(create[create.index("--target") + 1], SHA)
         for flag in ("--draft", "--prerelease", "--latest=false"):
             self.assertIn(flag, create)
@@ -275,7 +275,10 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
         self.assertIn("--json isDraft --jq .isDraft", workflow)
         self.assertIn("ref: ${{ needs.admit.outputs.sha }}", build)
         self.assertIn('test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"', build)
-        self.assertIn("ref: ${{ needs.admit.outputs.sha }}", job)
+        self.assertIn("ref: main", job)
+        self.assertIn('git show "$CANDIDATE_SHA:capture/desktop/linux/updates/update.rs"', job)
+        self.assertIn('strip_prefix("linux-main-v2-")', job)
+        self.assertIn('GITHUB_SHA="$CANDIDATE_SHA" cargo build', build)
         self.assertIn("python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py", job)
         self.assertIn("inputs.verify_only != true", job)
         self.assertNotIn("exit 0", job)
