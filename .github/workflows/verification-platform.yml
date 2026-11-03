@@ -185,7 +185,33 @@ jobs:
           TMPDIR="$storage_tmp" APPARENT_STORAGE_TEST_ELECTRON="$electron" \
             APPARENT_CONNECT_TEST_ELECTRON="$electron" \
             cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture
+      - name: Install the Mac candidate (packaging, not launch acceptance)
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        shell: bash
+        run: |
+          export APPARENT_APP_DIR="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
+          test ! -e "$APPARENT_APP_DIR"
+          APPARENT_NO_LAUNCH=1 bash capture/desktop/scripts/packaging/install-app.sh
+          codesign --verify --deep --strict "$APPARENT_APP_DIR"
+      - name: Packaged Mac Settings smoke (not capture or permission acceptance)
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        timeout-minutes: 3
+        shell: bash
+        env:
+          APPARENT_PACKAGED_SMOKE: '1'
+          APPARENT_SMOKE_OUTPUT: ${{ runner.temp }}/apparent-packaged-smoke
+        run: |
+          export APPARENT_APP_DIR="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
+          node capture/desktop/scripts/mac/packaged-smoke.cjs
+      - name: Retain packaged Mac smoke evidence, including failures
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-packaged-smoke
+          path: ${{ runner.temp }}/apparent-packaged-smoke/
+          if-no-files-found: warn
       - name: Native Mac Storage and error-reporting controls against the installed Rust GUI
+        id: native-storage
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
         timeout-minutes: 10
         shell: bash
@@ -196,13 +222,11 @@ jobs:
           test "$GITHUB_ACTIONS" = true
           test "$RUNNER_ENVIRONMENT" = github-hosted
           export APPARENT_APP_DIR="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
-          test ! -e "$APPARENT_APP_DIR"
-          APPARENT_NO_LAUNCH=1 bash capture/desktop/scripts/packaging/install-app.sh
-          codesign --verify --deep --strict "$APPARENT_APP_DIR"
           npm --prefix capture/desktop/ui/frontend run build
           APPARENT_STORAGE_NATIVE_APP_DIR="$APPARENT_APP_DIR" \
             node --test capture/desktop/ui/frontend/tests/mac-storage-native.cjs
       - name: Native GPUI Copy capture ID against the same installed App
+        id: native-copy-id
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
         timeout-minutes: 4
         shell: bash
@@ -221,6 +245,7 @@ jobs:
             -o "$evidence/copy-capture-id" > "$evidence/compile.log" 2>&1
           "$evidence/copy-capture-id" "$app" "$evidence/run"
       - name: Native Electron selected-reference control against the installed Rust App
+        id: native-reference
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
         timeout-minutes: 4
         shell: bash
@@ -230,7 +255,7 @@ jobs:
           export APPARENT_REFERENCE_BINARY="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app/Contents/MacOS/apparent"
           node --test capture/desktop/ui/frontend/tests/reference-native.cjs
       - name: Retain synthetic Electron reference evidence, including failures
-        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true' && steps.native-reference.outcome != 'skipped' && steps.native-reference.outcome != ''
         uses: actions/upload-artifact@v4
         with:
           name: mac-reference-electron-native
@@ -241,7 +266,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Retain synthetic native Copy capture ID evidence, including failures
-        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true' && steps.native-copy-id.outcome != 'skipped' && steps.native-copy-id.outcome != ''
         uses: actions/upload-artifact@v4
         with:
           name: mac-copy-capture-id-native
@@ -253,7 +278,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Retain synthetic Mac Storage evidence, including failures
-        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true' && steps.native-storage.outcome != 'skipped' && steps.native-storage.outcome != ''
         uses: actions/upload-artifact@v4
         with:
           name: mac-storage-native
