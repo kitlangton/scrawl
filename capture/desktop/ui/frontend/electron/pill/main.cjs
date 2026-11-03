@@ -37,10 +37,15 @@ function publish(value){
   if(!current || next.revision!==current.revision)pending=false;
   if(current && next.revision!==current.revision)pasteGesture=null;
   current=next;lastInput=Date.now();
-  if(loaded){window.webContents.send('pill:state',current);visibility();}
+  if(loaded)window.webContents.send('pill:state',current);
+  visibility();
 }
 function visibility(){
-  if(!activated || current?.phase==='hidden'){window.hide();return;}
+  if(!window || window.isDestroyed())return;
+  if(!activated || current?.phase==='hidden'){
+    if(window.isVisible())window.hide();
+    return;
+  }
   if(rendererReady && current && !window.isVisible())window.showInactive();
 }
 function valid(event,args){
