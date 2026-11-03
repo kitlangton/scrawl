@@ -49,6 +49,9 @@ test('feed step fetches immutable tags created after checkout without accepting 
   const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   try {
     const root = run(process.cwd(), 'rev-parse', '--show-toplevel');
+    // A shared local clone cannot fetch missing blobs from its donor's promisor.
+    // Hydrate this excluded test input before making the fixture's bare remote.
+    const cargoManifest = run(root, 'show', 'HEAD:Cargo.toml');
     const remote = join(dir, 'origin.git'), checkout = join(dir, 'checkout');
     run(dir, 'clone', '--bare', '--shared', root, remote);
     run(remote, 'config', 'uploadpack.allowFilter', 'true');
@@ -73,7 +76,7 @@ test('feed step fetches immutable tags created after checkout without accepting 
     assert.equal(run(checkout, 'rev-list', 'HEAD'), run(remote, 'rev-list', 'HEAD'));
     // Lazy materialization retains the exact current source tree and file bytes.
     assert.equal(run(checkout, 'rev-parse', 'HEAD^{tree}'), run(remote, 'rev-parse', 'HEAD^{tree}'));
-    assert.equal(run(checkout, 'show', 'HEAD:Cargo.toml'), run(remote, 'show', 'HEAD:Cargo.toml'));
+    assert.equal(run(checkout, 'show', 'HEAD:Cargo.toml'), cargoManifest);
     const head = run(checkout, 'rev-parse', 'HEAD'), tag = `refs/tags/linux-main-v2-${head}`;
     assert.throws(() => run(checkout, 'rev-parse', '--verify', `${tag}^{commit}`));
     run(remote, 'update-ref', tag, head); // Simulate the preceding release publisher.
