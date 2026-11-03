@@ -6,7 +6,7 @@ const suppliedProfile = process.argv.find(v => v.startsWith('--notes-profile='))
 const profile = suppliedProfile || fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'apparent-note-ui-'));
 const { pathToFileURL } = require('node:url');
 const readline = require('node:readline');
-const { validCommand, validSnapshot, popupBounds, badgeBounds, BADGE_WIDTH, BADGE_HEIGHT } = require('./protocol.cjs');
+const { validCommand, validSnapshot, popupBounds, badgeBounds, BADGE_WIDTH, BADGE_HEIGHT, flightBounds } = require('./protocol.cjs');
 app.setName('Apparent Notes');
 nativeTheme.themeSource = 'system';
 app.setPath('userData', profile);
@@ -44,6 +44,7 @@ app.whenReady().then(() => {
     return win;
   }
   popup = window('popup', 332, 200); badge = window('badge', BADGE_WIDTH, BADGE_HEIGHT);
+  let flight = null, flightTimer, pendingSave = null, flightSerial = 0;
   const placed = new Map();
   const requested = new Map();
   function setRequestedBounds(win, bounds, opening) {
@@ -71,13 +72,35 @@ app.whenReady().then(() => {
   }
   function publish() {
     if (!latest) return;
-    for (const win of [popup, badge]) win.webContents.send('notes:snapshot', latest);
+    for (const win of [popup, badge]) win.webContents.send('notes:snapshot', { ...latest, flight });
+  }
+  function cancelFlight() {
+    if (!flight) return;
+    clearTimeout(flightTimer); flight = null;
+    popup.hide(); popup.setIgnoreMouseEvents(false);
+    if (process.platform === 'darwin') popup.setFocusable(true);
+    send({ action: 'flight', active: false });
+  }
+  function flyToCounter(target) {
+    const motion = flightBounds(JSON.parse(requested.get(popup) || JSON.stringify(popup.getBounds())), target);
+    if (!motion) return false;
+    flight = { id: ++flightSerial, start: motion.start, delta: motion.delta };
+    // The native input filter must ignore the enlarged visual-only surface too.
+    send({ action: 'flight', active: true });
+    popup.hide(); popup.setIgnoreMouseEvents(true);
+    if (process.platform === 'darwin') popup.setFocusable(false);
+    send({ action: 'hidden' });
+    setRequestedBounds(popup, motion.bounds, true);
+    popup.showInactive(); placeSurface(popup, false, true, motion.bounds);
+    flightTimer = setTimeout(() => { cancelFlight(); publish(); }, 260);
+    return true;
   }
   ipcMain.handle('notes:ready', (event) => { validate(event); publish(); });
   ipcMain.handle('notes:finish-ready', event => { validate(event); if (event.sender !== popup.webContents || !finishing || finished) return; finished = true; send({ action: 'finished' }); });
   ipcMain.handle('notes:command', (event, value) => {
     validate(event);
     if (finished || !validCommand(value)) throw new Error('Invalid notes command');
+    if (value.action === 'save') pendingSave = { pin: value.pin, text: value.text.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '') };
     send(value);
   });
   const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -86,7 +109,7 @@ app.whenReady().then(() => {
     try {
       const state = JSON.parse(line);
       if (state.finishing === true && Object.keys(state).length === 1) {
-        finishing = true; popup.hide(); badge.hide();
+        finishing = true; pendingSave = null; cancelFlight(); popup.hide(); badge.hide();
         const notify = () => popup.webContents.send('notes:finish');
         if (popup.webContents.isLoadingMainFrame()) popup.webContents.once('did-finish-load', notify); else notify();
         return;
@@ -104,7 +127,11 @@ app.whenReady().then(() => {
         setRequestedBounds(badge, requestedBadge, openingBadge);
       }
       const point = { x: Math.round(state.position[0]), y: Math.round(state.position[1]) };
+      const attached = pendingSave && state.mode === 'badge' && !state.error && pendingSave.text.length > 0 &&
+        state.notes.some(n => n.pin === pendingSave.pin && n.text === pendingSave.text);
+      if (state.mode === 'badge' || state.error || (pendingSave && state.current !== pendingSave.pin)) pendingSave = null;
       if (state.mode !== 'badge') {
+        cancelFlight();
         const work = screen.getDisplayNearestPoint(point).workArea;
         const bounds = popupBounds(point, work, state.mode === 'list' ? 350 : 220);
         const opening = !popup.isVisible();
@@ -113,7 +140,10 @@ app.whenReady().then(() => {
         const focus = !previous || previous.mode !== state.mode || previous.current !== state.current;
         if (focus) { popup.focus(); popup.webContents.focus(); }
         placeSurface(popup, focus, opening, bounds);
-      } else { popup.hide(); if (previous && previous.mode !== 'badge') send({ action: 'hidden' }); }
+      } else if (attached && requestedBadge) {
+        cancelFlight();
+        if (!flyToCounter(requestedBadge)) { popup.hide(); send({ action: 'hidden' }); }
+      } else if (!flight) { popup.hide(); if (previous && previous.mode !== 'badge') send({ action: 'hidden' }); }
       if (requestedBadge) {
         if (openingBadge) badge.showInactive();
         placeSurface(badge, false, openingBadge, requestedBadge);

@@ -36,4 +36,16 @@ function badgeBounds(rect, area) {
     y: Math.round(Math.max(area.y, Math.min(by, area.y + area.height - BADGE_HEIGHT))) };
 }
 
-module.exports = { validCommand, validSnapshot, popupBounds, badgeBounds, BADGE_WIDTH, BADGE_HEIGHT };
+// A small click-through sprite travels between the two existing owned surfaces.
+function flightBounds(from, badge) {
+  const start = [from.x + from.width / 2 - 16, from.y + from.height / 2 - 16];
+  const end = [badge.x + badge.width / 2 - 16, badge.y + badge.height / 2 - 16];
+  const x = Math.floor(Math.min(start[0], end[0]) - 8);
+  const y = Math.floor(Math.min(start[1], end[1]) - 40);
+  const width = Math.ceil(Math.max(start[0], end[0]) + 40 - x);
+  const height = Math.ceil(Math.max(start[1], end[1]) + 40 - y);
+  if (![x, y, width, height].every(Number.isFinite) || width > 8192 || height > 8192) return null;
+  return { bounds: { x, y, width, height }, start: [start[0] - x, start[1] - y],
+    delta: [end[0] - start[0], end[1] - start[1]] };
+}
+module.exports = { validCommand, validSnapshot, popupBounds, badgeBounds, BADGE_WIDTH, BADGE_HEIGHT, flightBounds };

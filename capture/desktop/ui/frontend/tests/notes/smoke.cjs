@@ -64,9 +64,21 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   await expect(field).toHaveValue('Smaller button\nx');
   await field.press('Enter');
   await expect.poll(() => messages.find(m => m.action === 'save')?.text).toBe('Smaller button\nx');
+  await popup.emulateMedia({ reducedMotion: 'reduce' });
+  await popup.evaluate(() => {
+    window.flightSeen = false;
+    new MutationObserver(() => { const sprite = document.querySelector('.note-flight'); if (sprite) { window.flightSeen = true; window.flightDisplay = getComputedStyle(sprite).display; window.flightBody = getComputedStyle(document.body).backgroundColor; } })
+      .observe(document.body, { subtree: true, childList: true });
+  });
   // Real Rust owns this ack in production. This fixture tests renderer behavior only.
   state = { ...state, mode: 'badge', notes: [{ ...state.drafts[0], text: 'Smaller button\nx' }], drafts: [{ ...state.drafts[0], text: 'Smaller button\nx' }] }; send();
   await expect(badge.getByRole('button', { name: '1 saved notes. Open notes' })).toBeVisible();
+  await expect.poll(() => popup.evaluate(() => window.flightSeen)).toBe(true);
+  assert.equal(await popup.evaluate(() => window.flightDisplay), 'none', 'reduced motion hides the decorative flight');
+  assert.equal(await popup.evaluate(() => window.flightBody), 'rgba(0, 0, 0, 0)');
+  await expect.poll(() => messages.some(m => m.action === 'flight' && m.active)).toBe(true);
+  await expect.poll(() => messages.some(m => m.action === 'flight' && !m.active)).toBe(true);
+
   await badge.getByRole('button').click();
   await expect.poll(() => messages.some(m => m.action === 'list')).toBe(true);
   state.mode = 'list'; state.badgeRect = [450, 36, 380, 40]; send();
@@ -89,11 +101,19 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   await expect(popup.getByRole('alert')).toBeVisible(); await expect(field).toHaveValue('Draft correction');
   await assert.rejects(popup.evaluate(() => window.captureNotes.command({ action: 'save', pin: 1, text: 'x', path: '/tmp/no' })));
   // Finish must acknowledge every save already sent by this renderer, in pipe order.
-  await popup.evaluate(() => { void window.captureNotes.command({ action: 'save', pin: 1, text: 'Final correction' }); });
+  await popup.evaluate(() => { void window.captureNotes.command({ action: 'save', pin: 1, text: 'Final correction\n' }); });
+  await popup.emulateMedia({ reducedMotion: 'no-preference' });
+  const flightsBefore = messages.filter(m => m.action === 'flight' && m.active).length;
+  state = { ...state, mode: 'badge', error: null,
+    notes: [{ ...state.drafts[0], text: 'Final correction' }], drafts: [{ ...state.drafts[0], text: 'Final correction' }] }; send();
+  await expect.poll(() => messages.filter(m => m.action === 'flight' && m.active).length).toBe(flightsBefore + 1);
   child.stdin.write(JSON.stringify({ finishing: true }) + '\n');
   await expect.poll(() => messages.some(m => m.action === 'finished')).toBe(true);
   const finish = messages.findIndex(m => m.action === 'finished');
-  assert.ok(messages.findIndex(m => m.action === 'save' && m.text === 'Final correction') < finish);
+  const lastFlight = messages.findLastIndex(m => m.action === 'flight' && m.active);
+  assert.ok(messages.slice(lastFlight + 1, finish).some(m => m.action === 'flight' && !m.active),
+    'Finish cancels an active decorative animation before its save barrier');
+  assert.ok(messages.findIndex(m => m.action === 'save' && m.text === 'Final correction\n') < finish);
   await assert.rejects(popup.evaluate(() => window.captureNotes.command({ action: 'save', pin: 1, text: 'Too late' })));
   const exited = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Notes did not exit after EOF')), 5000);

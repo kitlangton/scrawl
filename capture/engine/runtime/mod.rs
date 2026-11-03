@@ -1506,18 +1506,21 @@ struct NoteDrawGesture {
     pending: bool,
 }
 impl NoteDrawGesture {
-    fn update(&mut self, editing: bool, shift: bool, at: (f64, f64), inside: impl FnOnce(f64, f64) -> bool) -> bool {
+    fn update(&mut self, editing: bool, shift: bool, at: (f64, f64), mut inside: impl FnMut(f64, f64) -> bool) -> bool {
         if !editing || !shift {
             *self = Self::default();
             return false;
         }
-        if self.pending { return false; }
-        if !at.0.is_finite() || !at.1.is_finite() || inside(at.0, at.1) {
-            self.start = None;
+        if self.pending || !at.0.is_finite() || !at.1.is_finite() { return false; }
+        let Some(start) = self.start else { self.start = Some(at); return false; };
+        if (at.0 - start.0).hypot(at.1 - start.1) < f64::from(MIN_INK_SPAN_PT) { return false; }
+        // Window lookup is needed only after real movement. If Shift started in
+        // the editor, protect text selection until Shift is released, even if
+        // that selection subsequently drags outside its bounds.
+        if inside(start.0, start.1) || inside(at.0, at.1) {
+            self.pending = true;
             return false;
         }
-        let start = *self.start.get_or_insert(at);
-        if (at.0 - start.0).hypot(at.1 - start.1) < f64::from(MIN_INK_SPAN_PT) { return false; }
         self.pending = true;
         true
     }
@@ -1535,6 +1538,17 @@ impl SharedCaptureTelemetry {
 mod note_draw_tests {
     use super::NoteDrawGesture;
     #[test]
+    fn stationary_shift_typing_does_not_enumerate_native_windows() {
+        let mut gesture = NoteDrawGesture::default();
+        let lookups = std::cell::Cell::new(0);
+        for _ in 0..125 {
+            assert!(!gesture.update(true, true, (10.0, 10.0), |_, _| { lookups.set(lookups.get() + 1); false }));
+        }
+        assert_eq!(lookups.get(), 0);
+        assert!(gesture.update(true, true, (20.0, 20.0), |_, _| { lookups.set(lookups.get() + 1); false }));
+        assert_eq!(lookups.get(), 2);
+    }
+    #[test]
     fn drawing_outside_a_note_requires_motion_and_preserves_typing_inside() {
         let mut gesture = NoteDrawGesture::default();
         assert!(!gesture.update(true, true, (10.0, 10.0), |_, _| false));
@@ -1542,6 +1556,8 @@ mod note_draw_tests {
         assert!(!gesture.update(true, false, (10.0, 10.0), |_, _| false));
         assert!(!gesture.update(true, true, (10.0, 10.0), |_, _| true));
         assert!(!gesture.update(true, true, (50.0, 50.0), |_, _| true));
+        assert!(!gesture.update(true, true, (80.0, 80.0), |_, _| false));
+        assert!(!gesture.update(true, false, (80.0, 80.0), |_, _| false));
         assert!(!gesture.update(true, true, (80.0, 80.0), |_, _| false));
         assert!(gesture.update(true, true, (100.0, 100.0), |_, _| false));
         assert!(!gesture.update(true, true, (120.0, 120.0), |_, _| false), "one dismissal until acknowledged");
