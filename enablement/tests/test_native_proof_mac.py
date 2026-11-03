@@ -59,7 +59,7 @@ class NativeProofMacTests(unittest.TestCase):
         workflow = WORKFLOW.read_text()
         main = (ROOT / '.github/workflows/verification-platform.yml').read_text()
         block = workflow.split('      - uses: Swatinem/rust-cache@v2\n', 1)[1].split('      - uses:', 1)[0]
-        main_block = main.split('      - uses: Swatinem/rust-cache@v2\n', 1)[1].split('      - uses:', 1)[0]
+        main_block = main.split('  rust:\n', 1)[1].split('      - uses: Swatinem/rust-cache@v2\n', 1)[1].split('      - uses:', 1)[0]
         def workspaces(text):
             return re.search(r'          workspaces: \|\n((?:            .*\n)+)', text)[1]
         self.assertEqual(workspaces(block), workspaces(main_block))
