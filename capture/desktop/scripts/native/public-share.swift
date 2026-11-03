@@ -73,10 +73,15 @@ func perform() throws {
         let freshBounds = CGRect(dictionaryRepresentation: fresh[0][kCGWindowBounds as String] as! CFDictionary)
         try check(freshBounds == bounds && CGPreflightPostEventAccess(), "Bounds changed or native input permission absent")
         let point = CGPoint(x: bounds.minX + box.midX * bounds.width, y: bounds.minY + (1 - box.midY) * bounds.height)
-        var hit: AXUIElement?; var hitPID: pid_t = -1
-        let result = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit)
-        if let hit { AXUIElementGetPid(hit, &hitPID) }
-        try check(result == .success && hitPID == pid, "Input does not hit the owned PID")
+        // Accessibility element lookup is not mouse hit-testing: a custom-drawn
+        // nonactivating panel need not expose an AX element at its visible button.
+        // AppKit uses the actual mouse-down rules, including transparent pixels
+        // and ignoresMouseEvents. Require the exact inspected window, not merely
+        // another window belonging to the same application.
+        // https://developer.apple.com/documentation/appkit/nswindow/windownumber(at:belowwindowwithwindownumber:)
+        let appKitPoint = NSPoint(x: point.x, y: CGDisplayBounds(CGMainDisplayID()).height - point.y)
+        let hitWindow = NSWindow.windowNumber(at: appKitPoint, belowWindowWithWindowNumber: 0)
+        try check(hitWindow == Int(id), "Mouse-down target differs from owned window (expected \(id), hit \(hitWindow))")
         for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
             CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)!.post(tap: .cghidEventTap)
             RunLoop.main.run(until: Date().addingTimeInterval(0.08))
