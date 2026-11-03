@@ -343,7 +343,7 @@
       "says": "Hold ⇧ and move to draw red ink over any app; it fades after release and is redrawn on the keyframes.",
       "status": "stable@0.3.4",
       "platforms": ["mac", "linux"],
-      "note": "On Wayland the Linux preview needs the input group for ink outside its own windows.",
+      "note": "Desktop ink can cross displays without expanding the recording source; bundle marks are clipped to the selected recording. Linux uses a spanning overlay and macOS uses per-display panels. The Electron development window offers live drawing status and Undo last mark through the Rust controller; native input and overlays remain authoritative. Installed routing is unchanged. Native cross-display acceptance remains pending in issue #355. On Wayland the Linux preview needs the input group for ink outside its own windows.",
       "shortcuts": [{ "keys": "⇧ + move", "does": "Draw" }],
       "docs": ["README.md#capture-controls"]
     },

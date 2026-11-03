@@ -156,6 +156,19 @@ function storagePreference(home, operation, fields = {}, timeoutMs = 3500) {
 
 module.exports = { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference };
 
+function drawing(home, operation = 'read', expected, timeoutMs = 3500) {
+  if (!['read', 'undo'].includes(operation) || (operation === 'undo' && !/^[a-f0-9]{16}$/.test(expected))) throw new Error('Invalid drawing request');
+  const request = { drawing: operation, deadline: Number(process.hrtime.bigint() / 1000000n) + Math.min(timeoutMs, 3000) };
+  if (operation === 'undo') request.expected = expected;
+  return exchange(home, JSON.stringify(request) + '\n', value => {
+    if (['conflict', 'admission_expired', 'app_unresponsive', 'invalid_request'].includes(value?.error)) return { status: 'error', code: value.error };
+    const d = value?.drawing;
+    if (!d || !(d.revision === null || (typeof d.revision === 'string' && /^[a-f0-9]{16}$/.test(d.revision))) || !Number.isSafeInteger(d.strokes) || d.strokes < 0) return { status: 'error', code: 'invalid_response' };
+    return { status: 'connected', revision: d.revision, strokes: d.strokes };
+  }, 4096, timeoutMs, { status: 'error', code: operation === 'undo' ? 'outcome_unknown' : 'timeout' });
+}
+module.exports.drawing = drawing;
+
 async function publicShare(home, operation, value) {
   const request = { publicShare: operation, deadline: Number(process.hrtime.bigint()/1000000n)+3000 };
   if (operation === 'start') { request.expected = value; request.disclosed = true; }

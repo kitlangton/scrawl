@@ -224,6 +224,49 @@ npm run test:electron       # real Electron, synthetic socket; needs a display
 xvfb-run -a npm run test:electron
 ```
 
+For a Linux integration checkpoint before Mac access, run from the repository root:
+
+```sh
+(
+TMPDIR="$(mktemp -d /tmp/apparent-ui.XXXXXXXX)" || exit 1
+export TMPDIR
+python3 enablement/owner_lanes.py --lane desktop-ui-integration --run --online
+# Preserve this private directory if fixtures need diagnosis.
+)
+```
+
+On Clanker, replace the Python command inside the subshell with
+`/home/simon/.local/bin/t3-build -- python3 enablement/owner_lanes.py --lane desktop-ui-integration --run --online`.
+Use the runner once; do not wrap an already admitted invocation.
+The lane honors the runner's `T3_BUILD_JOBS` and runs npm unit tests, the existing
+sequential Electron smoke script (including TypeScript/build) under Xvfb, then
+both ignored `_electron_rust_roundtrip` Rust tests, with the absolute Electron
+package executable supplied to `APPARENT_STORAGE_TEST_ELECTRON` and
+`APPARENT_CONNECT_TEST_ELECTRON`. Those tests use the actual Rust listener and
+controller with private temporary fixtures; the Connect HTTP account fixture is
+synthetic. They run Electron in Node mode and need no display. No standalone
+application build or installed app launch is performed.
+
+The temporary root must be short, owned and mode 0700; failed fixtures may be
+retained for diagnosis; the subshell preserves the caller’s TMPDIR.
+
+Prerequisites: Node 22/npm 10+, Xvfb (`xvfb-run` and `xauth`), Electron's Linux
+runtime libraries, Rust/system build dependencies and available build capacity.
+The command above permits npm/Electron installation and uses Cargo `--locked`.
+Omit `--online` for `npm ci --offline` and `cargo test --offline`; populate both
+package caches first and set `ELECTRON_OVERRIDE_DIST_PATH` to an absolute,
+preinstalled Linux Electron distribution directory outside this frontend's
+`node_modules` (matching its locked Electron version). Offline mode requires
+that executable before npm ci, preventing Electron's lazy downloader from
+silently fetching a binary. Missing prerequisites fail rather than skip proof.
+The ordinary `desktop-ui` lane remains lightweight and unchanged.
+
+This checkpoint proves renderer/synthetic transport behavior and real Rust bridge
+roundtrips only. It does not replace exact-candidate isolated Linux/Omarchy GUI,
+portal/picker, permissions, capture/output or installed packaging proof, nor Mac
+native acceptance. Follow `../../docs/native-testing.md` and
+`../../docs/linux/linux.md`; required exact-SHA CI/release receipts remain separate.
+
 The Electron smoke checks controls/keyboard use, disconnected/error/reconnect,
 renderer reload, minimum-width layout, sandbox/Node isolation, navigation/network
 refusal and rejection of a second renderer. It is not native platform acceptance.
@@ -367,6 +410,37 @@ remains until replacement Settings acceptance; rollback is to close this opt-in
 window, not change the saved consent. Remove the old presentation only with the
 future Settings routing switch. The reporting preference itself is not an
 off-by-default experiment. A packaged PostHog token is required to send reports.
+
+## Drawing controls (#355)
+
+The development window's **Draw across displays** section reads active screen
+recording status and mark count, and **Undo last mark** invokes the same Rust
+undo operation as the native shortcut (desktop ink or a newer pin). Hold Shift
+and move over the desktop to draw; Electron does not intercept pointer events.
+Refresh explicitly after drawing. Pin Undo first persists deletion of its typed note; a failed or timed-out receipt preserves the pin for recovery. This receipt has a two-second bound. No recording is started, target changed or
+permission granted by this section. Phone and lab sessions are unavailable.
+
+Routing: `npm start` opens the development controls; the separately running Rust
+GUI owns admission, capture, input and overlays. This adds no feature flag and
+does not activate any existing experiment or switch installed launchers. Linux and macOS use per-display native
+panels. These are OS adapters, not competing React ink canvases. The native
+shortcut remains usable alongside this control, as keyboard access to the same
+operation. Closing Electron rolls back to the installed native controls without
+changing config or active capture state. Remove the legacy control surface only
+after the shared shell is routed and accepted on both platforms and all its
+callers/build/package inputs are verified; this slice does not authorize that
+routing change or removal.
+
+The same-user private socket accepts typed `drawing: read|undo` JSON with a
+monotonic deadline. Main holds the observed recording revision; the renderer
+cannot supply it. Rust validates the deadline and exact recording identity on
+the GUI thread before mutation. Navigation invalidates the receipt. Requests
+are serialized, never retried automatically; after an ambiguous timeout refresh
+before another undo. No paths, capture contents or raw errors reach React.
+
+Transport and renderer fixtures are synthetic checks, not native drawing proof.
+Exact-candidate isolated Linux and macOS cross-display proof, bundle text/image
+inspection and a verified playable video remain required before acceptance.
 
 ## Explicit public link from the selected capture (#171)
 

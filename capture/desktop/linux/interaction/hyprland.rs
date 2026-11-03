@@ -426,7 +426,9 @@ pub fn place_note(xid: u32, pid: u32, rect: [i32; 4], focus: bool) -> Result<()>
     anyhow::ensure!(owned.next().is_none(), "Ambiguous notes surface");
     let address = window["address"].as_str().context("Notes surface has no address")?;
     anyhow::ensure!(address.starts_with("0x") && address.len() > 2 && address[2..].bytes().all(|b| b.is_ascii_hexdigit()), "Invalid notes address");
-    let [x,y,width,height] = rect;
+    let layout: Vec<Monitor> = serde_json::from_str(&request("j/monitors")?)?;
+    let outputs: Vec<_> = super::x11::monitors().into_iter().map(|m| (m.name, m.rect)).collect();
+    let [x,y,width,height] = note_layout_rect(rect, &layout, &outputs).context("Notes output unavailable")?;
     match syntax()? {
         Syntax::Lua => run(&format!("eval local w = hl.get_windows({{ title = '{title}' }})[1]; assert(w and w.address == '{address}', 'Notes surface changed'); hl.dispatch(hl.dsp.window.resize({{ window = w, x = {width}, y = {height}, relative = false }})); hl.dispatch(hl.dsp.window.move({{ window = w, x = {x}, y = {y}, relative = false }})); {}", if focus { "hl.dispatch(hl.dsp.focus({ window = w }))" } else { "" })),
         Syntax::Hyprlang => {
@@ -622,6 +624,14 @@ struct CursorPos {
 /// Hyprland has it at y 1080), so the point is taken to the same place on the same output,
 /// found by name, and scaled by how big XWayland draws it. `x_monitors` is each output's name
 /// and X11 rectangle.
+fn note_layout_rect(rect: [i32; 4], layout: &[Monitor], outputs: &[(String, [f64; 4])]) -> Option<[i32; 4]> {
+    let [x, y, w, h] = rect.map(f64::from);
+    let (name, r) = outputs.iter().find(|(_, r)| x >= r[0] && x < r[0]+r[2] && y >= r[1] && y < r[1]+r[3])?;
+    let m = layout.iter().find(|m| &m.name == name)?;
+    let factor = m.layout_size().0 / r[2];
+    Some([m.x + (x-r[0])*factor, m.y + (y-r[1])*factor, w*factor, h*factor].map(|v| v.round() as i32))
+}
+
 fn to_x_space(
     point: [f64; 2],
     layout: &[Monitor],
@@ -637,6 +647,52 @@ fn to_x_space(
         rect[0] + (point[0] - monitor.x) * factor,
         rect[1] + (point[1] - monitor.y) * factor,
     ))
+}
+
+/// Place this process's uniquely titled overlay after XWayland has mapped it.
+/// Raw X geometry is reinterpreted at map time; dispatch in compositor units.
+pub fn place_overlay(xid: u32, rect: [f64; 4]) -> Result<()> {
+    let mut last = None;
+    // X mapping and Hyprland IPC use separate queues. Reconcile only this owned
+    // window, within a fixed 100ms budget, after each remap.
+    for _ in 0..10 {
+        match place_overlay_once(xid, rect) {
+            Ok(()) => return Ok(()),
+            Err(error) => last = Some(error),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Err(last.unwrap())
+}
+
+fn place_overlay_once(xid: u32, rect: [f64; 4]) -> Result<()> {
+    let clients: Vec<serde_json::Value> = serde_json::from_str(&request("j/clients")?)?;
+    let title = format!("Apparent Ink {xid:x}");
+    let mut matches = clients.iter().filter(|c| c["pid"].as_u64() == Some(std::process::id() as u64)
+        && c["xwayland"].as_bool() == Some(true) && c["title"].as_str() == Some(title.as_str()));
+    let client = matches.next().context("Ink overlay not mapped yet")?;
+    anyhow::ensure!(matches.next().is_none(), "Ambiguous ink overlay");
+    let address = client["address"].as_str().context("Ink overlay has no address")?;
+    anyhow::ensure!(address.starts_with("0x") && address.len() > 2 && address[2..].bytes().all(|b| b.is_ascii_hexdigit()), "Invalid overlay address");
+    let [x,y,w,h] = rect.map(|n| n.round() as i32);
+    match syntax()? {
+        Syntax::Lua => run(&format!("eval hl.dispatch(hl.dsp.window.resize({{ x = {w}, y = {h}, relative = false, window = 'address:{address}' }})); hl.dispatch(hl.dsp.window.move({{ x = {x}, y = {y}, relative = false, window = 'address:{address}' }})); hl.dispatch(hl.dsp.window.pin({{ action = 'set', window = 'address:{address}' }}))"))?,
+        Syntax::Hyprlang => {
+            run(&format!("dispatch resizewindowpixel exact {w} {h},address:{address}"))?;
+            run(&format!("dispatch movewindowpixel exact {x} {y},address:{address}"))?;
+            if client["pinned"].as_bool() != Some(true) { run(&format!("dispatch pin address:{address}"))?; }
+        }
+    }
+    Ok(())
+}
+
+/// Override-redirect surfaces are placed in compositor layout units on Hyprland.
+/// Keep this separate from the X output rectangle used by telemetry and capture.
+pub fn overlay_rect(name: &str) -> Option<[f64; 4]> {
+    let layout: Vec<Monitor> = serde_json::from_str(&request("j/monitors").ok()?).ok()?;
+    let m = layout.iter().find(|m| m.name == name)?;
+    let (w, h) = m.layout_size();
+    Some([m.x, m.y, w, h])
 }
 
 /// Where the pointer is, in XWayland's coordinates. XWayland itself sees the pointer only over
@@ -743,6 +799,17 @@ mod tests {
             scale,
             transform,
         }
+    }
+
+    #[test]
+    fn notes_map_inverted_outputs_by_identity() {
+        let layout: Vec<Monitor> = serde_json::from_value(serde_json::json!([
+            {"name":"left","x":-1280,"y":0,"width":1280,"height":800,"scale":1.0},
+            {"name":"right","x":0,"y":0,"width":1280,"height":800,"scale":1.25}
+        ])).unwrap();
+        let outputs = vec![("left".into(), [1280.0,0.0,1280.0,800.0]), ("right".into(), [0.0,0.0,1280.0,800.0])];
+        assert_eq!(note_layout_rect([1500,100,332,220], &layout, &outputs), Some([-1060,100,332,220]));
+        assert_eq!(note_layout_rect([250,100,400,200], &layout, &outputs), Some([200,80,320,160]));
     }
 
     #[test]

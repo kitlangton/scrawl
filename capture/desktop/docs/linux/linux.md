@@ -271,3 +271,10 @@ cargo build -j 2 --offline
 ```
 
 GPUI needs Vulkan (`mesa-vulkan-drivers`; llvmpipe works in a VM). Tests: `cargo test`. A desktop test runs in a Tart Ubuntu VM on the Mac mini (`macvm`, see `~/code/home/tools/macvm`): GNOME on Wayland by default, X11 with `WaylandEnable=false` in `/etc/gdm3/custom.conf`. Never test on Kit's desktop session.
+
+Live desktop ink uses one native XWayland surface per output, retaining X output
+rectangles for telemetry and separate Hyprland layout rectangles for placement.
+Painting converts physical output pixels into each surface's backing units.
+Output transitions split painted and saved segments so reordered X outputs cannot
+create fictitious connecting lines; Undo still removes the entire gesture. Picker
+and device overlays remain local. Other compositors retain raw X placement.
