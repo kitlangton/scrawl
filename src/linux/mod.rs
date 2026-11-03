@@ -14,6 +14,7 @@
 
 pub mod atspi;
 pub mod clipboard;
+pub mod hyprland;
 pub mod input;
 pub mod ipc;
 pub mod login;
@@ -77,6 +78,11 @@ pub fn cursor_position() -> Option<(f64, f64)> {
         && let Some([x, y, w, h]) = desktop_rect()
     {
         return Some((x + nx * w, y + ny * h));
+    }
+    if wayland_session()
+        && let Some(position) = hyprland::cursor_position()
+    {
+        return Some(position);
     }
     x11::cursor_position()
 }

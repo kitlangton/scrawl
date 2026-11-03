@@ -568,7 +568,8 @@ pub fn activate(id: isize) {
 /// Takes one of Scrawl's GPUI windows out of the window manager's hands (no frame, no
 /// placement, above ordinary windows, not in the taskbar), places it over `rect` (global
 /// pixels) and shows it. GPUI has mapped it already, so it is unmapped and mapped again.
-pub fn float(id: u32, rect: [f64; 4]) {
+/// `clicks`: it takes clicks (the pill, the picker), rather than letting them through.
+pub fn float(id: u32, rect: [f64; 4], clicks: bool) {
     let Some(x) = x() else {
         return;
     };
@@ -621,6 +622,25 @@ pub fn float(id: u32, rect: [f64; 4]) {
             x.atom("_NET_WM_STATE_SKIP_PAGER"),
         ],
     );
+    // Hyprland never gives the pointer to an override-redirect notification (GPUI's type for
+    // popups); a toolbar gets it, without taking the keyboard when it's mapped. A class keeps
+    // it out of the stock "no_focus for XWayland windows without class or title" rule.
+    if clicks && super::hyprland::running() {
+        let _ = x.conn.change_property32(
+            PropMode::REPLACE,
+            id,
+            x.atom("_NET_WM_WINDOW_TYPE"),
+            AtomEnum::ATOM,
+            &[x.atom("_NET_WM_WINDOW_TYPE_TOOLBAR")],
+        );
+        let _ = x.conn.change_property8(
+            PropMode::REPLACE,
+            id,
+            AtomEnum::WM_CLASS,
+            AtomEnum::STRING,
+            b"dev.kitlangton.scrawl\0dev.kitlangton.scrawl\0",
+        );
+    }
     configure(x, id, rect);
     let _ = x.conn.map_window(id);
     raise_on(x, id);

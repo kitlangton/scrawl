@@ -78,7 +78,7 @@ impl InkOverlay {
             .ok()
             .flatten()
             .ok_or("The overlay has no X11 window")?;
-        x11::float(id, rect);
+        x11::float(id, rect, false);
         // KWin rebuilds the input region when a managed window becomes override-redirect.
         x11::set_click_through(id, true);
         HIDE_BETWEEN_STROKES.store(hide_between_strokes, Ordering::Release);
@@ -136,6 +136,7 @@ impl Drop for InkOverlay {
 /// Lets the overlay take the pointer (`true`), so XWayland reports where it is, or lets every
 /// click through again.
 pub fn take_pointer(take: bool) {
+    super::hyprland::take_shift_clicks(take);
     let id = OVERLAY.load(Ordering::Acquire);
     if id != 0 {
         x11::set_click_through(id, !take);

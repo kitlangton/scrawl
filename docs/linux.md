@@ -8,7 +8,9 @@ GPUI is built with its `x11` feature only, and `linux::prepare_process` (the fir
 
 GPUI 0.2.2's X11 window panics on `HasWindowHandle`, so `x11::window_id` finds a GPUI window's X id itself (the newest `_NET_WM_PID` window it hasn't seen, cached per `WindowId`).
 
-Global coordinates are root-window pixels; X11 has one scale for the screen (`x11::ui_scale`), so `MAX_CAPTURE_SCALE` is 1 as on Windows.
+Global coordinates are root-window pixels; X11 has one scale for the screen (`x11::ui_scale`), which mirrors GPUI's choice (`GPUI_X11_SCALE_FACTOR`, `Xft.dpi`, else RandR DPI), so `MAX_CAPTURE_SCALE` is 1 as on Windows.
+
+Hyprland (with its default `xwayland:force_zero_scaling`) sets no `Xft.dpi`, so GPUI uses the RandR DPI (5/3 on a 27" 4K). It hands the pointer to no override-redirect notification and, with the stock `no_focus` rule, to no XWayland window without class or title, so `float(.., clicks: true)` makes the pill and picker toolbars with a class there. Hyprland's IPC gives the pointer (`linux::hyprland`), and while ⇧ is held a do-nothing `SHIFT + mouse:272` bind keeps ⇧-clicks from the apps: the overlay stays a notification, since a window Hyprland hands the pointer to also takes the keyboard on hover.
 
 ## What each session can do
 

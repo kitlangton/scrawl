@@ -1019,6 +1019,8 @@ fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
     // it did (stale until the pointer moves over the overlay).
     let mut pointer_taken = false;
     let mut stale_pointer: Option<(f64, f64)> = None;
+    // A run that quit with ⇧ held leaves Hyprland holding ⇧-clicks back.
+    linux::hyprland::take_shift_clicks(false);
     loop {
         thread::sleep(Duration::from_millis(8));
         if last_tap_check.elapsed() >= Duration::from_millis(500) {

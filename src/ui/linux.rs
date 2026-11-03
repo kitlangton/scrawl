@@ -245,7 +245,7 @@ pub(super) fn keep_alive(cx: &mut App) {
         |window, cx| {
             // GPUI maps every window; this one is taken off the screen and out of the taskbar.
             if let Some(id) = x11::window_id(window) {
-                x11::float(id, [-100.0, -100.0, 1.0, 1.0]);
+                x11::float(id, [-100.0, -100.0, 1.0, 1.0], false);
                 x11::set_click_through(id, true);
             }
             gpui::AppContext::new(cx, |_| KeepAlive)
@@ -268,7 +268,7 @@ pub(super) fn configure_picker_window(
 ) -> Option<u32> {
     let id = x11::window_id(window)?;
     PICKER_WINDOW.store(id, Ordering::Release);
-    x11::float(id, frame);
+    x11::float(id, frame, true);
     cx.spawn(async move |_| {
         x11::place(id, frame);
         x11::focus(id);
@@ -346,7 +346,7 @@ impl PillChrome {
                     f64::from(f32::from(b.size.height)) * s,
                 ]
             });
-            x11::float(id, rect);
+            x11::float(id, rect, true);
         }
         Self { id }
     }
