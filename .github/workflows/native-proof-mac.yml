@@ -101,6 +101,7 @@ jobs:
           workspaces: |
             . -> target
             capture/engine -> target
+            connect/client -> target
           cache-on-failure: 'true'
       - uses: actions/setup-node@v4
         timeout-minutes: 2

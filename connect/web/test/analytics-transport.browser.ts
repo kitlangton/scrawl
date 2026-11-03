@@ -99,6 +99,30 @@ try{
   assert.equal(await page.getByRole('button',{name:'Allow analytics',exact:true}).isDisabled(),true)
   await download(page);assert.equal(sent.length,0);await page.getByRole('button',{name:'No thanks',exact:true}).click()
  },()=>{Object.defineProperty(window,'localStorage',{value:{getItem:()=>null,setItem:()=>{throw new DOMException('full','QuotaExceededError')}}})})
+ for(const removalBlocked of [false,true])await scenario('failed-withdrawal-does-not-replay-saved-allow-after-reload:remove-blocked='+removalBlocked,async(page,sent,context)=>{
+  await page.goto(origin);await allow(page);const count=sent.length;assert.ok(count>0)
+  const blockStorage=(removeBlocked:boolean)=>{
+   Storage.prototype.setItem=()=>{throw new DOMException('read-only','SecurityError')}
+   if(removeBlocked)Storage.prototype.removeItem=()=>{throw new DOMException('read-only','SecurityError')}
+  }
+  await page.evaluate(blockStorage,removalBlocked);await context.addInitScript(blockStorage,removalBlocked)
+  await page.getByRole('button',{name:'Analytics settings',exact:true}).click();await page.getByRole('button',{name:'No thanks',exact:true}).click()
+  const warned=await page.getByRole('status').filter({hasText:'Analytics stays off'}).isVisible()
+  await download(page);assert.equal(sent.length,count)
+  await page.reload();await settled(page);assert.equal(sent.length,count,'a failed withdrawal must not replay the previous allow on reload')
+  await page.getByRole('button',{name:'No thanks',exact:true}).waitFor({timeout:2000});assert.equal(warned,true)
+  if(removalBlocked)assert.equal(await page.getByRole('button',{name:'Allow analytics',exact:true}).isDisabled(),true)
+  else assert.equal(await page.evaluate(k=>localStorage.getItem(k),key),null)
+ })
+ await scenario('failed-opt-in-preserves-an-existing-persisted-refusal',async(page,sent)=>{
+  await page.goto(origin);await page.getByRole('button',{name:'No thanks',exact:true}).click()
+  const refusal=await page.evaluate(k=>localStorage.getItem(k),key)
+  await page.evaluate(()=>{Storage.prototype.setItem=()=>{throw new DOMException('read-only','SecurityError')}})
+  await page.getByRole('button',{name:'Analytics settings',exact:true}).click();await page.getByRole('button',{name:'Allow analytics',exact:true}).click()
+  await page.getByRole('status').filter({hasText:'Analytics stays off'}).waitFor()
+  assert.equal(await page.evaluate(k=>localStorage.getItem(k),key),refusal)
+  await page.reload();await download(page);assert.equal(sent.length,0)
+ })
  await scenario('malformed-preference-requires-a-fresh-choice-not-permanent-storage-lockout',async(page,sent)=>{
   await page.goto(origin);await page.getByRole('button',{name:'Allow analytics',exact:true}).waitFor();assert.equal(sent.length,0)
   await allow(page);assert.equal(sent.filter(e=>e.event==='$pageview').length,1)

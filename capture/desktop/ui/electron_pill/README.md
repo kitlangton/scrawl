@@ -14,6 +14,12 @@ Wayland desktops. There is no second backend or renderer recording clock.
 State frames carry an action revision; Rust checks the current action set and
 capture generation, consumes admitted revisions, and refuses expired commands.
 Pipes and queues are bounded; writes and process reaping run off the GUI thread.
+Linux warms the controls while hidden at app launch. While that child is within
+its existing readiness deadline, GPUI does not open a competing pill. A launch,
+readiness or later child failure restores GPUI through the existing tick path;
+capture and shortcuts never wait for the renderer. Reverting these Linux routing
+guards restores the previous transition. Retain the fallback until startup,
+failure recovery and capture controls have replacement native acceptance.
 On Hyprland, show/move/resize notifications coalesce into bounded background
 pin attempts through the existing Linux adapter. It matches the owned Electron
 PID and XID-specific title; other Apparent windows keep their workspace behavior.
