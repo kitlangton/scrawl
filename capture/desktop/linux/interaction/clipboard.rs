@@ -41,7 +41,8 @@ pub fn combined_offer_supported() -> bool {
 // Probe the actual replacement in a bounded child, without claiming a selection.
 // A successful wl-paste probe does not establish that this backend can start.
 fn owner_backend_ready() -> bool {
-    let (Ok(executable), Some(display)) = (owner_executable(), super::super::wayland_display()) else {
+    let (Ok(executable), Some(display)) = (owner_executable(), super::super::wayland_display())
+    else {
         return false;
     };
     Command::new("timeout")
@@ -148,24 +149,60 @@ fn snapshot_mime_types(types: &str) -> Result<Vec<&str>> {
 }
 
 pub fn restore_text_wayland(snapshot: TextSnapshot, offered: Option<(&str, &[u8])>) -> Result<()> {
+    restore_text_wayland_if_owned(snapshot, offered, still_ours, |snapshot| {
+        match snapshot.entries.as_slice() {
+            [] => clear_wayland(),
+            [(mime, bytes)] => copy_wayland(mime, bytes),
+            _ => copy_multi_wayland(&snapshot.entries),
+        }
+    })
+}
+
+fn restore_text_wayland_if_owned(
+    snapshot: TextSnapshot,
+    offered: Option<(&str, &[u8])>,
+    mut owns: impl FnMut(&str, &[u8]) -> Result<bool>,
+    restore: impl FnOnce(TextSnapshot) -> Result<()>,
+) -> Result<()> {
     let Some((mime, expected)) = offered else {
         return Ok(());
     };
     anyhow::ensure!(
-        still_ours(mime, expected)?,
+        owns(mime, expected)?,
         "Clipboard changed during handoff; leaving the newer content untouched"
     );
-    match snapshot.entries.as_slice() {
-        [] => clear_wayland(),
-        [(mime, bytes)] => copy_wayland(mime, bytes),
-        _ => copy_multi_wayland(&snapshot.entries),
-    }
+    restore(snapshot)
 }
 
 fn copy_multi_wayland(entries: &[(String, Vec<u8>)]) -> Result<()> {
-    validate_entries(entries)?;
     let display = super::super::wayland_display().context("No Wayland display")?;
-    let mut child = Command::new(owner_executable().context("Locating clipboard owner")?)
+    copy_multi_wayland_with(
+        entries,
+        owner_executable().context("Locating clipboard owner")?,
+        display,
+        std::time::Duration::from_secs(4),
+    )
+}
+
+fn copy_multi_wayland_with(
+    entries: &[(String, Vec<u8>)],
+    executable: std::path::PathBuf,
+    display: std::ffi::OsString,
+    timeout: std::time::Duration,
+) -> Result<()> {
+    copy_multi_wayland_checked(entries, executable, display, timeout, still_ours)
+}
+
+fn copy_multi_wayland_checked(
+    entries: &[(String, Vec<u8>)],
+    executable: std::path::PathBuf,
+    display: std::ffi::OsString,
+    timeout: std::time::Duration,
+    mut owns: impl FnMut(&str, &[u8]) -> Result<bool>,
+) -> Result<()> {
+    validate_entries(entries)?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut child = Command::new(executable)
         .arg(OWNER_ARGUMENT)
         .env("WAYLAND_DISPLAY", display)
         .stdin(Stdio::piped())
@@ -173,20 +210,39 @@ fn copy_multi_wayland(entries: &[(String, Vec<u8>)]) -> Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .context("Starting the native Wayland clipboard owner")?;
-    let write = (|| -> Result<()> {
-        let mut stdin = child.stdin.take().context("No clipboard owner input")?;
-        stdin.write_all(&(entries.len() as u32).to_be_bytes())?;
-        for (mime, bytes) in entries {
-            stdin.write_all(&(mime.len() as u32).to_be_bytes())?;
-            stdin.write_all(mime.as_bytes())?;
-            stdin.write_all(&(bytes.len() as u32).to_be_bytes())?;
-            stdin.write_all(bytes)?;
+    let stdin = child.stdin.take().context("No clipboard owner input")?;
+    let entries_to_write = entries.to_vec();
+    let (write_sender, write_receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let write = (|| -> Result<()> {
+            let mut stdin = stdin;
+            stdin.write_all(&(entries_to_write.len() as u32).to_be_bytes())?;
+            for (mime, bytes) in &entries_to_write {
+                stdin.write_all(&(mime.len() as u32).to_be_bytes())?;
+                stdin.write_all(mime.as_bytes())?;
+                stdin.write_all(&(bytes.len() as u32).to_be_bytes())?;
+                stdin.write_all(bytes)?;
+            }
+            Ok(())
+        })();
+        let _ = write_sender.send(write);
+    });
+    let write_timeout = deadline.saturating_duration_since(std::time::Instant::now());
+    let write = write_receiver.recv_timeout(write_timeout);
+    match write {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            stop_owner(&mut child);
+            return Err(error);
         }
-        Ok(())
-    })();
-    if let Err(error) = write {
-        stop_owner(&mut child);
-        return Err(error);
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            stop_owner(&mut child);
+            anyhow::bail!("Rich clipboard owner input timed out")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            stop_owner(&mut child);
+            anyhow::bail!("Rich clipboard owner input failed")
+        }
     }
     let mut stdout = child
         .stdout
@@ -198,14 +254,15 @@ fn copy_multi_wayland(entries: &[(String, Vec<u8>)]) -> Result<()> {
         let read = std::io::BufReader::new(&mut stdout).read_line(&mut line);
         let _ = sender.send((read, line));
     });
-    let confirmation = receiver.recv_timeout(std::time::Duration::from_secs(4));
+    let confirmation =
+        receiver.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
     if !matches!(confirmation, Ok((Ok(_), line)) if line == "READY\n") {
         stop_owner(&mut child);
         anyhow::bail!("Rich clipboard restore was not confirmed");
     }
     let offered = (|| -> Result<bool> {
         for (mime, bytes) in entries {
-            if !still_ours(mime, bytes)? {
+            if !owns(mime, bytes)? {
                 return Ok(false);
             }
         }
@@ -476,7 +533,8 @@ mod tests {
     #[test]
     fn snapshot_preserves_each_mime_once_when_the_owner_advertises_duplicates() {
         assert_eq!(
-            snapshot_mime_types("text/plain;charset=utf-8\ntext/plain\ntext/plain;charset=utf-8\n").unwrap(),
+            snapshot_mime_types("text/plain;charset=utf-8\ntext/plain\ntext/plain;charset=utf-8\n")
+                .unwrap(),
             vec!["text/plain;charset=utf-8", "text/plain"]
         );
     }
@@ -492,16 +550,22 @@ mod tests {
             let mut command = Command::new(&executable);
             // An owned directory with no compositor socket: never access the
             // host clipboard, even when this test runs in a desktop session.
-            command.env("XDG_RUNTIME_DIR", &root).env("WAYLAND_DISPLAY", "missing-socket");
+            command
+                .env("XDG_RUNTIME_DIR", &root)
+                .env("WAYLAND_DISPLAY", "missing-socket");
             command
         };
         let check = launch().args([OWNER_ARGUMENT, "--check"]).output().unwrap();
         assert!(!check.status.success());
         assert!(check.stdout.is_empty());
         for bytes in [vec![0, 0, 0, 0], vec![0, 0, 0, 33], vec![0, 0, 0, 1, 0]] {
-            let mut child = launch().arg(OWNER_ARGUMENT)
-                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
-                .spawn().unwrap();
+            let mut child = launch()
+                .arg(OWNER_ARGUMENT)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
             child.stdin.take().unwrap().write_all(&bytes).unwrap();
             let output = child.wait_with_output().unwrap();
             assert!(!output.status.success());
@@ -560,6 +624,88 @@ mod tests {
                 .is_err()
         );
         assert!(validate_entries(&vec![("x".to_owned(), vec![]); MAX_MIME_TYPES + 1]).is_err());
+    }
+
+    #[cfg(unix)]
+    fn owner_fixture(script: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
+        std::fs::create_dir(&root).unwrap();
+        let executable = root.join("owner");
+        std::fs::write(&executable, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        (root, executable)
+    }
+
+    #[cfg(unix)]
+    fn fixture_offer() -> Vec<(String, Vec<u8>)> {
+        vec![("text/plain".into(), b"synthetic offer".to_vec())]
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rich_owner_startup_failure_is_not_reported_as_success() {
+        let (root, executable) = owner_fixture("exit 17");
+        let result = copy_multi_wayland_with(
+            &fixture_offer(),
+            executable,
+            "unused-test-display".into(),
+            std::time::Duration::from_secs(1),
+        );
+        assert!(result.is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rich_owner_timeout_covers_a_child_stalled_before_reading_offer() {
+        let (root, executable) = owner_fixture("exec sleep 5");
+        let started = std::time::Instant::now();
+        let result = copy_multi_wayland_with(
+            &[("text/plain".into(), vec![7; 1024 * 1024])],
+            executable,
+            "unused-test-display".into(),
+            std::time::Duration::from_millis(150),
+        );
+        assert!(result.is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rich_owner_selection_loss_after_ready_is_not_reported_as_success() {
+        let (root, executable) = owner_fixture("cat >/dev/null; printf 'READY\\n'; exec sleep 5");
+        let started = std::time::Instant::now();
+        let result = copy_multi_wayland_checked(
+            &fixture_offer(),
+            executable,
+            "unused-test-display".into(),
+            std::time::Duration::from_secs(1),
+            |_, _| Ok(false),
+        );
+        assert!(result.is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restore_leaves_selection_loss_after_handoff_untouched() {
+        let snapshot = TextSnapshot {
+            entries: vec![("text/plain".into(), b"original".to_vec())],
+        };
+        let mut restored = false;
+        let result = restore_text_wayland_if_owned(
+            snapshot,
+            Some(("image/png", b"offered")),
+            |_, _| Ok(false),
+            |_| {
+                restored = true;
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(!restored);
     }
 
     #[test]
