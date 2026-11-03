@@ -79,8 +79,7 @@ are placeholders). Login prints a verification URL/code for a human to approve:
 
 ```sh
 apparent connect login --server https://api.example.com --scope read --no-browser
-apparent fetch <32hex-id> --out ./capture.apparent --wait 120
-apparent inspect ./capture.apparent
+apparent inspect <32hex-id>
 ```
 
 Read login/fetch needs network access, `curl`, system SHA-256 tooling and separate
@@ -109,3 +108,5 @@ bunx skills add https://github.com/tryapparent/apparent/tree/main/capture/agent/
 ```
 
 This installs neither the binary nor recording permissions.
+
+A bare Connect ID passed to `inspect` downloads to `./<id>.apparent`, waits up to 120 seconds for readiness, and prints the summary. Existing output is never overwritten; use `apparent inspect ./<id>.apparent` to inspect a previous download, or explicit `apparent fetch <id> --out <new-path> --wait <seconds>` followed by local inspection for custom transfer options.

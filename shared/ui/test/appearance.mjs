@@ -67,7 +67,7 @@ try {
      }
      states.push(state)
      assert.equal(state.background,mode==='dark'?'rgb(32, 27, 36)':'rgb(245, 240, 232)',`${name}/${owner}/${path} ${mode} background`)
-     assert.equal(state.foreground,mode==='dark'?'rgb(245, 240, 232)':'rgb(25, 22, 29)',`${name}/${owner}/${path} ${mode} text`)
+     assert.equal(state.foreground,mode==='dark'?'rgb(245, 240, 232)':owner==='public'&&process.env.PUBLIC_THEME_ARTIFACT?'rgb(2, 1, 2)':'rgb(25, 22, 29)',`${name}/${owner}/${path} ${mode} text`)
      if(owner==='public'&&process.env.PUBLIC_THEME_ARTIFACT){
       const patches=await page.evaluate(()=>{
        const statement=document.querySelector('.preview-statement'), hello=document.querySelector('.pond-hello'), bubble=document.querySelector('.rude-bubble')

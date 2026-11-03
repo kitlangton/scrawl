@@ -1121,8 +1121,8 @@ impl Client {
             !j.public_copy && j.bundle == bundle && self.active(j) && j.status != "cancelled"
         })?;
         Some(format!(
-            "apparent fetch {} --out ./{}.apparent --wait 120\napparent inspect ./{}.apparent\n",
-            job.id, job.id, job.id
+            "apparent inspect {}\n",
+            job.id
         ))
     }
     fn raw_request(

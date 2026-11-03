@@ -15,6 +15,8 @@ import time
 API = '/repos/tryapparent/apparent/releases/latest'
 MAIN_API = '/repos/tryapparent/apparent/releases?per_page=10&page='
 CANDIDATE_SHA = 'b' * 40
+LEGACY_SHA = 'a5cf47d7dc7d0f89b1552cfb2d5e4b0ab489526a'
+BRIDGE_SHA = 'f' * 40
 
 
 def metadata_path(control):
@@ -27,7 +29,10 @@ def response(control, path, payload):
     main = control.get('channel', 'stable') == 'main'
     revision = control['source_head'] if main and mode == 'current' else CANDIDATE_SHA
     name = f'Apparent-{version}-linux-x86_64.AppImage'
-    tag = 'linux-main-' + revision if main else 'v' + version
+    tag = 'linux-main-v2-' + revision if main else 'v' + version
+    if control.get('legacy'):
+        revision = LEGACY_SHA if mode == 'current' else BRIDGE_SHA
+        tag = 'linux-main-' + revision
     prefix = f'/tryapparent/apparent/releases/download/{tag}/'
     release = {'tag_name': tag, 'draft': False, 'prerelease': main,
                'published_at': '2026-11-01T00:00:00Z',
@@ -40,6 +45,11 @@ def response(control, path, payload):
         return 200, json.dumps([{'tag_name': 'v1.0.0', 'prerelease': False,
                                 'draft': False, 'assets': []}] if main else release).encode()
     if main and path == MAIN_API + '2':
+        # A later v2 release must never hide the bridge from an old client.
+        if control.get('legacy'):
+            future = dict(release, tag_name='linux-main-v2-' + CANDIDATE_SHA,
+                          published_at='2099-01-01T00:00:00Z')
+            return 200, json.dumps([future, release]).encode()
         return 200, json.dumps([release]).encode()
     if main and path == MAIN_API + '3':
         return 200, b'[]'
@@ -47,6 +57,19 @@ def response(control, path, payload):
         compare = '/repos/tryapparent/apparent/compare/'
         source = control['source_head']
         query = '?per_page=1&page=2'
+        if control.get('migration'):
+            if path == compare + LEGACY_SHA + '...' + BRIDGE_SHA + query:
+                return 200, json.dumps({'status':'ahead','base_commit':{'sha':LEGACY_SHA}}).encode()
+            if path == compare + BRIDGE_SHA + '...' + source + query:
+                return 200, json.dumps({'status':'behind','base_commit':{'sha':BRIDGE_SHA}}).encode()
+            if path == compare + BRIDGE_SHA + '...' + CANDIDATE_SHA + query:
+                return 200, json.dumps({'status':'diverged','base_commit':{'sha':BRIDGE_SHA}}).encode()
+            commit = '/repos/tryapparent/apparent/git/commits/'
+            tree = {'sha':'e' * 40}
+            if path == commit + BRIDGE_SHA:
+                return 200, json.dumps({'sha':BRIDGE_SHA,'tree':tree,'parents':[{'sha':LEGACY_SHA},{'sha':source}]}).encode()
+            if path == commit + source:
+                return 200, json.dumps({'sha':source,'tree':tree}).encode()
         if path == compare + source + '...' + CANDIDATE_SHA + query:
             return 200, json.dumps({'status': 'diverged' if mode == 'diverged' else 'ahead',
                                     'base_commit': {'sha': source}}).encode()

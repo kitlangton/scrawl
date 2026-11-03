@@ -22,6 +22,17 @@
   ],
   "features": [
     {
+      "id": "connect-product-analytics",
+      "added": "2026-11-03",
+      "group": "settings",
+      "name": "Explicit Connect analytics consent API",
+      "says": "A signed-in account can explicitly choose optional product analytics through its CSRF-protected consent API. Withdrawal clears queued events and blocks new export admissions; stale opt-ins cannot restore a withdrawn choice. Login alone grants no analytics permission.",
+      "status": "main",
+      "platforms": ["mac", "linux"],
+      "note": "Collection requires deployment configuration, the database control and affirmative per-account consent. Existing users are not enrolled. Only allowlisted event/quantity metadata is exported; recordings, credentials, keys and public capability links are excluded. Already-authorized sends may finish after withdrawal. Publishing this API does not by itself activate production collection. The browser control and disclosure belong to the dependent rollout slice; independent production acceptance remains required.",
+      "docs": ["connect/docs/product-analytics.md"]
+    },
+    {
       "id": "shared-system-appearance",
       "added": "2026-11-02",
       "group": "platforms",
@@ -128,7 +139,7 @@
       "id": "hosted-sync",
       "group": "delivery",
       "name": "Connect complete-bundle handoff",
-      "says": "Explicit upload login queues new GUI captures without waiting for the network. Clipboard text starts with fetch and inspect commands plus a one-line CLI installation fallback, with timestamped words and marks last. Hosted prompts omit local paths and repeated login instructions; unavailable hosted admission keeps local inspection instructions. A separate read login retrieves and validates the complete bundle; failures preserve the local original. Fetch waits through pre-reservation not_found within --wait and gives private, actionable unavailable/read-authorization guidance without exposing capture existence.",
+      "says": "Explicit upload login queues new GUI captures without waiting for the network. Clipboard text starts with a single apparent inspect <id> command that fetches to ./<id>.apparent, waits up to 120 seconds, and prints the summary plus a one-line CLI installation fallback, with timestamped words and marks last. Hosted prompts omit local paths and repeated login instructions; unavailable hosted admission keeps local inspection instructions. A separate read login retrieves and validates the complete bundle; failures preserve the local original. Fetch waits through pre-reservation not_found within --wait and gives private, actionable unavailable/read-authorization guidance without exposing capture existence.",
       "status": "experiment:hostedSync",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],
@@ -1295,6 +1306,7 @@
       "id": "linux-appimage-updates",
       "group": "install",
       "name": "Linux AppImage update channels",
+      "note": "Signing-history migration uses a permanent legacy bridge release and a separate v2 Main feed. Old ancestry stays outside Main. Publication and packaged old-to-bridge-to-v2 acceptance remain required before claiming recovery is live.",
       "says": "Installed AppImages check at launch and hourly, and stage verified updates for the next launch. Main publishes checked builds after pushes/merges without version bumps; failed builds preserve the last good release. Settings and CLI offer Stable or Main, manual check results and live version status. Update now waits until capture is idle.",
       "status": "main",
       "added": "2026-10-28",

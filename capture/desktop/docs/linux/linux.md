@@ -246,7 +246,7 @@ Linux previews can be published manually from checked AppImage artifacts as `lin
 Settings › About › Channel selects Stable releases (default) or Latest main. Only an AppImage owned by the user and stored under their home directory auto-updates; a debug build, symlink or system-owned install stays untouched. At launch and hourly, Apparent checks its selected release channel. It downloads the matching architecture's AppImage, checks its SHA-256 against that release's checksum, atomically swaps the executable, and keeps the previous image beside it. The running process stays on the old image; the new one starts at the next launch. Settings and the tray's Check for Updates… trigger the same check. Errors are logged without replacing the installed image.
 In Settings, a manual check immediately changes the button to “Checking…” and disables repeat clicks. When it finishes, a result shows the pixel frog and one line: “Update available” (including an image staged for the next launch), “No update available”, or “Update check failed”. The result does not show raw diagnostics; failures go to the log. Available offers Update now (relaunch the staged image) and Update later (dismiss); Tab focuses a choice, Enter or Space activates it, and Escape defers. Without a focused choice Enter chooses now. Other results have an OK button; Enter, Escape or OK dismisses them. If the new image exits before GPUI initializes, or initialization times out, Apparent restores the previous image and version marker at the installed path and skips that failed release until a newer one is published. A later crash after initialization is not treated as a failed update. The tray and automatic checks remain silent except for the existing installed-update notification and log.
 
-Stable reads the newest non-prerelease GitHub release on `tryapparent/apparent`, which must include the Linux AppImage and its `.sha256` asset. Main reads published `linux-main-<sha>` prereleases from that repository's paginated Releases API, not raw source or a mutable feed branch. The workflow pins checkout and artifact identity to the event SHA. Both architectures must pass the full Rust suite, packaging, model/codec and CPU checks; all four asset digests must match the private draft before publication. Pushes share one non-canceling workflow lane: the running build can finish and publish, while redundant pending runs coalesce to the latest pending event. A checked ancestor of current `main` may publish even after the branch advances. Diverged history and an older rerun behind an already published eligible Main build cannot promote. Published SHA releases are immutable; a failed build leaves the last good release available. The 03:17 UTC schedule retries an unpublished head; an existing published SHA skips the build. Manual `publish_main=true` with an empty `tag` uses the same checks.
+Stable reads the newest non-prerelease GitHub release on `tryapparent/apparent`, which must include the Linux AppImage and its `.sha256` asset. Main reads published `linux-main-v2-<sha>` prereleases from that repository's paginated Releases API, not raw source or a mutable feed branch. The workflow pins checkout and artifact identity to the event SHA. Both architectures must pass the full Rust suite, packaging, model/codec and CPU checks; all four asset digests must match the private draft before publication. Pushes share one non-canceling workflow lane: the running build can finish and publish, while redundant pending runs coalesce to the latest pending event. A checked ancestor of current `main` may publish even after the branch advances. Diverged history and an older rerun behind an already published eligible Main build cannot promote. Published SHA releases are immutable; a failed build leaves the last good release available. The 03:17 UTC schedule retries an unpublished head; an existing published SHA skips the build. Manual `publish_main=true` with an empty `tag` uses the same checks.
 
 Main therefore means the newest *successfully verified and published* build, not an immediate download after every merge. Build/test/package time comes first; the app then checks at launch or within its hourly interval (or immediately through Settings). Commit identity, not a semantic-version bump, distinguishes Main updates. Before staging over a known Main revision, the updater asks GitHub to confirm forward ancestry. An older feed leaves the newer installed/staged image intact; divergence, an unavailable comparison or an invalid response fails closed. Fresh CI packages use their embedded SHA when no installed marker exists. Legacy images without a revision can migrate once. Explicit Stable/Main channel switches retain their existing semantics, including potentially lower versions. Choosing Main accepts unreviewed code.
 
@@ -278,3 +278,49 @@ Painting converts physical output pixels into each surface's backing units.
 Output transitions split painted and saved segments so reordered X outputs cannot
 create fictitious connecting lines; Undo still removes the entire gesture. Picker
 and device overlays remain local. Other compositors retain raw X placement.
+
+### Signing-history migration (November 2026)
+
+Main previews now use `linux-main-v2-<source SHA>`. Old updaters ignore that
+namespace and keep seeing a permanent `linux-main-<bridge SHA>` compatibility
+release, even after later v2 releases. Do not delete the bridge or publish another
+v1 release after it. Main itself must retain only the corrected signed history.
+
+The bridge tag points to a signed commit with exactly two parents: the frozen
+legacy tip `a5cf47d7dc7d0f89b1552cfb2d5e4b0ab489526a`, then the verified canonical
+source. Its tree is exactly the source tree. The release aliases both byte-identical
+AppImages and checksums from the already public v2 release; the binaries retain
+the canonical source SHA, not the bridge tag SHA. This is an artifact alias, not
+an exact-build verification receipt for the bridge commit.
+
+After restart the new updater follows v2. If the installed marker still names
+the bridge, it validates those exact parents and source tree through GitHub's
+immutable commit API, then checks forward ancestry from its embedded canonical
+SHA. Arbitrary divergence, wrong parents/trees, unavailable metadata and backwards
+updates remain refused. Ordinary staged v2 markers keep their own identity.
+Settings, capture admission and rollback use their existing shared flow; this
+protocol repair adds no Desktop presentation or routing change.
+
+After the source PR passes native acceptance, merges, verifies on main and has
+both public v2 AppImages, run from the clean canonical checkout:
+
+```sh
+node --experimental-strip-types capture/desktop/scripts/linux/maintenance/signing-bridge.ts prepare <verified-source-SHA>
+```
+
+The tool checks the exact Linux receipt, correct account/signing identity, equal
+trees and ancestry coverage of every public v1 release before pushing only the
+signed bridge tag. Run the printed `gh workflow run` command on main. The
+`bridge_commit` dispatch uses the existing Linux publication concurrency lock,
+rechecks admission/coverage/tag identity and copies the verified assets into a
+private draft before promotion. Existing running v1 publishers must finish first;
+never cancel or bypass their lock. New publishers exclusively use v2. A failed
+public readback must be investigated before retry; never overwrite a public bridge.
+
+Rollback before promotion leaves v1 users on their existing build. After promotion,
+retain the bridge and fix forward on v2; reverting the publisher to v1 would break
+late migrations. No user config, captures or manual reinstall is required.
+Native acceptance must cover a checksum-verified old released AppImage discovering,
+staging and restarting into the bridge, then checking/staging/rechecking a later v2
+release, plus a late old client with newer v2 releases present. Unit and fixture
+contracts alone do not establish that packaged upgrade sequence.

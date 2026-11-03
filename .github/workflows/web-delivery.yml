@@ -182,9 +182,10 @@ jobs:
     timeout-minutes: 10
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      HOSTED_WORKER_NAME: ${{ vars.HOSTED_WORKER_NAME }}
+      HOSTED_D1_NAME: ${{ vars.HOSTED_D1_NAME }}
       HOSTED_D1_ID: ${{ vars.HOSTED_D1_ID }}
       HOSTED_R2_BUCKET: ${{ vars.HOSTED_R2_BUCKET }}
-      HOSTED_GOOGLE_CLIENT_ID: ${{ vars.HOSTED_GOOGLE_CLIENT_ID }}
       WRANGLER_SEND_METRICS: 'false'
     steps:
       - uses: actions/checkout@v4

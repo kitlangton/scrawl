@@ -5,6 +5,11 @@ trap 'printf "scenario failed at line %s: %s\n" "$LINENO" "$BASH_COMMAND" >&2' E
 export UPDATER_EXPECTED_SOURCE_HEAD='__UPDATER_EXPECTED_SOURCE_HEAD__'
 export UPDATER_EXPECTED_SHA256='__UPDATER_EXPECTED_SHA256__'
 export UPDATER_CHANNEL='__UPDATER_CHANNEL__'
+legacy_sha='__UPDATER_LEGACY_SHA256__'
+legacy_name='__UPDATER_LEGACY_NAME__'
+migration=false
+legacy=false
+if [[ -n "$legacy_sha" ]]; then migration=true; legacy=true; fi
 export UPDATER_CANDIDATE_ID='v999.0.0'
 if [[ "$UPDATER_CHANNEL" == main ]]; then
   export UPDATER_CANDIDATE_ID='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -43,7 +48,7 @@ serial=0
 control() {
   serial=$((serial + 1))
   rm -f "$out/request-started" "$out/release-response"
-  printf '{"version":"%s","mode":"%s","gate":%s,"serial":%s,"channel":"%s","source_head":"%s"}\n' "$version" "$1" "${2:-false}" "$serial" "$UPDATER_CHANNEL" "$UPDATER_EXPECTED_SOURCE_HEAD" > "$out/control.new"
+  printf '{"version":"%s","mode":"%s","gate":%s,"serial":%s,"channel":"%s","source_head":"%s","migration":%s,"legacy":%s}\n' "$version" "$1" "${2:-false}" "$serial" "$UPDATER_CHANNEL" "$UPDATER_EXPECTED_SOURCE_HEAD" "$migration" "$legacy" > "$out/control.new"
   mv "$out/control.new" "$out/control.json"
 }
 wait_file() {
@@ -62,6 +67,100 @@ server_job=$!
 app_job=''
 trap '[[ -z "$app_job" ]] || kill "$app_job" 2>/dev/null || :; kill "$server_job" 2>/dev/null || :' EXIT
 wait_file "$out/server-ready"
+if [[ "$migration" == true ]]; then
+  # The fixture has already loaded the exact new candidate bytes. Start the
+  # checksum-pinned real released old app at the same owned launcher path.
+  old_image="$(dirname "$image")/$legacy_name"
+  [[ "$(sha256sum "$old_image" | cut -d' ' -f1)" == "$legacy_sha" ]]
+  cp "$old_image" "$image"
+  chmod 700 "$image"
+  "$image" app > "$out/app.log" 2>&1 &
+  app_job=$!
+  wait_file "$out/startup-complete"
+  "$image" app >> "$out/app.log" 2>&1
+  ui '{"op":"click","text":"About","label":"legacy-about"}'
+  status legacy-baseline
+  python3 - "$out/legacy-baseline.json" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1]))
+assert s['running']['revision']=='a5cf47d7dc7d0f89b1552cfb2d5e4b0ab489526a', s
+PY
+  control available
+  ui '{"op":"click","text":"Check for Updates","label":"legacy-check-bridge"}'
+  ui '{"op":"assert","text":"Update available","label":"legacy-bridge-offered"}'
+  status legacy-staged
+  [[ "$(sha256sum "$image" | cut -d' ' -f1)" == "$original_hash" ]]
+  python3 - "$out/legacy-staged.json" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1]))
+assert s['pendingRestart'] and s['installed']['id']=='f'*40, s
+PY
+  # Restart enters the new v2 client. Its current-source feed is older than
+  # the alias commit, so it must neither redownload nor reject the bridge.
+  legacy=false
+  control current
+  ui '{"op":"click","text":"Update now","label":"legacy-restart-bridge"}'
+  for _ in $(seq 1 200); do
+    status bridge-running
+    if python3 - "$out/bridge-running.json" <<'PY'
+import json,os,sys
+s=json.load(open(sys.argv[1])); r=s['running']
+sys.exit(0 if r and r['revision']==os.environ['UPDATER_EXPECTED_SOURCE_HEAD'] and r['updateId']=='f'*40 and not s['pendingRestart'] else 1)
+PY
+    then break; fi
+    sleep .1
+  done
+  python3 - "$out/bridge-running.json" <<'PY'
+import json,os,sys
+s=json.load(open(sys.argv[1])); r=s['running']
+assert r and r['revision']==os.environ['UPDATER_EXPECTED_SOURCE_HEAD'] and r['updateId']=='f'*40 and not s['pendingRestart'], s
+PY
+  "$image" app >> "$out/app.log" 2>&1
+  ui '{"op":"click","text":"About","label":"bridge-about"}'
+  ui '{"op":"click","text":"Check for Updates","label":"bridge-current-check"}'
+  ui '{"op":"assert","text":"No update available","label":"bridge-current-source"}'
+  ui '{"op":"click","text":"OK","label":"bridge-current-dismiss"}'
+  control available
+  ui '{"op":"click","text":"Check for Updates","label":"bridge-v2-check"}'
+  ui '{"op":"assert","text":"Update available","label":"bridge-v2-offered"}'
+  ui '{"op":"click","text":"Update later","label":"bridge-v2-defer"}'
+  ui '{"op":"click","text":"Check for Updates","label":"bridge-v2-recheck"}'
+  ui '{"op":"assert","text":"Update available","label":"bridge-v2-still-staged"}'
+  status bridge-v2-staged
+  python3 - "$out/bridge-v2-staged.json" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1]))
+assert s['pendingRestart'] and s['installed']['id']=='b'*40 and s['running']['updateId']=='f'*40, s
+PY
+  ui '{"op":"click","text":"Update now","label":"bridge-v2-restart"}'
+  for _ in $(seq 1 200); do
+    status migrated
+    if python3 - "$out/migrated.json" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1])); r=s['running']
+sys.exit(0 if r and r['updateId']=='b'*40 and not s['pendingRestart'] else 1)
+PY
+    then break; fi
+    sleep .1
+  done
+  python3 - "$out/migrated.json" "$out/requests.jsonl" <<'PY'
+import json,os,sys
+s=json.load(open(sys.argv[1])); r=s['running']
+assert r and r['revision']==os.environ['UPDATER_EXPECTED_SOURCE_HEAD'] and r['updateId']=='b'*40 and not s['pendingRestart'], s
+requests=[json.loads(line) for line in open(sys.argv[2])]
+downloads=[r for r in requests if r['path'].endswith('.AppImage')]
+assert len(downloads)==2, downloads
+assert '/linux-main-'+'f'*40+'/' in downloads[0]['path'], downloads
+assert '/linux-main-v2-'+'b'*40+'/' in downloads[1]['path'], downloads
+assert any('/git/commits/'+'f'*40 in r['path'] for r in requests), requests
+PY
+  "$image" app >> "$out/app.log" 2>&1
+  ui '{"op":"click","text":"About","label":"migrated-about"}'
+  ui '{"op":"assert","text":"Check for Updates","label":"migration-complete"}'
+  ui '{"op":"hold","seconds":3,"label":"migration-finished"}'
+  printf 'UPDATER_GUI_PASS\n'
+  exit 0
+fi
 # Open the exact packaged candidate; second launch opens its Settings via IPC.
 "$image" app > "$out/app.log" 2>&1 &
 app_job=$!

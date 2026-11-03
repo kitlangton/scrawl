@@ -46,7 +46,7 @@ test("product names use the wordmark except the lowercase demo heading", () => {
   assert.match(body, /class="pond-wordmark"[^>]*src="\/apparent-wordmark\.svg"[^>]*alt="Apparent"[^>]*\/> creates the instructions/)
   assert.equal(existsSync(join(publicDir, "apparent-wordmark.svg")), true)
   assert.match(body, /<h2>See what <span>apparent<\/span> captures<\/h2>/)
-  assert.match(body, /Your agent makes the changes and uses apparent to send back a video walkthrough\./)
+  assert.match(body, /Your agent makes the changes and uses<br class="hero-return-break"\/> apparent to send back a video walkthrough\./)
 })
 
 test("the belief headline highlights enjoyable without changing its words", async (t) => {
