@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::BTreeSet,
     fs,
-    io::Write,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::OnceLock,
@@ -263,7 +263,7 @@ fn digest_stream(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
-    let written = write(&mut child.stdin.take().unwrap());
+    let written = write_buffered(child.stdin.take().unwrap(), write);
     let output = child.wait_with_output()?;
     written?;
     if !output.status.success() {
@@ -278,6 +278,20 @@ fn digest_stream(
         return Err(std::io::Error::other("invalid shasum output"));
     }
     Ok(hash)
+}
+
+// SDK records contain many tiny length/type/path writes. Batch their transport
+// without changing the byte stream or retaining the SDK in memory. Flush errors
+// must propagate, and the pipe must close before waiting for shasum's EOF.
+fn write_buffered(
+    sink: impl Write,
+    write: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let mut input = BufWriter::with_capacity(64 * 1024, sink);
+    let result = write(&mut input).and_then(|()| input.flush());
+    // Avoid an implicit retry on drop after a failed write/flush.
+    let (_sink, _pending) = input.into_parts();
+    result
 }
 
 /// Reuse only if receipt and every cached output validate; returns true on a cache hit.
@@ -397,6 +411,55 @@ fn command_output(program: &str, args: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sdk_transport_preserves_bytes_batches_writes_and_propagates_errors() {
+        #[derive(Default)]
+        struct Sink { bytes: Vec<u8>, writes: usize }
+        impl Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.writes += 1;
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let root = temp();
+        fs::create_dir_all(&root).unwrap();
+        for index in 0..4000 {
+            fs::write(root.join(format!("header-{index}.h")), b"small SDK header\n").unwrap();
+        }
+        let root = fs::canonicalize(root).unwrap();
+        let mut direct = Sink::default();
+        write_tree(&root, &root, &mut BTreeSet::new(), &mut direct).unwrap();
+        let mut buffered = Sink::default();
+        write_buffered(&mut buffered, |input| {
+            write_tree(&root, &root, &mut BTreeSet::new(), input)
+        }).unwrap();
+        assert_eq!(direct.bytes, buffered.bytes);
+        eprintln!("SDK fixture: {} bytes, {} direct writes, {} buffered writes",
+            direct.bytes.len(), direct.writes, buffered.writes);
+        assert!(buffered.writes * 100 < direct.writes);
+        assert_eq!(tree_digest(&root).unwrap(), digest(direct.bytes).unwrap());
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        assert_eq!(write_buffered(Broken, |input| input.write_all(b"tail"))
+            .unwrap_err().kind(), std::io::ErrorKind::BrokenPipe);
+        struct FlushFailure;
+        impl Write for FlushFailure {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> { Ok(bytes.len()) }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("flush failed"))
+            }
+        }
+        assert!(write_buffered(FlushFailure, |input| input.write_all(b"tail")).is_err());
+        assert!(write_buffered(Vec::new(), |_| Err(std::io::Error::other("source failed"))).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
     fn temp() -> PathBuf {
         std::env::temp_dir().join(format!(
             "apparent-cache-{}-{}",
