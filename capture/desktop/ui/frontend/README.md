@@ -7,6 +7,19 @@ development window has Linux and macOS checks with their own proof limits;
 foundation evidence does not establish pill, capture or overlay behavior.
 No Windows support.
 
+## Verification policy
+
+Follow [Desktop verification](../../docs/native-testing.md): run the shared
+renderer/workflow matrix and real Rust↔Electron contract checks on Linux. Mac
+checks cover affected native boundaries, not a duplicate UI matrix. Reuse
+applicable successful seam evidence for unchanged inputs; shared-only changes
+need no new Mac walkthrough before merge. A short current-package Mac smoke and
+existing CI/signing gates remain required before Mac publication. This policy
+governs the workflow checklists below; specific human holds remain in force.
+Synthetic fixtures never establish OS effects, and new native routes still need
+focused real-platform checks. Automatic selection/reuse is not implemented by
+this documentation change.
+
 From the repository root, with Node 22 and npm 10 or newer:
 
 ```sh
@@ -88,10 +101,12 @@ it does not approve a real account or upload media. Run it from the root with
 `APPARENT_CONNECT_TEST_ELECTRON` set to the absolute frontend Electron executable:
 `cargo test --offline connect_settings_electron_rust_roundtrip -- --ignored --nocapture`.
 On Clanker, wrap the command once with `t3-build` as documented in `AGENTS.md`.
-Neither check substitutes for native Linux/macOS acceptance. The earlier shell evidence below does not
-certify this new workflow. Roll back by disabling `connectSettings`; missing packaged Connect assets or
-a failed Connect window also restore native General. Do not remove the legacy
-presentation until both platforms pass equivalent consent/cancel/recovery proof.
+These checks cover shared consent/cancel/recovery behavior; native launch,
+browser opening, focus and fallback need affected-platform seam proof. The earlier
+shell evidence below does not certify this new workflow. Roll back by disabling
+`connectSettings`; missing packaged Connect assets or a failed Connect window also
+restore native General. Remove the legacy presentation only after shared coverage
+and affected-platform boundaries pass under the verification policy above.
 
 Background completion receipts are consumed only on a valid window request,
 not while the stream is idle. Closing before the next read therefore retains
@@ -263,11 +278,12 @@ that executable before npm ci, preventing Electron's lazy downloader from
 silently fetching a binary. Missing prerequisites fail rather than skip proof.
 The ordinary `desktop-ui` lane remains lightweight and unchanged.
 
-This checkpoint proves renderer/synthetic transport behavior and real Rust bridge
-roundtrips only. It does not replace exact-candidate isolated Linux/Omarchy GUI,
-portal/picker, permissions, capture/output or installed packaging proof, nor Mac
-native acceptance. Follow `../../docs/native-testing.md` and
-`../../docs/linux/linux.md`; required exact-SHA CI/release receipts remain separate.
+This checkpoint supplies shared renderer/synthetic transport and real Rust bridge
+proof. It does not establish OS effects: changed portal/picker, permissions,
+capture/output, focus or packaging boundaries still need focused native checks.
+It need not be followed by a duplicate full Mac/Linux workflow walkthrough.
+Follow `../../docs/native-testing.md` and `../../docs/linux/linux.md` for affected
+seams; required exact-SHA CI/release receipts remain separate.
 
 The Electron smoke checks controls/keyboard use, disconnected/error/reconnect,
 renderer reload, minimum-width layout, sandbox/Node isolation, navigation/network
@@ -465,8 +481,11 @@ public link. No automatic-sharing preference or historical scan is introduced.
 Routing remains the existing Electron development window (`npm start`); installed
 native Copy link retains its refusal for encrypted captures. Close this window to
 roll back. Do not remove the legacy donor or switch installed capsule routing
-until this workflow passes real macOS/isolated Linux acceptance and the routing
-switch is authorized. Socket/controller/browser fixtures are not native proof.
+until shared behavior and affected native seams pass under the verification policy
+above and the routing switch is authorized. Mac proof covers installed entry,
+popup ownership/focus, startup/fallback and actual clipboard; shared consent,
+retry and recipient assertions belong in Linux checks. Socket/controller/browser
+fixtures alone are not proof of native effects.
 
 ## Recording pill replacement candidate
 
@@ -489,19 +508,20 @@ Recording and finalization remain owned by Rust across renderer reload/exit.
 A failed or ambiguous action is never automatically retried. The keyboard
 shortcut and tray remain independent controls.
 
-Before installed routing may land, verify every existing visible workflow on
-macOS and isolated Linux: selection/reveal/switch, Finish/Cancel/Whiteboard,
-input and no-words warnings, actual microphone equalizer where supported,
-processing/finalization failures, completed handoff including drag-to-paste,
-sharing refusals, dismissal, theme/reduced-motion, drag/clamping/new-capture
-placement, click-through, focus return, fullscreen/workspace visibility,
-renderer reload/crash/fallback and shutdown. Inspect actual bundle text,
+Before installed routing may land, verify shared selection/state/action rendering,
+warnings, processing/failure states, sharing refusals and theme/reduced-motion
+on Linux. Verify affected native seams on each OS: actual microphone input where
+supported, Finish/Cancel/Whiteboard admission, clipboard/drag-to-paste,
+drag/clamping/new-capture placement, click-through, focus return,
+fullscreen/workspace visibility, capture exclusion and startup/crash/fallback/
+shutdown. Reuse applicable evidence for unchanged boundaries; do not replay the
+shared matrix on Mac. Inspect actual bundle text,
 contact sheet, full-quality frames and movie for interaction preservation and
 capture inclusion/exclusion. Preserve native glass/config compatibility until
 its replacement is established. Compare response and resource measurements
 with the same native baseline; copied-link and watch-ready timing differ.
 
-Remove old presentations only after those exact-candidate gates pass and their
+Remove old presentations only after those applicable gates pass and their
 consumers/build/package inputs are verified. Until then the native adapters and
 fallback are required. The implementation's remaining parity gaps must be
 closed before enabling the installed replacement through a release.
@@ -600,5 +620,6 @@ The executable is the existing Settings runtime at `Contents/Resources/settings/
 or `usr/share/apparent/settings/runtime`; popup packaging adds no second runtime.
 `package-notes.mjs` stages the required `electron/notes/` and includes `electron/share/`
 when its `main.cjs` exists, alongside the same `dist/` and single `runtime/`. The absent
-share consumer adds no entry or routing. A share owner must verify its installed route
-on both platforms before enabling it; resolver availability alone is not that proof.
+share consumer adds no entry or routing. A share owner must verify affected installed
+route seams on each platform before enabling it, reusing applicable evidence under
+the verification policy above; resolver availability alone is not that proof.

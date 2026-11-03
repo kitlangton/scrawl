@@ -135,8 +135,11 @@ It uses the existing Rust controller and a Connect-only bridge; navigating back
 returns to the existing Settings pages. Missing assets or a failed Electron window
 retain the native General fallback. Closing/reloading cancels pending approval;
 the native action that opened the view is consumed once and is never replayed by
-reload. Keep the native fallback until equivalent macOS and isolated Linux consent,
-cancellation, recovery and navigation acceptance passes. Ordinary Settings opens
+reload. Keep the native fallback until shared consent/cancellation/recovery and
+navigation pass Linux checks and affected launch/browser/focus/fallback seams pass
+on their OS under [Desktop verification](native-testing.md). Do not repeat the
+shared matrix on Mac; reuse applicable native evidence for unchanged inputs.
+Ordinary Settings opens
 no longer measure capture history; the native Storage fallback measures only on
 an explicit Storage visit, and Electron Storage uses its bounded usage request.
 
@@ -186,7 +189,8 @@ and test instructions are in `../ui/frontend/README.md`. Its persistent socket
 belongs to that window: reload/close/crash or an expired idle lease cancels pending
 sign-in, including late authorization receipts. Local refreshes do not probe the
 server. This does not change installed Settings routing; legacy controls remain
-the rollback until equivalent native Linux and macOS acceptance is complete.
+the rollback until shared behavior and affected native seams are accepted under
+[Desktop verification](native-testing.md).
 
 The shared config writer serializes CLI and GUI processes with a private
 `config.json.lock` sidecar, held from before the file read until atomic publication.

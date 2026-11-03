@@ -1,4 +1,68 @@
-# Linux native capture smoke recipe
+# Desktop verification
+
+Shared Electron UI is verified primarily on Linux. Mac execution covers affected
+OS boundaries and a short packaged integration smoke, rather than a second full
+workflow matrix. This policy supersedes blanket two-platform walkthrough gates
+in older workflow documentation; it does not certify unrun behavior or remove a
+specific human-imposed hold, consent requirement, safety rule or spending limit.
+
+## Coverage and merge gates
+
+| Layer | Required verification |
+|---|---|
+| Shared React/Electron behavior | Linux tests for rendering, controls, consent/cancel/retry states, errors and accessibility semantics. Use the shipped renderer/main/preload. |
+| Shared Rust↔Electron contract | Linux integration through the real Rust handlers, including failure and authorization behavior. Synthetic services are suitable; a fake Rust bridge proves only the fake. |
+| Native OS boundaries | Focused execution on the affected OS for permissions/dialogs, shortcuts/input, actual clipboard/paste, ownership/focus/stacking, capture inclusion/exclusion, startup/fallback and packaging. First adoption of a route counts as a boundary change. |
+| Mac release package | Short smoke of the current package: launch, a representative interaction and owned cleanup, plus applicable native evidence and existing exact-commit CI/signing checks. |
+
+Before merge, run focused shared checks, independent review and current-base
+integration assessment. Require native proof for affected boundaries only.
+Changing a bridge contract, Electron/runtime version or package layout requires
+assessing native consumers; moving logic into Electron does not make OS effects
+platform independent. Native capture, audio, permissions and multi-display changes
+retain their relevant real-platform checks.
+
+A shared-renderer-only change does not require a new Mac walkthrough when the
+owner establishes that native boundaries are unchanged. Reuse successful seam
+evidence after checking the relevant source, dependencies, runtime, packaging and
+environment inputs. Record the original evidence identity and why it applies;
+do not relabel an older execution as the current binary. An unrelated main
+advance or a new commit ID alone is not a reason to repeat native proof. Missing
+or incompatible evidence for an affected boundary requires that focused check.
+Known product failures must be investigated; a driver/environment failure is
+neither a product pass nor a reason to replay all unaffected cases.
+
+Use the existing `desktop-ui-integration` lane in `enablement/owner_lanes.py` for
+shared Electron and real Rust bridge checks. Use existing installed Mac scenarios
+and isolated Linux recipes for native boundaries. Keep each native checklist
+small and tied to the changed effect; do not build a new runner or evidence-cache
+service merely to apply this policy.
+
+For Copy link, Linux owns the shared consent/cancel/timeout/retry/repeat/offline
+matrix and synthetic recipient/revocation/privacy checks. Mac checks the installed
+entry opening the popup, ownership/focus, startup/fallback, actual clipboard and
+cleanup. Local Paste needs a real receiver when its OS handoff changes. Reuse
+existing valid results; do not edit another owner's active candidate to split its
+tests. Preserve actual output inspection when output changes are exercised.
+
+## Transition and publication
+
+This is the governing proof-selection policy now, including for in-flight work.
+Owners should replace generic inherited Mac/full-workflow waits with the concrete
+affected seam and evidence still needed. Explicit human holds and requested proof
+remain; historical generic checklists alone do not recreate a blanket gate.
+Before removing a fallback, establish coverage of shared behavior plus each
+affected platform boundary and verify remaining consumers/build/package inputs.
+
+This documentation change does not implement automatic test selection, receipt
+reuse or alter executable CI/release admission. Existing configured checks still
+run and must pass. Owners may assess evidence manually under this policy; that
+assessment cannot bypass a required automated check. The current Mac package
+smoke and applicable native evidence remain publication requirements even when a
+shared-only PR needs no fresh Mac run before merge. Mac delays do not block
+Linux/web publication under their own existing gates.
+
+## Linux native capture smoke recipe
 
 This is one supported **guest scenario**, not another VM controller:
 `capture/desktop/scripts/linux/gui/capture-smoke.py`, run by `capture/desktop/scripts/linux/gui/gui-vm.py`. It starts the
