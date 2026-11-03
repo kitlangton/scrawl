@@ -361,9 +361,9 @@ enum Command {
         #[command(subcommand)]
         command: HexCommand,
     },
-    /// Print the agent-ready summary or JSON manifest for a `.apparent` bundle (or `latest`).
+    /// Fetch and inspect a Connect capture ID, or inspect a local bundle (or `latest`).
     Inspect {
-        /// Path to `.apparent` bundle directory, `apparent.json`, or `latest`.
+        /// Connect ID (fetches to ./<id>.apparent, waits 120s), local bundle, or `latest`.
         #[arg(default_value = "latest")]
         bundle: PathBuf,
         /// Emit raw `apparent.json` instead of `summary.md` (with `--marks`, the marks as JSON).
@@ -1326,6 +1326,8 @@ pub(crate) fn run() -> Result<()> {
             for name in &experiments {
                 handoff::enable_experiment(name);
             }
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            let bundle = hosted::inspect_source(&bundle)?;
             let (dir, loaded) = handoff::load_bundle(&bundle)?;
             if marks {
                 let entries = agent_context::mark_entries(&loaded);
