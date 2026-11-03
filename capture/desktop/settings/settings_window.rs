@@ -369,6 +369,8 @@ struct Menu {
 }
 
 pub struct SettingsWindow {
+    #[cfg(target_os = "linux")]
+    _note_subject: Option<crate::capture::ui_process::SettingsWindow>,
     state: Option<ViewState>,
     pane: Pane,
     events: Events,
@@ -489,6 +491,9 @@ fn open(request: Request, cx: &mut App) {
                 })
                 .detach();
                 SettingsWindow {
+                    #[cfg(target_os = "linux")]
+                    _note_subject: crate::capture::desktop::linux::x11::window_id(window)
+                        .map(crate::capture::ui_process::SettingsWindow::new),
                     state: None,
                     pane: pane.unwrap_or(Pane::General),
                     events,

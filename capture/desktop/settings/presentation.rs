@@ -56,6 +56,9 @@ fn open_mode(events: Arc<dyn Fn(Event) + Send + Sync>, connect: Option<super::co
     let mut child = process.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
+    #[cfg(target_os = "linux")]
+    let child = crate::capture::ui_process::UiChild::settings(child);
+    #[cfg(not(target_os = "linux"))]
     let child = crate::capture::ui_process::UiChild::new(child);
     std::thread::spawn(move || {
         if let Some(stdout) = stdout {

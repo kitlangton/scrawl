@@ -1152,6 +1152,25 @@ impl SharedCaptureTelemetry {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn on_note_input_ui(&self, x: f64, y: f64) -> bool {
+        self.note_input_ui_in(&platform::input_windows(self.note_ui_pid.load(Ordering::Acquire) as u32), x, y)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn note_input_ui_in(&self, windows: &[crate::shared::windows::RawWindow], x: f64, y: f64) -> bool {
+        if self.notes_editing.load(Ordering::Acquire) || self.notes_window_in(windows, x, y) {
+            return self.notes_window_in(windows, x, y);
+        }
+        let passthrough = self.passthrough_window_ids.lock().unwrap().clone();
+        let subject = windows.iter().filter(|w| {
+            let [wx, wy, width, height] = w.bounds;
+            w.alpha > 0.01 && x >= wx && x <= wx + width && y >= wy && y <= wy + height
+        }).find(|w| !passthrough.contains(&w.id))
+            .is_some_and(|w| crate::capture::ui_process::settings_subject(w.pid, w.id));
+        !subject && self.apparent_window_in(windows, x, y, platform::is_helper_process)
+    }
+
     fn notes_window_in(&self, windows: &[crate::shared::windows::RawWindow], x: f64, y: f64) -> bool {
         let pid = self.note_ui_pid.load(Ordering::Acquire);
         let passthrough = self.passthrough_window_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2259,6 +2278,45 @@ mod tests {
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].pin, Some(1));
         assert_eq!(strokes[0].normalized_points(), vec![[0.25, 0.75]]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn settings_notes_preserve_control_editor_and_ordinary_click_exclusions() {
+        use crate::shared::windows::RawWindow;
+        let telemetry = session(1000.0, 1000.0);
+        let pid = std::process::id() as i32;
+        let window = |id, pid, bounds| RawWindow { id, pid, bounds, owner: "synthetic".into(), title: String::new(), layer: 0, alpha: 1.0 };
+        let settings = window(0xfeed0200, pid, [0.0, 100.0, 800.0, 600.0]);
+        let pill = window(0xfeed0201, pid, [300.0, 10.0, 300.0, 60.0]);
+        let windows = [pill.clone(), settings.clone()];
+        let registered = crate::capture::ui_process::SettingsWindow::new(settings.id);
+        assert!(telemetry.apparent_window_in(&windows, 400.0, 400.0, |_| false));
+        assert!(!telemetry.note_input_ui_in(&windows, 400.0, 400.0));
+        assert!(telemetry.note_input_ui_in(&windows, 400.0, 30.0), "pill is never a note subject");
+        let mut previous = [false; 2];
+        for shift in [false, true] {
+            for buttons in [[true, false], [false, false]] {
+                poll_clicks(&telemetry, &mut previous, buttons, (400.0, 400.0), shift, |x, y| {
+                    if shift { telemetry.note_input_ui_in(&windows, x, y) }
+                    else { telemetry.apparent_window_in(&windows, x, y, |_| false) }
+                });
+            }
+        }
+        telemetry.note_ui_pid.store(700, Ordering::Release);
+        let editor = window(0xfeed0202, 700, [350.0, 350.0, 300.0, 200.0]);
+        assert!(telemetry.note_input_ui_in(&[settings.clone(), editor.clone()], 400.0, 400.0), "pinned editor stays protected even with stale stacking");
+        let covering_control = window(0xfeed0203, pid, settings.bounds);
+        assert!(telemetry.note_input_ui_in(&[covering_control, settings.clone()], 400.0, 400.0), "another own surface cannot inherit the Settings role");
+        telemetry.notes_editing.store(true, Ordering::Release);
+        assert!(telemetry.note_input_ui_in(&[editor], 400.0, 400.0));
+        telemetry.notes_editing.store(false, Ordering::Release);
+        drop(registered);
+        assert!(telemetry.note_input_ui_in(&windows, 400.0, 400.0));
+        let (events, strokes) = telemetry.finish_session();
+        assert!(events.is_empty());
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].pin, Some(1));
     }
 
 
