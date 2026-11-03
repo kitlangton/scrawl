@@ -65,8 +65,9 @@ const JSON_LIMIT: u64 = 2_000_000;
 pub enum ConnectCommand {
     /// Sign in through a device code. Upload requires explicit --consent-upload.
     Login {
+        /// API origin (defaults to the configured origin, then Apparent Connect).
         #[arg(long)]
-        server: String,
+        server: Option<String>,
         #[arg(long, default_value = "read", value_parser = ["upload", "read"])]
         scope: String,
         #[arg(long)]
@@ -74,6 +75,9 @@ pub enum ConnectCommand {
         /// Print the verification link without opening a browser.
         #[arg(long)]
         no_browser: bool,
+        /// Also open the verification page on this computer.
+        #[arg(long, conflicts_with = "no_browser")]
+        browser: bool,
     },
     /// Inspect local queue and credentials (never prints tokens); --account also reads quota.
     Status {
@@ -1344,6 +1348,22 @@ impl Client {
         )?;
         serde_json::from_slice(&fs::read(response)?).context("Invalid hosted JSON response")
     }
+    pub fn login_server(&self, explicit: Option<&str>) -> Result<String> {
+        let configured = self.settings().server;
+        server_url(explicit.unwrap_or(if configured.is_empty() {
+            settings::DEFAULT_SERVER
+        } else {
+            &configured
+        }))
+    }
+    fn read_login_command(&self) -> Result<String> {
+        let server = self.login_server(None)?;
+        Ok(if server == settings::DEFAULT_SERVER {
+            "apparent connect login".to_owned()
+        } else {
+            format!("apparent connect login --server '{}'", server.replace('\'', "'\\''"))
+        })
+    }
     pub fn login(&self, server: &str, scope: &str, consent: bool, browser: bool) -> Result<()> {
         self.login_allowed(server, scope, consent, browser, &|| true)
     }
@@ -1420,7 +1440,7 @@ impl Client {
         let allowed: &dyn Fn() -> bool = &still_current;
         // Public keys are bound to this same approval, never to its server-known
         // user code. Secret material stays in a separate private endpoint artifact.
-        let encryption_identity = if self.provider.experiment(HOSTED_ENCRYPTION) {
+        let encryption_identity = if (cli && scope == "read") || self.provider.experiment(HOSTED_ENCRYPTION) {
             let identity_path = self.state.join(format!("{login_id}.identity"));
             let identity = encryption::load_or_create_identity(&identity_path)?;
             Some((login_id.clone(), identity.public_key()))
@@ -1901,7 +1921,7 @@ impl Client {
         self.fetch_inner(id, out, wait).map_err(|error| {
             match error.to_string().as_str() {
                 "Hosted API: not_found" => anyhow::anyhow!("Capture unavailable (not_found). The sender may still be uploading, the capture may have expired or been deleted, or this account/API origin may not have access. Check apparent connect status and confirm the API origin and approved read account with the sender; ask the sender to check upload status or provide a fresh handoff. Retry with --wait 120 if upload is still in progress."),
-                message if message.starts_with("auth_required:") || matches!(message, "Hosted API: unauthorized" | "Hosted API: forbidden" | "Hosted API: reauthorization_required") => anyhow::anyhow!("Capture read authorization failed. Check apparent connect status and sign in with apparent connect login --server <API-origin> --scope read using the sender's account and API origin; retry after approval."),
+                message if message.starts_with("auth_required:") || matches!(message, "Hosted API: unauthorized" | "Hosted API: forbidden" | "Hosted API: reauthorization_required") => anyhow::anyhow!("Capture read authorization failed. Run `{}` and ask the user to approve its verification link/code, then retry inspection.", self.read_login_command().unwrap_or_else(|_| "apparent connect login".into())),
                 _ => error,
             }
         })
@@ -1912,8 +1932,11 @@ impl Client {
             "Capture ID must be 32 lowercase hexadecimal characters"
         );
         ensure!(wait <= 900, "--wait must be between 0 and 900 seconds");
-        let server = server_url(&self.settings().server)?;
-        let credential = self.credential("read", &server)?;
+        let server = self.login_server(None)?;
+        let login = self.read_login_command()?;
+        let credential = self.credential("read", &server).with_context(|| format!(
+            "Read approval required. Run `{login}`, give the verification link and code to the user for approval, then retry this command. Upload consent is not required."
+        ))?;
         let out = std::path::absolute(out)?;
         no_symlinks(&out)?;
         ensure!(
@@ -1988,7 +2011,7 @@ impl Client {
             serde_json::from_value(manifest["files"].clone()).context("Invalid hosted manifest")?;
         match manifest.get("format").and_then(Value::as_str).unwrap_or("plaintext-v1") {
             "apparent-encrypted-v1" => {
-                ensure!(self.provider.experiment(HOSTED_ENCRYPTION), "encryption_required: enable hostedEncryption to fetch this capture");
+                ensure!(credential.encryption_identity.is_some(), "encryption_approval_required: run apparent connect login to approve this agent's decryption key, then ask the sender to retry the upload");
                 return self.fetch_encrypted(id, &server, &credential, &manifest, &stage.0, &out, &parent);
             }
             "plaintext-v1" => ensure!(!self.provider.experiment(HOSTED_ENCRYPTION), "encryption_downgrade_refused: capture is explicitly plaintext; disable the experiment only to deliberately fetch legacy content"),
@@ -2278,6 +2301,24 @@ fn publish_noreplace(from: &Path, to: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recipient_login_defaults_and_overrides() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Args {
+            #[command(subcommand)]
+            command: ConnectCommand,
+        }
+        let ConnectCommand::Login { server, scope, consent_upload, no_browser, browser } =
+            Args::try_parse_from(["apparent-connect", "login"]).unwrap().command
+        else { panic!("wrong command") };
+        assert_eq!(server, None);
+        assert_eq!(scope, "read");
+        assert!(!consent_upload && !no_browser && !browser);
+        assert!(Args::try_parse_from(["apparent-connect", "login", "--browser"]).is_ok());
+        assert!(Args::try_parse_from(["apparent-connect", "login", "--no-browser"]).is_ok());
+        assert!(Args::try_parse_from(["apparent-connect", "login", "--browser", "--no-browser"]).is_err());
+    }
     #[test]
     fn hosted_asset_boundary() {
         for path in [

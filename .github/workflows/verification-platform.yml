@@ -32,6 +32,8 @@ jobs:
           node-version: '22'
       - name: Verification receipt contracts
         run: node --test enablement/verification/*.test.ts
+      - name: Recipient CLI installation contracts
+        run: node --experimental-strip-types --test capture/agent/scripts/tests/install-cli.test.ts
       - name: Selector and hook contracts (no native proof)
         run: |
           python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'

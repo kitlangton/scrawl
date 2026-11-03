@@ -23,7 +23,8 @@ Windows is unsupported. Recording setup and permissions are separate from fetchi
 
 ## Agents
 
-Install the [official CLI](capture/agent/docs/installation.md) to run `apparent` on the recipient machine.
+Install the [latest verified Linux CLI](capture/agent/docs/installation.md) on the recipient machine; the installer selects the current published build automatically.
+Run `apparent inspect <capture-id>`. If read approval is needed, run `apparent connect login`, give the user its verification link/code, then retry inspection. No server, scope or browser flags are needed for the official service.
 Read login/fetch needs no desktop launch, recording permissions, speech model or upload consent.
 
 Optionally install the capture-reading skill for Claude Code, OpenCode, Codex and other agents:

@@ -186,7 +186,8 @@ pub fn command(command: ConnectCommand) -> Result<()> {
             scope,
             consent_upload,
             no_browser,
-        } => client.login(&server, &scope, consent_upload, !no_browser),
+            browser,
+        } => client.login(&client.login_server(server.as_deref())?, &scope, consent_upload, browser && !no_browser),
         ConnectCommand::Status { account } => {
             println!(
                 "{}",

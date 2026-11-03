@@ -1420,7 +1420,8 @@ pub fn hosted_fetch_before_reservation_waits_and_unavailable_is_actionable() {
         if mode == "fetch-missing" {
             assert!(error.contains("Capture unavailable") && error.contains("fresh handoff"));
         } else {
-            assert!(error.contains("authorization failed") && error.contains("--scope read"));
+            assert!(error.contains("authorization failed") && error.contains("apparent connect login"));
+            assert!(error.contains(&server.url) && !error.contains("--scope"));
             assert!(start.elapsed() < Duration::from_secs(1));
         }
         assert!(!fs::read_dir(&f.root).unwrap().any(|entry|

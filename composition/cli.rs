@@ -1693,14 +1693,7 @@ mod tests {
                 assert!(text.contains("apparent connect"), "{text}");
                 assert!(!text.contains("apparent cloud"), "{text}");
             }
-            let error = Cli::try_parse_from(["apparent", name, "login"])
-                .err()
-                .unwrap()
-                .to_string();
-            assert!(
-                error.contains("apparent connect login --server <SERVER>"),
-                "{error}"
-            );
+            assert!(Cli::try_parse_from(["apparent", name, "login"]).is_ok());
         }
     }
 
@@ -1709,6 +1702,8 @@ mod tests {
     fn hosted_connect_and_cloud_parse_identical_commands_and_flags() {
         use clap::CommandFactory;
         for tail in [
+            vec!["login"],
+            vec!["login", "--browser"],
             vec!["login", "--server", "https://hosted.tryapparent.com"],
             vec![
                 "login",
@@ -1751,7 +1746,7 @@ mod tests {
         }
         for name in ["connect", "cloud"] {
             for tail in [
-                vec!["login"],
+                vec!["login", "--browser", "--no-browser"],
                 vec![
                     "login",
                     "--server",

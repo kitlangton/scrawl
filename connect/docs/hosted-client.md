@@ -2,7 +2,7 @@
 
 ## Endpoint encryption candidate
 
-`experiments.hostedEncryption` is off by default. The candidate keeps local bundles ordinary and uses the existing any-browser link/sign-in/approve journey for grant-bound endpoint public keys. Account authorization is trusted; a compromised authorization service can substitute recipients. This is not Better Auth's token encryption and is not independent device pairing. No production enablement, plaintext migration or recovery guarantee is implied. See [the exact trust, wire, consent and remaining policy contract](hosted-encryption.md). Encrypted capture fetch requires the experiment and the original private endpoint identity; public/server-rendered sharing is rejected. Legacy plaintext remains explicitly identified and is not automatically migrated.
+`experiments.hostedEncryption` is off by default. The candidate keeps local bundles ordinary and uses the existing any-browser link/sign-in/approve journey for grant-bound endpoint public keys. Account authorization is trusted; a compromised authorization service can substitute recipients. This is not Better Auth's token encryption and is not independent device pairing. No production enablement, plaintext migration or recovery guarantee is implied. See [the exact trust, wire, consent and remaining policy contract](hosted-encryption.md). Desktop encryption remains controlled by the experiment. CLI read approval enrolls a receiving key without changing that flag; encrypted fetch requires the original approved private endpoint identity; public/server-rendered sharing is rejected. Legacy plaintext remains explicitly identified and is not automatically migrated.
 
 Shared macOS/Linux implementation, default-off `hostedSync` experiment. This is an implementation candidate, not a deployed service or proof of native GUI behavior. No Windows support. See [hosted-api.md](hosted-api.md) for the v1 protocol and hosting prerequisites.
 
@@ -105,6 +105,10 @@ config races, exact subprocess/CLI alias and logging assertions, and the real UI
 late-login helper. The feature is absent from normal application builds. Package
 experiment constants are included in feature-map discovery. Package checks do
 not substitute for root adoption compilation or native/platform proof.
+
+## Recipient CLI quick start
+
+Fresh Linux agents use the [latest published installer](../../capture/agent/docs/installation.md), then `apparent inspect <id>`. `apparent connect login` defaults to read scope, the configured API origin (or the official service), and printing the approval URL/code without opening a local browser. `--browser` opts into opening it. Existing `--server`, `--scope`, `--consent-upload` and `--no-browser` remain supported. CLI read approval enrolls an endpoint key even without the Desktop encryption experiment; encrypted fetch uses that approved key. It changes no upload consent or Desktop encryption flag. A receiver must be included when the sender encrypts; later approval cannot decrypt a previously sealed capture.
 
 ## Opt in on the recording computer
 

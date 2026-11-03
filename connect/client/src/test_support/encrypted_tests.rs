@@ -15,6 +15,24 @@ fn encrypted(f: &Fixture) {
         .unwrap();
 }
 
+#[test]
+fn fresh_recipient_uses_official_origin_and_actionable_read_approval() {
+    let f = Fixture::new();
+    assert_eq!(f.client.login_server(None).unwrap(), settings::DEFAULT_SERVER);
+    assert!(f.client.login_server(Some("not-an-origin")).is_err());
+    let out = f.root.join("missing.apparent");
+    let error = f.client.fetch(&"a".repeat(32), &out, 0).unwrap_err().to_string();
+    assert!(error.contains("apparent connect login"), "{error}");
+    assert!(!error.contains("--scope") && !error.contains("--server"));
+    assert!(!out.exists());
+    let cloud = CloudConfig { server: "https://custom.example.com".into(), ..Default::default() };
+    f.client.provider.set_cloud(&cloud).unwrap();
+    assert_eq!(f.client.login_server(None).unwrap(), cloud.server);
+    assert_eq!(f.client.login_server(Some(settings::DEFAULT_SERVER)).unwrap(), settings::DEFAULT_SERVER);
+    assert!(f.client.read_login_command().unwrap().contains("--server 'https://custom.example.com'"));
+    assert!(!f.client.enabled());
+}
+
 // Worker-path cases start with synthetic credentials but real generated endpoint
 // identities. The separate login test below exercises actual approval admission.
 fn pair(f: &Fixture, server: &Server) {
@@ -166,7 +184,6 @@ fn fetch_refused(f: &Fixture, id: &str, name: &str, expected: &str) {
 fn encrypted_login_binds_public_key_before_approval_and_read_never_enables_upload() {
     let f = Fixture::new();
     let server = encryption_server("");
-    encrypted(&f);
     let gate = Arc::new(MediaGate::default());
     server.state.lock().unwrap().media_gate = Some(gate.clone());
     let client = f.client.clone();
@@ -215,6 +232,8 @@ fn encrypted_login_binds_public_key_before_approval_and_read_never_enables_uploa
     assert!(!f.client.state.join("upload.credential").exists());
     assert!(f.client.enqueue(&f.bundle()).is_err());
     no_media(&server);
+    assert!(!f.client.provider.experiment(HOSTED_ENCRYPTION));
+    encrypted(&f);
     // Normal explicit upload approval on the same endpoint; no synthetic worker
     // credential shortcut in this positive round trip.
     f.client.login(&server.url, "upload", true, false).unwrap();
@@ -223,6 +242,7 @@ fn encrypted_login_binds_public_key_before_approval_and_read_never_enables_uploa
     f.client.process_once().unwrap();
     assert_ready(&f);
     let out = f.root.join("login-roundtrip.apparent");
+    f.client.provider.set_experiment(HOSTED_ENCRYPTION, false).unwrap();
     f.client.fetch(&id, &out, 0).unwrap();
     assert_bundle(&bundle, &out);
 }
