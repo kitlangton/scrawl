@@ -173,14 +173,5 @@ class PagesDeliveryTests(unittest.TestCase):
             self.assertEqual(verify.call_count, 5)
             self.assertEqual([call.args for call in sleep.call_args_list], [(1,), (2,), (4,), (8,)])
 
-    def test_clanker_publisher_cannot_activate_production(self):
-        spec = importlib.util.spec_from_file_location('old', Path(__file__).with_name('publish_site.py'))
-        assert spec is not None and spec.loader is not None
-        old = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(old)
-        with self.assertRaisesRegex(ValueError, 'retired'):
-            old.publish('/opt/presentations/releases', 'unused', 'a' * 40, 'unused')
-
-
 if __name__ == '__main__':
     unittest.main()

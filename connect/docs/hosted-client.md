@@ -255,3 +255,18 @@ sharing permission, exposes no asset path, and makes no network request. Retry,
 ready and cancelled states return no size failure. Desktop caches it with the
 completed capture path/generation internally and rechecks that binding before
 rendering a bounded notification; those identifiers never cross the pill pipe.
+
+### Fetch before upload reservation
+
+A private copy-handoff pointer can be emitted from the local queue before the
+sender reserves the capture on the API. `apparent fetch <id> --wait 120` waits
+within that budget for both a privacy-preserving `not_found` and a known pending
+capture. A 404 does not establish whether a capture exists: absent, expired,
+deleted, wrong-account and wrong-origin requests remain indistinguishable.
+Fetch gives recipient guidance to check `apparent connect status`, confirm the
+API origin and approved read account with the sender, and ask for upload status
+or a fresh handoff. Authorization failures need read approval rather than polling.
+The private destination guard, integrity validation and atomic complete-bundle
+publication still apply. Loopback tests exercise queue pointer → delayed upload
+→ fetch and unavailable/unauthorized failures; these are not live service or
+native clipboard proof.

@@ -883,7 +883,12 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
             .push((format!("{method} {route}"), body.to_vec()));
     }
     let mut status = 200;
-    let result: Vec<u8> = if route == "/v1/device/start" {
+    let result: Vec<u8> = if method == "GET" && route.starts_with("/v1/captures/")
+        && (s.mode == "fetch-missing" || s.mode == "fetch-unauthorized"
+            || (route.split('/').count() == 4 && route.rsplit('/').next() != Some(s.capture_id.as_str()))) {
+        status = if s.mode == "fetch-unauthorized" { 401 } else { 404 };
+        json!({"error":{"code":if status == 401 {"unauthorized"} else {"not_found"}}}).to_string().into_bytes()
+    } else if route == "/v1/device/start" {
         if let Some(encryption) = &mut s.encryption {
             let request: Value = serde_json::from_slice(body).unwrap();
             encryption.pending_key = request.get("encryptionKey").cloned();
@@ -1371,6 +1376,56 @@ pub fn hosted_roundtrip_pending_pointer_restart_complete_and_no_overwrite() {
             .to_string()
             .contains("secret")
     );
+}
+#[cfg_attr(test, test)]
+pub fn hosted_fetch_before_reservation_waits_and_unavailable_is_actionable() {
+    let f = Fixture::new();
+    let server = Server::new("");
+    f.authorize(&server.url);
+    let bundle = f.bundle();
+    let id = f.client.enqueue(&bundle).unwrap();
+    assert!(f.client.pointer(&bundle).is_some());
+    let out = f.root.join("delayed.apparent");
+    let error = f.client.fetch(&id, &out, 0).unwrap_err().to_string();
+    assert!(error.contains("Capture unavailable") && error.contains("API origin"));
+    assert!(!out.exists());
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(150));
+            f.client.process_once().unwrap();
+        });
+        f.client.fetch(&id, &out, 5).unwrap();
+        worker.join().unwrap();
+    });
+    assert!(out.join("apparent.json").is_file());
+    server.state.lock().unwrap().ready = false;
+    let pending_out = f.root.join("pending.apparent");
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(150));
+            server.state.lock().unwrap().ready = true;
+        });
+        f.client.fetch(&id, &pending_out, 5).unwrap();
+    });
+    for path in server.state.lock().unwrap().data.keys() {
+        assert_eq!(fs::read(bundle.join(path)).unwrap(), fs::read(pending_out.join(path)).unwrap());
+    }
+    for mode in ["fetch-missing", "fetch-unauthorized"] {
+        server.state.lock().unwrap().mode = mode.into();
+        let absent = f.root.join("absent.apparent");
+        let start = Instant::now();
+        let error = f.client.fetch(&id, &absent, 1).unwrap_err().to_string();
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert!(!absent.exists());
+        if mode == "fetch-missing" {
+            assert!(error.contains("Capture unavailable") && error.contains("fresh handoff"));
+        } else {
+            assert!(error.contains("authorization failed") && error.contains("--scope read"));
+            assert!(start.elapsed() < Duration::from_secs(1));
+        }
+        assert!(!fs::read_dir(&f.root).unwrap().any(|entry|
+            entry.unwrap().file_name().to_string_lossy().starts_with(".apparent-fetch-")));
+    }
 }
 #[cfg_attr(test, test)]
 pub fn hosted_disable_logout_and_quota_preserve_local() {

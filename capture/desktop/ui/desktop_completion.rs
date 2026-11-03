@@ -26,9 +26,10 @@ impl ApparentCoordinator {
     ) {
         // The worker still owns its exact ID's receipt after dismissal. Only its
         // UI/clipboard/onboarding effects lose ownership when a new capture starts.
-        if finalized.is_err() {
-            crate::capture::desktop::workflow::error_reporting::report(
+        if let Err(error) = &finalized {
+            crate::capture::desktop::workflow::error_reporting::report_error(
                 crate::capture::desktop::workflow::error_reporting::Failure::FinalizeCapture,
+                error,
             );
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]

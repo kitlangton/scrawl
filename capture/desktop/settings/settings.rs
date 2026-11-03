@@ -2308,7 +2308,8 @@ mod tests {
                 std::process::id(),
                 crate::shared::clock::now_epoch_ms()
             ));
-            std::fs::create_dir_all(&dir).unwrap();
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
             Self(dir)
         }
     }
