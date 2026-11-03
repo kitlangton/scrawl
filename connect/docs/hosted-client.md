@@ -136,7 +136,17 @@ the existing registered dispatcher calls this focused route only on a manually
 selected non-main branch. The full verification job keeps its main-only guard.
 Inspect the exact
 run SHA and `mac-connect-worker-native` artifact, including candidate identity,
-scenario report and cleanup receipt. This focused route runs no full suites,
+scenario report and cleanup receipt. The dependency cache uses the main Mac Rust
+job's `rust` namespace and root/engine/client workspace inputs, retaining the
+automatic OS, architecture, compiler, environment and lock hashes. `cache-on-failure`
+retains reusable dependencies after downstream failure; it does not cache a proof
+verdict. Inspect the action's actual restored-key/size log, not just its configured
+key or an exact-match boolean. The observed cold build/install took 25m24s: the
+stage allows 30 minutes and the hosted job 55, reserving time outside the build
+for setup/restore, the four-minute native scenario, owned cleanup, evidence and
+cache saving. Warm reuse is expected to reduce dependency compilation, but
+restoration and native success must be verified on the actual run. These Actions
+limits do not change NoMac spending/session limits. This focused route runs no full suites,
 produces no release receipt and does not replace main-only verification. It is
 restricted to standard GitHub-hosted `macos-15-intel`, with read-only repository
 permission and no secrets or production bindings. Later native consumers may

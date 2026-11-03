@@ -22,7 +22,7 @@ class NativeProofMacTests(unittest.TestCase):
         self.assertNotIn('secrets.', workflow)
         self.assertNotIn('write\n', workflow)
         self.assertIn("github.event_name == 'workflow_dispatch'", workflow)
-        self.assertIn('timeout-minutes: 30\n', workflow)
+        self.assertIn('    timeout-minutes: 55\n', workflow)
         self.assertIn('timeout-minutes: 4\n', workflow)
         self.assertIn('persist-credentials: false', workflow)
 
@@ -54,6 +54,27 @@ class NativeProofMacTests(unittest.TestCase):
         self.assertIn('uses: ./.github/workflows/native-proof-mac.yml', focused)
         self.assertIn('type: boolean\n        default: false', dispatcher)
         self.assertIn('  workflow_call:', WORKFLOW.read_text())
+
+    def test_main_dependency_cache_namespace_inputs_and_failure_retention(self):
+        workflow = WORKFLOW.read_text()
+        main = (ROOT / '.github/workflows/verification-platform.yml').read_text()
+        block = workflow.split('      - uses: Swatinem/rust-cache@v2\n', 1)[1].split('      - uses:', 1)[0]
+        main_block = main.split('      - uses: Swatinem/rust-cache@v2\n', 1)[1].split('      - uses:', 1)[0]
+        def workspaces(text):
+            return re.search(r'          workspaces: \|\n((?:            .*\n)+)', text)[1]
+        self.assertEqual(workspaces(block), workspaces(main_block))
+        self.assertIn('  rust:\n', main)
+        self.assertIn('          shared-key: rust\n', block)
+        self.assertIn("          cache-on-failure: 'true'\n", block)
+        self.assertNotRegex(block, r'prefix-key:|add-job-id-key:|add-rust-environment-hash-key:|env-vars:|key:.*Darwin')
+        build = workflow.split('      - name: Build and install the candidate without launching\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('timeout-minutes: 30\n', build)
+        self.assertIn('timeout-minutes: 4\n', workflow)
+        for name in ('Verify owned cleanup and retain only allowlisted evidence',
+                     'Retain synthetic proof evidence including failures'):
+            step = workflow.split('      - name: ' + name + '\n', 1)[1].split('      - name:', 1)[0]
+            self.assertIn('if: always()\n', step)
+            self.assertIn('timeout-minutes: 3\n', step)
 
     def run_cleanup(self, *, owned=False, unsafe=False):
         script = re.search(r'      - name: Verify owned cleanup.*?python3 - <<\'PY\'\n(.*?)^          PY',

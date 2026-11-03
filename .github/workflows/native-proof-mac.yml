@@ -16,7 +16,10 @@ jobs:
   connect-worker:
     if: github.repository == 'tryapparent/apparent' && github.event_name == 'workflow_dispatch'
     runs-on: macos-15-intel
-    timeout-minutes: 30
+    # Observed cold install: 25m24s. Allow 30m for that stage and 25m outside
+    # it for setup/cache restore, the 4m native scenario, cleanup/artifacts/cache save.
+    # These are hosted Actions limits, unrelated to the human NoMac session cap.
+    timeout-minutes: 55
     env:
       APPARENT_APP_DIR: /Users/runner/Applications/Apparent-Connect-${{ github.run_id }}-${{ github.run_attempt }}.app
       APPARENT_BUILD_TMP: /Users/runner/.apparent-connect-build-${{ github.run_id }}-${{ github.run_attempt }}
@@ -51,6 +54,14 @@ jobs:
           xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Match the main platform job's automatic job-id namespace and inputs.
+          shared-key: rust
+          workspaces: |
+            . -> target
+            capture/engine -> target
+            connect/client -> target
+          cache-on-failure: 'true'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -63,7 +74,7 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build
       - name: Build and install the candidate without launching
-        timeout-minutes: 20
+        timeout-minutes: 30
         env:
           APPARENT_NO_LAUNCH: '1'
         run: |
@@ -81,6 +92,7 @@ jobs:
             "$APPARENT_APP_DIR/Contents/MacOS/apparent" "$APPARENT_CONNECT_PROOF/scenario"
       - name: Verify owned cleanup and retain only allowlisted evidence
         if: always()
+        timeout-minutes: 3
         run: |
           python3 - <<'PY'
           import json, os, pathlib, shutil, subprocess
@@ -112,6 +124,7 @@ jobs:
           PY
       - name: Retain synthetic proof evidence including failures
         if: always()
+        timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
           name: mac-connect-worker-native
