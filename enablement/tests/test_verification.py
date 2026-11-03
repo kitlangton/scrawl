@@ -3,6 +3,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -379,18 +380,59 @@ class RuntimeBudgetTests(unittest.TestCase):
         self.assertIn('agent whose run hit this limit owns', result.stderr)
 
     def test_cancelled_watchdog_cleans_up_process_group(self):
-        process = subprocess.Popen(['python3', str(SCRIPT), '--hook-budget', '30',
-                                    'sh', '-c', 'echo ready; sleep 30 & wait'],
-                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            self.assertEqual(process.stdout.readline(), 'ready\n')
-            process.terminate()
-            process.communicate(timeout=5)
-            self.assertEqual(process.returncode, 143)
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.communicate()
+        import select
+        import signal
+        # Hold Popen after the real child exists but before the watchdog owns
+        # its return value. Child output is not watchdog-handler readiness.
+        driver = '''
+import runpy, subprocess, sys
+watchdog = runpy.run_path(sys.argv[1])['hook_budget']
+spawn = subprocess.Popen
+def held_spawn(*args, **kwargs):
+    child = spawn(*args, **kwargs)
+    print(child.pid, flush=True)
+    sys.stdin.readline()
+    return child
+if sys.argv[2] == 'spawn':
+    subprocess.Popen = held_spawn
+    command = 'sleep 30 & wait'
+else:
+    command = 'sleep 30 & echo $$; wait'
+sys.exit(watchdog(30, ['sh', '-c', command]))
+'''
+        for phase in ('spawn', 'running'):
+            for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+                with self.subTest(phase=phase, signal=sig):
+                    child_group = None
+                    with subprocess.Popen([sys.executable, '-c', driver, str(SCRIPT), phase],
+                                          text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                          stderr=subprocess.PIPE, start_new_session=True) as process:
+                        try:
+                            self.assertTrue(select.select([process.stdout], [], [], 5)[0], 'child did not start')
+                            child_group = int(process.stdout.readline())
+                            process.send_signal(sig)
+                            # EOF must include the whole child group, not just
+                            # the watchdog. Keep the original five-second bound.
+                            stdout, stderr = process.communicate(input='release\n', timeout=5)
+                            self.assertEqual(process.returncode, 128 + sig, stderr)
+                            self.assertEqual(stdout, '')
+                        finally:
+                            # Bound failure cleanup even when the watchdog has
+                            # exited but descendants still hold captured pipes.
+                            if child_group is not None:
+                                try: os.killpg(child_group, signal.SIGKILL)
+                                except ProcessLookupError: pass
+                            if process.poll() is None:
+                                process.kill()
+                            process.communicate(timeout=5)
+
+    def test_watchdog_restores_handlers_when_spawn_fails(self):
+        import signal
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        with patch.object(verification.subprocess, 'Popen', side_effect=OSError('synthetic launch failure')):
+            with self.assertRaisesRegex(OSError, 'synthetic launch failure'):
+                verification.hook_budget(30, ['synthetic-command'])
+        self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
 
     def test_supported_ci_jobs_have_ten_minute_execution_budget(self):
         import re

@@ -247,28 +247,36 @@ def run_checks(selection, offline=True):
 
 def hook_budget(seconds, command):
     """Bound the whole hook, including descendants, on macOS and Linux."""
-    process = subprocess.Popen(command, start_new_session=True)
+    process = None
+    cancelled = None
     def interrupted(signum, _frame):
-        raise SystemExit(128 + signum)
+        nonlocal cancelled
+        cancelled = 128 + signum
+        # Popen may already have created the child before returning its handle.
+        # Record cancellation until we can kill/reap that owned process group.
+        if process is not None:
+            raise SystemExit(cancelled)
 
     previous = {sig: signal.signal(sig, interrupted)
                 for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
     try:
+        process = subprocess.Popen(command, start_new_session=True)
+        if cancelled is not None:
+            return cancelled
         return process.wait(timeout=seconds)
     except subprocess.TimeoutExpired:
         print(f"Verification exceeded {seconds:g}s. Optimize the tests: the agent "
               "whose run hit this limit owns the optimization and successful rerun. "
               "Do not raise or bypass the limit.", file=sys.stderr, flush=True)
-        os.killpg(process.pid, signal.SIGKILL)
-        process.wait()
         return 124
     finally:
         # A successful parent must not leave background verification running.
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
         for sig, handler in previous.items():
             signal.signal(sig, handler)
 
