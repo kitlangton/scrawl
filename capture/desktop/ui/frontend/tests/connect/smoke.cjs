@@ -6,7 +6,9 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 // Transport/UI security fixture only. Actual consent policy is tested in Rust.
-test('Connect shipped Electron IPC, consent presentation, browser action and lifecycle ownership', { timeout: 45000 }, async t => {
+for (const mode of ['foundation', 'installed', 'installed-action']) {
+const installed = mode !== 'foundation', initial = mode === 'installed-action';
+test(`${mode} Connect shipped Electron IPC, consent presentation, browser action and lifecycle ownership`, { timeout: 45000 }, async t => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ec-'));
   const directory = path.join(home, '.config/apparent/agent-control');
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -64,7 +66,7 @@ test('Connect shipped Electron IPC, consent presentation, browser action and lif
   });
   const address = path.join(directory, 'capture.sock');
   await new Promise(resolve => server.listen(address, resolve)); await fs.chmod(address, 0o600);
-  const application = await electron.launch({ args: [path.join(__dirname, '../..')],
+  const application = await electron.launch({ args: [path.join(__dirname, '../..'), ...(installed ? ['--settings-connect'] : []), ...(initial ? ['--connect-action=connect'] : [])],
     env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') } });
   t.after(async () => {
     await application.close(); for (const client of clients) client.destroy();
@@ -73,8 +75,26 @@ test('Connect shipped Electron IPC, consent presentation, browser action and lif
   await application.evaluate(({ shell }) => { global.openedUris = []; shell.openExternal = async uri => { global.openedUris.push(uri); }; });
   const page = await application.firstWindow();
   const card = page.getByRole('region', { name: 'Apparent Connect' });
-  await card.getByRole('button', { name: 'Connect', exact: true }).click();
+  if (installed) {
+    await expect(page).toHaveTitle('Apparent Settings — Connect');
+    assert.equal(await page.evaluate(() => typeof window.apparent.readCaptureUsage), 'undefined');
+    assert.deepEqual(await page.evaluate(() => [typeof window.apparent.readMicrophoneEnabled, typeof window.apparent.setMicrophoneEnabled]), ['undefined', 'undefined']);
+    assert.equal(await application.evaluate(async ({ ipcMain, BrowserWindow }) => {
+      const sender = BrowserWindow.getAllWindows()[0].webContents;
+      for (const channel of ['apparent:read-capture-usage', 'apparent:read-capture-location', 'apparent:read-retention', 'apparent:read-runtime-state', 'apparent:show-capture-folder']) {
+        try { await ipcMain._invokeHandlers.get(channel)({ sender, senderFrame: sender.mainFrame }); return false; } catch {}
+      }
+      for (const [channel, args] of [['apparent:read-microphone-enabled', []], ['apparent:set-microphone-enabled', [false]]]) {
+        try { await ipcMain._invokeHandlers.get(channel)({ sender, senderFrame: sender.mainFrame }, ...args); return false; } catch {}
+      }
+      return true;
+    }), true);
+    assert.equal(requests.filter(request => Object.hasOwn(request, 'microphone')).length, 0);
+    if (!initial) assert.equal(requests.filter(r => r.command).length, 0);
+  }
+  if (!initial) await card.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(card.getByText('Explicit upload consent required.')).toBeVisible();
+  assert.equal(requests.filter(r => r.command === 'connect').length, 1);
   assert.equal(requests.filter(r => r.command === 'allow').length, 0);
   assert.deepEqual(await application.evaluate(() => global.openedUris), []);
   await card.getByRole('button', { name: 'Allow & continue', exact: true }).click();
@@ -125,9 +145,11 @@ test('Connect shipped Electron IPC, consent presentation, browser action and lif
     global.oldConnect = ipcMain._invokeHandlers.get('apparent:connect-open-browser')({ sender, senderFrame: sender.mainFrame });
   });
   await expect.poll(() => typeof hold).toBe('function');
+  const connectCommandsBeforeReload = requests.filter(r => r.command === 'connect').length;
   await page.reload();
   assert.deepEqual(await application.evaluate(() => global.oldConnect), { status: 'cancelled' });
   await expect.poll(() => closes).toBe(1);
+  assert.equal(requests.filter(r => r.command === 'connect').length, connectCommandsBeforeReload);
   holdAction = undefined; hold();
   await expect(card.getByRole('button', { name: 'Connect', exact: true })).toBeVisible();
   assert.deepEqual(await application.evaluate(() => global.openedUris), ['https://example.com/device?code=TEST-CODE']);
@@ -136,3 +158,5 @@ test('Connect shipped Electron IPC, consent presentation, browser action and lif
   await page.screenshot({ path: shot, fullPage: true });
   console.log(`Synthetic Connect screenshot: ${shot}`);
 });
+
+}
