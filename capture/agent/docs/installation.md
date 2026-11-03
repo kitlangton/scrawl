@@ -58,6 +58,14 @@ another receiver. Do not copy another environment's credentials or private keys.
 Ephemeral ChatGPT environments can require fresh approval; installing a CLI cannot
 carry private account authorization between them.
 
+If login fails before printing an approval link, report its transport stage,
+curl exit code and timing. Do not infer a missing capture or request repeated
+account approval. A proxied agent can reach HTTPS even when direct DNS fails;
+preserve its proxy settings and never print their values. An unauthenticated
+GET to the official `/v1/account` returning 401 proves API reachability, not that
+the authorization POST or capture fetch succeeds. Retry login deliberately only
+after connectivity is restored. Installer success alone does not prove login readiness.
+
 `inspect` downloads a hosted ID to `./<id>.apparent`, waits up to 120 seconds for
 readiness, and prints the summary. It never overwrites existing output: inspect a
 previous download using `apparent inspect ./<id>.apparent`. For custom paths/waits,

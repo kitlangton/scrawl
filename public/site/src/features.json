@@ -25,11 +25,11 @@
       "id": "connect-product-analytics",
       "added": "2026-11-03",
       "group": "settings",
-      "name": "Default-enabled, consent-gated Connect analytics",
-      "says": "A signed-in account can explicitly choose optional product analytics through its CSRF-protected consent API. Withdrawal clears queued events and blocks new export admissions; stale opt-ins cannot restore a withdrawn choice. Login alone grants no analytics permission.",
+      "name": "Default-enabled analytics with separate website/account choices",
+      "says": "Website visits/download clicks and signed-in account activity have separate affirmative analytics choices and disclosure. The account control uses CSRF-protected writes and revision readback; website analytics respects GPC/DNT. Withdrawal blocks new sends/admissions; stale opt-ins and late identity responses cannot restore a withdrawn choice. Login or upload permission alone grants no analytics consent.",
       "status": "main",
       "platforms": ["mac", "linux"],
-      "note": "Collector capability defaults enabled with EU ingestion and production labeling; additive migration0007 enables the database control without rewriting0006. Valid project configuration and affirmative per-account consent remain mandatory. Explicit kill switches persist; existing users and withdrawn choices are not enrolled. Only allowlisted event/quantity metadata is exported; recordings, credentials, keys and public capability links are excluded. Already-authorized sends may finish after withdrawal. The browser control/disclosure rollout and independent production acceptance remain separate; source landing alone is not deployment proof.",
+      "note": "Server and configured browser capability default enabled with EU ingestion and production labeling; migration0007 enables database availability without rewriting0006. Missing/invalid keys fail closed. No account/browser is silently enrolled; browser choices expire after180days and account choices persist until withdrawal/deletion. Only allowlisted metadata is exported: no recordings, filenames, emails, keys, URL queries/fragments or capability links. Device approval, shared-link management and recording recipients are not instrumented. Already-authorized server sends may finish after withdrawal. Controller/privacy contact are disclosed; independent actual-deployment acceptance remains required, not inferred from source landing.",
       "docs": ["connect/docs/product-analytics.md"]
     },
     {

@@ -49,6 +49,11 @@ jobs:
     if: needs.admit.outputs.sha != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      PUBLIC_POSTHOG_ENABLED: ${{ vars.PUBLIC_POSTHOG_ENABLED || 'true' }}
+      PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
+      PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
+      PUBLIC_POSTHOG_ENVIRONMENT: production
     steps:
       - uses: actions/checkout@v4
         with:
@@ -91,6 +96,11 @@ jobs:
           node --test scripts/commerce/test-package-text.mjs scripts/site-build/test-expected-canonical-packaging.mjs scripts/browser-proof/test-upstream-link-guard.mjs scripts/browser-proof/test-og-stage-redirect.mjs scripts/browser-proof/test-og-video-stage-browser.mjs
           cp -a dist-apparent "$RUNNER_TEMP/public-artifact"
           node scripts/connect/compose-connect.mjs
+      - name: Verify default-enabled analytics with isolated synthetic transport
+        working-directory: connect/web
+        env:
+          CONNECT_EVIDENCE: ${{ runner.temp }}/analytics-browser-evidence
+        run: npm run test:analytics
       - name: Prepare source-built Pages artifact
         working-directory: public/site
         run: |

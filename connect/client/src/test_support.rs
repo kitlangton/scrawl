@@ -1617,8 +1617,7 @@ pub fn hosted_transport_network_timeout_and_cancellation() {
     let server = Server::new("slow");
     let stage = Scratch::new(&f.client.state).unwrap();
     let start = Instant::now();
-    assert!(
-        f.client
+    let error = f.client
             .raw_request(
                 &server.url,
                 Some("synthetic-secret"),
@@ -1630,8 +1629,10 @@ pub fn hosted_transport_network_timeout_and_cancellation() {
                 Duration::from_millis(100),
                 &|| true
             )
-            .is_err()
-    );
+            .unwrap_err().to_string();
+    assert!(error.contains("account check") && error.contains("timeout"), "{error}");
+    assert!(error.contains("elapsed_ms=") && error.contains("request_timeout_ms=100"));
+    assert!(!error.contains("synthetic-secret") && !error.contains(&server.url));
     assert!(start.elapsed() < Duration::from_secs(1));
     assert!(
         f.client
@@ -1651,21 +1652,29 @@ pub fn hosted_transport_network_timeout_and_cancellation() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
-    assert!(
-        f.client
+    let error = f.client
             .request(
                 &url,
                 None,
-                "GET",
-                "/v1/account",
+                "POST",
+                "/v1/device/start",
                 None,
                 &stage.0.join("offline"),
                 100,
                 Duration::from_secs(1),
                 &|| true
             )
-            .is_err()
-    );
+            .unwrap_err().to_string();
+    assert!(error.contains("device authorization start") && error.contains("connection failed"), "{error}");
+    assert!(error.contains("curl_exit=7") && error.contains("http_status=0"));
+    assert!(!error.contains(&url));
+    let sized = Server::new("");
+    let error = f.client.raw_request(
+        &sized.url, Some("synthetic-read-secret"), "GET", "/v1/account", None,
+        &stage.0.join("oversized-response"), 1, Duration::from_secs(1), &|| true,
+    ).unwrap_err().to_string();
+    assert!(error.contains("response size limit exceeded") && error.contains("curl_exit=63"), "{error}");
+    assert!(error.contains("http_status=200"));
 }
 #[cfg_attr(test, test)]
 pub fn hosted_paths_symlinks_oversize_and_unknown_assets() {
