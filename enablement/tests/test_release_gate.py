@@ -285,6 +285,55 @@ class PublicationProgressTests(unittest.TestCase):
         self.assertIn("format('Release verification ({0})', inputs.revision)", platform)
 
 
+class MacHistoryTransitionTests(unittest.TestCase):
+    original = '75dc870c240e415820384ced32f4390f798615bc'
+    canonical = '65cee9e56edca6fe629a93ff9aafcbf35cb8608e'
+    tree = '27dc97069363fa1b6b838a421adc4bbcd6f9c38f'
+
+    def revision(self, repo='tryapparent/apparent', tag='preview-mac-12-1', mutate=None):
+        feed = f'<rss><channel><item><enclosure url="https://github.com/{repo}/releases/download/{tag}/app.zip"/></item></channel></rss>'
+        def fetch(path):
+            if '/git/ref/' in path:
+                data = {'object': {'type': 'commit', 'sha': self.original}}
+            else:
+                data = {'sha': path.rsplit('/', 1)[1], 'tree': {'sha': self.tree}}
+            if mutate:
+                mutate(path, data)
+            return data
+        return gate.mac_feed_revision(repo, feed, fetch)
+
+    def test_exact_transition_retains_normal_source_ordering(self):
+        published = self.revision()
+        self.assertEqual(published, self.canonical)
+        for status, expected in [('ahead', True), ('identical', False), ('behind', False)]:
+            answers = iter([{'status': 'ahead'}, {'status': status}])
+            self.assertEqual(gate.publication_needed('tryapparent/apparent', 'a' * 40,
+                             published, lambda _: next(answers)), expected)
+        answers = iter([{'status': 'ahead'}, {'status': 'diverged'}])
+        with self.assertRaisesRegex(ValueError, 'diverge'):
+            gate.publication_needed('tryapparent/apparent', 'a' * 40, published,
+                                    lambda _: next(answers))
+
+    def test_other_repositories_and_tags_are_not_mapped(self):
+        self.assertEqual(self.revision(repo='example/project'), self.original)
+        self.assertEqual(self.revision(tag='preview-mac-13-1'), self.original)
+
+    def test_changed_tag_or_either_commit_identity_or_tree_fails_closed(self):
+        def changed_tag(path, data):
+            if '/git/ref/' in path:
+                data['object']['sha'] = self.canonical
+        with self.assertRaisesRegex(ValueError, 'tag changed'):
+            self.revision(mutate=changed_tag)
+        for revision in (self.original, self.canonical):
+            for field in ('sha', 'tree'):
+                def corrupt(path, data):
+                    if path.endswith('/commits/' + revision):
+                        data[field] = 'b' * 40 if field == 'sha' else {'sha': 'b' * 40}
+                with self.subTest(revision=revision, field=field):
+                    with self.assertRaisesRegex(ValueError, 'content-identical'):
+                        self.revision(mutate=corrupt)
+
+
 class MacPreviewAdmissionWorkflowTests(unittest.TestCase):
     def setUp(self):
         root = Path(__file__).resolve().parents[2]
