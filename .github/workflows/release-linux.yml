@@ -329,12 +329,12 @@ jobs:
         run: node --experimental-strip-types capture/desktop/scripts/linux/maintenance/signing-bridge.ts publish "$BRIDGE_COMMIT"
 
   runtime-budget:
-    if: always()
+    if: always() && needs.admit.result != 'skipped'
     needs: [admit, preview-needed, linux, publish]
     permissions:
       contents: read
       actions: read
-    name: Workflow runtime budget${{ needs.admit.result == 'skipped' && ' (no-op)' || '' }}
+    name: Workflow runtime budget
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

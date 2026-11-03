@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url'
 
 export const budgetSeconds = 600
 export const auditName = 'Workflow runtime budget'
-export const noOpAuditName = `${auditName} (no-op)`
 export const optimization = 'Optimize the tests. The agent whose run exceeded the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
 export type Job = { name: string; status: string; conclusion: string | null; started_at: string | null; completed_at: string | null }
 
@@ -13,7 +12,7 @@ export function executionSeconds(jobs: Job[]): number {
   const intervals: [number, number][] = []
   for (const job of jobs) {
     // Auditing does not count as workload, including nested reusable gates.
-    if ([auditName, noOpAuditName].some(name => job.name === name || job.name.endsWith(` / ${name}`))) continue
+    if (job.name === auditName || job.name.endsWith(` / ${auditName}`)) continue
     if (job.status !== 'completed') throw new Error(`Workflow job is not terminal: ${job.name}`)
     if (job.conclusion === 'skipped') continue
     const start = Date.parse(job.started_at ?? '')
