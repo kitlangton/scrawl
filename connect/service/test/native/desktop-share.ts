@@ -162,18 +162,20 @@ async function until(probe, seconds, message) {
   do { const result = await probe(); if (result) return result; await delay(200); } while (Date.now() < end);
   throw Error(message);
 }
-function popupPID() {
+function installedChildPID(surface: 'pill' | 'share') {
   const pids = spawnSync('/usr/bin/pgrep', ['-P', String(desktop.pid)], {encoding: 'utf8'}).stdout.trim().split(/\s+/).filter(Boolean);
   const expected = binary.slice(0, binary.indexOf('.app/') + 5);
   const matches = pids.filter(pid => {
     const argv = spawnSync('/bin/ps', ['-ww', '-p', pid, '-o', 'command='], {encoding: 'utf8'}).stdout;
-    return argv.includes(expected) && argv.includes('/electron/share/main.cjs');
+    return argv.includes(expected) && argv.includes(`/electron/${surface}/main.cjs`);
   });
-  assert(matches.length <= 1, 'Multiple installed share children'); return matches.length ? Number(matches[0]) : null;
+  assert(matches.length <= 1, `Multiple installed ${surface} children`); return matches.length ? Number(matches[0]) : null;
 }
+const popupPID = () => installedChildPID('share');
 
 async function openPopup() {
-  ui('click', desktop.pid, 'Copy link');
+  const pill = await until(() => installedChildPID('pill'), 5, 'Installed Electron pill absent');
+  ui('click', pill, 'Copy link');
   const pid = await until(popupPID, 10, 'Installed share child absent');
   // OCR is scoped to this child; it proves the actual installed renderer/disclosure.
   await until(() => { try { ui('inspect', pid, 'not end-to-end encrypted'); return true; } catch { return false; } }, 8, 'Explicit disclosure absent');
