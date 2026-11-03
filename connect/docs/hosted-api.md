@@ -73,7 +73,7 @@ These limits bound only this Worker's controlled R2 operations/physical reservat
 
 ## Explicit single-capture sharing (experiment)
 
-The additive `0003.sql` migration creates capability rows; existing captures stay private. New grants require deployment variable `SHARING_ENABLED="true"` (default **false**) and the native sender separately requires `experiments.hostedSharing=true`. Turning the deployment switch off prevents new grants, not revocation or access to an already-issued link. No deployment is implied by this implementation.
+The additive `0003.sql` migration creates capability rows; existing captures stay private. New grants require deployment variable `SHARING_ENABLED="true"` (default **false**) and the desktop sender is available by default unless `experiments.hostedSharing=false`. Turning the deployment switch off prevents new grants, not revocation or access to an already-issued link. No deployment is implied by this implementation.
 
 - Upload-owner bearer `POST /v1/captures/:id/share` reserves or reuses the active capability immediately, even while upload is pending. Response `{url,status,expiresAt}`. Only the exact owned, live capture is eligible. Account login, ordinary upload and background processing do not call this route. Concurrent repeats return one active URL. Revocation then re-sharing creates a different URL; tombstoned/expired captures cannot be resurrected.
 - Upload-owner bearer `POST /v1/captures/:id/share/progress` accepts `{state:'uploading'|'paused'|'failed'}`. Counts come from confirmed stored files, never caller byte claims. Ready capture state takes precedence.

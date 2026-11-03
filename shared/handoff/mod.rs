@@ -1013,7 +1013,7 @@ pub(crate) fn experiment_enabled_in(config: &Config, name: &str) -> bool {
             name,
             AGENT_DEMO_VIDEO | "copyCaptureId" | "connectSettings" | "nativeLaunch" | "electronCaptureLocation"
                 | "movableRecordingControls" | "exportNarration" | "onboardingFirstCapture"
-                | "hostedSync" | "hostedEncryption"
+                | "hostedSync" | "hostedEncryption" | "hostedSharing"
         ))
 }
 
