@@ -427,10 +427,10 @@
       "id": "capsule",
       "group": "record",
       "name": "Capsule",
-      "says": "The capsule shows the time with Finish and Cancel on the display in use; on a Mac it's a native Metal panel, black or glass.",
+      "says": "The capsule shows the time with Finish and Cancel on the display in use.",
       "status": "stable@0.3.4",
       "platforms": ["mac", "linux"],
-      "note": "Linux draws the GPUI capsule; glass needs macOS 26. On main, the Hyprland capsule stays pinned across workspaces without pinning other app windows.",
+      "note": "The Electron replacement candidate uses shared React controls and Rust-owned capture state. Installed routing, native window behavior and capture-output parity require Mac and isolated Linux acceptance before release. The retained native fallback uses GPUI on Linux and Metal on Mac; glass needs macOS 26. Existing Hyprland workspace behavior remains an acceptance requirement.",
       "config": [
         { "key": "nativePill", "value": "false", "does": "Draw the GPUI capsule instead of the Metal one (Mac)" },
         { "key": "pillStyle", "value": "\"black\" | \"glass\"", "does": "The Metal capsule's look" }
