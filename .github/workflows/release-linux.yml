@@ -56,6 +56,8 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          # Keep complete ancestry/tags without downloading historical file bodies.
+          filter: blob:none
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -267,6 +269,8 @@ jobs:
           # Publication policy always comes from trusted current main.
           ref: main
           fetch-depth: 0
+          # Feed ordering needs full history, not obsolete historical file bodies.
+          filter: blob:none
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
