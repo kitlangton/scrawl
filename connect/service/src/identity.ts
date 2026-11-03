@@ -5,9 +5,25 @@ import {oauthProvider,oauthDeviceAuthorization,DEVICE_CODE_GRANT_TYPE} from '@be
 import type {Env} from './types.ts';
 import {admit,fail,hash,random} from './common.ts';
 
+// Workers keys environment lifetime by object identity (fetch handler parameters):
+// https://developers.cloudflare.com/workers/runtime-apis/handlers/fetch/#parameters
+// Reuse only static auth setup for an unchanged runtime binding object. Session,
+// token, grant and revocation reads remain live; cookie session caching stays off.
+const instances=new WeakMap<Env,{inputs:unknown[];auth:ReturnType<typeof createIdentity>}>();
+export function identity(env:Env) {
+ const inputs=[env.DB,env.API_ORIGIN,env.SITE_ORIGIN,env.LEGACY_SITE_ORIGIN,
+  env.GOOGLE_CLIENT_ID,env.GOOGLE_CLIENT_SECRET,env.BETTER_AUTH_SECRET,env.OAUTH_DISCOVERY_URL];
+ const cached=instances.get(env);
+ if(cached&&inputs.every((value,index)=>value===cached.inputs[index]))return cached.auth;
+ const entry={inputs,auth:createIdentity(env)};instances.set(env,entry);
+ // An initialization failure must not poison subsequent requests indefinitely.
+ void entry.auth.$context.catch(()=>{if(instances.get(env)===entry)instances.delete(env);});
+ return entry.auth;
+}
+
 // Only the v1 adapters and the Google callback are exposed by the Worker.
 // In particular, server-only client administration never becomes a public route.
-export function identity(env: Env) {
+function createIdentity(env: Env) {
  if(typeof env.BETTER_AUTH_SECRET!=='string'||env.BETTER_AUTH_SECRET.length<32)fail('auth_unavailable',503);
  return betterAuth({
   appName:'Apparent Connect',baseURL:env.API_ORIGIN,basePath:'/auth',secret:env.BETTER_AUTH_SECRET,
