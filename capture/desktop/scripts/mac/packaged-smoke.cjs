@@ -17,6 +17,18 @@ async function within(operation, ms) {
   } finally { clearTimeout(timer); }
 }
 
+// A location render starts retention/usage reads on Rust's same bounded worker.
+// Retry only explicit worker contention, never malformed replies or other errors.
+async function readLocation(read, budget, replies) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const result = await within(read(), budget());
+    replies.push(result);
+    if (result.status !== 'error' || result.code !== 'app_busy') return result;
+    await within(new Promise(resolve => setTimeout(resolve, 150)), budget());
+  }
+  throw new Error('Storage worker remained busy after eight bounded reads');
+}
+
 async function stopElectron(application, timeout = 3000) {
   if (!application) return;
   try { await within(application.close(), timeout); }
@@ -110,7 +122,7 @@ async function main() {
     TMPDIR: home, TMP: home, TEMP: home };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.APPARENT_CAPTURES_DIR;
-  let backend, application, log, failure;
+  let backend, application, page, log, failure;
   try {
     await fs.mkdir(path.dirname(config), { recursive: true, mode: 0o700 });
     await fs.mkdir(captures, { mode: 0o700 });
@@ -136,14 +148,17 @@ async function main() {
     assert.ok(ready, 'Installed Rust control bridge did not become idle');
     for (let cycle = 0; cycle < 2; cycle++) {
       application = await electron.launch({ executablePath: runtime, args: [entry], env, timeout: budget(15000) });
-      const page = await application.firstWindow({ timeout: budget(10000) });
+      page = await application.firstWindow({ timeout: budget(10000) });
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
       await expect(page.getByRole('heading', { name: 'Storage', exact: true })).toBeVisible({ timeout: budget() });
       await expect(page.getByRole('region', { name: 'Capture location', exact: true })
         .getByText('~/synthetic-captures', { exact: true })).toBeVisible({ timeout: budget() });
-      const location = await within(page.evaluate(() => window.apparent.readCaptureLocation()), budget());
-      assert.equal(location.status, 'connected');
+      await page.screenshot({ path: path.join(output, `settings-${cycle}.png`), timeout: budget() });
+      const replies = [];
+      report.cycles.push({ rendered: true, replies });
+      const location = await readLocation(() => page.evaluate(() => window.apparent.readCaptureLocation()), budget, replies);
+      assert.equal(location.status, 'connected', JSON.stringify(location));
       assert.equal(location.storage.effectivePath, captures);
       const identity = await within(application.evaluate(({ app, BrowserWindow }) => ({
         executable: process.execPath, appPath: app.getAppPath(), profile: app.getPath('userData'),
@@ -157,11 +172,17 @@ async function main() {
       assert.deepEqual(errors, []);
       await within(application.close(), budget(3000));
       application = undefined;
-      report.cycles.push({ rendered: true, realRustReadback: true, closed: true, identity });
+      Object.assign(report.cycles[cycle], { realRustReadback: true, closed: true, identity });
     }
     assert.equal(JSON.parse(await fs.readFile(config, 'utf8')).capturesDir, captures);
     report.passed = true;
-  } catch (error) { failure = error; report.error = error.stack; }
+  } catch (error) {
+    failure = error; report.error = error.stack;
+    if (page) {
+      try { await page.screenshot({ path: path.join(output, 'failure.png'), timeout: 3000 }); }
+      catch (shotError) { report.failureScreenshotUnavailable = shotError.message; }
+    }
+  }
   finally {
     try { await stopElectron(application); }
     catch (error) { failure ??= error; report.cleanup.electronError = error.message; }
@@ -177,7 +198,7 @@ async function main() {
   if (failure) throw failure;
 }
 
-module.exports = { admission, stopBackend, stopElectron, supervisor, within };
+module.exports = { admission, stopBackend, stopElectron, supervisor, within, readLocation };
 if (require.main === module) {
   main().catch(error => { console.error(error); process.exitCode = 1; });
 }
