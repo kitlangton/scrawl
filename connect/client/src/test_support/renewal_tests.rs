@@ -204,7 +204,7 @@ fn hosted_renewal_fixture_reads_fragmented_nonblocking_accept() {
     }
 }
 fn reply(scope: &str, grant: &str) -> Value {
-    json!({"accessToken":"synthetic-access-new","refreshToken":"synthetic-refresh-new","scope":scope,"expiresIn":3600,"refreshExpiresIn":86400,"grantId":grant})
+    json!({"accessToken":"synthetic-access-new","refreshToken":"synthetic-refresh-new","scope":scope,"expiresIn":3600,"refreshExpiresIn":86400,"grantId":grant,"accountInitial":"M"})
 }
 fn renewable(f: &Fixture, server: &str) {
     f.authorize(server);
@@ -307,6 +307,8 @@ fn settings_health_renews_without_fabricating_local_expiry_success() {
     assert!(renewed.connected && renewed.uploads_enabled);
     assert!(!renewed.reauthorization_required);
     assert!(!renewed.renewal_required);
+    assert_eq!(renewed.account_initial.as_deref(), Some("M"));
+    assert_eq!(Client::new(provider(f.client.config.clone())).settings_snapshot().unwrap().account_initial.as_deref(), Some("M"));
     assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
 }
 
@@ -317,6 +319,7 @@ fn settings_expired_refresh_or_revoked_grant_requires_reapproval() {
         let server = RenewalServer::new("");
         renewable(&f, &server.url);
         let mut credential = f.client.stored_credential("upload").unwrap();
+        credential.account_initial = Some("M".into());
         if revoked {
             credential.auth_required = true;
         } else {
@@ -326,8 +329,37 @@ fn settings_expired_refresh_or_revoked_grant_requires_reapproval() {
         let snapshot = f.client.settings_snapshot().unwrap();
         assert!(snapshot.reauthorization_required);
         assert!(!snapshot.renewal_required && !snapshot.uploads_enabled);
+        assert!(snapshot.account_initial.is_none());
         assert_eq!(server.requests.load(Ordering::SeqCst), 0);
     }
+}
+
+#[test]
+fn account_initial_is_optional_display_metadata_not_authorization() {
+    let f = Fixture::new();
+    let server = RenewalServer::new("");
+    f.authorize(&server.url);
+    let mut credential = f.client.stored_credential("upload").unwrap();
+    assert!(credential.account_initial.is_none(), "legacy grants have no identity display");
+    for value in [json!("M"), json!("SS"), json!("界"), json!("m@example.com"), json!("\u{202e}M"), json!("ABCD"), json!(42), Value::Null] {
+        let mut response = reply("upload", "synthetic-grant");
+        response["accountInitial"] = value.clone();
+        credential.apply_reply(&response, now(), false).unwrap();
+        let expected = value.as_str().filter(|s| ["M", "SS", "界"].contains(s));
+        assert_eq!(credential.account_initial.as_deref(), expected);
+        atomic_json(&f.client.state.join("upload.credential"), &credential).unwrap();
+        assert!(f.client.settings_snapshot().unwrap().uploads_enabled);
+    }
+    // Corrupted optional display metadata on disk must not reach a renderer.
+    credential.account_initial = Some("m@example.com".into());
+    atomic_json(&f.client.state.join("upload.credential"), &credential).unwrap();
+    assert!(f.client.settings_snapshot().unwrap().account_initial.is_none());
+    credential.account_initial = Some("M".into());
+    credential.expires_at = Some(now().saturating_sub(1));
+    atomic_json(&f.client.state.join("upload.credential"), &credential).unwrap();
+    assert_eq!(f.client.settings_snapshot().unwrap().account_initial.as_deref(), Some("M"));
+    f.client.settings_disable(true).unwrap();
+    assert!(f.client.settings_snapshot().unwrap().account_initial.is_none());
 }
 
 #[test]

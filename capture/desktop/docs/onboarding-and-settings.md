@@ -177,9 +177,10 @@ raw errors, tokens and device secrets never enter its presentation contract.
 
 Connect uses the accepted Paper card and the shared frog artwork, without a separate
 section heading. The invitation reads “Help others see what you mean.”; successful
-local activation becomes a compact confirmation. The top-right A opens connection
-controls, not an asserted account identity: the current Desktop contract has no
-verified email. Disable and disconnect first show a local confirmation; declining
+local activation becomes a compact confirmation. The top-right account control shows
+the initial derived from the verified email on the active local grant, without
+exposing the email to Desktop. Older credentials and unavailable identity use a
+neutral person icon. Disable and disconnect first show a local confirmation; declining
 it does not revoke or cancel anything. Confirmed commands retain the existing
 revocation and pending-login cancellation semantics. Shared-link management is
 available only through its existing feature gate and validated credential site.

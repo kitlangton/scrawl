@@ -34,6 +34,7 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
         headline,detail:stage === 'consent' ? 'Explicit upload consent required.' : 'Synthetic transport fixture.',note:'',
         artwork:['initial','consent','approval','connected'].includes(stage),compact:stage === 'connected',
         accountMenu:['connected','renewal','off'].includes(stage),buttons,
+        ...(stage === 'connected' ? {accountInitial:'M'} : {}),
         menuActions:buttons.filter(b=>['check','request-disable','request-disconnect'].includes(b.command) && !(stage === 'renewal' && b.command === 'check')).map(b=>b.command),sharedLinksUrl:null }
     };
   };
@@ -110,9 +111,11 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
   // Real renderer, typed semantic state, and a separate Rust confirmation command.
   stage = 'connected';
   await expect(card.getByText('You’re connected.', {exact:true})).toBeVisible();
+  await expect(card.getByRole('button', {name:'Account and connection options'})).toContainText('M');
   await expect(card.locator('[data-tone="success"]')).toHaveCSS('border-inline-start-color','rgb(20, 107, 67)');
   stage = 'renewal';
   await expect(card.getByText('Connection needs a refresh.', {exact:true})).toBeVisible();
+  await expect(card.getByRole('button', {name:'Account and connection options'})).not.toContainText('A');
   await expect(card.getByRole('button', {name:'Connect', exact:true})).toHaveCount(0);
   await card.getByRole('button', {name:'Check connection', exact:true}).click();
   await expect(card.getByText('You’re connected.', {exact:true})).toBeVisible();

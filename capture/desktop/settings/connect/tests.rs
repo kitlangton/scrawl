@@ -68,7 +68,7 @@ fn disconnected(server: Option<&str>) -> Snapshot {
         server: server.map(str::to_owned),
         connected: false,
         uploads_enabled: false,
-        reauthorization_required: false, renewal_required: false,
+        reauthorization_required: false, renewal_required: false, account_initial: None,
     }
 }
 
@@ -77,7 +77,7 @@ fn connected() -> Snapshot {
         server: Some(DEFAULT_SERVER.into()),
         connected: true,
         uploads_enabled: true,
-        reauthorization_required: false, renewal_required: false,
+        reauthorization_required: false, renewal_required: false, account_initial: None,
     }
 }
 
@@ -236,13 +236,13 @@ fn login_requires_authoritative_enabled_state_not_transport_success() {
             server: Some(DEFAULT_SERVER.into()),
             connected: true,
             uploads_enabled: false,
-            reauthorization_required: false, renewal_required: false,
+            reauthorization_required: false, renewal_required: false, account_initial: None,
         }),
         Ok(Snapshot {
             server: Some("https://other.example".into()),
             connected: true,
             uploads_enabled: true,
-            reauthorization_required: false, renewal_required: false,
+            reauthorization_required: false, renewal_required: false, account_initial: None,
         }),
     ] {
         let (mut c, backend, events, logins, _, _) = fixture();
@@ -301,7 +301,7 @@ fn failed_disable_retains_retry_and_fresh_read_only_status_without_health_flood(
         server: Some(DEFAULT_SERVER.into()),
         connected: true,
         uploads_enabled: false,
-        reauthorization_required: false, renewal_required: false,
+        reauthorization_required: false, renewal_required: false, account_initial: None,
     });
     c.refresh();
     c.refresh();

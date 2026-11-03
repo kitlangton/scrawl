@@ -177,6 +177,7 @@ struct ConnectPresentation: Decodable, Equatable {
   var artwork: Bool
   var compact: Bool
   var accountMenu: Bool
+  var accountInitial: String?
   var buttons: [ConnectButton]
   var menuActions: [String]
   var sharedLinksUrl: String?
@@ -193,7 +194,7 @@ private struct ConnectCard: View {
   private let carbon = connectColor(0x020102)
   private var p: ConnectPresentation {
     connect.presentation ?? ConnectPresentation(tone: "neutral", headline: connect.status,
-      detail: connect.detail, note: "", artwork: false, compact: false, accountMenu: false,
+      detail: connect.detail, note: "", artwork: false, compact: false, accountMenu: false, accountInitial: nil,
       buttons: connect.buttons, menuActions: [], sharedLinksUrl: nil)
   }
   private var color: Color { connectColor(["success":0x146b43, "progress":0x7a58c7, "warning":0xffbe2e, "failure":0xb42318][p.tone] ?? 0xcbc4bc) }
@@ -1021,7 +1022,7 @@ struct SettingsView: View {
                 model.act("connect", ["command":button.command])
               } label: { Text(button.title) }.disabled(!button.enabled)
             }
-          } label: { Text("A").font(.custom("HostGrotesk_700wght", size: 18)).frame(width: 44, height: 44) }
+          } label: { Group { if let initial = p.accountInitial { Text(initial).font(.custom("HostGrotesk_700wght", size: 18)) } else { Image(systemName: "person.crop.circle") } }.frame(width: 44, height: 44) }
             .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Account and connection options")
         }
       }

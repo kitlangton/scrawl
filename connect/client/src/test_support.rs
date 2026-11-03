@@ -671,6 +671,7 @@ impl Fixture {
                     grant_id: None,
                     auth_required: false,
                     encryption_identity: None,
+                    account_initial: None,
                 },
             )
             .unwrap();

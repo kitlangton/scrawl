@@ -26,6 +26,8 @@ pub struct Presentation {
     pub artwork: bool,
     pub compact: bool,
     pub account_menu: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_initial: Option<String>,
     pub buttons: Vec<Button>,
     pub menu_actions: Vec<Command>,
     pub shared_links_url: Option<String>,
@@ -41,6 +43,7 @@ impl Controller {
             ..Default::default()
         };
         let snapshot = self.snapshot.as_ref();
+        p.account_initial = snapshot.and_then(|s| s.account_initial.clone());
         if snapshot.is_some_and(|s| s.uploads_enabled) {
             p.headline = "You’re connected.".into();
             p.detail = "New captures upload privately.".into();

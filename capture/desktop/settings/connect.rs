@@ -76,6 +76,7 @@ pub struct Snapshot {
     pub uploads_enabled: bool,
     pub reauthorization_required: bool,
     pub renewal_required: bool,
+    pub account_initial: Option<String>,
 }
 
 /// Only public device-flow presentation data. The adapter must use the client's

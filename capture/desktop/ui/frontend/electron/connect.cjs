@@ -35,6 +35,7 @@ function decode(value, action) {
     if (!p || !['neutral','success','progress','warning','failure'].includes(p.tone) ||
         !['headline','detail','note'].every(k => text(p[k])) ||
         !['artwork','compact','accountMenu'].every(k => typeof p[k] === 'boolean') ||
+        !(p.accountInitial === undefined || typeof p.accountInitial === 'string' && /^[\p{L}\p{N}]{1,3}$/u.test(p.accountInitial)) ||
         !Array.isArray(p.buttons) || p.buttons.length > actions.size ||
         !p.buttons.every(b => actions.has(b.command) && text(b.title) && typeof b.enabled === 'boolean') ||
         new Set(p.buttons.map(b => b.command)).size !== p.buttons.length ||
@@ -42,6 +43,7 @@ function decode(value, action) {
         !(p.sharedLinksUrl == null || linksUri(p.sharedLinksUrl))) return failed();
     presentation = { tone:p.tone, headline:p.headline, detail:p.detail, note:p.note,
       artwork:p.artwork, compact:p.compact, accountMenu:p.accountMenu,
+      ...(p.accountInitial === undefined ? {} : { accountInitial:p.accountInitial }),
       buttons:p.buttons.map(({command,title,enabled}) => ({command,title,enabled})), menuActions:[...p.menuActions], sharedLinksUrl:p.sharedLinksUrl ?? null };
   }
   if (value.openUri !== undefined && !(

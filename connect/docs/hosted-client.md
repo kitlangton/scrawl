@@ -41,6 +41,12 @@ Local Settings distinguishes expired renewable access from reauthorization:
 `reauthorization_required` remains reserved for unusable refresh/legacy grants.
 The local snapshot still does not certify renewal or enable uploads on an expired
 access token. The explicit health action performs renewal through normal transport.
+Successful device approval and refresh responses include only `accountInitial`,
+derived from the verified email of that grant's user. The client stores this bounded
+display hint with its private credential and exposes it only in the secret-free
+Settings snapshot for a usable grant; it never exposes the email. Older credentials,
+older service responses and missing identity use a neutral person icon. This value
+is display metadata and grants no authority.
 
 ### Explicit public-copy admission
 

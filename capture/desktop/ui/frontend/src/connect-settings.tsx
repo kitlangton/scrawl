@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@apparent/ui/button';
 import { StatusCard } from '@apparent/ui/status-card';
 import { DisclosureMenu } from '@apparent/ui/disclosure-menu';
+import { UserRound } from 'lucide-react';
 import '@apparent/ui/status.css';
 import frogs from '../../../../../shared/assets/brand/connect-frogs.png';
 import font from '../../../../../shared/assets/fonts/HostGrotesk-Variable.ttf?url';
@@ -67,7 +68,7 @@ export function ConnectSettingsCard() {
   return <section aria-label="Apparent Connect" className="apparent-connect-workflow">
     <style>{`@font-face { font-family: 'Connect Host Grotesk'; src: url('${font}'); }`}</style>
     {p?.accountMenu && <div className="flex justify-end pb-4">
-      <DisclosureMenu label="Account and connection options" trigger="A">
+      <DisclosureMenu label="Account and connection options" trigger={p?.accountInitial ?? <UserRound size={18} aria-hidden="true" />}>
         {close => <>
           <p className="menu-context">This computer{view?.server && <><br />{view.server}</>}</p>
           {controls.map(button => renderButton(button, close))}
