@@ -477,7 +477,7 @@ pill or treat the synthetic tests as native capture proof.
 
 Rust launches the packaged pill alongside the existing Settings runtime; no
 new config key or off-by-default product feature is introduced. Missing assets,
-startup failure or child failure retain/restore the old pill for the remainder
+startup failure, bounded Hyprland pinning failure or child failure retain/restore the old pill for the remainder
 of the app process. The old pill stays until Electron reports readiness;
 Electron remains hidden until Rust closes the old pill and activates it.
 Recording and finalization remain owned by Rust across renderer reload/exit.

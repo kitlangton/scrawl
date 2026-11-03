@@ -108,7 +108,7 @@ impl ApparentCoordinator {
             self.electron_pill.take();
             self.electron_pill_failed = true;
             self.electron_pill_routed = false;
-            apparent_log("Electron recording controls exited; restoring native controls");
+            apparent_log("Electron recording controls unavailable; restoring native controls");
             let coordinator = cx.entity().clone();
             cx.defer(move |cx| super::super::super::ensure_hud_pill_open(&coordinator, cx));
             return;
