@@ -11,9 +11,12 @@ coalescing superseded runs within its own platform. Both call the same reusable
 `verification-platform.yml`, preserving the full Rust, Engine/client, browser,
 Electron and applicable native checks. Each checks the entire tree, not just the
 latest push delta: changes from a cancelled earlier run cannot escape verification.
-Explicit `workflow_dispatch` on a feature branch runs the same full test jobs.
-Feature dispatch does not emit the main-only `Release verification` receipt and
-cannot authorize publication; automatic execution remains main-only.
+Full verification is main-only, including explicit `workflow_dispatch`; a dispatch
+on another ref skips the reusable workflow before allocating its runners. PRs use
+focused checks, independent review, current-base integration checks and required
+native/platform proof before merge. Do not dispatch or wait for full branch CI as
+a merge gate. After merge, full verification of the exact main commit gates
+publication; a failed platform leaves its last verified release available.
 Each caller's `verify / Release verification` job is its platform receipt.
 General Mac verification uses `macos-15-intel` so it does not depend on the
 standard Apple Silicon runner pool. The required Xcode/macOS SDK remains selected

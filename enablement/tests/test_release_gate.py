@@ -53,12 +53,18 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(self.admit(platform, number), self.sha)
             self.assertEqual(self.admit(platform), self.sha)
 
-    def test_manual_feature_checks_preserve_publication_boundary(self):
+    def test_full_verification_is_main_only_even_for_manual_dispatch(self):
         root = Path(__file__).resolve().parents[2]
+        for caller in ('verification.yml', 'verification-mac.yml'):
+            text = (root / '.github/workflows' / caller).read_text()
+            verify = text.split('  verify:\n', 1)[1]
+            self.assertIn("if: github.ref == 'refs/heads/main'\n", verify)
+            self.assertIn('uses: ./.github/workflows/verification-platform.yml', verify)
         workflow = (root / '.github/workflows/verification-platform.yml').read_text()
         for job in ('desktop-ui', 'rust'):
             section = re.search(r'^  ' + job + r':\n(.*?)(?=^  [a-z]|\Z)', workflow, re.M | re.S)[1]
-            self.assertIn("if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'", section)
+            self.assertIn("if: github.ref == 'refs/heads/main'\n", section)
+            self.assertNotIn('workflow_dispatch', section.split('    steps:', 1)[0])
         receipt = workflow.split('  release-ready:\n', 1)[1]
         self.assertIn("if: github.ref == 'refs/heads/main'\n", receipt)
         self.assertNotIn('workflow_dispatch', receipt)
