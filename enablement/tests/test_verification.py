@@ -510,7 +510,7 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
             for job in re.split(r'^  [\w-]+:\n', workflow.read_text(), flags=re.M)[1:]:
                 if re.search(r'^    runs-on:', job, re.M):
                     self.assertIn('    timeout-minutes: 10\n', job, str(workflow))
-                    if '    name: Workflow runtime budget\n' not in job:
+                    if '    name: Workflow runtime budget' not in job:
                         self.assertIn('agent whose run hits the limit owns optimization', job)
 
 

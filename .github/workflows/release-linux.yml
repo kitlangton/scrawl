@@ -334,7 +334,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    name: Workflow runtime budget
+    name: Workflow runtime budget${{ needs.admit.result == 'skipped' && ' (no-op)' || '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
