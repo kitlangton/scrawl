@@ -423,6 +423,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Retain verified Intel Mac development executables
+        if: success() && runner.os == 'macOS' && runner.arch == 'X64' && needs.select.outputs.root == 'true'
+        run: node enablement/verification/mac-artifact.ts "$RUNNER_TEMP/mac-dev-executables"
+      - name: Upload Intel Mac development executable contract
+        if: success() && runner.os == 'macOS' && runner.arch == 'X64' && needs.select.outputs.root == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-dev-executables-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mac-dev-executables/
+          if-no-files-found: error
+          retention-days: 7
+
   release-ready:
     name: ${{ inputs.revision && format('Release verification ({0})', inputs.revision) || 'Release verification' }}
     needs: [select, desktop-ui, connect-client, connect-web, rust]
