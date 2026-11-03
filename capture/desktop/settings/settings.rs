@@ -1794,6 +1794,7 @@ pub(super) enum Transport {
 pub struct Session {
     generation: u64,
     storage: bool,
+    connect_presentation: bool,
     panel: Panel,
     connect: Option<super::connect::Controller>,
     transport: Transport,
@@ -1821,13 +1822,10 @@ impl Session {
         std::thread::spawn(move || {
             let mut n = 0_u32;
             while alive.load(Ordering::Acquire) {
-                // Hex and the size on open (`hex::watch` keeps Hex fresh) and every 30 s; the
-                // grants and the login item every second.
+                // Refresh model metadata every 30 s; grants/login state every
+                // second. Capture history is measured only on a Storage request.
                 if n % 30 == 0 {
                     crate::shared::hex::refresh_in_background();
-                    let size =
-                        crate::capture::engine::bundle::retention::captures_size(&crate::shared::handoff::default_captures_dir());
-                    poll(Event::CapturesSize(size));
                 }
                 // macOS receives the app-wide permission refresh, including with this
                 // window closed. Keep the existing local polling on other platforms.
@@ -1867,6 +1865,7 @@ impl Session {
         Ok(Self {
             generation,
             storage,
+            connect_presentation: false,
             panel,
             connect,
             transport,
@@ -1894,12 +1893,26 @@ impl Session {
         }
         let transport = if cfg!(not(target_os = "macos")) {
             let (sender, receiver) = flume::unbounded();
-            crate::capture::desktop::settings::settings_window::request_open(receiver, pane, events);
+            crate::capture::desktop::settings::settings_window::request_open(receiver, pane, events.clone());
             Transport::InProcess(Some(sender))
         } else {
-            Self::spawn_helper(pane, events)?
+            Self::spawn_helper(pane, events.clone())?
         };
+        if pane == Some(Pane::Storage) {
+            Self::measure_native_storage(events);
+        }
         Ok((transport, false))
+    }
+
+    // Native fallback has no bounded Electron usage request. Measure only after
+    // an explicit Storage visit, never on General/Connect open or a timer.
+    fn measure_native_storage(events: std::sync::Arc<dyn Fn(Event) + Send + Sync>) {
+        std::thread::spawn(move || {
+            let size = crate::capture::engine::bundle::retention::captures_size(
+                &crate::shared::handoff::default_captures_dir(),
+            );
+            events(Event::CapturesSize(size));
+        });
     }
 
     /// `apparent-helper settings`, reading its actions off stdout.
@@ -1969,6 +1982,21 @@ impl Session {
                 Effect::None
             }
             Event::Action(Action::Connect { command }) => {
+                let generation = super::presentation::generation();
+                let target = self.events.clone();
+                let events = std::sync::Arc::new(move |event| {
+                    target(Event::Presentation { generation, event: Box::new(event) });
+                });
+                if let Ok(transport) = super::presentation::open_connect(events, command) {
+                    if let Some(controller) = &mut self.connect { controller.close(); }
+                    self.connect = None;
+                    self.generation = generation;
+                    self.storage = false;
+                    self.connect_presentation = true;
+                    self.last_view.clear();
+                    super::presentation::retire(std::mem::replace(&mut self.transport, transport));
+                    return Effect::None;
+                }
                 if let Some(controller) = &mut self.connect {
                     if let Some(uri) = controller.command(command) {
                         let _ = crate::shared::handoff::open_path(Path::new(&uri));
@@ -1998,6 +2026,10 @@ impl Session {
                 Effect::None
             }
             Event::Tick => Effect::None,
+            Event::Exited if self.connect_presentation => {
+                self.show(Some(Pane::General));
+                return Effect::None;
+            }
             Event::Exited if self.storage => {
                 // EOF without a normal Close means Electron crashed or failed to
                 // launch. Keep Settings usable without touching saved policy.
@@ -2094,15 +2126,18 @@ impl Session {
     }
 
     pub fn show(&mut self, pane: Option<Pane>) {
+        let mut replaced = false;
         if let Some(pane) = pane {
             let storage = pane == Pane::Storage && crate::shared::handoff::experiment("electronCaptureLocation");
-            if storage != self.storage {
+            if self.connect_presentation || storage != self.storage {
                 let generation = super::presentation::generation();
                 match Self::open_presentation(Some(pane), generation, &self.events, true) {
                     Ok((transport, storage)) => {
+                        replaced = true;
                         self.send(&serde_json::json!({"type": "close"}));
                         self.generation = generation;
                         self.storage = storage;
+                        self.connect_presentation = false;
                         self.last_view.clear();
                         super::presentation::retire(std::mem::replace(&mut self.transport, transport));
                     }
@@ -2110,13 +2145,29 @@ impl Session {
                 }
             }
         }
+        if !replaced && !self.storage && pane == Some(Pane::Storage) {
+            let generation = self.generation;
+            let events = self.events.clone();
+            Self::measure_native_storage(std::sync::Arc::new(move |event| {
+                events(Event::Presentation { generation, event: Box::new(event) });
+            }));
+        }
+        if !self.storage && !self.connect_presentation && self.connect.is_none()
+            && crate::shared::handoff::experiment(super::connect::CONNECT_SETTINGS)
+        {
+            let events = self.events.clone();
+            self.connect = Some(super::connect::Controller::new(
+                crate::connect::hosted::settings_backend(&crate::shared::handoff::default_config_path()),
+                std::sync::Arc::new(move |event| events(Event::Connect(event))),
+            ));
+        }
         self.send(&serde_json::json!({"type": "show", "pane": pane}));
     }
 
     pub fn sync(&mut self, host: &dyn Host) {
         // Storage reads its narrow projected socket contract. Do not forward the
         // other pages' state to a renderer which does not present those pages.
-        if self.storage { return; }
+        if self.storage || self.connect_presentation { return; }
         let mut view = serde_json::to_value(self.panel.view(host)).unwrap_or_default();
         view["type"] = "state".into();
         // Switched from Hex to Apple Speech: get its model now, not at the first capture.
