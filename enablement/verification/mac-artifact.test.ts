@@ -90,6 +90,21 @@ test('workflow retains success-only producer after existing evidence and before 
   assert.match(segment, /needs: \[select, desktop-ui, connect-client, connect-web, rust\]/)
 })
 
+test('main Mac producer selects the tested compiler before cache restore without disabling cold builds or cache publication', () => {
+  const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
+  const rust = workflow.split('\n  rust:\n')[1].split('\n  all:')[0]
+  const setup = rust.split('      - uses: Swatinem/rust-cache@v2')[0]
+  assert.match(setup, /uses: dtolnay\/rust-toolchain@stable/)
+  assert.ok(setup.includes("toolchain: ${{ runner.os == 'macOS' && '1.99.1' || 'stable' }}"))
+  assert.ok(setup.includes("test \"$(rustc -V)\" = 'rustc 1.99.1 (58cf8f9c3 2026-10-13)'"))
+  assert.ok(setup.includes("if: runner.os == 'macOS' && (needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true')"))
+  const cache = rust.split('      - uses: Swatinem/rust-cache@v2')[1].split('      - uses:')[0]
+  assert.match(cache, /workspaces: \|\n            \. -> target\n            capture\/engine -> target\n            connect\/client -> target/)
+  assert.doesNotMatch(cache, /save-if:|lookup-only:|add-rust-environment-hash-key:/)
+  assert.doesNotMatch(rust, /cache-hit/)
+  assert.match(rust, /verification\.py --base "\$BASE" --run --online --suite rust/)
+})
+
 test('share build kind is bound to its own workflow and job without changing Settings', () => fixture((run) => {
   const env = { ...focused, GITHUB_JOB: 'share-build', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/native-proof-mac.yml@refs/heads/t3/candidate' }
   assert.throws(() => run(env, 'darwin', 'focused-settings-build'))
