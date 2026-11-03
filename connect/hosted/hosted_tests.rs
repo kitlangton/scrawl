@@ -165,6 +165,12 @@ fn hosted_transport_network_timeout_and_cancellation() {
     test_support::hosted_transport_network_timeout_and_cancellation();
 }
 #[test]
+fn hosted_oversized_upload_retains_actionable_details_across_restart() {
+    setup();
+    test_support::hosted_oversized_upload_retains_actionable_details_across_restart();
+}
+
+#[test]
 fn hosted_paths_symlinks_oversize_and_unknown_assets() {
     setup();
     test_support::hosted_paths_symlinks_oversize_and_unknown_assets();

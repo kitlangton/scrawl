@@ -186,6 +186,17 @@ The allowlist exactly matches the API: summary, metadata, contact sheets includi
 
 The server quota is **500,000,000 bytes per account**. Separately, v1 accepts at most 512 files and **90,000,000 bytes per file**, with a 128KiB manifest request. `file_too_large` is reported in queue status; the capture stays local. There is no multipart/chunk protocol and the client never drops a large recording/audio asset to fit. Real larger recordings therefore need a future coordinated protocol change. Server retention is seven days after reservation, with incomplete reservations reclaimed after 24 hours; a tombstoned ID requires a fresh explicit `apparent connect upload`, not a retry of that ID.
 
+When local staging rejects an oversized asset, the private durable job and local
+`apparent connect status` queue entry also carry
+`sizeFailure: {path, size, limit}`. Sizes are exact bytes; `path` is an allowlisted
+bundle-relative asset name, never the source directory or credential path. The
+same typed reason survives encryption staging context and process restart. Size
+failures stop automatic retries before reservation or media transfer. Explicit
+CLI retry clears the previous details and checks the files again; unchanged
+oversized files fail again. Older jobs without details remain readable and retain
+their original error code. Successful recovery clears the details. This is local
+diagnostic state, not a server response, telemetry payload or implemented pocket UI.
+
 ## Verification
 
 `encrypted_settings_future_capture_restart_retry_and_disconnect` exercises one
