@@ -11,7 +11,7 @@ const source = fileURLToPath(import.meta.url)
 const hash = (input: string | Buffer) => createHash('sha256').update(input).digest('hex')
 // Reviewed package sources, fixtures, lockfiles and Cargo configuration. Any
 // change disables reuse until its closure is reviewed and this signature updated.
-export const REVIEWED_PACKAGE = 'e86ddc89cf5397a9ec55e443e6db9593ef2014c434c1c522fab523eef1472578'
+export const REVIEWED_PACKAGE = '724ac70896b6e23684d9eca2a255f727d0e8dc4027956f3956afd65342758c36'
 export type Identity = { sha: string; key: string; eligible: boolean; verifier: string; closure: string }
 export type Proof = {
   schema: 1; eligible: boolean; key: string; verifier: string; outcome: string; checked_sha: string;
@@ -28,9 +28,12 @@ export function sourceInputs(root: string) {
   const all = createHash('sha256'), packageHash = createHash('sha256')
   let regular = true
   for (const path of paths) {
-    // The standalone package has no Public input. All other source, consumers,
-    // tests, shared code and tooling remain conservative invalidation inputs.
-    if (path.startsWith('public/')) continue
+    // The pinned standalone package has no path dependencies, build script or
+    // external source/fixture includes. These owners cannot change its inputs.
+    // Root checks still exercise their real-provider integration; service/API,
+    // build/configuration, verification and unknown paths remain conservative.
+    if (['capture/', 'composition/', 'shared/', 'public/', 'connect/web/',
+      'enablement/native/'].some(prefix => path.startsWith(prefix))) continue
     let bytes = 'missing'
     try {
       const stat = lstatSync(join(root, path))
@@ -53,10 +56,12 @@ export function identity(root: string): Identity {
   const inputs = sourceInputs(root)
   const env = process.env
   const tools = { rustc: probe('rustc', ['-vV']), cargo: probe('cargo', ['-vV']),
-    curl: probe('curl', ['--version']), cc: probe('cc', ['--version']), libc: platform() === 'linux' ? probe('ldd', ['--version']) : 'not-linux', node: process.version,
+    curl: probe('curl', ['--version']), checksum: platform() === 'linux' ? probe('sha256sum', ['--version']) : 'not-linux',
+    cc: probe('cc', ['--version']), libc: platform() === 'linux' ? probe('ldd', ['--version']) : 'not-linux', node: process.version,
     sdk: platform() === 'darwin' ? probe('xcrun', ['--show-sdk-version']) : 'not-macos' }
   const environment = Object.fromEntries(Object.entries(env).filter(([name]) =>
-    /^(CARGO|RUST|CC$|CXX$|AR$|CFLAGS|CPPFLAGS|LDFLAGS|MACOSX_|SDKROOT|DEVELOPER_DIR|LANG$|LC_|APPARENT_|TMPDIR$)/.test(name)).sort())
+    /^(CARGO|RUST|CC$|CXX$|AR$|CFLAGS|CPPFLAGS|LDFLAGS|MACOSX_|SDKROOT|DEVELOPER_DIR|LANG$|LC_|APPARENT_|TMPDIR$|CURL_|SSL_CERT_)/.test(name)
+    || /^(http|https|all|no)_proxy$/i.test(name)).sort())
   const cargoHome = env.CARGO_HOME || join(homedir(), '.cargo')
   const globalConfig = ['config', 'config.toml'].some(name => existsSync(join(cargoHome, name)))
   const verifier = hash(readFileSync(source))

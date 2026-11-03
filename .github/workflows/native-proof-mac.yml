@@ -26,15 +26,19 @@ jobs:
   connect-worker:
     if: github.repository == 'tryapparent/apparent' && github.event_name == 'workflow_dispatch'
     runs-on: macos-15-intel
-    # Cold install observed at 25m24s; build cap 30m. Exclusive scenarios use
-    # at most 62m of step caps, retaining 8m for overhead and cleanup.
+    timeout-minutes: 10
+    # The 10m job budget also bounds cold installation and all scenario steps.
+    # Cold runs that exceed it require optimization by the triggering agent.
     # These are hosted Actions limits, unrelated to the human NoMac session cap.
-    timeout-minutes: 70
     env:
       APPARENT_NATIVE_SCENARIO: ${{ inputs.scenario || 'worker' }}
       APPARENT_APP_DIR: /Users/runner/Applications/Apparent-Connect-${{ github.run_id }}-${{ github.run_attempt }}.app
       APPARENT_BUILD_TMP: /Users/runner/.apparent-connect-build-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: echo '10 minute execution limit (runner queue excluded). If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         timeout-minutes: 1
         with:

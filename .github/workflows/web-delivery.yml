@@ -23,9 +23,14 @@ jobs:
       contents: read
       actions: read
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       sha: ${{ steps.gate.outputs.sha }}
     steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: echo '10 minute execution limit (runner queue excluded). If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       # Admission code comes from trusted main, never an unchecked event SHA.
       - uses: actions/checkout@v4
         with:
@@ -48,13 +53,17 @@ jobs:
     needs: admit
     if: needs.admit.outputs.sha != ''
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       PUBLIC_POSTHOG_ENABLED: ${{ vars.PUBLIC_POSTHOG_ENABLED || 'true' }}
       PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
       PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
       PUBLIC_POSTHOG_ENVIRONMENT: production
     steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: echo '10 minute execution limit (runner queue excluded). If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -153,8 +162,12 @@ jobs:
       name: website-production
       url: https://app.tryapparent.com
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: echo '10 minute execution limit (runner queue excluded). If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -199,6 +212,10 @@ jobs:
       POSTHOG_ENABLED: ${{ vars.POSTHOG_ENABLED || 'true' }}
       WRANGLER_SEND_METRICS: 'false'
     steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: echo '10 minute execution limit (runner queue excluded). If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           persist-credentials: false

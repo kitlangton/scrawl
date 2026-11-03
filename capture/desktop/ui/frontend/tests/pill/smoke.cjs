@@ -16,6 +16,10 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  const page=await application.firstWindow();
  const evidence=process.env.APPARENT_PILL_EVIDENCE;
  if(evidence)await fs.mkdir(evidence,{recursive:true,mode:0o700});
+ async function snapshot(name){
+  await expect.poll(()=>page.locator('main').evaluate(el=>{const r=el.getBoundingClientRect();return r.width<=innerWidth && r.height<=innerHeight;})).toBe(true);
+  await page.screenshot({path:path.join(evidence,name),animations:'disabled'});
+ }
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const sent=[];let stream='';application.process().stdout.on('data',data=>{stream+=data.toString();let end;while((end=stream.indexOf('\n'))>=0){const line=stream.slice(0,end);stream=stream.slice(end+1);try{sent.push(JSON.parse(line));}catch{}}});
  async function publish(state){await application.evaluate((_electron,state)=>{process.stdin.emit('data',JSON.stringify({type:'state',view:state})+'\n');},state);}
@@ -29,17 +33,37 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  assert.equal(await page.evaluate(()=>typeof window.process),'undefined');
  assert.deepEqual(await page.evaluate(()=>Object.keys(window.apparentPill)),['read','layout','manualDrag','beginDrag','beginPaste','cancelPaste','act','subscribe']);
  assert.equal(await page.evaluate(async()=>{try{await window.apparentPill.beginDrag(0);return false;}catch{return true;}}),true);
- if(evidence)await page.screenshot({path:path.join(evidence,'recording.png')});
+ assert.deepEqual(await page.locator('.controls button').evaluateAll(buttons=>buttons.map(b=>b.getAttribute('aria-label'))),['Whiteboard','Finish','Cancel']);
+ assert.equal(await page.getByRole('button',{name:'Cancel',exact:true}).textContent(),'');
+ const finishStyle=await page.getByRole('button',{name:'Finish',exact:true}).evaluate(b=>({height:b.getBoundingClientRect().height,padding:getComputedStyle(b).paddingLeft}));
+ assert.deepEqual(finishStyle,{height:44,padding:'16px'});
+ if(evidence)await snapshot('recording.png');
  await page.getByRole('button',{name:'Finish',exact:true}).click();
  await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeDisabled();
  await expect.poll(()=>sent.filter(x=>x.action==='finish').length).toBe(1);
  assert.deepEqual(sent.find(x=>x.action==='finish'),{revision:1,action:'finish'});
  assert.equal(await page.evaluate(async()=>{try{await window.apparentPill.act(1,'paste');return false;}catch{return true;}}),true);
  await publish({...base,revision:2,phase:'processing',label:'Processing recording…',draggable:false,actions:[]});
- await expect(page.getByText('Processing recording…',{exact:true})).toBeVisible();
+ await expect(page.getByText('Processing…',{exact:true})).toBeVisible();
  assert.equal(await page.getByRole('button').count(),0);
  await publish({...base,revision:3,warning:'Microphone input stopped; screen recording continues',notice:'Control request expired or changed. Try again.',pocket:{tone:'warning',title:'Recording notice',description:'Microphone input stopped; screen recording continues',actionIds:[]},actions:base.actions.map(a=>({...a,primary:false}))});
  await expect(page.getByRole('alert')).toContainText('screen recording continues');
+ // Measure actual hover/focus targets, not just the centred chevron glyph.
+ for(const theme of ['light','dark']){
+  await page.emulateMedia({colorScheme:theme});
+  const trigger=page.getByRole('button',{name:'Hide notification'});
+  await trigger.hover();
+  await page.getByRole('button',{name:'Whiteboard',exact:true}).focus();
+  await page.keyboard.press('Shift+Tab');
+  const geometry=await page.locator('main').evaluate(main=>{
+   const button=main.querySelector('.pocket-trigger'),clock=main.querySelector('.clock');
+   const b=button.getBoundingClientRect(),c=clock.getBoundingClientRect();
+   return {gap:c.left-b.right,width:b.width,height:b.height,focus:button.matches(':focus-visible'),border:getComputedStyle(main.querySelector('.pill-row')).borderColor,pocketBorder:getComputedStyle(main.querySelector('.pocket-alert')).borderColor};
+  });
+  assert.ok(geometry.gap>=8);assert.equal(geometry.width,44);assert.equal(geometry.height,44);assert.equal(geometry.focus,true);assert.equal(geometry.border,geometry.pocketBorder);
+  if(evidence)await snapshot('hover-'+theme+'.png');
+ }
+
  await expect(page.getByText('Control request expired or changed. Try again.',{exact:true})).toBeVisible({timeout:1000});
  await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeEnabled();
  await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeInViewport();
@@ -49,7 +73,7 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  await page.emulateMedia({colorScheme:'light'});
  assert.notEqual(await page.locator('.pill-row').evaluate(el=>getComputedStyle(el).backgroundColor),dark);
  assert.equal(await page.locator('main').evaluate(el=>[...el.querySelectorAll('*')].every(child=>getComputedStyle(child).animationName==='none')),true);
- if(evidence)await page.screenshot({path:path.join(evidence,'warning-light.png')});
+ if(evidence)await snapshot('warning-light.png');
  // Escape closes the pocket before it can cancel recording; width and row anchor stay stable.
  const expanded=await page.locator('.pill-row').boundingBox();
  await page.keyboard.press('Escape');
@@ -65,15 +89,28 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
   {id:'record',label:'Record',enabled:true,selected:false,primary:true},base.actions[2]]});
  await expect(page.getByRole('button',{name:'Screen',exact:true})).toHaveAttribute('aria-pressed','true');
  assert.equal(await page.getByRole('button',{name:'Window',exact:true}).count(),0);
- if(evidence)await page.screenshot({path:path.join(evidence,'selecting.png')});
+ if(evidence)await snapshot('selecting.png');
+ // Rejected selection actions retain a usable notification disclosure after Escape.
+ await publish({...base,revision:4,phase:'selecting',label:'Choose what to record',draggable:false,
+  notice:'Control request expired or changed. Try again.',pocket:{tone:'info',title:'Control changed',description:'',actionIds:[]},
+  actions:[{id:'select-screen',label:'Screen',enabled:true,selected:true,primary:false},base.actions[2]]});
+ await expect(page.getByRole('alert')).toBeVisible();
+ await page.keyboard.press('Escape');
+ await expect(page.getByRole('button',{name:'Show notification'})).toBeVisible();
+ assert.equal(sent.filter(x=>x.action==='cancel').length,0);
+ await page.getByRole('button',{name:'Show notification'}).click();
+ await expect(page.getByRole('alert')).toBeVisible();
+ await page.keyboard.press('Escape');
+
  await page.keyboard.press('Escape');
  await expect.poll(()=>sent.filter(x=>x.action==='cancel').length).toBe(1);
  await publish({...base,revision:5,phase:'completed',label:'Saved',draggable:false,actions:[
   {id:'paste',label:'Paste',enabled:true,selected:false,primary:true},
   {id:'copy-link',label:'Copy link',enabled:false,selected:false,primary:false},
+  {id:'inspect',label:'Inspect',enabled:true,selected:false,primary:false},
   {id:'dismiss',label:'Dismiss',enabled:true,selected:false,primary:false}]});
  await expect(page.getByRole('button',{name:'Copy link',exact:true})).toBeDisabled();
- if(evidence)await page.screenshot({path:path.join(evidence,'completed.png')});
+ if(evidence)await snapshot('completed.png');
  await page.reload();
  await expect(page.getByRole('button',{name:'Paste',exact:true})).toBeEnabled();
  assert.equal(await page.evaluate(async()=>{try{await fetch('https://example.com');return false;}catch{return true;}}),true);
@@ -84,7 +121,8 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  const completed={...base,revision:6,phase:'completed',label:'Saved',draggable:false,actions:[
  {id:'paste',label:'Paste',enabled:true,selected:false,primary:true},
  {id:'copy-link',label:'Copy link',enabled:false,selected:false,primary:false},
- {id:'dismiss',label:'Dismiss',enabled:true,selected:false,primary:false}]};
+ {id:'inspect',label:'Inspect',enabled:true,selected:false,primary:false},
+  {id:'dismiss',label:'Dismiss',enabled:true,selected:false,primary:false}]};
  await publish({...completed,pocket:{tone:'failure',title:'Too large to upload',description:'6.0 GB · limit 5.0 GB. Your recording is saved. Paste it locally.',actionIds:['paste']}});
  await expect(page.getByText('Too large to upload',{exact:true})).toBeVisible();
  await expect(page.locator('main')).toHaveAttribute('data-pocket-side','up');
@@ -92,7 +130,7 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  const row=await page.locator('.pill-row').boundingBox();
  assert.equal(expandedBounds.width,anchor.width);assert.equal(expandedBounds.y+row.y,anchor.y);
  assert.equal(sent.filter(x=>x.action==='paste').length,0);
- if(evidence)await page.screenshot({path:path.join(evidence,'size-failure-up.png')});
+ if(evidence)await snapshot('size-failure-up.png');
  await page.locator('.pocket-actions').getByRole('button',{name:'Paste',exact:true}).click();
  await expect.poll(()=>sent.filter(x=>x.action==='paste').length).toBe(1);
  assert.deepEqual(sent.find(x=>x.action==='paste'),{revision:6,action:'paste'});

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import signal
 import sys
 from pathlib import Path
 import subprocess
@@ -244,6 +245,34 @@ def run_checks(selection, offline=True):
             subprocess.run(command, cwd=browser, check=True)
 
 
+def hook_budget(seconds, command):
+    """Bound the whole hook, including descendants, on macOS and Linux."""
+    process = subprocess.Popen(command, start_new_session=True)
+    def interrupted(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    previous = {sig: signal.signal(sig, interrupted)
+                for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    try:
+        return process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        print(f"Verification exceeded {seconds:g}s. Optimize the tests: the agent "
+              "whose run hit this limit owns the optimization and successful rerun. "
+              "Do not raise or bypass the limit.", file=sys.stderr, flush=True)
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        return 124
+    finally:
+        # A successful parent must not leave background verification running.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
@@ -251,6 +280,8 @@ def main():
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--receipt-dir", type=Path, help="Write observation-only receipts outside the checkout (Node 22 required)")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--suite", choices=("all", "rust", "browser"), default="all",
+                        help="Execute a full platform suite; default runs all changed-tree selections")
     parser.add_argument("--pr", action="store_true", help="Hook/CI: cheap PR contract checks")
     parser.add_argument("--online", action="store_true", help="CI: use locked graph instead of offline cache")
     parser.add_argument("--github-output", type=Path)
@@ -263,12 +294,18 @@ def main():
         command = ['python3', str(Path(__file__).resolve()), '--base', args.base, '--head', args.head]
         if args.github_output:
             command += ['--github-output', str(args.github_output.resolve())]
+        command += ['--suite', args.suite]
         command += [flag for flag, enabled in [('--pr', args.pr), ('--run', args.run), ('--online', args.online)] if enabled]
+        label = ('changed-tree' if args.suite == 'all' else 'platform-' + args.suite) if args.run else 'pr-contracts'
         subprocess.run(['node', str(ROOT / 'enablement/verification/receipt.ts'),
-                        '--suite', 'changed-tree' if args.run else 'pr-contracts',
+                        '--suite', label,
                         '--output', str(args.receipt_dir.resolve()), '--', *command], cwd=ROOT, check=True)
         return
     selection = plan(args.base, args.head)
+    if args.suite == 'rust':
+        selection.update(root=True, engine=True, browser=False, focused=[])
+    elif args.suite == 'browser':
+        selection.update(root=False, engine=False, browser=True, focused=[])
     print(json.dumps(selection, sort_keys=True), flush=True)
     if args.github_output:
         with args.github_output.open("a") as output:
@@ -281,4 +318,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--hook-budget":
+        sys.exit(hook_budget(float(sys.argv[2]), sys.argv[3:]))
     main()

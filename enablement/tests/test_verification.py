@@ -25,6 +25,41 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(result["root"])
         self.assertFalse(result["engine"])
 
+    def test_explicit_platform_suite_executes_only_its_commands_and_default_keeps_all(self):
+        for suite, cargo, browser in [('all', True, True), ('rust', True, False), ('browser', False, True)]:
+            args = ['verification.py', '--base', 'unknown', '--run']
+            if suite != 'all': args += ['--suite', suite]
+            with self.subTest(suite=suite), patch.object(verification.sys, 'argv', args), patch.object(
+                    verification, 'plan', return_value=verification.select(['build.rs', 'connect/web/package.json'])), patch.object(
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                verification.main()
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(any('cargo' in command for command in commands), cargo)
+                self.assertEqual(any(command[0] == 'bun' for command in commands), browser)
+                self.assertEqual(['node', 'scripts/test-browser.mjs'] in commands, browser)
+                self.assertEqual(any('capture/engine/Cargo.toml' in command for command in commands), cargo)
+
+    def test_receipt_wrapper_preserves_explicit_suite(self):
+        args = ['verification.py', '--base', 'unknown', '--run', '--online',
+                '--suite', 'rust', '--receipt-dir', '/external/receipts']
+        with patch.object(verification.sys, 'argv', args), patch.object(verification.subprocess, 'run') as run:
+            verification.main()
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index('--suite', command.index('--') + 1) + 1], 'rust')
+            self.assertEqual(command[command.index('--suite') + 1], 'platform-rust')
+            self.assertIn('--online', command)
+
+    def test_explicit_platform_suites_execute_even_when_changed_tree_has_no_matching_inputs(self):
+        for suite in ('rust', 'browser'):
+            args = ['verification.py', '--base', 'unknown', '--run', '--suite', suite]
+            with self.subTest(suite=suite), patch.object(verification.sys, 'argv', args), patch.object(
+                    verification, 'plan', return_value=verification.select(['README.md'])), patch.object(
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                verification.main()
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(['node', 'scripts/test-browser.mjs'] in commands, suite == 'browser')
+                self.assertEqual(any('cargo' in command for command in commands), suite == 'rust')
+
     def test_engine_tests_compile_and_test_package(self):
         result = verification.select(["capture/engine/tests/process.rs"])
         self.assertFalse(result["root"])
@@ -324,6 +359,48 @@ class SelectionTests(unittest.TestCase):
                     git("update-index", "--add", "--cacheinfo", "100644", oid, "README.md")
                     documented = commit()
                     self.assertEqual(verification.plan(base, documented)["focused"], sorted(reviewed["tests"]))
+
+
+class RuntimeBudgetTests(unittest.TestCase):
+    def test_budget_preserves_status_and_stdin(self):
+        result = subprocess.run(['python3', str(SCRIPT), '--hook-budget', '2',
+                                 'sh', '-c', 'cat; exit 7'], input='refs\n',
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(result.stdout, 'refs\n')
+
+    def test_budget_kills_descendants_and_assigns_optimization(self):
+        # Inherited pipes stay open if the descendant escapes cleanup.
+        result = subprocess.run(['python3', str(SCRIPT), '--hook-budget', '.1',
+                                 'sh', '-c', 'sleep 30 & wait'],
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 124)
+        self.assertIn('Optimize the tests', result.stderr)
+        self.assertIn('agent whose run hit this limit owns', result.stderr)
+
+    def test_cancelled_watchdog_cleans_up_process_group(self):
+        process = subprocess.Popen(['python3', str(SCRIPT), '--hook-budget', '30',
+                                    'sh', '-c', 'echo ready; sleep 30 & wait'],
+                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            self.assertEqual(process.stdout.readline(), 'ready\n')
+            process.terminate()
+            process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 143)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    def test_supported_ci_jobs_have_ten_minute_execution_budget(self):
+        import re
+        for workflow in (SCRIPT.parents[1] / '.github/workflows').glob('*.yml'):
+            if workflow.name == 'release-windows.yml':
+                continue  # Retired platform is outside the supported CI contract.
+            for job in re.split(r'^  [\w-]+:\n', workflow.read_text(), flags=re.M)[1:]:
+                if re.search(r'^    runs-on:', job, re.M):
+                    self.assertIn('    timeout-minutes: 10\n', job, str(workflow))
+                    self.assertIn('agent whose run hits the limit owns optimization', job)
 
 
 if __name__ == "__main__":
