@@ -285,6 +285,12 @@ impl Session {
                         crate::capture::engine::runtime::apparent_log(format!(
                             "Electron recording pill: could not pin on Hyprland: {error:#}"
                         ));
+                        // Electron's visibility/activation acknowledgement does not
+                        // prove that XWayland supplied a compositor surface. Do not
+                        // leave capture without usable controls after bounded native
+                        // admission fails; the coordinator restores its native pill.
+                        alive.store(false, Ordering::Release);
+                        return;
                     }
                 }
             });
