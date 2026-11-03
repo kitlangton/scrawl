@@ -1883,6 +1883,15 @@ impl Client {
         Ok(())
     }
     pub fn fetch(&self, id: &str, out: &Path, wait: u64) -> Result<PathBuf> {
+        self.fetch_inner(id, out, wait).map_err(|error| {
+            match error.to_string().as_str() {
+                "Hosted API: not_found" => anyhow::anyhow!("Capture unavailable (not_found). The sender may still be uploading, the capture may have expired or been deleted, or this account/API origin may not have access. Check apparent connect status and confirm the API origin and approved read account with the sender; ask the sender to check upload status or provide a fresh handoff. Retry with --wait 120 if upload is still in progress."),
+                message if message.starts_with("auth_required:") || matches!(message, "Hosted API: unauthorized" | "Hosted API: forbidden" | "Hosted API: reauthorization_required") => anyhow::anyhow!("Capture read authorization failed. Check apparent connect status and sign in with apparent connect login --server <API-origin> --scope read using the sender's account and API origin; retry after approval."),
+                _ => error,
+            }
+        })
+    }
+    fn fetch_inner(&self, id: &str, out: &Path, wait: u64) -> Result<PathBuf> {
         ensure!(
             valid_id(id),
             "Capture ID must be 32 lowercase hexadecimal characters"
@@ -1926,7 +1935,21 @@ impl Client {
                 None,
                 timeout,
                 &|| true,
-            )?;
+            );
+            // A copied pointer can precede server reservation. A 404 also hides
+            // inaccessible captures: wait only within the caller's budget and
+            // never infer existence or retry authorization failures.
+            let reply = match reply {
+                Ok(reply) => reply,
+                Err(error) if error.to_string() == "Hosted API: not_found"
+                    && wait > 0 && Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(500)
+                        .min(deadline.saturating_duration_since(Instant::now())));
+                    if Instant::now() >= deadline { return Err(error); }
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             ensure!(
                 reply["id"].as_str() == Some(id),
                 "Wrong capture ID in manifest"
