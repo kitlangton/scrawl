@@ -1746,6 +1746,7 @@ pub fn post_synthetic_click(screen_x: f64, screen_y: f64) {
 /// Key codes are never polled: reading them is Input Monitoring's.
 fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
     let mut prev_shift_ink = false;
+    let mut note_draw = super::super::NoteDrawGesture::default();
     let mut await_shift_release = false;
     let mut prev_buttons = [false; 2];
     let mut last_tap_check: Option<Instant> = None;
@@ -1775,6 +1776,7 @@ fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
         };
         if !telemetry.active.load(Ordering::Acquire) {
             prev_shift_ink = false;
+            note_draw = super::super::NoteDrawGesture::default();
             prev_buttons = buttons;
             continue;
         }
@@ -1797,6 +1799,7 @@ fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
         );
 
         let pure_shift = shift && !cmd && !ctrl && !alt && !await_shift_release;
+        telemetry.resume_note_drawing(&mut note_draw, (loc.x, loc.y), pure_shift);
         // Hold Shift + move cursor inside the capture target = draw a persistent stroke.
         track_shift_ink(&telemetry, (loc.x, loc.y), pure_shift, prev_shift_ink);
 

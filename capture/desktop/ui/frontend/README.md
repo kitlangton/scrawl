@@ -483,7 +483,9 @@ no renderer paths, window IDs, IPC names, shell or network commands are accepted
 Rust writes saved notes to `notes.json` before acknowledging/counting them;
 unsent drafts stay in the capture's Rust session rather than note metadata/summary. Linux display video still includes the visible popup and its text. Enter with no text closes the
 field and retains the pin. Escape keeps the in-capture draft; Shift+Enter adds
-a newline. Capture completion closes this capture-local surface. Restarting or
+a newline. Shift-move outside the note retains its draft and returns to drawing
+once the pointer has moved beyond the existing ink threshold; Shift typing and
+selection inside the editor stay protected. Capture completion closes this capture-local surface. Restarting or
 ending a capture does not promise recovery of unsubmitted drafts.
 
 The native menu and Electron Recording control share `microphoneEnabled` in

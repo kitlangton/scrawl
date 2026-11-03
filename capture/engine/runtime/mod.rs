@@ -1498,6 +1498,59 @@ fn clip_recording_ink(stroke: &Stroke) -> Vec<Stroke> {
     result
 }
 
+/// A deliberate Shift movement outside the editor returns to annotation.
+/// Stationary capital-letter Shift presses and movement inside the editor do not.
+#[derive(Default)]
+struct NoteDrawGesture {
+    start: Option<(f64, f64)>,
+    pending: bool,
+}
+impl NoteDrawGesture {
+    fn update(&mut self, editing: bool, shift: bool, at: (f64, f64), inside: impl FnOnce(f64, f64) -> bool) -> bool {
+        if !editing || !shift {
+            *self = Self::default();
+            return false;
+        }
+        if self.pending { return false; }
+        if !at.0.is_finite() || !at.1.is_finite() || inside(at.0, at.1) {
+            self.start = None;
+            return false;
+        }
+        let start = *self.start.get_or_insert(at);
+        if (at.0 - start.0).hypot(at.1 - start.1) < f64::from(MIN_INK_SPAN_PT) { return false; }
+        self.pending = true;
+        true
+    }
+}
+impl SharedCaptureTelemetry {
+    fn resume_note_drawing(&self, gesture: &mut NoteDrawGesture, at: (f64, f64), shift: bool) {
+        if gesture.update(self.notes_editing.load(Ordering::Acquire), shift, at,
+            |x, y| self.on_capture_input_ui(x, y)) {
+            let _ = self.ui_sender.try_send(LiveOverlayEvent::NoteOutside);
+        }
+    }
+}
+
+#[cfg(test)]
+mod note_draw_tests {
+    use super::NoteDrawGesture;
+    #[test]
+    fn drawing_outside_a_note_requires_motion_and_preserves_typing_inside() {
+        let mut gesture = NoteDrawGesture::default();
+        assert!(!gesture.update(true, true, (10.0, 10.0), |_, _| false));
+        assert!(!gesture.update(true, true, (10.0, 10.0), |_, _| false));
+        assert!(!gesture.update(true, false, (10.0, 10.0), |_, _| false));
+        assert!(!gesture.update(true, true, (10.0, 10.0), |_, _| true));
+        assert!(!gesture.update(true, true, (50.0, 50.0), |_, _| true));
+        assert!(!gesture.update(true, true, (80.0, 80.0), |_, _| false));
+        assert!(gesture.update(true, true, (100.0, 100.0), |_, _| false));
+        assert!(!gesture.update(true, true, (120.0, 120.0), |_, _| false), "one dismissal until acknowledged");
+        assert!(!gesture.update(false, true, (120.0, 120.0), |_, _| false));
+        assert!(!gesture.update(true, true, (120.0, 120.0), |_, _| false));
+        assert!(gesture.update(true, true, (140.0, 140.0), |_, _| false));
+    }
+}
+
 /// One poll of desktop Shift ink, using unclamped capture-relative coordinates.
 /// Only clipped segments enter the recording; letting go of Shift commits it. `pure_shift` is Shift
 /// without other modifiers (and not left over from a chord such as the capture shortcut).
