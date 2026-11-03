@@ -336,3 +336,27 @@ fn electron_pill_bounds_notification_unicode_and_size_precision() {
     assert_eq!(upload_size(90_000_000, false), "90 MB");
     assert!(!upload_size(u64::MAX, true).is_empty());
 }
+
+#[test]
+fn electron_pill_pocket_keeps_authoritative_notice_with_recording_warning() {
+    let mut view = View::new(&snapshot(Pres::RecordingWarning { chips: false, has_iphone: false }), 8, true);
+    assert!(view.consume(command(8, "finish"), false).is_none());
+    let text = &view.pocket.as_ref().unwrap().description;
+    assert!(view.notice.as_ref().unwrap().contains("expired"), "authoritative rejection must be retained");
+    assert!(text.contains("No words recognized"), "recording warning must remain available");
+}
+
+#[test]
+fn electron_pill_pocket_keeps_audio_outcome_with_size_failure() {
+    let view = View::new(&snapshot(Pres::Completed {
+        label: "Saved · No audio recorded".into(), routes: vec![], warning: true, share: Some(false),
+    }), 9, false).with_size_failure(90_000_001, 90_000_000);
+    let pocket = view.pocket.as_ref().unwrap();
+    assert_eq!(pocket.title, "Too large to upload");
+    assert!(pocket.description.contains("No audio recorded"), "size failure must preserve the audio outcome");
+    assert!(pocket.description.encode_utf16().count() <= 300);
+    let long = View::new(&snapshot(Pres::Completed {
+        label: "😀".repeat(300), routes: vec![], warning: true, share: None,
+    }), 10, false).with_size_failure(90_000_001, 90_000_000);
+    assert!(long.pocket.unwrap().description.encode_utf16().count() <= 300);
+}

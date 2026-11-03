@@ -49,6 +49,11 @@ fn bounded_text(value: &str, units: usize) -> String {
     String::from_utf16_lossy(&value.encode_utf16().take(units).collect::<Vec<_>>())
 }
 
+fn pocket_description(primary: &str, warning: Option<&str>) -> String {
+    let text = warning.map_or_else(|| primary.to_owned(), |warning| format!("{primary}\n{warning}"));
+    bounded_text(&text, 300)
+}
+
 fn upload_size(bytes: u64, round_up: bool) -> String {
     let unit = if bytes >= 1_000_000_000 { 100_000_000 } else { 1_000_000 };
     let value = bytes / unit + u64::from(round_up && bytes % unit != 0);
@@ -138,10 +143,12 @@ impl View {
             title: "Recording notice".into(),
             description: bounded_text(warning, 300),
             action_ids: vec![],
-        }).or_else(|| self.notice.as_ref().map(|notice| Pocket {
+        }).or_else(|| self.notice.as_ref().map(|_| Pocket {
             tone: "info",
             title: "Control changed".into(),
-            description: bounded_text(notice, 300),
+            // Session retains notice after projection; render that authoritative
+            // field inside this pocket rather than embedding a stale copy.
+            description: String::new(),
             action_ids: vec![],
         }));
     }
@@ -171,7 +178,7 @@ impl View {
             self.pocket = Some(Pocket {
                 tone: "failure",
                 title: "Too large to upload".into(),
-                description: format!("{} · limit {}. Your recording is saved. Paste it locally.", upload_size(size, true), upload_size(limit, false)),
+                description: pocket_description(&format!("{} · limit {}. Your recording is saved. Paste it locally.", upload_size(size, true), upload_size(limit, false)), self.warning.as_deref()),
                 action_ids: self.actions.iter().filter(|a| a.id == "paste" && a.enabled).map(|a| a.id.clone()).collect(),
             });
         }

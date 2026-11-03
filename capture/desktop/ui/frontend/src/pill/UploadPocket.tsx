@@ -5,11 +5,11 @@ import {Button} from '@apparent/ui/button';
 import type {PocketView} from './bridge';
 
 /** Disclosure is local presentation state; all mutations use existing Rust actions. */
-export function UploadPocket({pocket,children,actions,onLayout}: {
-  pocket:PocketView|null;children:(trigger:ReactNode)=>ReactNode;actions:ReactNode;onLayout:()=>void;
+export function UploadPocket({pocket,notice,children,actions,onLayout}: {
+  pocket:PocketView|null;notice:string|null;children:(trigger:ReactNode)=>ReactNode;actions:ReactNode;onLayout:()=>void;
 }) {
   const triggerRef=useRef<HTMLButtonElement>(null);
-  const identity=pocket?JSON.stringify(pocket):'';
+  const identity=pocket?JSON.stringify({pocket,notice}):'';
   const [closed,setClosed]=useState('');
   const open=!!pocket && closed!==identity;
   useEffect(()=>{onLayout();},[open,identity,onLayout]);
@@ -26,7 +26,8 @@ export function UploadPocket({pocket,children,actions,onLayout}: {
     <CollapsibleContent className="upload-pocket">
       {pocket && <Alert className="pocket-alert" variant={pocket.tone==='failure'?'destructive':'default'} data-tone={pocket.tone}>
         <AlertTitle className="pocket-title">{pocket.title}</AlertTitle>
-        <AlertDescription>{pocket.description}</AlertDescription>
+        {notice && <AlertDescription>{notice}</AlertDescription>}
+        {pocket.description && <AlertDescription>{pocket.description}</AlertDescription>}
         {actions && <div className="pocket-actions">{actions}</div>}
       </Alert>}
     </CollapsibleContent>

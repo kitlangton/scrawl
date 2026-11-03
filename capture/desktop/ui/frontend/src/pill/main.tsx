@@ -46,7 +46,7 @@ function Pill() {
   if(!view)return <div role="status" className="pill connection">{error?'Recording controls unavailable':'Connecting…'}</div>;
   if(view.phase==='hidden')return null;
   return <main data-revision={view.revision} className="pill settings-shell" data-phase={view.phase} data-reduced={view.reducedMotion} data-warning={view.warning!==null}>
-    <UploadPocket pocket={error?{tone:'failure',title:'Action not confirmed',description:'Use the recording shortcut or tray menu.',actionIds:[]}:view.pocket??(view.warning?{tone:'warning',title:'Recording notice',description:view.warning,actionIds:[]}:view.notice?{tone:'info',title:'Control changed',description:view.notice,actionIds:[]}:null)} onLayout={layout}
+    <UploadPocket notice={error?null:view.notice} pocket={error?{tone:'failure',title:'Action not confirmed',description:'Use the recording shortcut or tray menu.',actionIds:[]}:view.pocket??(view.warning?{tone:'warning',title:'Recording notice',description:view.warning,actionIds:[]}:view.notice?{tone:'info',title:'Control changed',description:'',actionIds:[]}:null)} onLayout={layout}
       actions={view.pocket?.actionIds.map(id=>{const action=view.actions.find(a=>a.id===id);return action && <Button key={id} variant="outline" disabled={!action.enabled || pending} onClick={()=>void act(id)}>{action.label}</Button>;})}>
     {trigger=><div className="pill-row">
     <div className={`lead ${view.draggable?'movable':''} ${window.apparentPill?.manualDrag?'manual-drag':''}`} title={view.draggable?'Drag recording controls':undefined}

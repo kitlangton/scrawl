@@ -38,8 +38,9 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  await publish({...base,revision:2,phase:'processing',label:'Processing recording…',draggable:false,actions:[]});
  await expect(page.getByText('Processing recording…',{exact:true})).toBeVisible();
  assert.equal(await page.getByRole('button').count(),0);
- await publish({...base,revision:3,warning:'Microphone input stopped; screen recording continues',actions:base.actions.map(a=>({...a,primary:false}))});
+ await publish({...base,revision:3,warning:'Microphone input stopped; screen recording continues',notice:'Control request expired or changed. Try again.',pocket:{tone:'warning',title:'Recording notice',description:'Microphone input stopped; screen recording continues',actionIds:[]},actions:base.actions.map(a=>({...a,primary:false}))});
  await expect(page.getByRole('alert')).toContainText('screen recording continues');
+ await expect(page.getByText('Control request expired or changed. Try again.',{exact:true})).toBeVisible({timeout:1000});
  await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeEnabled();
  await expect(page.getByRole('button',{name:'Finish',exact:true})).toBeInViewport();
  await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth && document.documentElement.scrollHeight<=innerHeight)).toBe(true);
