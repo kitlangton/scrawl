@@ -1,4 +1,5 @@
 import type {Env,Scope} from './types.ts';
+import {analyticsChoice,analyticsIdentity,analyticsNoticeVersion,setAnalyticsChoice} from './analytics.ts';
 import {identity,DEVICE_CODE_GRANT_TYPE} from './identity.ts';
 import {random,hash,json,fail,stmt,body,bounded,session,csrf,usage,slots,rate,envelope,bearer,isRecord} from './common.ts';
 
@@ -47,6 +48,15 @@ async function issued(env:Env,g:Grant,accessToken:string,refreshToken:string){
 }
 export async function authRoutes(request:Request,env:Env,url:URL) {
  const p=url.pathname,m=request.method;
+ if(p==='/v1/analytics/consent'&&(m==='GET'||m==='POST')) {
+  const s=await session(request,env);
+  if(m==='GET')return json(await analyticsChoice(env,s.account_id));
+  csrf(request,env,s);const b=await body(request);
+  if(Object.keys(b).some(k=>!['consented','revision','noticeVersion'].includes(k))||typeof b.consented!=='boolean'||
+   !(b.revision===null||typeof b.revision==='string'&&/^[a-f0-9]{64}$/.test(b.revision))||
+   b.consented&&b.noticeVersion!==analyticsNoticeVersion)fail('invalid_request');
+  return json(await setAnalyticsChoice(env,s.account_id,b.consented,b.revision));
+ }
  if(p==='/v1/encryption/peers'&&m==='GET') {
   const a=await bearer(request,env);
   // The ten-minute approval code expiry is deliberately NOT a device lifetime.
@@ -74,7 +84,7 @@ export async function authRoutes(request:Request,env:Env,url:URL) {
  }
  if(p==='/v1/session'&&m==='GET') {
   const s=await session(request,env,false);
-  return json({authenticated:!!s,csrfToken:s?.csrf||null,account:s?{email:s.email,beta:s.beta,quotaBytes:500000000,usedBytes:await usage(env,s.account_id),waitlist:{interestedAtFiveDollars:!!s.interest}}:null,slots:await slots(env)});
+  return json({authenticated:!!s,csrfToken:s?.csrf||null,account:s?{email:s.email,beta:s.beta,quotaBytes:500000000,usedBytes:await usage(env,s.account_id),analyticsId:await analyticsIdentity(env,s.account_id),waitlist:{interestedAtFiveDollars:!!s.interest}}:null,slots:await slots(env)});
  }
  if(p==='/auth/logout'&&m==='POST') {
   const s=await session(request,env);csrf(request,env,s);

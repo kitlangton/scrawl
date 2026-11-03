@@ -12,6 +12,11 @@ export interface Env {
  BETTER_AUTH_SECRET: string;
  OAUTH_DISCOVERY_URL?: string;
  SHARING_ENABLED?: string;
+ POSTHOG_ENABLED?: string;
+ POSTHOG_PROJECT_TOKEN?: string;
+ POSTHOG_HOST?: string;
+ POSTHOG_ENVIRONMENT?: string;
+ POSTHOG_EXCLUDED_ACCOUNT_IDS?: string;
 }
 export type Scope = 'read' | 'upload';
 export type Beta = 'active' | 'waitlist';

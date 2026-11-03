@@ -1,0 +1,37 @@
+# Connect product analytics
+
+The collector is separate from account admission, storage/spending ledgers and public recording sharing. Publishing code does not silently enroll accounts. Production activation requires the reviewed disclosure, the explicit account-owned choice, correct deployment bindings and independent production acceptance. Issue175 remains open for the requested metrics; dashboard installation alone is not acceptance.
+
+## Event and privacy contract
+
+The EU project is configured through `POSTHOG_HOST=https://eu.i.posthog.com`, secret `POSTHOG_PROJECT_TOKEN`, `POSTHOG_ENVIRONMENT` and `POSTHOG_ENABLED`. A separate `analytics_control.enabled` database switch also gates collection. Existing accounts start with no consent. `POSTHOG_EXCLUDED_ACCOUNT_IDS` is an optional exact-ID exclusion, never a substitute for consent.
+
+Stable provider identity is `account:<opaque64hex>`, not an email. Qualifying events are `connect_account_created` (only explicit pre-enrollment before creation), `connect_device_connected` (first authoritative post-approval grant binding) and `connect_upload_completed` (pending→ready after complete object verification). Login alone is not an active-user event. `connect_storage_snapshot` is a daily system gauge, not user activity. No historical signup or activity is backfilled after consent. Coverage starts with consent and activation; opt-out and missing history remain visible reporting limitations.
+
+Only allowlisted actor/environment/outcome, opaque identity, occurrence time, UUID, manifest-byte and storage/reservation quantities are exported. No email, recording ID, path, content, transcript, encryption public/private key, session/CSRF/device credential or capability URL is an analytics property. Public recording-link recipients are not instrumented. Browser visits are a separate consented stream and must not be combined with account activity as one DAU count.
+
+Upload statistics deduplicate UUIDs before sum/mean/median, not byte values: two distinct same-size recordings are two uploads. Storage reports select the latest gauge per account before aggregating, including zero-storage accounts. Logical retained size and unreleased reservations are not measured R2 object size or exact cleanup backlog.
+
+## Account-owned consent
+
+`GET /v1/analytics/consent` requires a verified browser session. It returns `{available,consented,revision,noticeVersion}` without enrolling the account or creating a preference. `available` requires valid deployment configuration and global control; a disabled deployment does not forget an existing explicit choice. Notice version is `product-analytics-v1`.
+
+`POST /v1/analytics/consent` requires the same cookie, exact trusted Origin and session CSRF token. The body is `{consented:boolean,revision:string|null,noticeVersion}`. New opt-in requires the current notice version and the exact server revision the browser read; unknown fields and another account ID are rejected. Devices/bearers cannot manage human consent. Withdrawal is available while delivery is disabled and never requires accepting a newer notice.
+
+Choices are transactional in D1. Opt-in records its notice version and server timestamp; an identical positive choice retains the consent generation and pending events. Withdrawal deletes positive consent and pending outbox rows, while retaining a server-owned choice revision. This tombstone prevents an older in-flight opt-in from restoring a deleted row. An explicit operator deletion also rotates the revision. Re-enrollment after a fresh choice gets a new consent identity; stale retries and old batch acknowledgements cannot inherit that later permission. Account deletion removes its positive consent, outbox and choice metadata.
+
+The final database authorization is the export cutoff: withdrawal blocks later authorizations, not a batch already authorized beforehand. Already-admitted sends may finish. Browser preference is independent; withdrawing account analytics does not silently modify an anonymous browser choice, and neither choice is completed provider erasure.
+
+## Delivery and operations
+
+The bounded outbox has a 10,000-row limit, a 24-hour queue lifetime and bounded batches. Overflow/expiry is disclosed through the aggregate drop counter, not invented complete coverage. Requests require a successful HTTP result plus exact provider acknowledgment `status: "Ok"` or legacy numeric `1`. Ambiguous acknowledgments retain stable UUIDs for retry. Provider retries may duplicate raw rows; reporting must deduplicate explicitly.
+
+PostHog's existing-plan retention defaults apply. The free query window is not a physical-deletion promise. Local queue expiry is separate. Exact-target provider deletion is asynchronous; accepted deletion or absent person records do not prove event erasure. Keep the earlier synthetic-erasure follow-up owned without re-submitting it or making provider latency an unrelated deployment blocker. Do not infer deletion-write authority from read-only plus Dashboard/Insight write scopes.
+
+## Compatible migration and rollout
+
+Before migration, inventory the actual Worker name/routes, D1 ledger/schema, private R2 bindings, existing secrets, object restrictions and spending counters. Preserve main's immutable `0004.sql` auth and `0005.sql` encryption migrations. Analytics is additive `0006.sql`; never relabel previously applied branch filenames or apply SQL based on filename alone. Old unmerged analytics0004/0005 histories require a separate reviewed compatibility plan. Never reset accounts, auth, objects or spent budget.
+
+The observed beta deployment was through auth0004 with no analytics tables. Main's additive encryption0005 must precede analytics0006; both are checked on fresh and populated schemas before any compatible remote application. New controls start disabled and no account is implicitly opted in. Preserve existing production origin/cookie/CORS and secret bindings rather than replacing the working beta with a different Worker name. Do not rotate OAuth or encryption secrets for analytics.
+
+Production acceptance is a small, explicitly consenting run-owned account/browser trial paired with an opted-out fixture. Retain exact deployed SHA/config/start window, IDs/UUIDs, expected actions, D1 consent/outbox/admission evidence, actual browser transport and provider readback. Provider absence alone is not suppression proof. Fixtures are not customers; coordinate exclusions and cleanup with reporting owner356. Do not close175/356 until independent actual metrics acceptance. No new purchases, access or messages to people are part of rollout.

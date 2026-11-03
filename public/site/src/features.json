@@ -22,6 +22,17 @@
   ],
   "features": [
     {
+      "id": "connect-product-analytics",
+      "added": "2026-11-03",
+      "group": "settings",
+      "name": "Explicit Connect analytics consent API",
+      "says": "A signed-in account can explicitly choose optional product analytics through its CSRF-protected consent API. Withdrawal clears queued events and blocks new export admissions; stale opt-ins cannot restore a withdrawn choice. Login alone grants no analytics permission.",
+      "status": "main",
+      "platforms": ["mac", "linux"],
+      "note": "Collection requires deployment configuration, the database control and affirmative per-account consent. Existing users are not enrolled. Only allowlisted event/quantity metadata is exported; recordings, credentials, keys and public capability links are excluded. Already-authorized sends may finish after withdrawal. Publishing this API does not by itself activate production collection. The browser control and disclosure belong to the dependent rollout slice; independent production acceptance remains required.",
+      "docs": ["connect/docs/product-analytics.md"]
+    },
+    {
       "id": "shared-system-appearance",
       "added": "2026-11-02",
       "group": "platforms",
