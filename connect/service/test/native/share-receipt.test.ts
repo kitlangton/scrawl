@@ -12,3 +12,8 @@ test('native failure keeps protocol reason while excluding arbitrary output and 
   assert.deepEqual(captureFailureReceipt('start', JSON.stringify({status:['saved'], error:{toString:'private token'}})),
     {operation:'start', status:'unknown', error:'unknown'});
 });
+test('documented transient and terminal capture errors remain distinguishable', () => {
+  for (const error of ['app_busy', 'app_unresponsive', 'invalid_response', 'cancelled', 'unknown_capture', 'ended_before_ready', 'occupied', 'admission_expired']) {
+    assert.equal(captureFailureReceipt('start', JSON.stringify({error, message:'private context'})).error, error);
+  }
+});

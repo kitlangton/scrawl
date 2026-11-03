@@ -196,7 +196,24 @@ async function openPopup() {
   scene = spawn(driver, ['scene'], {env, detached: true, stdio: 'ignore'}); children.add(scene);
   await delay(1000); assert(alive(scene)); await startDesktop();
   const id = createHash('sha256').update(output).digest('hex').slice(0, 32);
-  const started = JSON.parse(await cli(['capture', 'start', '--request-id', id, '--wait', '--timeout', '20']));
+  let started;
+  try {
+    started = JSON.parse(await cli(['capture', 'start', '--request-id', id, '--wait', '--timeout', '20']));
+  } catch (error) {
+    // Transport failure is not proof that Start was rejected. Inspect the same
+    // admitted identity once; never replay Start or infer success from a path.
+    const failure = report.captureFailure;
+    try {
+      const inspected = JSON.parse(await cli(['capture', 'inspect', id]));
+      report.startFailureInspection = captureFailureReceipt('inspect', JSON.stringify(inspected));
+      if (inspected.capture_id === id && inspected.status === 'recording') {
+        started = inspected;
+        report.startRecoveredBySameIdInspection = true;
+      }
+    } catch { report.startFailureInspectionUnavailable = true; }
+    report.captureFailure = failure;
+    if (!started) throw error;
+  }
   assert.equal(started.capture_id, id); assert.equal(started.status, 'recording');
   // Capture admission precedes asynchronous notes renderer startup. Do not
   // spend the unchanged six-second finish barrier on cold renderer startup.
