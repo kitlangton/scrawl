@@ -72,8 +72,8 @@ device and shares paths, query bytes and slash variants. The production composer
 accepts only six HTML documents, their emitted JS/CSS resource closure and five
 approved assets. It rejects differing collisions and private, malformed,
 symlink/nonregular, missing-resource or synthetic-origin inputs before changing
-the destination. The accepted homepage overlay is a separate checksum-bound
-exception; final graph verification follows it. Public's homepage graph has no
+the destination. The source-built homepage survives composition byte-for-byte; final graph
+verification checks both independently built owners. Public's homepage graph has no
 Connect/API code; Connect has no marketing/demo/font-service graph. Pages metadata
 provides no-store/noindex and legacy redirects; `404.html` prevents unknown/private
 paths from acquiring a general SPA fallback. The same existing workflow and
@@ -88,9 +88,9 @@ From `public/site/`:
 APPARENT_PUBLIC_SITE=1 VITE_HOSTED_API_ORIGIN=https://hosted.tryapparent.com npm run build
 node scripts/package-apparent.mjs
 node scripts/compose-connect.mjs
-node scripts/prepare-pages.mjs
-node scripts/verify-composed.mjs
-node --test scripts/test-brand-favicon.mjs scripts/test-github-stars.mjs scripts/test-latest-download.mjs scripts/test-platform-os.mjs scripts/test-public-homepage.mjs scripts/test-video-demo.mjs
+node scripts/pages/prepare-pages.ts
+node scripts/site-build/verify-composed.ts
+node --test scripts/brand/test-brand-favicon.mjs scripts/browser-proof/test-github-stars.mjs scripts/pages/test-latest-download.mjs scripts/pages/test-platform-os.mjs scripts/pages/test-public-homepage.ts scripts/browser-proof/test-video-demo.mjs
 ```
 
 `test:hosted` serves the exact packaged website with a **controlled synthetic API**, not a live Connect service. It checks built route files/noindex, absent homepage/sitemap promotion, anonymous sign-in destinations, loading, zero/full count states, authenticated waitlist interest, read/upload explicit approvals, expired/rejected/unknown scope/no-code states, denied CSRF, unavailable/malformed API, mutation duplicate guards, cookie/Origin/CSRF request paths, mutation readback, logout, no token/CSRF DOM exposure or localStorage, hydration errors, and 320/390/1100px overflow. Setup checks assert the complete Connect login/status commands, configured API origin and older-app compatibility guidance in both tabs, including legacy routes. Sharing adds list/empty/revoke/denied/unconfirmed-readback interactions, escaped captured titles, no-JS recipient states, and a real pending-to-ready reload under the restrictive CSP above. Recipient media bytes are not exercised by these fixtures. Screenshots go to `$SITE_EVIDENCE` or `$TMPDIR/hosted-web-evidence`; inspect them before accepting visual changes. Set `CHROME_PATH` if the default existing Playwright Chrome path differs. `SITE_ARTIFACT` can select another package.

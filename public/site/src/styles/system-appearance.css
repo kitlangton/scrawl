@@ -1,4 +1,4 @@
-/* Color-only adapter for the accepted published homepage; layout/media stay intact. */
+/* Shared semantic palette for the source-built public homepage. */
 :root { --bg: var(--color-background); --fg: var(--color-foreground); --muted: var(--color-muted-foreground); --line: var(--color-border); }
 :root body, :root .pond-page, :root .frog-footer, :root .photo-story { background: var(--color-background); color: var(--color-foreground); }
 :root .pond-page { --brand-carbon: var(--color-brand-foreground); }
@@ -22,9 +22,10 @@
 :root .feature-grid-section, :root .feature-grid-card h3 { color: var(--color-foreground); }
 :root .feature-grid-toggle { color: var(--color-muted-foreground); }
 
-/* These sections are inserted by the accepted snapshot after hydration. */
+/* Statement, photos, and social details share the same system palette. */
 :root .preview-statement { background: var(--color-background); color: var(--color-foreground); }
-:root .rude-bubble, :root .pond-hello { color: var(--color-brand-foreground); }
+:root .rude-bubble { color: var(--color-accent-foreground); }
+:root .pond-hello { color: var(--color-brand-foreground); }
 :root .pond-hello { background: var(--color-brand); }
 :root .feature-grid-viewport { background: var(--color-muted); border-color: var(--color-border); }
 :root .preview-statement .enjoy-highlight { stroke: var(--color-accent); }

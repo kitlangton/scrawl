@@ -12,7 +12,7 @@ const { build } = require("esbuild")
 
 test("workerd transmits a fixed Content-Length for full and seeking movie responses", async () => {
   const original = readFileSync(new URL("../../public/assets/media/Apparent-ghost-demo-v4-lilac.mp4", import.meta.url))
-  const bundled = await build({
+  const bundled = process.env.PAGES_WORKER ? null : await build({
     stdin: {
       contents: `import { onRequest } from "../../functions/Apparent-ghost-demo-v4-lilac.mp4.js";
         export default { fetch(request, env, ctx) {
@@ -23,7 +23,7 @@ test("workerd transmits a fixed Content-Length for full and seeking movie respon
     bundle: true, write: false, format: "esm", platform: "browser",
   })
   const runtime = new Miniflare({
-    modules: true, script: bundled.outputFiles[0].text,
+    modules: true, script: process.env.PAGES_WORKER ? readFileSync(process.env.PAGES_WORKER, "utf8") : bundled.outputFiles[0].text,
     compatibilityDate: "2026-08-06", host: "127.0.0.1", port: 0,
     serviceBindings: {
       ASSETS(request) {

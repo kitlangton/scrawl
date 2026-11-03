@@ -8,10 +8,10 @@ on:
 permissions:
   contents: read
 
-# Coalesce only this platform; a queued Mac must not hold Linux publication.
+# Finish the running candidate; replace only pending work. Mac never holds this lane.
 concurrency:
   group: changed-tree-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   verify:

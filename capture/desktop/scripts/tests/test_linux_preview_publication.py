@@ -273,9 +273,9 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
         build = workflow.split("  linux:\n", 1)[1].split("  attach-release:\n", 1)[0]
         self.assertNotIn("actions: write", workflow)
         self.assertIn("--json isDraft --jq .isDraft", workflow)
-        self.assertIn("ref: ${{ inputs.tag || github.sha }}", build)
-        self.assertIn('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', build)
-        self.assertIn("ref: ${{ github.sha }}", job)
+        self.assertIn("ref: ${{ needs.admit.outputs.sha }}", build)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"', build)
+        self.assertIn("ref: ${{ needs.admit.outputs.sha }}", job)
         self.assertIn("python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py", job)
         self.assertIn("inputs.verify_only != true", job)
         self.assertNotIn("exit 0", job)
@@ -283,7 +283,7 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
     def test_main_push_and_retry_selection_preserve_non_canceling_serialization(self):
         workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
         triggers = workflow.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
-        self.assertIn("  push:\n    branches: [main]\n", triggers)
+        self.assertIn("  workflow_run:\n    workflows: [Linux verification]\n    branches: [main]\n", triggers)
         self.assertNotIn("pull_request:", triggers)
         self.assertIn("cron: '17 3 * * *'", triggers)
         self.assertIn("workflow_dispatch:", triggers)
@@ -295,15 +295,15 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
         job = workflow.split("  main-preview:\n", 1)[1]
         condition = job.split("    if: ", 1)[1].splitlines()[0]
         for event, ref, tag, publish, verify, result, expected in (
-            ("push", "refs/heads/main", "", False, False, "success", True),
+            ("workflow_run", "refs/heads/main", "", False, False, "success", True),
             ("schedule", "refs/heads/main", "", False, False, "success", True),
             ("workflow_dispatch", "refs/heads/main", "", True, False, "success", True),
             ("workflow_dispatch", "refs/heads/main", "v1.2.3", False, False, "success", False),
             ("workflow_dispatch", "refs/heads/main", "", False, True, "success", False),
             ("workflow_dispatch", "refs/heads/topic", "", True, False, "success", False),
             ("pull_request", "refs/pull/278/merge", "", False, False, "success", False),
-            ("push", "refs/heads/main", "", False, False, "failure", False),
-            ("push", "refs/heads/main", "", False, False, "skipped", False),
+            ("workflow_run", "refs/heads/main", "", False, False, "failure", False),
+            ("workflow_run", "refs/heads/main", "", False, False, "skipped", False),
         ):
             with self.subTest(event=event, ref=ref, tag=tag, verify=verify, result=result):
                 values = {"github.event_name": event, "github.ref": ref, "inputs.tag": tag,
@@ -314,7 +314,7 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
                     expression = expression.replace(key, repr(value))
                 expression = expression.replace("&&", " and ").replace("||", " or ").replace("true", "True")
                 self.assertEqual(eval(expression, {"__builtins__": {}}), expected)
-        expected_env = "PUBLISH_MAIN: ${{ github.event_name == 'push' || github.event_name == 'schedule' || inputs.publish_main }}"
+        expected_env = "PUBLISH_MAIN: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main }}"
         for section in (workflow.split("  preview-needed:\n", 1)[1].split("  linux:\n", 1)[0],
                         workflow.split("  linux:\n", 1)[1].split("  attach-release:\n", 1)[0]):
             self.assertIn(expected_env, section)

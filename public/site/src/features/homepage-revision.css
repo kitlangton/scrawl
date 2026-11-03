@@ -80,3 +80,17 @@ dialog[data-dialog="social"] .rude-bubble{position:absolute;top:24px;left:0}
 .pond-copy .pond-wordmark{transform:translateY(3px)}
 /* Fit the more descriptive headline without overpowering the hero. */
 @media(min-width:701px){.pond-copy h1{font-size:clamp(32px,3.5vw,50px);line-height:1.1}}
+
+/* Preserve the accepted mobile download dimensions and feature rhythm. */
+.feature-copy h3 { margin: 0; }
+@media (max-width: 700px) {
+  .pond-download .btn-primary { min-height: 44px; line-height: normal; }
+}
+.frog-footer .footer-try[data-launch-attempted="true"] { max-width: 100%; white-space: normal; line-height: 1.35 !important; text-align: center; }
+
+/* Match the accepted hero action and feature typography. */
+.pond-download .btn-primary { border-radius: 0; padding: 13px 20px; min-height: 48px; font-weight: 400; line-height: normal; }
+.feature-copy h3 { font-weight: 700; }
+@media (max-width: 700px) {
+  .pond-download .btn-primary { min-height: 44px; padding: 12px 18px; }
+}

@@ -9,6 +9,8 @@ import json
 import os
 import re
 import subprocess
+from pathlib import Path
+import xml.etree.ElementTree as ET
 
 WORKFLOWS = {
     'linux': '.github/workflows/verification.yml',
@@ -45,20 +47,29 @@ def verified_run(repo, sha, platform, run_id, fetch):
         runs = [fetch(f'{prefix}/actions/runs/{run_id}')]
     else:
         filename = workflow.rsplit('/', 1)[1]
-        runs = pages(f'{prefix}/actions/workflows/{filename}/runs?head_sha={sha}&branch=main&event=push', fetch)
+        query = f'head_sha={sha}&branch=main&event=push' if platform == 'linux' else 'branch=main'
+        runs = pages(f'{prefix}/actions/workflows/{filename}/runs?{query}', fetch)
     # Never accept a different commit, fork, workflow, PR/manual run or old attempt.
     for candidate in sorted(runs, key=lambda run: run['id'], reverse=True):
         run = fetch(f'{prefix}/actions/runs/{candidate["id"]}')
+        follower = platform == 'macos' and run['event'] == 'workflow_run'
         if not (run['repository']['full_name'] == repo
                 and run['head_repository']['full_name'] == repo
-                and run['path'] == workflow and run['head_sha'] == sha
-                and run['head_branch'] == 'main' and run['event'] == 'push'
+                and run['path'] == workflow
+                and (follower or (run['head_sha'] == sha and run['event'] == 'push'))
+                and run['head_branch'] == 'main'
                 and run['status'] == 'completed' and run['conclusion'] == 'success'):
             continue
         jobs = pages(f'{prefix}/actions/runs/{run["id"]}/attempts/{run["run_attempt"]}/jobs', fetch)
         successful = {job['name'] for job in jobs
                       if job['status'] == 'completed' and job['conclusion'] == 'success'}
-        if REQUIRED[platform] <= successful:
+        required = REQUIRED[platform]
+        if follower:
+            # workflow_run's head_sha can be newer than the tested candidate.
+            # Trusted workflow code names its terminal job with the exact checkout.
+            required = (required - {'verify / Release verification'}) | {
+                f'verify / Release verification ({sha})'}
+        if required <= successful:
             return
     raise ValueError(f'No successful {platform} main verification for this exact commit')
 
@@ -83,13 +94,57 @@ def admit(repo, sha, run_id=None, fetch=api, platform='linux'):
     return sha
 
 
+def publication_needed(repo, sha, published, fetch=api):
+    """Call under the publisher's concurrency lock, immediately before mutation."""
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
+        raise ValueError('Invalid repository')
+    for value in (sha, published):
+        if value is not None and not re.fullmatch(r'[0-9a-f]{40}', value):
+            raise ValueError('Unknown publication revision; refusing to guess ordering')
+    if fetch(f'repos/{repo}/compare/{sha}...main')['status'] not in ('ahead', 'identical'):
+        raise ValueError('Candidate is no longer on main')
+    if published is None:
+        return True
+    status = fetch(f'repos/{repo}/compare/{published}...{sha}')['status']
+    if status == 'ahead':
+        return True
+    if status in ('identical', 'behind'):
+        return False
+    raise ValueError('Published revision and candidate diverge; refusing publication')
+
+
+def mac_feed_revision(repo, previous, fetch=api):
+    if not previous.strip():
+        return None
+    root = ET.fromstring(previous)
+    enclosure = root.find('./channel/item/enclosure')
+    if enclosure is None:
+        raise ValueError('Previous Mac feed has no release identity')
+    match = re.fullmatch(r'https://github.com/' + re.escape(repo) +
+                        r'/releases/download/(preview-mac-[0-9]+-[0-9]+)/[^/]+',
+                        enclosure.get('url', ''))
+    if not match:
+        raise ValueError('Unknown previous Mac release URL')
+    target = fetch(f'repos/{repo}/git/ref/tags/{match[1]}')['object']
+    if target['type'] != 'commit':
+        raise ValueError('Previous Mac release tag must identify a commit')
+    return target['sha']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--platform', choices=sorted(WORKFLOWS), required=True)
     parser.add_argument('--sha', required=True)
     parser.add_argument('--run-id')
+    parser.add_argument('--previous-mac-feed', type=Path)
     args = parser.parse_args()
     sha = admit(os.environ['GITHUB_REPOSITORY'], args.sha, args.run_id, platform=args.platform)
+    if args.previous_mac_feed is not None:
+        if args.platform != 'macos':
+            raise ValueError('Mac feed ordering requires macos admission')
+        published = mac_feed_revision(os.environ['GITHUB_REPOSITORY'], args.previous_mac_feed.read_text())
+        if not publication_needed(os.environ['GITHUB_REPOSITORY'], sha, published):
+            raise ValueError('Mac feed already contains this or a newer source revision')
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         output.write(f'sha={sha}\n')
     print(f'Admitted verified main commit {sha}')

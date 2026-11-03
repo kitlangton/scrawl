@@ -1,8 +1,10 @@
 name: Mac verification
 
 on:
-  push:
+  workflow_run:
+    workflows: [Linux verification]
     branches: [main]
+    types: [completed]
   workflow_dispatch:
     inputs:
       connect_worker_proof:
@@ -12,19 +14,45 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
-# Coalesce only this platform; a queued Mac must not hold Linux publication.
+# Every automatic Mac candidate already has a matching Linux receipt.
+# Finish running Mac work; coalesce only pending Linux-verified candidates.
+# Failed Linux completions and manual diagnostics cannot evict a good pending run.
 concurrency:
-  group: verification-macos-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: verification-macos-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.event != 'push' || github.event.workflow_run.head_repository.full_name != github.repository) && github.run_id || 'eligible' }}
+  cancel-in-progress: false
 
 jobs:
+  admit:
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.candidate.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          VERIFY_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
+            python3 enablement/release_gate.py --platform linux --sha "$REQUEST_SHA" --run-id "$VERIFY_RUN_ID"
+          else
+            echo "sha=$REQUEST_SHA" >> "$GITHUB_OUTPUT"
+          fi
   verify:
+    needs: admit
     if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/verification-platform.yml
     with:
       # General Mac CI can use Intel capacity; arm64 packaging stays on Apple Silicon.
       runner: macos-15-intel
+      revision: ${{ needs.admit.outputs.sha }}
 
   connect-native:
     if: github.ref != 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.connect_worker_proof
