@@ -5,8 +5,9 @@
 The Mac status item keeps the approved lowercase “a” at 18 points. It uses Lilac
 on Carbon in dark appearance and the website's darker purple (`#7a58c7`) on
 Paper (`#faf9f6`) in light appearance. The latter has 4.93:1 internal contrast.
-It follows the actual status button's effective appearance through AppKit KVO,
-including live changes, rather than checking the app's theme only at launch.
+It follows the application's inherited system appearance through AppKit KVO,
+including live changes. A full-screen menu bar can stay dark in both system
+modes, so the status button's own appearance must not select the icon variant.
 There is no app appearance setting or restart requirement. The Dock/app icon
 keeps its Carbon/Lilac colors. Linux's tray is unchanged.
 This is an OS adapter change, not a new Settings workflow;
@@ -15,7 +16,8 @@ the development Electron Settings window does not create a second tray icon.
 Regenerate the light variant from the approved menu bar raster with
 `swift capture/desktop/scripts/native/make-menu-bar-light.swift`; append
 `--check` to verify shape, colors and contrast. Native acceptance still needs the running
-candidate's status item on light and dark menu bars, a live transition, and an
+candidate's status item in Light and Dark mode, in full-screen and normal windows,
+a live transition without restarting the app, and an
 open menu. An asset check or successful build alone is not that proof.
 
 Read this before changing `capture/desktop/settings/onboarding.rs`, `capture/desktop/settings/settings.rs`, `composition/command_line.rs` or the helper's `Onboarding.swift`, `PermissionPanel.swift` and `Settings.swift`.
