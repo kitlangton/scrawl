@@ -14,6 +14,8 @@ let fm = FileManager.default
 func perform() throws {
     try check(env["GITHUB_ACTIONS"] == "true" && env["RUNNER_ENVIRONMENT"] == "github-hosted" && env["APPARENT_CONNECT_NATIVE_CI"] == "1", "Hosted synthetic proof only")
     try check(args.count >= 2, "Missing operation")
+    // Establish AppKit's WindowServer connection in every driver invocation.
+    _ = NSApplication.shared
     if args[1] == "scene" {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
@@ -80,9 +82,27 @@ func perform() throws {
         // another window belonging to the same application.
         // https://developer.apple.com/documentation/appkit/nswindow/windownumber(at:belowwindowwithwindownumber:)
         let appKitPoint = NSPoint(x: point.x, y: CGDisplayBounds(CGMainDisplayID()).height - point.y)
+        let beforeHit = NSWindow.windowNumber(at: appKitPoint, belowWindowWithWindowNumber: 0)
+        let pointerBefore = NSEvent.mouseLocation
+        // Native controls intentionally ignore input while the pointer is outside
+        // their shape. Move without pressing, then allow their pointer poll to run.
+        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)!.post(tap: .cghidEventTap)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let moved = CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]] ?? []
+        try check(moved.count == 1 && (moved[0][kCGWindowOwnerPID as String] as? Int32) == pid,
+                  "Input window ownership changed after pointer movement")
+        let movedBounds = CGRect(dictionaryRepresentation: moved[0][kCGWindowBounds as String] as! CFDictionary)
+        try check(movedBounds == bounds && CGPreflightPostEventAccess(), "Bounds changed or input permission lost after pointer movement")
         let hitWindow = NSWindow.windowNumber(at: appKitPoint, belowWindowWithWindowNumber: 0)
+        let diagnostic: [String: Any] = ["expectedWindow": id, "beforeHit": beforeHit, "afterHit": hitWindow,
+            "windowBounds": [bounds.minX, bounds.minY, bounds.width, bounds.height],
+            "ocrBounds": [box.minX, box.minY, box.width, box.height],
+            "quartzPoint": [point.x, point.y], "appKitPoint": [appKitPoint.x, appKitPoint.y],
+            "pointerBefore": [pointerBefore.x, pointerBefore.y]]
+        let data = try JSONSerialization.data(withJSONObject: diagnostic, options: [.sortedKeys])
+        print(String(decoding: data, as: UTF8.self))
         try check(hitWindow == Int(id), "Mouse-down target differs from owned window (expected \(id), hit \(hitWindow))")
-        for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
+        for type in [CGEventType.leftMouseDown, .leftMouseUp] {
             CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)!.post(tap: .cghidEventTap)
             RunLoop.main.run(until: Date().addingTimeInterval(0.08))
         }
