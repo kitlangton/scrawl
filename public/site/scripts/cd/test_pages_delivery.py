@@ -87,7 +87,8 @@ class PagesDeliveryTests(unittest.TestCase):
                    'latest_stage': {'status': 'success'}, 'deployment_trigger': {'metadata': {'commit_hash': sha}}}}
         class Response(BytesIO):
             headers = {'X-Apparent-Publisher': 'cloudflare-pages', 'Cache-Control': 'no-store',
-                       'X-Robots-Tag': 'noindex, nofollow', 'Content-Type': 'video/mp4'}
+                       'X-Robots-Tag': 'noindex, nofollow', 'Content-Type': 'video/mp4',
+                       'Set-Cookie': 'private-cookie-sentinel'}
         with tempfile.TemporaryDirectory() as directory:
             artifact = self.fixture(Path(directory))
             package = artifact / 'dist-apparent'
@@ -100,7 +101,7 @@ class PagesDeliveryTests(unittest.TestCase):
                 url = urlsplit(request.full_url)
                 visited.add(url.netloc)
                 if url.path == bad_path and (bad_origin is None or url.netloc == bad_origin):
-                    return Response(b'different bytes')
+                    return Response(b'unexpected response body sentinel')
                 if url.path.endswith('.mp4'):
                     return Response(b'checked movie')
                 return Response((package / paths[url.path]).read_bytes())
@@ -108,8 +109,13 @@ class PagesDeliveryTests(unittest.TestCase):
                 self.assertEqual(pages.verify(sha, package)['deployment_id'], 'deployment')
                 self.assertEqual(visited, {'deployment.apparent-capture.pages.dev', 'app.tryapparent.com'})
                 for bad_path in paths:
-                    with self.assertRaisesRegex(ValueError, 'different bytes'):
+                    with self.assertRaisesRegex(ValueError, 'different bytes') as error:
                         pages.verify(sha, package)
+                    self.assertIn('actual_sha256', str(error.exception))
+                    self.assertIn('expected_sha256', str(error.exception))
+                    self.assertIn('content_encoding', str(error.exception))
+                    self.assertNotIn('unexpected response body sentinel', str(error.exception))
+                    self.assertNotIn('private-cookie-sentinel', str(error.exception))
                 bad_path = '/Apparent-ghost-demo-v4-lilac.mp4'
                 with self.assertRaisesRegex(ValueError, 'different movie'):
                     pages.verify(sha, package)

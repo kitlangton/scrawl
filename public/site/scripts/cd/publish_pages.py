@@ -111,14 +111,28 @@ def verify(sha, package):
             request = Request(origin + route, headers={'Cache-Control': 'no-cache', 'User-Agent': 'Apparent-CD/1.0'})
             with urlopen(request, timeout=60) as response:
                 body = response.read()
+                response_meta = {
+                    'content_encoding': response.headers.get('Content-Encoding'),
+                    'content_type': response.headers.get('Content-Type'),
+                    'cache_status': response.headers.get('CF-Cache-Status'),
+                    'age': response.headers.get('Age'),
+                    'cf_ray': response.headers.get('CF-Ray'),
+                }
                 if response.headers.get('X-Apparent-Publisher') != 'cloudflare-pages':
                     raise ValueError('Missing Pages publisher header')
                 if route.startswith('/connect/') and (
                         'no-store' not in response.headers.get('Cache-Control', '').lower() or
                         not {'noindex', 'nofollow'} <= set(response.headers.get('X-Robots-Tag', '').lower().replace(',', ' ').split())):
                     raise ValueError('Missing Connect privacy headers')
-            if hashlib.sha256(body).hexdigest() != manifest['files']['dist-apparent/' + path]:
-                raise mismatch(f'Pages served different bytes: {origin}/{path}')
+            actual_hash = hashlib.sha256(body).hexdigest()
+            expected_hash = manifest['files']['dist-apparent/' + path]
+            if actual_hash != expected_hash:
+                # Public response metadata and fingerprints only: never log the
+                # body, cookies, request credentials or complete header sets.
+                detail = {**response_meta, 'actual_sha256': actual_hash,
+                          'expected_sha256': expected_hash, 'actual_bytes': len(body),
+                          'expected_bytes': (package / path).stat().st_size}
+                raise mismatch(f'Pages served different bytes: {origin}{route} ' + json.dumps(detail, sort_keys=True))
         media = manifest['movie']
         actual = hashlib.sha256()
         request = Request(origin + media['path'], headers={'Cache-Control': 'no-cache', 'User-Agent': 'Apparent-CD/1.0'})
