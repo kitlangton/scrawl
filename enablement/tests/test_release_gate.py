@@ -1,5 +1,6 @@
 """Exact-commit, per-platform publication admission using synthetic GitHub APIs."""
 import copy
+import re
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -51,6 +52,21 @@ class AdmissionTests(unittest.TestCase):
         for platform, number in [('linux', '42'), ('macos', '84')]:
             self.assertEqual(self.admit(platform, number), self.sha)
             self.assertEqual(self.admit(platform), self.sha)
+
+    def test_manual_feature_checks_preserve_publication_boundary(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github/workflows/verification-platform.yml').read_text()
+        for job in ('desktop-ui', 'rust'):
+            section = re.search(r'^  ' + job + r':\n(.*?)(?=^  [a-z]|\Z)', workflow, re.M | re.S)[1]
+            self.assertIn("if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'", section)
+        receipt = workflow.split('  release-ready:\n', 1)[1]
+        self.assertIn("if: github.ref == 'refs/heads/main'\n", receipt)
+        self.assertNotIn('workflow_dispatch', receipt)
+        for platform in self.runs:
+            self.runs[platform].update(event='workflow_dispatch', head_branch='feature')
+        for platform in self.runs:
+            with self.assertRaises(ValueError):
+                self.admit(platform)
 
     def test_intel_mac_receipt_matches_workflow_and_is_required(self):
         workflow = Path(__file__).resolve().parents[2] / gate.WORKFLOWS['macos']
