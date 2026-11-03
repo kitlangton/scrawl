@@ -742,17 +742,35 @@ mod tests {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
         let config = load_config_from(&path);
-        for name in ["nativeLaunch", "movableRecordingControls", "exportNarration", "onboardingFirstCapture"] {
+        for name in ["nativeLaunch", "movableRecordingControls", "exportNarration", "onboardingFirstCapture", "hostedSync", "hostedEncryption"] {
             assert!(experiment_enabled_in(&config, name), "{name}");
             set_experiment_in(&path, name, false).unwrap();
             assert!(!experiment_enabled_in(&load_config_from(&path), name), "{name}");
             set_experiment_in(&path, name, true).unwrap();
             assert!(experiment_enabled_in(&load_config_from(&path), name), "{name}");
         }
-        for name in ["hostedSync", "hostedSharing", "hostedEncryption", "clipboardImage", "autoPasteDraft", "unknownFutureFeature"] {
+        for name in ["hostedSharing", "clipboardImage", "autoPasteDraft", "unknownFutureFeature"] {
             assert!(!experiment_enabled_in(&config, name), "{name}");
         }
         assert!(config.cloud.is_none());
+    }
+
+    #[test]
+    fn private_connect_defaults_do_not_grant_consent_or_change_unknown_config() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("config.json");
+        fs::write(&path, r#"{"secret":"synthetic","unknown":{"kept":true},"cloud":{"enabled":false,"uploadConsent":false,"server":"https://api.example.invalid"}}"#).unwrap();
+        for name in ["hostedSync", "hostedEncryption"] {
+            assert!(experiment_enabled_in(&load_config_from(&path), name));
+            set_experiment_in(&path, name, false).unwrap();
+            assert!(!experiment_enabled_in(&load_config_from(&path), name));
+        }
+        let raw: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(raw["secret"], "synthetic");
+        assert_eq!(raw["unknown"]["kept"], true);
+        assert_eq!(raw["cloud"]["enabled"], false);
+        assert_eq!(raw["cloud"]["uploadConsent"], false);
+        assert!(!experiment_enabled_in(&load_config_from(&path), "hostedSharing"));
     }
 
     #[test]
@@ -883,7 +901,8 @@ mod tests {
         let path = fixture.0.join("config.json");
         let missing = load_config_from(&path);
         assert!(experiment_enabled_in(&missing, "connectSettings"));
-        assert!(!experiment_enabled_in(&missing, "hostedSync"));
+        assert!(experiment_enabled_in(&missing, "hostedSync"));
+        assert!(experiment_enabled_in(&missing, "hostedEncryption"));
         assert!(!experiment_enabled_in(&missing, "hostedSharing"));
         assert!(missing.cloud.is_none());
         fs::write(&path, r#"{"autoSend":false,"experiments":{"other":true}}"#).unwrap();
