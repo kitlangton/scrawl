@@ -361,5 +361,47 @@ class SelectionTests(unittest.TestCase):
                     self.assertEqual(verification.plan(base, documented)["focused"], sorted(reviewed["tests"]))
 
 
+class RuntimeBudgetTests(unittest.TestCase):
+    def test_budget_preserves_status_and_stdin(self):
+        result = subprocess.run(['python3', str(SCRIPT), '--hook-budget', '2',
+                                 'sh', '-c', 'cat; exit 7'], input='refs\n',
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(result.stdout, 'refs\n')
+
+    def test_budget_kills_descendants_and_assigns_optimization(self):
+        # Inherited pipes stay open if the descendant escapes cleanup.
+        result = subprocess.run(['python3', str(SCRIPT), '--hook-budget', '.1',
+                                 'sh', '-c', 'sleep 30 & wait'],
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 124)
+        self.assertIn('Optimize the tests', result.stderr)
+        self.assertIn('agent whose run hit this limit owns', result.stderr)
+
+    def test_cancelled_watchdog_cleans_up_process_group(self):
+        process = subprocess.Popen(['python3', str(SCRIPT), '--hook-budget', '30',
+                                    'sh', '-c', 'echo ready; sleep 30 & wait'],
+                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            self.assertEqual(process.stdout.readline(), 'ready\n')
+            process.terminate()
+            process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 143)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    def test_supported_ci_jobs_have_ten_minute_execution_budget(self):
+        import re
+        for workflow in (SCRIPT.parents[1] / '.github/workflows').glob('*.yml'):
+            if workflow.name == 'release-windows.yml':
+                continue  # Retired platform is outside the supported CI contract.
+            for job in re.split(r'^  [\w-]+:\n', workflow.read_text(), flags=re.M)[1:]:
+                if re.search(r'^    runs-on:', job, re.M):
+                    self.assertIn('    timeout-minutes: 10\n', job, str(workflow))
+                    self.assertIn('agent whose run hits the limit owns optimization', job)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -434,3 +434,15 @@ tag retains legacy ancestry outside Main, with an identical canonical source tre
 Keep that permanent v1 release for late upgraders and never resume v1 publication.
 Preparation, exact evidence and rollback constraints are in
 [`Linux signing-history migration`](../../capture/desktop/docs/linux/linux.md#signing-history-migration-november-2026).
+
+## Verification runtime budgets
+
+The complete pre-commit hook has 60 seconds; pre-push has 300 seconds.
+Each supported-platform CI job has 10 minutes of execution, including setup,
+checks and cleanup; GitHub runner queue time is excluded. Reusable workflow
+callers inherit the limits on their executing jobs. Job dependencies may wait
+without consuming another job's execution budget. A timeout fails verification.
+The agent whose run exceeds a budget owns optimizing the tests and rerunning
+successfully before continuing delivery. Do not increase/bypass limits, remove
+coverage or weaken checks to obtain a pass. CI logs print this instruction before
+setup so it remains visible even when GitHub terminates a timed-out job.

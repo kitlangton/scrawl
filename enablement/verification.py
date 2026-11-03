@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import signal
 import sys
 from pathlib import Path
 import subprocess
@@ -244,6 +245,34 @@ def run_checks(selection, offline=True):
             subprocess.run(command, cwd=browser, check=True)
 
 
+def hook_budget(seconds, command):
+    """Bound the whole hook, including descendants, on macOS and Linux."""
+    process = subprocess.Popen(command, start_new_session=True)
+    def interrupted(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    previous = {sig: signal.signal(sig, interrupted)
+                for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    try:
+        return process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        print(f"Verification exceeded {seconds:g}s. Optimize the tests: the agent "
+              "whose run hit this limit owns the optimization and successful rerun. "
+              "Do not raise or bypass the limit.", file=sys.stderr, flush=True)
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        return 124
+    finally:
+        # A successful parent must not leave background verification running.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
@@ -289,4 +318,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--hook-budget":
+        sys.exit(hook_budget(float(sys.argv[2]), sys.argv[3:]))
     main()
