@@ -36,6 +36,11 @@ test('Pages preserves source-built homepage, assets and all fresh Connect routes
     const redirects = readFileSync(join(root, 'dist-apparent/_redirects'), 'utf8')
     for (const route of ['', '/device', '/shares']) for (const suffix of ['', '/']) assert(redirects.includes(`/hosted${route}${suffix} /connect${route} 302`))
     assert.match(readFileSync(join(root, 'dist-apparent/_headers'), 'utf8'), /X-Apparent-Publisher: cloudflare-pages/)
+    const headers = readFileSync(join(root, 'dist-apparent/_headers'), 'utf8')
+    assert.match(headers, /\/\*\n  Cache-Control: no-cache, no-transform\n/)
+    for (const route of ['/connect*', '/hosted*']) {
+      assert(headers.includes(`${route}\n  Cache-Control: no-store, no-transform\n  X-Robots-Tag: noindex, nofollow\n`))
+    }
     assert.equal(run(root).status, 1, 'provider metadata must not be reprocessed as public input')
   } finally { cleanup() }
 })
