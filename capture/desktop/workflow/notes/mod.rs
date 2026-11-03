@@ -328,6 +328,7 @@ impl Session {
                                         rect,
                                         wants_focus,
                                         own_windows.first() == Some(&id),
+                                        flying && own_windows.first() == Some(&id),
                                     );
                                 }
                             }

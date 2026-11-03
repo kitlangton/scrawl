@@ -927,11 +927,11 @@ mod note_anchor_tests {
 }
 
 #[derive(Clone, Copy, Default)]
-struct NoteSurface { id: u32, generation: u64, worker: bool, rect: [i32; 4], focus: bool }
+struct NoteSurface { id: u32, generation: u64, worker: bool, rect: [i32; 4], focus: bool, flying: bool }
 #[derive(Clone, Copy, Default)]
 struct NoteSurfaces { pid: u32, slots: [NoteSurface; 2] }
 static NOTE_SURFACES: std::sync::Mutex<NoteSurfaces> = std::sync::Mutex::new(NoteSurfaces {
-    pid: 0, slots: [NoteSurface { id: 0, generation: 0, worker: false, rect: [0; 4], focus: false }; 2],
+    pid: 0, slots: [NoteSurface { id: 0, generation: 0, worker: false, rect: [0; 4], focus: false, flying: false }; 2],
 });
 
 pub(in crate::capture::desktop) fn register_note_surfaces(pid: u32) {
@@ -943,9 +943,18 @@ pub(in crate::capture::desktop) fn clear_note_surfaces(pid: u32) {
 }
 fn raise_note_surfaces() {
     let state = *NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let ids: Vec<_> = state.slots.iter().filter(|surface| surface.id != 0 &&
+    let mut ids: Vec<_> = state.slots.iter().filter(|surface| surface.id != 0 &&
         x11::window_info(surface.id as isize).is_some_and(|w| w.pid == state.pid && w.on_screen()))
         .map(|surface| surface.id).collect();
+    if state.slots[1].flying && ids.contains(&state.slots[1].id) {
+        // XWayland compositors can route clicks to the focused app through a
+        // transparent window even with an empty input shape. Keep controls above
+        // the visual flight, with the Notes counter above the pill's native rect.
+        let popup = state.slots[1].id;
+        ids.retain(|id| *id != popup);
+        if let Some(pill) = own_window(&PILL_WINDOW) { ids.insert(0, pill); }
+        ids.insert(0, popup);
+    }
     x11::raise_group(&ids);
 }
 
@@ -992,7 +1001,7 @@ pub(in crate::capture::desktop) fn prepare_note_surface(id: u32, pid: u32) -> bo
     x11::prepare_floating(id)
 }
 
-pub(in crate::capture::desktop) fn place_note_surface(id: u32, pid: u32, rect: [i32; 4], focus: bool, popup: bool) {
+pub(in crate::capture::desktop) fn place_note_surface(id: u32, pid: u32, rect: [i32; 4], focus: bool, popup: bool, flying: bool) {
     let index = usize::from(popup);
     {
         let state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1006,7 +1015,7 @@ pub(in crate::capture::desktop) fn place_note_surface(id: u32, pid: u32, rect: [
         let mut state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.pid != pid { return; }
         let slot = &mut state.slots[index];
-        slot.id = id; slot.rect = rect; slot.focus = focus; slot.generation = slot.generation.wrapping_add(1);
+        slot.id = id; slot.rect = rect; slot.focus = focus; slot.flying = flying; slot.generation = slot.generation.wrapping_add(1);
         let start = !slot.worker && linux::hyprland::running();
         slot.worker |= start;
         start
