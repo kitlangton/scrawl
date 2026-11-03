@@ -22,5 +22,14 @@ test('share window requires explicit consent and keeps URLs and other bridges ou
  send('preparing');await expect(page.getByRole('status')).toHaveText('Preparing public link…');
  send('prepared');await page.bringToFront();await expect.poll(()=>lines).toBe('confirm\ndeliver\n');
  send('copied');await expect(page.getByRole('status')).toContainText('Link copied · upload may still be preparing');
- await page.getByRole('button',{name:'Close',exact:true}).click();await expect.poll(()=>lines).toBe('confirm\ndeliver\ncancel\n');
+ // Close quits Electron synchronously. CDP may disconnect after dispatching
+ // the click but before Playwright finishes its action bookkeeping.
+ const closed=page.waitForEvent('close');
+ const exited=new Promise(resolve=>child.once('exit',(code,signal)=>resolve({code,signal})));
+ await page.getByRole('button',{name:'Close',exact:true}).click().catch(error=>{
+  if(!String(error).includes('Target page, context or browser has been closed'))throw error;
+ });
+ await expect.poll(()=>lines).toBe('confirm\ndeliver\ncancel\n');
+ await closed;
+ assert.deepEqual(await exited,{code:0,signal:null});
 });
