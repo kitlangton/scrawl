@@ -1,10 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { validCommand, validSnapshot, popupBounds, badgeBounds } = require('../../electron/notes/protocol.cjs');
+const { validCommand, validSnapshot, popupBounds, badgeBounds, flightBounds } = require('../../electron/notes/protocol.cjs');
 test('notes bridge accepts only bounded note actions, never renderer paths or window commands', () => {
   assert.equal(validCommand({ action: 'save', pin: 1, text: 'Change this\nnot that' }), true);
   for (const message of [{ action: 'save', pin: 1, text: 'x', path: '/tmp/private' },
-    { action: 'windows', ids: [9] }, { action: 'surface', id: 9, rect: [0,0,10,10], focus: true }, { action: 'ready' }, { action: 'open', pin: 1 },
+    { action: 'windows', ids: [9] }, { action: 'surface', id: 9, rect: [0,0,10,10], focus: true }, { action: 'ready' }, { action: 'flight', active: true }, { action: 'open', pin: 1 },
     { action: 'save', pin: 1, text: 'é'.repeat(4097) }, { action: 'delete', pin: -1 }]) {
     assert.ok(!validCommand(message));
   }
@@ -25,7 +25,19 @@ test('popup stays inside work areas including negative display coordinates and s
 
 test('counter falls left or below instead of covering the capsule at a display edge', () => {
   const area = { x: -1280, y: 0, width: 1280, height: 800 };
-  assert.deepEqual(badgeBounds([-1000, 40, 350, 40], area), { x: -644, y: 40 });
-  assert.deepEqual(badgeBounds([-370, 40, 350, 40], area), { x: -526, y: 40 });
-  assert.deepEqual(badgeBounds([-1270, 40, 1260, 40], area), { x: -715, y: 86 });
+  assert.deepEqual(badgeBounds([-1000, 40, 350, 40], area), { x: -634, y: 38 });
+  assert.deepEqual(badgeBounds([-370, 40, 350, 40], area), { x: -502, y: 38 });
+  assert.deepEqual(badgeBounds([-1270, 40, 1260, 40], area), { x: -698, y: 96 });
+});
+
+test('saved-note flight retains its source and destination with bounded geometry', () => {
+  const from = { x: -300, y: 400, width: 332, height: 220 };
+  const badge = { x: 600, y: 30, width: 116, height: 44 };
+  const flight = flightBounds(from, badge);
+  assert.ok(flight.bounds.width > 0 && flight.bounds.height > 0);
+  assert.equal(flight.bounds.x + flight.start[0], from.x + from.width / 2 - 16);
+  assert.equal(flight.bounds.y + flight.start[1], from.y + from.height / 2 - 16);
+  assert.equal(flight.bounds.x + flight.start[0] + flight.delta[0], badge.x + badge.width / 2 - 16);
+  assert.equal(flight.bounds.y + flight.start[1] + flight.delta[1], badge.y + badge.height / 2 - 16);
+  assert.equal(flightBounds(from, { ...badge, x: 10000 }), null);
 });
