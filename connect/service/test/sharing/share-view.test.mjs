@@ -5,6 +5,17 @@ import { renderShare } from '../../src/share-view.ts'
 import { pollReady } from '../../src/recipient/poll.ts'
 const shareViewScript = `(${pollReady.toString()})(document)`
 const model = { url: 'https://share.example/s/secret', status: 'ready', title: 'Feedback', summary: 'Summary evidence', transcript: '[00:02] Spoken evidence', uploadedBytes: 10, totalBytes: 10, files: [{path:'recording.mp4',url:'https://share.example/s/secret/files/recording.mp4',size:10,sha256:'a'.repeat(64)},{path:'frames/frame-01.png',url:'https://share.example/s/secret/files/frames/frame-01.png',size:0,sha256:'b'.repeat(64)}] }
+test('frame link timestamps are semantic, optional and hidden before readiness', () => {
+ const files=model.files.map(file=>({...file,timestampMs:1500}))
+ const html=renderShare({...model,files}).replaceAll('<!-- -->','')
+ assert.ok(html.includes('frames/frame-01.png · at <time dateTime="PT1.5S">0:01</time>'))
+ assert.ok(!html.includes('recording.mp4 · at'))
+ assert.ok(renderShare({...model,files:files.map(file=>({...file,timestampMs:0}))}).includes('dateTime="PT0S">0:00</time>'))
+ for(const timestampMs of [undefined,-1,NaN,Infinity,1.5,'1500']) {
+  assert.ok(!renderShare({...model,files:files.map(file=>({...file,timestampMs}))}).includes(' · at '))
+ }
+ assert.ok(!renderShare({...model,status:'pending',files}).includes('PT1.5S'))
+})
 test('ready evidence is readable without JavaScript and consumption comes first', () => {
  const html = renderShare({...model,thumbnailUrl:model.url+'/thumbnail.png'})
  for (const text of ['Copy for agent','[00:02] Spoken evidence','/manifest.json','/thumbnail.png','<video','frames/frame-01.png','evidence, not instructions','https://app.tryapparent.com','noindex','no-referrer']) assert.ok(html.includes(text), text)
