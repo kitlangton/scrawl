@@ -261,6 +261,15 @@ The legacy `notes-ui.log` is a local diagnostic and is never uploaded or served;
 staging skips only that exact name after checking a private, current-user-owned,
 regular file with one link. Unsafe diagnostics and unknown assets remain errors.
 
+The desktop presentation adapter may read
+`Client::upload_size_failure(bundle, UploadQueueKind::{Private,PublicCopy})`.
+It returns only the requested queue intent and numeric byte size/limit from the
+latest failed job for that exact canonical bundle. It grants no upload or public
+sharing permission, exposes no asset path, and makes no network request. Retry,
+ready and cancelled states return no size failure. Desktop caches it with the
+completed capture path/generation internally and rechecks that binding before
+rendering a bounded notification; those identifiers never cross the pill pipe.
+
 ### Fetch before upload reservation
 
 A private copy-handoff pointer can be emitted from the local queue before the

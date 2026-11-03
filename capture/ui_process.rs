@@ -52,3 +52,28 @@ pub(crate) fn owns(pid: i32) -> bool {
     // this child, a different process reusing its PID cannot become ours.
     child.is_some_and(|child| matches!(child.lock().unwrap().try_wait(), Ok(None)))
 }
+
+/// UI children share the application's focus identity. They must never replace
+/// the last external receiver used by capture context or explicit Paste.
+pub(crate) fn is_external_app(pid: i32) -> bool {
+    pid > 0 && pid != std::process::id() as i32 && !owns(pid)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+    #[test]
+    fn external_receiver_excludes_the_live_owned_renderer() {
+        assert!(!is_external_app(0));
+        assert!(!is_external_app(std::process::id() as i32));
+        let child = Command::new("/bin/cat").stdin(Stdio::piped())
+            .stdout(Stdio::null()).spawn().unwrap();
+        let pid = child.id() as i32;
+        assert!(is_external_app(pid));
+        let mut owned = UiChild::new(child);
+        assert!(!is_external_app(pid));
+        owned.kill().unwrap();
+        owned.wait().unwrap();
+    }
+}

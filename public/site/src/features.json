@@ -25,11 +25,11 @@
       "id": "connect-product-analytics",
       "added": "2026-11-03",
       "group": "settings",
-      "name": "Explicit Connect analytics consent API",
+      "name": "Default-enabled, consent-gated Connect analytics",
       "says": "A signed-in account can explicitly choose optional product analytics through its CSRF-protected consent API. Withdrawal clears queued events and blocks new export admissions; stale opt-ins cannot restore a withdrawn choice. Login alone grants no analytics permission.",
       "status": "main",
       "platforms": ["mac", "linux"],
-      "note": "Collection requires deployment configuration, the database control and affirmative per-account consent. Existing users are not enrolled. Only allowlisted event/quantity metadata is exported; recordings, credentials, keys and public capability links are excluded. Already-authorized sends may finish after withdrawal. Publishing this API does not by itself activate production collection. The browser control and disclosure belong to the dependent rollout slice; independent production acceptance remains required.",
+      "note": "Collector capability defaults enabled with EU ingestion and production labeling; additive migration0007 enables the database control without rewriting0006. Valid project configuration and affirmative per-account consent remain mandatory. Explicit kill switches persist; existing users and withdrawn choices are not enrolled. Only allowlisted event/quantity metadata is exported; recordings, credentials, keys and public capability links are excluded. Already-authorized sends may finish after withdrawal. The browser control/disclosure rollout and independent production acceptance remain separate; source landing alone is not deployment proof.",
       "docs": ["connect/docs/product-analytics.md"]
     },
     {
@@ -427,10 +427,10 @@
       "id": "capsule",
       "group": "record",
       "name": "Capsule",
-      "says": "The capsule shows the time with Finish and Cancel on the display in use; on a Mac it's a native Metal panel, black or glass.",
+      "says": "The capsule shows the time with Finish and Cancel on the display in use.",
       "status": "stable@0.3.4",
       "platforms": ["mac", "linux"],
-      "note": "Linux draws the GPUI capsule; glass needs macOS 26. On main, the Hyprland capsule stays pinned across workspaces without pinning other app windows.",
+      "note": "The Electron replacement candidate uses shared React controls and Rust-owned capture state. Its notification pocket candidate expands vertically at the same width with shared Collapsible/Alert controls; capture-bound upload-size errors offer explicit local Paste while preserving the original; native geometry and handoff proof remain required. Installed routing, native window behavior and capture-output parity require Mac and isolated Linux acceptance before release. The retained native fallback uses GPUI on Linux and Metal on Mac; glass needs macOS 26. Existing Hyprland workspace behavior remains an acceptance requirement.",
       "config": [
         { "key": "nativePill", "value": "false", "does": "Draw the GPUI capsule instead of the Metal one (Mac)" },
         { "key": "pillStyle", "value": "\"black\" | \"glass\"", "does": "The Metal capsule's look" }

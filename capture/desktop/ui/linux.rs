@@ -325,6 +325,34 @@ struct PillDrag {
     panel: [f64; 4],
     pointer_down: [f64; 2],
     display: crate::capture::engine::runtime::screens::Screen,
+    owner: PillDragOwner,
+}
+
+enum PillDragOwner {
+    Native,
+    Electron { pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool>, position: Arc<Mutex<Option<[f64; 4]>>> },
+}
+
+impl PillDragOwner {
+    fn current(&self, id: u32) -> bool {
+        match self {
+            Self::Native => own_window(&PILL_WINDOW) == Some(id),
+            Self::Electron { pid, alive, .. } => alive.load(Ordering::Acquire)
+                && crate::capture::ui_process::owns(*pid as i32)
+                && x11::window_info(id as isize).is_some_and(|window| window.pid == *pid),
+        }
+    }
+    fn needs_pin(&self) {
+        match self {
+            Self::Native => PILL_NEEDS_PIN.store(true, Ordering::Release),
+            Self::Electron { pin, .. } => pin.store(true, Ordering::Release),
+        }
+    }
+    fn moved(&self, rect: [f64; 4]) {
+        if let Self::Electron { position, .. } = self {
+            *position.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(rect);
+        }
+    }
 }
 
 static PILL_DRAG: std::sync::Mutex<Option<PillDrag>> = std::sync::Mutex::new(None);
@@ -332,13 +360,47 @@ static PILL_DRAG: std::sync::Mutex<Option<PillDrag>> = std::sync::Mutex::new(Non
 // after the mouse button is released. The ink overlay may still follow the pointer.
 static PILL_USER_MOVED: AtomicBool = AtomicBool::new(false);
 
+fn drag_left_down(x11_left: bool, kernel: Option<&linux::input::Held>) -> bool {
+    // An XWayland unmap cancels its implicit grab and clears its button mask.
+    // The existing input reader retains the actual held/released device state.
+    kernel.map_or(x11_left, |held| held.left())
+}
+
+#[test]
+fn pill_drag_uses_kernel_button_across_xwayland_remaps() {
+    let mut held = linux::input::Held::default();
+    held.keys.insert(linux::input::code::BTN_LEFT);
+    assert!(drag_left_down(false, Some(&held)), "A remap is not a physical release");
+    held.keys.clear();
+    assert!(!drag_left_down(true, Some(&held)), "A stale X11 press must not prolong dragging");
+    assert!(drag_left_down(true, None));
+    assert!(!drag_left_down(false, None));
+}
+
 /// Only the recording status/clock starts a drag, not the actionable chips.
 pub(in crate::capture::desktop) fn begin_pill_drag() {
-    if !crate::shared::handoff::experiment("movableRecordingControls") { return; }
     let Some(id) = own_window(&PILL_WINDOW) else { return };
-    let Some(pointer) = x11::pointer_state().filter(|p| p.left) else { return };
-    let (x, y) = linux::cursor_position().unwrap_or((pointer.x, pointer.y));
+    begin_owned_pill_drag(id, PillDragOwner::Native, None);
+}
+
+pub(in crate::capture::desktop) fn begin_electron_pill_drag(
+    id: u32, pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool>,
+    position: Arc<Mutex<Option<[f64; 4]>>>, point: [f64; 2],
+) {
+    begin_owned_pill_drag(id, PillDragOwner::Electron { pid, alive, pin, position }, Some(point));
+}
+
+fn begin_owned_pill_drag(id: u32, owner: PillDragOwner, point: Option<[f64; 2]>) {
+    if !crate::shared::handoff::experiment("movableRecordingControls") || !owner.current(id) { return; }
+    let Some(pointer) = x11::pointer_state() else { return };
+    if !drag_left_down(pointer.left, linux::input::held().as_ref()) { return; }
+    let [x, y] = point.unwrap_or_else(|| {
+        let (x, y) = linux::cursor_position().unwrap_or((pointer.x, pointer.y));
+        [x, y]
+    });
     let Some(panel) = x11::geometry(id) else { return };
+    if ![x, y].iter().all(|v| v.is_finite()) || x < panel[0] || y < panel[1]
+        || x >= panel[0] + panel[2] || y >= panel[1] + panel[3] { return; }
     let screens = crate::capture::engine::runtime::screens::displays();
     let centre = [panel[0] + panel[2] / 2.0, panel[1] + panel[3] / 2.0];
     let Some(display) = crate::capture::engine::runtime::screens::index_at(&screens, centre).map(|i| screens[i].clone()) else {
@@ -349,6 +411,7 @@ pub(in crate::capture::desktop) fn begin_pill_drag() {
         panel,
         pointer_down: [x, y],
         display,
+        owner,
     });
 }
 
@@ -356,23 +419,36 @@ pub(in crate::capture::desktop) fn tick_pill_drag() {
     let mut slot = PILL_DRAG.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(drag) = slot.as_ref() else { return };
     let Some(pointer) = x11::pointer_state() else { return };
-    if !pointer.left || own_window(&PILL_WINDOW) != Some(drag.id) {
+    if !drag_left_down(pointer.left, linux::input::held().as_ref()) || !drag.owner.current(drag.id) {
         *slot = None;
         return;
     }
     // XWayland's root pointer freezes above native Wayland windows. Ask the
-    // compositor first; the button state still comes from the X11 press.
+    // compositor first; the existing kernel reader keeps the button state over remaps.
     let (px, py) = linux::cursor_position().unwrap_or((pointer.x, pointer.y));
+    let Some(live) = x11::geometry(drag.id) else { *slot = None; return; };
+    // Electron owns content size. Keep the original grab offset while clamping
+    // against its live dimensions, without restoring a stale warning/reveal size.
+    let panel = [drag.panel[0], drag.panel[1], live[2], live[3]];
     let [x, y] = crate::capture::engine::runtime::screens::drag_pill_origin(
         &drag.display,
-        drag.panel,
+        panel,
         drag.pointer_down,
         [px, py],
     );
     if (x - drag.panel[0]).abs() >= 1.0 || (y - drag.panel[1]).abs() >= 1.0 {
+        // The compositor pointer query may have waited while the child retired
+        // or the user released the button. Refuse a stale move after that wait.
+        if !drag.owner.current(drag.id) || !x11::pointer_state()
+            .is_some_and(|p| drag_left_down(p.left, linux::input::held().as_ref())) {
+            *slot = None;
+            return;
+        }
         PILL_USER_MOVED.store(true, Ordering::Release);
-        x11::place(drag.id, [x, y, drag.panel[2], drag.panel[3]]);
-        PILL_NEEDS_PIN.store(true, Ordering::Release);
+        let rect = [x, y, live[2], live[3]];
+        x11::move_origin(drag.id, [x, y]);
+        drag.owner.moved(rect);
+        drag.owner.needs_pin();
     }
 }
 

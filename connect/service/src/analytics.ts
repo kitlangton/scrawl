@@ -9,7 +9,9 @@ interface Activity {
 const hosts=new Set(['https://eu.i.posthog.com']);
 const events=new Set(['connect_account_created','connect_device_connected','connect_upload_completed','connect_storage_snapshot']);
 const actor=(event: string)=>event==='connect_upload_completed'?'device':event==='connect_storage_snapshot'?'system':'browser';
-const configured=(env:Env)=>env.POSTHOG_ENABLED==='true'&&!!env.POSTHOG_PROJECT_TOKEN&&hosts.has(env.POSTHOG_HOST||'')&&['production','synthetic','development'].includes(env.POSTHOG_ENVIRONMENT||'');
+const host=(env:Env)=>env.POSTHOG_HOST??'https://eu.i.posthog.com';
+const environment=(env:Env)=>env.POSTHOG_ENVIRONMENT??'production';
+const configured=(env:Env)=>(env.POSTHOG_ENABLED===undefined||env.POSTHOG_ENABLED==='true')&&!!env.POSTHOG_PROJECT_TOKEN&&hosts.has(host(env))&&['production','synthetic','development'].includes(environment(env));
 const exclusions=(env:Env)=>new Set((env.POSTHOG_EXCLUDED_ACCOUNT_IDS||'').split(',').map(s=>s.trim()).filter(Boolean));
 export const analyticsNoticeVersion='product-analytics-v1';
 export async function analyticsChoice(env:Env,account:string) {
@@ -89,7 +91,7 @@ export async function flushAnalytics(env: Env) {
    const digest=await hash('apparent-analytics:'+row.consent_id+':'+row.id);
    const uuid=`${digest.slice(0,8)}-${digest.slice(8,12)}-5${digest.slice(13,16)}-a${digest.slice(17,20)}-${digest.slice(20,32)}`;
    return {uuid,event:row.event,timestamp:new Date(row.occurred_at).toISOString(),properties:{
-    distinct_id:'account:'+row.account_id,environment:env.POSTHOG_ENVIRONMENT,actor:actor(row.event),
+    distinct_id:'account:'+row.account_id,environment:environment(env),actor:actor(row.event),
     outcome:'success',$geoip_disable:true,$ip:null,
     ...(row.event==='connect_upload_completed'?{recording_bytes:row.bytes}:{}),
     ...(row.event==='connect_storage_snapshot'?{retained_bytes:row.bytes,retained_recordings:row.captures,pending_reserved_bytes:row.pending_bytes,physical_reserved_bytes:row.physical_bytes}:{}),
@@ -106,7 +108,7 @@ export async function flushAnalytics(env: Env) {
    const allowed=new Map(eligible.results.map(row=>[row.id,row.consent_id]));
    const current=batch.filter((_,i)=>allowed.get(safe[i].id)===safe[i].consent_id);
    if(!current.length)return;
-   const response=await fetch(env.POSTHOG_HOST+'/batch/',{method:'POST',redirect:'manual',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:env.POSTHOG_PROJECT_TOKEN,batch:current}),signal:AbortSignal.timeout(5000)});
+   const response=await fetch(host(env)+'/batch/',{method:'POST',redirect:'manual',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:env.POSTHOG_PROJECT_TOKEN,batch:current}),signal:AbortSignal.timeout(5000)});
    if(!response.ok)return;
    const result=await response.json() as {status?:number|string};if(result.status!==1&&result.status!=='Ok')return;
   }

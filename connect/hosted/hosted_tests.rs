@@ -279,3 +279,9 @@ fn hosted_notes_assets_preserve_semantics_and_exclude_local_ui_log() {
     setup();
     test_support::hosted_notes_assets_preserve_semantics_and_exclude_local_ui_log();
 }
+
+#[test]
+fn hosted_size_failure_projection_separates_queue_intents() {
+    setup();
+    test_support::hosted_size_failure_projection_separates_queue_intents();
+}

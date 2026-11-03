@@ -81,7 +81,10 @@ def preflight():
         binding = by_name.get(name, {})
         if binding.get('type') != kind or binding.get(field) != value:
             raise ValueError('Existing ' + name + ' binding differs from approved input')
-    for name, value in desired['vars'].items():
+    # Existing identity/origins must match before deployment. New analytics
+    # defaults are deployment inputs, not prerequisites on the old version.
+    for name in ('API_ORIGIN', 'SITE_ORIGIN', 'LEGACY_SITE_ORIGIN'):
+        value = desired['vars'][name]
         binding = by_name.get(name, {})
         if binding.get('type') != 'plain_text' or binding.get('text') != value:
             raise ValueError('Existing origin binding differs from approved input')

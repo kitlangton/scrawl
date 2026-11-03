@@ -1,9 +1,11 @@
 # Desktop UI foundation
 
-Shared Electron Settings surfaces and a separate opt-in development window use
-React/TypeScript, shadcn/ui and Tailwind. Installed routing and retained native
-fallbacks are described per surface below. The development window has native
-Linux and macOS checks with their own proof limits. No Windows support.
+Shared Electron Desktop surfaces use React/TypeScript, shadcn/ui and Tailwind.
+Installed Settings routing, the recording pill replacement candidate and retained
+native fallbacks have separate contracts and acceptance gates below. The opt-in
+development window has Linux and macOS checks with their own proof limits;
+foundation evidence does not establish pill, capture or overlay behavior.
+No Windows support.
 
 From the repository root, with Node 22 and npm 10 or newer:
 
@@ -465,6 +467,74 @@ native Copy link retains its refusal for encrypted captures. Close this window t
 roll back. Do not remove the legacy donor or switch installed capsule routing
 until this workflow passes real macOS/isolated Linux acceptance and the routing
 switch is authorized. Socket/controller/browser fixtures are not native proof.
+
+## Recording pill replacement candidate
+
+`pill/index.html`, `src/pill`, `electron/pill` and `../electron_pill` implement the
+shared pill presentation and parent-owned Rust transport. This candidate is
+not evidence of accepted installed/native behavior. Do not remove the old
+pill or treat the synthetic tests as native capture proof.
+
+Rust launches the packaged pill alongside the existing Settings runtime; no
+new config key or off-by-default product feature is introduced. Missing assets,
+startup failure, bounded Hyprland pinning failure or child failure retain/restore the old pill for the remainder
+of the app process. The old pill stays until Electron reports readiness;
+Electron remains hidden until Rust closes the old pill and activates it.
+Linux pin discovery waits for activation acknowledgement; hidden placement and
+uncommitted renderer layout do not start native retries. Failure diagnostics
+retain only phase and activation/readiness/visibility flags.
+Authoritative dismissal hides the native window during renderer loading too;
+hidden-state heartbeats do not repeatedly request native hiding.
+Recording and finalization remain owned by Rust across renderer reload/exit.
+A failed or ambiguous action is never automatically retried. The keyboard
+shortcut and tray remain independent controls.
+
+Before installed routing may land, verify every existing visible workflow on
+macOS and isolated Linux: selection/reveal/switch, Finish/Cancel/Whiteboard,
+input and no-words warnings, actual microphone equalizer where supported,
+processing/finalization failures, completed handoff including drag-to-paste,
+sharing refusals, dismissal, theme/reduced-motion, drag/clamping/new-capture
+placement, click-through, focus return, fullscreen/workspace visibility,
+renderer reload/crash/fallback and shutdown. Inspect actual bundle text,
+contact sheet, full-quality frames and movie for interaction preservation and
+capture inclusion/exclusion. Preserve native glass/config compatibility until
+its replacement is established. Compare response and resource measurements
+with the same native baseline; copied-link and watch-ready timing differ.
+
+Remove old presentations only after those exact-candidate gates pass and their
+consumers/build/package inputs are verified. Until then the native adapters and
+fallback are required. The implementation's remaining parity gaps must be
+closed before enabling the installed replacement through a release.
+
+`tests/pill/smoke.cjs` runs shipped Electron/main/preload/React against an
+explicitly synthetic parent stream. It checks state rendering, stale and
+unavailable action refusal, keyboard cancellation, themes/reduced motion,
+renderer reload and isolation. It does not prove real Rust command dispatch,
+native desktop mechanics, clipboard or capture output.
+
+On Linux, a user-owned runtime without a valid root-owned SUID helper requests
+Chromium's namespace sandbox instead. Kernel restrictions still refuse startup
+and restore the native controls; production never adds `--no-sandbox`. The local
+Xvfb renderer fixtures use that flag for testing and do not establish OS sandbox
+acceptance. Native runtime/namespace proof remains required.
+
+Known expired commands return a new revision and a visible rejection without
+dispatch; an old command never consumes a newer capture's revision. Readiness
+requires the owned React renderer to acknowledge its committed state/layout,
+not just successful HTML loading. Missing renderer assets time out without
+retiring the functioning previous controls. Mac paste gestures temporarily keep
+mouse delivery through release/cancel; programmatic size changes clamp every
+phase to its display. Native glass and Mac capture-exclusion opt-out continue
+on their original presentation, including changes between captures; retiring
+Electron windows remain explicitly excluded from the next stream.
+
+The parent receives `BrowserWindow.getMediaSourceId()`'s native window ID with
+readiness, before activation. Mac compatibility retirement therefore does not
+depend on a window being onscreen. Linux registers the XID for candidate-only
+masking before showing the pill and after each session reset; delivered movies
+and full-quality frames retain their existing inclusion behavior. A Mac route
+that returns to native compatibility stays native until the next app launch,
+avoiding overlapping Electron profiles during asynchronous retirement.
 
 ## Shift-click notes
 

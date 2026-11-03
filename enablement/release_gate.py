@@ -128,6 +128,19 @@ def mac_feed_revision(repo, previous, fetch=api):
     target = fetch(f'repos/{repo}/git/ref/tags/{match[1]}')['object']
     if target['type'] != 'commit':
         raise ValueError('Previous Mac release tag must identify a commit')
+    # Published preview predates the signing-history rewrite. This single
+    # reviewed identity may use its content-identical canonical counterpart.
+    if repo == 'tryapparent/apparent' and match[1] == 'preview-mac-12-1':
+        original = '75dc870c240e415820384ced32f4390f798615bc'
+        canonical = '65cee9e56edca6fe629a93ff9aafcbf35cb8608e'
+        tree = '27dc97069363fa1b6b838a421adc4bbcd6f9c38f'
+        if target['sha'] != original:
+            raise ValueError('Historical Mac release tag changed')
+        for revision in (original, canonical):
+            commit = fetch(f'repos/{repo}/git/commits/{revision}')
+            if commit['sha'] != revision or commit['tree']['sha'] != tree:
+                raise ValueError('Historical Mac source mapping is not content-identical')
+        return canonical
     return target['sha']
 
 

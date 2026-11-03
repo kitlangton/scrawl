@@ -71,6 +71,8 @@ def main():
     shutil.copytree(frontend / "dist/assets", app / "dist/assets",
                     ignore=shutil.ignore_patterns("foundation-*"))
     shutil.copy2(frontend / "dist/settings.html", app / "dist/settings.html")
+    (app / "dist/pill").mkdir()
+    shutil.copy2(frontend / "dist/pill/index.html", app / "dist/pill/index.html")
     shutil.copy2(frontend / "dist/onboarding.html", app / "dist/onboarding.html")
     (app / "package.json").write_text(json.dumps({"name": "apparent-settings", "version": "0.0.0", "main": "electron/settings.cjs"}) + "\n")
     shutil.copytree(frontend / "node_modules/electron/dist", destination / "runtime", symlinks=True)

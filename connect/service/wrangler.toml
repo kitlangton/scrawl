@@ -14,6 +14,10 @@ SITE_ORIGIN = "https://site.example.invalid"
 # LEGACY_SITE_ORIGIN = "https://legacy-site.example.invalid"
 GOOGLE_CLIENT_ID = "CONFIGURE_GOOGLE_CLIENT_ID"
 SHARING_ENABLED = "false" # Explicit single-capture grants are off by default.
+POSTHOG_ENABLED = "true" # Capability only; affirmative analytics consent still required.
+POSTHOG_HOST = "https://eu.i.posthog.com"
+POSTHOG_ENVIRONMENT = "production"
+# POSTHOG_PROJECT_TOKEN is a provider-managed secret, never committed here.
 
 [[d1_databases]]
 binding = "DB"
