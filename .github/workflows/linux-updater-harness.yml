@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/linux-updater-harness.yml'
       - 'capture/desktop/scripts/linux/gui/**'
+      - 'enablement/native/linux/**'
       - 'capture/desktop/scripts/linux/updater/**'
       - 'capture/desktop/scripts/linux/updater/updater-fixture.py'
       - 'capture/desktop/linux/update.rs'
@@ -32,10 +33,10 @@ jobs:
       - name: Test OCR, release fixture and disposable-runner contracts
         run: |
           python3 capture/desktop/scripts/linux/updater/test-updater-gui.py
-          python3 capture/desktop/scripts/linux/gui/test-gui-vm.py
+          python3 enablement/native/linux/test-gui-vm.py
           python3 capture/desktop/scripts/linux/gui/test-capture-smoke.py
       - name: Check driver syntax
         run: |
-          python3 -m py_compile capture/desktop/scripts/linux/gui/gui-vm.py capture/desktop/scripts/linux/gui/gui-vm-reaper.py capture/desktop/scripts/linux/updater/updater-gui.py capture/desktop/scripts/linux/updater/updater-fixture.py capture/desktop/scripts/linux/gui/test-gui-vm.py
+          python3 -m py_compile enablement/native/linux/gui-vm.py enablement/native/linux/gui-vm-reaper.py capture/desktop/scripts/linux/updater/updater-gui.py capture/desktop/scripts/linux/updater/updater-fixture.py enablement/native/linux/test-gui-vm.py
           python3 -m py_compile capture/desktop/scripts/linux/gui/capture-smoke.py capture/desktop/scripts/linux/gui/test-capture-smoke.py
           bash -n capture/desktop/scripts/linux/updater/updater-gui-scenario.sh

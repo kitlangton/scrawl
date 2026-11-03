@@ -48,7 +48,7 @@ cargo test -j 1 --offline -- --test-threads=2
 GITHUB_SHA=$(git rev-parse HEAD) cargo build -j 1 --offline
 ./capture/desktop/scripts/linux/appimage/appimage.sh target/debug/apparent
 python3 capture/desktop/scripts/linux/updater/test-updater-gui.py
-python3 capture/desktop/scripts/linux/gui/test-gui-vm.py
+python3 enablement/native/linux/test-gui-vm.py
 
 python3 capture/desktop/scripts/linux/updater/updater-gui.py \
   --template "$GUI_TEMPLATE/system.qcow2" \
