@@ -18,8 +18,16 @@ function view(value) {
     seen.add(a.id);
     return {id:a.id,label:a.label,enabled:a.enabled,selected:a.selected,primary:a.primary};
   });
+  let pocket=null;
+  if(value.pocket!=null){
+    const p=value.pocket;
+    if(!['info','warning','failure'].includes(p.tone) || typeof p.title!=='string' || !p.title.length || p.title.length>80 ||
+       typeof p.description!=='string' || p.description.length>300 || !Array.isArray(p.actionIds) || p.actionIds.length>3 ||
+       new Set(p.actionIds).size!==p.actionIds.length || p.actionIds.some(id=>!controls.some(a=>a.id===id)))throw Error('Invalid pill pocket');
+    pocket={tone:p.tone,title:p.title,description:p.description,actionIds:[...p.actionIds]};
+  }
   return {revision:value.revision,phase:value.phase,clock:value.clock,label:value.label,warning:value.warning,notice:value.notice??null,
-    reducedMotion:value.reducedMotion,draggable:value.draggable,inputLevel:value.inputLevel??null,actions:controls};
+    reducedMotion:value.reducedMotion,draggable:value.draggable,inputLevel:value.inputLevel??null,pocket,actions:controls};
 }
 function command(current, revision, action) {
   if (!current || revision !== current.revision || !actions.has(action) ||

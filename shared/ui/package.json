@@ -11,7 +11,9 @@
     "./disclosure-menu": "./src/disclosure-menu.tsx",
     "./status.css": "./src/status.css",
     "./tokens.css": "./src/tokens.css",
-    "./window-theme": "./src/window-theme.cjs"
+    "./window-theme": "./src/window-theme.cjs",
+    "./collapsible": "./src/feedback/collapsible.tsx",
+    "./alert": "./src/feedback/alert.tsx"
   },
   "peerDependencies": {
     "react": "^19.2.0"
@@ -21,6 +23,7 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "tailwind-merge": "^3.3.1"
+    "tailwind-merge": "^3.3.1",
+    "@radix-ui/react-collapsible": "^1.1.12"
   }
 }

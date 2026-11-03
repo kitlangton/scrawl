@@ -10,6 +10,7 @@ app.setPath('userData',path.join(app.getPath('appData'),'apparent-pill'));
 nativeTheme.themeSource='system';
 const page=pathToFileURL(path.join(__dirname,'../../dist/pill/index.html')).href;
 let window,current=null,buffer='',pending=false,loaded=false,placed=false,activated=false,pendingPlace=null;
+let footprint={rowY:0,rowHeight:58};
 let lastInput=Date.now(),hovered=false,expected=null,rendererReady=false,readySent=false,renderDeadline=Date.now()+5000,pasteGesture=null,lastFrame='';
 function position(bounds){
  const next={...window.getBounds(),...bounds};
@@ -124,14 +125,18 @@ app.whenReady().then(()=>{
     if(current?.phase!=='hidden' && Date.now()-lastInput>5000){app.exit(1);return;}
     try{
       const area=screen.getDisplayMatching(window.getBounds()).workArea;
-      const size=await window.webContents.executeJavaScript(`(() => {document.documentElement.style.setProperty('--pill-limit', '${area.width}px');const element=document.querySelector('main'),rect=element?.getBoundingClientRect();return rect && {width:Math.ceil(rect.width),height:Math.ceil(rect.height),revision:Number(element.dataset.revision)};})()`);
+      const size=await window.webContents.executeJavaScript(`(() => {document.documentElement.style.setProperty('--pill-limit', '${area.width}px');const element=document.querySelector('main'),rect=element?.getBoundingClientRect();return rect && {width:Math.ceil(rect.width),height:Math.ceil(rect.height),rowHeight:Math.ceil(document.querySelector('.pill-row')?.getBoundingClientRect().height??rect.height),revision:Number(element.dataset.revision)};})()`);
       if(!size || !Number.isFinite(size.width)||!Number.isFinite(size.height))return false;
       const bounds=window.getBounds();
       const width=Math.min(area.width,Math.max(100,Math.ceil(size.width)));
-      const height=Math.min(160,Math.max(58,Math.ceil(size.height)));
-      const before=window.getBounds();
-      if(before.width!==width || before.height!==height)position({x:Math.round(before.x+(before.width-width)/2),y:before.y,width,height});
-      if(process.platform==='linux')window.setShape(geometry.shape(width,height));
+      const height=Math.min(area.height,360,Math.max(58,Math.ceil(size.height)));
+      const rowHeight=Math.min(height,Math.max(56,Math.ceil(size.rowHeight)));
+      const next=geometry.layout(bounds,area,width,height,rowHeight,footprint.rowY);
+      await window.webContents.executeJavaScript(`document.querySelector('main')?.setAttribute('data-pocket-side', '${next.side}')`);
+      if(size.revision!==current?.revision)return false;
+      footprint=next;
+      if(bounds.width!==width || bounds.height!==height || bounds.y!==next.bounds.y)position(next.bounds);
+      if(process.platform==='linux')window.setShape(geometry.shape(width,height,next.rowY,rowHeight));
       return size.revision===current?.revision;
     }catch{app.exit(1);}
   }
@@ -175,7 +180,7 @@ app.whenReady().then(()=>{
   });
   const pointerTimer=setInterval(()=>{
     if(!loaded || window.isDestroyed())return;
-    const inside=window.isVisible() && geometry.contains(screen.getCursorScreenPoint(),window.getBounds());
+    const inside=window.isVisible() && geometry.contains(screen.getCursorScreenPoint(),window.getBounds(),footprint.rowY,footprint.rowHeight);
     if(inside!==hovered){hovered=inside;emit({hovered});}
     if(pasteGesture && Date.now()>pasteGesture.until)pasteGesture=null;
     if(process.platform==='darwin')window.setIgnoreMouseEvents(!inside && !pasteGesture,{forward:true});

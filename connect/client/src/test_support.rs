@@ -1761,6 +1761,38 @@ pub fn hosted_oversized_upload_retains_actionable_details_across_restart() {
 }
 
 #[cfg_attr(test, test)]
+pub fn hosted_size_failure_projection_separates_queue_intents() {
+    let f = Fixture::new();
+    let server = Server::new("");
+    f.authorize(&server.url);
+    let bundle = f.bundle();
+    File::create(bundle.join("recording.mov")).unwrap().set_len(MAX_FILE_BYTES + 1).unwrap();
+    f.client.enqueue(&bundle).unwrap();
+    f.client.process_once().unwrap();
+    let private = f.client.upload_size_failure(&bundle, UploadQueueKind::Private).unwrap();
+    assert_eq!(private, UploadSizeFailure { kind: UploadQueueKind::Private, size: MAX_FILE_BYTES+1, limit: MAX_FILE_BYTES });
+    assert!(f.client.upload_size_failure(&bundle, UploadQueueKind::PublicCopy).is_none());
+    assert!(f.client.upload_size_failure(&f.root.join("absent.apparent"), UploadQueueKind::Private).is_none());
+    let mut job = f.client.jobs().unwrap().pop().unwrap();
+    job.encrypted = true;
+    f.client.save_job(&job).unwrap();
+    assert_eq!(f.client.upload_size_failure(&bundle, UploadQueueKind::Private), Some(private.clone()));
+    assert!(f.client.upload_size_failure(&bundle, UploadQueueKind::PublicCopy).is_none());
+    let mut public = job.clone();
+    public.id = fixture_id(); public.public_copy = true; public.shared = true; public.encrypted = false;
+    public.created += 1;
+    public.size_failure.as_mut().unwrap().size += 7;
+    f.client.save_job(&public).unwrap();
+    assert_eq!(f.client.upload_size_failure(&bundle, UploadQueueKind::Private), Some(private));
+    assert_eq!(f.client.upload_size_failure(&bundle, UploadQueueKind::PublicCopy).unwrap().size, MAX_FILE_BYTES+8);
+    public.status = "ready".into(); f.client.save_job(&public).unwrap();
+    assert!(f.client.upload_size_failure(&bundle, UploadQueueKind::PublicCopy).is_none());
+    job.status = "pending".into(); f.client.save_job(&job).unwrap();
+    assert!(f.client.upload_size_failure(&bundle, UploadQueueKind::Private).is_none());
+    assert_eq!(server.state.lock().unwrap().requests, 0);
+}
+
+#[cfg_attr(test, test)]
 pub fn hosted_malicious_manifests_symlink_output_and_bounds() {
     let f = Fixture::new();
     let server = Server::new("");

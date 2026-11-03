@@ -24,3 +24,27 @@ test('pill input silhouette lets transparent corners through and clamps to negat
  assert.equal(shape.length,58);assert.ok(shape[0].x>0);assert.equal(shape[28].x,0);
  assert.deepEqual(geometry.clamp({...bounds,x:-2000,y:2000},{x:-1920,y:0,width:1920,height:1080}),{x:-1920,y:1022});
 });
+
+test('pocket is bounded, strips private extras, and references authoritative actions',()=>{
+ const pocket={tone:'failure',title:'Too large to upload',description:'Saved locally',actionIds:['finish']};
+ assert.deepEqual(view({...state,pocket:{...pocket,path:'/private'}}).pocket,pocket);
+ assert.equal(view(state).pocket,null);
+ for(const change of [{tone:'success'},{title:'x'.repeat(81)},{description:'x'.repeat(301)},
+ {actionIds:['paste']},{actionIds:['finish','finish']},{actionIds:['shell']}])assert.throws(()=>view({...state,pocket:{...pocket,...change}}));
+ assert.throws(()=>command(view({...state,pocket}),11,'finish'));
+});
+test('vertical pocket preserves leading-row anchor and compound click-through footprint',()=>{
+ const area={x:-1920,y:0,width:1920,height:1080};
+ const before={x:-1200,y:950,width:500,height:58};
+ const open=geometry.layout(before,area,500,220,58);
+ assert.equal(open.side,'up');assert.equal(open.bounds.y+open.rowY,before.y);
+ assert.equal(open.bounds.x,before.x);
+ const closed=geometry.layout(open.bounds,area,500,58,58,open.rowY);
+ assert.deepEqual(closed.bounds,before);
+ for(const [rowY,rowHeight] of [[0,58],[162,58]]){
+   const bounds={x:0,y:0,width:500,height:220}, shape=geometry.shape(500,220,rowY,rowHeight);
+   for(let y=0;y<220;y++)for(const x of [0,10,250,489,499])assert.equal(geometry.contains({x:x+.5,y:y+.5},bounds,rowY,rowHeight),shape.some(r=>y===r.y && x>=r.x && x<r.x+r.width));
+ }
+ const down=geometry.layout({...before,y:34},area,500,220,58);
+ assert.equal(down.side,'down');assert.equal(down.bounds.y,34);
+});
