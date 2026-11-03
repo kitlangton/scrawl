@@ -61,8 +61,13 @@ does not remove configured jobs, implement automatic selection or turn skipped
 checks into passes; existing executable admission remains in force.
 
 Manual/tag Linux releases require the same exact Linux/shared receipt; manual Mac
-previews require both receipts. Their optional `candidate_sha` selects an exact
-verified main ancestor; empty retains the dispatch commit. The selected SHA flows
+previews require both receipts. For Linux Main previews and Mac previews, optional
+`candidate_sha` selects an exact verified main ancestor; empty retains the dispatch
+commit. Linux selection excludes tag, bridge and verification-only modes. When
+that immutable Linux release already exists, Main publication skips packaging
+and repairs the feed using its checked assets. Publication refreshes remote tags
+before feed identity/ancestry validation, including tags created after checkout.
+The selected SHA flows
 through checkout, tags, admission and feed ordering. Linux `verify_only` still permits isolated branch
 packaging without publication. Failed required verification leaves that platform's
 last published version available; fix or revert main and verify the next candidate.

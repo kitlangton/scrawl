@@ -283,6 +283,35 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
         self.assertIn("inputs.verify_only != true", job)
         self.assertNotIn("exit 0", job)
 
+    def test_selected_candidate_reuses_exact_admission_and_rejects_other_modes(self):
+        workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
+        admit = workflow.split('  admit:\n')[1].split('  preview-needed:\n')[0]
+        self.assertIn('REQUEST_SHA: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha || github.sha }}', admit)
+        script = textwrap.dedent(admit.split('        run: |\n')[1])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gate = root / 'python3'
+            gate.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$GATE_ARGS"\n')
+            gate.chmod(0o755)
+            baseline = dict(os.environ, PATH=f'{root}:{os.environ["PATH"]}',
+                            SELECTED_SHA=SHA, REQUEST_SHA=SHA, GITHUB_EVENT_NAME='workflow_dispatch',
+                            GITHUB_REF='refs/heads/main', TAG='', VERIFY_ONLY='false', BRIDGE_COMMIT='',
+                            VERIFY_RUN_ID='', GATE_ARGS=str(root / 'args'))
+            for overrides in ({}, {'VERIFY_ONLY': 'true'}, {'TAG': 'v1.2.3'},
+                              {'BRIDGE_COMMIT': SHA}, {'GITHUB_REF': 'refs/heads/topic'},
+                              {'GITHUB_EVENT_NAME': 'schedule'}):
+                with self.subTest(overrides=overrides):
+                    (root / 'args').unlink(missing_ok=True)
+                    result = subprocess.run(['bash', '-c', script], env=baseline | overrides,
+                                            capture_output=True, text=True)
+                    if overrides:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertFalse((root / 'args').exists())
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual((root / 'args').read_text().splitlines(),
+                                         ['enablement/release_gate.py', '--platform', 'linux', '--sha', SHA])
+
     def test_main_push_and_retry_selection_preserve_non_canceling_serialization(self):
         workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
         triggers = workflow.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
