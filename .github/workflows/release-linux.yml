@@ -31,12 +31,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # Verification cannot replace the pending publisher behind a running Main build.
-  group: release-linux-${{ github.ref }}-${{ inputs.tag }}-${{ inputs.verify_only == true && 'verify-only' || 'publish' }}-${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.event != 'push' || github.event.workflow_run.head_repository.full_name != github.repository) && github.run_id || 'eligible' }}
-  # Finish the running build/publication; GitHub coalesces to the latest pending run.
-  cancel-in-progress: false
-
 jobs:
   admit:
     if: github.repository == 'tryapparent/apparent' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository))
@@ -110,6 +104,10 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
   linux:
+    # Supersede expensive automatic builds only after exact-SHA admission.
+    concurrency:
+      group: release-linux-build-${{ github.ref }}-${{ matrix.arch }}-${{ github.event_name == 'workflow_run' && 'automatic' || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
     needs: [admit, preview-needed]
     if: needs.preview-needed.outputs.build == 'true'
     name: Linux ${{ matrix.arch }}
@@ -220,6 +218,11 @@ jobs:
           path: dist/*
 
   attach-release:
+    # Never interrupt feed replacement or asset publication.
+    concurrency:
+      group: release-linux-publication
+      queue: max
+      cancel-in-progress: false
     if: needs.linux.result == 'success' && inputs.tag != '' && inputs.verify_only != true
     needs: [admit, linux]
     permissions:
@@ -247,6 +250,11 @@ jobs:
           gh release upload "$TAG" dist/* --clobber
 
   main-preview:
+    # Never interrupt feed replacement or asset publication.
+    concurrency:
+      group: release-linux-publication
+      queue: max
+      cancel-in-progress: false
     if: needs.linux.result == 'success' && (github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main) && inputs.tag == '' && github.ref == 'refs/heads/main' && inputs.verify_only != true
     needs: [admit, linux]
     permissions:
@@ -275,8 +283,13 @@ jobs:
           GITHUB_SHA="$CANDIDATE_SHA" APPARENT_VERSION="$version" python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py
 
   main-feed:
+    # Never interrupt feed replacement or asset publication.
+    concurrency:
+      group: release-linux-publication
+      queue: max
+      cancel-in-progress: false
     # Also repair metadata after an interrupted publication whose immutable v2
-    # release already exists. This job shares the workflow publication lock.
+    # release already exists. This job shares the noncanceling publication lock.
     needs: [admit, preview-needed, linux, main-preview]
     if: always() && needs.admit.outputs.sha != '' && (needs.main-preview.result == 'success' || needs.preview-needed.outputs.build == 'false') && (github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main) && inputs.tag == '' && inputs.bridge_commit == '' && github.ref == 'refs/heads/main' && inputs.verify_only != true
     permissions:
@@ -301,6 +314,11 @@ jobs:
         run: node --experimental-strip-types capture/desktop/scripts/linux/maintenance/main-feed.ts "$CANDIDATE_SHA"
 
   signing-bridge:
+    # Never interrupt feed replacement or asset publication.
+    concurrency:
+      group: release-linux-publication
+      queue: max
+      cancel-in-progress: false
     needs: admit
     if: inputs.bridge_commit != '' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     permissions:
