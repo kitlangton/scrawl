@@ -2150,9 +2150,10 @@ fn snapshot(bundle: &Path, stage: &Path) -> Result<Vec<Asset>> {
             );
             continue;
         }
-        if name == ".publication.lock" {
-            // Engine keeps this empty coordination inode after publication. It
-            // is local machinery, never capture evidence or a remotely served asset.
+        if matches!(name.as_str(), ".publication.lock" | "microphone-off") {
+            // Engine retains empty local coordination/recording-intent markers.
+            // microphoneCapture in apparent.json already carries the semantic
+            // microphone choice; neither marker is a remotely served asset.
             let metadata = fs::symlink_metadata(entry.path())?;
             ensure!(
                 metadata.is_file()
@@ -2160,7 +2161,11 @@ fn snapshot(bundle: &Path, stage: &Path) -> Result<Vec<Asset>> {
                     && metadata.mode() & 0o022 == 0
                     && metadata.nlink() == 1
                     && metadata.len() == 0,
-                "Unsafe bundle publication lock"
+                if name == "microphone-off" {
+                    "Unsafe local microphone-off marker"
+                } else {
+                    "Unsafe bundle publication lock"
+                }
             );
             continue;
         }
@@ -2323,6 +2328,7 @@ mod tests {
             "frames/a\\b.png",
             "credentials.json",
             "notes-ui.log",
+            "microphone-off",
         ] {
             assert!(!asset_path(path), "accepted {path}");
         }

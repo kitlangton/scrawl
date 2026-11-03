@@ -7,6 +7,7 @@ import {mkdir, mkdtemp, readFile, writeFile, readdir, realpath, rm, cp} from 'no
 import {openSync, closeSync, existsSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
+import {captureFailureReceipt} from './share-receipt.ts';
 assert.equal(process.env.APPARENT_CONNECT_NATIVE_CI, '1', 'Explicit native proof opt-in required');
 assert.equal(process.platform, 'darwin', 'This case uses the hosted Mac owned-window driver');
 if (process.platform === 'darwin') {
@@ -44,6 +45,18 @@ async function stop(p) {
     }, 5000); })]); await closed; } finally { clearTimeout(timer); }
   }
   children.delete(p);
+}
+async function retainBundle(bundle) {
+  // Artifact allowlist is independent of upload admission. Never retain UI diagnostics.
+  const target = join(evidence, 'synthetic.apparent'); await mkdir(target, {mode: 0o700});
+  for (const name of await readdir(bundle)) {
+    if (/^(apparent\.json|notes\.json|summary\.md|contact-sheet(?:-full)?\.png|recording\.(mp4|mov)|audio\.wav|timeline\.json|finish-trace\.json)$/.test(name))
+      await cp(join(bundle, name), join(target, name));
+    else if (name === 'frames' || name === 'frames-full') {
+      await mkdir(join(target, name), {mode: 0o700});
+      for (const file of await readdir(join(bundle, name))) if (/^frame-[0-9]+\.png$/.test(file)) await cp(join(bundle, name, file), join(target, name, file));
+    }
+  }
 }
 try {
 // Load platform-native Worker dependencies after establishing failure evidence.
@@ -106,7 +119,10 @@ function cli(args:string[], onData:(text:string)=>void = () => {}):Promise<strin
     p.stderr.resume(); // Native errors can contain paths; expose only the operation and exit below.
     p.once('error', () => { clearTimeout(timeout); clearTimeout(hardTimeout); children.delete(p); reject(new Error(`Native ${args[0]} could not start`)); });
     p.once('close', code => { clearTimeout(timeout); clearTimeout(hardTimeout); children.delete(p);
-      if (code === 0) resolve(stdout); else reject(new Error(`Native ${args[0]} failed (${code})`)); });
+      if (code === 0) resolve(stdout); else {
+        if (args[0] === 'capture') report.captureFailure = captureFailureReceipt(args[1], stdout);
+        reject(new Error(`Native ${args[0]} failed (${code})`));
+      } });
   });
 }
 runDiagnosticUpload = bundle => cli(['upload', bundle]);
@@ -155,18 +171,7 @@ function popupPID() {
   });
   assert(matches.length <= 1, 'Multiple installed share children'); return matches.length ? Number(matches[0]) : null;
 }
-async function retainBundle(bundle) {
-  // Artifact allowlist is independent of upload admission. Never retain UI diagnostics.
-  const target = join(evidence, 'synthetic.apparent'); await mkdir(target, {mode: 0o700});
-  for (const name of await readdir(bundle)) {
-    if (/^(apparent\.json|notes\.json|summary\.md|contact-sheet(?:-full)?\.png|recording\.(mp4|mov)|audio\.wav|timeline\.json|finish-trace\.json)$/.test(name))
-      await cp(join(bundle, name), join(target, name));
-    else if (name === 'frames' || name === 'frames-full') {
-      await mkdir(join(target, name), {mode: 0o700});
-      for (const file of await readdir(join(bundle, name))) if (/^frame-[0-9]+\.png$/.test(file)) await cp(join(bundle, name, file), join(target, name, file));
-    }
-  }
-}
+
 async function openPopup() {
   ui('click', desktop.pid, 'Copy link');
   const pid = await until(popupPID, 10, 'Installed share child absent');
@@ -281,6 +286,16 @@ finally {
     if (!report.videoDecodes) { await rm(video, {force: true}); report.videoLimit = 'Native recorder did not produce decodable video; owned-window screenshots retained'; }
   }
   for (const child of [...children]) { try { await stop(child); } catch { cleanupErrors.push('owned child cleanup failed'); } }
+  // A failed finalizer can still leave useful synthetic media. Preserve the
+  // existing asset allowlist only after its writers stop, before deleting home.
+  if (!report.passed && !capturedBundle && !cleanupErrors.length) {
+    try {
+      const entries = (await readdir(join(home, 'captures'))).filter(name => /^apparent-[0-9]+-[a-f0-9]+-[0-9]+\.apparent$/.test(name));
+      if (entries.length === 1) {
+        await retainBundle(join(home, 'captures', entries[0])); report.failedCaptureArtifactsRetained = true;
+      }
+    } catch { report.failedCaptureArtifactsUnavailable = true; }
+  }
   if (log !== undefined) { try { closeSync(log); } catch { cleanupErrors.push('log close failed'); } }
   if (server?.listening) { server.closeAllConnections(); await new Promise(r => server.close(r)); }
   if (service) { try { await service.close(); } catch { cleanupErrors.push('local Worker cleanup failed'); } }

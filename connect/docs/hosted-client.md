@@ -255,6 +255,8 @@ it is not live Google, deployed Worker, Electron routing or native platform proo
 The independent package tests also exercise renewable account/upload/fetch/share/progress calls, proactive expiry and unexpected 401, separate-process single ownership, transient/permanent refresh failures, scope/grant mismatch, delayed refresh versus disable/logout/new generation, secret-free status, expired-grant revocation, offline logout and process exit after durable response before credential publication. These are synthetic protocol tests, not Better Auth/browser integration evidence; candidate backend-client integration and macOS/Linux native GUI checks remain separate gates.
 
 Saved `notes.json` is semantic capture data and transfers with the recording.
+The empty, owned, single-link, non-writable-by-others `microphone-off` marker stays
+local; its meaning already transfers as `microphoneCapture: off` in capture metadata.
 The legacy `notes-ui.log` is a local diagnostic and is never uploaded or served;
 staging skips only that exact name after checking a private, current-user-owned,
 regular file with one link. Unsafe diagnostics and unknown assets remain errors.
