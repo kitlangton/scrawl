@@ -162,7 +162,7 @@ async function until(probe, seconds, message) {
   do { const result = await probe(); if (result) return result; await delay(200); } while (Date.now() < end);
   throw Error(message);
 }
-function installedChildPID(surface: 'pill' | 'share') {
+function installedChildPID(surface: 'pill' | 'share' | 'notes') {
   const pids = spawnSync('/usr/bin/pgrep', ['-P', String(desktop.pid)], {encoding: 'utf8'}).stdout.trim().split(/\s+/).filter(Boolean);
   const expected = binary.slice(0, binary.indexOf('.app/') + 5);
   const matches = pids.filter(pid => {
@@ -194,6 +194,16 @@ async function openPopup() {
   const id = createHash('sha256').update(output).digest('hex').slice(0, 32);
   const started = JSON.parse(await cli(['capture', 'start', '--request-id', id, '--wait', '--timeout', '20']));
   assert.equal(started.capture_id, id); assert.equal(started.status, 'recording');
+  // Capture admission precedes asynchronous notes renderer startup. Do not
+  // spend the unchanged six-second finish barrier on cold renderer startup.
+  await until(() => {
+    const notes = installedChildPID('notes');
+    if (!notes) return false;
+    try { ui('inspect', notes, 'Notes'); return true; } catch { return false; }
+  }, 30, 'Installed notes renderer not ready before capture stop');
+  const recording = JSON.parse(await cli(['capture', 'inspect', id]));
+  assert.equal(recording.capture_id, id); assert.equal(recording.status, 'recording');
+  report.notesReadyBeforeStop = true;
   await delay(2500);
   const saved = JSON.parse(await cli(['capture', 'stop', id, '--wait', '--timeout', '60']));
   assert.equal(saved.capture_id, id); assert.equal(saved.status, 'saved');
