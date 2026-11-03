@@ -293,8 +293,11 @@ fn settings_health_renews_without_fabricating_local_expiry_success() {
     let server = RenewalServer::new("");
     renewable(&f, &server.url);
     let local = f.client.settings_snapshot().unwrap();
-    assert!(local.reauthorization_required);
+    assert!(!local.reauthorization_required, "a valid refresh grant must not ask the user to sign in again");
     assert!(!local.uploads_enabled);
+    assert!(local.renewal_required);
+    let restarted = Client::new(provider(f.client.config.clone()));
+    assert_eq!(restarted.settings_snapshot().unwrap(), local);
     assert_eq!(server.requests.load(Ordering::SeqCst), 0);
     assert_eq!(
         f.client.settings_health(&|| true),
@@ -303,7 +306,28 @@ fn settings_health_renews_without_fabricating_local_expiry_success() {
     let renewed = f.client.settings_snapshot().unwrap();
     assert!(renewed.connected && renewed.uploads_enabled);
     assert!(!renewed.reauthorization_required);
+    assert!(!renewed.renewal_required);
     assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn settings_expired_refresh_or_revoked_grant_requires_reapproval() {
+    for revoked in [false, true] {
+        let f = Fixture::new();
+        let server = RenewalServer::new("");
+        renewable(&f, &server.url);
+        let mut credential = f.client.stored_credential("upload").unwrap();
+        if revoked {
+            credential.auth_required = true;
+        } else {
+            credential.refresh_expires_at = Some(now().saturating_sub(1));
+        }
+        atomic_json(&f.client.state.join("upload.credential"), &credential).unwrap();
+        let snapshot = f.client.settings_snapshot().unwrap();
+        assert!(snapshot.reauthorization_required);
+        assert!(!snapshot.renewal_required && !snapshot.uploads_enabled);
+        assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[test]

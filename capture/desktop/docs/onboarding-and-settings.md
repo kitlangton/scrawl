@@ -162,6 +162,12 @@ already uploaded data. Cancelled jobs cannot silently resume after a later login
 **Check connection** performs a bounded authenticated background probe; ordinary
 Settings refresh reads local state only. Offline, reauthorization, denied/expired
 approval and local storage failures retain local capture and offer recovery.
+An expired access token with a valid refresh grant shows **Connection needs a
+refresh**, with **Check connection** directly on the card. It does not ask for
+another sign-in or claim that renewal has completed. Checking renews access
+through the existing client; expired refresh grants and revoked authorization
+still require sign-in. Reopening Settings or updating the app preserves this
+distinction without making a network request merely to display the page.
 If a disable/disconnect could not finish because local state was busy, uploads
 remain blocked across restart. Use Disable uploads or Disconnect again to finish;
 do not delete the client's pending revocation files. Failed state writes are not

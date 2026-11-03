@@ -36,6 +36,12 @@ plus the candidate's pinned age, ed25519-dalek and zeroize dependencies. It does
 GStreamer, Swift helper or root build script. Runtime curl and system SHA-256
 requirements still apply; supported platforms remain macOS and Linux.
 
+Local Settings distinguishes expired renewable access from reauthorization:
+`renewal_required` offers Check connection without another login, while
+`reauthorization_required` remains reserved for unusable refresh/legacy grants.
+The local snapshot still does not certify renewal or enable uploads on an expired
+access token. The explicit health action performs renewal through normal transport.
+
 ### Explicit public-copy admission
 
 `hostedSharing` is available by default. An explicit `experiments.hostedSharing=false` opt-out remains respected. Completed captures show Copy link beside Paste. Availability does not sign in, grant upload consent, publish recordings or change private encryption; each selected public copy still requires the confirmation below. The service must separately permit sharing grants.

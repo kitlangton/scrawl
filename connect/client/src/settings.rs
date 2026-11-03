@@ -9,6 +9,7 @@ pub struct Snapshot {
     pub connected: bool,
     pub uploads_enabled: bool,
     pub reauthorization_required: bool,
+    pub renewal_required: bool,
 }
 #[derive(Clone)]
 pub struct Approval {
@@ -158,7 +159,11 @@ impl Client {
             reauthorization_required: upload
                 .as_ref()
                 .or(read.as_ref())
-                .is_some_and(|grant| !Self::settings_usable(grant)),
+                .is_some_and(|grant| !grant.usable()),
+            renewal_required: upload
+                .as_ref()
+                .or(read.as_ref())
+                .is_some_and(|grant| grant.usable() && !Self::settings_usable(grant)),
             server,
             connected,
         })

@@ -51,6 +51,12 @@ impl Controller {
             p.detail = "You’re still signed in. New captures stay local.".into();
             p.artwork = false;
         }
+        if snapshot.is_some_and(|s| s.renewal_required) {
+            p.headline = "Connection needs a refresh.".into();
+            p.detail = "You're still signed in. Check connection to renew this computer's access. Local recording still works.".into();
+            p.tone = Tone::Warning;
+            p.compact = false; p.artwork = false;
+        }
         if let Some(health) = self.health {
             match health {
                 Health::Offline => {
@@ -115,7 +121,8 @@ impl Controller {
         }
         // Preserve the backend's emergency/retry controls, including while state
         // readback is unavailable. The account control asserts no email identity.
-        p.account_menu = snapshot.is_some_and(|s| s.connected || s.reauthorization_required)
+        let renewal = snapshot.is_some_and(|s| s.renewal_required);
+        p.account_menu = snapshot.is_some_and(|s| s.connected || s.reauthorization_required || s.renewal_required)
             || view.buttons.iter().any(|b| matches!(b.command, Command::Disable | Command::Disconnect));
         p.shared_links_url = self.backend.shared_links_url();
         if p.shared_links_url.is_some() {
@@ -145,7 +152,8 @@ impl Controller {
                     other => other,
                 };
             }
-            if matches!(b.command, Command::Check | Command::RequestDisable | Command::RequestDisconnect | Command::Disable | Command::Disconnect) && !self.disabling() {
+            if matches!(b.command, Command::Check | Command::RequestDisable | Command::RequestDisconnect | Command::Disable | Command::Disconnect) && !self.disabling()
+                && !(renewal && b.command == Command::Check) {
                 p.menu_actions.push(b.command);
             }
         }

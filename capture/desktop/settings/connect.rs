@@ -75,6 +75,7 @@ pub struct Snapshot {
     pub connected: bool,
     pub uploads_enabled: bool,
     pub reauthorization_required: bool,
+    pub renewal_required: bool,
 }
 
 /// Only public device-flow presentation data. The adapter must use the client's
@@ -471,6 +472,9 @@ impl Controller {
             if snapshot.reauthorization_required {
                 view.status = "Sign-in required".into();
                 view.detail = "This computer's authorization has expired or been revoked. Sign in again to reconnect; local captures still work.".into();
+            } else if snapshot.renewal_required {
+                view.status = "Connection needs a refresh".into();
+                view.detail = "You're still signed in. Check connection to renew this computer's access; local captures still work.".into();
             } else if snapshot.uploads_enabled {
                 view.status = "Uploads on".into();
                 view.detail = "New captures can upload privately to your Connect account.".into();
@@ -567,12 +571,13 @@ impl Controller {
         } else {
             let uploads = self.snapshot.as_ref().is_some_and(|s| s.uploads_enabled);
             let connected = self.snapshot.as_ref().is_some_and(|s| s.connected);
+            let renewal = self.snapshot.as_ref().is_some_and(|s| s.renewal_required);
             let reauthorize = self
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.reauthorization_required)
                 || self.health == Some(Health::AuthRequired);
-            if !uploads || reauthorize {
+            if (!uploads && !renewal) || reauthorize {
                 view.buttons.push(button(
                     Command::Connect,
                     if reauthorize {
@@ -585,14 +590,14 @@ impl Controller {
                     self.snapshot.is_some() && self.retry_disable.is_none(),
                 ));
             }
-            if connected || reauthorize || self.error.is_some() || self.local_error.is_some() {
+            if connected || renewal || reauthorize || self.error.is_some() || self.local_error.is_some() {
                 view.buttons.push(button(
                     Command::Check,
                     "Check connection",
                     self.snapshot.is_some(),
                 ));
             }
-            if uploads || self.retry_disable == Some(false) || self.local_error.is_some() {
+            if uploads || renewal || self.retry_disable == Some(false) || self.local_error.is_some() {
                 view.buttons.push(button(
                     Command::Disable,
                     if self.retry_disable == Some(false) {
@@ -604,6 +609,7 @@ impl Controller {
                 ));
             }
             if connected
+                || renewal
                 || reauthorize
                 || self.retry_disable == Some(true)
                 || self.local_error.is_some()

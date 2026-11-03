@@ -97,6 +97,7 @@ impl settings_controller::Backend for SettingsBackend {
                 connected: state.connected,
                 uploads_enabled: state.uploads_enabled,
                 reauthorization_required: state.reauthorization_required,
+                renewal_required: state.renewal_required,
             })
             .map_err(settings_error)
     }

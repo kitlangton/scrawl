@@ -19,11 +19,11 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
   const view = () => {
     const buttons = stage === 'initial' ? [button('connect', 'Connect')]
       : stage === 'consent' ? [button('allow', 'Allow & continue'), button('cancel', 'Not now')]
-      : stage === 'connected' ? [button('check','Check connection'), button('request-disable','Turn off uploads'), button('request-disconnect','Disconnect this computer')]
+      : ['connected', 'renewal'].includes(stage) ? [button('check','Check connection'), button('request-disable','Turn off uploads'), button('request-disconnect','Disconnect this computer')]
       : stage === 'disable-confirm' ? [button('disable','Turn off uploads'),button('cancel','Keep uploads on')]
       : stage === 'off' ? [button('connect','Enable uploads'),button('check','Check connection'),button('request-disconnect','Disconnect this computer')]
       : [button('open-browser', 'Open browser'), button('cancel', 'Cancel')];
-    const headline = {initial:'Help others see what you mean.',consent:'Allow new capture uploads?',approval:'Finish connecting in your browser.',connected:'You’re connected.',off:'Uploads are off.','disable-confirm':'Turn uploads off?'}[stage];
+    const headline = {initial:'Help others see what you mean.',consent:'Allow new capture uploads?',approval:'Finish connecting in your browser.',connected:'You’re connected.',renewal:'Connection needs a refresh.',off:'Uploads are off.','disable-confirm':'Turn uploads off?'}[stage];
     return { title:'Apparent Connect', status:stage === 'connected' ? 'Uploads on' : 'Not connected',
       detail:stage === 'consent' ? 'Explicit upload consent required.' : 'Synthetic transport fixture.',
       server:'https://api.example.com', note:'No old captures or public links.',
@@ -33,8 +33,8 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
       presentation:{tone:stage === 'connected' ? 'success' : stage === 'approval' ? 'progress' : stage === 'disable-confirm' ? 'warning' : 'neutral',
         headline,detail:stage === 'consent' ? 'Explicit upload consent required.' : 'Synthetic transport fixture.',note:'',
         artwork:['initial','consent','approval','connected'].includes(stage),compact:stage === 'connected',
-        accountMenu:['connected','off'].includes(stage),buttons,
-        menuActions:buttons.filter(b=>['check','request-disable','request-disconnect'].includes(b.command)).map(b=>b.command),sharedLinksUrl:null }
+        accountMenu:['connected','renewal','off'].includes(stage),buttons,
+        menuActions:buttons.filter(b=>['check','request-disable','request-disconnect'].includes(b.command) && !(stage === 'renewal' && b.command === 'check')).map(b=>b.command),sharedLinksUrl:null }
     };
   };
   const server = net.createServer(socket => {
@@ -57,6 +57,7 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
         if (request.command === 'cancel') stage = stage === 'disable-confirm' ? 'connected' : 'initial';
         if (request.command === 'request-disable') stage = 'disable-confirm';
         if (request.command === 'disable') stage = 'off';
+        if (request.command === 'check' && stage === 'renewal') stage = 'connected';
         const response = { connect: { ...view(), privateCredential: 'synthetic-secret' },
           ...(request.command === 'open-browser' ? { openUri: view().verificationUri } : {}) };
         if (request.command && request.command === holdAction) { hold = () => socket.write(JSON.stringify(response) + '\n'); continue; }
@@ -110,6 +111,11 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
   stage = 'connected';
   await expect(card.getByText('You’re connected.', {exact:true})).toBeVisible();
   await expect(card.locator('[data-tone="success"]')).toHaveCSS('border-inline-start-color','rgb(20, 107, 67)');
+  stage = 'renewal';
+  await expect(card.getByText('Connection needs a refresh.', {exact:true})).toBeVisible();
+  await expect(card.getByRole('button', {name:'Connect', exact:true})).toHaveCount(0);
+  await card.getByRole('button', {name:'Check connection', exact:true}).click();
+  await expect(card.getByText('You’re connected.', {exact:true})).toBeVisible();
   await card.getByRole('button',{name:'Account and connection options'}).click();
   await card.getByRole('button',{name:'Turn off uploads',exact:true}).click();
   await expect(card.getByText('Turn uploads off?',{exact:true})).toBeVisible();
