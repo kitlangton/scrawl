@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Ubuntu 24.04 build/packaging dependencies, shared by check and release jobs.
 set -euo pipefail
+# Hosted images prefer Azure even when it trickles rather than failing over.
+# Use their existing Ubuntu archive alternative first; retain every source,
+# signature check and package. Local machines and ports-based ARM sources stay
+# unchanged. This file belongs to the disposable hosted runner image.
+if [[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted && -f /etc/apt/apt-mirrors.txt ]]; then
+  sudo sed -i \
+    -e '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|s/priority:1/priority:2/' \
+    -e '\|^https://archive\.ubuntu\.com/ubuntu/|s/priority:2/priority:1/' \
+    /etc/apt/apt-mirrors.txt
+fi
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   build-essential pkg-config cmake ninja-build clang \
