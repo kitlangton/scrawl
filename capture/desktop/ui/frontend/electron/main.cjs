@@ -4,7 +4,7 @@ const os = require('node:os');
 const {PublicShare} = require('./public-share.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference, microphoneEnabled } = require('./runtime.cjs');
+const { drawing, readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference, microphoneEnabled } = require('./runtime.cjs');
 const { ConnectSettings, actions } = require('./connect.cjs');
 const followWindowTheme = require('@apparent/ui/window-theme');
 nativeTheme.themeSource = 'system';
@@ -28,7 +28,7 @@ app.whenReady().then(() => {
     title: connectSettings ? 'Apparent Settings — Connect' : settings ? 'Apparent Settings — Storage' : 'Apparent — UI foundation',
     backgroundColor: followWindowTheme.backgroundColor(nativeTheme),
     webPreferences: {
-      preload: path.join(__dirname, connectSettings ? 'connect-preload.cjs' : settings ? 'storage-preload.cjs' : 'preload.cjs'),
+      preload: path.join(__dirname, connectSettings ? 'preloads/connect.cjs' : settings ? 'preloads/storage.cjs' : 'preload.cjs'),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
       webSecurity: true, spellcheck: false,
     },
@@ -50,6 +50,7 @@ app.whenReady().then(() => {
     if (window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame ||
         event.senderFrame.url !== page || args.length !== 0) throw new Error('Forbidden bridge request');
   };
+  let drawingRevision;
   const validateStorage = (event, args) => {
     if (connectSettings) throw new Error('Unavailable in Connect Settings');
     validate(event, args);
@@ -99,7 +100,7 @@ app.whenReady().then(() => {
   let referencePending;
   let retentionRevision;
   let retentionRead;
-  const invalidate = () => { generation += 1; storageVersion += 1; reference = undefined; retentionRevision = undefined; connect.close(); publicShare.close(); };
+  const invalidate = () => { generation += 1; drawingRevision = undefined; storageVersion += 1; reference = undefined; retentionRevision = undefined; connect.close(); publicShare.close(); };
   window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) invalidate(); });
   window.webContents.on('will-navigate', invalidate);
   window.webContents.on('render-process-gone', invalidate);
@@ -272,6 +273,25 @@ app.whenReady().then(() => {
         const result = await storagePreference(os.homedir(), `${operation}retention`, { expected, preset });
         return token === generation ? projectRetention(result) : { status: 'cancelled' };
       } finally { storageVersion += 1; mutation = false; }
+    });
+  }
+  let drawingPending = false;
+  for (const operation of ['read', 'undo']) {
+    ipcMain.handle(`apparent:${operation}-drawing`, async (event, ...args) => {
+      validateFoundation(event, args);
+      if (drawingPending) return { status: 'error', code: 'app_busy' };
+      if (operation === 'undo' && !drawingRevision) return { status: 'error', code: 'refresh_required' };
+      const expected = drawingRevision;
+      drawingRevision = undefined;
+      drawingPending = true;
+      const token = generation;
+      try {
+        const result = await drawing(os.homedir(), operation, expected);
+        if (token !== generation) return { status: 'cancelled' };
+        if (result.status !== 'connected') return result;
+        drawingRevision = result.revision;
+        return { status: 'connected', active: result.revision !== null, strokes: result.strokes };
+      } finally { drawingPending = false; }
     });
   }
   ipcMain.handle('apparent:read-runtime-state', (event, ...args) => {

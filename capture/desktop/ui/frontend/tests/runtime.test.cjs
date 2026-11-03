@@ -188,6 +188,19 @@ for (const [reply, expected] of [
   assert.deepEqual(await captureLocation(f.home), expected);
 });
 
+test('drawing undo binds recording identity and strips unexpected state', async (t) => {
+  const { drawing } = require('../electron/runtime.cjs');
+  const f = await fixture(t, '{"drawing":{"revision":"0123456789abcdef","strokes":2,"private":"hidden"}}\n');
+  assert.deepEqual(await drawing(f.home, 'undo', '0123456789abcdef'), { status: 'connected', revision: '0123456789abcdef', strokes: 2 });
+  const request = JSON.parse(f.requests[0]);
+  assert.equal(request.drawing, 'undo');
+  assert.equal(request.expected, '0123456789abcdef');
+  assert.ok(request.deadline > 0);
+  await assert.rejects(async () => drawing(f.home, 'undo', 'wrong'));
+  const stale = await fixture(t, '{"error":"conflict"}\n');
+  assert.deepEqual(await drawing(stale.home, 'undo', '0123456789abcdef'), { status: 'error', code: 'conflict' });
+});
+
 const {PublicShare} = require('../electron/public-share.cjs');
 test('public share requires observed selection, retains operation in main and delivers once',async t=>{
  const operation='a'.repeat(32);
