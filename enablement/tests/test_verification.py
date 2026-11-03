@@ -437,8 +437,8 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
     def test_supported_ci_jobs_have_ten_minute_execution_budget(self):
         import re
         for workflow in (SCRIPT.parents[1] / '.github/workflows').glob('*.yml'):
-            if workflow.name in ('release-windows.yml', 'runtime-budget.yml'):
-                continue  # Retired platform and waiting-only controller are not workload jobs.
+            if workflow.name == 'release-windows.yml':
+                continue  # Retired platform is outside the supported CI contract.
             for job in re.split(r'^  [\w-]+:\n', workflow.read_text(), flags=re.M)[1:]:
                 if re.search(r'^    runs-on:', job, re.M):
                     self.assertIn('    timeout-minutes: 10\n', job, str(workflow))
