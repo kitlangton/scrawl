@@ -92,7 +92,9 @@ func perform() throws {
         let hitDeadline = Date().addingTimeInterval(2)
         repeat {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-            if NSWindow.windowNumber(at: appKitPoint, belowWindowWithWindowNumber: 0) == Int(id) { break }
+            let pointer = NSEvent.mouseLocation
+            if hypot(pointer.x - appKitPoint.x, pointer.y - appKitPoint.y) <= 2,
+               NSWindow.windowNumber(at: appKitPoint, belowWindowWithWindowNumber: 0) == Int(id) { break }
         } while Date() < hitDeadline
         let moved = CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]] ?? []
         try check(moved.count == 1 && (moved[0][kCGWindowOwnerPID as String] as? Int32) == pid,
@@ -109,6 +111,8 @@ func perform() throws {
             "pointerAfter": [pointerAfter.x, pointerAfter.y]]
         let data = try JSONSerialization.data(withJSONObject: diagnostic, options: [.sortedKeys])
         print(String(decoding: data, as: UTF8.self))
+        try check(hypot(pointerAfter.x - appKitPoint.x, pointerAfter.y - appKitPoint.y) <= 2,
+                  "Pointer did not reach the validated target")
         try check(hitWindow == Int(id), "Mouse-down target differs from owned window (expected \(id), hit \(hitWindow))")
         for type in [CGEventType.leftMouseDown, .leftMouseUp] {
             CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)!.post(tap: .cghidEventTap)
