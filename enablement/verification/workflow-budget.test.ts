@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { executionSeconds, enforceBudget, loadJobs, auditName, type Job } from './workflow-budget.ts'
+import { executionSeconds, enforceBudget, loadJobs, auditName, noOpAuditName, type Job } from './workflow-budget.ts'
 import { readFileSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -19,6 +19,8 @@ test('sequential reusable jobs share one workflow budget', () => {
 test('skip placeholders and audits do not consume the workload budget', () => {
   assert.equal(executionSeconds([{ ...job(10, 0), conclusion: 'skipped' },
     { ...job(0, 999), name: `runtime-budget / ${auditName}`, status: 'in_progress' },
+    { ...job(0, 999), name: noOpAuditName, status: 'in_progress' },
+    { ...job(0, 999), name: `release / ${noOpAuditName}`, status: 'in_progress' },
     job(0, 20)]), 20)
 })
 test('failed and cancelled execution still counts; uncertain timestamps fail closed', () => {
