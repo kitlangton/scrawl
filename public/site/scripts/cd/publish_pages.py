@@ -8,6 +8,7 @@ import subprocess
 import shutil
 import tempfile
 import time
+import sys
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -36,38 +37,92 @@ def current_main(sha):
         raise SupersededMain('Refusing stale main revision')
 
 
+def inventory(root):
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError('Artifact root must be a regular directory')
+    result = {}
+    for path in sorted(root.rglob('*')):
+        if path.is_symlink() or not (path.is_dir() or path.is_file()):
+            raise ValueError('Artifact contains a symlink or nonregular file')
+        if path.is_file():
+            if path.stat().st_size > 25 * 1024 * 1024:
+                raise ValueError('Artifact contains an oversized asset')
+            result[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return result
+
+
+def seal(sha):
+    if not re.fullmatch('[0-9a-f]{40}', sha):
+        raise ValueError('Invalid artifact revision')
+    artifact = ROOT / '.build/website'
+    # Refuse accidental reuse: an immutable candidate is assembled once.
+    artifact.mkdir(parents=True, exist_ok=False)
+    shutil.copytree(ROOT / 'public/site/dist-apparent', artifact / 'dist-apparent')
+    shutil.copyfile(ROOT / 'public/site/wrangler.pages.jsonc', artifact / 'wrangler.jsonc')
+    files = inventory(artifact)
+    for required in ('dist-apparent/index.html', 'dist-apparent/404.html',
+                     'dist-apparent/_routes.json', 'dist-apparent/_worker.js'):
+        if required not in files:
+            raise ValueError('Incomplete Pages artifact: ' + required)
+    movie = ROOT / 'public/site/public/assets/media/Apparent-ghost-demo-v4-lilac.mp4'
+    media = {'path': '/' + movie.name, 'sha256': hashlib.sha256(movie.read_bytes()).hexdigest()}
+    manifest = {'schema': 1, 'revision': sha, 'files': files, 'movie': media}
+    (artifact / 'manifest.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')
+    verify_artifact(sha, artifact)
+    return manifest
+
+
+def verify_artifact(sha, artifact):
+    actual = inventory(artifact)
+    manifest = json.loads((artifact / 'manifest.json').read_text())
+    actual.pop('manifest.json')
+    if manifest['schema'] != 1 or manifest['revision'] != sha:
+        raise ValueError('Artifact revision mismatch')
+    if actual != manifest['files']:
+        raise ValueError('Artifact checksum/inventory mismatch')
+    if any(not (name == 'wrangler.jsonc' or name.startswith('dist-apparent/')) for name in actual):
+        raise ValueError('Unexpected artifact input')
+    return manifest
+
+
 def verify(sha, package):
     project = api(f'/accounts/{ACCOUNT}/pages/projects/{PROJECT}')
     deployment = project['canonical_deployment']
     if deployment['latest_stage']['status'] != 'success' or deployment['deployment_trigger']['metadata']['commit_hash'] != sha:
         raise ValueError('Pages production is not the checked revision')
-    origin = deployment['url']
-    for path, route in [('index.html', '/'), ('connect/index.html', '/connect/'),
-                        ('connect/device/index.html', '/connect/device/'),
-                        ('connect/shares/index.html', '/connect/shares/')]:
-        request = Request(origin + route, headers={'Cache-Control': 'no-cache', 'User-Agent': 'Apparent-CD/1.0'})
+    manifest = verify_artifact(sha, package.parent)
+    paths = [('index.html', '/'), ('connect/index.html', '/connect/'),
+             ('connect/device/index.html', '/connect/device/'),
+             ('connect/shares/index.html', '/connect/shares/')]
+    # Check emitted code as well as HTML, at both immutable and public origins.
+    paths += [(path.removeprefix('dist-apparent/'), '/' + path.removeprefix('dist-apparent/'))
+              for path in manifest['files'] if path.startswith('dist-apparent/assets/') and path.endswith(('.js', '.css'))]
+    for origin in dict.fromkeys([deployment['url'], 'https://app.tryapparent.com']):
+        for path, route in paths:
+            request = Request(origin + route, headers={'Cache-Control': 'no-cache', 'User-Agent': 'Apparent-CD/1.0'})
+            with urlopen(request, timeout=60) as response:
+                body = response.read()
+                if response.headers.get('X-Apparent-Publisher') != 'cloudflare-pages':
+                    raise ValueError('Missing Pages publisher header')
+                if route.startswith('/connect/') and (
+                        'no-store' not in response.headers.get('Cache-Control', '').lower() or
+                        not {'noindex', 'nofollow'} <= set(response.headers.get('X-Robots-Tag', '').lower().replace(',', ' ').split())):
+                    raise ValueError('Missing Connect privacy headers')
+            if hashlib.sha256(body).hexdigest() != manifest['files']['dist-apparent/' + path]:
+                raise ValueError('Pages served different bytes: ' + path)
+        media = manifest['movie']
+        actual = hashlib.sha256()
+        request = Request(origin + media['path'], headers={'Cache-Control': 'no-cache', 'User-Agent': 'Apparent-CD/1.0'})
         with urlopen(request, timeout=60) as response:
-            body = response.read()
-            if response.headers.get('X-Apparent-Publisher') != 'cloudflare-pages':
-                raise ValueError('Missing Pages publisher header')
-            if route.startswith('/connect/') and (
-                    'no-store' not in response.headers.get('Cache-Control', '').lower() or
-                    not {'noindex', 'nofollow'} <= set(response.headers.get('X-Robots-Tag', '').lower().replace(',', ' ').split())):
-                raise ValueError('Missing Connect privacy headers')
-        if hashlib.sha256(body).digest() != hashlib.sha256((package / path).read_bytes()).digest():
-            raise ValueError('Pages served different bytes: ' + path)
-    movie = ROOT / 'public/site/public/assets/media/Apparent-ghost-demo-v4-lilac.mp4'
-    expected = hashlib.sha256(movie.read_bytes()).digest()
-    actual = hashlib.sha256()
-    request = Request(origin + '/' + movie.name, headers={'Cache-Control': 'no-cache', 'User-Agent': 'Apparent-CD/1.0'})
-    with urlopen(request, timeout=60) as response:
-        if response.headers.get('Content-Type') != 'video/mp4':
-            raise ValueError('Pages movie is unavailable')
-        while data := response.read(256 * 1024):
-            actual.update(data)
-    if actual.digest() != expected:
-        raise ValueError('Pages served different movie bytes')
-    return {'revision': sha, 'project': PROJECT, 'deployment_id': deployment['id'], 'url': origin}
+            if response.headers.get('Content-Type') != 'video/mp4':
+                raise ValueError('Pages movie is unavailable')
+            while data := response.read(256 * 1024):
+                actual.update(data)
+        if actual.hexdigest() != media['sha256']:
+            raise ValueError('Pages served different movie bytes')
+    return {'revision': sha, 'project': PROJECT, 'deployment_id': deployment['id'],
+            'url': deployment['url'], 'public_url': 'https://app.tryapparent.com',
+            'manifest_sha256': hashlib.sha256((package.parent / 'manifest.json').read_bytes()).hexdigest()}
 
 
 def verify_ready(sha, package):
@@ -87,7 +142,9 @@ def main():
     sha = os.environ['GITHUB_SHA']
     if not re.fullmatch('[0-9a-f]{40}', sha) or os.environ.get('GITHUB_REF') != 'refs/heads/main':
         raise ValueError('Only exact main revisions may publish')
-    package = ROOT / 'public' / 'site' / 'dist-apparent'
+    artifact = ROOT / '.build/website'
+    manifest = verify_artifact(sha, artifact)
+    package = artifact / 'dist-apparent'
     if not (package / '404.html').is_file() or not (package / '_routes.json').is_file():
         raise ValueError('Missing privacy/routing preparation')
     if package.is_symlink() or any(p.is_symlink() or (p.is_file() and p.stat().st_size > 25 * 1024 * 1024) for p in package.rglob('*')):
@@ -99,9 +156,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix='apparent-pages-') as directory:
         stage = Path(directory)
         shutil.copytree(package, stage / 'dist-apparent')
-        shutil.copytree(ROOT / 'public/site/functions', stage / 'functions')
-        shutil.copytree(ROOT / 'public/site/lib', stage / 'lib')
-        shutil.copyfile(ROOT / 'public/site/wrangler.pages.jsonc', stage / 'wrangler.jsonc')
+        shutil.copyfile(artifact / 'wrangler.jsonc', stage / 'wrangler.jsonc')
+        # Verify the actual staged bytes before giving them to the publisher.
+        if inventory(stage) != manifest['files']:
+            raise ValueError('Staged artifact checksum mismatch')
         try:
             current_main(sha)
         except SupersededMain:
@@ -109,11 +167,16 @@ def main():
             return
         subprocess.run([str(ROOT / 'connect/service/node_modules/.bin/wrangler'), 'pages', 'deploy',
                         '--project-name', PROJECT, '--branch', 'main', '--commit-hash', sha,
-                        '--commit-dirty=false'], cwd=stage, env=env, check=True)
+                        '--commit-dirty=false', '--no-bundle'], cwd=stage, env=env, check=True)
     receipt = verify_ready(sha, package)
     (ROOT / 'website-receipt.json').write_text(json.dumps(receipt) + '\n')
     print(json.dumps(receipt))
 
 
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) == 3 and sys.argv[1] == 'seal':
+        seal(sys.argv[2])
+    elif len(sys.argv) == 1:
+        main()
+    else:
+        raise ValueError('Usage: publish_pages.py [seal SHA]')

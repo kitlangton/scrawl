@@ -1,9 +1,8 @@
 import { Demo } from "../../demo/core/VideoDemo"
-import { BeliefPond } from "./BeliefPond"
+import { PhotoStory } from "./PhotoStory"
 import { FrogPond } from "./FrogPond"
 import { GithubStars } from "./GithubStars"
 import { Footer } from "../../footer/Footer"
-import { Team } from "./Team"
 import { FeatureGrid } from "../../features/FeatureGrid"
 
 export function App() {
@@ -13,7 +12,6 @@ export function App() {
         <a className="brand" href="#top" aria-label="Apparent home">
           <img src="/apparent-wordmark.svg" width={149} height={35} decoding="async" alt="apparent" />
         </a>
-        <a className="pond-team-link" href="#team">Team</a>
         <GithubStars />
       </header>
       <main>
@@ -25,8 +23,7 @@ export function App() {
           </div>
         </section>
         <FeatureGrid />
-        <BeliefPond />
-        <Team />
+        <PhotoStory />
       </main>
       <Footer />
     </div>

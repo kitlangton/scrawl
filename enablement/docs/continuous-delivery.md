@@ -96,7 +96,12 @@ Node 22.23.0 and Bun 1.3.10 are pinned. Browser installation uses the version of
 `VITE_HOSTED_API_ORIGIN=https://hosted.tryapparent.com`. The production artifact
 is saved **before** a separate loopback-configured browser build. The loopback
 package is never uploaded for deployment. Artifact download is scoped to the
-same workflow run and named with its event SHA. Production runs are serialized
+same workflow run and named with its admitted SHA. The website artifact includes
+compiled Pages Functions, provider config and a complete checksum manifest outside
+the served tree; publication uses `--no-bundle` and verifies the downloaded bytes.
+The source-built homepage is never replaced by a committed deployment snapshot.
+Website artifacts are retained for 90 days, with Pages deployment IDs and receipts
+supporting rollback without rebuilding. Production runs are serialized
 without canceling a deployment halfway through; each publisher also refuses a
 candidate that is no longer current `main`. Pages treats a revision superseded
 after admission as a successful skip, without uploading or issuing a deployment
@@ -105,7 +110,7 @@ later push supplies the replacement; otherwise dispatch the workflow on `main` a
 
 ## Website activation: Cloudflare Pages
 
-The active website job now publishes only `public/site/dist-apparent` to the isolated
+The active website job now publishes only the sealed source-built `dist-apparent` to the isolated
 `apparent-capture` Pages project, using `public/site/scripts/cd/publish_pages.py` and
 `public/site/wrangler.pages.jsonc`. It does not execute `public/site/wrangler.jsonc`, deploy the
 hosted Worker, or connect to Clanker. See

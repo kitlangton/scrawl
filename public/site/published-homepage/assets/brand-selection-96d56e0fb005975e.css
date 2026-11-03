@@ -1,9 +1,0 @@
-.pond-page {
-  --brand-lilac: #b7a5d8;
-  --brand-carbon: #020102;
-}
-.pond-page ::selection {
-  background: var(--brand-lilac);
-  color: var(--brand-carbon);
-}
-.pond-demo h2 span { color: var(--brand-lilac); }

@@ -27,67 +27,109 @@ class PagesDeliveryTests(unittest.TestCase):
                 pages.verify('a' * 40, Path('unused'))
             http.assert_not_called()
 
-    def test_readback_requires_exact_root_and_connect_bytes_and_pages_marker(self):
+    def fixture(self, root):
+        for name, data in [('public/site/dist-apparent/index.html', 'source homepage'),
+                           ('public/site/dist-apparent/404.html', 'not found'),
+                           ('public/site/dist-apparent/_routes.json', '{}'),
+                           ('public/site/dist-apparent/_worker.js', 'compiled worker'),
+                           ('public/site/dist-apparent/assets/index-test.js', 'compiled source'),
+                           ('public/site/dist-apparent/connect/index.html', 'connect'),
+                           ('public/site/dist-apparent/connect/device/index.html', 'device'),
+                           ('public/site/dist-apparent/connect/shares/index.html', 'shares'),
+                           ('public/site/public/assets/media/Apparent-ghost-demo-v4-lilac.mp4', 'checked movie'),
+                           ('public/site/functions/movie.js', 'source must not reach publisher'),
+                           ('public/site/wrangler.pages.jsonc', '{"name":"apparent-capture"}'),
+                           ('public/site/wrangler.jsonc', 'unrelated Worker'),
+                           ('.env', 'private sentinel')]:
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(data)
+        with patch.object(pages, 'ROOT', root):
+            pages.seal('a' * 40)
+        return root / '.build/website'
+
+    def test_sealed_artifact_refuses_wrong_revision_tampering_extra_files_and_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = self.fixture(root)
+            with self.assertRaisesRegex(ValueError, 'revision'):
+                pages.verify_artifact('b' * 40, artifact)
+            target = artifact / 'dist-apparent/index.html'
+            original = target.read_bytes()
+            target.write_text('tampered')
+            with self.assertRaisesRegex(ValueError, 'checksum'):
+                pages.verify_artifact('a' * 40, artifact)
+            target.write_bytes(original)
+            extra = artifact / 'dist-apparent/extra.js'
+            extra.write_text('unexpected')
+            with self.assertRaisesRegex(ValueError, 'checksum'):
+                pages.verify_artifact('a' * 40, artifact)
+            extra.unlink()
+            extra.symlink_to(root, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'symlink'):
+                pages.verify_artifact('a' * 40, artifact)
+            extra.unlink()
+            self.assertEqual(pages.verify_artifact('a' * 40, artifact)['revision'], 'a' * 40)
+            with patch.object(pages, 'ROOT', root), self.assertRaises(FileExistsError):
+                pages.seal('a' * 40)
+
+    def test_readback_requires_exact_html_assets_movie_and_privacy_at_both_origins(self):
+        from urllib.parse import urlsplit
         sha = 'a' * 40
         project = {'canonical_deployment': {'id': 'deployment', 'url': 'https://deployment.apparent-capture.pages.dev',
                    'latest_stage': {'status': 'success'}, 'deployment_trigger': {'metadata': {'commit_hash': sha}}}}
         class Response(BytesIO):
-            headers = {'X-Apparent-Publisher': 'cloudflare-pages',
-                       'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow'}
-        class MovieResponse(BytesIO):
-            headers = {'Content-Type': 'video/mp4'}
+            headers = {'X-Apparent-Publisher': 'cloudflare-pages', 'Cache-Control': 'no-store',
+                       'X-Robots-Tag': 'noindex, nofollow', 'Content-Type': 'video/mp4'}
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / 'public/site/public/assets/media').mkdir(parents=True, exist_ok=True)
-            (root / 'public/site/public/assets/media/Apparent-ghost-demo-v4-lilac.mp4').write_bytes(b'checked movie')
-            for name in ['index.html', 'connect/index.html', 'connect/device/index.html', 'connect/shares/index.html']:
-                (root / name).parent.mkdir(parents=True, exist_ok=True)
-                (root / name).write_bytes(name.encode())
+            artifact = self.fixture(Path(directory))
+            package = artifact / 'dist-apparent'
+            paths = {'/': 'index.html', '/connect/': 'connect/index.html', '/connect/device/': 'connect/device/index.html',
+                     '/connect/shares/': 'connect/shares/index.html', '/assets/index-test.js': 'assets/index-test.js'}
+            visited = set()
+            bad_path = None
             def fetch(request, timeout):
-                if request.full_url.endswith('.mp4'):
-                    return MovieResponse(b'checked movie')
-                path = {'/': 'index.html', '/connect/': 'connect/index.html', '/connect/device/': 'connect/device/index.html', '/connect/shares/': 'connect/shares/index.html'}
-                from urllib.parse import urlsplit
-                return Response(path[urlsplit(request.full_url).path].encode())
-            with patch.object(pages, 'ROOT', root), patch.object(pages, 'api', return_value=project), patch.object(pages, 'urlopen', side_effect=fetch):
-                self.assertEqual(pages.verify(sha, root)['deployment_id'], 'deployment')
-                for name in ['connect/device/index.html', 'connect/shares/index.html']:
-                    (root / name).write_text('different bytes')
+                url = urlsplit(request.full_url)
+                visited.add(url.netloc)
+                if url.path == bad_path:
+                    return Response(b'different bytes')
+                if url.path.endswith('.mp4'):
+                    return Response(b'checked movie')
+                return Response((package / paths[url.path]).read_bytes())
+            with patch.object(pages, 'api', return_value=project), patch.object(pages, 'urlopen', side_effect=fetch):
+                self.assertEqual(pages.verify(sha, package)['deployment_id'], 'deployment')
+                self.assertEqual(visited, {'deployment.apparent-capture.pages.dev', 'app.tryapparent.com'})
+                for bad_path in paths:
                     with self.assertRaisesRegex(ValueError, 'different bytes'):
-                        pages.verify(sha, root)
-                    (root / name).write_bytes(name.encode())
-                for missing in ['Cache-Control', 'X-Robots-Tag']:
+                        pages.verify(sha, package)
+                bad_path = '/Apparent-ghost-demo-v4-lilac.mp4'
+                with self.assertRaisesRegex(ValueError, 'different movie'):
+                    pages.verify(sha, package)
+                bad_path = None
+                for missing in ['X-Apparent-Publisher', 'Cache-Control', 'X-Robots-Tag']:
                     with patch.dict(Response.headers, {key: value for key, value in Response.headers.items() if key != missing}, clear=True):
-                        with self.assertRaisesRegex(ValueError, 'privacy headers'):
-                            pages.verify(sha, root)
-            with patch.object(pages, 'api', return_value=project), patch.object(pages, 'urlopen', return_value=BytesIO(b'index.html')):
-                with self.assertRaises((AttributeError, ValueError)):
-                    pages.verify(sha, root)
+                        with self.assertRaises(ValueError):
+                            pages.verify(sha, package)
 
-    def test_main_stages_only_public_inputs_and_selects_pages_not_worker(self):
+    def test_main_deploys_only_sealed_artifact_without_rebuilding_functions(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name, data in [('public/site/dist-apparent/404.html', 'not found'),
-                               ('public/site/dist-apparent/_routes.json', '{}'),
-                               ('public/site/functions/movie.js', 'function source'),
-                               ('public/site/lib/metadata.js', 'fixed metadata'),
-                               ('public/site/wrangler.pages.jsonc', '{"name":"apparent-capture"}'),
-                               ('public/site/wrangler.jsonc', 'unrelated Worker'),
-                               ('.env', 'private sentinel')]:
-                (root / name).parent.mkdir(parents=True, exist_ok=True)
-                (root / name).write_text(data)
+            artifact = self.fixture(root)
+            # The source tree may disappear entirely after the verified build.
+            import shutil
+            shutil.rmtree(root / 'public/site')
             def deploy(argv, cwd, env, check):
                 self.assertEqual(argv[1:3], ['pages', 'deploy'])
+                self.assertIn('--no-bundle', argv)
                 self.assertIn('apparent-capture', argv)
                 self.assertEqual((cwd / 'wrangler.jsonc').read_text(), '{"name":"apparent-capture"}')
-                self.assertEqual(sorted(p.name for p in cwd.iterdir()), ['dist-apparent', 'functions', 'lib', 'wrangler.jsonc'])
+                self.assertEqual(sorted(p.name for p in cwd.iterdir()), ['dist-apparent', 'wrangler.jsonc'])
+                self.assertEqual((cwd / 'dist-apparent/_worker.js').read_text(), 'compiled worker')
                 self.assertFalse((cwd / '.env').exists())
                 self.assertEqual(env['CLOUDFLARE_ACCOUNT_ID'], pages.ACCOUNT)
             with patch.object(pages, 'ROOT', root), patch.dict(pages.os.environ, {'GITHUB_SHA': 'a' * 40, 'GITHUB_REF': 'refs/heads/main', 'WEBSITE_PAGES_API_TOKEN': 'synthetic'}), patch.object(pages, 'current_main') as current, patch.object(pages.subprocess, 'run', side_effect=deploy) as upload, patch.object(pages, 'verify', return_value={'revision': 'a' * 40}):
                 pages.main()
                 current.assert_called_once_with('a' * 40)
                 upload.assert_called_once()
-                # Main can advance after admission while the package is built.
                 (root / 'website-receipt.json').unlink()
                 upload.reset_mock()
                 with patch.object(pages, 'current_main', side_effect=pages.SupersededMain('stale')), patch.object(pages, 'verify_ready') as readback:
@@ -95,14 +137,12 @@ class PagesDeliveryTests(unittest.TestCase):
                 upload.assert_not_called()
                 readback.assert_not_called()
                 self.assertFalse((root / 'website-receipt.json').exists())
-                # Transport/auth errors must remain failures, not stale skips.
                 with patch.object(pages, 'current_main', side_effect=RuntimeError('git failed')):
                     with self.assertRaisesRegex(RuntimeError, 'git failed'):
                         pages.main()
                 upload.assert_not_called()
-                (root / 'public/site/dist-apparent/private-link').symlink_to(root, target_is_directory=True)
-                upload.reset_mock()
-                with self.assertRaisesRegex(ValueError, 'symlink'):
+                (artifact / 'dist-apparent/index.html').write_text('changed after verification')
+                with self.assertRaisesRegex(ValueError, 'checksum'):
                     pages.main()
                 upload.assert_not_called()
 

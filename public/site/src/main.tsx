@@ -4,6 +4,9 @@ import { App } from "./components/home/App"
 import "./styles/styles.css"
 import "./styles/pond-hero.css"
 import "./cta.css"
+import "./styles/accepted-homepage.css"
+import "./features/homepage-revision.css"
+import "./styles/system-appearance.css"
 
 const root = document.getElementById("root")!
 const app = (
