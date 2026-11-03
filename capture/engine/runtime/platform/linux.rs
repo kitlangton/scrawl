@@ -1145,6 +1145,7 @@ fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
 
         let mut pure_shift =
             mods.shift && !mods.super_key && !mods.ctrl && !mods.alt && !await_shift_release;
+        let note_shift = pure_shift;
         // Wayland: XWayland only sees the pointer over X11 windows, so the overlay takes it
         // while ⇧ is held (`linux::overlay::take_pointer`).
         pure_shift &= !telemetry.notes_editing.load(Ordering::Acquire);
@@ -1176,7 +1177,8 @@ fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
             buttons,
             (x, y),
             mods.shift && !mods.super_key && !mods.ctrl && !mods.alt,
-            |x, y| telemetry.on_capture_input_ui(x, y),
+            |x, y| if note_shift { telemetry.on_note_input_ui(x, y) }
+                else { telemetry.on_capture_input_ui(x, y) },
         );
 
         // Hold Shift + move the pointer inside the capture target = draw a persistent stroke.

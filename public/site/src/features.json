@@ -89,7 +89,7 @@
           "does": "Set false for intentional silent captures; applies to the next screen capture without changing the selected microphone device"
         }
       ],
-      "note": "Enabled by default. Rust persists notes before acknowledgement. The notes-only Electron surface does not replace the picker, native drawing or the complete recording capsule. Linux display video includes the visible popup, including drafts; unsaved text is excluded from note metadata and summary. Native platform acceptance is required before release.",
+      "note": "Enabled by default. Linux native and Electron Settings can be Shift-clicked during capture for self-feedback; macOS still excludes its own Settings windows. Rust persists notes before acknowledgement. The notes-only Electron surface does not replace the picker, native drawing or the complete recording capsule. Linux display video includes the visible popup, including drafts; unsaved text is excluded from note metadata and summary. Native platform acceptance is required before release.",
       "docs": [
         "capture/engine/docs/keyframes-and-text.md",
         "capture/desktop/ui/frontend/README.md"

@@ -85,8 +85,9 @@ def scene(ready):
 
 
 class Recipe:
-    def __init__(self, output, binary, seconds):
+    def __init__(self, output, binary, seconds, save_seconds=4, silent=False):
         self.out, self.binary, self.seconds = output, binary, seconds
+        self.save_seconds, self.silent = save_seconds, silent
         self.env = os.environ.copy()
         self.jobs, self.ids, self.serial = [], [], 0
         self.report = {"schema": 1, "proof": "native execution required; synthetic transport tests are not native proof",
@@ -177,7 +178,8 @@ class Recipe:
             Path(self.env[key]).mkdir(parents=True, mode=0o700)
         config = Path(self.env["APPARENT_CONFIG"])
         config.parent.mkdir(parents=True, exist_ok=True)
-        config.write_text(json.dumps({"onboarding": {"seen": True}, "launchAtLogin": False, "autoPasteDraft": False}))
+        config.write_text(json.dumps({"onboarding": {"seen": True}, "launchAtLogin": False, "autoPasteDraft": False,
+                                      **({"microphoneEnabled": False} if self.silent else {})}))
         self.env["APPIMAGE_EXTRACT_AND_RUN"] = "1"
         self.report["candidate"] = {"path": str(self.binary), "sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest()}
         self.report["desktop"] = {key: self.env.get(key) for key in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP")}
@@ -230,7 +232,7 @@ class Recipe:
         self.wait(gui_ready, 20, "GUI control not ready; see command streams and app.log")
         self.report["gates"]["gui_ready"] = "PASS"
         owned = self.start("save")
-        time.sleep(4)
+        time.sleep(self.save_seconds)
         if scene_job.poll() is not None:
             raise Failure("environment", "synthetic scene exited during recording")
         self.report["stage"] = "saved_receipt"
@@ -340,18 +342,24 @@ def main():
     parser = argparse.ArgumentParser(description="Guest-only production capture/save/cancel scenario; invoked by gui-vm.py.")
     parser.add_argument("--scene", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--consent-timeout", type=int, default=40)
+    parser.add_argument("--save-seconds", type=int, default=4,
+                        help="recording hold for scoped native input checks (1..180; default: 4)")
+    parser.add_argument("--silent", action="store_true", help="disable microphone in this isolated fixture")
     args = parser.parse_args()
     if args.scene:
         scene(args.scene)
         return 0
     if not 1 <= args.consent_timeout <= 120:
         parser.error("consent-timeout must be 1..120 seconds")
+    if not 1 <= args.save_seconds <= 180:
+        parser.error("save-seconds must be 1..180 seconds")
     os.umask(0o077)
     output = Path(os.environ["SCRAWL_GUI_OUTPUT"]).resolve()
     output.mkdir(parents=True, exist_ok=True)
     if (output / "capture-smoke-report.json").exists() or (output / ".config").exists():
         parser.error("output already used; preserve it and choose a new run")
-    recipe = Recipe(output, Path(os.environ["SCRAWL_GUI_BINARY"]).resolve(), args.consent_timeout)
+    recipe = Recipe(output, Path(os.environ["SCRAWL_GUI_BINARY"]).resolve(), args.consent_timeout,
+                    args.save_seconds, args.silent)
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(Failure("driver", "scenario terminated")))
     try:
         recipe.run()
