@@ -217,24 +217,42 @@ jobs:
           name: ${{ steps.package.outputs.name }}
           path: dist/*
 
-  attach-release:
-    # Never interrupt feed replacement or asset publication.
+  publish:
+    # One transaction keeps immutable publication and feed repair together.
+    # Pending transactions may coalesce; running publication is never canceled.
     concurrency:
       group: release-linux-publication
-      queue: max
       cancel-in-progress: false
-    if: needs.linux.result == 'success' && inputs.tag != '' && inputs.verify_only != true
-    needs: [admit, linux]
+    needs: [admit, preview-needed, linux]
+    if: always() && needs.admit.result == 'success' && needs.admit.outputs.sha != '' && inputs.verify_only != true && (needs.linux.result == 'success' || needs.preview-needed.outputs.build == 'false' || inputs.bridge_commit != '')
     permissions:
       contents: write
+      actions: read
     runs-on: ubuntu-24.04
+    env:
+      PUBLISH_MAIN: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main }}
+      TAG: ${{ inputs.tag }}
+      BRIDGE_COMMIT: ${{ inputs.bridge_commit }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          # Publication policy always comes from trusted current main.
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Validate metadata contracts
+        run: node --experimental-strip-types --test capture/desktop/scripts/linux/maintenance/main-feed.test.ts
       - uses: actions/download-artifact@v5
+        if: needs.linux.result == 'success' && env.BRIDGE_COMMIT == ''
         with:
           pattern: Apparent-*.AppImage
           path: dist
           merge-multiple: true
       - name: Attach to the release
+        if: needs.linux.result == 'success' && env.TAG != '' && env.BRIDGE_COMMIT == ''
         env:
           CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
           TAG: ${{ inputs.tag }}
@@ -249,30 +267,8 @@ jobs:
             gh release view "$TAG" >/dev/null
           gh release upload "$TAG" dist/* --clobber
 
-  main-preview:
-    # Never interrupt feed replacement or asset publication.
-    concurrency:
-      group: release-linux-publication
-      queue: max
-      cancel-in-progress: false
-    if: needs.linux.result == 'success' && (github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main) && inputs.tag == '' && github.ref == 'refs/heads/main' && inputs.verify_only != true
-    needs: [admit, linux]
-    permissions:
-      contents: write
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          # Publication policy comes from current trusted main, not an older
-          # admitted build whose publisher may still use the legacy feed.
-          ref: main
-          fetch-depth: 0
-      - uses: actions/download-artifact@v5
-        with:
-          pattern: Apparent-*.AppImage
-          path: dist
-          merge-multiple: true
       - name: Publish both checked AppImages
+        if: needs.linux.result == 'success' && env.PUBLISH_MAIN == 'true' && env.TAG == '' && env.BRIDGE_COMMIT == '' && github.ref == 'refs/heads/main'
         env:
           CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
@@ -282,58 +278,15 @@ jobs:
           version=$(git show "$CANDIDATE_SHA:Cargo.toml" | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
           GITHUB_SHA="$CANDIDATE_SHA" APPARENT_VERSION="$version" python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py
 
-  main-feed:
-    # Never interrupt feed replacement or asset publication.
-    concurrency:
-      group: release-linux-publication
-      queue: max
-      cancel-in-progress: false
-    # Also repair metadata after an interrupted publication whose immutable v2
-    # release already exists. This job shares the noncanceling publication lock.
-    needs: [admit, preview-needed, linux, main-preview]
-    if: always() && needs.admit.outputs.sha != '' && (needs.main-preview.result == 'success' || needs.preview-needed.outputs.build == 'false') && (github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main) && inputs.tag == '' && inputs.bridge_commit == '' && github.ref == 'refs/heads/main' && inputs.verify_only != true
-    permissions:
-      contents: write
-      actions: read
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: main
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.0'
-      - name: Validate metadata contracts
-        run: node --experimental-strip-types --test capture/desktop/scripts/linux/maintenance/main-feed.test.ts
       - name: Publish admitted immutable artifact identities and complete ancestry
+        if: env.PUBLISH_MAIN == 'true' && env.TAG == '' && env.BRIDGE_COMMIT == '' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
         run: node --experimental-strip-types capture/desktop/scripts/linux/maintenance/main-feed.ts "$CANDIDATE_SHA"
 
-  signing-bridge:
-    # Never interrupt feed replacement or asset publication.
-    concurrency:
-      group: release-linux-publication
-      queue: max
-      cancel-in-progress: false
-    needs: admit
-    if: inputs.bridge_commit != '' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: write
-      actions: read
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: main
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.0'
       - name: Publish unchanged verified assets for legacy updaters
+        if: env.BRIDGE_COMMIT != '' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           BRIDGE_COMMIT: ${{ inputs.bridge_commit }}

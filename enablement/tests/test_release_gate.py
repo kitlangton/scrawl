@@ -270,16 +270,29 @@ class PublicationProgressTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/release-linux.yml').read_text()
         self.assertNotIn('\nconcurrency:', workflow)
-        build = workflow.split('\n  linux:\n')[1].split('\n  attach-release:')[0]
+        build = workflow.split('\n  linux:\n')[1].split('\n  publish:')[0]
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'workflow_run' }}", build)
         self.assertIn("matrix.arch", build)
         self.assertIn("github.event_name == 'workflow_run' && 'automatic' || github.run_id", build)
         self.assertIn('needs: [admit, preview-needed]', build)
-        for name in ('attach-release', 'main-preview', 'main-feed', 'signing-bridge'):
-            job = re.split(r'\n  [a-z][a-z-]*:', workflow.split(f'\n  {name}:\n')[1])[0]
-            self.assertIn('group: release-linux-publication', job)
-            self.assertIn('queue: max', job)
-            self.assertIn('cancel-in-progress: false', job)
+        job = workflow.split('\n  publish:\n')[1]
+        self.assertEqual(workflow.count('group: release-linux-publication'), 1)
+        self.assertNotIn('queue:', workflow)  # Compatible with pinned actionlint 1.7.12.
+        self.assertIn('cancel-in-progress: false', job)
+        self.assertIn('needs: [admit, preview-needed, linux]', job)
+        self.assertIn("needs.preview-needed.outputs.build == 'false'", job)
+        self.assertIn("needs.admit.result == 'success'", job)
+        self.assertIn("inputs.verify_only != true", job)
+        steps = ('Attach to the release', 'Publish both checked AppImages',
+                 'Publish admitted immutable artifact identities and complete ancestry',
+                 'Publish unchanged verified assets for legacy updaters')
+        for step in steps:
+            self.assertIn(f'- name: {step}', job)
+        self.assertLess(job.index(steps[1]), job.index(steps[2]))
+        # Feed repair still runs when immutable assets already exist, without download.
+        download = job.split('- uses: actions/download-artifact@v5')[1].split('- name:')[0]
+        self.assertIn("needs.linux.result == 'success'", download)
+
 
     def test_verification_scheduling_keeps_running_work_and_matching_candidates(self):
         root = Path(__file__).resolve().parents[2]
