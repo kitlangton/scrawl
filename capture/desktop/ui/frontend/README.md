@@ -480,6 +480,9 @@ new config key or off-by-default product feature is introduced. Missing assets,
 startup failure, bounded Hyprland pinning failure or child failure retain/restore the old pill for the remainder
 of the app process. The old pill stays until Electron reports readiness;
 Electron remains hidden until Rust closes the old pill and activates it.
+Linux pin discovery waits for activation acknowledgement; hidden placement and
+uncommitted renderer layout do not start native retries. Failure diagnostics
+retain only phase and activation/readiness/visibility flags.
 Recording and finalization remain owned by Rust across renderer reload/exit.
 A failed or ambiguous action is never automatically retried. The keyboard
 shortcut and tray remain independent controls.
