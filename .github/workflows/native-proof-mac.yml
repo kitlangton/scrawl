@@ -1,0 +1,119 @@
+name: Focused Mac Connect native proof
+
+# Deliberately separate from full main verification and release admission.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-proof-mac-connect-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  connect-worker:
+    if: github.repository == 'tryapparent/apparent' && github.event_name == 'workflow_dispatch'
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    env:
+      APPARENT_APP_DIR: /Users/runner/Applications/Apparent-Connect-${{ github.run_id }}-${{ github.run_attempt }}.app
+      APPARENT_BUILD_TMP: /Users/runner/.apparent-connect-build-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Establish private evidence and build directories
+        run: |
+          umask 077
+          export APPARENT_CONNECT_PROOF="$RUNNER_TEMP/apparent-connect-native"
+          echo "APPARENT_CONNECT_PROOF=$APPARENT_CONNECT_PROOF" >> "$GITHUB_ENV"
+          test ! -e "$APPARENT_APP_DIR"
+          mkdir "$APPARENT_BUILD_TMP"
+          mkdir -p "$APPARENT_CONNECT_PROOF/evidence"
+          python3 - <<'PY'
+          import json, os, pathlib
+          evidence = pathlib.Path(os.environ['APPARENT_CONNECT_PROOF']) / 'evidence'
+          (evidence / 'candidate.json').write_text(json.dumps({
+              'sha': os.environ['GITHUB_SHA'], 'run': os.environ['GITHUB_RUN_ID'],
+              'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'scope': 'focused installed Connect worker; no full-suite or release receipt',
+          }))
+          PY
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.0'
+      - name: Prepare synthetic media and Metal compiler
+        timeout-minutes: 10
+        run: |
+          command -v ffmpeg && command -v ffprobe || brew install ffmpeg
+          xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: connect/service/package-lock.json
+      - name: Prepare the checked local Worker with locked dependencies
+        timeout-minutes: 5
+        working-directory: connect/service
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Build and install the candidate without launching
+        timeout-minutes: 20
+        env:
+          APPARENT_NO_LAUNCH: '1'
+        run: |
+          export TMPDIR="$APPARENT_BUILD_TMP"
+          bash capture/desktop/scripts/packaging/install-app.sh
+          codesign --verify --deep --strict "$APPARENT_APP_DIR"
+          shasum -a 256 "$APPARENT_APP_DIR/Contents/MacOS/apparent" > "$APPARENT_CONNECT_PROOF/evidence/binary.sha256"
+      - name: Installed Connect worker restart and encrypted fetch
+        timeout-minutes: 4
+        env:
+          APPARENT_CONNECT_NATIVE_CI: '1'
+        run: |
+          # The harness requires a fresh output directory; evidence lives beside it until completion.
+          node connect/service/test/native/desktop-worker.mjs "$GITHUB_WORKSPACE" \
+            "$APPARENT_APP_DIR/Contents/MacOS/apparent" "$APPARENT_CONNECT_PROOF/scenario"
+      - name: Verify owned cleanup and retain only allowlisted evidence
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, shutil, subprocess
+          root = pathlib.Path(os.environ['APPARENT_CONNECT_PROOF'])
+          evidence = root / 'evidence'
+          evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
+          for name in ('report.json', 'desktop.log'):
+              source = root / 'scenario' / 'evidence' / name
+              if source.is_file():
+                  shutil.copyfile(source, evidence / name)
+          app = pathlib.Path(os.environ['APPARENT_APP_DIR'])
+          build = pathlib.Path(os.environ['APPARENT_BUILD_TMP'])
+          home = pathlib.Path.home()
+          suffix = os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT']
+          assert app == home / 'Applications' / ('Apparent-Connect-' + suffix + '.app')
+          assert build == home / ('.apparent-connect-build-' + suffix)
+          processes = subprocess.check_output(['ps', '-axww', '-o', 'comm='], text=True).splitlines()
+          clean = not any(line.strip().startswith(str(app) + '/Contents/') for line in processes)
+          if clean:
+              for path in (app, build):
+                  if path.exists():
+                      assert not path.is_symlink()
+                      shutil.rmtree(path)
+          (evidence / 'cleanup.json').write_text(json.dumps({
+              'noInstalledProcesses': clean,
+              'installedAppRemoved': not app.exists(), 'buildTemporaryRemoved': not build.exists(),
+          }))
+          assert clean and not app.exists() and not build.exists(), 'Owned package cleanup failed'
+          PY
+      - name: Retain synthetic proof evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-connect-worker-native
+          path: ${{ runner.temp }}/apparent-connect-native/evidence/
+          if-no-files-found: error
+          retention-days: 7

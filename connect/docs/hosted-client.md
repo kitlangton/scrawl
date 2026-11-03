@@ -128,8 +128,16 @@ apparent connect logout
 
 ### Installed worker readiness proof
 
-The Mac platform workflow runs `service/test/native/desktop-worker.mjs` against
-the signed installed app and actual local Worker/D1/R2. A synthetic read approval
+The manually invoked `native-proof-mac.yml` workflow builds/installs only the candidate
+and runs `service/test/native/desktop-worker.mjs` against
+the signed installed app and actual local Worker/D1/R2. Dispatch it with
+`gh workflow run native-proof-mac.yml --ref <candidate-branch>`; inspect the exact
+run SHA and `mac-connect-worker-native` artifact, including candidate identity,
+scenario report and cleanup receipt. This focused route runs no full suites,
+produces no release receipt and does not replace main-only verification. It is
+restricted to standard GitHub-hosted `macos-15-intel`, with read-only repository
+permission and no secrets or production bindings. Later native consumers may
+extend this route through reviewed, bounded scenarios. A synthetic read approval
 does not enable uploads or discover history. Separate explicit upload approval
 allows a staged synthetic job; a failed PUT remains pending, then the restarted
 Desktop worker completes the same encrypted job without a CLI retry or account
