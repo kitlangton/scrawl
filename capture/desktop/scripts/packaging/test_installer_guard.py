@@ -87,8 +87,8 @@ esac
                 source = source.replace("/usr/bin/ditto", str(tools / "ditto"))
                 (packaging / name).write_text(source)
             (packaging / "stage-settings.py").write_text(
-                "import os\nfrom pathlib import Path\n"
-                "with Path(os.environ['MOCK_LOG']).open('a') as log: log.write('stage-settings\\n')\n")
+                "import os, sys\nfrom pathlib import Path\n"
+                "with Path(os.environ['MOCK_LOG']).open('a') as log: log.write('stage-settings ' + ' '.join(sys.argv[1:]) + '\\n')\n")
             env = dict(os.environ, HOME=str(home), PATH=str(tools) + ":" + os.environ["PATH"],
                        MOCK_LOG=str(log), MOCK_PROCESSES=str(processes),
                        MOCK_PS_STATUS=str(ps_status), MOCK_TMP=str(root),
@@ -119,8 +119,9 @@ esac
                     self.assertFalse(legacy_runtime.exists(), "ditto must not retain the obsolete popup runtime")
                 else:
                     self.assertEqual(executable.read_text(), "synthetic new asset")
-                    self.assertIn("package-notes.mjs", calls)
-                    self.assertIn("stage-settings", calls)
+                    self.assertNotIn("package-notes.mjs", calls)
+                    self.assertEqual(calls.count("stage-settings"), 1)
+                    self.assertIn("--popups-destination " + str(app / "Contents/Resources/note-ui"), calls)
                 self.assertEqual("open " in calls, remote or not no_launch)
 
     def test_destination_processes_refuse_before_replacement(self):
