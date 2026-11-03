@@ -11,6 +11,10 @@ Apparent records screen, voice, cursor, clicks and ink so a human can point, tal
 - Keep changes owner-local and bounded. Move a legacy mechanism with its callers/tests, preserve contracts and verify consumers before removing donors. Coordinate real cross-owner contract changes; routine owner work need not wait for an integrator.
 - Delete verified dead implementations and obsolete tests/references rather than copying them into an archive. Establish requiredness from consumers, build/runtime/package inputs, supported compatibility/data readers and owner reservations—not merely deployment. Preserve active/uncommitted work, private captures, credentials and evidence. See `enablement/refactor.md` for campaign gates.
 
+## Language policy
+
+Use Rust for application logic and TypeScript for web code, scripts, tests and repository tooling. Do not add Python or authored JavaScript files (`.js`, `.jsx`, `.mjs` or `.cjs`) without explicit user approval. Existing Python and JavaScript may receive necessary fixes; migrate them in bounded, verified changes rather than starting an unrelated rewrite. Preserve native adapters and tool-required configuration formats. Generated deployment JavaScript stays outside Git.
+
 ## Desktop UI direction
 
 Electron is the selected desktop UI shell, prioritizing a shared macOS/Linux experience and fewer rendering differences. This is the target direction, not a claim that migration is implemented. Keep capture and processing in Rust, independent of UI animations and responsiveness; measure pill responsiveness and resource contention on both platforms. Native adapters may still be needed for OS integration; the exact overlay boundary remains to be established.

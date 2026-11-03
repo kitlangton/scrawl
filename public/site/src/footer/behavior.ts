@@ -94,6 +94,17 @@ export function mountFooter(root: HTMLElement): () => void {
       if (active && !dialogs.some(d => d.open)) returnFocus?.focus()
     })
   }
+  const social = root.querySelector<HTMLDialogElement>('dialog[data-dialog="social"]')!
+  const simon = social.querySelector<HTMLAnchorElement>('a[href*="simon"]')!
+  const bubble = social.querySelector<HTMLElement>('.rude-bubble')!
+  let ready = false
+  listen(simon, 'click', event => {
+    if (ready) { bubble.hidden = true; ready = false; return }
+    event.preventDefault()
+    ready = true
+    bubble.hidden = false
+  })
+  listen(social, 'close', () => { bubble.hidden = true; ready = false })
   fit(); label(); schedule()
   return () => {
     active = false

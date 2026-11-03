@@ -171,7 +171,7 @@ class PreviewReleaseTest(unittest.TestCase):
         self.assertIn("capture/desktop/scripts/release/preview_appcast.py", workflow)
         self.assertLess(workflow.index("gh release create"), workflow.index("capture/desktop/scripts/release/preview_appcast.py"))
         self.assertIn("preview-mac-feed", workflow)
-        self.assertIn('tag_args=(--target "$GITHUB_SHA")', workflow)
+        self.assertIn('tag_args=(--target "$CANDIDATE_SHA")', workflow)
         self.assertNotIn("--clobber", workflow)
         self.assertNotIn("release-app.sh", workflow)
 
@@ -181,7 +181,7 @@ class PreviewReleaseTest(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/release-mac-preview.yml").read_text()
         self.assertIn('releases/tags/${tag}', workflow)
         self.assertIn('existing_sha', workflow)
-        self.assertIn('"$existing_sha" != "$GITHUB_SHA"', workflow)
+        self.assertIn('"$existing_sha" != "$CANDIDATE_SHA"', workflow)
         self.assertIn('--verify-tag', workflow)
         self.assertIn(r'\(HTTP 404\)$', workflow)
         self.assertIn('"$tag_type" != "commit"', workflow)
@@ -218,7 +218,7 @@ class PreviewReleaseTest(unittest.TestCase):
                         print('gh: Not Found (HTTP 404)', file=sys.stderr)
                         sys.exit(1)
                     kind = 'tag' if scenario == 'annotated' else 'commit'
-                    sha = 'wrong' if scenario == 'wrong' else os.environ['GITHUB_SHA']
+                    sha = 'wrong' if scenario == 'wrong' else os.environ['CANDIDATE_SHA']
                     print(kind + ' ' + sha)
                     sys.exit(0)
                 sys.exit(2)
@@ -231,7 +231,7 @@ class PreviewReleaseTest(unittest.TestCase):
                 created.unlink(missing_ok=True)
                 env = dict(os.environ, PATH=f'{root / "bin"}:{os.environ["PATH"]}',
                            SCENARIO=scenario, CREATED=str(created), RUNNER_TEMP=tmp,
-                           GITHUB_REPOSITORY="tryapparent/apparent", GITHUB_SHA="abc123",
+                           GITHUB_REPOSITORY="tryapparent/apparent", CANDIDATE_SHA="abc123",
                            GITHUB_RUN_NUMBER="3", GITHUB_RUN_ATTEMPT="1")
                 env['APPARENT_PREVIEW_NOTARIZE'] = 'true' if scenario == 'matching_signed' else 'false'
                 result = subprocess.run(["bash", "-c", script], cwd=root, env=env,

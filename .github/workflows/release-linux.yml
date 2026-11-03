@@ -29,7 +29,7 @@ permissions:
 
 concurrency:
   # Verification cannot replace the pending publisher behind a running Main build.
-  group: release-linux-${{ github.ref }}-${{ inputs.tag }}-${{ inputs.verify_only == true && 'verify-only' || 'publish' }}
+  group: release-linux-${{ github.ref }}-${{ inputs.tag }}-${{ inputs.verify_only == true && 'verify-only' || 'publish' }}-${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.event != 'push' || github.event.workflow_run.head_repository.full_name != github.repository) && github.run_id || 'eligible' }}
   # Finish the running build/publication; GitHub coalesces to the latest pending run.
   cancel-in-progress: false
 
@@ -65,11 +65,6 @@ jobs:
           fi
           if [[ -n "$TAG" ]]; then
             REQUEST_SHA=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
-          fi
-          # Superseded automatic candidates need no more runner time.
-          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$(git rev-parse origin/main)" != "$REQUEST_SHA" ]]; then
-            echo 'Skipping superseded main candidate'
-            exit 0
           fi
           args=(--platform linux --sha "$REQUEST_SHA")
           if [[ -n "$VERIFY_RUN_ID" ]]; then args+=(--run-id "$VERIFY_RUN_ID"); fi

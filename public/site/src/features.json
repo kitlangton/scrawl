@@ -201,31 +201,30 @@
       "docs": ["capture/desktop/docs/native-launch.md"]
     },
     {
-      "id": "site-team",
+      "id": "site-homepage-photos",
       "group": "install",
-      "name": "Homepage team",
-      "says": "The public homepage shows Olivia and Simon with uncropped portraits and links each affiliation logo to its organization.",
-      "status": "review:#138",
-      "added": "2026-10-30",
+      "name": "Homepage photos",
+      "says": "The public homepage shows Simon dancing and Olivia cuddling a dog, with handwritten activity annotations.",
+      "status": "main",
+      "added": "2026-11-03",
       "platforms": ["mac", "linux"],
-      "pr": 138,
-      "docs": ["public/site/docs/clanker-deploy.md"]
+      "docs": ["public/site/docs/feature-grid.md"]
     },
     {
       "id": "site-frog-footer",
       "group": "install",
-      "name": "Frog theatre feedback footer",
-      "says": "Paper fades into the frog theatre behind a feedback invitation. Try first attempts apparent://open, then the same button offers an explicit second-click platform download; no installation detection or automatic download. Hero and footer share a rounded button style. The compact Berlin credit respects reduced motion; the LinkedIn chooser does not record or send feedback.",
+      "name": "Homepage feedback footer",
+      "says": "A compact invitation beneath the photos offers Try apparent and a LinkedIn chooser. Try first attempts apparent://open, then the same button offers an explicit second-click platform download; no installation detection or automatic download. The footer retains its lilac rounded button style. The LinkedIn chooser includes the accepted speech-bubble interaction and does not record or send feedback.",
       "status": "main",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],
       "docs": ["public/site/docs/footer-release.md"]
     },
     {
-      "id": "site-belief-pond",
+      "id": "site-belief-statement",
       "group": "install",
-      "name": "Interactive homepage belief",
-      "says": "Scroll directly draws and reverses the work circle and enjoyable highlight. Me too sends one frog into a group hug; reduced motion skips travel. Mobile keeps text and controls inset with a compact text-to-frog gap.",
+      "name": "Homepage belief statement",
+      "says": "The belief statement above the photos keeps the original wording, hand-drawn work circle and enjoyable highlight at desktop and mobile sizes.",
       "status": "main",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Notify the committing agent when its branch needs integration; never rebase."""
+"""Report incoming main changes for integration assessment; never rebase."""
 import os
 from pathlib import Path
 import signal
@@ -51,11 +51,28 @@ def checkpoint():
         return
     if contained.returncode != 1:
         raise RuntimeError("cannot compare main with HEAD")
-    notify(f"INTEGRATION REQUIRED: origin/main ({main[:12]}) is not included in HEAD ({head[:12]}).")
+    base = git("merge-base", main, head)
+    # NUL delimiters preserve unusual filenames; repr keeps terminal output inert.
+    incoming = git("diff", "--name-only", "-z", base, main).split("\0")
+    incoming = sorted(path for path in incoming if path)
+    local = set(git("diff", "--name-only", "-z", base, head).split("\0"))
+    overlap = sorted(local.intersection(incoming))
+    notify(f"INTEGRATION CHECKPOINT: fetched origin/main {main}; HEAD {head}.")
+    notify(f"Incoming paths ({len(incoming)}): " + ", ".join(repr(p) for p in incoming))
+    if overlap:
+        notify("Changed on both branches (assess conflicts): " + ", ".join(repr(p) for p in overlap))
+    owners = sorted({"/".join(p.split("/")[:2]) if p.startswith("capture/")
+                     else p.split("/")[0] for p in incoming})
+    notify("Incoming areas: " + ", ".join(repr(p) for p in owners))
+    if any(p.startswith(("shared/", "enablement/", ".github/", ".githooks/", ".cargo/"))
+           or "/" not in p for p in incoming):
+        notify("Shared/build/verification contracts changed; assess consumers before continuing dependent work.")
     if git("status", "--porcelain", "--untracked-files=normal"):
         notify("Uncommitted work remains; preserve it explicitly before integrating. Do not auto-stash.")
-    notify("Before the next work section, finish running operations, then rebase onto the fetched main commit above;")
-    notify("inspect incoming changes, resolve conflicts, and rerun affected checks. The commit succeeded; no rebase was run.")
+    notify("Assess incoming contracts and dependencies; disjoint paths do not prove independence.")
+    notify("Integrate now for conflicts or relevant changes; otherwise finish the bounded slice.")
+    notify("Before merge, fetch current main, integrate and rerun affected checks with independent review.")
+    notify("The commit succeeded; no rebase was run.")
 
 
 if __name__ == "__main__":

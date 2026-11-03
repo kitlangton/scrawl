@@ -55,9 +55,9 @@ export function FeatureGrid() {
     </div>
     <div className="feature-grid-cards">
       {FEATURES.map(feature => <article className="feature-grid-card" key={feature.path}>
-        <FeatureAnimation path={feature.path} title={feature.title} paused={paused} />
-        <h3>{feature.title}</h3>
-        <p className="feature-grid-description">{feature.description}</p>
+        <FeatureAnimation path={feature.path} title={feature.path === "anywhere" ? "Agent walkthrough" : feature.title} paused={paused} />
+        <div className="feature-copy"><h3>{feature.title}</h3>
+        <p className="feature-grid-description">{feature.description}</p></div>
       </article>)}
     </div>
   </section>

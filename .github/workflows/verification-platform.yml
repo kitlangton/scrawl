@@ -3,6 +3,10 @@ name: Platform verification
 on:
   workflow_call:
     inputs:
+      revision:
+        description: Exact Linux-verified main candidate for the Mac follower
+        type: string
+        default: ''
       runner:
         required: true
         type: string
@@ -20,6 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Selector and hook contracts (no native proof)
@@ -64,6 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.revision || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -95,6 +101,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Linux application dependencies
@@ -308,9 +315,11 @@ jobs:
           retention-days: 7
 
   release-ready:
-    name: Release verification
+    name: ${{ inputs.revision && format('Release verification ({0})', inputs.revision) || 'Release verification' }}
     needs: [select, desktop-ui, rust]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
-      - run: echo "Platform checks passed for $GITHUB_SHA"
+      - run: echo "Platform checks passed for $CANDIDATE_SHA"
+        env:
+          CANDIDATE_SHA: ${{ inputs.revision || github.sha }}

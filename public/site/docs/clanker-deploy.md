@@ -52,14 +52,14 @@ Chapter times are final-export seconds: Start 0, Capture 3.733333, Sketch 15.433
 Handoff 27.92, Result 48.7, Try it 55.7. Controls follow the real video clock.
 
 The Pages package boundary includes only the approved movie, poster and public
-assets. Preserve the accepted snapshot's combined markup and CSS when changing
-it; copying images alone does not preserve a homepage. Record base and overlay
-commits privately and update the source-controlled snapshot checksum contract.
+assets. The TypeScript/React source now reproduces the accepted homepage; build
+and verify it normally. Generated snapshots and compiled-bundle overlays are
+retired. See `pages-deploy.md` for artifact sealing and main-branch publication.
 
 After building and packaging, run the source and artifact Node tests with
-`node --test scripts/brand/test-brand-favicon.mjs scripts/browser-proof/test-github-stars.mjs scripts/pages/test-latest-download.mjs scripts/pages/test-platform-os.mjs scripts/pages/test-public-homepage.mjs scripts/browser-proof/test-video-demo.mjs`.
-The belief/footer overlay and browser scripts require separate `SITE_BASELINE` or
-`SITE_ARTIFACT`/`SITE_EVIDENCE` inputs; the wildcard is not a standalone suite.
+`node --test scripts/brand/test-brand-favicon.mjs scripts/browser-proof/test-github-stars.mjs scripts/pages/test-latest-download.mjs scripts/pages/test-platform-os.mjs scripts/pages/test-public-homepage.ts scripts/browser-proof/test-video-demo.mjs`.
+Browser scripts accept `SITE_ARTIFACT`/`SITE_EVIDENCE` inputs; the wildcard is not
+a standalone suite.
 Against a
 server that supports HTTP byte ranges, run
 `node scripts/browser-proof/verify-video-demo-browser.mjs <URL> <private evidence directory>`.

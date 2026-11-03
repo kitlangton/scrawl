@@ -17,13 +17,15 @@ cd public/site
 APPARENT_PUBLIC_SITE=1 npm run build
 node scripts/site-build/package-apparent.mjs
 node scripts/connect/compose-connect.mjs
-node scripts/pages/prepare-pages.mjs
-node scripts/site-build/verify-composed.mjs
+node scripts/pages/prepare-pages.ts
+node scripts/site-build/verify-composed.ts
 node scripts/pages/prepare-pages-video.mjs
+../../connect/service/node_modules/.bin/esbuild lib/pages-worker.ts --bundle --platform=browser --format=esm --outfile=dist-apparent/_worker.js
+PAGES_WORKER=dist-apparent/_worker.js node --test scripts/pages/test-pages-video-runtime.mjs
+python3 scripts/cd/publish_pages.py seal <full-commit-sha>
 ```
 
-Upload only `dist-apparent`. Never upload `dist`, this repository, the snapshot
-checksum file, evidence, private prototypes, pitches, internal feature maps or
+Upload only the sealed `dist-apparent/` using the publisher. Never upload `dist`, this repository, the artifact manifest, evidence, private prototypes, pitches, internal feature maps or
 operator metadata. `404.html` disables Pages' implicit SPA fallback. The preparation
 step checks every input path against the former Caddy public boundary, including
 only the three approved hosted illustrations. `_headers` supplies no-store/noindex
@@ -32,31 +34,14 @@ and share-management documents remain packaged. `_redirects` preserves legacy
 hosted routes and their query strings. Anonymous capability recipients and their
 media/manifest/preview/script/styles remain on the hosted Worker origin, not Pages.
 
-**The live homepage was not a fresh build of main.** The migration imported its
-accepted HTML and retained public assets into `published-homepage/`, bound to
-`published-homepage.sha256.json`. Its baseline was Clanker's resolved
-`apparent-connect-64e15d623a67` release (Connect source
-`64e15d623a67aaab67b9d53dcc7f7c10a091a1e9`), with later approved homepage overlays.
-The homepage HTML SHA-256 was
-`91630e87b68f16641fbae22d8ad64261cb6ef317774ab6407bf395359c469ea8`.
-This is now an explicit, source-controlled public homepage input, not an ongoing
-read from Clanker. Public builds no authenticated source. `compose-connect.mjs`
-validates Public's packaged output and the independent `connect/web/dist` before
-changing its destination: exact six route documents, emitted resource closure and
-five canonical assets only; identical collisions pass and differing bytes refuse.
-Symlinks, nonregular files, private/unexpected paths, missing resources and loopback
-configuration refuse without changing the prior destination. The accepted homepage
-is the sole deliberate differing-byte overlay, bound to the unchanged checksum
-inventory. A deterministic color-only system-appearance adapter combines the
-canonical `shared/ui/src/tokens.css` with `src/styles/system-appearance.css` and
-adds one inline stylesheet to the accepted HTML after checksum validation.
-The snapshot source, layout, scripts and media stay byte-identical.
-`verify-composed.mjs` checks the exact HTML transformation, retained hashes and both final resource graphs
-before existing metadata/video publication. Do not assume editing `src/App`
-alone changes the published homepage. For an intentional homepage change, reconcile
-it into the accepted public input and update the checksum contract in the same PR;
-verify desktop/mobile behavior before publication. A future source-only rewrite
-must prove equivalent design and interactions before retiring this snapshot.
+The TypeScript/React source build is the production homepage. Packaging admits
+only the public allowlist, and `compose-connect.mjs` adds the independently built
+Connect browser artifact. `prepare-pages.ts` adds provider metadata without
+replacing homepage or asset bytes. `verify-composed.ts` verifies the source-built
+homepage survives unchanged, validates Connect-owned bytes and both resource
+graphs, and refuses private/unexpected paths or loopback production configuration.
+Do not patch compiled bundles, maintain deployment overlays, or commit generated
+site output. Original approved photos and media remain source assets.
 
 The approved movie exceeds Pages' 25 MiB asset ceiling. A **Pages Function**, not a
 separate Worker deployment or external origin, serves the existing movie URL from
@@ -74,11 +59,18 @@ pages do not consume that Function allowance.
 ## Main-branch CD
 
 PR verification has no production credentials. The production Pages artifact is
-frozen before the separate synthetic Connect build. The website job downloads only
-that run's revision-named artifact, checks current main, deploys with the exact
-commit hash and reads back the production deployment plus root/Connect bytes.
-Publication is serialized without canceling an in-flight job. The `hosted` job and
-its activation gate are unchanged and must remain disabled for this website task.
+frozen before the separate synthetic Connect build. The website job downloads only that run's revision-named artifact, checks current
+main, verifies its complete checksum inventory, and deploys without bundling. The
+credential-free job compiles the Pages Function into `_worker.js` and tests that
+compiled worker in workerd before sealing `.build/website/`. This artifact contains
+`dist-apparent/`, `wrangler.jsonc`, and a nonserved `manifest.json` binding every
+file to the admitted commit. Artifacts are retained for 90 days; provider deployment
+IDs and readback receipts identify rollback candidates independently of that TTL.
+The production job copies no Function source or repository library into staging.
+It checks HTML and emitted JS/CSS at both the immutable deployment URL and canonical
+hostname, plus movie identity and Connect privacy headers. The receipt records
+revision, deployment ID and manifest digest. Publication is serialized without
+canceling an in-flight job. The `hosted` job and its activation gate are unchanged.
 
 The synthetic integration build uses `connect/web/dist-test` and writes only
 `public/site/dist/synthetic-composition`. `COMPOSE_SYNTHETIC_ORIGIN` must name its labelled
@@ -166,7 +158,7 @@ site.
 
 ## Verification
 
-Run existing public-site tests before the preservation overlay, then the Pages
+Run existing public-site tests on the source build and final package, then the Pages
 package/video tests, CD Python tests and Connect's credentialed synthetic browser
 suite. On both the immutable deployment and custom hostname run the recorded-video
 browser verifier and inspect desktop/mobile screenshots, frog jumps/waves, download
