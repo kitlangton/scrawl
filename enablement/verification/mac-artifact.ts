@@ -8,14 +8,18 @@ import { platform, arch } from 'node:os'
 
 const hash = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
 type Probe = (command: string, args: string[]) => string
-type ProducerKind = 'verified-main' | 'focused-settings-build'
+export const focusedProducers = {
+  'focused-settings-build': { workflow: 'verification-mac.yml', buildJob: 'settings-build', nativeJob: 'settings-native' },
+  'focused-share-build': { workflow: 'native-proof-mac.yml', buildJob: 'share-build', nativeJob: 'connect-worker' },
+} as const
+type ProducerKind = 'verified-main' | keyof typeof focusedProducers
 export function producerOptions(args: string[]): { kind: ProducerKind, output: string } {
   if (args.length === 1 && args[0] && !args[0].startsWith('--')) return { kind: 'verified-main', output: args[0] }
   if (args.length === 3 && args[0] === '--producer-kind' &&
-      ['verified-main', 'focused-settings-build'].includes(args[1]) && args[2] && !args[2].startsWith('--')) {
+      ['verified-main', ...Object.keys(focusedProducers)].includes(args[1]) && args[2] && !args[2].startsWith('--')) {
     return { kind: args[1] as ProducerKind, output: args[2] }
   }
-  throw new Error('Usage: mac-artifact.ts [--producer-kind verified-main|focused-settings-build] FRESH_OUTPUT_DIRECTORY')
+  throw new Error('Usage: mac-artifact.ts [--producer-kind verified-main|focused-settings-build|focused-share-build] FRESH_OUTPUT_DIRECTORY')
 }
 const requireMatch = (s: string, re: RegExp) => { if (!re.test(s)) throw new Error('Unexpected producer identity/configuration'); return s }
 const system = (p: string) => /^\/(usr\/lib|System\/Library)\/[A-Za-z0-9_./+-]+$/.test(p) && !p.split('/').includes('..')
@@ -42,35 +46,36 @@ export function audit(loads: string, developer: string, exists = existsSync) {
 }
 
 export function produce(root: string, output: string, env: NodeJS.ProcessEnv, probe: Probe, os = platform(), cpu = arch(), kind: ProducerKind = 'verified-main') {
-  if (!['verified-main', 'focused-settings-build'].includes(kind)) throw new Error('Unknown producer kind')
+  if (!['verified-main', ...Object.keys(focusedProducers)].includes(kind)) throw new Error('Unknown producer kind')
   if (os !== 'darwin' || cpu !== 'x64') throw new Error('Expected Intel macOS')
   const q = (c: string, ...args: string[]) => probe(c, args).trim()
   const git = (...args: string[]) => q('git', ...args)
   if (git('status', '--porcelain', '--untracked-files=normal')) throw new Error('Dirty checkout')
   const sha = requireMatch(git('rev-parse', 'HEAD'), /^[a-f0-9]{40}$/)
   const tree = requireMatch(git('rev-parse', 'HEAD^{tree}'), /^[a-f0-9]{40}$/)
-  const focused = kind === 'focused-settings-build'
+  const route = focusedProducers[kind as keyof typeof focusedProducers]
+  const focused = Boolean(route)
   let workflow: string
   if (focused) {
     const ref = requireMatch(env.GITHUB_REF ?? '', /^refs\/heads\/[A-Za-z0-9_./-]+$/)
     if (ref === 'refs/heads/main' || /\s/.test(ref) || ref.includes('..') || ref.includes('//') ||
-        env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_JOB !== 'settings-build' ||
+        env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_JOB !== route.buildJob ||
         env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || env.GITHUB_SHA !== sha || env.GITHUB_WORKFLOW_SHA !== sha) {
       throw new Error('Focused producer must build this dispatched candidate')
     }
-    workflow = `tryapparent/apparent/.github/workflows/verification-mac.yml@${ref}`
+    workflow = `tryapparent/apparent/.github/workflows/${route.workflow}@${ref}`
     if (env.GITHUB_WORKFLOW_REF !== workflow) throw new Error('Unexpected focused producer workflow')
   } else {
     workflow = requireMatch(env.GITHUB_WORKFLOW_REF ?? '', /^tryapparent\/apparent\/\.github\/workflows\/verification(?:-mac)?\.yml@refs\/heads\/main$/)
   }
   const identity = {
-    ...(focused ? { kind: 'focused-settings-build' as const } : {}),
+    ...(focused ? { kind } : {}),
     repository: requireMatch(env.GITHUB_REPOSITORY ?? '', /^tryapparent\/apparent$/),
     workflow,
     workflow_sha: requireMatch(env.GITHUB_WORKFLOW_SHA ?? '', /^[a-f0-9]{40}$/),
     run: requireMatch(env.GITHUB_RUN_ID ?? '', /^[1-9]\d*$/),
     attempt: requireMatch(env.GITHUB_RUN_ATTEMPT ?? '', /^[1-9]\d*$/),
-    job: requireMatch(env.GITHUB_JOB ?? '', focused ? /^settings-build$/ : /^rust$/),
+    job: requireMatch(env.GITHUB_JOB ?? '', focused ? new RegExp(`^${route.buildJob}$`) : /^rust$/),
   }
   const allowed: Record<string, string> = { MACOSX_DEPLOYMENT_TARGET: '15.0' }
   for (const [key, value] of Object.entries(env)) {

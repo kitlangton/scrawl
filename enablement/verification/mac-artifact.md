@@ -77,3 +77,20 @@ unchanged. Run/artifact/destination environment names and CLI remain the same.
 This is a build input for the same run's subsequent native test, never a full
 verification, release or successful native receipt. The Settings owner supplies
 its emitter and workflow composition; the consumer adds no candidate build job.
+
+
+### Focused public-share build inputs
+
+The separate `focused-share-build` identity uses `native-proof-mac.yml`, build
+job `share-build` and consumer `connect-worker`. It has the same exact-candidate,
+same-run/attempt and successful-build requirements as Settings; neither kind can
+consume the other's artifact. The producer CLI selects the kind explicitly.
+
+A share dispatch without explicit main artifact IDs builds once in `share-build`,
+then passes its immutable artifact ID to the native job. Each job retains a
+10-minute whole-job limit. Failed/cancelled builds cannot start the native job or
+fall back to rebuilding. Explicit verified-main inputs and the existing worker
+scenario retain their routes. Build reuse removes repeated compilation from
+installed acceptance; it does not remove or certify any native assertions.
+Both measured complete job times, runtime closure and actual installed proof
+remain required; local contract tests establish none of those outcomes.

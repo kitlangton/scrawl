@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, read
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
+import { admit, verify } from './mac-artifact-consumer.ts'
 import { produce, audit, producerOptions } from './mac-artifact.ts'
 const developer = '/Applications/Xcode_26.0.app/Contents/Developer'
 const loads = 'cmd LC_BUILD_VERSION\ncmdsize 32\nplatform 1\nminos 15.0\nsdk 26.0\ncmd LC_LOAD_DYLIB\ncmdsize 56\nname /usr/lib/libSystem.B.dylib (offset 24)'
@@ -88,3 +89,28 @@ test('workflow retains success-only producer after existing evidence and before 
   assert.ok(workflow.indexOf('name: verification-receipts-rust-') < workflow.indexOf('      - name: Retain verified Intel'))
   assert.match(segment, /needs: \[select, desktop-ui, connect-client, connect-web, rust\]/)
 })
+
+test('share build kind is bound to its own workflow and job without changing Settings', () => fixture((run) => {
+  const env = { ...focused, GITHUB_JOB: 'share-build', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/native-proof-mac.yml@refs/heads/t3/candidate' }
+  assert.throws(() => run(env, 'darwin', 'focused-settings-build'))
+  assert.throws(() => run(focused, 'darwin', 'focused-share-build'))
+  const manifest = run(env, 'darwin', 'focused-share-build')
+  assert.equal(manifest.producer.kind, 'focused-share-build')
+  assert.equal(manifest.producer.job, 'share-build')
+  assert.equal(manifest.producer.workflow, env.GITHUB_WORKFLOW_REF)
+  assert.equal(producerOptions(['--producer-kind', 'focused-share-build', '/fresh']).kind, 'focused-share-build')
+}))
+
+for (const kind of ['focused-settings-build', 'focused-share-build'] as const) test(`${kind} emitted manifest passes the real consumer contract`, () => fixture((run, root) => {
+  const sharing = kind === 'focused-share-build'
+  const jobName = sharing ? 'share-build' : 'settings-build'
+  const workflow = sharing ? 'native-proof-mac.yml' : 'verification-mac.yml'
+  const env = { ...focused, GITHUB_JOB: jobName, GITHUB_WORKFLOW_REF: `tryapparent/apparent/.github/workflows/${workflow}@refs/heads/t3/candidate` }
+  const manifest = run(env, 'darwin', kind)
+  const repository = { full_name: 'tryapparent/apparent' }
+  const upstream = { id: 123, run_attempt: 1, repository, head_repository: repository, path: `.github/workflows/${workflow}`, head_branch: 't3/candidate', head_sha: manifest.source.sha, event: 'workflow_dispatch', status: 'in_progress', conclusion: null }
+  const artifact = { id: 456, name: 'mac-dev-executables-123-1', workflow_run: { id: 123 }, expired: false, digest: 'sha256:' + 'f'.repeat(64) }
+  const job = { name: jobName, run_id: 123, run_attempt: 1, status: 'completed', conclusion: 'success' }
+  const identity = admit(upstream, artifact, [job], '123', '456', { kind, run: '123', attempt: '1', sha: manifest.source.sha, head: manifest.source.sha, tree: manifest.source.tree, workflow: manifest.producer.workflow, workflowSha: manifest.source.sha, job: sharing ? 'connect-worker' : 'settings-native', event: 'workflow_dispatch' })
+  verify(join(root, 'payload'), manifest, { sha: manifest.source.sha, tree: manifest.source.tree, lock: manifest.cargo_lock_sha256, config: manifest.config_sha256 }, identity)
+}))

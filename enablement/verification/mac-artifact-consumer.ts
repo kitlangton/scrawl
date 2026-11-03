@@ -5,7 +5,7 @@ import { chmodSync, existsSync, lstatSync, readFileSync, readdirSync } from 'nod
 import { resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { platform, arch } from 'node:os'
-import { audit } from './mac-artifact.ts'
+import { audit, focusedProducers } from './mac-artifact.ts'
 
 const repository = 'tryapparent/apparent'
 const digest = (data: Buffer | string) => createHash('sha256').update(data).digest('hex')
@@ -16,32 +16,33 @@ type Context = { kind?: string, run?: string, attempt?: string, sha?: string, he
 export function admit(run: any, artifact: any, jobs: any[], runId: string, artifactId: string, context: Context = {}) {
   number(runId); number(artifactId)
   const kind = context.kind ?? 'verified-main'
-  check(kind === 'verified-main' || kind === 'focused-settings-build', 'Unknown producer kind')
+  check(kind === 'verified-main' || Object.hasOwn(focusedProducers, kind), 'Unknown producer kind')
+  const route = focusedProducers[kind as keyof typeof focusedProducers]
   check(String(run.id) === runId && run.repository?.full_name === repository && run.head_repository?.full_name === repository,
     'Wrong producer repository/run')
-  check(run.path === '.github/workflows/verification-mac.yml', 'Wrong producer workflow')
+  check(run.path === `.github/workflows/${route?.workflow ?? 'verification-mac.yml'}`, 'Wrong producer workflow')
   const attempt = number(String(run.run_attempt))
   if (kind === 'verified-main') {
     check(run.head_branch === 'main' && run.event === 'workflow_run' && run.status === 'completed' &&
       run.conclusion === 'success', 'Producer did not succeed on trusted main')
   } else {
-    check(context.event === 'workflow_dispatch' && context.job === 'settings-native' &&
+    check(context.event === 'workflow_dispatch' && context.job === route.nativeJob &&
       context.run === runId && context.attempt === attempt && run.event === 'workflow_dispatch' &&
       run.status === 'in_progress' && run.conclusion == null, 'Focused inputs require the same active native run/attempt')
     check(typeof context.sha === 'string' && /^[a-f0-9]{40}$/.test(context.sha) &&
       context.head === context.sha && context.workflowSha === context.sha && run.head_sha === context.sha &&
       typeof context.tree === 'string' && /^[a-f0-9]{40}$/.test(context.tree), 'Focused candidate identity mismatch')
     check(typeof run.head_branch === 'string' && run.head_branch !== 'main' &&
-      context.workflow === `${repository}/.github/workflows/verification-mac.yml@refs/heads/${run.head_branch}`, 'Focused workflow ref mismatch')
+      context.workflow === `${repository}/.github/workflows/${route.workflow}@refs/heads/${run.head_branch}`, 'Focused workflow ref mismatch')
   }
   check(String(artifact.id) === artifactId && artifact.expired === false && artifact.workflow_run?.id === run.id &&
     artifact.name === `mac-dev-executables-${runId}-${attempt}`, 'Wrong or expired artifact')
   check(/^sha256:[a-f0-9]{64}$/.test(artifact.digest), 'Missing trusted archive digest')
-  const rust = jobs.filter(j => j.name === (kind === 'verified-main' ? 'verify / rust (macos-15-intel)' : 'settings-build'))
+  const rust = jobs.filter(j => j.name === (kind === 'verified-main' ? 'verify / rust (macos-15-intel)' : route.buildJob))
   check(rust.length === 1 && rust[0].status === 'completed' && rust[0].conclusion === 'success' &&
     String(rust[0].run_id) === runId && String(rust[0].run_attempt) === attempt, 'Producer job did not succeed')
   return { kind, run: runId, attempt, artifact: artifactId, digest: artifact.digest as string,
-    ...(kind === 'focused-settings-build' ? { candidate: { sha: context.sha, tree: context.tree, workflow: context.workflow, workflowSha: context.workflowSha } } : {}) }
+    ...(route ? { candidate: { sha: context.sha, tree: context.tree, workflow: context.workflow, workflowSha: context.workflowSha } } : {}) }
 }
 export function unpack(bytes: Buffer, expectedDigest: string, directory: string) {
   check(`sha256:${digest(bytes)}` === expectedDigest, 'Artifact transport digest mismatch')
@@ -77,7 +78,7 @@ export function verify(directory: string, manifest: any, expected: { sha: string
     check(manifest.producer.job === 'rust' && manifest.producer.workflow === `${repository}/.github/workflows/verification-mac.yml@refs/heads/main`, 'Wrong main producer')
   } else {
     const candidate = identity.candidate
-    check(manifest.producer.job === 'settings-build' && candidate?.sha === expected.sha && candidate?.tree === expected.tree &&
+    check(manifest.producer.job === focusedProducers[identity.kind as keyof typeof focusedProducers].buildJob && candidate?.sha === expected.sha && candidate?.tree === expected.tree &&
       manifest.producer.workflow === candidate?.workflow && manifest.producer.workflow_sha === candidate?.workflowSha, 'Wrong focused producer/candidate')
   }
   check(manifest.target === 'x86_64-apple-darwin' && manifest.profile === 'dev' && manifest.deployment_target === '15.0' &&
@@ -107,7 +108,7 @@ export function trustedIdentity(runId: string, artifactId: string) {
   const response = github(`actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`)
   check(response.total_count <= 100, 'Unexpected job pagination')
   const kind = process.env.APPARENT_PREBUILT_KIND ?? 'verified-main'
-  const context: Context = kind === 'focused-settings-build' ? {
+  const context: Context = Object.hasOwn(focusedProducers, kind) ? {
     kind, run: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT,
     sha: process.env.GITHUB_SHA, head: command('git', 'rev-parse', 'HEAD'), tree: command('git', 'rev-parse', 'HEAD^{tree}'),
     workflow: process.env.GITHUB_WORKFLOW_REF, workflowSha: process.env.GITHUB_WORKFLOW_SHA,

@@ -95,3 +95,16 @@ test('focused admission rejects cross-run, attempts, refs, source and non-native
   for (const jobs of [[job], [{ ...focusedJob, conclusion: 'failure' }], [{ ...focusedJob, run_attempt: 1 }]]) assert.throws(() => admit(focusedRun, artifact, jobs, '123', '456', focusedContext))
   assert.throws(() => admit(focusedRun, artifact, [focusedJob], '123', '456'), 'default main kind must still require final automatic main success')
 })
+
+test('share and Settings focused kinds cannot consume each others builds', () => fixture((dir, m, expected) => {
+  const shareRun = { ...focusedRun, path: '.github/workflows/native-proof-mac.yml' }
+  const shareJob = { ...focusedJob, name: 'share-build' }
+  const context = { ...focusedContext, kind: 'focused-share-build', job: 'connect-worker', workflow: focusedContext.workflow.replace('verification-mac.yml', 'native-proof-mac.yml') }
+  const identity = admit(shareRun, artifact, [shareJob], '123', '456', context)
+  const manifest = { ...m, producer: { ...m.producer, kind: 'focused-share-build', job: 'share-build', workflow: context.workflow, workflow_sha: context.sha } }
+  verify(dir, manifest, expected, identity)
+  assert.throws(() => admit(shareRun, artifact, [focusedJob], '123', '456', context))
+  assert.throws(() => admit(focusedRun, artifact, [shareJob], '123', '456', context))
+  assert.throws(() => admit(shareRun, artifact, [shareJob], '123', '456', focusedContext))
+  assert.throws(() => verify(dir, { ...manifest, producer: { ...manifest.producer, kind: 'focused-settings-build' } }, expected, identity))
+}))
