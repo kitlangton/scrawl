@@ -29,7 +29,7 @@ for (const path of files.keys()) if (path.endsWith('.html') && !routes.some(rout
 assert.doesNotMatch(files.get('index.html').toString(), /href="\/(?:connect|hosted)/)
 assert.doesNotMatch(files.get('sitemap.xml').toString(), /\/(?:connect|hosted)/)
 const headers = files.get('_headers').toString(), redirects = files.get('_redirects').toString()
-for (const route of ['connect', 'hosted']) assert(headers.includes(`/${route}*\n  Cache-Control: no-store\n  X-Robots-Tag: noindex, nofollow`))
+for (const route of ['connect', 'hosted']) assert(headers.includes(`/${route}*\n  Cache-Control: no-store, no-transform\n  X-Robots-Tag: noindex, nofollow`))
 for (const suffix of ['', '/device', '/shares']) for (const slash of ['', '/']) assert(redirects.split('\n').includes(`/hosted${suffix}${slash} /connect${suffix} 302`))
 assert(files.has('404.html')); assert(!files.has('connect.html'))
 console.log(JSON.stringify({ artifact: root, sourceHomepageSha256: createHash('sha256').update(source.get('index.html')).digest('hex'), landingResources: landing.size, connectResources: browser.size, synthetic: Boolean(syntheticOrigin), limits: 'Static composed graph and metadata; not live Pages, OAuth or native proof.' }))
