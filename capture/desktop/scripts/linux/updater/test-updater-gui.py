@@ -26,6 +26,37 @@ class LocatorTests(unittest.TestCase):
     def setUp(self):
         self.gui = load('updater-gui')
 
+    def test_native_output_selection_refuses_changed_or_ambiguous_picker(self):
+        from PIL import Image
+        image = Image.new('RGB', (1280, 800))
+        for point in ((144, 154), (1134, 154), (144, 644), (1134, 644)):
+            image.putpixel(point, (122, 162, 247))
+        for point in ((340, 233), (640, 232), (640, 604)):
+            image.putpixel(point, (17, 17, 17))
+        words = [dict(text=text, left=left, top=185)
+                 for text, left in zip(('Windows', 'Outputs', 'Region'), (178, 261, 343))]
+        self.assertEqual(self.gui.picker_output_center(image, words), (640, 400))
+        for invalid in ([], words + [words[1]], [dict(w, top=200) for w in words]):
+            with self.assertRaises(ValueError):
+                self.gui.picker_output_center(image, invalid)
+        with self.assertRaises(ValueError):
+            self.gui.picker_output_center(image.resize((640, 400)), words)
+        image.putpixel((640, 604), (0, 0, 0))
+        with self.assertRaises(ValueError):
+            self.gui.picker_output_center(image, words)
+
+    def test_picker_preview_text_cannot_establish_live_dialog(self):
+        words = [dict(text=t, left=x, top=400, width=40, height=12,
+                      block_num=1, par_num=1, line_num=1)
+                 for t, x in [('Update', 500), ('now', 545)]]
+        self.assertTrue(self.gui.native_picker_dismissed(words))
+        self.assertTrue(self.gui.native_picker_dismissed([], words))
+        self.assertFalse(self.gui.native_picker_dismissed([dict(text='Outputs')], words))
+        self.assertFalse(self.gui.native_picker_dismissed(words, [dict(text='Outputs')]))
+        self.assertFalse(self.gui.native_picker_dismissed([]))
+        self.assertFalse(self.gui.native_picker_dismissed(words + [dict(text='Outputs')]))
+        self.assertFalse(self.gui.native_picker_dismissed(words + [dict(w, line_num=2) for w in words]))
+
     def test_phrase_uses_visible_word_bounds(self):
         words = [{'text': t, 'left': x, 'top': 10, 'width': w, 'height': 12,
                   'block_num': 1, 'par_num': 1, 'line_num': 1}
@@ -249,6 +280,23 @@ exit "$result"
 
 
 class FixtureTests(unittest.TestCase):
+    def test_static_feed_works_with_api_unavailable_and_binds_checksum(self):
+        fixture = load('updater-fixture')
+        control = {'channel': 'main', 'source_head': 'a'*40, 'version': '1.2.3',
+                   'mode': 'available', 'api_unavailable': True}
+        self.assertEqual(fixture.response(control, fixture.MAIN_API+'1', b'image')[0], 403)
+        status, body = fixture.response(control, fixture.MAIN_FEED, b'image')
+        self.assertEqual(status, 200)
+        feed = json.loads(body)
+        self.assertEqual(feed['source'], 'b'*40)
+        self.assertIn('a'*40, feed['ancestors'])
+        self.assertEqual(len(feed['release']['assets']), 4)
+        for name, checksum in feed['checksums'].items():
+            self.assertEqual(checksum, hashlib.sha256(b'image').hexdigest()+'  '+name+'\n')
+        control['mode'] = 'diverged'
+        feed = json.loads(fixture.response(control, fixture.MAIN_FEED, b'image')[1])
+        self.assertNotIn('a'*40, feed['ancestors'])
+
     def setUp(self):
         self.fixture = load('updater-fixture')
 
@@ -271,7 +319,7 @@ class FixtureTests(unittest.TestCase):
     def test_main_pagination_canonical_assets_and_current_identity(self):
         source = 'a' * 40
         control = {'channel': 'main', 'source_head': source, 'version': '1.2.3', 'mode': 'current'}
-        base = '/repos/tryapparent/apparent/releases?per_page=10&page='
+        base = '/repos/tryapparent/apparent/releases?per_page=100&page='
         first = json.loads(self.fixture.response(control, base + '1', b'x')[1])
         self.assertFalse(first[0]['prerelease'])
         release = json.loads(self.fixture.response(control, base + '2', b'x')[1])[0]
@@ -360,6 +408,26 @@ class FixtureTests(unittest.TestCase):
                 trusted = subprocess.run(curl + ['--cacert', str(directory / 'cert.pem'), url],
                                          check=True, capture_output=True)
                 self.assertEqual(json.loads(trusted.stdout)['tag_name'], 'v1.2.3')
+                self.assertFalse((directory / 'startup-complete').exists())
+                control = {'version': '1.2.3', 'mode': 'error', 'serial': 1,
+                           'channel': 'main', 'source_head': 'a'*40, 'api_unavailable': True}
+                (directory / 'control.json').write_text(json.dumps(control))
+                feed_url = 'https://github.com' + self.fixture.MAIN_FEED
+                failed = subprocess.run(curl + ['--cacert', str(directory / 'cert.pem'), feed_url],
+                                        capture_output=True)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertFalse((directory / 'startup-complete').exists())
+                control['mode'] = 'current'
+                (directory / 'control.json').write_text(json.dumps(control))
+                feed = subprocess.run(curl + ['--cacert', str(directory / 'cert.pem'), feed_url],
+                                      check=True, capture_output=True)
+                self.assertEqual(json.loads(feed.stdout)['source'], 'a'*40)
+                deadline = time.monotonic() + 2
+                while not (directory / 'startup-complete').exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue((directory / 'startup-complete').exists())
+                requests = [json.loads(line) for line in (directory / 'requests.jsonl').read_text().splitlines()]
+                self.assertFalse(any(r['path'].endswith('.sha256') for r in requests))
                 foreign = subprocess.run(curl + ['--cacert', str(directory / 'cert.pem'), 'https://foreign.invalid/'],
                                          capture_output=True)
                 self.assertNotEqual(foreign.returncode, 0)

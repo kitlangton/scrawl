@@ -13,17 +13,22 @@ import ssl
 import time
 
 API = '/repos/tryapparent/apparent/releases/latest'
-MAIN_API = '/repos/tryapparent/apparent/releases?per_page=10&page='
+MAIN_FEED = '/tryapparent/apparent/releases/download/linux-main-feed/main.json'
+MAIN_API = '/repos/tryapparent/apparent/releases?per_page=100&page='
 CANDIDATE_SHA = 'b' * 40
 LEGACY_SHA = 'a5cf47d7dc7d0f89b1552cfb2d5e4b0ab489526a'
 BRIDGE_SHA = 'f' * 40
 
 
 def metadata_path(control):
-    return MAIN_API + '1' if control.get('channel', 'stable') == 'main' else API
+    return (MAIN_API + '1' if control.get('legacy') else MAIN_FEED) if control.get('channel', 'stable') == 'main' else API
 
 
 def response(control, path, payload):
+    # Preserve old-client bridge fixtures alongside current larger pages.
+    path = path.replace("releases?per_page=10&page=", "releases?per_page=100&page=")
+    if control.get('api_unavailable') and path.startswith('/repos/'):
+        return 403, b'API unavailable\n'
     mode = control['mode']
     version = control['version'] if mode == 'current' else '999.0.0'
     main = control.get('channel', 'stable') == 'main'
@@ -38,7 +43,22 @@ def response(control, path, payload):
                'published_at': '2026-11-01T00:00:00Z',
                'assets': [{'name': filename, 'browser_download_url': 'https://github.com' + prefix + filename}
                           for filename in [name, name + '.sha256']]}
-    if path == metadata_path(control):
+    if main and path == MAIN_FEED:
+        if mode == 'error':
+            return 503, b'controlled feed failure\n'
+        checksums = {}
+        digest = '0' * 64 if mode == 'bad-checksum' else hashlib.sha256(payload).hexdigest()
+        for cpu in ['x86_64', 'aarch64']:
+            filename = f'Apparent-{version}-linux-{cpu}.AppImage'
+            checksums[filename] = f'{digest}  {filename}\n'
+            if cpu == 'aarch64':
+                release['assets'].extend({'name': n, 'browser_download_url': 'https://github.com' + prefix + n}
+                                         for n in [filename, filename + '.sha256'])
+        ancestors = sorted(set([revision] + ([] if mode == 'diverged' else [control['source_head']])))
+        bridges = [{'id': BRIDGE_SHA, 'source': control['source_head']}] if control.get('migration') else []
+        return 200, json.dumps({'schema': 1, 'source': revision, 'release': release,
+                               'checksums': checksums, 'ancestors': ancestors, 'bridges': bridges}).encode()
+    if path == (MAIN_API + '1' if main else API):
         if mode == 'error':
             return 503, b'controlled fixture failure\n'
         # Put the usable Main release on a later page, beyond unrelated releases.
@@ -117,7 +137,8 @@ def serve(directory, payload, port=8443):
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-            if control['serial'] == 1 and self.path.endswith('.sha256'):
+            if control['serial'] == 1 and status == 200 and (
+                    self.path.endswith('.sha256') or self.path == MAIN_FEED):
                 (directory / 'startup-complete').touch()
 
         def log_message(self, format, *args):
