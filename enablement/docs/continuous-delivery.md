@@ -270,6 +270,31 @@ candidate, including cancelled-run changes. Missing or incompatible proof must
 rerun. Validate shadow decisions against full execution and investigate omissions.
 Dependency caches are not test receipts; no speedup is claimed here.
 
+## Verification receipts and timing
+
+`verification.py --run|--pr --receipt-dir <external-directory>` and
+`owner_lanes.py --lane <name> --run --receipt-dir <external-directory>` record
+observation-only JSON through `enablement/verification/receipt.ts` (Node 22).
+The wrapper can also run a bounded existing command:
+`node enablement/verification/receipt.ts --suite <name> --output <external-directory> -- <command> ...`.
+It preserves the command's working directory and nonzero exit status.
+
+Receipts include the actual checkout SHA, a fingerprint of all tracked and
+nonignored working inputs, platform/kernel, tool-version digests, verifier digest,
+start/end timestamps, duration, outcome, and an Actions run/attempt evidence link.
+They include neither command arguments, output nor environment values. Generated,
+ignored and external/native inputs are explicitly outside this observation's
+attestation; **these receipts cannot skip verification or authorize publication**.
+An initial `in_progress` record precedes command execution. Signals are forwarded
+to the command group and yield `interrupted`; hard termination leaves incomplete
+proof. Source mutations are recorded and never labelled reusable.
+
+The platform workflow uploads renderer and changed-tree observations for 14 days,
+including failures, and puts command duration in the job summary. Missing uploads
+or unfinished records are not passes. For queue time, use Actions run/job timestamps
+alongside receipt execution times; command duration does not include runner wait,
+setup, or the entire platform workflow. No speedup is claimed from instrumentation.
+
 ## Commit integration checkpoint
 
 With `core.hooksPath=.githooks`, `post-commit` refreshes `origin/main` with a
