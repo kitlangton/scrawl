@@ -33,8 +33,10 @@ requirements still apply; supported platforms remain macOS and Linux.
 `Client::prepare_public_link` is the compatible client integration contract for
 #171. Call it only after the sender explicitly chooses public sharing with:
 “Anyone with this link can view this capture. Shared captures are not end-to-end
-encrypted.” Existing Desktop callers still use `prepare_link`, which retains the
-encrypted-sharing refusal until their consent/UI integration is accepted.
+encrypted.” The completed-capture Copy link action reaches this method through
+its capture-bound Rust controller after the Electron confirmation. Other
+`prepare_link` callers retain the encrypted-sharing refusal. The installed
+sender's native acceptance and existing activation holds remain separate gates.
 
 The explicit method persists a separate `publicCopy` job, plaintext manifest and
 fresh capture ID under the current upload grant. It never edits/cancels the
@@ -246,3 +248,8 @@ it is not live Google, deployed Worker, Electron routing or native platform proo
 `cargo test -j 3 --offline hosted_ -- --test-threads=2` exercises the production curl subprocess against an isolated loopback HTTP server, synthetic device auth, complete bundle upload/fetch, restart queue recovery, pending pointers, quota/disable/logout, pending/transport deadlines, corruption, path and symlink rejection and v1 bounds. Tests use private synthetic config/bundle directories, not the user's credentials/captures. Native capture/paste and macOS tooling still require platform proof; a Linux build is not GUI proof.
 
 The independent package tests also exercise renewable account/upload/fetch/share/progress calls, proactive expiry and unexpected 401, separate-process single ownership, transient/permanent refresh failures, scope/grant mismatch, delayed refresh versus disable/logout/new generation, secret-free status, expired-grant revocation, offline logout and process exit after durable response before credential publication. These are synthetic protocol tests, not Better Auth/browser integration evidence; candidate backend-client integration and macOS/Linux native GUI checks remain separate gates.
+
+Saved `notes.json` is semantic capture data and transfers with the recording.
+The legacy `notes-ui.log` is a local diagnostic and is never uploaded or served;
+staging skips only that exact name after checking a private, current-user-owned,
+regular file with one link. Unsafe diagnostics and unknown assets remain errors.

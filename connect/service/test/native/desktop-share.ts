@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {spawn, spawnSync} from 'node:child_process';
-import {mkdir, mkdtemp, readFile, writeFile, readdir, realpath, rm} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, writeFile, readdir, realpath, rm, cp} from 'node:fs/promises';
 import {openSync, closeSync, existsSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -153,6 +153,18 @@ function popupPID() {
   });
   assert(matches.length <= 1, 'Multiple installed share children'); return matches.length ? Number(matches[0]) : null;
 }
+async function retainBundle(bundle) {
+  // Artifact allowlist is independent of upload admission. Never retain UI diagnostics.
+  const target = join(evidence, 'synthetic.apparent'); await mkdir(target, {mode: 0o700});
+  for (const name of await readdir(bundle)) {
+    if (/^(apparent\.json|notes\.json|summary\.md|contact-sheet(?:-full)?\.png|recording\.(mp4|mov)|audio\.wav|timeline\.json|finish-trace\.json)$/.test(name))
+      await cp(join(bundle, name), join(target, name));
+    else if (name === 'frames' || name === 'frames-full') {
+      await mkdir(join(target, name), {mode: 0o700});
+      for (const file of await readdir(join(bundle, name))) if (/^frame-[0-9]+\.png$/.test(file)) await cp(join(bundle, name, file), join(target, name, file));
+    }
+  }
+}
 async function openPopup() {
   ui('click', desktop.pid, 'Copy link');
   const pid = await until(popupPID, 10, 'Installed share child absent');
@@ -173,6 +185,8 @@ async function openPopup() {
   const saved = JSON.parse(await cli(['capture', 'stop', id, '--wait', '--timeout', '60']));
   assert.equal(saved.capture_id, id); assert.equal(saved.status, 'saved');
   const bundle = saved.bundle_path; assert(bundle.startsWith(join(home, 'captures') + '/'));
+  Object.assign(report, {captureSaved: true, binarySHA256: createHash('sha256').update(await readFile(binary)).digest('hex')});
+  await retainBundle(bundle);
   const jobs = async () => Promise.all((await readdir(join(home, 'hosted'))).filter(n => n.endsWith('.job')).map(async n => JSON.parse(await readFile(join(home, 'hosted', n)))));
   const privateJob = await until(async () => (await jobs()).find(j => j.encrypted && j.status === 'ready'), 25, 'Approved private transfer not ready');
   const privateFile = join(home, 'hosted', privateJob.id + '.job');
@@ -209,8 +223,6 @@ async function openPopup() {
     const bytes = Buffer.from(await r.arrayBuffer());
     assert.equal(digest(bytes), file.sha256); assert(bytes.equals(await readFile(join(bundle, file.path))));
   }
-  // Only synthetic bundle text/images/movie are retained, with capabilities excluded.
-  const {cp} = await import('node:fs/promises'); await cp(bundle, join(evidence, 'synthetic.apparent'), {recursive: true});
   const publicJob = (await jobs()).find(j => j.publicCopy); assert(publicJob && !publicJob.encrypted && publicJob.id !== privateJob.id);
   const share = await service.db.prepare('SELECT id FROM shares WHERE capture_id = ?').bind(publicJob.id).first(); assert(share);
   assert.equal((await service.call('/v1/shares/' + share.id, {token: account.token, method: 'DELETE'})).status, 200);
@@ -223,6 +235,19 @@ async function openPopup() {
 } catch (error) { report.failure = error.message.replace(/\/s\/[a-f0-9]{64}/g, '/s/[redacted]'); process.exitCode = 1; }
 finally {
   const cleanupErrors = [];
+  // Only allowlisted status/error enums and numeric facts survive failed preparation.
+  try {
+    const allowedErrors = new Set(['file_too_large', 'encryption_pending_recipient', 'encryption_action_required', 'quota_exceeded', 'unsupported_asset', 'auth_required', 'upload_failed']);
+    report.uploadQueue = await Promise.all((await readdir(join(home, 'hosted'))).filter(n => n.endsWith('.job')).map(async name => {
+      const j = JSON.parse(await readFile(join(home, 'hosted', name)));
+      return {status: ['pending', 'ready', 'failed', 'cancelled', 'expired'].includes(j.status) ? j.status : 'unknown',
+        error: j.error == null ? null : allowedErrors.has(j.error) ? j.error : 'unknown',
+        encrypted: j.encrypted === true, publicCopy: j.publicCopy === true,
+        attempts: Number.isSafeInteger(j.attempts) ? j.attempts : null};
+    }));
+    report.apiStatuses = calls.map(c => ({method: c.method, status: c.status ?? null}));
+  } catch { report.queueInspectionUnavailable = true; }
+
   if (recorder && alive(recorder)) {
     recorder.kill('SIGINT');
     await Promise.race([new Promise(r => recorder.once('close', r)), delay(5000)]);

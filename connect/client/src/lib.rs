@@ -251,6 +251,7 @@ fn asset_path(path: &str) -> bool {
             *name,
             "summary.md"
                 | "apparent.json"
+                | "notes.json"
                 | "contact-sheet.png"
                 | "contact-sheet-full.png"
                 | "recording.mp4"
@@ -2059,6 +2060,19 @@ fn snapshot(bundle: &Path, stage: &Path) -> Result<Vec<Asset>> {
             .file_name()
             .into_string()
             .map_err(|_| anyhow::anyhow!("Invalid asset name"))?;
+        if name == "notes-ui.log" {
+            // Existing Desktop captures retain this local Electron diagnostic.
+            // It is not semantic capture data and must never enter either transfer.
+            let metadata = fs::symlink_metadata(entry.path())?;
+            ensure!(
+                metadata.is_file()
+                    && metadata.uid() == unsafe { libc::geteuid() }
+                    && metadata.mode() & 0o077 == 0
+                    && metadata.nlink() == 1,
+                "Unsafe local notes diagnostic"
+            );
+            continue;
+        }
         if name == ".publication.lock" {
             // Engine keeps this empty coordination inode after publication. It
             // is local machinery, never capture evidence or a remotely served asset.
@@ -2231,12 +2245,14 @@ mod tests {
             "frames/.credential",
             "frames/a\\b.png",
             "credentials.json",
+            "notes-ui.log",
         ] {
             assert!(!asset_path(path), "accepted {path}");
         }
         for path in [
             "summary.md",
             "apparent.json",
+            "notes.json",
             "contact-sheet.png",
             "frames/frame-01.png",
             "frames-full/frame-01.png",

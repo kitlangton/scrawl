@@ -115,7 +115,7 @@ jobs:
         env:
           APPARENT_CONNECT_NATIVE_CI: '1'
         run: |
-          node connect/service/test/native/desktop-share.mjs "$GITHUB_WORKSPACE" \
+          node connect/service/test/native/desktop-share.ts "$GITHUB_WORKSPACE" \
             "$APPARENT_APP_DIR/Contents/MacOS/apparent" "$APPARENT_CONNECT_PROOF/scenario"
       - name: Verify owned cleanup and retain only allowlisted evidence
         if: always()

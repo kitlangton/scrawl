@@ -44,8 +44,10 @@ test('popup packaging requires notes and includes a present independent share en
   await assert.rejects(stagePopupEntries(root, out), { code: 'ENOENT' });
   await fs.writeFile(path.join(root, 'electron/share/main.cjs'), 'share entry');
   await fs.writeFile(path.join(root, 'electron/share/preload.cjs'), 'separate protocol');
+  await fs.writeFile(path.join(root, 'electron/share/main.cts'), 'authored TypeScript');
   await stagePopupEntries(root, out);
   assert.equal(await fs.readFile(path.join(out, 'electron/share/main.cjs'), 'utf8'), 'share entry');
   assert.equal(await fs.readFile(path.join(out, 'electron/share/preload.cjs'), 'utf8'), 'separate protocol');
+  await assert.rejects(fs.stat(path.join(out, 'electron/share/main.cts')), { code: 'ENOENT' });
   await assert.rejects(fs.stat(path.join(out, 'runtime')), { code: 'ENOENT' });
 });

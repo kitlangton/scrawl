@@ -97,8 +97,8 @@ class NativeProofMacTests(unittest.TestCase):
         self.assertIn("if: inputs.scenario != 'share'", worker)
         self.assertIn("if: inputs.scenario == 'share'", share)
         self.assertIn('desktop-worker.mjs', worker)
-        self.assertNotIn('desktop-share.mjs', worker)
-        self.assertIn('desktop-share.mjs', share)
+        self.assertNotIn('desktop-share.ts', worker)
+        self.assertIn('desktop-share.ts', share)
         self.assertNotIn('desktop-worker.mjs', share)
         self.assertIn('name: mac-connect-${{ inputs.scenario || \'worker\' }}-native', workflow)
 

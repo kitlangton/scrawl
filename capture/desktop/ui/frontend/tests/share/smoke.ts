@@ -1,8 +1,10 @@
-const {test}=require('node:test');
-const assert=require('node:assert/strict');
-const {chromium,expect}=require('@playwright/test');
-const {spawn}=require('node:child_process');
-const path=require('node:path');
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {chromium,expect} from '@playwright/test';
+import {spawn} from 'node:child_process';
+import path from 'node:path';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url),__dirname=import.meta.dirname;
 test('share window requires explicit consent and keeps URLs and other bridges out of renderer',{timeout:30000},async t=>{
  const child=spawn(require('electron'),['--no-sandbox','--remote-debugging-port=0',path.resolve(__dirname,'../../electron/share/main.cjs')],{stdio:['pipe','pipe','pipe']});
  let browser,lines='';child.stdout.on('data',b=>lines+=b);

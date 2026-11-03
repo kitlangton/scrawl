@@ -557,3 +557,7 @@ explicit consent/cancel/repeated clipboard delivery, and the actual loopback
 Worker. It retains synthetic screenshots/bundle and available decodable video;
 it does not edit TCC or establish deployed-account/ChatGPT acceptance. A long
 open confirmation pauses completion dismissal; closing grants a fresh retry interval.
+
+The share Electron entry/preload are authored as `.cts`. `npm run build` checks
+and emits their ignored `.cjs` runtime files; popup packaging stages only those
+outputs. The share smoke and hosted native case are TypeScript run by Node 22.
