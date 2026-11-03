@@ -15,6 +15,8 @@ from urllib.request import Request, urlopen
 ACCOUNT = 'a54dcebead3b8ad688f891da0ab54d1f'
 PROJECT = 'apparent-capture'
 ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT / 'enablement'))
+from release_gate import publication_needed
 
 
 def api(path):
@@ -32,9 +34,11 @@ class SupersededMain(ValueError):
 
 
 def current_main(sha):
-    tip = subprocess.check_output(['git', 'ls-remote', 'origin', 'refs/heads/main'], cwd=ROOT, text=True).split()[0]
-    if tip != sha:
-        raise SupersededMain('Refusing stale main revision')
+    project = api(f'/accounts/{ACCOUNT}/pages/projects/{PROJECT}')
+    deployment = project['canonical_deployment']
+    published = None if deployment is None else deployment['deployment_trigger']['metadata']['commit_hash']
+    if not publication_needed(os.environ['GITHUB_REPOSITORY'], sha, published):
+        raise SupersededMain('An equal or newer website revision is already deployed')
 
 
 def inventory(root):

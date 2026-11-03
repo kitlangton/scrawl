@@ -2,6 +2,9 @@
 import json
 import os
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "enablement"))
+from release_gate import publication_needed
 from urllib.request import Request, urlopen
 
 
@@ -16,13 +19,18 @@ def api(path):
     return result['result']
 
 
-def verify(sha):
+def deployed_revision():
     deployments = api('deployments')['deployments']
     latest = max(deployments, key=lambda d: d['created_on'])
     versions = latest['versions']
     if len(versions) != 1 or versions[0]['percentage'] != 100:
         raise ValueError('Expected a single fully deployed version')
     version = api('versions/' + versions[0]['version_id'])
+    return latest, version
+
+
+def verify(sha):
+    latest, version = deployed_revision()
     if version.get('annotations', {}).get('workers/tag') != sha:
         raise ValueError('Deployed Worker is not the checked commit')
     request = Request('https://hosted.tryapparent.com/v1/session',
@@ -38,5 +46,17 @@ def verify(sha):
     print(json.dumps({'sha': sha, 'deployment': latest['id'], 'version': version['id']}))
 
 
+def can_publish(sha):
+    _, version = deployed_revision()
+    # Unknown/mixed deployment identities fail closed, never silently replace.
+    published = version.get('annotations', {}).get('workers/tag', '')
+    return publication_needed(os.environ['GITHUB_REPOSITORY'], sha, published)
+
+
 if __name__ == '__main__':
-    verify(sys.argv[1])
+    if len(sys.argv) == 3 and sys.argv[1] == '--publication-needed':
+        needed = can_publish(sys.argv[2])
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write(f'publish={str(needed).lower()}\n')
+    else:
+        verify(sys.argv[1])

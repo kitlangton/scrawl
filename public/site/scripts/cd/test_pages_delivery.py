@@ -14,10 +14,18 @@ spec.loader.exec_module(pages)
 
 
 class PagesDeliveryTests(unittest.TestCase):
-    def test_old_main_is_refused(self):
-        with patch.object(pages.subprocess, 'check_output', return_value='b' * 40 + '\trefs/heads/main\n'):
-            with self.assertRaisesRegex(ValueError, 'stale'):
-                pages.current_main('a' * 40)
+    def test_publisher_checks_deployed_revision_instead_of_requiring_main_tip(self):
+        project = {'canonical_deployment': {'deployment_trigger': {'metadata': {'commit_hash': 'b' * 40}}}}
+        with patch.object(pages, 'api', return_value=project), patch.dict(pages.os.environ, {'GITHUB_REPOSITORY': 'example/project'}):
+            with patch.object(pages, 'publication_needed', return_value=True) as order:
+                pages.current_main('c' * 40)
+                order.assert_called_once_with('example/project', 'c' * 40, 'b' * 40)
+            with patch.object(pages, 'publication_needed', return_value=False):
+                with self.assertRaises(pages.SupersededMain):
+                    pages.current_main('a' * 40)
+            with patch.object(pages, 'publication_needed', side_effect=RuntimeError('API failed')):
+                with self.assertRaisesRegex(RuntimeError, 'API failed'):
+                    pages.current_main('c' * 40)
 
     def test_readback_binds_revision_before_requesting_public_pages(self):
         project = {'canonical_deployment': {'latest_stage': {'status': 'success'},

@@ -11,9 +11,9 @@ permissions:
   contents: read
 
 # Never cancel a deployment halfway through publication. Every publisher also
-# checks current main; Actions concurrency is not a FIFO queue.
+# checks ancestry against the deployed revision while this lock is held.
 concurrency:
-  group: web-delivery-production
+  group: web-delivery-production-${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.event != 'push' || github.event.workflow_run.head_repository.full_name != github.repository) && github.run_id || 'eligible' }}
   cancel-in-progress: false
 
 jobs:
@@ -40,11 +40,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Superseded automatic candidates need no more runner time.
-          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$(git rev-parse origin/main)" != "$REQUEST_SHA" ]]; then
-            echo 'Skipping superseded main candidate'
-            exit 0
-          fi
           args=(--platform linux --sha "$REQUEST_SHA")
           if [[ -n "$VERIFY_RUN_ID" ]]; then args+=(--run-id "$VERIFY_RUN_ID"); fi
           python3 enablement/release_gate.py "${args[@]}"
@@ -167,6 +162,7 @@ jobs:
         working-directory: connect/service
       - name: Publish checked main to Cloudflare Pages (never Clanker or the Worker)
         env:
+          GH_TOKEN: ${{ github.token }}
           WEBSITE_PAGES_API_TOKEN: ${{ secrets.WEBSITE_PAGES_API_TOKEN }}
         run: GITHUB_SHA="${{ needs.admit.outputs.sha }}" python3 public/site/scripts/cd/publish_pages.py
       - uses: actions/upload-artifact@v4
@@ -204,14 +200,20 @@ jobs:
         working-directory: connect/service
       - name: Render approved resource bindings (never apply migrations)
         run: python3 public/site/scripts/cd/hosted_config.py
-      - name: Deploy current checked main and read back version and anonymous CORS
+      - name: Check source ordering under the publication lock
+        id: order
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 public/site/scripts/cd/verify_worker.py --publication-needed "${{ needs.admit.outputs.sha }}"
+      - name: Deploy checked main and read back version and anonymous CORS
+        if: steps.order.outputs.publish == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
           export GITHUB_SHA="${{ needs.admit.outputs.sha }}"
           test -n "$CLOUDFLARE_API_TOKEN"
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
           cd connect/service
           ./node_modules/.bin/wrangler deploy --config wrangler.cd.json --tag "$GITHUB_SHA" --message "GitHub Actions $GITHUB_RUN_ID commit $GITHUB_SHA" --strict --no-autoconfig
           cd ../..

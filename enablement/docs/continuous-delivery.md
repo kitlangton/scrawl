@@ -6,18 +6,19 @@ they do not rebuild the application.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
-`Linux verification` and `Mac verification` run independently on `main`, each
-coalescing superseded runs within its own platform. Both call the same reusable
-`verification-platform.yml`, preserving the full Rust, Engine/client, browser,
-Electron and applicable native checks. Each checks the entire tree, not just the
-latest push delta: changes from a cancelled earlier run cannot escape verification.
-Full verification is main-only, including explicit `workflow_dispatch`; a dispatch
-on another ref skips the reusable workflow before allocating its runners. PRs use
-focused checks, independent review, current-base integration checks and required
-native/platform proof before merge. Do not dispatch or wait for full branch CI as
-a merge gate. After merge, full verification of the exact main commit gates
-publication; a failed platform leaves its last verified release available.
-Each caller's `verify / Release verification` job is its platform receipt.
+`Linux verification` runs on main pushes. Running verification finishes; only
+pending work is replaced. `Mac verification` follows successful Linux runs and
+checks their exact SHA, so every automatic Mac candidate retains matching Linux
+proof even while main advances. Mac's running work also finishes and its pending
+candidates coalesce; slow Mac capacity never blocks Linux. Manual main dispatches
+remain diagnostic and cannot substitute for automatic release receipts.
+Both use `verification-platform.yml` and retain full Rust, Engine/client, browser,
+Electron and applicable native checks against the entire selected tree. Cancelled
+pending runs cannot hide changes. Full verification is main-only; feature branches
+use focused checks, independent review, current-base integration and required
+native/platform proof before merge. Do not wait for full branch CI as a merge gate.
+Linux's terminal job is `verify / Release verification`; Mac's terminal receipt
+includes the exact tested SHA, since a workflow-run control SHA may be newer.
 General Mac verification uses `macos-15-intel` so it does not depend on the
 standard Apple Silicon runner pool. The required Xcode/macOS SDK remains selected
 explicitly. Preview publication stays on `macos-latest` for arm64 packaging; Intel
@@ -30,18 +31,25 @@ successful Linux/shared receipt. Mac preview publication requires both the
 Linux/shared and Mac receipts for the same commit. A queued/failed Mac run cannot
 hold Linux publication; Linux success cannot authorize a Mac release.
 `enablement/release_gate.py --platform linux|macos` validates the exact caller
-workflow, upstream run/attempt, repository, main push, SHA and every required job.
+workflow, upstream run/attempt, repository, main push (or Linux-verified Mac
+follower), SHA and every required job.
 PR/manual checks, skipped jobs, failed/cancelled runs, legacy combined receipts
 and another platform's receipt cannot substitute for the required proof.
 
-Automatic stale candidates are skipped before builds. Every downstream checkout
-and website artifact uses the admitted SHA, including when `workflow_run`'s default
-SHA points at a newer main commit. Publication locks are separate from cancellable
-verification; a new push never cancels publication. Existing service activation,
-schema, consent and native/product acceptance requirements are unchanged.
+Verified main ancestors may publish while newer main commits are still testing.
+Every checkout and artifact uses the admitted SHA. Existing publication locks
+finish running work and coalesce pending work. Under those locks, Linux previews,
+Pages, Worker and the Mac appcast compare source ancestry against the published
+revision; equal/older candidates never replace newer deployments. Unknown or
+divergent identities fail closed. Mac also retains its monotonic Sparkle build
+number check. All writers must use these workflow locks; out-of-band deployment
+is not coordinated by Actions. Activation variables, schema, consent and
+native/product acceptance requirements remain unchanged.
 
 Manual/tag Linux releases require the same exact Linux/shared receipt; manual Mac
-previews require both receipts. Linux `verify_only` still permits isolated branch
+previews require both receipts. Their optional `candidate_sha` selects an exact
+verified main ancestor; empty retains the dispatch commit. The selected SHA flows
+through checkout, tags, admission and feed ordering. Linux `verify_only` still permits isolated branch
 packaging without publication. Failed required verification leaves that platform's
 last published version available; fix or revert main and verify the next candidate.
 CodeQL managed setup is disabled by Simon's explicit instruction; it is not a
@@ -102,10 +110,10 @@ the served tree; publication uses `--no-bundle` and verifies the downloaded byte
 The source-built homepage is never replaced by a committed deployment snapshot.
 Website artifacts are retained for 90 days, with Pages deployment IDs and receipts
 supporting rollback without rebuilding. Production runs are serialized
-without canceling a deployment halfway through; each publisher also refuses a
-candidate that is no longer current `main`. Pages treats a revision superseded
-after admission as a successful skip, without uploading or issuing a deployment
-receipt; remote lookup, upload and readback errors still fail the job. A relevant
+without canceling a deployment halfway through. Publishers admit verified main
+ancestors but refuse to replace an equal or newer deployed revision. Pages treats
+such a superseded revision as a successful skip, without uploading or issuing a
+deployment receipt; remote lookup, upload and readback errors still fail the job. A relevant
 later push supplies the replacement; otherwise dispatch the workflow on `main` after reviewing it.
 
 ## Website activation: Cloudflare Pages
