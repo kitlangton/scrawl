@@ -45,6 +45,13 @@ It never applies migrations or initializes the budget ledger.
 - Keep request/event logs disabled or explicitly redact URLs, Authorization, Cookie, OAuth query codes/state and response tokens in any upstream logging system. The Worker never logs requests, exceptions or provider bodies. Wrangler observability is off in this template.
 - Smoke-test actual CORS/cookie routing, live Google claims, 90MB request handling and cron in an authorized staging environment before production. Local workerd proof does not establish remote account configuration.
 
+Auth setup is reused only for the same unchanged binding environment, keyed by
+the [Workers fetch environment identity](https://developers.cloudflare.com/workers/runtime-apis/handlers/fetch/#parameters). Database,
+secret, provider and trusted-origin changes invalidate that instance; failed
+initialization is evicted. This caches static library setup, never sessions,
+credential validity, grant approval or revocation results. Cookie session caching
+remains disabled. Local timing is not a remote Free CPU acceptance receipt.
+
 ## Deliberate v1 limits
 
 500,000,000 bytes per account, at most 20 beta accounts, seven days from reservation, 24-hour pending-upload timeout, 512 files per capture, 90,000,000 bytes per file, 128KiB JSON, 128-character exact allowlisted paths. No billing, public object URLs, multipart protocol, account deletion UI or admin promotion route is implemented here. Separate read/upload authorizations have immutable scope/grant ID, one-hour access credentials and rotating 30-day refresh credentials; reported lifetimes are remaining seconds. Revocation denies the entire device grant, including outstanding access and renewal. Browser sessions last seven days; logout revokes only its own session.
