@@ -253,7 +253,7 @@ jobs:
           export APPARENT_REFERENCE_BINARY="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app/Contents/MacOS/apparent"
           node --test capture/desktop/ui/frontend/tests/reference-native.cjs
       - name: Retain synthetic Electron reference evidence, including failures
-        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true' && (steps.native-reference.outcome == 'success' || steps.native-reference.outcome == 'failure')
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true' && steps.native-reference.outcome != 'skipped' && steps.native-reference.outcome != ''
         uses: actions/upload-artifact@v4
         with:
           name: mac-reference-electron-native
@@ -264,7 +264,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Retain synthetic native Copy capture ID evidence, including failures
-        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true' && (steps.native-copy-id.outcome == 'success' || steps.native-copy-id.outcome == 'failure')
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true' && steps.native-copy-id.outcome != 'skipped' && steps.native-copy-id.outcome != ''
         uses: actions/upload-artifact@v4
         with:
           name: mac-copy-capture-id-native
@@ -276,7 +276,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Retain synthetic Mac Storage evidence, including failures
-        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true' && (steps.native-storage.outcome == 'success' || steps.native-storage.outcome == 'failure')
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true' && steps.native-storage.outcome != 'skipped' && steps.native-storage.outcome != ''
         uses: actions/upload-artifact@v4
         with:
           name: mac-storage-native
