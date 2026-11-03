@@ -254,6 +254,23 @@ jobs:
         run: |
           export APPARENT_REFERENCE_BINARY="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app/Contents/MacOS/apparent"
           node --test capture/desktop/ui/frontend/tests/reference-native.cjs
+      - name: Installed Mac Connect worker restart and encrypted fetch
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        timeout-minutes: 4
+        env:
+          APPARENT_CONNECT_NATIVE_CI: '1'
+        run: |
+          app="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
+          node connect/service/test/native/desktop-worker.mjs "$GITHUB_WORKSPACE" \
+            "$app/Contents/MacOS/apparent" "$RUNNER_TEMP/apparent-connect-native"
+      - name: Retain synthetic Connect worker evidence without credentials
+        if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-connect-worker-native
+          path: ${{ runner.temp }}/apparent-connect-native/evidence/
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain synthetic Electron reference evidence, including failures
         if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true' && steps.native-reference.outcome != 'skipped' && steps.native-reference.outcome != ''
         uses: actions/upload-artifact@v4

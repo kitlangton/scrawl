@@ -126,6 +126,19 @@ apparent connect logout
 
 `upload` explicitly queues that completed bundle **under a fresh ID on every invocation**, then makes one processing pass. It supersedes any unfinished local job for that bundle/server without changing an already reserved remote manifest. Use it to recover a changed bundle, an expired reservation or a tombstoned ID, or to deliberately share a previously cancelled capture. Automatic completion notifications deduplicate only retained queue records, including cancelled/expired records. Admission of another bundle prunes terminal or expired records; after pruning, a repeated completion notification for the original bundle can create a fresh ID. There is no permanent dedup history and no automatic historical scan. `retry` keeps existing IDs, resets eligible failed/pending jobs and makes one processing pass; it cannot enable disabled uploads or revive cancelled jobs. The running desktop worker resumes persisted pending jobs at startup, checks every two seconds, and retries with bounded exponential backoff (eight attempts, at most seven days, 100 queue records). CLI-only users run `retry` to resume after the command exits. `disable` acquires the queue lock before reading settings, clears consent/enabled state and cancels unfinished jobs durably under that same lock. `logout` additionally removes local read/upload transport credentials and renewal journals under the lock, then attempts whole-device-grant revocation with a shared two-second deadline outside all queue/config locks. An expired renewable access token uses the refresh credential without an expired bearer header. Offline or failed revocation does not undo local logout; a copied grant can remain usable remotely until revoked or expired. Neither operation removes independent decryption-key artifacts. Already sent server data is not deleted by local logout; it expires under the server's seven-day policy.
 
+### Installed worker readiness proof
+
+The Mac platform workflow runs `service/test/native/desktop-worker.mjs` against
+the signed installed app and actual local Worker/D1/R2. A synthetic read approval
+does not enable uploads or discover history. Separate explicit upload approval
+allows a staged synthetic job; a failed PUT remains pending, then the restarted
+Desktop worker completes the same encrypted job without a CLI retry or account
+probe. Fetch compares all six files; disabled restart stays offline and logout
+preserves unrelated config. Only the allowlisted evidence directory is uploaded,
+excluding the disposable home and its credentials. This is not real Google,
+browser-cookie, deployed-service or real-capture proof. Existing activation and
+schema holds remain unchanged.
+
 ### Renewable native grants
 
 The Better Auth candidate configures **3,600-second access tokens** and **2,592,000-second (30-day) refresh tokens**. The client uses the returned positive `expiresIn` and `refreshExpiresIn` seconds, not hardcoded lifetimes; it stores conservative Unix-second deadlines measured from before the request. Approved device polling and `POST /v1/token/refresh` must return `accessToken`, `refreshToken`, `scope`, `expiresIn`, `refreshExpiresIn` and `grantId`. Refresh sends only `{"refreshToken":...}`: it cannot request a scope or escalate a read grant. The returned scope must match, and `grantId` must remain stable. Server grant IDs are opaque and stored separately from the local 32-hex generation.
