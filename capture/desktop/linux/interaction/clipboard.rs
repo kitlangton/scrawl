@@ -8,8 +8,13 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result, anyhow};
+use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
 
 static CLIPBOARD: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
+const MAX_MIME_TYPES: usize = 32;
+const MAX_MIME_BYTES: usize = 256;
+const MAX_CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
+const OWNER_ARGUMENT: &str = "--internal-wayland-clipboard-owner";
 
 fn with<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>) -> Result<T> {
     let mut slot = CLIPBOARD
@@ -31,21 +36,10 @@ fn native_wayland_clipboard() -> bool {
 /// clipboard contents: another process may have become the selection owner.
 pub fn combined_offer_supported() -> bool {
     native_wayland_clipboard()
-        && super::super::wayland_display().is_some_and(|display| helper_ready(&restore_helper(), &display))
-}
-
-fn helper_ready(helper: &std::path::Path, display: &std::ffi::OsStr) -> bool {
-    if !helper.is_file() {
-        return false;
-    }
-    Command::new("timeout")
-        .args(["3s", "python3"])
-        .arg(helper)
-        .arg("--check")
-        .env("GDK_BACKEND", "wayland")
-        .env("WAYLAND_DISPLAY", display)
-        .output()
-        .is_ok_and(|check| check.status.success() && check.stdout == b"READY\n")
+        && super::super::wayland_display().is_some_and(|_| {
+            std::env::current_exe().is_ok_and(|exe| exe.is_file())
+                && read_wayland(&["--list-types"], 8192).is_ok()
+        })
 }
 
 pub struct TextSnapshot {
@@ -79,17 +73,20 @@ pub fn snapshot_text_wayland() -> Result<TextSnapshot> {
     let _ = plain_text_mime(types)?;
     let mimes: Vec<_> = types.lines().collect();
     anyhow::ensure!(
-        mimes.len() <= 32,
+        mimes.len() <= MAX_MIME_TYPES,
         "Clipboard has too many MIME types to preserve"
     );
     let mut entries = Vec::with_capacity(mimes.len());
     let mut size = 0usize;
     for mime in mimes {
         anyhow::ensure!(
-            !mime.is_empty() && mime.len() <= 256,
+            !mime.is_empty() && mime.len() <= MAX_MIME_BYTES,
             "Invalid clipboard MIME type"
         );
-        let bytes = read_wayland(&["--no-newline", "--type", mime], 16 * 1024 * 1024 - size)?;
+        let bytes = read_wayland(
+            &["--no-newline", "--type", mime],
+            MAX_CLIPBOARD_BYTES - size,
+        )?;
         size += bytes.len();
         entries.push((mime.to_owned(), bytes));
     }
@@ -98,25 +95,9 @@ pub fn snapshot_text_wayland() -> Result<TextSnapshot> {
         "Clipboard changed during snapshot"
     );
     if entries.len() > 1 {
-        let helper = restore_helper();
         anyhow::ensure!(
-            helper.is_file(),
-            "Rich clipboard restore helper is missing; original clipboard untouched"
-        );
-        let check = Command::new("timeout")
-            .args(["3s", "python3"])
-            .arg(&helper)
-            .arg("--check")
-            .env("GDK_BACKEND", "wayland")
-            .env(
-                "WAYLAND_DISPLAY",
-                super::super::wayland_display().context("No Wayland display")?,
-            )
-            .output()
-            .context("Checking rich clipboard restoration")?;
-        anyhow::ensure!(
-            check.status.success() && check.stdout == b"READY\n",
-            "Rich clipboard restoration is unavailable; original clipboard untouched"
+            std::env::current_exe().is_ok_and(|exe| exe.is_file()),
+            "Rich clipboard owner is unavailable; original clipboard untouched"
         );
     }
     Ok(TextSnapshot { entries })
@@ -137,32 +118,19 @@ pub fn restore_text_wayland(snapshot: TextSnapshot, offered: Option<(&str, &[u8]
     }
 }
 
-fn restore_helper() -> std::path::PathBuf {
-    let adjacent = std::env::current_exe().ok().and_then(|exe| {
-        exe.parent()
-            .map(|dir| dir.join("apparent-restore-clipboard.py"))
-    });
-    if let Some(path) = adjacent.filter(|path| path.is_file()) {
-        return path;
-    }
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capture/desktop/scripts/support/apparent-restore-clipboard.py")
-}
-
 fn copy_multi_wayland(entries: &[(String, Vec<u8>)]) -> Result<()> {
-    let mut child = Command::new("python3")
-        .arg(restore_helper())
-        .env("GDK_BACKEND", "wayland")
-        .env(
-            "WAYLAND_DISPLAY",
-            super::super::wayland_display().context("No Wayland display")?,
-        )
+    validate_entries(entries)?;
+    let display = super::super::wayland_display().context("No Wayland display")?;
+    let mut child = Command::new(std::env::current_exe().context("Locating clipboard owner")?)
+        .arg(OWNER_ARGUMENT)
+        .env("WAYLAND_DISPLAY", display)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .context("Rich clipboard restore requires Python GTK4")?;
+        .context("Starting the native Wayland clipboard owner")?;
     let write = (|| -> Result<()> {
-        let mut stdin = child.stdin.take().context("No restore input")?;
+        let mut stdin = child.stdin.take().context("No clipboard owner input")?;
         stdin.write_all(&(entries.len() as u32).to_be_bytes())?;
         for (mime, bytes) in entries {
             stdin.write_all(&(mime.len() as u32).to_be_bytes())?;
@@ -173,10 +141,13 @@ fn copy_multi_wayland(entries: &[(String, Vec<u8>)]) -> Result<()> {
         Ok(())
     })();
     if let Err(error) = write {
-        let _ = child.kill();
+        stop_owner(&mut child);
         return Err(error);
     }
-    let mut stdout = child.stdout.take().context("No restore confirmation")?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .context("No clipboard owner confirmation")?;
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut line = String::new();
@@ -185,7 +156,7 @@ fn copy_multi_wayland(entries: &[(String, Vec<u8>)]) -> Result<()> {
     });
     let confirmation = receiver.recv_timeout(std::time::Duration::from_secs(4));
     if !matches!(confirmation, Ok((Ok(_), line)) if line == "READY\n") {
-        let _ = child.kill();
+        stop_owner(&mut child);
         anyhow::bail!("Rich clipboard restore was not confirmed");
     }
     let offered = (|| -> Result<bool> {
@@ -197,10 +168,118 @@ fn copy_multi_wayland(entries: &[(String, Vec<u8>)]) -> Result<()> {
         Ok(true)
     })();
     if !matches!(offered, Ok(true)) {
-        let _ = child.kill();
+        stop_owner(&mut child);
         anyhow::bail!("Rich clipboard restore did not own the expected data");
     }
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
+}
+
+fn stop_owner(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn validate_entries(entries: &[(String, Vec<u8>)]) -> Result<()> {
+    anyhow::ensure!(
+        (1..=MAX_MIME_TYPES).contains(&entries.len()),
+        "Invalid clipboard MIME count"
+    );
+    let mut total = 0usize;
+    for (index, (mime, bytes)) in entries.iter().enumerate() {
+        anyhow::ensure!(
+            !mime.is_empty()
+                && mime.len() <= MAX_MIME_BYTES
+                && !mime.bytes().any(|byte| matches!(byte, b'\n' | b'\r' | 0)),
+            "Invalid clipboard MIME type"
+        );
+        anyhow::ensure!(
+            !entries[..index].iter().any(|(other, _)| other == mime),
+            "Duplicate clipboard MIME type"
+        );
+        total = total
+            .checked_add(bytes.len())
+            .context("Clipboard snapshot is too large")?;
+        anyhow::ensure!(
+            total <= MAX_CLIPBOARD_BYTES,
+            "Clipboard snapshot is too large"
+        );
+    }
+    Ok(())
+}
+
+fn read_owner_entries(mut input: impl std::io::Read) -> Result<Vec<(String, Vec<u8>)>> {
+    fn read_size(input: &mut impl std::io::Read) -> Result<usize> {
+        let mut bytes = [0; 4];
+        input
+            .read_exact(&mut bytes)
+            .context("Incomplete clipboard offer")?;
+        Ok(u32::from_be_bytes(bytes) as usize)
+    }
+
+    let count = read_size(&mut input)?;
+    anyhow::ensure!(
+        (1..=MAX_MIME_TYPES).contains(&count),
+        "Invalid clipboard MIME count"
+    );
+    let mut entries = Vec::with_capacity(count);
+    let mut total = 0usize;
+    for _ in 0..count {
+        let mime_size = read_size(&mut input)?;
+        anyhow::ensure!(
+            (1..=MAX_MIME_BYTES).contains(&mime_size),
+            "Invalid clipboard MIME size"
+        );
+        let mut mime = vec![0; mime_size];
+        input
+            .read_exact(&mut mime)
+            .context("Incomplete clipboard MIME type")?;
+        let mime = String::from_utf8(mime).context("Invalid clipboard MIME type")?;
+        let size = read_size(&mut input)?;
+        total = total
+            .checked_add(size)
+            .context("Clipboard snapshot is too large")?;
+        anyhow::ensure!(
+            total <= MAX_CLIPBOARD_BYTES,
+            "Clipboard snapshot is too large"
+        );
+        let mut bytes = vec![0; size];
+        input
+            .read_exact(&mut bytes)
+            .context("Incomplete clipboard data")?;
+        entries.push((mime, bytes));
+    }
+    let mut trailing = [0];
+    anyhow::ensure!(
+        input.read(&mut trailing)? == 0,
+        "Unexpected clipboard protocol data"
+    );
+    validate_entries(&entries)?;
+    Ok(entries)
+}
+
+/// Internal entry point used by this process as the lifetime owner for a rich Wayland offer.
+pub fn run_owner_protocol() -> Result<()> {
+    let entries = read_owner_entries(std::io::stdin().lock())?;
+    let sources = entries
+        .into_iter()
+        .map(|(mime, bytes)| MimeSource {
+            source: Source::Bytes(bytes.into_boxed_slice()),
+            mime_type: MimeType::Specific(mime),
+        })
+        .collect();
+    let mut options = Options::new();
+    options
+        .foreground(true)
+        .omit_additional_text_mime_types(true);
+    let prepared = options
+        .prepare_copy_multi(sources)
+        .context("Could not acquire the Wayland clipboard")?;
+    println!("READY");
+    std::io::stdout().flush()?;
+    prepared.serve().context("Serving the Wayland clipboard")
 }
 
 fn clear_wayland() -> Result<()> {
@@ -351,16 +430,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unavailable_helper_is_detected_before_the_clipboard_is_touched() {
-        let root = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
-        std::fs::create_dir(&root).unwrap();
-        let helper = root.join("helper.py");
-        assert!(!helper_ready(&helper, std::ffi::OsStr::new("wayland-0")));
-        std::fs::write(&helper, "import sys; sys.exit(2)\n").unwrap();
-        assert!(!helper_ready(&helper, std::ffi::OsStr::new("wayland-0")));
-        std::fs::write(&helper, "print('READY')\n").unwrap();
-        assert!(helper_ready(&helper, std::ffi::OsStr::new("wayland-0")));
-        std::fs::remove_dir_all(root).unwrap();
+    fn rich_offer_protocol_round_trips_exact_mime_and_binary_bytes() {
+        let entries = vec![
+            (
+                "text/html".to_owned(),
+                b"<strong>one\0two</strong>".to_vec(),
+            ),
+            ("image/png".to_owned(), vec![0, 255, 1, 2, 0]),
+        ];
+        let mut wire = Vec::new();
+        wire.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+        for (mime, bytes) in &entries {
+            wire.extend_from_slice(&(mime.len() as u32).to_be_bytes());
+            wire.extend_from_slice(mime.as_bytes());
+            wire.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            wire.extend_from_slice(bytes);
+        }
+        assert_eq!(read_owner_entries(wire.as_slice()).unwrap(), entries);
+    }
+
+    #[test]
+    fn rich_offer_protocol_rejects_truncation_extra_bytes_and_duplicate_types() {
+        assert!(read_owner_entries([0, 0, 0, 1, 0].as_slice()).is_err());
+
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&1u32.to_be_bytes());
+        extra.extend_from_slice(&9u32.to_be_bytes());
+        extra.extend_from_slice(b"text/html");
+        extra.extend_from_slice(&0u32.to_be_bytes());
+        extra.push(1);
+        assert!(read_owner_entries(extra.as_slice()).is_err());
+
+        assert!(
+            validate_entries(&[
+                ("text/plain".to_owned(), b"first".to_vec()),
+                ("text/plain".to_owned(), b"second".to_vec()),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rich_offer_protocol_enforces_existing_limits() {
+        assert!(validate_entries(&[]).is_err());
+        assert!(validate_entries(&[("x".repeat(MAX_MIME_BYTES + 1), vec![])]).is_err());
+        assert!(
+            validate_entries(&[("text/plain".to_owned(), vec![0; MAX_CLIPBOARD_BYTES + 1])])
+                .is_err()
+        );
+        assert!(validate_entries(&vec![("x".to_owned(), vec![]); MAX_MIME_TYPES + 1]).is_err());
     }
 
     #[test]

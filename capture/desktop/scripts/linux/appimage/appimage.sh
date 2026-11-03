@@ -44,7 +44,6 @@ for library in "$(dirname "$binary")"/libggml-cpu*.so; do
 done
 
 cd "$out"
-install -Dm755 "$root/capture/desktop/scripts/support/apparent-restore-clipboard.py" "$appdir/usr/bin/apparent-restore-clipboard.py"
 LDAI_OUTPUT="Apparent-$arch.AppImage" linuxdeploy \
   --appdir "$appdir" \
   --executable "$binary" \
