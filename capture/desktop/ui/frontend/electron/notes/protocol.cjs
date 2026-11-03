@@ -25,12 +25,13 @@ function popupBounds(point, area, height) {
 }
 const BADGE_WIDTH = 116;
 const BADGE_HEIGHT = 44;
+const BADGE_GAP = 16;
 function badgeBounds(rect, area) {
   const [x, y, width, height] = rect;
-  let bx = x + width + 6, by = y + (height - BADGE_HEIGHT) / 2;
+  let bx = x + width + BADGE_GAP, by = y + (height - BADGE_HEIGHT) / 2;
   if (bx + BADGE_WIDTH > area.x + area.width) {
-    bx = x - BADGE_WIDTH - 6;
-    if (bx < area.x) { bx = x + (width - BADGE_WIDTH) / 2; by = y + height + 6; }
+    bx = x - BADGE_WIDTH - BADGE_GAP;
+    if (bx < area.x) { bx = x + (width - BADGE_WIDTH) / 2; by = y + height + BADGE_GAP; }
   }
   return { x: Math.round(Math.max(area.x, Math.min(bx, area.x + area.width - BADGE_WIDTH))),
     y: Math.round(Math.max(area.y, Math.min(by, area.y + area.height - BADGE_HEIGHT))) };
