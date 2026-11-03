@@ -142,7 +142,12 @@ app.whenReady().then(() => {
         setRequestedBounds(popup, bounds, opening);
         if (opening) popup.show();
         const focus = !previous || previous.mode !== state.mode || previous.current !== state.current;
-        if (focus) { popup.focus(); popup.webContents.focus(); }
+        if (focus) {
+          // A key window in an accessory app need not be the keyboard's active
+          // application. Activate only for this explicit editor/list opening.
+          if (process.platform === 'darwin') app.focus({ steal: true });
+          popup.focus(); popup.webContents.focus();
+        }
         placeSurface(popup, focus, opening, bounds);
       } else if (attached && requestedBadge) {
         cancelFlight();
