@@ -236,6 +236,16 @@ jobs:
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - uses: dtolnay/rust-toolchain@stable
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
+        with:
+          # Keep the trusted Mac cache producer on the focused consumers' tested
+          # compiler. Retain the action's Cargo environment and Linux selection.
+          toolchain: ${{ runner.os == 'macOS' && '1.99.1' || 'stable' }}
+      - name: Verify the tested Mac compiler before cache restore
+        if: runner.os == 'macOS' && (needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true')
+        run: |
+          test "$(rustc -V)" = 'rustc 1.99.1 (58cf8f9c3 2026-10-13)'
+          rustc -vV
+          cargo -V
       - uses: Swatinem/rust-cache@v2
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
         with:
