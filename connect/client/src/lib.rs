@@ -1714,6 +1714,12 @@ impl Client {
                 continue;
             }
             let result = self.upload(&mut job);
+            if let Err(error) = &result {
+                let (stage, reason) = upload_failure_diagnostic(error);
+                // Ignore diagnostic write errors and keep stderr I/O outside
+                // queue.lock so foreground cancellation can still acquire it.
+                let _ = writeln!(std::io::stderr().lock(), "Hosted upload failure: stage={stage} reason={reason}");
+            }
 
             let _lock = Lock::acquire(&self.state.join("queue.lock"), false)?;
             // Logout/disable wins over a late completion. Never restore a cancelled job.
@@ -2107,6 +2113,54 @@ fn digest_file(path: &Path) -> Result<String> {
     let digest = output.split_whitespace().next().unwrap_or("");
     ensure!(hex_digest(digest), "Invalid SHA-256 output");
     Ok(digest.to_owned())
+}
+
+// Local diagnostic codes only: never emit arbitrary error text, paths or keys.
+fn upload_failure_diagnostic(error: &anyhow::Error) -> (&'static str, &'static str) {
+    let mut stage = "upload";
+    let mut reason = "unclassified";
+    for cause in error.chain() {
+        let text = cause.to_string();
+        stage = match text.as_str() {
+            "encryption_identity_missing: approve this device with hostedEncryption enabled; never replace lost keys implicitly"
+                | "encryption_identity_unavailable: local key is missing, invalid or not private; no plaintext fallback" => "identity",
+            "encryption_snapshot_failed" => "snapshot",
+            "encryption_pack_failed" => "encrypt",
+            "encryption_spool_receipt_failed" => "spool_receipt",
+            "encryption_spool_directory_unsafe" | "encryption_spool_invalid" => "spool_validate",
+            _ => stage,
+        };
+        reason = match text.as_str() {
+            "unsupported_asset: bundle contains an unknown asset; no files were omitted" | "unsupported_asset" => "unknown_asset",
+            "Unsafe local notes diagnostic" => "unsafe_notes_log",
+            "Unsafe bundle publication lock" => "unsafe_publication_lock",
+            "Symlink path refused" | "Symlink asset directory refused" => "symlink",
+            "Unsafe shared or unowned directory tree" => "unsafe_directory",
+            "Directory ACL grants are not supported for hosted transfers" => "allow_acl",
+            "Could not verify directory ACL" | "Could not verify directory ACL entries" => "acl_unverified",
+            "SHA-256 tool is required" | "SHA-256 failed" | "Invalid SHA-256 output" => "digest",
+            "Asset changed during snapshot" | "encryption_source_changed" => "source_changed",
+            "Unsafe or missing bundle asset reference" | "Invalid asset reference" | "Missing frame asset" => "asset_reference",
+            "encryption_identity_missing: approve this device with hostedEncryption enabled; never replace lost keys implicitly" => "identity_missing",
+            "encryption_identity_unavailable: local key is missing, invalid or not private; no plaintext fallback" => "identity_file",
+            "encryption_approval_required: this grant has no approved endpoint key" => "peer_not_enrolled",
+            "encryption_key_binding_mismatch" => "key_binding",
+            "invalid_encryption_authorization" => "peer_authorization",
+            "encryption_scratch_not_empty" => "scratch_not_empty",
+            _ => reason,
+        };
+        if reason == "unclassified" {
+            if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+                reason = match io.kind() {
+                    std::io::ErrorKind::PermissionDenied => "io_permission",
+                    std::io::ErrorKind::NotFound => "io_not_found",
+                    std::io::ErrorKind::InvalidInput => "io_invalid_input",
+                    _ => "io_other",
+                };
+            }
+        }
+    }
+    (stage, reason)
 }
 
 fn snapshot(bundle: &Path, stage: &Path) -> Result<Vec<Asset>> {

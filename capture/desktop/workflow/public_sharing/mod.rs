@@ -1,4 +1,5 @@
 //! Window-owned explicit public-copy admission and foreground clipboard delivery.
+pub(crate) mod popup;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::os::unix::fs::MetadataExt;

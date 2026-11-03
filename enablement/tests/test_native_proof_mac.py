@@ -22,7 +22,7 @@ class NativeProofMacTests(unittest.TestCase):
         self.assertNotIn('secrets.', workflow)
         self.assertNotIn('write\n', workflow)
         self.assertIn("github.event_name == 'workflow_dispatch'", workflow)
-        self.assertIn('    timeout-minutes: 65\n', workflow)
+        self.assertIn('    timeout-minutes: 70\n', workflow)
         self.assertIn('timeout-minutes: 4\n', workflow)
         self.assertIn('persist-credentials: false', workflow)
 
@@ -85,8 +85,22 @@ class NativeProofMacTests(unittest.TestCase):
             cap = re.search(r'^        timeout-minutes: (\d+)$', step, re.M)
             self.assertIsNotNone(cap, step.splitlines()[0])
             caps.append(int(cap[1]))
-        self.assertEqual(sum(caps), 58)
-        self.assertGreaterEqual(job_cap - sum(caps), 7)
+        # Worker/share scenarios are mutually exclusive; reserve the larger cap.
+        self.assertEqual(sum(caps) - min(4, 8), 62)
+        self.assertGreaterEqual(job_cap - (sum(caps) - min(4, 8)), 7)
+
+    def test_share_scenario_is_explicit_and_cannot_run_worker_case(self):
+        workflow = WORKFLOW.read_text()
+        self.assertIn('options: [worker, share]\n        default: worker', workflow)
+        worker = workflow.split('      - name: Installed Connect worker restart and encrypted fetch\n', 1)[1].split('      - name:', 1)[0]
+        share = workflow.split('      - name: Installed completed-capture public copy\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn("if: inputs.scenario != 'share'", worker)
+        self.assertIn("if: inputs.scenario == 'share'", share)
+        self.assertIn('desktop-worker.mjs', worker)
+        self.assertNotIn('desktop-share.ts', worker)
+        self.assertIn('desktop-share.ts', share)
+        self.assertNotIn('desktop-worker.mjs', share)
+        self.assertIn('name: mac-connect-${{ inputs.scenario || \'worker\' }}-native', workflow)
 
     def run_cleanup(self, *, owned=False, unsafe=False):
         script = re.search(r'      - name: Verify owned cleanup.*?python3 - <<\'PY\'\n(.*?)^          PY',
@@ -113,7 +127,7 @@ class NativeProofMacTests(unittest.TestCase):
             ps.chmod(0o700)
             env = dict(os.environ, HOME=str(home), PATH=str(binary) + ':' + os.environ['PATH'],
                        APPARENT_APP_DIR=str(unrelated if unsafe else app), APPARENT_BUILD_TMP=str(build),
-                       APPARENT_CONNECT_PROOF=str(proof), GITHUB_RUN_ID='42', GITHUB_RUN_ATTEMPT='1')
+                       APPARENT_CONNECT_PROOF=str(proof), APPARENT_NATIVE_SCENARIO='worker', GITHUB_RUN_ID='42', GITHUB_RUN_ATTEMPT='1')
             result = subprocess.run(['python3', '-c', script], env=env, capture_output=True)
             self.assertTrue(unrelated.exists())
             self.assertFalse((proof / 'evidence/credentials.json').exists())

@@ -38,8 +38,10 @@ requirements still apply; supported platforms remain macOS and Linux.
 `Client::prepare_public_link` is the compatible client integration contract for
 #171. Call it only after the sender explicitly chooses public sharing with:
 “Anyone with this link can view this capture. Shared captures are not end-to-end
-encrypted.” Existing Desktop callers still use `prepare_link`, which retains the
-encrypted-sharing refusal until their consent/UI integration is accepted.
+encrypted.” The completed-capture Copy link action reaches this method through
+its capture-bound Rust controller after the Electron confirmation. Other
+`prepare_link` callers retain the encrypted-sharing refusal. The installed
+sender's native acceptance and existing activation holds remain separate gates.
 
 The explicit method persists a separate `publicCopy` job, plaintext manifest and
 fresh capture ID under the current upload grant. It never edits/cancels the
@@ -256,6 +258,13 @@ it is not live Google, deployed Worker, Electron routing or native platform proo
 
 The independent package tests also exercise renewable account/upload/fetch/share/progress calls, proactive expiry and unexpected 401, separate-process single ownership, transient/permanent refresh failures, scope/grant mismatch, delayed refresh versus disable/logout/new generation, secret-free status, expired-grant revocation, offline logout and process exit after durable response before credential publication. These are synthetic protocol tests, not Better Auth/browser integration evidence; candidate backend-client integration and macOS/Linux native GUI checks remain separate gates.
 
+Saved `notes.json` is semantic capture data and transfers with the recording.
+The empty, owned, single-link, non-writable-by-others `microphone-off` marker stays
+local; its meaning already transfers as `microphoneCapture: off` in capture metadata.
+The legacy `notes-ui.log` is a local diagnostic and is never uploaded or served;
+staging skips only that exact name after checking a private, current-user-owned,
+regular file with one link. Unsafe diagnostics and unknown assets remain errors.
+
 The desktop presentation adapter may read
 `Client::upload_size_failure(bundle, UploadQueueKind::{Private,PublicCopy})`.
 It returns only the requested queue intent and numeric byte size/limit from the
@@ -279,3 +288,7 @@ The private destination guard, integrity validation and atomic complete-bundle
 publication still apply. Loopback tests exercise queue pointer → delayed upload
 → fetch and unavailable/unauthorized failures; these are not live service or
 native clipboard proof.
+
+Upload failures emit local allowlisted stage/reason codes on stderr. The existing
+queue/progress categories are unchanged; diagnostics emit neither raw error text,
+paths, endpoint keys, credentials or capture contents.

@@ -8,6 +8,7 @@ import { ErrorReporting } from './error-reporting';
 import { ConnectSettingsCard } from './connect-settings';
 import { CaptureReference } from './reference';
 import './style.css';
+import {ShareCapture} from './share';
 import { CaptureNotes } from './notes';
 import { RecordingMicrophone } from './notes/microphone';
 
@@ -112,4 +113,4 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(<StrictMode>{location.hash.startsWith('#notes-') ? <CaptureNotes /> : <App />}</StrictMode>);
+createRoot(document.getElementById('root')!).render(<StrictMode>{location.hash === '#share' ? <ShareCapture /> : location.hash.startsWith('#notes-') ? <CaptureNotes /> : <App />}</StrictMode>);

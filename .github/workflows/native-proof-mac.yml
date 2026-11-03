@@ -3,7 +3,17 @@ name: Focused Mac Connect native proof
 # Deliberately separate from full main verification and release admission.
 on:
   workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Scoped installed workflow to verify'
+        type: choice
+        options: [worker, share]
+        default: worker
   workflow_call:
+    inputs:
+      scenario:
+        type: string
+        default: worker
 
 permissions:
   contents: read
@@ -16,11 +26,12 @@ jobs:
   connect-worker:
     if: github.repository == 'tryapparent/apparent' && github.event_name == 'workflow_dispatch'
     runs-on: macos-15-intel
-    # Observed cold install: 25m24s; build cap 30m. All explicit steps sum to
-    # 58m, leaving 7m for job overhead/post-actions (including dependency save).
+    # Cold install observed at 25m24s; build cap 30m. Exclusive scenarios use
+    # at most 62m of step caps, retaining 8m for overhead and cleanup.
     # These are hosted Actions limits, unrelated to the human NoMac session cap.
-    timeout-minutes: 65
+    timeout-minutes: 70
     env:
+      APPARENT_NATIVE_SCENARIO: ${{ inputs.scenario || 'worker' }}
       APPARENT_APP_DIR: /Users/runner/Applications/Apparent-Connect-${{ github.run_id }}-${{ github.run_attempt }}.app
       APPARENT_BUILD_TMP: /Users/runner/.apparent-connect-build-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -43,7 +54,8 @@ jobs:
           (evidence / 'candidate.json').write_text(json.dumps({
               'sha': os.environ['GITHUB_SHA'], 'run': os.environ['GITHUB_RUN_ID'],
               'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
-              'scope': 'focused installed Connect worker; no full-suite or release receipt',
+              'scope': 'focused installed Connect; no full-suite or release receipt',
+              'scenario': os.environ['APPARENT_NATIVE_SCENARIO'],
           }))
           PY
       - uses: maxim-lobanov/setup-xcode@v1
@@ -89,12 +101,22 @@ jobs:
           codesign --verify --deep --strict "$APPARENT_APP_DIR"
           shasum -a 256 "$APPARENT_APP_DIR/Contents/MacOS/apparent" > "$APPARENT_CONNECT_PROOF/evidence/binary.sha256"
       - name: Installed Connect worker restart and encrypted fetch
+        if: inputs.scenario != 'share'
         timeout-minutes: 4
         env:
           APPARENT_CONNECT_NATIVE_CI: '1'
         run: |
           # The harness requires a fresh output directory; evidence lives beside it until completion.
           node connect/service/test/native/desktop-worker.mjs "$GITHUB_WORKSPACE" \
+            "$APPARENT_APP_DIR/Contents/MacOS/apparent" "$APPARENT_CONNECT_PROOF/scenario"
+      - name: Installed completed-capture public copy
+        if: inputs.scenario == 'share'
+        timeout-minutes: 8
+        env:
+          APPARENT_CONNECT_NATIVE_CI: '1'
+        run: |
+          npm run typecheck:share-proof --prefix capture/desktop/ui/frontend
+          node connect/service/test/native/desktop-share.ts "$GITHUB_WORKSPACE" \
             "$APPARENT_APP_DIR/Contents/MacOS/apparent" "$APPARENT_CONNECT_PROOF/scenario"
       - name: Verify owned cleanup and retain only allowlisted evidence
         if: always()
@@ -109,6 +131,20 @@ jobs:
               source = root / 'scenario' / 'evidence' / name
               if source.is_file():
                   shutil.copyfile(source, evidence / name)
+          if os.environ['APPARENT_NATIVE_SCENARIO'] == 'share':
+              source = root / 'scenario' / 'evidence'
+              for image in source.glob('window-*.png'):
+                  assert image.is_file() and not image.is_symlink()
+                  shutil.copyfile(image, evidence / image.name)
+              movie = source / 'public-copy.mov'
+              if movie.is_file():
+                  assert not movie.is_symlink()
+                  shutil.copyfile(movie, evidence / movie.name)
+              bundle = source / 'synthetic.apparent'
+              if bundle.is_dir():
+                  assert not bundle.is_symlink()
+                  assert not any(p.is_symlink() for p in bundle.rglob('*'))
+                  shutil.copytree(bundle, evidence / 'synthetic.apparent')
           app = pathlib.Path(os.environ['APPARENT_APP_DIR'])
           build = pathlib.Path(os.environ['APPARENT_BUILD_TMP'])
           home = pathlib.Path.home()
@@ -133,7 +169,7 @@ jobs:
         timeout-minutes: 2
         uses: actions/upload-artifact@v4
         with:
-          name: mac-connect-worker-native
+          name: mac-connect-${{ inputs.scenario || 'worker' }}-native
           path: ${{ runner.temp }}/apparent-connect-native/evidence/
           if-no-files-found: error
           retention-days: 7

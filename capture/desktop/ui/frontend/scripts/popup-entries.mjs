@@ -34,6 +34,10 @@ export async function stagePopupEntries(root, destination) {
     try { await stat(source); }
     catch (error) { if (surface === 'share' && error.code === 'ENOENT') continue; throw error; }
     await stat(path.join(source, 'main.cjs'));
-    await cp(source, path.join(destination, 'electron', surface), { recursive: true, force: true });
+    if (surface === 'share') {
+      const target = path.join(destination, 'electron', surface);
+      await mkdir(target, { recursive: true });
+      for (const entry of ['main.cjs', 'preload.cjs']) await cp(path.join(source, entry), path.join(target, entry));
+    } else await cp(source, path.join(destination, 'electron', surface), { recursive: true, force: true });
   }
 }

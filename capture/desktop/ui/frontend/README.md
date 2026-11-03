@@ -623,3 +623,41 @@ when its `main.cjs` exists, alongside the same `dist/` and single `runtime/`. Th
 share consumer adds no entry or routing. A share owner must verify affected installed
 route seams on each platform before enabling it, reusing applicable evidence under
 the verification policy above; resolver availability alone is not that proof.
+
+### Installed public-copy confirmation (#171)
+
+Completed Copy link opens the independent `electron/share` entry in the one
+shared packaged runtime resolved by `workflow::electron`. It shows only the
+selected capture and the explicit anyone-with-link/non-E2E disclosure. Its
+private parent pipe carries capture name/status and bounded confirm/cancel/deliver
+commands, never a capture path, share URL or account token to the renderer.
+Rust pins the completed bundle path, inode and generation before opening; every
+poll revalidates them, and only the GUI thread may deliver a prepared clipboard
+write. Electron requests delivery only while focused; Rust independently rechecks the current OS foreground owner immediately before clipboard admission. Losing focus between those steps cancels the operation without a clipboard write; close and choose Copy link again to retry. Closing,
+selection changes, new recording and expiry cancel future effects; an admitted
+clipboard write or transmitted data cannot be recalled. A copied result remains
+separate from upload/recipient readiness. No automatic ambiguous-write retry.
+
+The completed pill's ordinary timeout pauses while this capture-bound popup is
+open. New capture/phase transitions still close it; local Paste stays available.
+Disconnected users use the existing General connection setup, then choose Copy
+link again. Missing assets fail with an actionable local-Paste message; there is
+no legacy direct-public-copy fallback. The old direct reservation path is removed.
+Existing hostedSharing and service activation holds are preserved; this adds no
+new experiment. Keep this routing only after macOS/isolated Linux acceptance;
+rollback must restore a verified consent surface, never bypass public-copy consent.
+The development foundation card remains a diagnostic surface, not an installed
+second capture workspace. No #172 ChatGPT-web or deployed-account proof is implied.
+
+The scoped hosted macOS native route is `native-proof-mac.yml`, dispatched with
+`scenario=share` against the frozen candidate. The default worker case remains
+unchanged. The share case uses a synthetic full-screen scene, normal capture
+start/stop, the installed completed-pill action, native owned-window OCR/input,
+explicit consent/cancel/repeated clipboard delivery, and the actual loopback
+Worker. It retains synthetic screenshots/bundle and available decodable video;
+it does not edit TCC or establish deployed-account/ChatGPT acceptance. A long
+open confirmation pauses completion dismissal; closing grants a fresh retry interval.
+
+The share Electron entry/preload are authored as `.cts`. `npm run build` checks
+and emits their ignored `.cjs` runtime files; popup packaging stages only those
+outputs. The share smoke and hosted native case are TypeScript run by Node 22.

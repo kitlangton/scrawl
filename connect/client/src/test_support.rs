@@ -2462,3 +2462,19 @@ pub fn hosted_provider_write_failure_never_reports_disabled_or_login_success() {
     assert!(server.state.lock().unwrap().data.is_empty());
     assert_eq!(fs::read(bundle.join("audio.wav")).unwrap(), b"audio");
 }
+
+#[cfg_attr(test, test)]
+pub fn hosted_upload_diagnostic_preserves_stage_without_private_error_text() {
+    let sensitive = "synthetic-private-key-path-and-token-never-export";
+    let error = anyhow::anyhow!(sensitive).context("encryption_snapshot_failed");
+    assert!(error.chain().any(|cause| cause.to_string().contains(sensitive)));
+    assert_eq!(upload_failure_diagnostic(&error), ("snapshot", "unclassified"));
+    let rejected = anyhow::anyhow!("unsupported_asset: bundle contains an unknown asset; no files were omitted")
+        .context("encryption_snapshot_failed");
+    assert_eq!(upload_failure_diagnostic(&rejected), ("snapshot", "unknown_asset"));
+    let io = anyhow::Error::from(std::io::Error::new(std::io::ErrorKind::PermissionDenied, sensitive))
+        .context("encryption_pack_failed");
+    assert_eq!(upload_failure_diagnostic(&io), ("encrypt", "io_permission"));
+    let arbitrary = anyhow::anyhow!("encryption_snapshot_failed with a synthetic secret");
+    assert_eq!(upload_failure_diagnostic(&arbitrary), ("upload", "unclassified"));
+}

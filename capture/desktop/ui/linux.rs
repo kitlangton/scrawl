@@ -1100,3 +1100,6 @@ pub(in crate::capture::desktop) fn place_note_surface(id: u32, pid: u32, rect: [
     if focus { x11::focus(id); }
     if start_worker { std::thread::spawn(move || pin_note_surface(id, pid, index)); }
 }
+
+/// Current compositor/window owner, including owned Electron children.
+pub(in crate::capture::desktop) fn share_foreground_pid() -> u32 { note_focus().1 }
