@@ -87,7 +87,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: connect/service/package-lock.json
+          cache-dependency-path: |
+            connect/service/package-lock.json
+            capture/desktop/ui/frontend/package-lock.json
       - name: Prepare the checked local Worker with locked dependencies
         timeout-minutes: 5
         working-directory: connect/service
