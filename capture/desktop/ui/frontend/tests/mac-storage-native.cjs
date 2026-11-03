@@ -454,7 +454,16 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.before = { ...await poll(snapshot, 'Initial authoritative read'), files: await assertFiles(null) };
     assert.equal(report.before.location.storage.source, 'builtin');
     assert.equal(report.before.location.storage.effectivePath, builtin);
-    await locationStatus.getByText(report.before.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
+    await poll(async () => {
+      const displayed = await locationStatus.innerText({ timeout: budget(1000) });
+      if (await locationStatus.getByText(report.before.location.storage.displayPath, { exact: true }).isVisible()) return;
+      // The initial renderer read may race other read-only Settings requests.
+      // Use the shipped Refresh control only for its explicit busy state;
+      // unexpected errors still fail, and no mutation is retried.
+      assert.equal(displayed, 'Another location request is still running. Refresh when it finishes.');
+      await card.getByRole('button', { name: 'Refresh location', exact: true }).click({ timeout: budget(1000) });
+      throw new Error('Location refresh pending');
+    }, 'Rendered initial capture location');
     await change.click({ timeout: budget() });
     report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');
     // Only the OS picker receives the path. Never pass it through renderer/IPC.
