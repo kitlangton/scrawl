@@ -102,6 +102,28 @@ class SigningHookTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.head(), head)
 
+    def test_symbolic_head_transaction_does_not_treat_ref_as_commit(self):
+        self.commit()
+        result = subprocess.run(
+            [str(self.repo / '.githooks/reference-transaction'), 'prepared'],
+            input='ref:refs/heads/main ref:refs/heads/side HEAD\n',
+            cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_symbolic_head_transaction_still_checks_new_branch_commit(self):
+        self.commit()
+        head = self.head()
+        tree = self.git('rev-parse', 'HEAD^{tree}').stdout.strip()
+        unsigned = self.git('commit-tree', tree, '-p', head, '-m', 'unsigned').stdout.strip()
+        result = subprocess.run(
+            [str(self.repo / '.githooks/reference-transaction'), 'prepared'],
+            input=('ref:refs/heads/main ref:refs/heads/side HEAD\n'
+                   f'{head} {unsigned} refs/heads/side\n'),
+            cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=15)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('a verifiable signature is required', result.stderr)
+        self.assertEqual(self.head(), head)
+
     def test_existing_unsigned_history_and_remote_updates_unchanged(self):
         self.git('-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false',
                  'commit', '--allow-empty', '-qm', 'old unsigned history')

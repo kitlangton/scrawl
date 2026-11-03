@@ -14,6 +14,11 @@ def check():
     tips = set()
     for line in sys.stdin:
         _old, new, ref = line.split()
+        # Modern Git reports symbolic-ref changes as ref:<target>, not object
+        # IDs. Commit-bearing branch updates in the same transaction are still
+        # checked below; moving HEAD's pointer introduces no commit itself.
+        if new.startswith("ref:"):
+            continue
         if (ref == "HEAD" or ref.startswith("refs/heads/")) and new.strip("0"):
             tips.add(new)
     if not tips:
