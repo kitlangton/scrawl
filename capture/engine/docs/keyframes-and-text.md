@@ -280,7 +280,9 @@ To compare a summary experiment on real captures, `capture/agent/scripts/agent-e
 
 During screen capture, Shift-click opens a compact Electron text field at the
 point; Shift drawing is unchanged. Enter or Attach saves; empty Enter keeps
-only the pin. Escape preserves the in-capture draft. The count reflects durable
+only the pin. Escape preserves the in-capture draft. A deliberate Shift-move
+outside the editor retains its draft and returns to drawing; stationary Shift
+presses and movement inside the editor keep typing protected. The count reflects durable
 saved notes; its compact list edits/deletes them. Unsubmitted drafts are not
 handoff content and do not survive ending/restarting the capture.
 

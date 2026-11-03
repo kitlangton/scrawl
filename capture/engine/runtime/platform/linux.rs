@@ -1068,6 +1068,7 @@ fn log_chord(telemetry: &SharedCaptureTelemetry, mods: Modifiers, vk: u16) {
 fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
     let mut prev_keys: HashSet<u16> = HashSet::new();
     let mut prev_shift_ink = false;
+    let mut note_draw = super::super::NoteDrawGesture::default();
     let mut await_shift_release = false;
     let mut prev_buttons = [false; 2];
     let mut last_tap_check = Instant::now() - Duration::from_secs(1);
@@ -1133,6 +1134,7 @@ fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
         let buttons = [held.left, held.right];
         if !active {
             prev_shift_ink = false;
+            note_draw = super::super::NoteDrawGesture::default();
             prev_buttons = buttons;
             if pointer_taken {
                 linux::overlay::take_pointer(false);
@@ -1161,6 +1163,8 @@ fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
         } else {
             stale_pointer = None;
         }
+        telemetry.resume_note_drawing(&mut note_draw, (x, y),
+            mods.shift && !mods.super_key && !mods.ctrl && !mods.alt && !await_shift_release);
         *telemetry
             .pointer_screen
             .lock()

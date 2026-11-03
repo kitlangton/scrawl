@@ -219,6 +219,7 @@ pub enum LiveOverlayEvent {
     Note { pin: u32, t: u64, x: f32, y: f32, screen_x: f64, screen_y: f64 },
     NoteClosed { focus: u64, owner: u32 },
     NoteOutside,
+    NoteResumeDrawing,
     NotesUnavailable,
     /// The iPhone mirror ended on its own (unplugged, never found, or access denied).
     PhoneEnded,
@@ -1496,6 +1497,75 @@ fn clip_recording_ink(stroke: &Stroke) -> Vec<Stroke> {
         for point in part.pts.chunks_exact_mut(3) { point[2] -= offset; }
     }
     result
+}
+
+/// A deliberate Shift movement outside the editor returns to annotation.
+/// Stationary capital-letter Shift presses and movement inside the editor do not.
+#[derive(Default)]
+struct NoteDrawGesture {
+    start: Option<(f64, f64)>,
+    pending: bool,
+}
+impl NoteDrawGesture {
+    fn update(&mut self, editing: bool, shift: bool, at: (f64, f64), mut inside: impl FnMut(f64, f64) -> bool) -> bool {
+        if !editing || !shift {
+            *self = Self::default();
+            return false;
+        }
+        if self.pending || !at.0.is_finite() || !at.1.is_finite() { return false; }
+        let Some(start) = self.start else { self.start = Some(at); return false; };
+        if (at.0 - start.0).hypot(at.1 - start.1) < f64::from(MIN_INK_SPAN_PT) { return false; }
+        // Window lookup is needed only after real movement. If Shift started in
+        // the editor, protect text selection until Shift is released, even if
+        // that selection subsequently drags outside its bounds.
+        if inside(start.0, start.1) || inside(at.0, at.1) {
+            self.pending = true;
+            return false;
+        }
+        self.pending = true;
+        true
+    }
+}
+impl SharedCaptureTelemetry {
+    fn resume_note_drawing(&self, gesture: &mut NoteDrawGesture, at: (f64, f64), shift: bool) {
+        if gesture.update(self.notes_editing.load(Ordering::Acquire), shift, at,
+            |x, y| self.on_capture_input_ui(x, y)) {
+            let _ = self.ui_sender.try_send(LiveOverlayEvent::NoteResumeDrawing);
+        }
+    }
+}
+
+#[cfg(test)]
+mod note_draw_tests {
+    use super::NoteDrawGesture;
+    #[test]
+    fn stationary_shift_typing_does_not_enumerate_native_windows() {
+        let mut gesture = NoteDrawGesture::default();
+        let lookups = std::cell::Cell::new(0);
+        for _ in 0..125 {
+            assert!(!gesture.update(true, true, (10.0, 10.0), |_, _| { lookups.set(lookups.get() + 1); false }));
+        }
+        assert_eq!(lookups.get(), 0);
+        assert!(gesture.update(true, true, (20.0, 20.0), |_, _| { lookups.set(lookups.get() + 1); false }));
+        assert_eq!(lookups.get(), 2);
+    }
+    #[test]
+    fn drawing_outside_a_note_requires_motion_and_preserves_typing_inside() {
+        let mut gesture = NoteDrawGesture::default();
+        assert!(!gesture.update(true, true, (10.0, 10.0), |_, _| false));
+        assert!(!gesture.update(true, true, (10.0, 10.0), |_, _| false));
+        assert!(!gesture.update(true, false, (10.0, 10.0), |_, _| false));
+        assert!(!gesture.update(true, true, (10.0, 10.0), |_, _| true));
+        assert!(!gesture.update(true, true, (50.0, 50.0), |_, _| true));
+        assert!(!gesture.update(true, true, (80.0, 80.0), |_, _| false));
+        assert!(!gesture.update(true, false, (80.0, 80.0), |_, _| false));
+        assert!(!gesture.update(true, true, (80.0, 80.0), |_, _| false));
+        assert!(gesture.update(true, true, (100.0, 100.0), |_, _| false));
+        assert!(!gesture.update(true, true, (120.0, 120.0), |_, _| false), "one dismissal until acknowledged");
+        assert!(!gesture.update(false, true, (120.0, 120.0), |_, _| false));
+        assert!(!gesture.update(true, true, (120.0, 120.0), |_, _| false));
+        assert!(gesture.update(true, true, (140.0, 140.0), |_, _| false));
+    }
 }
 
 /// One poll of desktop Shift ink, using unclamped capture-relative coordinates.

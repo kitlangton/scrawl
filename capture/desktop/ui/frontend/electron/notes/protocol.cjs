@@ -23,14 +23,30 @@ function popupBounds(point, area, height) {
     y: Math.round(Math.max(area.y, Math.min(point.y + 12, area.y + area.height - height))),
     width, height: Math.min(height, area.height) };
 }
+const BADGE_WIDTH = 116;
+const BADGE_HEIGHT = 44;
+const BADGE_GAP = 16;
 function badgeBounds(rect, area) {
   const [x, y, width, height] = rect;
-  let bx = x + width + 6, by = y;
-  if (bx + 150 > area.x + area.width) {
-    bx = x - 156;
-    if (bx < area.x) { bx = x + (width - 150) / 2; by = y + height + 6; }
+  let bx = x + width + BADGE_GAP, by = y + (height - BADGE_HEIGHT) / 2;
+  if (bx + BADGE_WIDTH > area.x + area.width) {
+    bx = x - BADGE_WIDTH - BADGE_GAP;
+    if (bx < area.x) { bx = x + (width - BADGE_WIDTH) / 2; by = y + height + BADGE_GAP; }
   }
-  return { x: Math.round(Math.max(area.x, Math.min(bx, area.x + area.width - 150))),
-    y: Math.round(Math.max(area.y, Math.min(by, area.y + area.height - 44))) };
+  return { x: Math.round(Math.max(area.x, Math.min(bx, area.x + area.width - BADGE_WIDTH))),
+    y: Math.round(Math.max(area.y, Math.min(by, area.y + area.height - BADGE_HEIGHT))) };
 }
-module.exports = { validCommand, validSnapshot, popupBounds, badgeBounds };
+
+// A small click-through sprite travels between the two existing owned surfaces.
+function flightBounds(from, badge) {
+  const start = [from.x + from.width / 2 - 16, from.y + from.height / 2 - 16];
+  const end = [badge.x + badge.width / 2 - 16, badge.y + badge.height / 2 - 16];
+  const x = Math.floor(Math.min(start[0], end[0]) - 8);
+  const y = Math.floor(Math.min(start[1], end[1]) - 40);
+  const width = Math.ceil(Math.max(start[0], end[0]) + 40 - x);
+  const height = Math.ceil(Math.max(start[1], end[1]) + 40 - y);
+  if (![x, y, width, height].every(Number.isFinite) || width > 8192 || height > 8192) return null;
+  return { bounds: { x, y, width, height }, start: [start[0] - x, start[1] - y],
+    delta: [end[0] - start[0], end[1] - start[1]] };
+}
+module.exports = { validCommand, validSnapshot, popupBounds, badgeBounds, BADGE_WIDTH, BADGE_HEIGHT, flightBounds };

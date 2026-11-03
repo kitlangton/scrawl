@@ -2921,7 +2921,7 @@ impl ApparentCoordinator {
             let anchor = self.electron_pill.as_ref().filter(|_| self.electron_pill_routed)
                 .and_then(|pill| pill.note_badge_anchor()).or(anchor);
             #[cfg(target_os = "linux")]
-            let anchor = anchor.or_else(|| platform::note_badge_anchor(self.island_width * self.island_scale, self.island_y + (PILL_WINDOW_H - ISLAND_H * self.island_scale) / 2.0));
+            let anchor = anchor.or_else(|| platform::note_badge_anchor(self.island_width * self.island_scale, self.island_y + (PILL_WINDOW_H - ISLAND_H * self.island_scale) / 2.0, ISLAND_H * self.island_scale));
             if let (Some(ui), Some(point)) = (self.note_ui.as_mut(), anchor) { ui.position_badge(point); }
         }
         let live_no_words = self.recording_has_no_words();
@@ -6956,6 +6956,7 @@ pub fn run_app(
                             }
                             LiveOverlayEvent::NoteClosed { focus, owner } => platform::restore_note_focus(focus, owner),
                             LiveOverlayEvent::NoteOutside => { if let Some(ui) = coord.note_ui.as_ref() { ui.outside(); } },
+                            LiveOverlayEvent::NoteResumeDrawing => { if let Some(ui) = coord.note_ui.as_ref() { ui.resume_drawing(); } },
                             LiveOverlayEvent::Note { pin, t, x, y, screen_x, screen_y } => {
                                 coord.request_immediate_frame();
                                 let (focus, owner) = platform::note_focus();

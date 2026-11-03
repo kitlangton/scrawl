@@ -14,6 +14,7 @@ use std::sync::{Arc, atomic::Ordering};
 pub enum CommandMessage {
     Ready,
     Hidden,
+    Flight { active: bool },
     Outside,
     Finished,
     Draft {
@@ -170,6 +171,7 @@ impl Session {
         let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stopped = Arc::clone(&stopping);
         std::thread::spawn(move || {
+            let mut flying = false;
             let mut current = None;
             let mut focus = 0;
             let mut owner = 0;
@@ -260,6 +262,16 @@ impl Session {
                                 owner = 0;
                                 mode = "badge";
                             }
+                            CommandMessage::Flight { active } => {
+                                flying = active && mode == "badge" && completion.is_none();
+                                if let Some(id) = own_windows.first() {
+                                    let mut passthrough = telemetry.passthrough_window_ids.lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                    if flying {
+                                        if !passthrough.contains(id) { passthrough.push(*id); }
+                                    } else { passthrough.retain(|existing| existing != id); }
+                                }
+                            }
                             CommandMessage::Hidden => {
                                 if mode == "badge" {
                                     let _ = telemetry
@@ -307,7 +319,7 @@ impl Session {
                                     "Invalid notes surface"
                                 );
                                 if completion.is_none()
-                                    && (mode != "badge" || own_windows.first() != Some(&id))
+                                    && (mode != "badge" || flying || own_windows.first() != Some(&id))
                                 {
                                     #[cfg(target_os = "linux")]
                                     crate::capture::desktop::platform::place_note_surface(
@@ -316,6 +328,7 @@ impl Session {
                                         rect,
                                         wants_focus,
                                         own_windows.first() == Some(&id),
+                                        flying && own_windows.first() == Some(&id),
                                     );
                                 }
                             }
@@ -370,6 +383,9 @@ impl Session {
                 let _ = telemetry
                     .ui_sender
                     .try_send(LiveOverlayEvent::NotesUnavailable);
+            }
+            if let Some(id) = own_windows.first() {
+                telemetry.passthrough_window_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|existing| existing != id);
             }
             telemetry.notes_editing.store(false, Ordering::Release);
             drop(input); // EOF asks Electron to close its windows.
@@ -440,6 +456,11 @@ impl Session {
             let _ = sender.send(Message::Finish(reply));
         });
         result
+    }
+    /// A Shift gesture leaves typing without selecting another app, so retain
+    /// the original focus token (unlike an actual outside click).
+    pub fn resume_drawing(&self) {
+        let _ = self.sender.try_send(Message::Action(CommandMessage::Dismiss));
     }
     pub fn open(&self, anchor: Anchor) {
         let _ = self.sender.try_send(Message::Open(anchor));
