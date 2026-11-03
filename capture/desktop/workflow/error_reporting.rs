@@ -1,4 +1,4 @@
-//! Desktop-only, content-free PostHog errors. Never forward log/error/panic text.
+//! Desktop-only, structured PostHog diagnostics. Never forward log/error/panic text.
 //! No SDK, persistent identity, disk spool, retries, or Engine -> Desktop dependency.
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -92,7 +92,11 @@ pub(crate) fn set_enabled_in(path: &Path, on: bool) -> anyhow::Result<()> {
     set_enabled_admitted_in(path, on, || true).map_err(anyhow::Error::msg)
 }
 
-fn set_enabled_admitted_in(path: &Path, on: bool, admit: impl FnOnce() -> bool) -> Result<(), &'static str> {
+fn set_enabled_admitted_in(
+    path: &Path,
+    on: bool,
+    admit: impl FnOnce() -> bool,
+) -> Result<(), &'static str> {
     let mut expired = false;
     let result = crate::shared::handoff::update_config_in(path, |config| {
         // This check runs against the fresh config after acquiring its flock.
@@ -106,12 +110,19 @@ fn set_enabled_admitted_in(path: &Path, on: bool, admit: impl FnOnce() -> bool) 
         config["errorReportingGeneration"] = json!(crate::shared::ids::make_bundle_id());
         Ok(())
     });
-    result.map_err(|_| if expired { "admission_expired" } else { "config_write_failed" })
+    result.map_err(|_| {
+        if expired {
+            "admission_expired"
+        } else {
+            "config_write_failed"
+        }
+    })
 }
 
 fn read_enabled_in(path: &Path) -> Result<bool, &'static str> {
     let config = reporting_config_in(path).ok_or("config_read_failed")?;
-    if config.get("errorReportingGeneration").is_some_and(|v| !v.as_str().is_some_and(|s| s.len() <= 128)) {
+    let generation = config.get("errorReportingGeneration");
+    if generation.is_some_and(|v| !v.as_str().is_some_and(|s| s.len() <= 128)) {
         return Err("config_read_failed");
     }
     match config.get("errorReporting") {
@@ -121,7 +132,12 @@ fn read_enabled_in(path: &Path) -> Result<bool, &'static str> {
     }
 }
 
-pub(crate) fn error_reporting_bridge_in(path: &Path, operation: &str, enabled: Option<bool>, admit: impl FnOnce() -> bool) -> Result<bool, &'static str> {
+pub(crate) fn error_reporting_bridge_in(
+    path: &Path,
+    operation: &str,
+    enabled: Option<bool>,
+    admit: impl FnOnce() -> bool,
+) -> Result<bool, &'static str> {
     match (operation, enabled) {
         ("read", None) => read_enabled_in(path),
         ("set", Some(value)) => {
@@ -139,6 +155,7 @@ struct Report {
     line: u32,
     consent: Consent,
     delivered: Option<mpsc::SyncSender<()>>,
+    diagnostics: Option<Value>,
 }
 
 impl Report {
@@ -149,6 +166,7 @@ impl Report {
             line: location.line(),
             consent,
             delivered: None,
+            diagnostics: None,
         }
     }
 
@@ -162,7 +180,7 @@ impl Report {
             frame["filename"] = json!(file);
             frame["lineno"] = json!(self.line);
         }
-        Ok(json!({
+        let mut payload = json!({
             "api_key": token,
             "event": "$exception",
             // A fresh event identity, not a person, installation or session.
@@ -186,8 +204,75 @@ impl Report {
                     "stacktrace": { "type":"raw", "frames":[frame] }
                 }]
             }
-        }))
+        });
+        if let Some(diagnostics) = &self.diagnostics {
+            payload["properties"]["diagnostics"] = diagnostics.clone();
+            let step = diagnostics["steps"]
+                .as_array()
+                .and_then(|s| s.last())
+                .and_then(|s| s["step"].as_str())
+                .unwrap_or("unknown");
+            let kind = diagnostics["io_errors"]
+                .as_array()
+                .and_then(|s| s.last())
+                .and_then(|s| s["kind"].as_str())
+                .unwrap_or("unknown");
+            payload["properties"]["$exception_list"][0]["value"] =
+                json!(format!("{}: {step} ({kind})", self.failure.code()));
+            payload["properties"]["$exception_fingerprint"] = json!(format!(
+                "desktop:{}:{step}:{kind}:{}",
+                self.failure.code(),
+                std::env::consts::OS
+            ));
+            if let Some(steps) = diagnostics["steps"].as_array().filter(|s| !s.is_empty()) {
+                payload["properties"]["$exception_list"][0]["stacktrace"]["frames"] = json!(
+                    steps
+                        .iter()
+                        .map(|point| json!({
+                            "platform": "native", "lang": "rust", "function": point["step"],
+                            "filename": point["file"], "lineno": point["line"],
+                            "in_app": true, "synthetic": true, "client_resolved": true,
+                        }))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+        Ok(payload)
     }
+}
+
+/// Extract only typed breadcrumbs and OS codes. Never call Display/Debug on an error.
+/// Bounded independently of the size or contents of a third-party error chain.
+fn diagnostics(error: &anyhow::Error) -> Value {
+    use crate::capture::engine::bundle::diagnostics::{Breadcrumb, CaptureFailure};
+    let mut steps = Vec::new();
+    let mut io = Vec::new();
+    let mut capture = None;
+    let mut json_error = None;
+    let mut depth = 0;
+    for cause in error.chain().take(32) {
+        depth += 1;
+        if let Some(point) = cause.downcast_ref::<Breadcrumb>() {
+            // Apply the same source-path boundary as the reporting callsite.
+            steps.push(
+                json!({"step": point.step, "file": source_file(point.file), "line": point.line}),
+            );
+        }
+        if let Some(failure) = cause.downcast_ref::<CaptureFailure>() {
+            capture = Some(&failure.facts);
+        }
+        if let Some(error) = cause.downcast_ref::<serde_json::Error>() {
+            json_error = Some(
+                json!({"category": format!("{:?}", error.classify()), "line": error.line(), "column": error.column()}),
+            );
+        }
+        if let Some(error) = cause.downcast_ref::<std::io::Error>() {
+            io.push(
+                json!({"kind": format!("{:?}", error.kind()), "os_code": error.raw_os_error()}),
+            );
+        }
+    }
+    json!({"schema_version": 1, "steps": steps, "io_errors": io, "capture": capture, "chain_depth": depth, "json_error": json_error})
 }
 
 /// Source location only, never runtime paths or dependency/build-root paths.
@@ -247,12 +332,22 @@ impl Reporter {
         Ok(Self { config, sender })
     }
 
+    #[cfg(test)]
     fn capture(&self, failure: Failure, location: &std::panic::Location<'_>) {
+        self.capture_error(failure, location, None);
+    }
+
+    fn capture_error(
+        &self,
+        failure: Failure,
+        location: &std::panic::Location<'_>,
+        error: Option<&anyhow::Error>,
+    ) {
         if let Some(consent) = consent_in(&self.config) {
             // Never wait for network or for queue capacity on a capture/UI thread.
-            let _ = self
-                .sender
-                .try_send(Report::new(failure, location, consent));
+            let mut report = Report::new(failure, location, consent);
+            report.diagnostics = error.map(diagnostics);
+            let _ = self.sender.try_send(report);
         }
     }
 
@@ -336,9 +431,9 @@ fn install_reporter(reporter: Reporter) {
 }
 
 #[track_caller]
-pub(crate) fn report(failure: Failure) {
+pub(crate) fn report_error(failure: Failure, error: &anyhow::Error) {
     if let Some(reporter) = REPORTER.get() {
-        reporter.capture(failure, std::panic::Location::caller());
+        reporter.capture_error(failure, std::panic::Location::caller(), Some(error));
     }
 }
 

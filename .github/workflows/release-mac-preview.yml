@@ -4,6 +4,11 @@ name: Mac preview release
 # Keep its feed separate from Kit's Developer ID signed production appcast.
 on:
   workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact Linux-and-Mac verified main SHA (empty selects dispatch commit)
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -20,6 +25,8 @@ jobs:
       contents: read
       actions: read
     runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.gate.outputs.sha }}
     steps:
       # Check receipts before allocating a Mac, using trusted current main code.
       - uses: actions/checkout@v5
@@ -27,9 +34,11 @@ jobs:
           ref: main
           persist-credentials: false
       - name: Require Linux/shared and Mac verification of this exact main commit
+        id: gate
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 enablement/release_gate.py --platform macos --sha "$GITHUB_SHA"
+          REQUEST_SHA: ${{ inputs.candidate_sha || github.sha }}
+        run: python3 enablement/release_gate.py --platform macos --sha "$REQUEST_SHA"
 
   preview:
     needs: admit
@@ -37,6 +46,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     env:
+      CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
       APPARENT_PREVIEW_NOTARIZE: ${{ vars.MAC_APPLE_SIGNING_ENABLED || 'false' }}
       APPARENT_APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
       APPARENT_APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
@@ -44,10 +54,12 @@ jobs:
       APPARENT_NOTARY_ISSUER: ${{ vars.APPLE_NOTARY_ISSUER }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.admit.outputs.sha }}
       - name: Require Linux/shared and Mac verification of this exact main commit
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 enablement/release_gate.py --platform macos --sha "$GITHUB_SHA"
+        run: python3 enablement/release_gate.py --platform macos --sha "$CANDIDATE_SHA"
       - name: Prepare Developer ID credentials
         if: env.APPARENT_PREVIEW_NOTARIZE == 'true'
         env:
@@ -122,11 +134,11 @@ jobs:
           fi
           # Only lightweight tags are accepted; annotated tags point at a tag
           # object and need a second dereference, which we deliberately avoid.
-          if [[ -n "$existing_sha" && ( "$tag_type" != "commit" || "$existing_sha" != "$GITHUB_SHA" ) ]]; then
+          if [[ -n "$existing_sha" && ( "$tag_type" != "commit" || "$existing_sha" != "$CANDIDATE_SHA" ) ]]; then
             echo "Tag ${tag} does not point to the run commit" >&2
             exit 1
           fi
-          tag_args=(--target "$GITHUB_SHA")
+          tag_args=(--target "$CANDIDATE_SHA")
           if [[ -n "$existing_sha" ]]; then tag_args=(--verify-tag); fi
           if [[ "$APPARENT_PREVIEW_NOTARIZE" == true ]]; then
             notes="Mac preview signed with Developer ID and notarized by Apple. Updates use the existing preview Sparkle feed and EdDSA signature. This does not update Kit's app."
@@ -152,23 +164,28 @@ jobs:
           # A moved tag must never become an update offered by the live feed.
           tag_target=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" \
             --jq '.object.type + " " + .object.sha')
-          if [[ "$tag_target" != "commit ${GITHUB_SHA}" ]]; then
+          if [[ "$tag_target" != "commit ${CANDIDATE_SHA}" ]]; then
             echo "Tag moved before appcast publication: ${tag}" >&2
             exit 1
           fi
           branch=preview-mac-feed
           if ! gh api "repos/${GITHUB_REPOSITORY}/branches/${branch}" > /dev/null 2>&1; then
             gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f ref="refs/heads/${branch}" -f sha="$GITHUB_SHA" > /dev/null
+              -f ref="refs/heads/${branch}" -f sha="$CANDIDATE_SHA" > /dev/null
           fi
           previous="$RUNNER_TEMP/previous-preview-appcast.xml"
           printf '' > "$previous"
           sha=''
-          if gh api "repos/${GITHUB_REPOSITORY}/contents/appcast.xml?ref=${branch}" > "$RUNNER_TEMP/preview-feed-response.json" 2>/dev/null; then
+          if gh api "repos/${GITHUB_REPOSITORY}/contents/appcast.xml?ref=${branch}" > "$RUNNER_TEMP/preview-feed-response.json" 2>"$RUNNER_TEMP/preview-feed-error"; then
             sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha"])' "$RUNNER_TEMP/preview-feed-response.json")
             python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["content"].replace("\n", ""), end="")' \
               "$RUNNER_TEMP/preview-feed-response.json" | base64 -D > "$previous"
+          elif ! grep -qE '\(HTTP 404\)$' "$RUNNER_TEMP/preview-feed-error"; then
+            echo 'Could not inspect existing Mac feed; refusing publication' >&2
+            exit 1
           fi
+          # Recheck exact receipts and source ordering while the publisher lock is held.
+          python3 enablement/release_gate.py --platform macos --sha "$CANDIDATE_SHA" --previous-mac-feed "$previous"
           python3 capture/desktop/scripts/release/preview_appcast.py \
             --previous "$previous" --zip "$zip" --version "$version" --build-number "$build" \
             --signature-attributes "$(cat "$RUNNER_TEMP/preview-signature-attributes")" \

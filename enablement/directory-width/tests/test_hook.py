@@ -134,7 +134,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
         self.assertIn(b"public/site/public/feature-demos: 11 files", result.stderr)
 
     def test_generated_published_homepage_bundle_is_excluded(self) -> None:
-        paths = [f"public/site/published-homepage/assets/generated-{i}.js" for i in range(11)]
+        paths = [f"public/site/video-demo/output/generated-{i}.js" for i in range(11)]
         for path in paths:
             self.put(path)
         self.stage(*paths)
@@ -212,7 +212,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
 
     def test_dependency_and_known_generated_roots_are_excluded(self) -> None:
         paths = [f"vendor/pkg-{i}/lib.rs" for i in range(11)]
-        paths += [f"public/site/published-homepage/assets/generated-{i}.js" for i in range(11)]
+        paths += [f"public/site/video-demo/output/generated-{i}.js" for i in range(11)]
         paths += [f"target/gen-{i}/mod.rs" for i in range(11)]
         for path in paths:
             self.put(path)

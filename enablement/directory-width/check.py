@@ -19,7 +19,6 @@ EXCLUDED_COMPONENTS = {
     b"third-party", b"__pycache__",
 }
 EXCLUDED_PREFIXES = (
-    b"public/site/published-homepage/", # checked-in generated site bundle
     b"public/site/video-demo/output/",   # generated demo render output
     b"connect/web/dist/",                # generated browser package output
     b"connect/web/dist-site-check/",     # generated verification output

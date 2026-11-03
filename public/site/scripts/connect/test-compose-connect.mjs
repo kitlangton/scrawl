@@ -129,6 +129,20 @@ test('final preservation verification rejects missing unreferenced approved art 
     validatePreservedFiles(inventory(f.con), expected)
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
+test('final preservation requires every Public input, including runtime-only art', () => {
+  const f = fixture()
+  try {
+    f.put(f.pub, 'pond/runtime-only.png', 'accepted source art')
+    f.put(f.canonical, 'assets/pond/runtime-only.png', 'accepted source art')
+    f.run()
+    const expected = inventory(f.pub)
+    validatePreservedFiles(inventory(f.out), expected)
+    rmSync(join(f.out, 'pond/runtime-only.png'))
+    assert.throws(() => validatePreservedFiles(inventory(f.out), expected), /Missing or changed composed input: pond\/runtime-only.png/)
+    f.put(f.out, 'pond/runtime-only.png', 'changed')
+    assert.throws(() => validatePreservedFiles(inventory(f.out), expected), /Missing or changed composed input/)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
 test('follow inline CSS and srcset resources while allowing fragment/data URLs', () => {
   const f = fixture()
   try {

@@ -38,6 +38,7 @@ class HostedDeliveryTests(unittest.TestCase):
         self.assertEqual(result['vars']['API_ORIGIN'], 'https://hosted.tryapparent.com')
         self.assertEqual(result['vars']['SITE_ORIGIN'], 'https://app.tryapparent.com')
         self.assertEqual(result['routes'], [{'pattern': 'hosted.tryapparent.com', 'custom_domain': True}])
+        self.assertEqual(result['compatibility_flags'], ['nodejs_compat'])
         self.assertFalse(result['workers_dev'])
         self.assertFalse(result['observability']['enabled'])
         self.assertNotIn('limits', result)
@@ -54,6 +55,14 @@ class HostedDeliveryTests(unittest.TestCase):
         deployment['deployments'][0]['versions'][0]['percentage'] = 50
         with patch.object(worker, 'api', return_value=deployment), self.assertRaisesRegex(ValueError, 'fully deployed'):
             worker.verify('a' * 40)
+
+    def test_publication_uses_current_worker_source_identity(self):
+        deployment = {'deployments': [{'id': 'deployment', 'created_on': '2026-11-03',
+                                      'versions': [{'version_id': 'version', 'percentage': 100}]}]}
+        for allowed in (True, False):
+            with patch.object(worker, 'api', side_effect=[deployment, {'annotations': {'workers/tag': 'a' * 40}}]), patch.dict(worker.os.environ, {'GITHUB_REPOSITORY': 'example/project'}), patch.object(worker, 'publication_needed', return_value=allowed) as order:
+                self.assertEqual(worker.can_publish('b' * 40), allowed)
+                order.assert_called_once_with('example/project', 'b' * 40, 'a' * 40)
 
     def test_matching_version_requires_anonymous_credentialed_cors(self):
         from io import BytesIO

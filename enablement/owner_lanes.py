@@ -158,12 +158,21 @@ def main():
     parser.add_argument('--json', type=Path)
     parser.add_argument('--summary', type=Path)
     parser.add_argument('--lane', choices=EXPLICIT_LANES)
+    parser.add_argument('--receipt-dir', type=Path, help='Observation-only receipts outside the checkout (Node 22 required)')
     parser.add_argument('--run', action='store_true')
     parser.add_argument('--online', action='store_true')
     args = parser.parse_args()
     if args.run:
         if not args.lane:
             parser.error('--run requires an explicit --lane; advisory selection cannot execute suites')
+        if args.receipt_dir:
+            command = ['python3', str(Path(__file__).resolve()), '--lane', args.lane, '--run']
+            if args.online:
+                command.append('--online')
+            subprocess.run(['node', str(ROOT / 'enablement/verification/receipt.ts'),
+                            '--suite', 'owner-' + args.lane, '--output', str(args.receipt_dir.resolve()),
+                            '--', *command], cwd=ROOT, check=True)
+            return
         run_lane(args.lane, args.online)
         return
     report = plan(args.base, args.head)

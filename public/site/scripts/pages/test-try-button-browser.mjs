@@ -65,7 +65,8 @@ try {
       const style = getComputedStyle(document.querySelector(selector))
       return ['borderRadius', 'backgroundColor', 'color', 'padding', 'fontSize', 'fontWeight', 'lineHeight'].map(key => style[key])
     }))
-    assert.deepEqual(styles[0], styles[1], 'hero and footer share the rounded CTA style')
+    // The accepted homepage gives the hero and footer distinct treatments.
+    assert.deepEqual(styles[1].slice(0, 3), ['7px', 'rgb(183, 165, 216)', 'rgb(25, 22, 29)'], 'footer retains the accepted lilac rounded action')
     await page.screenshot({ path: `${evidence}/${scenario.name}-before.png` })
     if (scenario.keyboard) { await button.focus(); await page.keyboard.press('Enter') }
     else await button.click({ delay: 80 })

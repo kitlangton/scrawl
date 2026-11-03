@@ -57,11 +57,63 @@ class CommitCheckpointTests(unittest.TestCase):
     def test_commit_fetches_new_main_without_rewriting_head(self):
         self.advance_main()
         result = self.commit()
-        self.assertIn('INTEGRATION REQUIRED', result.stderr)
+        self.assertIn('INTEGRATION CHECKPOINT', result.stderr)
         self.assertIn(self.incoming[:12], result.stderr)
         self.assertEqual(self.git('rev-parse', 'HEAD^').stdout.strip(), self.main)
         self.assertEqual(self.git('status', '--porcelain').stdout, '')
         self.assertEqual(self.git('rev-parse', 'origin/main').stdout.strip(), self.incoming)
+
+    def incoming_file(self, path):
+        other = self.root / 'writer'
+        self.git('clone', '-q', str(self.remote), str(other))
+        self.git('config', 'user.name', 'Test', cwd=other)
+        self.git('config', 'user.email', 'test@example.invalid', cwd=other)
+        target = other / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('incoming contract\n')
+        self.git('add', '.', cwd=other)
+        self.git('commit', '-qm', 'incoming path', cwd=other)
+        self.git('push', '-q', 'origin', 'main', cwd=other)
+
+    def test_unrelated_site_change_allows_finishing_slice(self):
+        self.incoming_file('public/site/index.html')
+        result = self.commit()
+        self.assertIn('public/site/index.html', result.stderr)
+        self.assertIn('otherwise finish the bounded slice', result.stderr)
+        self.assertNotIn('Before the next work section', result.stderr)
+        self.assertIn('Before merge, fetch current main', result.stderr)
+        self.assertIn('disjoint paths do not prove independence', result.stderr)
+
+    def test_all_incoming_paths_are_reported_even_for_large_deltas(self):
+        # Build an incoming tree in the index, then restore it before committing
+        # the feature checkpoint. The real hook fetches this tree from origin.
+        paths = [f'public/site/asset-{n:02}.txt' for n in range(35)]
+        for name in paths:
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('asset\n')
+        self.git('add', 'public')
+        tree = self.git('write-tree').stdout.strip()
+        incoming = self.git('commit-tree', tree, '-p', self.main, '-m', 'many paths').stdout.strip()
+        self.git('push', '-q', 'origin', f'{incoming}:refs/heads/main')
+        self.git('read-tree', 'HEAD')
+        shutil.rmtree(self.repo / 'public')
+        result = self.commit()
+        for path in paths:
+            self.assertIn(repr(path), result.stderr)
+
+    def test_shared_contract_change_prompts_assessment(self):
+        self.incoming_file('shared/contract.rs')
+        result = self.commit()
+        self.assertIn('assess consumers before continuing dependent work', result.stderr)
+        self.assertIn("Incoming areas: 'shared'", result.stderr)
+
+    def test_overlapping_paths_are_reported(self):
+        self.incoming_file('file')
+        (self.repo / 'file').write_text('local contract\n')
+        self.git('add', 'file')
+        result = self.commit()
+        self.assertIn("Changed on both branches (assess conflicts): 'file'", result.stderr)
 
     def test_partial_commit_preserves_unstaged_and_untracked_work(self):
         self.advance_main()
@@ -107,7 +159,7 @@ class CommitCheckpointTests(unittest.TestCase):
         linked = self.root / 'linked'
         self.git('worktree', 'add', '-qb', 'linked', str(linked))
         result = self.commit(cwd=linked)
-        self.assertIn('INTEGRATION REQUIRED', result.stderr)
+        self.assertIn('INTEGRATION CHECKPOINT', result.stderr)
         self.assertEqual(self.git('rev-parse', 'HEAD').stdout.strip(), self.main)
 
     def test_fetch_timeout_is_bounded(self):

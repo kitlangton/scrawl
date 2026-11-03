@@ -1,4 +1,4 @@
-/* Color-only adapter for the accepted published homepage; layout/media stay intact. */
+/* Shared semantic palette for the source-built public homepage. */
 :root { --bg: var(--color-background); --fg: var(--color-foreground); --muted: var(--color-muted-foreground); --line: var(--color-border); }
 :root body, :root .pond-page, :root .frog-footer, :root .photo-story { background: var(--color-background); color: var(--color-foreground); }
 :root .pond-page { --brand-carbon: var(--color-brand-foreground); }
@@ -10,7 +10,8 @@
 :root .pond-download .download-meta, :root .pond-download .download-more, :root .pond-download .platform-detail, :root .pond-download .platform-action { color: var(--color-muted-foreground); }
 :root .pond-download .platforms { background: var(--color-surface); box-shadow: inset 0 0 0 1px var(--color-border); }
 :root .pond-download .platform-row, :root .pond-download .platform-name { color: var(--color-foreground); }
-:root .pond-download .btn-primary, :root .frog-footer .footer-try { background: var(--color-primary) !important; color: var(--color-primary-foreground) !important; }
+:root .pond-download .btn-primary { background: var(--color-primary) !important; color: var(--color-primary-foreground) !important; }
+:root .frog-footer .footer-try { background: var(--color-brand) !important; color: var(--color-brand-foreground) !important; }
 :root .pond-purpose .belief-pond button { background: var(--color-secondary); color: var(--color-secondary-foreground); }
 :root .pond-page :is(a,button,summary):focus-visible { outline-color: var(--color-ring); }
 :root .frog-footer .footer-dialog { background: var(--color-background); color: var(--color-foreground); border-color: var(--color-border); }
@@ -21,9 +22,10 @@
 :root .feature-grid-section, :root .feature-grid-card h3 { color: var(--color-foreground); }
 :root .feature-grid-toggle { color: var(--color-muted-foreground); }
 
-/* These sections are inserted by the accepted snapshot after hydration. */
+/* Statement, photos, and social details share the same system palette. */
 :root .preview-statement { background: var(--color-background); color: var(--color-foreground); }
-:root .rude-bubble, :root .pond-hello { color: var(--color-brand-foreground); }
+:root .rude-bubble { color: var(--color-accent-foreground); }
+:root .pond-hello { color: var(--color-brand-foreground); }
 :root .pond-hello { background: var(--color-brand); }
 :root .feature-grid-viewport { background: var(--color-muted); border-color: var(--color-border); }
 :root .preview-statement .enjoy-highlight { stroke: var(--color-accent); }
