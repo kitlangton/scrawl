@@ -53,10 +53,8 @@ function atomicWrite(path: string, value: unknown) {
   renameSync(temporary, path)
 }
 
-export async function observe(root: string, suite: string, output: string, command: string[]) {
-  if (!/^[a-z0-9][a-z0-9._-]{0,79}$/.test(suite) || !command.length) throw new Error('Invalid suite or empty command')
-  const cwd = realpathSync(root)
-  root = realpathSync(git(cwd, 'rev-parse', '--show-toplevel').toString().trim())
+export function externalDirectory(root: string, output: string): string {
+  root = realpathSync(root)
   const external = (path: string) => {
     const distance = relative(root, path)
     if (!distance || (!distance.startsWith('../') && !isAbsolute(distance))) {
@@ -82,6 +80,14 @@ export async function observe(root: string, suite: string, output: string, comma
   mkdirSync(output, { recursive: true })
   output = realpathSync(output)
   external(output)
+  return output
+}
+
+export async function observe(root: string, suite: string, output: string, command: string[]) {
+  if (!/^[a-z0-9][a-z0-9._-]{0,79}$/.test(suite) || !command.length) throw new Error('Invalid suite or empty command')
+  const cwd = realpathSync(root)
+  root = realpathSync(git(cwd, 'rev-parse', '--show-toplevel').toString().trim())
+  output = externalDirectory(root, output)
   const path = resolve(output, `${suite}-${randomUUID()}.json`)
   const before = snapshot(root)
   const env = process.env

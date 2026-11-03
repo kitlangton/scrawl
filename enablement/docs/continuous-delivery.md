@@ -295,6 +295,48 @@ or unfinished records are not passes. For queue time, use Actions run/job timest
 alongside receipt execution times; command duration does not include runner wait,
 setup, or the entire platform workflow. No speedup is claimed from instrumentation.
 
+## Bounded Connect client reuse pilot
+
+The independent Connect client build/test step uses
+`enablement/verification/client-suite.ts`. Reuse is eligible only on identified
+GitHub-hosted **Linux** images; Mac and local runs still execute the suite. Root
+Rust checks, real-provider consumer tests and native/platform proof always remain
+required. This pilot does not cache any GUI/native acceptance or release artifacts.
+
+The reviewed closure includes every tracked non-Public input, conservatively
+invalidating consumers, shared code, workflows and tooling. The standalone client
+has no Public source dependency. Client sources/fixtures/manifests/locks, root
+Cargo manifests/locks and `.cargo` configuration are additionally pinned by a
+reviewed signature. A changed package/configuration automatically runs in full;
+updating that signature requires reviewing its new dependency and runtime-input
+closure, not copying a new hash to make a test pass. New untracked work, symlinks,
+unknown runner images, global Cargo configuration, missing tool probes and
+application environment overrides disable reuse. Image, kernel, architecture,
+Rust/Cargo/curl/compiler/libc/Node identities and relevant build/locale environment
+also participate in compatibility. Values are hashed rather than published.
+
+A successful baseline plus **two matching full shadow executions** are required
+before the first reuse, independently per compatible input/environment identity.
+After four reuses the next candidate runs the suite as an uncached result audit
+(Cargo dependency/build caches remain usable). Audit/shadow failure disables reuse
+for that verifier namespace, including after subsequent full passes. Reviewed
+verifier changes create a new namespace and restart shadow qualification.
+
+Actions caches only the small proof/tombstone JSON, with a unique run/attempt key
+and a verifier/platform restore prefix. Automatic main workflows alone save it;
+manual diagnostics cannot displace it. Failed audits are saved too. A missing,
+malformed, incompatible, failed or incomplete proof always executes; malformed
+proof also disables reuse. Whole-tree input identity, not the last-push delta,
+prevents cancelled intermediate commits from hiding changes. Reuse reports both
+the currently checked candidate and the original successful test SHA/evidence.
+The `connect-client-proof-<runner>` artifact records decisions and duration for
+14 days. No speedup is assumed until these live artifacts demonstrate it.
+
+For a local full execution through the build runner:
+`node enablement/verification/client-suite.ts --state <external-directory>/proof.json --offline --shadow`.
+Local runs deliberately cannot qualify CI reuse. Never copy local proof into an
+Actions cache or treat a dependency cache as a successful test receipt.
+
 ## Commit integration checkpoint
 
 With `core.hooksPath=.githooks`, `post-commit` refreshes `origin/main` with a
