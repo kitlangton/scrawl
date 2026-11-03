@@ -1,5 +1,18 @@
 # Intel Mac development executable producer
 
+Main selects Rust 1.99.1 through `dtolnay/rust-toolchain`, retaining its
+`CARGO_HOME`, `CARGO_INCREMENTAL=0` and `CARGO_TERM_COLOR=always` environment.
+Before dependency-cache lookup, `.github/actions/mac-rust-cache` validates the
+disposable GitHub-hosted Intel Mac and selected compiler's full identity. It
+removes only the known unused preinstalled stable 1.98.0 alias. An alias already
+resolving to the tested compiler stays installed; unexpected inventory fails
+before mutation. This matters because rust-cache hashes every installed compiler,
+including inactive ones. Focused consumers must use the same action after their
+pinned toolchain setup and before cache restore; real `HOME` is never changed.
+The three workspace paths, compiler/environment fingerprints and ordinary cold
+build path remain intact. Source tests do not establish a warm restore or a
+successful cache save; those require an actual successful Mac run.
+
 `mac-artifact.ts FRESH_OUTPUT_DIRECTORY` retains existing `target/debug/apparent`
 and `apparent-helper`, plus `manifest.json`, after the existing Rust job checks
 and evidence uploads succeed. It never compiles, stages a package or signs.

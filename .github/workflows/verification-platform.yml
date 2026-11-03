@@ -246,6 +246,9 @@ jobs:
           test "$(rustc -V)" = 'rustc 1.99.1 (58cf8f9c3 2026-10-13)'
           rustc -vV
           cargo -V
+      - name: Normalize the disposable Intel Mac compiler inventory
+        if: runner.os == 'macOS' && (needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true')
+        uses: ./.github/actions/mac-rust-cache
       - uses: Swatinem/rust-cache@v2
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
         with:
