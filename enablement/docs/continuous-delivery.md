@@ -186,9 +186,13 @@ as far as Cloudflare permits and review its actual access before activation.
 `hosted_config.py` validates the required public identifiers and writes an ignored
 `connect/service/wrangler.cd.json` next to the existing entrypoint. The fixed production
 origins retain hosted API/auth/callback and legacy transition CORS; the UI stays
-on app. Only the existing `/auth/*` and `/v1/*` Worker routes are declared; the
-publisher does not claim the whole hostname, Pages/legacy UI or a public-share
-route. `keep_vars` preserves other writers' plain variables; provider secret
+on app. The Worker owns `/auth/*`, `/v1/*`, `/s/*` and the four exact recipient assets
+(`/share-view.js`, `/share-view.css`, `/share-wordmark.svg`, `/share-font.ttf`);
+Pages/legacy UI and the rest of the hostname remain untouched. The initial
+sharing activation must establish these exact routes before CD preflight passes.
+`SHARING_ENABLED` defaults to `true` for this approved deployment; an explicit
+`false` environment variable stops new grants while retaining existing-link
+reads and revocation. This does not publish any capture without sender consent. `keep_vars` preserves other writers' plain variables; provider secret
 bindings are not rendered, replaced or rotated. Preflight reads the selected
 existing service and refuses missing service, different D1/R2/origin bindings,
 missing/malformed settings, missing auth-secret names, route/cron drift or
