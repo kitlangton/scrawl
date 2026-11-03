@@ -117,8 +117,12 @@ class PagesDeliveryTests(unittest.TestCase):
                     self.assertNotIn('unexpected response body sentinel', str(error.exception))
                     self.assertNotIn('private-cookie-sentinel', str(error.exception))
                 bad_path = '/Apparent-ghost-demo-v4-lilac.mp4'
-                with self.assertRaisesRegex(ValueError, 'different movie'):
+                with self.assertRaisesRegex(ValueError, 'different movie') as error:
                     pages.verify(sha, package)
+                for field in ['actual_sha256', 'expected_sha256', 'actual_bytes', 'content_range', 'content_encoding', 'status']:
+                    self.assertIn(field, str(error.exception))
+                self.assertNotIn('unexpected response body sentinel', str(error.exception))
+                self.assertNotIn('private-cookie-sentinel', str(error.exception))
                 bad_path = None
                 bad_origin = 'app.tryapparent.com'
                 bad_path = '/'

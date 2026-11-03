@@ -135,14 +135,27 @@ def verify(sha, package):
                 raise mismatch(f'Pages served different bytes: {origin}{route} ' + json.dumps(detail, sort_keys=True))
         media = manifest['movie']
         actual = hashlib.sha256()
+        actual_bytes = 0
         request = Request(origin + media['path'], headers={'Cache-Control': 'no-cache', 'User-Agent': 'Apparent-CD/1.0'})
         with urlopen(request, timeout=60) as response:
+            response_meta = {
+                'status': getattr(response, 'status', None),
+                'content_length': response.headers.get('Content-Length'),
+                'content_range': response.headers.get('Content-Range'),
+                'content_encoding': response.headers.get('Content-Encoding'),
+                'cache_status': response.headers.get('CF-Cache-Status'),
+                'age': response.headers.get('Age'),
+                'cf_ray': response.headers.get('CF-Ray'),
+            }
             if response.headers.get('Content-Type') != 'video/mp4':
                 raise ValueError('Pages movie is unavailable')
             while data := response.read(256 * 1024):
                 actual.update(data)
+                actual_bytes += len(data)
         if actual.hexdigest() != media['sha256']:
-            raise mismatch(f'Pages served different movie bytes: {origin}{media["path"]}')
+            detail = {**response_meta, 'actual_sha256': actual.hexdigest(),
+                      'expected_sha256': media['sha256'], 'actual_bytes': actual_bytes}
+            raise mismatch(f'Pages served different movie bytes: {origin}{media["path"]} ' + json.dumps(detail, sort_keys=True))
     return {'revision': sha, 'project': PROJECT, 'deployment_id': deployment['id'],
             'url': deployment['url'], 'public_url': 'https://app.tryapparent.com',
             'manifest_sha256': hashlib.sha256((package.parent / 'manifest.json').read_bytes()).hexdigest()}
