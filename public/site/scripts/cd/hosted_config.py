@@ -25,6 +25,9 @@ def config(env):
         raise ValueError('Placeholder D1 ID')
     bucket = value('HOSTED_R2_BUCKET', '[a-z0-9][a-z0-9-]{1,61}[a-z0-9]')
     database_name = value('HOSTED_D1_NAME', '[a-z0-9][a-z0-9-]{1,61}[a-z0-9]')
+    analytics_enabled = env.get('POSTHOG_ENABLED', 'true')
+    if analytics_enabled not in ('true', 'false'):
+        raise ValueError('Invalid POSTHOG_ENABLED')
     return {
         'name': worker_name(env), 'account_id': account,
         'main': 'dist/worker.js', 'compatibility_date': '2026-02-05',
@@ -36,7 +39,10 @@ def config(env):
         'keep_vars': True,
         'vars': {'API_ORIGIN': 'https://hosted.tryapparent.com',
                  'SITE_ORIGIN': 'https://app.tryapparent.com',
-                 'LEGACY_SITE_ORIGIN': 'https://hosted.tryapparent.com'},
+                 'LEGACY_SITE_ORIGIN': 'https://hosted.tryapparent.com',
+                 'POSTHOG_ENABLED': analytics_enabled,
+                 'POSTHOG_HOST': 'https://eu.i.posthog.com',
+                 'POSTHOG_ENVIRONMENT': 'production'},
         'd1_databases': [{'binding': 'DB', 'database_name': database_name,
                           'database_id': database, 'migrations_dir': 'migrations'}],
         'r2_buckets': [{'binding': 'BUCKET', 'bucket_name': bucket}],

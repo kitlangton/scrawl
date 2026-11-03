@@ -5,8 +5,8 @@ Desktop, Connect account and recording recipient pages, and Public consume the
 same framework-independent tokens. Engine and Agent frontends must use them too. Application policy,
 account state and capture state do not belong here.
 
-Button, Tabs and `cn` come from shadcn/ui's MIT-licensed `new-york` registry,
-retrieved from `https://ui.shadcn.com/r/styles/new-york/{button,tabs}.json`.
+Button, Tabs, Collapsible, Alert and `cn` come from shadcn/ui's MIT-licensed `new-york` registry,
+retrieved from `https://ui.shadcn.com/r/styles/new-york/{button,tabs,collapsible,alert}.json`.
 Only import paths and formatting were adapted. Review source changes on updates;
 update underlying Radix and utility packages normally. Add controls here, not
 separate Desktop/Connect copies. Theme tokens are shared, not OS-native skins.
