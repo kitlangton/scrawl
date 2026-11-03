@@ -104,8 +104,16 @@ on run argv
       if operation is "go-ready" or operation is "go-fill" or operation is "go-readback" or operation is "go-commit" then
         if depth is not 2 or panelRole is not "AXSheet" or panelName is not "" then error "Unsupported Go to Folder sheet: " & trace
         if (role of parentPicker as text) is not "AXSheet" then error "Unexpected Go to Folder parent role: " & trace
-        if (count of buttons of parentPicker) > 16 then error "Oversized Go to Folder parent footer: " & trace
-        if (count of buttons of parentPicker whose name is "Choose") is not 1 or (count of buttons of parentPicker whose name is "Cancel") is not 1 then error "Go to Folder has no unique chooser parent: " & trace
+        set parentButtons to buttons of parentPicker
+        if (count of parentButtons) > 16 then error "Oversized Go to Folder parent footer: " & trace
+        set parentChooseCount to 0
+        set parentCancelCount to 0
+        repeat with parentButton in parentButtons
+          set parentButtonName to name of parentButton
+          if parentButtonName is "Choose" then set parentChooseCount to parentChooseCount + 1
+          if parentButtonName is "Cancel" then set parentCancelCount to parentCancelCount + 1
+        end repeat
+        if parentChooseCount is not 1 or parentCancelCount is not 1 then error "Go to Folder has no unique chooser parent: " & trace
         set children to UI elements of picker
         if (count of children) is not 4 then error "Unsupported Go to Folder controls: " & trace
         if (role of item 1 of children as text) is not "AXStaticText" or (role of item 2 of children as text) is not "AXButton" or (role of item 3 of children as text) is not "AXTextField" or (role of item 4 of children as text) is not "AXScrollArea" then error "Unsupported Go to Folder roles: " & trace
