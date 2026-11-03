@@ -231,7 +231,8 @@ Shift-click opens an Electron note near the click on release; Shift-drag still d
 On Linux, Shift-click also annotates the native and Electron Settings windows
 during a capture. Only those live Settings surfaces opt in; ordinary clicks on
 Apparent, the recording pill and the notes editor retain their input exclusions.
-The existing Shift overlay owns the pointer for the annotation gesture. Native
+Electron Settings uses XWayland, matching capture's overlay and note editor, so
+the Shift overlay owns the pointer before a Settings control can act. Native
 window/process lifetime guards remove admission when Settings closes or its child
 exits. macOS's own-window input route is unchanged and still excludes Settings
 self-annotation. Reverting this admission restores the old Settings exclusion;
