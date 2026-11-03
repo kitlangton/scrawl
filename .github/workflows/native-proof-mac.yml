@@ -9,11 +9,25 @@ on:
         type: choice
         options: [worker, share]
         default: worker
+      producer_run:
+        description: 'Optional successful main Mac verification run ID; requires artifact ID'
+        type: string
+        default: ''
+      producer_artifact:
+        description: 'Immutable mac-dev-executables artifact ID for this exact checkout'
+        type: string
+        default: ''
   workflow_call:
     inputs:
       scenario:
         type: string
         default: worker
+      producer_run:
+        type: string
+        default: ''
+      producer_artifact:
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -24,14 +38,73 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  share-build:
+    name: share-build
+    if: github.repository == 'tryapparent/apparent' && github.event_name == 'workflow_dispatch' && inputs.scenario == 'share' && inputs.producer_run == '' && inputs.producer_artifact == ''
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    outputs:
+      artifact: ${{ steps.executables.outputs.artifact-id }}
+    steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+      - uses: actions/checkout@v4
+        timeout-minutes: 1
+        with:
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        timeout-minutes: 1
+        with:
+          xcode-version: '26.0'
+      - uses: dtolnay/rust-toolchain@stable
+        timeout-minutes: 2
+      - uses: Swatinem/rust-cache@v2
+        timeout-minutes: 3
+        with:
+          shared-key: rust
+          workspaces: |
+            . -> target
+            capture/engine -> target
+            connect/client -> target
+          cache-on-failure: 'true'
+      - uses: actions/setup-node@v4
+        timeout-minutes: 2
+        with:
+          node-version: '22'
+      - name: Prepare Metal compiler
+        timeout-minutes: 5
+        run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+      - name: Build the exact candidate once
+        timeout-minutes: 8
+        run: |
+          proof_tmp="$(mktemp -d "$HOME/.apparent-share-build.XXXXXX")"
+          trap 'rm -rf -- "$proof_tmp"' EXIT
+          TMPDIR="$proof_tmp" cargo build -j 3 --locked
+      - name: Bind the focused build artifact to this candidate and job
+        timeout-minutes: 1
+        run: node enablement/verification/mac-artifact.ts --producer-kind focused-share-build "$RUNNER_TEMP/mac-dev-executables"
+      - uses: actions/upload-artifact@v4
+        timeout-minutes: 1
+        id: executables
+        with:
+          name: mac-dev-executables-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mac-dev-executables/
+          if-no-files-found: error
+          retention-days: 7
+
   connect-worker:
-    if: github.repository == 'tryapparent/apparent' && github.event_name == 'workflow_dispatch'
+    needs: share-build
+    if: always() && !cancelled() && github.repository == 'tryapparent/apparent' && github.event_name == 'workflow_dispatch' && (needs.share-build.result == 'success' || (needs.share-build.result == 'skipped' && (inputs.scenario != 'share' || inputs.producer_run != '' || inputs.producer_artifact != '')))
     runs-on: macos-15-intel
     timeout-minutes: 10
     # The 10m job budget also bounds cold installation and all scenario steps.
     # Cold runs that exceed it require optimization by the triggering agent.
     # These are hosted Actions limits, unrelated to the human NoMac session cap.
     env:
+      APPARENT_PREBUILT_KIND: ${{ needs.share-build.result == 'success' && 'focused-share-build' || 'verified-main' }}
+      APPARENT_PREBUILT_RUN: ${{ needs.share-build.result == 'success' && github.run_id || inputs.producer_run }}
+      APPARENT_PREBUILT_ARTIFACT: ${{ needs.share-build.outputs.artifact || inputs.producer_artifact }}
       APPARENT_NATIVE_SCENARIO: ${{ inputs.scenario || 'worker' }}
       APPARENT_APP_DIR: /Users/runner/Applications/Apparent-Connect-${{ github.run_id }}-${{ github.run_attempt }}.app
       APPARENT_BUILD_TMP: /Users/runner/.apparent-connect-build-${{ github.run_id }}-${{ github.run_attempt }}
@@ -69,12 +142,17 @@ jobs:
           xcode-version: '26.0'
       - name: Prepare synthetic media and Metal compiler
         timeout-minutes: 5
+        env:
+          PRODUCER_RUN: ${{ env.APPARENT_PREBUILT_RUN }}
         run: |
           command -v ffmpeg && command -v ffprobe || brew install ffmpeg
-          xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+          if [ -z "$PRODUCER_RUN" ]; then
+            xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+          fi
       - uses: dtolnay/rust-toolchain@stable
         timeout-minutes: 2
       - uses: Swatinem/rust-cache@v2
+        if: env.APPARENT_PREBUILT_RUN == ''
         timeout-minutes: 3
         with:
           # Match the main platform job's automatic job-id namespace and inputs.
@@ -89,7 +167,17 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: connect/service/package-lock.json
+          cache-dependency-path: |
+            connect/service/package-lock.json
+            capture/desktop/ui/frontend/package-lock.json
+      - name: Admit explicit successful producer before downloading executable inputs
+        if: env.APPARENT_PREBUILT_RUN != '' || env.APPARENT_PREBUILT_ARTIFACT != ''
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN: ${{ env.APPARENT_PREBUILT_RUN }}
+          PRODUCER_ARTIFACT: ${{ env.APPARENT_PREBUILT_ARTIFACT }}
+        run: node enablement/verification/mac-artifact-consumer.ts admit "$PRODUCER_RUN" "$PRODUCER_ARTIFACT"
       - name: Prepare the checked local Worker with locked dependencies
         timeout-minutes: 5
         working-directory: connect/service
@@ -100,11 +188,18 @@ jobs:
         timeout-minutes: 30
         env:
           APPARENT_NO_LAUNCH: '1'
+          GH_TOKEN: ${{ github.token }}
         run: |
           export TMPDIR="$APPARENT_BUILD_TMP"
+          if [ -n "$APPARENT_PREBUILT_RUN" ]; then
+            export APPARENT_PREBUILT_DIR="$RUNNER_TEMP/mac-prebuilt"
+          fi
           bash capture/desktop/scripts/packaging/install-app.sh
           codesign --verify --deep --strict "$APPARENT_APP_DIR"
-          shasum -a 256 "$APPARENT_APP_DIR/Contents/MacOS/apparent" > "$APPARENT_CONNECT_PROOF/evidence/binary.sha256"
+          shasum -a 256 "$APPARENT_APP_DIR/Contents/MacOS/apparent" "$APPARENT_APP_DIR/Contents/MacOS/apparent-helper" > "$APPARENT_CONNECT_PROOF/evidence/binary.sha256"
+          if [ -n "$APPARENT_PREBUILT_RUN" ]; then
+            cp "$APPARENT_PREBUILT_DIR/manifest.json" "$APPARENT_CONNECT_PROOF/evidence/build-inputs.json"
+          fi
       - name: Installed Connect worker restart and encrypted fetch
         if: inputs.scenario != 'share'
         timeout-minutes: 4
@@ -181,7 +276,7 @@ jobs:
 
   runtime-budget:
     if: always()
-    needs: [connect-worker]
+    needs: [share-build, connect-worker]
     permissions:
       contents: read
       actions: read

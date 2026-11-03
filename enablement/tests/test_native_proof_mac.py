@@ -59,7 +59,8 @@ class NativeProofMacTests(unittest.TestCase):
         workflow = WORKFLOW.read_text()
         main = (ROOT / '.github/workflows/verification-platform.yml').read_text()
         block = workflow.split('      - uses: Swatinem/rust-cache@v2\n', 1)[1].split('      - uses:', 1)[0]
-        main_block = main.split('  rust:\n', 1)[1].split('      - uses: Swatinem/rust-cache@v2\n', 1)[1].split('      - uses:', 1)[0]
+        main_root = main.split('  rust:\n', 1)[1]
+        main_block = main_root.split('      - uses: Swatinem/rust-cache@v2\n', 1)[1].split('      - uses:', 1)[0]
         def workspaces(text):
             return re.search(r'          workspaces: \|\n((?:            .*\n)+)', text)[1]
         self.assertEqual(workspaces(block), workspaces(main_block))
@@ -102,6 +103,23 @@ class NativeProofMacTests(unittest.TestCase):
             self.assertTrue(step.startswith('name: ' + name + '\n'))
             self.assertIn('        if: always()\n', step)
             self.assertIn('        timeout-minutes: 2\n', step)
+
+    def test_share_build_is_required_and_never_falls_back_to_recompilation(self):
+        workflow = WORKFLOW.read_text()
+        build, native = workflow.split('  connect-worker:\n', 1)
+        self.assertIn('  share-build:\n    name: share-build\n', build)
+        self.assertIn("inputs.scenario == 'share' && inputs.producer_run == '' && inputs.producer_artifact == ''", build)
+        self.assertIn('--producer-kind focused-share-build', build)
+        self.assertIn('artifact: ${{ steps.executables.outputs.artifact-id }}', build)
+        self.assertIn('needs: share-build', native)
+        self.assertIn('  runtime-budget:\n    if: always()\n    needs: [share-build, connect-worker]', workflow)
+        self.assertIn("needs.share-build.result == 'success'", native)
+        self.assertIn("needs.share-build.result == 'skipped'", native)
+        self.assertNotIn("needs.share-build.result == 'failure'", native)
+        self.assertIn('!cancelled()', native)
+        self.assertIn("'focused-share-build' || 'verified-main'", native)
+        self.assertIn('needs.share-build.outputs.artifact || inputs.producer_artifact', native)
+        self.assertEqual(re.findall(r'^    timeout-minutes: (\d+)$', workflow, re.M), ['10', '10'])
 
     def test_share_scenario_is_explicit_and_cannot_run_worker_case(self):
         workflow = WORKFLOW.read_text()

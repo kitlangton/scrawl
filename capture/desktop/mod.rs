@@ -2833,11 +2833,15 @@ impl ApparentCoordinator {
     }
 
     pub fn copy_completed_link(&mut self, cx: &mut Context<Self>) {
+        apparent_log(format!("public-share action completed={} online={} pending={} bundle={}",
+            matches!(self.island_phase, IslandPhase::Completed { .. }), self.share_online,
+            self.share_pending.is_some(), self.completed_dir.is_some()));
         if !crate::shared::handoff::experiment(crate::connect::hosted::HOSTED_SHARING)
             || !matches!(self.island_phase, IslandPhase::Completed { .. })
             || !self.share_online || self.share_pending.is_some() { return; }
         let Some(bundle) = self.completed_dir.clone() else { return };
         if !crate::connect::hosted::sharing_connected() {
+            apparent_log("public-share connect-required");
             self.completed_note = Some("Connect in Settings, then choose Copy link again".into());
             self.open_settings(Some(crate::capture::desktop::settings::Pane::General));
             self.sync_native_pill(); cx.notify(); return;
@@ -2845,6 +2849,7 @@ impl ApparentCoordinator {
         self.public_popup.take();
         match crate::capture::desktop::workflow::public_sharing::popup::Popup::open(bundle, self.capture_generation, self.public_share.clone()) {
             Ok(popup) => {
+                apparent_log("public-share popup-opened");
                 let id = popup.id.clone();
                 self.public_popup = Some(popup);
                 cx.spawn(async move |entity, cx| {
@@ -2871,7 +2876,10 @@ impl ApparentCoordinator {
                     }
                 }).detach();
             }
-            Err(_) => self.completed_note = Some("Sharing window unavailable · Local Paste remains available".into()),
+            Err(_) => {
+                apparent_log("public-share popup-open-failed");
+                self.completed_note = Some("Sharing window unavailable · Local Paste remains available".into());
+            }
         }
         self.sync_native_pill();
         cx.notify();
@@ -2969,6 +2977,7 @@ impl ApparentCoordinator {
                 Some("Saved · paste manually" | "Saved · open bundle (copy failed)")
             )
         {
+            apparent_log("completed-controls timeout-dismissal");
             self.set_island_phase(IslandPhase::Dismissing);
         }
 

@@ -8,6 +8,19 @@ import { platform, arch } from 'node:os'
 
 const hash = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
 type Probe = (command: string, args: string[]) => string
+export const focusedProducers = {
+  'focused-settings-build': { workflow: 'verification-mac.yml', buildJob: 'settings-build', nativeJob: 'settings-native' },
+  'focused-share-build': { workflow: 'native-proof-mac.yml', buildJob: 'share-build', nativeJob: 'connect-worker' },
+} as const
+type ProducerKind = 'verified-main' | keyof typeof focusedProducers
+export function producerOptions(args: string[]): { kind: ProducerKind, output: string } {
+  if (args.length === 1 && args[0] && !args[0].startsWith('--')) return { kind: 'verified-main', output: args[0] }
+  if (args.length === 3 && args[0] === '--producer-kind' &&
+      ['verified-main', ...Object.keys(focusedProducers)].includes(args[1]) && args[2] && !args[2].startsWith('--')) {
+    return { kind: args[1] as ProducerKind, output: args[2] }
+  }
+  throw new Error('Usage: mac-artifact.ts [--producer-kind verified-main|focused-settings-build|focused-share-build] FRESH_OUTPUT_DIRECTORY')
+}
 const requireMatch = (s: string, re: RegExp) => { if (!re.test(s)) throw new Error('Unexpected producer identity/configuration'); return s }
 const system = (p: string) => /^\/(usr\/lib|System\/Library)\/[A-Za-z0-9_./+-]+$/.test(p) && !p.split('/').includes('..')
 
@@ -32,20 +45,37 @@ export function audit(loads: string, developer: string, exists = existsSync) {
   return { rpaths, closure }
 }
 
-export function produce(root: string, output: string, env: NodeJS.ProcessEnv, probe: Probe, os = platform(), cpu = arch()) {
+export function produce(root: string, output: string, env: NodeJS.ProcessEnv, probe: Probe, os = platform(), cpu = arch(), kind: ProducerKind = 'verified-main') {
+  if (!['verified-main', ...Object.keys(focusedProducers)].includes(kind)) throw new Error('Unknown producer kind')
   if (os !== 'darwin' || cpu !== 'x64') throw new Error('Expected Intel macOS')
   const q = (c: string, ...args: string[]) => probe(c, args).trim()
   const git = (...args: string[]) => q('git', ...args)
   if (git('status', '--porcelain', '--untracked-files=normal')) throw new Error('Dirty checkout')
   const sha = requireMatch(git('rev-parse', 'HEAD'), /^[a-f0-9]{40}$/)
   const tree = requireMatch(git('rev-parse', 'HEAD^{tree}'), /^[a-f0-9]{40}$/)
+  const route = focusedProducers[kind as keyof typeof focusedProducers]
+  const focused = Boolean(route)
+  let workflow: string
+  if (focused) {
+    const ref = requireMatch(env.GITHUB_REF ?? '', /^refs\/heads\/[A-Za-z0-9_./-]+$/)
+    if (ref === 'refs/heads/main' || /\s/.test(ref) || ref.includes('..') || ref.includes('//') ||
+        env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_JOB !== route.buildJob ||
+        env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || env.GITHUB_SHA !== sha || env.GITHUB_WORKFLOW_SHA !== sha) {
+      throw new Error('Focused producer must build this dispatched candidate')
+    }
+    workflow = `tryapparent/apparent/.github/workflows/${route.workflow}@${ref}`
+    if (env.GITHUB_WORKFLOW_REF !== workflow) throw new Error('Unexpected focused producer workflow')
+  } else {
+    workflow = requireMatch(env.GITHUB_WORKFLOW_REF ?? '', /^tryapparent\/apparent\/\.github\/workflows\/verification(?:-mac)?\.yml@refs\/heads\/main$/)
+  }
   const identity = {
+    ...(focused ? { kind } : {}),
     repository: requireMatch(env.GITHUB_REPOSITORY ?? '', /^tryapparent\/apparent$/),
-    workflow: requireMatch(env.GITHUB_WORKFLOW_REF ?? '', /^tryapparent\/apparent\/\.github\/workflows\/verification(?:-mac)?\.yml@refs\/heads\/main$/),
+    workflow,
     workflow_sha: requireMatch(env.GITHUB_WORKFLOW_SHA ?? '', /^[a-f0-9]{40}$/),
     run: requireMatch(env.GITHUB_RUN_ID ?? '', /^[1-9]\d*$/),
     attempt: requireMatch(env.GITHUB_RUN_ATTEMPT ?? '', /^[1-9]\d*$/),
-    job: requireMatch(env.GITHUB_JOB ?? '', /^rust$/),
+    job: requireMatch(env.GITHUB_JOB ?? '', focused ? new RegExp(`^${route.buildJob}$`) : /^rust$/),
   }
   const allowed: Record<string, string> = { MACOSX_DEPLOYMENT_TARGET: '15.0' }
   for (const [key, value] of Object.entries(env)) {
@@ -95,10 +125,10 @@ export function produce(root: string, output: string, env: NodeJS.ProcessEnv, pr
   return manifest
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv.length !== 3) throw new Error('Usage: mac-artifact.ts FRESH_OUTPUT_DIRECTORY')
-  produce(process.cwd(), resolve(process.argv[2]), process.env, (command, args) => {
+  const options = producerOptions(process.argv.slice(2))
+  produce(process.cwd(), resolve(options.output), process.env, (command, args) => {
     const result = spawnSync(command, args, { encoding: 'utf8', timeout: 15000, maxBuffer: 16 * 1024 * 1024 })
     if (result.status !== 0) throw new Error(`Producer probe failed: ${command}`)
     return result.stdout
-  })
+  }, platform(), arch(), options.kind)
 }

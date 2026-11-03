@@ -11,7 +11,7 @@ SCRIPTS = Path(__file__).resolve().parent
 
 
 class InstallerGuardTests(unittest.TestCase):
-    def run_installer(self, remote, running=None, ps_status=0, no_launch=False):
+    def run_installer(self, remote, running=None, ps_status=0, no_launch=False, prebuilt=None):
         with tempfile.TemporaryDirectory(prefix="installer-guard-") as temporary:
             root = Path(temporary)
             home = root / "Test User"
@@ -57,6 +57,7 @@ case "$name" in
   node)
     case "$1" in
       */package-notes.mjs) mkdir -p "$2/dist" ;;
+      */mac-artifact-consumer.ts) test "$MOCK_PREBUILT" = accepted ;;
       *) exit 90 ;;
     esac ;;
   taskpolicy|cargo|git|codesign|open|sleep|pgrep|pkill|ditto) : ;;
@@ -87,18 +88,27 @@ esac
                 source = source.replace("/usr/bin/ditto", str(tools / "ditto"))
                 (packaging / name).write_text(source)
             (packaging / "stage-settings.py").write_text(
-                "import os\nfrom pathlib import Path\n"
-                "with Path(os.environ['MOCK_LOG']).open('a') as log: log.write('stage-settings\\n')\n")
+                "import os, sys\nfrom pathlib import Path\n"
+                "with Path(os.environ['MOCK_LOG']).open('a') as log: log.write('stage-settings ' + ' '.join(sys.argv[1:]) + '\\n')\n")
             env = dict(os.environ, HOME=str(home), PATH=str(tools) + ":" + os.environ["PATH"],
                        MOCK_LOG=str(log), MOCK_PROCESSES=str(processes),
                        MOCK_PS_STATUS=str(ps_status), MOCK_TMP=str(root),
                        APPARENT_APP_DIR=str(app), APPARENT_NO_LAUNCH="1" if no_launch else "0")
+            env.pop("APPARENT_PREBUILT_DIR", None)
+            if prebuilt:
+                binary_inputs = root / "verified inputs"
+                binary_inputs.mkdir()
+                for name in ("apparent", "apparent-helper"):
+                    (binary_inputs / name).write_text("synthetic verified input")
+                env.update(APPARENT_PREBUILT_DIR=str(binary_inputs), MOCK_PREBUILT=prebuilt)
             script = packaging / ("install-app-remote.sh" if remote else "install-app.sh")
             result = subprocess.run(["bash", str(script)], env=env, text=True,
                                     capture_output=True, timeout=10)
             calls = log.read_text() if log.exists() else ""
             self.assertNotIn("pkill ", calls, result.stderr)
-            refused = running is not None or ps_status != 0
+            refused = running is not None or ps_status != 0 or prebuilt == "rejected"
+            if prebuilt:
+                self.assertNotIn("cargo build", calls, "Explicit artifact selection must never rebuild")
             if refused:
                 self.assertNotIn("stage-settings", calls, "Never stage Settings into a running app")
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -106,9 +116,11 @@ esac
                 self.assertTrue(legacy_runtime.exists(), "A refused install must preserve the old runtime")
                 self.assertFalse((app / "Contents/Info.plist").exists())
                 self.assertNotIn("ditto ", calls)
-                self.assertNotIn("node ", calls)
+                if not prebuilt:
+                    self.assertNotIn("node ", calls)
                 self.assertNotIn("open ", calls)
-                self.assertIn("retry", result.stderr)
+                if prebuilt != "rejected":
+                    self.assertIn("retry", result.stderr)
                 if running:
                     self.assertIn("finish", result.stderr)
                     self.assertIn("quit", result.stderr)
@@ -118,10 +130,16 @@ esac
                     self.assertIn("ditto ", calls)
                     self.assertFalse(legacy_runtime.exists(), "ditto must not retain the obsolete popup runtime")
                 else:
-                    self.assertEqual(executable.read_text(), "synthetic new asset")
-                    self.assertIn("package-notes.mjs", calls)
-                    self.assertIn("stage-settings", calls)
+                    self.assertEqual(executable.read_text(), "synthetic verified input" if prebuilt else "synthetic new asset")
+                    self.assertNotIn("package-notes.mjs", calls)
+                    self.assertEqual(calls.count("stage-settings"), 1)
+                    self.assertIn("--popups-destination " + str(app / "Contents/Resources/note-ui"), calls)
                 self.assertEqual("open " in calls, remote or not no_launch)
+
+    def test_explicit_prebuilt_admission_selects_inputs_or_refuses_without_fallback(self):
+        for prebuilt in ("accepted", "rejected"):
+            with self.subTest(prebuilt=prebuilt):
+                self.run_installer(False, no_launch=True, prebuilt=prebuilt)
 
     def test_destination_processes_refuse_before_replacement(self):
         for remote in (False, True):
