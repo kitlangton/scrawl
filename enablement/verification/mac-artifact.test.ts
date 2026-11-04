@@ -108,6 +108,26 @@ test('main Mac producer selects the tested compiler before cache restore without
 })
 
 const selectedCompiler = '1.99.1-x86_64-apple-darwin'
+for (const os of ['macOS', 'Linux']) for (const status of [0, 7]) test(`verifier trace scopes ${os} environment and preserves status ${status}`, () => {
+  const root = mkdtempSync(join(tmpdir(), 'verifier-trace-'))
+  try {
+    const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
+    const start = workflow.indexOf('          cargo_trace_env=()')
+    assert.ok(start >= 0)
+    const shell = workflow.slice(start, workflow.indexOf('\n          verification_complete=true', start))
+    writeFileSync(join(root, 'python3'), '#!/bin/bash\nprintf "%s\\n" "$CARGO_LOG" "$*" >> "$TRACE_RECORD"\nexit "$TRACE_STATUS"\n', { mode: 0o755 })
+    const record = join(root, 'calls')
+    const result = spawnSync('bash', ['-e', '-c', shell + '\necho "$CARGO_LOG"'], { encoding: 'utf8',
+      env: { ...process.env, PATH: root + ':' + process.env.PATH, CARGO_LOG: 'inherited',
+        BASE: 'synthetic-base', RUNNER_TEMP: root, RUNNER_OS: os, TRACE_RECORD: record, TRACE_STATUS: String(status) } })
+    assert.equal(result.status, status, result.stderr)
+    assert.deepEqual(readFileSync(record, 'utf8').trim().split('\n'), [
+      os === 'macOS' ? 'cargo::compiler::fingerprint=trace' : 'inherited',
+      `enablement/verification.py --base synthetic-base --run --online --suite rust --parallel-contracts --cargo-timings --receipt-dir ${root}/verification-receipts`,
+    ])
+    assert.equal(result.stdout.trim(), status === 0 ? 'inherited' : '')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 for (const os of ['macOS', 'Linux']) for (const status of [0, 7]) test(`combined Cargo preflight preserves ${os} selection and status ${status}`, () => {
   const root = mkdtempSync(join(tmpdir(), 'cargo-preflight-'))
   try {
@@ -151,7 +171,8 @@ mod connect { mod hosted { mod hosted_tests {
 }}}
 #[test] fn unrelated_must_be_excluded() { panic!("unselected"); }
 `)
-    const env = { ...process.env, CARGO_TARGET_DIR: join(root, 'target'), CARGO_NET_OFFLINE: 'true' }
+    const env = { ...process.env, CARGO_TARGET_DIR: join(root, 'target'), CARGO_NET_OFFLINE: 'true',
+      CARGO_LOG: 'cargo::compiler::fingerprint=trace' }
     const lock = spawnSync('cargo', ['generate-lockfile', '--offline'], { cwd: root, env, encoding: 'utf8', timeout: 60000 })
     assert.equal(lock.status, 0, lock.stderr)
     const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
@@ -161,6 +182,7 @@ mod connect { mod hosted { mod hosted_tests {
       const result = spawnSync('bash', ['-e', '-c', shell], { cwd: root, encoding: 'utf8', timeout: 60000,
         env: { ...env, RUNNER_OS: os, ...(fail ? { PREFLIGHT_FAIL: '1' } : {}) } })
       assert.equal(result.status, fail ? 101 : 0, result.stdout + result.stderr)
+      assert.match(result.stderr, /cargo::compiler::fingerprint:/)
       assert.match(result.stdout, /the_command_line_row_first \.\.\. ok/)
       assert.match(result.stdout, /the_command_line_row_future_match \.\.\. ok/)
       assert.match(result.stdout, new RegExp('competing_launches_cannot_remove_the_winning_control_socket \\.\\.\\. ' + (fail ? 'FAILED' : 'ok')))

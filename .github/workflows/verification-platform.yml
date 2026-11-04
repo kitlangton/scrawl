@@ -297,7 +297,11 @@ jobs:
             cargo test -j 3 --locked --timings -- "${preflight_filters[@]}" --test-threads=1
           fi
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online --suite rust --parallel-contracts --cargo-timings --receipt-dir "$RUNNER_TEMP/verification-receipts"
+          cargo_trace_env=()
+          if [ "$RUNNER_OS" = macOS ]; then
+            cargo_trace_env=(env CARGO_LOG=cargo::compiler::fingerprint=trace)
+          fi
+          "${cargo_trace_env[@]}" python3 enablement/verification.py --base "$BASE" --run --online --suite rust --parallel-contracts --cargo-timings --receipt-dir "$RUNNER_TEMP/verification-receipts"
           verification_complete=true
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
