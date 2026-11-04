@@ -417,27 +417,60 @@ fn successful_completion_cleans_descendants_before_reaping() {
 
 #[cfg(unix)]
 #[test]
-fn aggregate_output_budget_applies_below_line_and_event_limits() {
-    let line = format!(
-        r#"{{"segment":{{"t0":0,"t1":0,"text":"{}"}}}}"#,
-        "x".repeat(32_000)
+fn aggregate_output_limit_rejects_the_first_over_budget_line() {
+    let ready = r#"{"ready":true,"locale":"en_US","engine":"SpeechTranscriber"}"#;
+    let ready_bytes = ready.len() + 1;
+    let result_prefix = r#"{"segment":{"t0":0,"t1":1,"text":"x"},"words":[],"padding":""}"#;
+    let limit = MAX_OUTPUT_BYTES;
+    let result_len = 32 * 1024;
+    let mut result = result_prefix.to_owned();
+    result.insert_str(
+        result.len() - 2,
+        &"x".repeat(result_len - result_prefix.len()),
     );
+    let result_bytes = result.len() + 1;
     let script = format!(
-        r#"{READY}; i=0; while [ "$i" -lt 270 ]; do echo '{}'; i=$((i + 1)); done"#,
-        line
+        "printf '%s\\n' '{}'; while :; do printf '%s\\n' '{}'; done",
+        ready, result
     );
     let mut live =
         Live::start_with(fake(&script), Arc::new(Mutex::new(Samples::default()))).unwrap();
-    let error = live
-        .finish_within(&wav(&[]), Duration::from_secs(3))
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("invalid live transcription protocol"),
-        "expected the aggregate output guard, got: {error:#}"
-    );
+    let mut feeding = live.join_feeder().unwrap();
+    drop(feeding.stdin.take());
+    let mut received = 0usize;
+    let mut result_events = 0usize;
+    match feeding.lines.recv_timeout(Duration::from_secs(2)).unwrap() {
+        Line::Event(Event::Ready {
+            ready: true,
+            locale,
+            engine,
+        }) => {
+            assert_eq!(locale, "en_US");
+            assert_eq!(engine, "SpeechTranscriber");
+            received += ready_bytes;
+        }
+        _ => panic!("expected valid Ready event"),
+    }
+    assert!(result_bytes < MAX_LINE_BYTES);
+    assert!((limit - ready_bytes) / result_bytes + 2 < MAX_EVENTS);
+    while received + result_bytes <= limit {
+        match feeding.lines.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Line::Event(Event::Result { segment, .. }) => {
+                assert_eq!(segment.text, "x");
+                received += result_bytes;
+                result_events += 1;
+            }
+            _ => panic!("expected valid Result before aggregate byte limit"),
+        }
+    }
+    assert!(result_events > 1);
+    assert!(received <= limit);
+    assert!(matches!(
+        feeding.lines.recv_timeout(Duration::from_secs(2)).unwrap(),
+        Line::Invalid
+    ));
 }
+
 #[cfg(unix)]
 #[test]
 fn failed_live_prefix_invokes_complete_saved_recording_fallback() {
