@@ -651,6 +651,41 @@ fn run_owned_app(record: bool, iphone: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn run_bundled_capture_client() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command as ProcessCommand;
+
+    let executable = std::env::current_exe().context("locate installed Apparent executable")?;
+    let parent = executable
+        .parent()
+        .context("installed Apparent executable has no parent directory")?;
+    let client = parent.join("apparent-capture");
+    let metadata = std::fs::symlink_metadata(&client).with_context(|| {
+        format!(
+            "bundled capture client is missing beside {}",
+            executable.display()
+        )
+    })?;
+    ensure!(
+        metadata.file_type().is_file()
+            && metadata.permissions().mode() & 0o111 != 0,
+        "bundled capture client is not a regular executable"
+    );
+
+    let mut args = std::env::args_os();
+    let _program = args.next();
+    let _capture = args.next();
+    let status = ProcessCommand::new(&client)
+        .args(args)
+        .status()
+        .with_context(|| format!("run bundled capture client {}", client.display()))?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
 pub(crate) fn run() -> Result<()> {
     #[cfg(target_os = "linux")]
     linux::prepare_process();
@@ -701,51 +736,7 @@ pub(crate) fn run() -> Result<()> {
             run_owned_app(false, false)
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        Command::Capture { command } => {
-            use crate::capture::desktop::workflow::agent_capture::Action;
-            let (action, id, wait, timeout) = match command {
-                CaptureCommand::State => (None, None, false, 4),
-                CaptureCommand::Start {
-                    wait,
-                    timeout,
-                    request_id,
-                } => (
-                    Some(Action::Start),
-                    Some(match request_id {
-                        Some(id) => id,
-                        None => agent_capture::new_id()?,
-                    }),
-                    wait,
-                    timeout,
-                ),
-                CaptureCommand::Stop {
-                    capture_id,
-                    wait,
-                    timeout,
-                } => (Some(Action::Stop), Some(capture_id), wait, timeout),
-                CaptureCommand::Cancel { capture_id } => {
-                    (Some(Action::Cancel), Some(capture_id), false, 4)
-                }
-                CaptureCommand::Inspect { capture_id } => {
-                    (Some(Action::Inspect), Some(capture_id), false, 4)
-                }
-            };
-            let value = agent_capture::execute(
-                action.zip(id.as_deref()),
-                wait,
-                Duration::from_secs(timeout),
-            );
-            println!("{value}");
-            ensure!(!value["error"].is_string(), "GUI capture control: {value}");
-            ensure!(
-                !matches!(
-                    value["outcome"].as_str(),
-                    Some("wrong_capture" | "not_ready")
-                ),
-                "GUI capture control: {value}"
-            );
-            Ok(())
-        }
+        Command::Capture { command: _ } => run_bundled_capture_client(),
         Command::App { record, iphone } => {
             #[cfg(target_os = "windows")]
             {
