@@ -434,7 +434,8 @@ fn aggregate_output_budget_applies_below_line_and_event_limits() {
     assert!(
         error
             .to_string()
-            .contains("invalid live transcription protocol")
+            .contains("invalid live transcription protocol"),
+        "expected the aggregate output guard, got: {error:#}"
     );
 }
 #[cfg(unix)]
