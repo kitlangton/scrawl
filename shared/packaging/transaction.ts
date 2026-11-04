@@ -1,6 +1,6 @@
 /** Packaging-only transactions. Callers own validation, signing and exclusive installation locks. */
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -79,7 +79,10 @@ export function publishValidatedDirectory(candidate: string, destination: string
       catch {
         // Cleanup cannot change a committed installation into a failed one, or
         // obscure the original failure after a successful rollback.
-        process.emitWarning(`Publication ${state}; private cleanup retained at ${transaction}`);
+        // Do not emit a process event: application warning listeners must not
+        // participate in the transaction. Even diagnostic I/O is best effort.
+        try { writeSync(2, `Publication ${state}; private cleanup retained at ${transaction}\n`); }
+        catch { /* The transaction result takes precedence over reporting. */ }
       }
     }
   }

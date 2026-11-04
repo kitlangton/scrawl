@@ -113,13 +113,13 @@ test('post-commit cleanup failure reports committed publication and retains the 
   app(destination, 'old');
   app(candidate, 'new');
   const originalRemove = fs.rmSync;
-  const originalWarning = process.emitWarning;
+  const originalWrite = fs.writeSync;
   const warnings: string[] = [];
   fs.rmSync = ((path, options) => {
     if (String(path).startsWith(join(root, '.package-publication-'))) throw Error('cleanup unavailable');
     return originalRemove(path, options);
   }) as typeof fs.rmSync;
-  process.emitWarning = ((message: string) => { warnings.push(message); }) as typeof process.emitWarning;
+  fs.writeSync = ((_fd: number, message: string) => { warnings.push(message); return message.length; }) as typeof fs.writeSync;
   syncBuiltinESMExports();
   try {
     assert.doesNotThrow(() => publishValidatedDirectory(candidate, destination, () => {}));
@@ -132,7 +132,36 @@ test('post-commit cleanup failure reports committed publication and retains the 
     assert.match(warnings[0], /Publication committed; private cleanup retained at/);
   } finally {
     fs.rmSync = originalRemove;
-    process.emitWarning = originalWarning;
+    fs.writeSync = originalWrite;
+    syncBuiltinESMExports();
+    rmSync(root, { recursive: true });
+  }
+});
+test('diagnostic failure cannot change a committed result or replace a publication error', () => {
+  const root = mkdtempSync(join(tmpdir(), 'publication-report-failure-'));
+  const originalRemove = fs.rmSync;
+  const originalWrite = fs.writeSync;
+  fs.rmSync = ((path, options) => {
+    if (String(path).includes('.package-publication-')) throw Error('cleanup failed');
+    return originalRemove(path, options);
+  }) as typeof fs.rmSync;
+  fs.writeSync = (() => { throw Error('diagnostic failed'); }) as typeof fs.writeSync;
+  syncBuiltinESMExports();
+  try {
+    for (const fail of [false, true]) {
+      const destination = join(root, `installed-${fail}`);
+      const candidate = join(root, `candidate-${fail}`);
+      app(destination, 'old'); app(candidate, 'new');
+      const primary = Error('publication failed');
+      const publish = () => publishValidatedDirectory(candidate, destination, () => {},
+        () => { if (fail) throw primary; });
+      if (fail) assert.throws(publish, error => error === primary);
+      else assert.doesNotThrow(publish);
+      assert.equal(readFileSync(join(destination, 'Contents/MacOS/apparent'), 'utf8'), fail ? 'old' : 'new');
+      if (fail) assert.equal(readFileSync(join(candidate, 'Contents/MacOS/apparent'), 'utf8'), 'new');
+    }
+  } finally {
+    fs.rmSync = originalRemove; fs.writeSync = originalWrite;
     syncBuiltinESMExports();
     rmSync(root, { recursive: true });
   }
