@@ -264,7 +264,6 @@ def run_selected_checks(selection, offline=True, cargo_timings=False):
     dependency_mode = "--offline" if offline else "--locked"
     diagnostics = ["--timings"] if cargo_timings else []
     if selection["root"]:
-        subprocess.run(cargo + ["build", "-j", jobs, dependency_mode] + diagnostics, cwd=ROOT, check=True)
         if selection.get("focused"):
             for test_filter in selection["focused"]:
                 result = subprocess.run(cargo + ["test", "-j", jobs, dependency_mode] + diagnostics + [test_filter,
@@ -275,6 +274,9 @@ def run_selected_checks(selection, offline=True, cargo_timings=False):
                     raise RuntimeError(f"Focused filter selected no passing tests: {test_filter}")
         else:
             subprocess.run(cargo + ["test", "-j", jobs, dependency_mode] + diagnostics + ["--", "--test-threads=2"], cwd=ROOT, check=True)
+        # Keep the preflight test harness warm before building the distinct app
+        # binary required by subsequent bridge, packaging and native checks.
+        subprocess.run(cargo + ["build", "-j", jobs, dependency_mode] + diagnostics, cwd=ROOT, check=True)
     if selection["engine"]:
         for command in ("build", "test"):
             args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + diagnostics

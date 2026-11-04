@@ -125,6 +125,8 @@ class SelectionTests(unittest.TestCase):
             verification.run_selected_checks(selection, offline=False, cargo_timings=True)
         commands = [call.args[0] for call in run.call_args_list if 'cargo' in call.args[0]]
         self.assertEqual(len(commands), 4)
+        self.assertEqual([next(c for c in command if c in ('build', 'test')) for command in commands],
+                         ['test', 'build', 'build', 'test'])
         for command in commands:
             self.assertEqual(command.count('--timings'), 1)
             self.assertIn('--locked', command)
@@ -132,6 +134,28 @@ class SelectionTests(unittest.TestCase):
             if 'test' in command:
                 self.assertLess(command.index('--timings'), command.index('--'))
                 self.assertIn('--test-threads=2', command)
+
+    def test_root_test_and_fresh_app_build_failures_stop_verification(self):
+        for focused in ([], ['capture::']):
+            for failure in ('test', 'build'):
+                commands = []
+                def execute(command, **kwargs):
+                    if 'cargo' in command:
+                        commands.append(command)
+                        self.assertTrue(kwargs['check'])
+                        if failure in command:
+                            raise subprocess.CalledProcessError(7, command)
+                    return subprocess.CompletedProcess(command, 0, stdout='test result: ok. 2 passed; 0 failed\n')
+                with self.subTest(focused=focused, failure=failure), patch.object(
+                        verification.subprocess, 'run', side_effect=execute):
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        verification.run_selected_checks({'root': True, 'engine': True,
+                                                          'browser': False, 'focused': focused})
+                self.assertEqual(len(commands), 1 if failure == 'test' else 2)
+                self.assertIn('test', commands[0])
+                if failure == 'build':
+                    self.assertIn('build', commands[1])
+                self.assertFalse(any('capture/engine/Cargo.toml' in c for c in commands))
 
     def test_explicit_platform_suites_execute_even_when_changed_tree_has_no_matching_inputs(self):
         for suite in ('rust', 'browser'):
