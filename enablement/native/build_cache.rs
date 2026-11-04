@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::BTreeSet,
     fs,
-    io::{BufWriter, Write},
+    io::{BufReader, BufWriter, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::OnceLock,
@@ -318,7 +318,10 @@ fn write_tree(
         input.write_all(b"F")?;
         input.write_all(&metadata.len().to_be_bytes())?;
         let bytes = measure(&mut metrics.file_stream, || {
-            std::io::copy(&mut fs::File::open(path)?, input)
+            // The dynamic writer hides its output buffer from io::copy. Buffer
+            // regular-file reads too, without changing bytes or escape checks.
+            let mut file = BufReader::with_capacity(64 * 1024, fs::File::open(path)?);
+            std::io::copy(&mut file, input)
         })?;
         metrics.bytes += bytes;
         if bytes != metadata.len() {
