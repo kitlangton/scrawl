@@ -341,6 +341,7 @@ jobs:
         shell: bash
         run: |
           npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
+          npm --prefix capture/desktop/ui/frontend run build
           # Electron 45 downloads lazily. Resolve it once before the test;
           # do not capture its download log as part of an executable pathname.
           node -e "require('./capture/desktop/ui/frontend/node_modules/electron')"

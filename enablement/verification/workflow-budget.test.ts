@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { executionSeconds, enforceBudget, workflowBudgetSeconds, loadJobs, auditName, type Job } from './workflow-budget.ts'
-import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -141,4 +141,40 @@ test('Mac alone has a fifteen-minute budget with strict boundaries', () => {
   }
   for (const name of ['verification.yml', 'release-linux.yml', 'web-delivery.yml'])
     assert.doesNotMatch(readFileSync(new URL(name, folder), 'utf8'), /platform: macos|timeout-minutes: 15/)
+})
+
+test('Electron to Rust Settings workflow builds frontend artifacts before the bridge test', () => {
+  const workflow = readFileSync(new URL('../../.github/workflows/verification-platform.yml', import.meta.url), 'utf8')
+  const block = workflow.split('      - name: Actual Electron to Rust Settings integration (not native GUI proof)\n')[1].split('\n      - name: Install the Mac candidate')[0]
+  const script = block.split('        run: |\n')[1].split('\n').map(line => line.replace(/^          /, '')).join('\n')
+  const root = mkdtempSync(join(tmpdir(), 'electron-settings-workflow-'))
+  try {
+    const calls = join(root, 'calls')
+    for (const binary of ['electron', 'Electron.app/Contents/MacOS/Electron']) {
+      const file = join(root, 'capture/desktop/ui/frontend/node_modules/electron/dist', binary)
+      mkdirSync(join(file, '..'), { recursive: true })
+      writeFileSync(file, '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+    }
+    writeFileSync(join(root, 'npm'), `#!/bin/sh
+printf 'npm:%s\\n' "$*" >> "$CALLS"
+case "$*" in *'run build'*) exit "$BUILD_STATUS";; esac
+`, { mode: 0o700 })
+    for (const name of ['cargo', 'node']) writeFileSync(join(root, name), `#!/bin/sh
+printf '${name}:%s\\n' "$*" >> "$CALLS"
+`, { mode: 0o700 })
+    for (const os of ['Linux', 'macOS']) for (const status of ['0', '7']) {
+      writeFileSync(calls, '')
+      const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], { cwd: root, encoding: 'utf8',
+        env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CALLS: calls, BUILD_STATUS: status, HOME: root, RUNNER_OS: os } })
+      assert.equal(result.status, Number(status), result.stderr)
+      const lines = readFileSync(calls, 'utf8').trim().split('\n')
+      assert.equal(lines[0], 'npm:--prefix capture/desktop/ui/frontend ci --no-audit --no-fund')
+      assert.equal(lines[1], 'npm:--prefix capture/desktop/ui/frontend run build')
+      if (status === '0') {
+        assert.match(lines[2], /^node:-e /)
+        assert.equal(lines[3], 'cargo:test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture')
+        assert.equal(lines.length, 4)
+      } else assert.equal(lines.length, 2, 'build failure must stop before Electron or Cargo')
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
