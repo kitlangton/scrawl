@@ -33,10 +33,27 @@ checks before Mac publication.
 Linux delivery triggers only after successful `Linux verification`.
 Web delivery runs on main pushes, manual main dispatches and successful trusted
 Connect producer completions, independently of native application receipts.
-Its full-delta input selector includes Public, Connect browser, shared UI/analytics
-and web delivery inputs; missing history broadens checks. Its terminal gate accepts
+Its full-delta input selector includes Public, Connect browser, shared UI/analytics/assets,
+root README and the Agent skill consumed by generated pages, publisher policy and
+web delivery inputs. It starts from a successful run with actual owner verification
+and a successful budget audit; selector-only successes never advance that baseline.
+A same-source successful Public verification can make a later Connect follower
+unnecessary. Missing, incomplete or uncertain history and unknown inputs broaden
+checks. Its terminal gate accepts
 only required/success or explicitly unnecessary/skipped verification. Manual refresh
 forces checks. Native-only changes can report web checks not applicable.
+Connect's paired browser/Worker producer combines that input selection with existing
+authenticated artifact compatibility checks; missing compatible bytes still requires
+production. Its recipient matrix has an independent cheap selector, so web artifact
+lookup cannot hold native selection. A recipient baseline requires all four targets,
+durable release and budget audit to have succeeded; skipped matrix jobs do not qualify.
+Known unrelated changes skip the matrix only after such a baseline exists. Explicit
+dispatches force owner work. These skips neither create a new component identity nor
+admit another commit's verification as current proof. Native package consumers still
+require their real reviewed artifacts and applicable platform acceptance.
+Public and Connect builds invoke the color guard for their own frontend surfaces
+plus shared sources. The default repository-wide color guard still checks all
+owners, including Desktop; no fixed-color allowances or global checks were removed.
 Public consumes immutable independently verified Connect browser artifacts after
 trusted producer/run/digest, candidate input and current build-configuration checks.
 No compatible retained artifact means fail-closed admission, never a Connect rebuild.

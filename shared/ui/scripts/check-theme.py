@@ -6,6 +6,7 @@ It grants no allowance to new files. Reduce it as old surfaces adopt tokens;
 new exceptions require an explicit, reviewed baseline edit.
 """
 from collections import Counter
+import argparse
 import json
 from pathlib import Path
 import re
@@ -22,7 +23,9 @@ NAMED = re.compile(r"\b(?:background(?:Color|-color)?|color|fill|stroke|borderCo
 def colors_in(source):
     return Counter(COLOR.findall(source) + ['named:' + name for name in NAMED.findall(source)])
 
-def inventory(root=ROOT):
+def inventory(root=ROOT, owner=None):
+    if owner not in (None, 'public', 'connect'):
+        raise ValueError('Unknown theme owner')
     try:
         git_root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], cwd=root, stderr=subprocess.DEVNULL).decode().strip()
     except subprocess.CalledProcessError:
@@ -37,6 +40,10 @@ def inventory(root=ROOT):
     result = {}
     for path in sorted(set(paths)):
         if not path or not path.startswith(('capture/', 'connect/', 'public/', 'shared/')):
+            continue
+        surfaces = {'public': ('public/site/', 'shared/'),
+                    'connect': ('connect/web/', 'connect/service/', 'shared/')}
+        if owner is not None and not path.startswith(surfaces[owner]):
             continue
         file = root / path
         if file.suffix not in ('.css', '.tsx', '.ts', '.html', '.js', '.cjs') or not file.is_file():
@@ -56,8 +63,11 @@ def violations(current, baseline):
             if count > baseline.get(path, {}).get(color, 0)]
 
 if __name__ == '__main__':
-    failures = violations(inventory(), json.loads(BASELINE.read_text()))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--owner', choices=('public', 'connect'), help='Check this owner and shared sources; default checks every owner')
+    args = parser.parse_args()
+    failures = violations(inventory(owner=args.owner), json.loads(BASELINE.read_text()))
     if failures:
         print('New fixed frontend colors: use shared/ui/src/tokens.css semantic tokens.\n' + '\n'.join(failures), file=sys.stderr)
         sys.exit(1)
-    print('Shared theme color contract passed.')
+    print('Shared theme color contract passed.' if args.owner is None else f'Theme color contract passed for {args.owner} + shared.')

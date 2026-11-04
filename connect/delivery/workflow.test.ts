@@ -34,7 +34,7 @@ test('producer verifies before sealing and never publishes',async()=>{
  assert.ok(workflow.indexOf('Verify browser and analytics')<workflow.indexOf('Seal verified'));
  const producer=workflow.split('  publish:')[0];
  assert.doesNotMatch(producer,/wrangler deploy|cargo |secrets\.|public\/site|needs:.*(?:linux|macos)/);
- assert.equal((workflow.match(/timeout-minutes: 10/g)||[]).length,6);
+ assert.equal((workflow.match(/timeout-minutes: 10/g)||[]).length,7);
 });
 
 test('callable publisher admits independently with production controls',async()=>{
@@ -44,7 +44,7 @@ test('callable publisher admits independently with production controls',async()=
  assert.ok(workflow.includes("inputs.producer-run == ''"));
  for(const value of ["inputs.producer-run != ''", "github.repository == 'tryapparent/apparent'", "vars.HOSTED_CD_ENABLED == 'true'",'name: hosted-production','group: web-delivery-production-eligible','cancel-in-progress: false','${{ inputs.producer-run }}','${{ secrets.CLOUDFLARE_API_TOKEN }}','Require atomic retirement'])assert.ok(publish.includes(value),value);
  assert.doesNotMatch(publish,/needs:|github.event_name|github.event.workflow_run.id/);
- assert.ok(workflow.includes('needs: [select, produce, publish, recipient, recipient-release]'));
+ assert.ok(workflow.includes('needs: [select, produce, publish, recipient-select, recipient, recipient-release]'));
 });
 
 test('durable recipient releases verify trusted provenance and preserve executability',async()=>{
@@ -53,4 +53,16 @@ test('durable recipient releases verify trusted provenance and preserve executab
  for(const value of ['needs: recipient',"github.ref == 'refs/heads/main'",'connect/delivery/recipient/release.ts recipient-assets release-assets', 'pattern: recipient-${{ github.sha }}-${{ github.run_id }}-*','gh release create','--latest=false']) assert.ok(release.includes(value),value);
  assert.doesNotMatch(release,/--clobber|gh release (?:edit|delete|upload)|wrangler|HOSTED_CD_ENABLED/);
  assert.ok(release.indexOf('release.ts')<release.indexOf('gh release create'));
+});
+
+test('recipient selection is independent of web production and a skip cannot publish native evidence',async()=>{
+ const workflow=await readFile(new URL('../../.github/workflows/connect-delivery.yml',import.meta.url),'utf8');
+ const selection=workflow.split('  recipient-select:')[1].split('  recipient:')[0];
+ const recipient=workflow.split('  recipient:')[1].split('  recipient-release:')[0];
+ assert.match(selection,/baseline.ts recipient/);assert.match(selection,/fetch-depth: 0/);
+ assert.doesNotMatch(selection,/needs:|upload-artifact|cargo|npm ci|bun install/);
+ assert.match(recipient,/needs: recipient-select/);
+ assert.match(recipient,/needs.recipient-select.outputs.required == 'true'/);
+ assert.match(selection,/inputs.producer-run == ''/);
+ const release=workflow.split('  recipient-release:')[1];assert.match(release,/needs: recipient/);
 });

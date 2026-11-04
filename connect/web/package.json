@@ -8,7 +8,7 @@
     "dev": "vite",
     "typecheck": "tsc -b",
     "test:routes": "node --test test/routes.test.mjs",
-    "build": "python3 ../../shared/ui/scripts/check-theme.py && tsc -b && node scripts/assets.mjs && vite build && vite build --ssr src/entry-server.tsx --outDir dist-ssr && node scripts/prerender.mjs",
+    "build": "python3 ../../shared/ui/scripts/check-theme.py --owner connect && tsc -b && node scripts/assets.mjs && vite build && vite build --ssr src/entry-server.tsx --outDir dist-ssr && node scripts/prerender.mjs",
     "test:artifact": "node --test test/artifact.test.mjs test/closure.test.mjs test/analytics-artifact.test.ts",
     "test:browser": "node test/browser.mjs",
     "test:analytics": "node scripts/test-analytics.ts",

@@ -16,7 +16,7 @@ test('default committed producer CLI admits ancestor reuse and rejects changed c
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
   const commit = () => { git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture') }
   try {
-    for (const path of ['connect/web/package.json', 'shared/ui/token.css', 'shared/analytics/config.ts', '.github/workflows/connect-delivery.yml', '.github/actions/runtime-budget/action.yml', 'enablement/verification/workflow-budget.ts']) put(path)
+    for (const path of ['connect/web/package.json', 'shared/ui/token.css', 'shared/analytics/config.ts', '.github/workflows/connect-delivery.yml', '.github/actions/runtime-budget/action.yml', 'enablement/verification/workflow-budget.ts','enablement/release_gate.py','enablement/verification/web/inputs.ts','enablement/verification/web/baseline.ts']) put(path)
     put('connect/delivery/artifacts.ts', readFileSync(new URL('../../../../connect/delivery/artifacts.ts', import.meta.url), 'utf8'))
     put('connect/web/scripts/assets.mjs', readFileSync(new URL('../../../../connect/web/scripts/assets.mjs', import.meta.url), 'utf8'))
     for (const path of ['hosted/source-pond-v4.png', 'hosted/agent-pond-v4.png', 'hosted/agent-reading-v4.png', 'fonts/HostGrotesk-Variable.ttf', 'brand/apparent-wordmark.svg']) put(`public/site/public/assets/${path}`)

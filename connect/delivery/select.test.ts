@@ -18,8 +18,8 @@ test('authenticated pagination reaches direct producer beyond thirty receipt-onl
  const root=await mkdtemp(join(tmpdir(),'selection-api-')),old=process.cwd(),fetchBefore=globalThis.fetch,token=process.env.GH_TOKEN;
  const git=(...args:string[])=>execFileSync('git',args,{cwd:root,encoding:'utf8'}).trim();
  try{
- for(const p of ['connect/web/scripts','connect/service','connect/delivery','shared/ui','shared/analytics','shared/assets','public/site/public/assets','.github/workflows','.github/actions/runtime-budget','enablement/verification'])await mkdir(join(root,p),{recursive:true});
- for(const p of ['connect/service/source.ts','connect/delivery/source.ts','shared/ui/source.ts','shared/analytics/source.ts','shared/assets/source.ts','.github/workflows/connect-delivery.yml','.github/actions/runtime-budget/source.ts','enablement/verification/workflow-budget.ts'])await writeFile(join(root,p),'fixture');
+ for(const p of ['connect/web/scripts','connect/service','connect/delivery','shared/ui','shared/analytics','shared/assets','public/site/public/assets','.github/workflows','.github/actions/runtime-budget','enablement/verification/web'])await mkdir(join(root,p),{recursive:true});
+ for(const p of ['connect/service/source.ts','connect/delivery/source.ts','shared/ui/source.ts','shared/analytics/source.ts','shared/assets/source.ts','.github/workflows/connect-delivery.yml','.github/actions/runtime-budget/source.ts','enablement/verification/workflow-budget.ts','enablement/release_gate.py','enablement/verification/web/inputs.ts','enablement/verification/web/baseline.ts'])await writeFile(join(root,p),'fixture');
  await mkdir(join(root,'connect/delivery/recipient'));await writeFile(join(root,'connect/delivery/recipient/source.ts'),'native fixture');
  await writeFile(join(root,'connect/web/scripts/assets.mjs'),Array.from({length:5},(_,i)=>`['${i}.svg', 'unused']`).join('\n'));
  for(let i=0;i<5;i++)await writeFile(join(root,`public/site/public/assets/${i}.svg`),'<svg/>');
@@ -52,7 +52,7 @@ test('authenticated pagination reaches direct producer beyond thirty receipt-onl
  git('add','.');git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m',edit+' native delivery');
  assert.equal(await select(),'1',edit+' must reuse the complete verified web baseline');
  }
- for(const path of ['connect/delivery/source.ts','.github/workflows/connect-delivery.yml','enablement/verification/workflow-budget.ts']) {
+ for(const path of ['connect/delivery/source.ts','.github/workflows/connect-delivery.yml','enablement/verification/workflow-budget.ts','enablement/release_gate.py','enablement/verification/web/inputs.ts','enablement/verification/web/baseline.ts']) {
  await writeFile(join(root,path),'changed shared admission');assert.equal(await select(),'');await writeFile(join(root,path),'fixture');
  }
  const downloaded=await downloadWorker('200',join(root,'download'));assert.equal(downloaded.sourceSha,sha);

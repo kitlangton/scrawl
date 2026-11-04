@@ -178,7 +178,7 @@ jobs:
   runtime-budget:
     name: Workflow runtime budget
     if: always()
-    needs: [select, produce, publish, recipient, recipient-release]
+    needs: [select, produce, publish, recipient-select, recipient, recipient-release]
     permissions:
       contents: read
       actions: read
@@ -192,8 +192,31 @@ jobs:
         with:
           platform: web
 
-  recipient:
+  recipient-select:
     if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && inputs.producer-run == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      required: ${{ steps.selection.outputs.required }}
+    steps:
+      - name: Runtime budget ownership
+        run: echo '10 minute whole-workflow execution budget; agent whose run hits the limit owns optimization and a successful rerun. Do not raise or bypass the limit.'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - id: selection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types enablement/verification/web/baseline.ts recipient
+
+  recipient:
+    needs: recipient-select
+    if: needs.recipient-select.outputs.required == 'true' && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && inputs.producer-run == ''
     strategy:
       fail-fast: false
       matrix:
