@@ -340,14 +340,17 @@ succeed before the receipt succeeds; failure or cancellation terminates and reap
 the owned contract process group. The receipt wrapper forwards this option.
 Local invocations remain sequential unless the option is explicitly supplied.
 
-Mac CI also supplies `--overlap-root-build`: after Cargo reports successful full
+Linux and Mac CI also supply `--overlap-root-build`: after Cargo reports successful full
 root test compilation, the ordinary app build runs alongside test execution.
 Cargo still launches the tests with two test threads, and each build retains its
 existing worker limit. Both commands must succeed before Engine or downstream
 checks; failure or cancellation kills the owned process groups and reaps both
 direct children. The fresh app binary remains required. Focused filters and
 invocations without this option keep sequential test/build ordering. This overlap
-does not establish a runtime improvement until measured on the actual Mac run.
+does not establish a runtime improvement until measured on the actual platform run.
+Linux runs the preflight cases within that complete suite instead of serializing
+a separate cold Cargo test invocation before the verifier and contract checks.
+Mac retains its serial native-sensitive preflight.
 
 `--cargo-timings` records Cargo unit reports on the existing build/test commands;
 the platform job retains available HTML reports even when later verification

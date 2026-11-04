@@ -315,8 +315,10 @@ jobs:
             exit "$status"
           }
           trap cleanup EXIT
-          # Reproduce the CI-sensitive fixtures before the full affected suites.
-          if [ "${{ needs.select.outputs.root }}" = true ]; then
+          # Preserve Mac's serial native-sensitive preflight. Linux's complete
+          # suite includes the same cases: let cold compilation overlap contract
+          # checks rather than serializing a second Cargo invocation before them.
+          if [ "${{ needs.select.outputs.root }}" = true ] && [ "$RUNNER_OS" = macOS ]; then
             preflight_filters=(capture::desktop::settings::settings::tests::the_command_line_row_ capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket)
             if [ "$RUNNER_OS" = macOS ]; then
               preflight_filters+=(connect::hosted::hosted_tests::hosted_security_darwin_acl_grants_fail_closed)
@@ -325,7 +327,7 @@ jobs:
           fi
           BASE=$(git hash-object -t tree /dev/null)
           cargo_trace_env=()
-          root_build_overlap=()
+          root_build_overlap=(--overlap-root-build)
           if [ "$RUNNER_OS" = macOS ]; then
             cargo_trace_env=(env CARGO_LOG=cargo::compiler::fingerprint=trace)
             root_build_overlap=(--overlap-root-build)

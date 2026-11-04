@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { executionSeconds, enforceBudget, workflowBudgetSeconds, loadJobs, auditName, type Job } from './workflow-budget.ts'
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
@@ -61,6 +63,33 @@ test('every supported root workflow waits for all payload jobs before auditing',
   }
 })
 
+
+test('Linux folds preflight into the complete suite and overlaps its required app build; Mac preserves focused preflight', () => {
+  const workflow = readFileSync(new URL('../../.github/workflows/verification-platform.yml', import.meta.url), 'utf8')
+  const block = workflow.split('      - name: Execute Rust changed-tree checks (not GUI acceptance)\n')[1].split('      - name: Actual Electron')[0]
+  const script = block.split('        run: |\n')[1].split('\n').map(line => line.replace(/^          /, '')).join('\n').replaceAll('${{ needs.select.outputs.root }}', 'true')
+  const root = mkdtempSync(join(tmpdir(), 'verification-scheduling-'))
+  try {
+    for (const name of ['cargo', 'python3']) writeFileSync(join(root, name), `#!/bin/sh\nprintf '${name}:%s\\n' "$*"\n`, { mode: 0o700 })
+    for (const platform of ['Linux', 'macOS']) {
+      const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], { encoding: 'utf8', env: { ...process.env, HOME: root, PATH: root + ':' + process.env.PATH, RUNNER_OS: platform } })
+      assert.equal(result.status, 0, result.stderr)
+      const cargo = result.stdout.split('\n').filter(line => line.startsWith('cargo:'))
+      assert.equal(cargo.length, platform === 'Linux' ? 0 : 1, 'Linux must not serialize a cold test compilation before the complete verifier')
+      if (platform === 'macOS') {
+        assert.match(cargo[0], /the_command_line_row_/)
+        assert.match(cargo[0], /competing_launches_cannot_remove_the_winning_control_socket/)
+        assert.match(cargo[0], /hosted_security_darwin_acl_grants_fail_closed/)
+      }
+      const verifier = result.stdout.split('\n').find(line => line.startsWith('python3:'))!
+      const emptyTree = spawnSync('git', ['hash-object', '-t', 'tree', '/dev/null'], { encoding: 'utf8' }).stdout.trim()
+      assert.ok(verifier.includes('--base ' + emptyTree), 'empty-tree selection retains the complete root and Engine suites')
+      assert.match(verifier, /--run --online --suite rust --parallel-contracts/)
+      assert.match(verifier, /--overlap-root-build/)
+      assert.doesNotMatch(verifier, /--focused|--skip/)
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 
 test('watched workflow starts have no standalone watchdog to spawn', () => {
   const folder = new URL('../../.github/workflows/', import.meta.url)
