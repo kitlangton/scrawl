@@ -282,7 +282,7 @@ jobs:
       attestations: write
     steps:
       - name: Runtime budget ownership
-        run: echo '10 minute execution budget; agent whose run hits the limit owns optimization and a successful rerun. Do not raise or bypass the limit.'
+        run: echo '2 minute execution budget; agent whose run hits the limit owns optimization and a successful rerun. Do not raise or bypass the limit.'
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
