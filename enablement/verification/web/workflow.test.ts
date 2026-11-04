@@ -37,3 +37,13 @@ test('Worker invokes owner reusable publication independently with a separate lo
   assert(!workflow.includes('\n  hosted:\n'))
   assert(!workflow.split('jobs:')[0].includes('concurrency:'))
 })
+
+test('Reusable worker caller grants the complete nested contents permission closure', () => {
+  const callee = readFileSync(new URL('../../../.github/workflows/connect-delivery.yml', import.meta.url), 'utf8')
+  const rank: Record<string, number> = { none: 0, read: 1, write: 2 }
+  const caller = section('worker').match(/contents: (read|write|none)/)?.[1] ?? 'none'
+  for (const requirement of callee.matchAll(/contents: (read|write|none)/g)) {
+    assert(rank[caller] >= rank[requirement[1]], `worker contents:${caller} cannot grant nested contents:${requirement[1]}`)
+  }
+  assert.match(workflow.split('jobs:')[0], /contents: read/)
+})

@@ -193,7 +193,7 @@ jobs:
 
   worker:
     permissions:
-      contents: read
+      contents: write
       actions: read
       id-token: write
       attestations: write
