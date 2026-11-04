@@ -564,6 +564,33 @@ class SelectionTests(unittest.TestCase):
         self.assertIn("capture/engine/Cargo.toml", commands[0])
         self.assertNotIn("--", commands[0])
 
+    def test_directory_width_hook_contracts_follow_their_input_closure(self):
+        for path in (".githooks/pre-commit", "enablement/verification.py",
+                     "enablement/directory-width/check.py",
+                     "enablement/directory-width/tests/test_hook.py",
+                     "enablement/file-length/check.ts"):
+            with self.subTest(path=path):
+                self.assertTrue(verification.directory_width_contract_selected([path]))
+        for path in ("README.md", "capture/desktop/ui/frontend/src/main.tsx",
+                     "enablement/directory-width/README.md",
+                     "enablement/file-length/check.test.ts"):
+            with self.subTest(path=path):
+                self.assertFalse(verification.directory_width_contract_selected([path]))
+        self.assertTrue(verification.directory_width_contract_selected([]))
+
+    def test_pre_push_runs_directory_width_suite_only_for_its_contract_inputs(self):
+        command = ["python3", "-m", "unittest", "discover", "-s",
+                   "enablement/directory-width/tests", "-p", "test_*.py"]
+        for path, expected in ((".githooks/pre-commit", True), ("README.md", False)):
+            with self.subTest(path=path), patch.object(verification.subprocess, "run") as run:
+                verification.run_pr_checks({"paths": [path]})
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(command in commands, expected)
+                if expected:
+                    self.assertLess(commands.index(command), commands.index(
+                        ["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                         "-p", "test_*push*.py"]))
+
     def test_unknown_shared_build_security_lifecycle_and_tooling_broaden(self):
         for path in ["new-owner/foo.rs", "Cargo.toml", "Cargo.lock", "build.rs",
                      "assets/icon.png", "src/ui/recording_completion.rs", "src/handoff.rs",

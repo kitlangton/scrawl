@@ -9,3 +9,7 @@ Run focused integration coverage with:
 ```sh
 python3 -m unittest discover -s enablement/directory-width/tests -v
 ```
+
+Feature pre-push verification runs this suite when the candidate changes the
+pre-commit hook, either staged-tree checker, their hook-budget wrapper, or these
+tests. It uses the exact clean commit being pushed and installs no dependencies.

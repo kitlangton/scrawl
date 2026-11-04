@@ -47,6 +47,10 @@ class PrePushGuardTests(unittest.TestCase):
             destination = self.repo / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(HOOK.parents[1] / name, destination)
+        width_tests = self.repo / "enablement/directory-width/tests"
+        width_tests.mkdir(parents=True)
+        shutil.copy2(HOOK.parents[1] / "enablement/directory-width/tests/test_hook.py",
+                     width_tests / "test_hook.py")
         # The real verifier now runs the shared frontend color guard. Preserve
         # its actual dependency closure in this disposable hook repository.
         theme = self.repo / "shared/ui/scripts"
