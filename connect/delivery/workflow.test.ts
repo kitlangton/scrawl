@@ -7,7 +7,7 @@ test('producer verifies before sealing and never publishes',async()=>{
  assert.ok(workflow.indexOf('Verify browser and analytics')<workflow.indexOf('Seal verified'));
  const producer=workflow.split('  publish:')[0];
  assert.doesNotMatch(producer,/wrangler deploy|cargo |secrets\.|public\/site|needs:.*(?:linux|macos)/);
- assert.equal((workflow.match(/timeout-minutes: 10/g)||[]).length,4);
+ assert.equal((workflow.match(/timeout-minutes: 10/g)||[]).length,6);
 });
 
 test('callable publisher admits independently with production controls',async()=>{
@@ -17,5 +17,13 @@ test('callable publisher admits independently with production controls',async()=
  assert.ok(workflow.includes("inputs.producer-run == ''"));
  for(const value of ["inputs.producer-run != ''", "github.repository == 'tryapparent/apparent'", "vars.HOSTED_CD_ENABLED == 'true'",'name: hosted-production','group: web-delivery-production-eligible','cancel-in-progress: false','${{ inputs.producer-run }}','${{ secrets.CLOUDFLARE_API_TOKEN }}','Require atomic retirement'])assert.ok(publish.includes(value),value);
  assert.doesNotMatch(publish,/needs:|github.event_name|github.event.workflow_run.id/);
- assert.ok(workflow.includes('needs: [select, produce, publish]'));
+ assert.ok(workflow.includes('needs: [select, produce, publish, recipient, recipient-release]'));
+});
+
+test('durable recipient releases verify trusted provenance and preserve executability',async()=>{
+ const workflow=await readFile(new URL('../../.github/workflows/connect-delivery.yml',import.meta.url),'utf8');
+ const release=workflow.split('  recipient-release:')[1];
+ for(const value of ['needs: recipient',"github.ref == 'refs/heads/main'",'--source-ref refs/heads/main','--source-digest "$GITHUB_SHA"','--signer-workflow tryapparent/apparent/.github/workflows/connect-delivery.yml','chmod 755','gh release create','--latest=false']) assert.ok(release.includes(value),value);
+ assert.doesNotMatch(release,/--clobber|gh release (?:edit|delete|upload)|wrangler|HOSTED_CD_ENABLED/);
+ assert.ok(release.indexOf('chmod 755')<release.indexOf('tar -czf'));
 });

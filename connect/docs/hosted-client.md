@@ -365,3 +365,17 @@ The worker uploads evidence before media. Authenticated metadata distinguishes `
 No Desktop renderer, bridge, native capture, consent or browser playback route changes. Rollback keeps existing single-stream jobs readable; old clients reject grouped transport paths rather than publishing partial bundles. New grouped uploads require the compatible service to be published first.
 
 After building the candidate CLI and service, run `npm --prefix connect/service run test:evidence-cli -- /absolute/path/to/apparent [fresh-synthetic-evidence-directory]`. This exercises the production CLI against a local Worker/D1/R2 fixture with separate sender/receiver states, real endpoint approval, synthetic images/video, interrupted media, source removal, immutable evidence inspection and complete byte equality. It starts no desktop and requires no deployed account or permission changes. Generated credentials and source data are removed afterward; the optional output retains only synthetic evidence for visual inspection. This is CLI/service integration evidence, not native capture or packaged Mac proof.
+
+### Independent recipient executable
+
+Build `apparent-connect-recipient` with `cargo build --manifest-path
+connect/client/Cargo.toml --bin apparent-connect-recipient`. It reads one bounded
+JSON request from stdin through EOF using `recipient_protocol::Request` v1.
+Stdout contains JSON lines: an optional `approval` event with `verificationUri`
+and `userCode`, followed by a `result` or `error` envelope, each with `protocol: 1`.
+Errors retain the client message and exit nonzero. SIGINT/SIGTERM cancel login
+and fetch transport and prevent fetch publication after cancellation is observed.
+Status account probes retain the existing bounded timeout. No sender operation
+is admitted. APPARENT_CONFIG selects the same config as root callers; both use
+the same sidecar lock, durable transaction and publication-uncertain error type.
+Packaging and root command routing have not switched to this executable.

@@ -52,3 +52,27 @@ nonempty publishes that successful run. Each completed invocation uploads
 as the string `selectedRun`. Publication authenticates the current receipt and its
 one-hop prior producer, including archive digests, expiry and Git ancestry. Outputs
 are `selected-run`, `build`, and `applicable` (currently always true).
+
+Recipient producer prerequisite
+
+`connect-delivery.yml` runs only on canonical main and builds the standalone
+Rust recipient in a temporary source directory, outside root Cargo configuration.
+Each of four macOS/Linux architecture outputs includes its executable and a
+protocol-1 manifest sealing the actual executable SHA256, full source SHA and
+unique workflow run/attempt version. GitHub build attestations cover both files.
+A main-only release job verifies both attestations against the canonical workflow,
+main ref and exact source digest, then publishes four target archives and SHA256SUMS
+as durable GitHub release assets. Versions are independently named
+`recipient-<full SHA>-<run ID>-<attempt>`; reruns create a new version. Existing
+versions/assets must never be edited, deleted or overwritten. Release creation
+fails on an existing tag; no update/upload-clobber path exists. Actions archives
+are only intermediate transport. GitHub repository administrators can still alter
+releases: consumers must verify the embedded executable and manifest attestations,
+not trust a release URL or checksum alone. These binaries are not Apple signed or
+notarized. No Desktop packaging, app release or hosted activation is included.
+
+Before adoption, authenticate the canonical workflow run on main and its source,
+verify GitHub attestations with the expected repository/workflow identity, validate
+platform/architecture/protocol and hash the downloaded executable before copying
+it into the application. Never fall back to source compilation. App signing,
+notarization, updater identity and exact-commit publication gates remain required.

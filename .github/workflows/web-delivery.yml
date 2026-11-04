@@ -192,6 +192,11 @@ jobs:
           if-no-files-found: ignore
 
   worker:
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
     if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && vars.HOSTED_CD_ENABLED == 'true'
     uses: ./.github/workflows/connect-delivery.yml
     with:

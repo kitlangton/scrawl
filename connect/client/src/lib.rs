@@ -13,11 +13,15 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+mod config;
+pub use config::store as config_store;
+pub use config::provider as config_provider;
 mod renewal;
 mod transport;
 mod encrypted_transfer;
 mod encryption;
 mod device;
+pub mod recipient_protocol;
 pub use device::DeviceLogin;
 pub mod settings;
 
@@ -1403,7 +1407,7 @@ impl Client {
             true,
         )
     }
-    fn login_presented(
+    pub fn login_presented(
         &self,
         server: &str,
         scope: &str,
@@ -1949,6 +1953,9 @@ impl Client {
         self.fetch_inner(id, out, wait, true).map_err(|error| self.fetch_error(error))
     }
     fn fetch_inner(&self, id: &str, out: &Path, wait: u64, evidence: bool) -> Result<PathBuf> {
+        self.fetch_recipient(id, out, wait, evidence, &|| true)
+    }
+    pub fn fetch_recipient(&self, id: &str, out: &Path, wait: u64, evidence: bool, allowed: &dyn Fn() -> bool) -> Result<PathBuf> {
         ensure!(
             valid_id(id),
             "Capture ID must be 32 lowercase hexadecimal characters"
@@ -1994,7 +2001,7 @@ impl Client {
                 &base,
                 None,
                 timeout,
-                &|| true,
+                allowed,
             );
             // A copied pointer can precede server reservation. A 404 also hides
             // inaccessible captures: wait only within the caller's budget and
@@ -2064,7 +2071,7 @@ impl Client {
                 &destination,
                 file.size.max(1),
                 Duration::from_secs(60),
-                &|| true,
+                allowed,
             )?;
             ensure!(
                 fs::metadata(&destination)?.len() == file.size
@@ -2073,6 +2080,7 @@ impl Client {
             );
         }
         validate_bundle_references(&stage.0, &files)?;
+        ensure!(allowed(), "cancelled");
         // Atomic no-replace publish. Linux/macOS use their kernel's exclusive rename.
         publish_noreplace(&stage.0, &out)?;
         File::open(&parent)?.sync_all()?;
