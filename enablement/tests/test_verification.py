@@ -655,16 +655,25 @@ class RuntimeBudgetTests(unittest.TestCase):
     def test_cancelled_watchdog_cleans_up_process_group(self):
         import select
         import signal
-        # Hold Popen after the real child exists but before the watchdog owns
-        # its return value. Child output is not watchdog-handler readiness.
+        # Deliver a real OS signal after Popen creates the child but before the
+        # watchdog owns its return value. Avoid an unrelated stdin rendezvous
+        # in this cancellation window. The running case still signals externally.
         driver = '''
-import runpy, subprocess, sys
+import os, runpy, signal, subprocess, sys
 watchdog = runpy.run_path(sys.argv[1])['hook_budget']
 spawn = subprocess.Popen
 def held_spawn(*args, **kwargs):
     child = spawn(*args, **kwargs)
     print(child.pid, flush=True)
-    sys.stdin.readline()
+    sig = int(sys.argv[3])
+    handler = signal.getsignal(sig)
+    observed = []
+    def record(signum, frame):
+        observed.append(signum)
+        return handler(signum, frame)
+    signal.signal(sig, record)
+    os.kill(os.getpid(), sig)
+    assert observed == [sig], 'signal must run before Popen returns'
     return child
 if sys.argv[2] == 'spawn':
     subprocess.Popen = held_spawn
@@ -677,16 +686,17 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
             for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
                 with self.subTest(phase=phase, signal=sig):
                     child_group = None
-                    with subprocess.Popen([sys.executable, '-c', driver, str(SCRIPT), phase],
-                                          text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    with subprocess.Popen([sys.executable, '-c', driver, str(SCRIPT), phase, str(sig)],
+                                          text=True, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                           stderr=subprocess.PIPE, start_new_session=True) as process:
                         try:
                             self.assertTrue(select.select([process.stdout], [], [], 5)[0], 'child did not start')
                             child_group = int(process.stdout.readline())
-                            process.send_signal(sig)
+                            if phase == 'running':
+                                process.send_signal(sig)
                             # EOF must include the whole child group, not just
                             # the watchdog. Keep the original five-second bound.
-                            stdout, stderr = process.communicate(input='release\n', timeout=5)
+                            stdout, stderr = process.communicate(timeout=5)
                             self.assertEqual(process.returncode, 128 + sig, stderr)
                             self.assertEqual(stdout, '')
                         finally:
