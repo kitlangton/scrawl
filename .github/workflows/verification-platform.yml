@@ -217,7 +217,8 @@ jobs:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo 'Execution budget: Linux 15 minutes; temporary Simon-authorized Mac release allowance 60 minutes. All native assertions and release gates remain required. Restore the Mac allowance after verified release delivery.'
+        run: |
+          echo 'Execution budget: Linux 15 minutes; temporary Simon-authorized Mac release allowance 60 minutes. All native assertions and release gates remain required. Restore the Mac allowance after verified release delivery.'
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.revision || github.sha }}

@@ -62,7 +62,8 @@ jobs:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo 'Temporary Simon-authorized Mac release execution allowance: 60 minutes. All signing, notarization, native acceptance and exact-source release gates remain required. Restore the allowance after verified release delivery.'
+        run: |
+          echo 'Temporary Simon-authorized Mac release execution allowance: 60 minutes. All signing, notarization, native acceptance and exact-source release gates remain required. Restore the allowance after verified release delivery.'
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.admit.outputs.sha }}
