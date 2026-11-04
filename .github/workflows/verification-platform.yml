@@ -36,7 +36,7 @@ jobs:
         with:
           node-version: '22'
       - name: Verification receipt contracts
-        run: node --experimental-strip-types --test enablement/verification/*.test.ts enablement/native/mac-setup.test.ts enablement/native/owned-processes.test.ts
+        run: node --experimental-strip-types --test enablement/verification/*.test.ts enablement/native/mac-setup.test.ts enablement/native/owned-processes.test.ts enablement/native/cache-command-timing.test.ts
       - name: Recipient CLI installation contracts
         run: node --experimental-strip-types --test capture/agent/scripts/tests/install-cli.test.ts
       - name: Selector and hook contracts (no native proof)
@@ -273,6 +273,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
         with:
+          cmd-format: ${{ runner.os == 'macOS' && format('node --experimental-strip-types "{0}/enablement/native/cache-command-timing.ts" {{0}}', github.workspace) || '{0}' }}
           # Cache versions include every path, not just the visible key. Keep
           # the pre-split inventory compatible with successful Mac caches and
           # native-proof-mac; client checks still run in their own required job.

@@ -328,3 +328,14 @@ test('selected Xcode 26.0.1 retains its exact patch/build identity', () => fixtu
 for (const version of ['26.0.2', '26.1', '27.0', '26.0 beta']) test(`rejects unreviewed Xcode ${version}`, () => fixture(run => {
   assert.throws(() => run({ 'xcodebuild -version': `Xcode ${version}\nBuild version 17A400` }))
 }))
+
+test('Mac Rust cache times existing metadata through workspace-absolute wrapper only', () => {
+  const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
+  const rust = workflow.split('  rust:\n')[1].split('  all:')[0]
+  const cache = rust.split('      - uses: Swatinem/rust-cache@v2')[1].split('      - name:')[0]
+  assert.match(cache, /cmd-format:.*runner\.os == 'macOS'/)
+  assert.match(cache, /cache-command-timing\.ts/)
+  assert.match(cache, /github\.workspace/)
+  assert.match(cache, /\| '\{0\}'/)
+  assert.doesNotMatch(cache, /CARGO[A-Z_]*=|RUST[A-Z_]*=/)
+})
