@@ -1471,6 +1471,7 @@ mod tests {
         // Unit-test builds deliberately disable default experiments. Exercise
         // the normal encrypted endpoint-enrollment path in this isolated lane.
         crate::shared::handoff::enable_experiment(apparent_connect_client::HOSTED_ENCRYPTION);
+        crate::shared::handoff::enable_experiment(apparent_connect_client::HOSTED_SYNC);
         let electron = std::env::var_os("APPARENT_CONNECT_TEST_ELECTRON")
             .expect("Set APPARENT_CONNECT_TEST_ELECTRON to the frontend Electron executable");
         let home = std::env::temp_dir().join(format!("ce-{}", &new_id().unwrap()[..8]));

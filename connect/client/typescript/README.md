@@ -23,12 +23,19 @@ Electron runtime. No second runtime, service or config writer is introduced.
 
 `settings-transport.cts` consumes the narrow backend RPC on the existing private
 socket (`connect: backend`, `version: 1`; responses carry `account.version: 1`).
-Native code supplies local snapshots, existing device auth/renewal and
-durable mutations. Login pins the origin displayed at consent; activation needs
+When the native peer advertises `deviceFlow: 1`, `device-flow.cts` owns the
+installed device-start reply validation, public approval projection, polling,
+expiry/rejection, credential validation and commit intent. The main process alone
+receives private device replies; they never enter renderer views. Native code
+executes the two allowlisted HTTP calls and the existing single-writer credential/
+config transaction. It retains the approved response and original issue time;
+commit consumes it once after fresh cancellation/marker/queue checks.
+
+Native code still supplies local snapshots, renewal and durable mutations. Login pins the origin displayed at consent; activation needs
 a successful matching operation and fresh committed upload gates. EOF, timeout
 or feature disable before activation retains native durable cancellation. Failed
 readback starts durable cleanup instead of leaving a reusable authorization.
-These Rust auth/snapshot/storage dependencies remain explicit migration debt;
+These Rust HTTP/renewal/snapshot/storage dependencies and older-consumer auth remain explicit migration debt;
 this adoption does not complete the account or Rust-free stream acceptance.
 
 Fallback to `legacy-settings.cts` is allowed only for an unsupported **read-only

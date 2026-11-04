@@ -19,7 +19,10 @@ sharing state/progress/size helpers, `account_view_in`, `command`, `fetch`,
 The adopted Electron account workflow additionally enters Connect's
 `client/typescript/src/settings-controller.cts` through the generated Desktop
 entry. Its backend RPC uses the existing Connect socket worker for Rust local
-snapshots/auth/durable operations. The TypeScript controller owns consent,
+snapshots/renewal/durable operations. With `deviceFlow: 1`, the adopted
+`device-flow.cts` also owns device approval validation, polling/expiry, grant
+validation and commit intent; native code temporarily executes the two closed
+HTTP routes and one-shot credential/config publication. The TypeScript controller owns consent,
 confirmation, cancellation/receipt handling and activation intent. Native EOF
 guards and the current client writer remain authoritative for durable effects.
 Legacy opening fallback is read-only and occurs before any mutation; older/native

@@ -36,7 +36,7 @@ pub enum SafeError {
 }
 
 // Inspect only known internal diagnostics, never copy remote text, paths or secrets.
-fn safe_error(error: &anyhow::Error, allowed: &dyn Fn() -> bool) -> SafeError {
+pub fn safe_error(error: &anyhow::Error, allowed: &dyn Fn() -> bool) -> SafeError {
     if !allowed() {
         return SafeError::Cancelled;
     }

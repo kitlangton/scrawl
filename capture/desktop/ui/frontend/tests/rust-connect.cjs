@@ -49,7 +49,7 @@ async function main() {
     if (args[0] === address) {
       const write = socket.write.bind(socket);
       socket.write = (chunk, ...rest) => {
-        try { const frame = JSON.parse(String(chunk)); frames.push({connect:frame.connect,version:frame.version}); } catch {}
+        try { const frame = JSON.parse(String(chunk)); frames.push({connect:frame.connect,version:frame.version,command:frame.command}); } catch {}
         return write(chunk, ...rest);
       };
     }
@@ -72,7 +72,10 @@ async function main() {
       deviceCode: 'synthetic-private-device-secret', userCode: 'TEST-CODE', expiresIn: deviceMode === 'expired' ? 0 : 60, interval: 1,
       verificationUri: origin + '/hosted/device?code=TEST-CODE',
     }));
-    if (request.url === '/v1/device/poll') return response.end(JSON.stringify({status:deviceMode === 'rejected' ? 'rejected' : 'pending'}));
+    if (request.url === '/v1/device/poll') return response.end(JSON.stringify(deviceMode === 'approved' ? {
+      status:'approved',scope:'upload',accessToken:'synthetic-approved-access',refreshToken:'synthetic-approved-refresh',
+      grantId:'synthetic-approved-grant',expiresIn:300,refreshExpiresIn:3600,accountInitial:'M',
+    } : {status:deviceMode === 'rejected' ? 'rejected' : 'pending'}));
     response.writeHead(500); response.end('{"error":"unexpected_test_endpoint"}');
     });
   });
@@ -128,6 +131,23 @@ async function main() {
       assert.equal(JSON.stringify(failed).includes('synthetic-private'), false);
       assert.ok(failed.view.buttons.some(button => button.command === 'connect' && button.enabled));
     }
+    deviceMode = 'approved';
+    await client.request('connect'); await client.request('allow');
+    const committed = await until(() => client.request(), r => r.view?.presentationState?.snapshot?.uploadsEnabled === true &&
+      r.view.presentationState.operation === null, 'TypeScript device approval did not commit/activate through the real writer');
+    assert.equal(JSON.stringify(committed).includes('synthetic-approved'), false);
+    const durableGrant = JSON.parse(await fs.readFile(path.join(state,'upload.credential'),'utf8'));
+    assert.equal(durableGrant.token,'synthetic-approved-access'); assert.equal(durableGrant.refreshToken,'synthetic-approved-refresh');
+    assert.equal(durableGrant.server,origin); assert.equal(durableGrant.grantId,'synthetic-approved-grant');
+    assert.match(durableGrant.encryption_identity,/^[a-f0-9]{32}$/);
+    await client.request('request-disable');
+    assert.equal(JSON.parse(await fs.readFile(config,'utf8')).cloud.enabled,true,'Confirmation must not revoke before explicit action');
+    await client.request('disable');
+    await until(()=>client.request(),r=>r.view?.presentationState?.snapshot?.uploadsEnabled === false && r.view.presentationState.operation === null,'Approved grant disable did not settle');
+    assert.ok(frames.some(frame=>frame.command === 'device-login'));
+    assert.ok(frames.some(frame=>frame.command === 'device-poll'));
+    assert.ok(frames.some(frame=>frame.command === 'device-commit'));
+    assert.equal(frames.some(frame=>frame.command === 'login'),false,'Shipped device protocol must execute in TypeScript');
     deviceMode = 'pending';
     assert.ok(frames.some(frame => frame.connect === 'backend' && frame.version === 1));
     assert.equal(frames.some(frame => frame.connect === 'settings'), false, 'New runtime must exercise the TypeScript controller, not the legacy fallback');
@@ -164,8 +184,8 @@ async function main() {
     console.log(JSON.stringify({ platform: process.platform, electron: process.versions.electron,
       bridge: 'shipped TypeScript controller + real Rust listener/auth client', controllerProtocol:'backend-v1',
       packagedController:process.env.APPARENT_CONNECT_TEST_MODULE !== undefined,
-      http: 'synthetic loopback pending-device fixture, no account approval',
-      checks: 'disabled/local-only/no-consent/public-projection/cancel/EOF/durable-off/preserved-config/rejection/expiry/offline/retry/key-enrollment/expired-frame/account-initial/revoked-identity', requests: calls.length }));
+      http: 'synthetic loopback device approval; private isolated credentials, no uploads',
+      checks: 'disabled/local-only/no-consent/public-projection/cancel/EOF/durable-off/preserved-config/approval-commit/rejection/expiry/offline/retry/key-enrollment/expired-frame/account-initial/revoked-identity', requests: calls.length }));
   } catch (error) {
     console.error(JSON.stringify({ fixtureEndpointsObserved: calls }));
     throw error;

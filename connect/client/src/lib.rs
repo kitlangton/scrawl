@@ -17,6 +17,8 @@ mod renewal;
 mod transport;
 mod encrypted_transfer;
 mod encryption;
+mod device;
+pub use device::DeviceLogin;
 pub mod settings;
 
 /// Application-owned preferences and browser mechanics. Implementations must

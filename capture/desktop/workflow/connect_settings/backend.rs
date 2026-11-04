@@ -16,7 +16,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-const MAX_FRAME: usize = 4096;
+const MAX_FRAME: usize = 32768;
+const MAX_OPENING: usize = 4096;
 const REQUEST_MS: u64 = 3000;
 const LEASE: Duration = Duration::from_secs(10);
 
@@ -38,12 +39,21 @@ enum Request {
         operation: Option<u64>,
         #[serde(default)]
         origin: Option<String>,
+        #[serde(default, rename = "deviceCode")]
+        device_code: Option<String>,
+        #[serde(default, rename = "timeoutMs")]
+        timeout_ms: Option<u64>,
+        #[serde(default)]
+        site: Option<String>,
     },
 }
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum Verb {
     Login,
+    DeviceLogin,
+    DevicePoll,
+    DeviceCommit,
     Probe,
     Cancel,
     Disable,
@@ -52,7 +62,7 @@ enum Verb {
 }
 
 pub(super) fn opening_deadline(line: &str) -> Option<u64> {
-    if line.len() > MAX_FRAME {
+    if line.len() > MAX_OPENING {
         return None;
     }
     match serde_json::from_str(line).ok()? {
@@ -103,6 +113,20 @@ fn envelope(
     }
     serde_json::json!({"account":account})
 }
+fn device_result(
+    result: anyhow::Result<serde_json::Value>,
+    allowed: &dyn Fn() -> bool,
+) -> (serde_json::Value, Option<&'static str>) {
+    match result {
+        Ok(reply) => (reply, None),
+        Err(error) => (
+            serde_json::Value::Null,
+            Some(safe_error(crate::connect::hosted::device_error(
+                &error, allowed,
+            ))),
+        ),
+    }
+}
 fn write(stream: &mut UnixStream, value: &serde_json::Value) -> std::io::Result<()> {
     serde_json::to_writer(&mut *stream, value)?;
     stream.write_all(b"\n")
@@ -113,6 +137,15 @@ struct Receipt {
     id: u64,
     event: serde_json::Value,
 }
+type DeviceFactory = Arc<
+    dyn Fn(
+            &str,
+            Arc<dyn Fn() -> bool + Send + Sync>,
+        ) -> anyhow::Result<apparent_connect_client::DeviceLogin>
+        + Send
+        + Sync,
+>;
+
 struct Active {
     id: u64,
     verb: Verb,
@@ -129,6 +162,12 @@ pub(crate) fn serve(stream: UnixStream, deadline: u64, config: &Path) {
         || crate::connect::hosted::settings_backend(config),
         crate::connect::hosted::start_worker,
         LEASE,
+        Some(Arc::new({
+            let config = config.to_owned();
+            move |server, allowed| {
+                crate::connect::hosted::begin_device_login(&config, server, allowed)
+            }
+        })),
     )
 }
 fn run(
@@ -138,6 +177,7 @@ fn run(
     backend_fn: impl FnOnce() -> Arc<dyn Backend>,
     mut worker: impl FnMut(),
     lease_duration: Duration,
+    device_factory: Option<DeviceFactory>,
 ) {
     use std::io::ErrorKind;
     if stream
@@ -169,7 +209,14 @@ fn run(
     let mut next_id = 0u64;
     let mut active: Option<Active> = None;
     let mut pending_login: Option<(u64, String)> = None;
-    let initial = envelope(&*backend, vec![], None);
+    let device_session = Arc::new(std::sync::Mutex::new(
+        None::<Arc<apparent_connect_client::DeviceLogin>>,
+    ));
+    let mut device_busy = false;
+    let mut initial = envelope(&*backend, vec![], None);
+    if device_factory.is_some() {
+        initial["account"]["deviceFlow"] = 1.into();
+    }
     if clock_ms() >= deadline {
         super::refuse(&mut stream, "admission_expired");
         return;
@@ -222,19 +269,46 @@ fn run(
                         };
                         buffer.clear();
                         frame_until = None;
-                        let (req_deadline, verb, op, origin) = match req {
-                            Request::BackendRead { deadline } => (deadline, None, None, None),
-                            Request::BackendCommand {
-                                command,
-                                deadline,
-                                operation,
-                                origin,
-                            } => (deadline, Some(command), operation, origin),
-                        };
-                        if verb.is_some_and(|v| matches!(v, Verb::Activate)) != op.is_some() {
+                        let (req_deadline, verb, op, origin, device_code, timeout_ms, site) =
+                            match req {
+                                Request::BackendRead { deadline } => {
+                                    (deadline, None, None, None, None, None, None)
+                                }
+                                Request::BackendCommand {
+                                    command,
+                                    deadline,
+                                    operation,
+                                    origin,
+                                    device_code,
+                                    timeout_ms,
+                                    site,
+                                } => (
+                                    deadline,
+                                    Some(command),
+                                    operation,
+                                    origin,
+                                    device_code,
+                                    timeout_ms,
+                                    site,
+                                ),
+                            };
+                        if verb.is_some_and(|v| {
+                            matches!(v, Verb::Activate | Verb::DevicePoll | Verb::DeviceCommit)
+                        }) != op.is_some()
+                        {
                             break;
                         }
-                        if verb.is_some_and(|v| matches!(v, Verb::Login)) != origin.is_some() {
+                        if verb.is_some_and(|v| matches!(v, Verb::Login | Verb::DeviceLogin))
+                            != origin.is_some()
+                        {
+                            break;
+                        }
+                        let is_poll = verb.is_some_and(|v| matches!(v, Verb::DevicePoll));
+                        let is_commit = verb.is_some_and(|v| matches!(v, Verb::DeviceCommit));
+                        if is_poll != (device_code.is_some() && timeout_ms.is_some())
+                            || is_commit != site.is_some()
+                            || (!is_poll && (device_code.is_some() || timeout_ms.is_some()))
+                        {
                             break;
                         }
                         let req_deadline = req_deadline.min(frame_deadline);
@@ -255,6 +329,26 @@ fn run(
                                         a.success = ok;
                                     }
                                 }
+                                if matches!(
+                                    receipt.event["kind"].as_str(),
+                                    Some("device-start" | "device-poll" | "device-commit")
+                                ) {
+                                    device_busy = false;
+                                    if !receipt.event["error"].is_null() {
+                                        if let Some(a) = active.as_mut() {
+                                            a.terminal = true;
+                                            a.success = false;
+                                        }
+                                    }
+                                }
+                                if receipt.event["kind"] == "device-commit"
+                                    && receipt.event["error"].is_null()
+                                {
+                                    if let Some(a) = active.as_mut() {
+                                        a.terminal = true;
+                                        a.success = true;
+                                    }
+                                }
                                 events.push(receipt.event);
                             }
                         }
@@ -262,7 +356,9 @@ fn run(
                         // Its receipt is still returned, while later explicit retries
                         // may allocate a new operation on this same owned stream.
                         if active.as_ref().is_some_and(|a| {
-                            a.terminal && !a.success && matches!(a.verb, Verb::Login)
+                            a.terminal
+                                && !a.success
+                                && matches!(a.verb, Verb::Login | Verb::DeviceLogin)
                         }) {
                             if let Some(a) = active.take() {
                                 a.active.store(false, Ordering::SeqCst);
@@ -273,7 +369,11 @@ fn run(
                         let mut activated = None;
                         if let Some(verb) = verb {
                             match verb {
-                                Verb::Login | Verb::Probe | Verb::Disable | Verb::Disconnect => {
+                                Verb::Login
+                                | Verb::DeviceLogin
+                                | Verb::Probe
+                                | Verb::Disable
+                                | Verb::Disconnect => {
                                     if active.as_ref().is_some_and(|a| {
                                         !a.terminal
                                             && matches!(a.verb, Verb::Disable | Verb::Disconnect)
@@ -304,30 +404,34 @@ fn run(
                                         lease = Instant::now() + lease_duration;
                                         continue;
                                     }
-                                    let login_server = if matches!(verb, Verb::Login) {
-                                        let snap = backend.snapshot();
-                                        if !snap.as_ref().is_ok_and(|s| {
-                                            origin.as_deref()
-                                                == Some(
-                                                    s.server.as_deref().unwrap_or(DEFAULT_SERVER),
-                                                )
-                                        }) {
-                                            let mut reply = envelope(&*backend, events, None);
-                                            if snap.is_ok() {
-                                                reply["account"]["error"] = "invalid-server".into();
+                                    let login_server =
+                                        if matches!(verb, Verb::Login | Verb::DeviceLogin) {
+                                            let snap = backend.snapshot();
+                                            if !snap.as_ref().is_ok_and(|s| {
+                                                origin.as_deref()
+                                                    == Some(
+                                                        s.server
+                                                            .as_deref()
+                                                            .unwrap_or(DEFAULT_SERVER),
+                                                    )
+                                            }) {
+                                                let mut reply = envelope(&*backend, events, None);
+                                                if snap.is_ok() {
+                                                    reply["account"]["error"] =
+                                                        "invalid-server".into();
+                                                }
+                                                if clock_ms() >= req_deadline
+                                                    || write(&mut stream, &reply).is_err()
+                                                {
+                                                    break;
+                                                }
+                                                lease = Instant::now() + lease_duration;
+                                                continue;
                                             }
-                                            if clock_ms() >= req_deadline
-                                                || write(&mut stream, &reply).is_err()
-                                            {
-                                                break;
-                                            }
-                                            lease = Instant::now() + lease_duration;
-                                            continue;
-                                        }
-                                        origin.clone()
-                                    } else {
-                                        None
-                                    };
+                                            origin.clone()
+                                        } else {
+                                            None
+                                        };
                                     if clock_ms() >= req_deadline || !enabled(config) {
                                         break;
                                     }
@@ -337,7 +441,8 @@ fn run(
                                         }
                                         pending_login = None;
                                     } else if active.as_ref().is_some_and(|a| {
-                                        !a.terminal || matches!(a.verb, Verb::Login)
+                                        !a.terminal
+                                            || matches!(a.verb, Verb::Login | Verb::DeviceLogin)
                                     }) {
                                         break;
                                     } else {
@@ -378,6 +483,45 @@ fn run(
                                                 id,
                                                 verb,
                                                 active: active_flag,
+                                                terminal: false,
+                                                success: false,
+                                            });
+                                        }
+                                        Verb::DeviceLogin => {
+                                            let Some(factory) = device_factory.clone() else {
+                                                break;
+                                            };
+                                            let server =
+                                                login_server.expect("validated device origin");
+                                            pending_login = Some((id, server.clone()));
+                                            let flag = Arc::new(AtomicBool::new(true));
+                                            let allowed_flag = flag.clone();
+                                            let session = device_session.clone();
+                                            *session.lock().unwrap() = None;
+                                            let txc = tx.clone();
+                                            let config = config.to_owned();
+                                            device_busy = true;
+                                            std::thread::spawn(move || {
+                                                let allowed: Arc<dyn Fn() -> bool + Send + Sync> =
+                                                    Arc::new(move || {
+                                                        allowed_flag.load(Ordering::SeqCst)
+                                                            && enabled(&config)
+                                                    });
+                                                let result = factory(&server, allowed.clone())
+                                                    .and_then(|flow| {
+                                                        let flow = Arc::new(flow);
+                                                        let reply = flow.start()?;
+                                                        *session.lock().unwrap() = Some(flow);
+                                                        Ok(reply)
+                                                    });
+                                                let (reply, error) =
+                                                    device_result(result, &*allowed);
+                                                let _ = txc.try_send(Receipt { id, event: serde_json::json!({"operation":id,"kind":"device-start","reply":reply,"error":error}) });
+                                            });
+                                            active = Some(Active {
+                                                id,
+                                                verb,
+                                                active: flag,
                                                 terminal: false,
                                                 success: false,
                                             });
@@ -423,12 +567,64 @@ fn run(
                                             });
                                         }
                                         Verb::Cancel => unreachable!(),
-                                        Verb::Activate => unreachable!(),
+                                        Verb::Activate | Verb::DevicePoll | Verb::DeviceCommit => {
+                                            unreachable!()
+                                        }
                                     }
+                                }
+                                Verb::DevicePoll | Verb::DeviceCommit => {
+                                    if device_busy
+                                        || !active.as_ref().is_some_and(|a| {
+                                            Some(a.id) == op
+                                                && matches!(a.verb, Verb::DeviceLogin)
+                                                && !a.terminal
+                                        })
+                                    {
+                                        break;
+                                    }
+                                    let Some(flow) = device_session.lock().unwrap().clone() else {
+                                        break;
+                                    };
+                                    returned_op = op;
+                                    let a = active.as_ref().unwrap();
+                                    let id = a.id;
+                                    let flag = a.active.clone();
+                                    let config = config.to_owned();
+                                    let txc = tx.clone();
+                                    let b = backend.clone();
+                                    device_busy = true;
+                                    std::thread::spawn(move || {
+                                        let allowed =
+                                            || flag.load(Ordering::SeqCst) && enabled(&config);
+                                        let result = if matches!(verb, Verb::DevicePoll) {
+                                            flow.poll(
+                                                device_code.as_deref().unwrap(),
+                                                timeout_ms.unwrap(),
+                                            )
+                                        } else {
+                                            flow.commit(site.as_deref().unwrap())
+                                                .map(|_| serde_json::Value::Null)
+                                        };
+                                        // An uncertain or partial credential/config commit must
+                                        // settle durable off before returning a failed login.
+                                        if matches!(verb, Verb::DeviceCommit) && result.is_err() {
+                                            let _ = b.disable(false);
+                                        }
+                                        let (reply, error) = device_result(result, &allowed);
+                                        let kind = if matches!(verb, Verb::DevicePoll) {
+                                            "device-poll"
+                                        } else {
+                                            "device-commit"
+                                        };
+                                        let _ = txc.try_send(Receipt { id, event: serde_json::json!({"operation":id,"kind":kind,"reply":reply,"error":error}) });
+                                    });
                                 }
                                 Verb::Cancel => {
                                     if let Some(a) = active.take() {
-                                        if matches!(a.verb, Verb::Login | Verb::Probe) {
+                                        if matches!(
+                                            a.verb,
+                                            Verb::Login | Verb::DeviceLogin | Verb::Probe
+                                        ) {
                                             a.active.store(false, Ordering::SeqCst);
                                         } else {
                                             active = Some(a)
@@ -442,7 +638,7 @@ fn run(
                                     let valid =
                                         active.as_ref().is_some_and(|a| {
                                             Some(a.id) == op
-                                                && matches!(a.verb, Verb::Login)
+                                                && matches!(a.verb, Verb::Login | Verb::DeviceLogin)
                                                 && a.terminal
                                                 && a.success
                                         }) && pending_login.as_ref().is_some_and(|(id, server)| {
@@ -473,6 +669,9 @@ fn run(
                         }
                         // Include only receipts collected at the start of this admitted turn.
                         let mut reply = envelope(&*backend, events, returned_op);
+                        if device_factory.is_some() {
+                            reply["account"]["deviceFlow"] = 1.into();
+                        }
                         if let Some(activated) = activated {
                             reply["account"]["activated"] = activated.into();
                         }
@@ -496,7 +695,7 @@ fn run(
     }
     // A login remains revocable until explicit activation, including after its terminal receipt.
     if let Some(a) = active.take() {
-        if matches!(a.verb, Verb::Login | Verb::Probe) {
+        if matches!(a.verb, Verb::Login | Verb::DeviceLogin | Verb::Probe) {
             a.active.store(false, Ordering::SeqCst);
         }
     }

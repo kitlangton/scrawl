@@ -7,6 +7,8 @@ mod encrypted_tests;
 mod renewal_tests;
 #[cfg(test)]
 mod settings_tests;
+#[cfg(test)]
+mod device_tests;
 use std::sync::OnceLock;
 
 pub type ConfigWriteHook = Box<dyn FnMut(&str, &Path)>;

@@ -31,10 +31,16 @@ map records the separately executed bounded beta acceptance and its limits.
 
 `client/typescript/src/settings-controller.cts` and `settings-presentation.ts` own
 the Electron workflow and presentation. The generated Desktop entry uses the
-existing private socket's backend RPC for local snapshots, auth/renewal and durable
+existing private socket's backend RPC for local snapshots, renewal and durable
 mutations. The TypeScript controller admits explicit consent, confirmation,
 receipt handling and activation intent; native guards retain durable cancellation
 until a matching successful login is activated against fresh committed gates.
+The current peer advertises `deviceFlow: 1`: `device-flow.cts` owns approval
+validation, polling/deadlines, rejection/expiry, grant validation and commit intent.
+Only the main process receives device replies. The temporary native executor has
+closed device-start/poll routes and a one-shot commit of its retained approved
+response under the existing queue/config locks; no Node filesystem writer exists.
+Failed flows retire before a same-lease retry, and failed commit settles durable off.
 No generic mutation, private credential or arbitrary browser URL enters the renderer.
 
 An unsupported read-only opening may fall back to the retained legacy transport
@@ -43,7 +49,7 @@ Older installed assets/native callers retain the previous Rust projection.
 Rollback may use the previous client assets and unchanged file formats against
 that retained route. Remove legacy policy/transport only after those consumers
 and native fallback surfaces migrate and their affected seams pass. Rust
-auth/snapshot/credentials/queue remain explicit debt; no state writer has switched,
+HTTP/renewal/snapshot/credentials/queue and older-consumer auth remain explicit debt; no state writer has switched,
 and this controller adoption is not full account or Rust-free Connect acceptance.
 
 `connect/client` is the production `apparent-connect-client` library, not a

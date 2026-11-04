@@ -117,6 +117,7 @@ impl Session {
                     worker_count.fetch_add(1, Ordering::SeqCst);
                 },
                 Duration::from_secs(2),
+                None,
             )
         });
         Self {

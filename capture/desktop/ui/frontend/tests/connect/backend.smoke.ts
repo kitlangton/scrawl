@@ -26,6 +26,7 @@ test('shipped account controller owns consent, activation, confirmation and stal
   const snapshot={server:'https://connect.test',connected:false,uploadsEnabled:false,
     renewalRequired:false,reauthorizationRequired:false,accountInitial:null as string|null};
   let serial=0, login:number|undefined, activations=0, closed=0;
+  let approved=false;
   let holdRead=false, held:(()=>void)|undefined;
   const events: Record<string,unknown>[]=[];
   const commands: {command:string;operation?:number}[]=[];
@@ -45,12 +46,25 @@ test('shipped account controller owns consent, activation, confirmation and stal
         if (!['backend','backend-read','backend-command'].includes(request.connect)) {socket.end('{"error":"feature_disabled"}\n');continue;}
         owned=true;
         const account: Record<string,unknown>={version:1,snapshot:{...snapshot,credential:'synthetic-private-secret'},
-          error:null,sharedLinksUrl:null,events:events.splice(0),credential:'synthetic-private-secret'};
+          error:null,deviceFlow:1,sharedLinksUrl:null,events:events.splice(0),credential:'synthetic-private-secret'};
         if (request.command) {
           commands.push({command:request.command,operation:request.operation});
-          if (request.command==='login') {
+          if (request.command==='device-login') {
             login=++serial; account.operation=login;
-            events.push({operation:login,kind:'approval',approval:{verificationUri:'https://connect.test/device?code=TEST-CODE',userCode:'TEST-CODE'}});
+            events.push({operation:login,kind:'device-start',error:null,reply:{deviceCode:'synthetic-private-secret',
+              verificationUri:'https://connect.test/device?code=TEST-CODE',userCode:'TEST-CODE',expiresIn:60,interval:1}});
+          } else if (request.command==='device-poll') {
+            assert.equal(request.operation,login); assert.equal(request.deviceCode,'synthetic-private-secret');
+            account.operation=login;
+            events.push({operation:login,kind:'device-poll',error:null,reply:approved ? {
+              status:'approved',scope:'upload',accessToken:'synthetic-private-secret',refreshToken:'synthetic-private-secret',
+              grantId:'synthetic-grant',expiresIn:300,refreshExpiresIn:3600,
+            } : {status:'pending'}});
+          } else if (request.command==='device-commit') {
+            assert.equal(request.operation,login); assert.equal(request.site,'https://connect.test');
+            account.operation=login;
+            Object.assign(snapshot,{connected:true,uploadsEnabled:true,accountInitial:'M'});
+            events.push({operation:login,kind:'device-commit',error:null,reply:null});
           } else if (request.command==='activate') {
             const valid=request.operation===login && snapshot.uploadsEnabled;
             account.activated=valid;
@@ -85,15 +99,15 @@ test('shipped account controller owns consent, activation, confirmation and stal
   assert.equal(commands.length,0,'local consent presentation must not start backend operations');
   await card.getByRole('button',{name:'Allow & continue',exact:true}).click();
   await expect(card.getByRole('button',{name:'Open browser',exact:true})).toBeVisible();
-  assert.deepEqual(commands.map(c=>c.command),['login']);
+  assert.ok(commands.some(c=>c.command==='device-login'));
+  assert.equal(commands.some(c=>c.command==='login'),false);
   assert.equal(await page.getByText('synthetic-private-secret').count(),0);
   const projected=await page.evaluate(()=>window.apparent!.readConnectSettings());
   assert.equal(JSON.stringify(projected).includes('synthetic-private-secret'),false);
   assert.equal(activations,0);
   await card.getByRole('button',{name:'Open browser',exact:true}).click();
   await expect.poll(()=>application!.evaluate(()=>(global as any).opened.length)).toBe(1);
-  Object.assign(snapshot,{connected:true,uploadsEnabled:true,accountInitial:'M'});
-  events.push({operation:login,kind:'login',error:null});
+  approved=true;
   await expect(card.getByText('You’re connected.',{exact:true})).toBeVisible();
   assert.equal(activations,1);
   await card.getByRole('button',{name:'Account and connection options'}).click();
@@ -103,6 +117,7 @@ test('shipped account controller owns consent, activation, confirmation and stal
   await card.getByRole('button',{name:'Turn off uploads',exact:true}).click();
   await expect(card.getByText('Uploads are off.',{exact:true})).toBeVisible();
   assert.equal(commands.filter(c=>c.command==='disable').length,1);
+  approved=false;
   await card.getByRole('button',{name:'Enable uploads',exact:true}).click();
   await card.getByRole('button',{name:'Allow & continue',exact:true}).click();
   await expect(card.getByRole('button',{name:'Open browser',exact:true})).toBeVisible();

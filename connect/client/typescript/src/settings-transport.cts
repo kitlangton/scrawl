@@ -1,6 +1,7 @@
 import { lstat } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
+import { authorizeDevice, DeviceFlowError } from './device-flow.cjs';
 import { AccountController } from './settings-controller.cjs';
 import type { AccountBackend, Approval, Health, LocalState, Snapshot } from './settings-controller.cjs';
 import type { Action, SafeError } from './settings-presentation.js';
@@ -17,8 +18,9 @@ const errors = new Set<unknown>(['cancelled','offline','auth-required','rejected
 const safeError = (value: unknown): SafeError | null => value === null || errors.has(value) ? value as SafeError | null : bad();
 const health = (value: unknown): Health => ['online','offline','auth-required'].includes(value as string) ? value as Health : bad();
 const id = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : bad();
-type Event = { operation: number } & ({kind:'approval';approval:Approval} | {kind:'probe';health:Health} | {kind:'login'|'disable'|'disconnect';error:SafeError|null});
-type Account = LocalState & { events: Event[]; operation?: number; activated?: boolean };
+type DeviceKind = 'device-start'|'device-poll'|'device-commit';
+type Event = { operation: number } & ({kind:'approval';approval:Approval} | {kind:'probe';health:Health} | {kind:'login'|'disable'|'disconnect';error:SafeError|null} | {kind:DeviceKind;reply:unknown;error:SafeError|null});
+type Account = LocalState & { events: Event[]; operation?: number; activated?: boolean; deviceFlow?: 1 };
 
 function decode(value: unknown, opening: boolean): Account {
   const response = record(value);
@@ -48,12 +50,14 @@ function decode(value: unknown, opening: boolean): Account {
       if (!(typeof approval.userCode === 'string' && /^[a-zA-Z0-9-]{1,128}$/.test(approval.userCode)) || !browserUri(approval.verificationUri, approval.userCode)) bad();
       return {operation,kind:'approval',approval:{verificationUri:approval.verificationUri,userCode:approval.userCode}} as Event;
     }
+    if (['device-start','device-poll','device-commit'].includes(e.kind as string)) return {operation,kind:e.kind as DeviceKind,reply:e.reply,error:safeError(e.error)};
     if (e.kind === 'probe') return {operation,kind:'probe',health:health(e.health)} as Event;
     if (e.kind === 'login' || e.kind === 'disable' || e.kind === 'disconnect') return {operation,kind:e.kind,error:safeError(e.error)} as Event;
     return bad();
   });
+  if (a.deviceFlow !== undefined && a.deviceFlow !== 1) bad();
   if (a.activated !== undefined && typeof a.activated !== 'boolean') bad();
-  return {snapshot,error,sharedLinksUrl:a.sharedLinksUrl as string|null,events,
+  return {snapshot,error,sharedLinksUrl:a.sharedLinksUrl as string|null,events,...(a.deviceFlow === 1 ? {deviceFlow:1 as const} : {}),
     ...(a.operation === undefined ? {} : {operation:id(a.operation)}),
     ...(a.activated === undefined ? {} : {activated:a.activated as boolean})};
 }
@@ -75,16 +79,16 @@ class Channel {
     this.socket?.destroy(); this.socket = undefined; this.opened = false;
     this.finish?.(new BridgeError('cancelled'));
   }
-  request(command?: string, operation?: number, origin?: string): Promise<Account> {
+  request(command?: string, operation?: number, origin?: string, device?: {deviceCode?:string;timeoutMs?:number;site?:string}): Promise<Account> {
     const generation = this.generation;
     const result = this.tail.then(() => {
       if (this.closed || generation !== this.generation) throw new BridgeError('cancelled');
-      return this.exchange(command, operation, origin);
+      return this.exchange(command, operation, origin, device);
     }).catch(error => { this.close(); throw error; });
     this.tail = result.catch(() => {});
     return result;
   }
-  private async exchange(command?: string, operation?: number, origin?: string): Promise<Account> {
+  private async exchange(command?: string, operation?: number, origin?: string, device?: {deviceCode?:string;timeoutMs?:number;site?:string}): Promise<Account> {
     if (this.closed) throw new BridgeError('cancelled');
     const generation = this.generation;
     if (!this.socket) {
@@ -123,7 +127,7 @@ class Channel {
       socket.write(JSON.stringify({connect:opening?'backend':command?'backend-command':'backend-read',
         ...(opening ? {version:1} : {}),
         ...(command ? {command} : {}),...(operation === undefined ? {} : {operation}),
-        ...(origin === undefined ? {} : {origin}),
+        ...(origin === undefined ? {} : {origin}),...device,
         deadline:Number(process.hrtime.bigint()/1000000n)+Math.min(this.timeout(),3000)})+'\n');
     });
     if (generation !== this.generation) throw new BridgeError('cancelled');
@@ -138,16 +142,27 @@ class Backend implements AccountBackend {
   private pending = new Map<number,Pending>();
   private successfulLogin?: number;
   private local?: LocalState;
+  private deviceFlow = false;
+  private deviceWait?: {operation:number;kind:DeviceKind;finish:(reply:unknown,error:SafeError|null)=>void};
   constructor(readonly channel: Channel) {}
   close(): void {
     this.channel.close();
+    this.deviceWait?.finish(null,'cancelled'); this.deviceWait = undefined;
     for (const item of this.pending.values()) { this.retire(item); item.finish(item.kind === 'probe' ? 'offline' : 'cancelled'); }
     this.pending.clear(); this.successfulLogin = undefined;
   }
   private retire(item: Pending): void { if (item.abort) item.signal?.removeEventListener('abort',item.abort); }
   private consume(a: Account): void {
+    if (a.deviceFlow === 1) this.deviceFlow = true;
     this.local = {snapshot:a.snapshot,error:a.error,sharedLinksUrl:a.sharedLinksUrl};
     for (const event of a.events) {
+      if (event.kind === 'device-start' || event.kind === 'device-poll' || event.kind === 'device-commit') {
+        const wait = this.deviceWait;
+        if (wait && wait.operation === event.operation && wait.kind === event.kind) {
+          this.deviceWait = undefined; wait.finish(event.reply,event.error);
+        }
+        continue;
+      }
       const pending = this.pending.get(event.operation);
       if (!pending) continue;
       if (event.kind === 'approval') { if (pending.kind !== 'login') bad(); pending.approval?.(event.approval); continue; }
@@ -177,8 +192,44 @@ class Backend implements AccountBackend {
       if (signal?.aborted) abort();
     });
   }
+  private async deviceLogin(server:string, signal:AbortSignal, approval:(value:Approval)=>void):Promise<SafeError|null> {
+    let operation: number | undefined;
+    const step = async (kind:DeviceKind, command:string, fields?:{deviceCode?:string;timeoutMs?:number;site?:string}):Promise<unknown> => {
+      if (signal.aborted) throw new DeviceFlowError('cancelled');
+      const a = await this.channel.request(command,operation,command === 'device-login' ? server : undefined,fields);
+      this.consume(a);
+      if (signal.aborted) throw new DeviceFlowError('cancelled');
+      if (a.operation === undefined) throw new DeviceFlowError(a.error ?? 'unavailable');
+      if (operation !== undefined && operation !== a.operation) bad();
+      operation = a.operation;
+      return new Promise((resolve,reject) => {
+        this.deviceWait = {operation:operation!,kind,finish:(reply,error)=> error ? reject(new DeviceFlowError(error)) : resolve(reply)};
+      });
+    };
+    const abort = () => {
+      const wait = this.deviceWait; this.deviceWait = undefined;
+      wait?.finish(null,'cancelled');
+      void this.channel.request('cancel').then(a=>this.consume(a)).catch(()=>this.close());
+    };
+    signal.addEventListener('abort',abort,{once:true});
+    try {
+      const result = await authorizeDevice({
+        start:()=>step('device-start','device-login'),
+        poll:(deviceCode,timeoutMs)=>step('device-poll','device-poll',{deviceCode,timeoutMs}),
+        commit:async site=>{await step('device-commit','device-commit',{site});return null;},
+      },signal,approval);
+      if (result === null && !signal.aborted) this.successfulLogin = operation;
+      else if (!signal.aborted) {
+        // Retire a rejected/expired/malformed flow before admitting an explicit
+        // retry on this lease; it cannot lend its marker or grant to another flow.
+        try { const cancelled = await this.channel.request('cancel'); this.consume(cancelled); } catch { this.close(); }
+      }
+      return result;
+    } finally { signal.removeEventListener('abort',abort); }
+  }
   async login(server:string, signal:AbortSignal, approval:(value:Approval)=>void):Promise<SafeError|null> {
     if ((this.local?.snapshot?.server ?? 'https://hosted.tryapparent.com') !== server) return 'invalid-server';
+    if (this.deviceFlow) return this.deviceLogin(server,signal,approval);
     return await this.operation('login',signal,approval,server) as SafeError|null;
   }
   async probe(signal:AbortSignal):Promise<Health> { return await this.operation('probe',signal) as Health; }

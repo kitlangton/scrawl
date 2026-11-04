@@ -63,6 +63,14 @@ pub fn settings_backend(
     Arc::new(SettingsBackend(client_at(config.into()), config.into()))
 }
 
+// Temporary private device transaction/HTTP executor for the TypeScript flow.
+pub(crate) fn begin_device_login(config: &Path, server: &str, allowed: Arc<dyn Fn() -> bool + Send + Sync>) -> Result<apparent_connect_client::DeviceLogin> {
+    client_at(config.to_owned()).begin_device_login(server, "upload", true, allowed)
+}
+pub(crate) fn device_error(error: &anyhow::Error, allowed: &dyn Fn() -> bool) -> settings_controller::SafeError {
+    settings_error(client_settings::safe_error(error, allowed))
+}
+
 struct SettingsBackend(Client, PathBuf);
 use crate::capture::desktop::settings::connect as settings_controller;
 use apparent_connect_client::settings as client_settings;
