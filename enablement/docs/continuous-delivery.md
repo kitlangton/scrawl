@@ -25,7 +25,16 @@ explicitly. Preview publication stays on `macos-latest` for arm64 packaging; Int
 CI is not Apple Silicon runtime proof. An image change must still pass the same
 checks before Mac publication.
 
-Linux and web delivery trigger only after successful `Linux verification`.
+Linux delivery triggers only after successful `Linux verification`.
+Web delivery runs directly on main pushes and manual main dispatches. Its own
+credential-free Worker, browser, website, privacy and publication-contract checks
+admit its exact source and sealed artifact; Linux/Mac application verification
+cannot block web publication. Both publishers still depend on that run's successful
+`verify` job and retain their existing activation gates and publication ordering.
+This first separation does not yet split Public and Connect's composed Pages
+artifact or select web work by changed owner inputs: every main candidate still
+runs the complete web suite. Reverting the web workflow to the Linux follower
+restores the previous routing without changing deployed data or feed identities.
 Linux packaging compiles the release-profile model test executable on both
 architectures but leaves the full unit suite to that verification receipt.
 Packaged library, media and CPU compatibility checks remain release gates.
@@ -34,7 +43,7 @@ invocation; model loading and inference still execute under emulation, while
 download and whole-model hashing stay outside it. Production verification is
 unchanged. Run the harness contracts with
 `node --experimental-strip-types --test capture/desktop/scripts/linux/appimage/smoke-cpu.test.ts`.
-Their admission job reads trusted-main code and requires that exact commit's
+Linux admission reads trusted-main code and requires that exact commit's
 successful Linux/shared receipt. Mac preview publication requires both the
 Linux/shared and Mac receipts for the same commit. A queued/failed Mac run cannot
 hold Linux publication; Linux success cannot authorize a Mac release.

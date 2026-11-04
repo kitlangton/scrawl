@@ -58,6 +58,14 @@ pages do not consume that Function allowance.
 
 ## Main-branch CD
 
+The workflow starts directly on main pushes or manual main dispatches, independently
+of native application verification. Candidate admission validates canonical-main
+event and checkout identity. Publication requires the same run's complete web
+verification and revision-named sealed artifact; failed or skipped web checks
+cannot admit either publisher. Public and Connect currently share the composed
+Pages artifact and web verification lane; this does not claim separate deployment
+of those two owners yet.
+
 PR verification has no production credentials. The production Pages artifact is
 frozen before the separate synthetic Connect build. The website job downloads only that run's revision-named artifact, checks current
 main, verifies its complete checksum inventory, and deploys without bundling. The

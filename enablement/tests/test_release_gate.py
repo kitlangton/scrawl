@@ -285,7 +285,7 @@ class PublicationProgressTests(unittest.TestCase):
 
     def test_ineligible_completions_cannot_evict_good_pending_candidates(self):
         root = Path(__file__).resolve().parents[2]
-        for name in ('verification-mac.yml', 'web-delivery.yml'):
+        for name in ('verification-mac.yml',):
             workflow = (root / '.github/workflows' / name).read_text()
             group = workflow.split('\nconcurrency:\n')[1].split('  group: ')[1].splitlines()[0]
             def key(**overrides):
