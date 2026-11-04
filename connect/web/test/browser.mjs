@@ -375,6 +375,11 @@ try {
   }
   // StrictMode starts two loads. Hold the first session until the second has
   // published its list; a stale success or failure must not replace current UI.
+  // StrictMode effect replay exists only in React's development build. CI's
+  // production NODE_ENV must not turn this superseded-load regression into
+  // a single held request. Packaged production scenarios above stay unchanged.
+  const previousNodeEnv = process.env.NODE_ENV
+  process.env.NODE_ENV = 'development'
   viteServer=await (await import('vite')).createServer({server:{port:0}})
   await viteServer.listen()
   uiOrigin=`http://127.0.0.1:${viteServer.httpServer.address().port}`
@@ -402,6 +407,8 @@ try {
     await page.close();results.push(staleFailure?'shares-stale-load-failure':'shares-stale-load-success')
   }
   await viteServer.close();viteServer=null
+  if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+  else process.env.NODE_ENV = previousNodeEnv
   uiOrigin=`http://127.0.0.1:${server.address().port}`
   scenario={unavailable:true}; writes=[]; signedOut=false; revoked=false
   const recovery=await browser.newPage()

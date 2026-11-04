@@ -1,0 +1,20 @@
+import {downloadWorker} from './provenance.ts';
+import {execFileSync} from 'node:child_process';
+import {copyFile,mkdir,readFile} from 'node:fs/promises';
+import {resolve} from 'node:path';
+const [runId,directory]=process.argv.slice(2);
+if(!directory)throw Error('usage: publish.ts RUN_ID NEW_ARTIFACT_DIRECTORY');
+const root=resolve(import.meta.dirname,'../..');process.chdir(root);
+const manifest=await downloadWorker(runId,resolve(directory));
+// Preserve the existing ancestry gate and runtime configuration verbatim.
+process.env.PYTHONPATH=resolve(root,'enablement');
+process.env.GITHUB_SHA=manifest.sourceSha;
+execFileSync('python3',['connect/delivery/runtime/hosted_config.py'],{stdio:'inherit'});
+const output=resolve(directory,'order.txt');process.env.GITHUB_OUTPUT=output;
+execFileSync('python3',['connect/delivery/runtime/verify_worker.py','--publication-needed',manifest.sourceSha],{encoding:'utf8'});
+const order=await readFile(output,'utf8');process.stdout.write(order);
+if(!order.includes('publish=true'))process.exit(0);
+await mkdir(resolve(root,'connect/service/dist'),{recursive:true});
+await copyFile(resolve(directory,'dist/worker.js'),resolve(root,'connect/service/dist/worker.js'));
+execFileSync('./node_modules/.bin/wrangler',['deploy','--config','wrangler.cd.json','--tag',manifest.sourceSha,'--message',`GitHub Actions ${process.env.GITHUB_RUN_ID} commit ${manifest.sourceSha}`,'--strict','--no-autoconfig','--no-bundle'],{cwd:resolve(root,'connect/service'),stdio:'inherit'});
+execFileSync('python3',['connect/delivery/runtime/verify_worker.py',manifest.sourceSha],{stdio:'inherit'});
