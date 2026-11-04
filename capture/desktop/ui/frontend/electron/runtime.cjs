@@ -6,7 +6,7 @@ const path = require('node:path');
 const phases = new Set(['idle', 'selecting', 'starting', 'recording', 'processing', 'completed']);
 const reportingCodes = new Set(['invalid_request', 'config_read_failed', 'config_write_failed', 'app_busy', 'admission_expired']);
 const failure = { status: 'error', message: 'The Rust app did not return a valid state. Retry when it is responsive.' };
-const codes = new Set(['invalid_request', 'invalid_path', 'conflict', 'admission_expired', 'config_write_failed',
+const codes = new Set(['invalid_request', 'invalid_path', 'conflict', 'admission_expired', 'outcome_unknown', 'config_write_failed',
   'config_read_failed', 'app_busy', 'app_unresponsive', 'feature_disabled', 'usage_unavailable']);
 const text = (value) => typeof value === 'string' && Buffer.byteLength(value) <= 4096 && !value.includes('\0');
 
@@ -78,6 +78,53 @@ function decodeStorage(value) {
     displayPath: s.displayPath, custom: s.custom, source: s.source, revision: s.revision } };
 }
 
+function decodeLocationFacts(value) {
+  if (codes.has(value?.error)) {
+    if (value.error === 'feature_disabled') return { status: 'disabled' };
+    if (value.error === 'invalid_request') return { status: 'incompatible' };
+    return { status: 'error', code: value.error };
+  }
+  const l = value?.location;
+  const saved = l?.saved;
+  const environment = l?.environment;
+  const validSaved = saved?.kind === 'absent' || saved?.kind === 'null' || saved?.kind === 'other' ||
+    (saved?.kind === 'string' && text(saved.value));
+  if (!validSaved || !environment || typeof environment.present !== 'boolean' ||
+      !(environment.value === null || text(environment.value)) || environment.present !== (environment.value !== null) ||
+      !text(l.homePath) || !text(l.builtinPath) || !/^[a-f0-9]{16}$/.test(l.revision)) {
+    return { status: 'error', code: 'invalid_response' };
+  }
+  const projectedSaved = saved.kind === 'string' ? { kind: 'string', value: saved.value } : { kind: saved.kind };
+  return { status: 'connected', location: { saved: projectedSaved, environment: { present: environment.present, value: environment.value }, homePath: l.homePath,
+    builtinPath: l.builtinPath, revision: l.revision } };
+}
+
+function storageLocation(home, operation = 'facts', fields = {}, timeoutMs = 3500) {
+  if (!['facts', 'probe', 'set', 'reset'].includes(operation)) throw new Error('Invalid storage operation');
+  const wireOperation = { facts: 'locationfacts', probe: 'probelocation', set: 'setlocation', reset: 'resetlocation' }[operation];
+  const request = { storage: wireOperation, deadline: Number(process.hrtime.bigint() / 1000000n) + Math.min(timeoutMs, 3000) };
+  if (operation !== 'facts') {
+    if (!/^[a-f0-9]{16}$/.test(fields.expected)) throw new Error('Invalid revision');
+    request.expected = fields.expected;
+  }
+  if (operation === 'set' || operation === 'probe') {
+    if (!text(fields.path) || !path.isAbsolute(fields.path)) throw new Error('Invalid selected folder');
+    request.path = fields.path;
+  }
+  const decode = operation === 'facts' || operation === 'set' || operation === 'reset' ? decodeLocationFacts : (value) => {
+    if (codes.has(value?.error)) {
+      if (value.error === 'feature_disabled') return { status: 'disabled' };
+      if (value.error === 'invalid_request') return { status: 'incompatible' };
+      return { status: 'error', code: value.error };
+    }
+    return typeof value?.probe?.available === 'boolean' ? { status: 'connected', available: value.probe.available }
+      : { status: 'error', code: 'invalid_response' };
+  };
+  return exchange(home, JSON.stringify(request) + '\n', decode, 131072, timeoutMs,
+    { status: 'error', code: operation === 'set' || operation === 'reset' ? 'outcome_unknown' : 'timeout' });
+}
+
+// Retained for already-installed Settings assets and the capture bridge contract.
 function captureLocation(home, operation = 'read', fields = {}, timeoutMs = 3500) {
   if (!['read', 'set', 'reset'].includes(operation)) throw new Error('Invalid storage operation');
   const request = { storage: operation, deadline: Number(process.hrtime.bigint() / 1000000n) + Math.min(timeoutMs, 3000) };
@@ -133,8 +180,11 @@ function storagePreference(home, operation, fields = {}, timeoutMs = 3500) {
     request.expected = fields.expected;
   }
   if (operation === 'saveretention') {
-    if (!['week', 'month', 'forever'].includes(fields.preset)) throw new Error('Invalid preset');
-    request.preset = fields.preset;
+    const policy = fields.policy;
+    const validDays = value => value === null || (Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
+    if (!policy || Object.keys(policy).length !== 2 || !validDays(policy.mediaDays) || !validDays(policy.bundleDays))
+      throw new Error('Invalid retention policy');
+    request.policy = { mediaDays: policy.mediaDays, bundleDays: policy.bundleDays };
   }
   return exchange(home, JSON.stringify(request) + '\n', (value) => {
     if (value?.error) return decodeStorage(value);
@@ -145,16 +195,16 @@ function storagePreference(home, operation, fields = {}, timeoutMs = 3500) {
         : { status: 'error', code: 'invalid_response' };
     }
     const r = value?.retention;
-    if (!r || !(r.preset === null || ['week', 'month', 'forever'].includes(r.preset)) || !text(r.note) ||
-        typeof value.custom !== 'boolean' || !/^[a-f0-9]{16}$/.test(value.revision) ||
-        !Array.isArray(r.options) || r.options.length !== 3 ||
-        !r.options.every((o, i) => o.id === ['week', 'month', 'forever'][i] && text(o.label))) return { status: 'error', code: 'invalid_response' };
-    return { status: 'connected', retention: { preset: r.preset, note: r.note,
-      options: r.options.map(o => ({ id: o.id, label: o.label })) }, custom: value.custom, revision: value.revision };
+    const field = v => v && typeof v.present === 'boolean' &&
+      (v.value === null || (Number.isInteger(v.value) && v.value >= 0 && v.value <= 0xffffffff));
+    if (!r || !field(r.mediaDays) || !field(r.bundleDays) || typeof value.custom !== 'boolean' ||
+        !/^[a-f0-9]{16}$/.test(value.revision)) return { status: 'error', code: 'invalid_response' };
+    return { status: 'connected', policy: { mediaDays: { present: r.mediaDays.present, value: r.mediaDays.value },
+      bundleDays: { present: r.bundleDays.present, value: r.bundleDays.value } }, custom: value.custom, revision: value.revision };
   }, 16384, timeoutMs, { status: 'error', code: mutation ? 'outcome_unknown' : 'timeout' });
 }
 
-module.exports = { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference };
+module.exports = { readRuntimeState, captureLocation, storageLocation, errorReporting, captureReference, storagePreference };
 
 function drawing(home, operation = 'read', expected, timeoutMs = 3500) {
   if (!['read', 'undo'].includes(operation) || (operation === 'undo' && !/^[a-f0-9]{16}$/.test(expected))) throw new Error('Invalid drawing request');

@@ -5,7 +5,8 @@ const os = require('node:os');
 const {PublicShare} = require('./public-share.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { drawing, readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference, microphoneEnabled } = require('./runtime.cjs');
+const { drawing, readRuntimeState, storageLocation, errorReporting, captureReference, storagePreference, microphoneEnabled } = require('./runtime.cjs');
+const { locationCandidate, resolveLocationCandidate, normalizeSelectedPath } = require('./storage-policy.cjs');
 const { ConnectSettings, actions } = require('./connect.cjs');
 const followWindowTheme = require('@apparent/ui/window-theme');
 nativeTheme.themeSource = 'system';
@@ -141,10 +142,23 @@ app.whenReady().then(() => {
       return requestConnect(action);
     });
   }
+  const resolveLocation = async (facts) => {
+    const candidate = locationCandidate(facts);
+    if (candidate.snapshot) return { status: 'connected', revision: candidate.revision, storage: candidate.snapshot };
+    const probe = await storageLocation(os.homedir(), 'probe', { path: candidate.probePath, expected: candidate.revision });
+    if (probe.status !== 'connected') return probe;
+    return { status: 'connected', revision: candidate.revision,
+      storage: resolveLocationCandidate(facts, probe.available) };
+  };
+  const readLocation = async () => {
+    const result = await storageLocation(os.homedir(), 'facts');
+    if (result.status !== 'connected') return result;
+    try { return await resolveLocation(result.location); }
+    catch { return { status: 'error', code: 'invalid_response' }; }
+  };
   const project = (result) => {
     if (result.status !== 'connected') return result;
-    const { revision: _revision, ...storage } = result.storage;
-    return { status: 'connected', storage };
+    return { status: 'connected', storage: result.storage };
   };
   let reportingMutation = false;
   let microphoneMutation = false;
@@ -172,7 +186,7 @@ app.whenReady().then(() => {
   ipcMain.handle('apparent:read-capture-location', async (event, ...args) => {
     validateStorage(event, args);
     const version = storageVersion;
-    const result = await captureLocation(os.homedir());
+    const result = await readLocation();
     return version === storageVersion ? project(result) : { status: 'cancelled' };
   });
   for (const operation of ['change', 'reset']) {
@@ -183,10 +197,10 @@ app.whenReady().then(() => {
       storageVersion += 1;
       const token = generation;
       try {
-        const before = await captureLocation(os.homedir());
+        const before = await readLocation();
         if (token !== generation) return { status: 'cancelled' };
         if (before.status !== 'connected') return project(before);
-        const fields = { expected: before.storage.revision };
+        const fields = { expected: before.revision };
         if (operation === 'change') {
           const selected = await dialog.showOpenDialog(window, {
             title: 'Choose capture location', buttonLabel: 'Choose',
@@ -196,10 +210,14 @@ app.whenReady().then(() => {
           });
           if (token !== generation || window.isDestroyed() || selected.canceled) return { status: 'cancelled' };
           if (selected.filePaths.length !== 1) return { status: 'error', code: 'invalid_path' };
-          fields.path = selected.filePaths[0];
+          fields.path = normalizeSelectedPath(selected.filePaths[0]);
+          if (!fields.path) return { status: 'error', code: 'invalid_path' };
         }
         if (token !== generation) return { status: 'cancelled' };
-        return project(await captureLocation(os.homedir(), operation === 'change' ? 'set' : 'reset', fields));
+        const saved = await storageLocation(os.homedir(), operation === 'change' ? 'set' : 'reset', fields);
+        if (saved.status !== 'connected') return project(saved);
+        if (token !== generation || window.isDestroyed()) return { status: 'cancelled' };
+        return project(await resolveLocation(saved.location));
       } catch {
         return { status: 'error', code: 'bridge_failed' };
       } finally {
@@ -260,9 +278,14 @@ app.whenReady().then(() => {
   });
   for (const operation of ['save', 'reset']) {
     ipcMain.handle(`apparent:${operation}-retention`, async (event, ...args) => {
-      const preset = operation === 'save' ? args[0] : undefined;
-      validateStorage(event, operation === 'save' && args.length === 1 && ['week', 'month', 'forever'].includes(preset) ? [] : args);
-      if (operation === 'save' && args.length !== 1) throw new Error('Invalid preset');
+      const policy = operation === 'save' ? args[0] : undefined;
+      validateStorage(event, operation === 'save' && args.length === 1 ? [] : args);
+      if (operation === 'save' && (!policy || Object.keys(policy).length !== 2 ||
+          !['mediaDays', 'bundleDays'].every(key => Object.hasOwn(policy, key)) ||
+          !['mediaDays', 'bundleDays'].every(key => policy[key] === null ||
+            (Number.isInteger(policy[key]) && policy[key] >= 0 && policy[key] <= 0xffffffff)))) {
+        throw new Error('Invalid retention policy');
+      }
       if (mutation) return { status: 'error', code: 'app_busy' };
       if (!retentionRevision) return { status: 'error', code: 'refresh_required' };
       const expected = retentionRevision;
@@ -271,7 +294,7 @@ app.whenReady().then(() => {
       storageVersion += 1;
       const token = generation;
       try {
-        const result = await storagePreference(os.homedir(), `${operation}retention`, { expected, preset });
+        const result = await storagePreference(os.homedir(), `${operation}retention`, { expected, policy });
         return token === generation ? projectRetention(result) : { status: 'cancelled' };
       } finally { storageVersion += 1; mutation = false; }
     });

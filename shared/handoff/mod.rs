@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::shared::model::ApparentBundle;
 
 mod config_store;
+pub(crate) use config_store::ConfigPublicationUncertain;
 pub(crate) mod capture_location;
 pub use config_store::{default_config_path, set_config_value_in};
 pub(crate) use config_store::{update_config_in, update_config_allowed_in};

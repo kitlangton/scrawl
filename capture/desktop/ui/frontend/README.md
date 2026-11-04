@@ -157,22 +157,32 @@ the owned generated-fixture windows and stay outside git.
 Installed Settings routes Storage to the branded React presentation by default.
 `experiments.electronCaptureLocation=false` restores the native Storage page on
 its next open. No retention policy is changed by enabling the presentation.
-`readRetention()`, `saveRetention(preset)`, `resetRetention()` and
-`readCaptureUsage()` are the only additional preload methods. Only Save takes
-an argument: a validated `week`, `month` or `forever` identifier. Rust supplies
-the option labels, current/custom policy, policy note, effective path and
-formatted logical-byte usage. No renderer-provided path, config, revision,
-deadline, filesystem, shell or arbitrary IPC operation is accepted.
+`readRetention()`, `saveRetention(policy)`, `resetRetention()` and
+`readCaptureUsage()` are the only additional preload methods. TypeScript owns
+retention defaults, custom-value validation, preset mapping, labels and notes:
+Week is 7 media/30 bundle days, Month is 30/90, Forever is null/null. An absent
+field falls back independently to the 7/30 default; explicit JSON `null` means
+forever. Rust returns presence-aware retention values and a stale-edit revision to main;
+main retains the revision and exposes only the policy view to the renderer. Save
+accepts the two allowlisted `mediaDays`/`bundleDays` values, never a config object,
+path or renderer revision. TypeScript selects the Settings capture location from
+native facts; the native usage worker scans the actual effective folder and
+returns formatted logical bytes.
 
 The existing bounded socket worker admits `retention`, `saveretention`,
 `resetretention` and `usage` through its unchanged activation/expiry gate.
 Main retains the last authoritative retention revision; a concurrent edit
-conflicts rather than silently overwriting it. The existing config transaction
-preserves unrelated top-level and nested policy keys and secrets; Reset removes
-only the recognized retention fields, restoring `Policy::default()` (7-day
-media/30-day bundle policy). A custom hand-edited policy remains visible until
-explicitly replaced. Writes fail closed, including malformed/unsafe config;
-failed or outcome-unknown saves require a refresh and are never retried.
+conflicts rather than silently overwriting it. The config transaction compares
+fresh presence-aware owner values under the persistent config lock, preserves
+unrelated top-level and nested policy keys and secrets, and durably publishes
+only after file and directory sync. Reset removes only the recognized retention
+fields. A custom hand-edited policy remains visible until explicitly replaced.
+Malformed known retention values follow the existing cleanup reader's Week
+fallback and are not echoed to the renderer. Writes fail closed on malformed or
+unsafe config;
+failed or outcome-unknown saves require a refresh and are never retried. Rust
+config locking/CAS remains a named temporary executor dependency; the TypeScript
+Storage route owns persistence intent. No Node-side config read/modify/write runs.
 
 Saving/resetting nudges the **existing** Rust cleanup worker, as native Settings
 does: it schedules a pass about five seconds later, deferring while recording.
@@ -181,7 +191,7 @@ pass (normally hourly; first launch pass after about 90 seconds). It retains
 its startup capture folder until app restart. Nothing in the bridge runs a
 cleanup pass or moves a capture; normal policy cleanup remains unchanged.
 
-Usage scans the freshly resolved Rust effective location, not a cached renderer
+Usage scans the freshly resolved native capture location, not a cached renderer
 path, on open and manual refresh only. It counts logical file bytes (not free
 space or physical allocation), does not follow symlink entries, and returns
 an error rather than a partial total on I/O failure, expiry, its 100,000-entry
@@ -230,6 +240,34 @@ No recording/bundle was produced; that guest reports a missing H.264 decoder,
 and its walkthrough capture/export path was not exercised. Private evidence is
 retained outside the repository; the PR records candidate identity and gates.
 
+
+### Storage policy acceptance (#530)
+
+The policy move uses the existing installed Storage route. Relative to main
+`02c3aa92`, it changes neither Electron 45.2.1 nor the native launcher,
+window ownership, chooser options/parent, focus, permission, clipboard,
+capture-exclusion or cleanup mechanisms. The added policy module is emitted by
+`npm run build` before the unchanged packager copies the Electron tree; it has
+no runtime imports. The location contract types are owner-local so emission
+cannot pull Connect implementation into the Storage runtime.
+
+Linux shared checks exercise the shipped main/preload/renderer and real Rust
+socket. Native filesystem probes use the same create/metadata checks as the
+retained capture-time safety resolver; config publication uses the same flock,
+private temp file, fsync and rename. The new error marker records post-rename
+uncertainty, including unchanged-value saves. There is no new native route or
+OS effect to certify in this slice. The earlier installed-route evidence in
+[PR #357](https://github.com/tryapparent/apparent/pull/357) (Mac `d70b20ce`,
+Linux integrated `05bd4d9d`) and the retention evidence above remain evidence
+for those original seams, not fresh executions of this policy candidate.
+The runtime version is unchanged; subsequent main launcher/packaging work is
+preserved, not certified here. No fallback is retired. Existing native holds,
+including PR #376's Agents recovery, remain independent and open.
+
+No fresh native GUI or Mac execution is claimed. Before Mac publication the
+current packaged-app smoke, relevant native evidence and exact-main signing/CI
+gates still apply. Ordinary Storage policy build/unit checks invoke no Rust
+compiler; bridge/native changes still require their focused native integration.
 
 ## Checks
 
@@ -320,33 +358,45 @@ separate `npm start` window remains a developer harness; it is not installed or
 used by the Settings route. Browser preview has no Storage bridge.
 
 `readCaptureLocation()`, `changeCaptureLocation()` and `resetCaptureLocation()`
-accept no path, revision, dialog options or other arguments. Main reads the
-revision from Rust before opening its parented native folder dialog. Cancel,
+accept no path, revision, dialog options or other arguments. Installed main reads
+presence-aware native facts, then the emitted `electron/storage-policy.cjs`
+(built from `src/storage/location-policy.ts`) owns saved-path normalization,
+environment precedence, Settings candidate selection and fallback presentation.
+The native adapter supplies home/built-in paths, environment presence/value, the
+owner-key revision and a narrow availability probe for the TS-selected path.
+Main reads the revision before opening its parented native folder dialog. Cancel,
 reload, navigation and closing the window discard an unfinished selection.
 Change and Reset are single-flight. A timeout never retries a mutation: refresh
 to establish its actual outcome before trying again.
 
-The same-user socket accepts strict JSON `{storage:"read",deadline}`,
-`{storage:"set",path,expected,deadline}` and `{storage:"reset",expected,deadline}`
-frames with a trailing newline. `deadline` is same-host monotonic milliseconds;
-Rust caps admission at three seconds and rechecks it after acquiring the config
-lock. Storage uses libuv's clock: `CLOCK_MONOTONIC` on Linux,
-`CLOCK_MONOTONIC_RAW` on macOS. The legacy Rust-client clock is unchanged.
-`expected` is an opaque 16-hex stale-edit fingerprint of **only** the raw
-`capturesDir` value, not a security token or portable content digest.
-Other config edits survive; a changed capture preference refuses the stale save.
-One worker handles Storage without blocking the GUI or queuing config writers.
-Legacy state/start/inspect/stop/cancel requests keep their existing contract.
+The same-user socket accepts strict JSON `{storage:"locationfacts",deadline}`,
+`{storage:"probelocation",path,expected,deadline}`,
+`{storage:"setlocation",path,expected,deadline}` and
+`{storage:"resetlocation",expected,deadline}` frames with a trailing newline.
+`deadline` is same-host monotonic milliseconds; Rust caps admission at three
+seconds and rechecks it after acquiring the config lock for a mutation. Storage
+uses libuv's clock: `CLOCK_MONOTONIC` on Linux, `CLOCK_MONOTONIC_RAW` on macOS.
+`expected` is an opaque 16-hex stale-edit fingerprint of **only** the
+presence-tagged raw `capturesDir` value (so absent and explicit JSON `null`
+differ), not a security token or portable content digest. Other config edits
+survive; a changed capture preference refuses the stale save. One worker handles
+Storage without blocking the GUI or queuing config writers.
 
-Rust validates paths, preserves unknown config keys, removes the saved key on
-Reset, and returns authoritative saved/effective/display paths and source
-(`environment`, `configured`, `builtin`, `fallback`). Revisions remain in main;
-raw config and diagnostics never reach the renderer. An environment override
-still wins over the saved preference. An unusable saved folder falls back to
-the built-in folder. Existing bundles keep their recorded directory; nothing
-is relocated. Subsequent captures resolve the new preference. Existing
-background retention/transcript workers retain their startup directory until
-the Rust app restarts; this slice does not change their lifecycle.
+Rust keeps the flock/CAS transaction, preserves unknown config keys and secrets,
+removes only `capturesDir` on Reset, and reports durable success only after file
+fsync, atomic rename and directory fsync. It returns bounded location facts and
+probes only the absolute candidate selected by TypeScript; the renderer receives
+no revision, raw config, filesystem capability or diagnostics. TypeScript applies
+`APPARENT_CAPTURES_DIR` presence before a saved preference, then built-in; empty
+and relative environment overrides remain effective as before. A selected saved
+folder that cannot be created/written displays the built-in fallback without
+deleting the preference. The native capture-time resolver remains authoritative
+for actual capture and independently enforces the same safe fallback for older
+supported readers. Existing bundles keep their recorded directory; nothing is
+relocated. Subsequent captures resolve the saved preference. Existing background
+retention/transcript workers retain their startup directory until the Rust app
+restarts; this slice does not change their lifecycle. Config CAS remains an
+explicit low-level executor debt until a coordinated all-writer cutover.
 
 Rust config/socket tests and synthetic Electron tests are not native picker or
 capture proof. The earlier Linux/macOS foundation results above do **not**
