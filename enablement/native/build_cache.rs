@@ -160,7 +160,7 @@ fn fingerprint_tool(record: &mut Vec<u8>, path: &Path) -> Option<()> {
     add_field(
         record,
         b"tool-sha256",
-        digest(fs::read(resolved).ok()?).ok()?.as_bytes(),
+        digest_file(&resolved).ok()?.as_bytes(),
     );
     Some(())
 }
@@ -220,6 +220,22 @@ pub fn add_compiler_env(record: &mut Vec<u8>) {
 /// Uses the fixed macOS system tool instead of introducing a build dependency.
 pub fn digest(bytes: Vec<u8>) -> std::io::Result<String> {
     digest_stream(|input| input.write_all(&bytes))
+}
+
+/// Hash a compiler file directly, avoiding a full-file allocation and stdin pipe.
+/// `openssl` opens the canonical path itself; command failure disables cache reuse.
+fn digest_file(path: &Path) -> std::io::Result<String> {
+    let output = Command::new("/usr/bin/openssl")
+        .args(["dgst", "-sha256", "-r"])
+        .arg(path)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()?;
+    parse_digest_output(output.status.success(), &output.stdout)
 }
 
 // Stream SDK bytes rather than holding an SDK in memory or starting one hash
@@ -349,10 +365,14 @@ fn digest_stream(
     let written = write_buffered(child.stdin.take().unwrap(), write);
     let output = child.wait_with_output()?;
     written?;
-    if !output.status.success() {
+    parse_digest_output(output.status.success(), &output.stdout)
+}
+
+fn parse_digest_output(success: bool, stdout: &[u8]) -> std::io::Result<String> {
+    if !success {
         return Err(std::io::Error::other("SHA-256 command failed"));
     }
-    let hash = String::from_utf8_lossy(&output.stdout)
+    let hash = String::from_utf8_lossy(stdout)
         .split_whitespace()
         .next()
         .unwrap_or("")
@@ -586,6 +606,27 @@ mod tests {
         ] {
             assert_eq!(digest(bytes).unwrap(), expected);
         }
+    }
+    #[test]
+    fn direct_file_sha256_matches_stream_hash_and_fails_closed() {
+        let root = temp();
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("compiler");
+        let mut bytes = Vec::with_capacity(1024 * 1024 + 3);
+        bytes.extend((0..=255).cycle().take(1024 * 1024));
+        bytes.extend_from_slice(b"\0\xff\x80");
+        fs::write(&path, &bytes).unwrap();
+        let canonical = fs::canonicalize(&path).unwrap();
+        let original = digest(bytes.clone()).unwrap();
+        assert_eq!(digest_file(&canonical).unwrap(), original);
+        bytes[512 * 1024] ^= 0x40;
+        fs::write(&path, &bytes).unwrap();
+        let changed = digest_file(&canonical).unwrap();
+        assert_ne!(changed, original);
+        assert_eq!(changed, digest(bytes).unwrap());
+        assert!(digest_file(&root).is_err(), "directories must fail closed");
+        assert!(digest_file(&root.join("missing")).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn sdk_transport_preserves_bytes_batches_writes_and_propagates_errors() {
