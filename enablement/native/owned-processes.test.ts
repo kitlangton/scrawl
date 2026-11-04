@@ -4,6 +4,32 @@ const path = require('node:path');
 const { stripTypeScriptTypes } = require('node:module');
 const helper = path.join(__dirname, 'owned-processes.ts');
 
+test('bridge failure retains only synthetic Notes logs before owned temporary cleanup', () => {
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'notes-retain-'));
+  const temporary = path.join(root, 'owned-tmp'), retained = path.join(root, 'retained');
+  try {
+    const fixture = path.join(temporary, 'notes-bridge-synthetic');
+    fs.mkdirSync(fixture, { recursive: true });
+    fs.mkdirSync(retained);
+    fs.writeFileSync(path.join(fixture, 'notes-ui.log'), 'Notes fixture: ready-probe-start\n');
+    fs.writeFileSync(path.join(fixture, 'notes.json'), 'synthetic note text must not be retained');
+    const workflow = fs.readFileSync(path.join(__dirname, '../../.github/workflows/verification-platform.yml'), 'utf8');
+    const functionBody = workflow.slice(workflow.indexOf('          retain_bridge_logs() {'),
+      workflow.indexOf('          TMPDIR="$storage_tmp"'));
+    const result = spawnSync('bash', ['-c', `set -e\nstorage_tmp="$OWNED_TMP"\n${functionBody}\nexit 101`],
+      { env: { ...process.env, OWNED_TMP: temporary, RUNNER_TEMP: retained }, encoding: 'utf8' });
+    assert.equal(result.status, 101, 'retention must preserve the original test failure');
+    assert.equal(fs.existsSync(temporary), false);
+    const output = path.join(retained, 'apparent-bridge-notes/notes-bridge-synthetic');
+    assert.deepEqual(fs.readdirSync(output), ['notes-ui.log']);
+    assert.equal(fs.readFileSync(path.join(output, 'notes-ui.log'), 'utf8'), 'Notes fixture: ready-probe-start\n');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('cleanup stops owned supervisor and descendant', async () => {
   const assert = require('node:assert/strict');
   const { spawn } = require('node:child_process');

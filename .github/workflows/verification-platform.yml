@@ -370,10 +370,27 @@ jobs:
           fi
           storage_tmp="$(mktemp -d "$HOME/.apparent-storage.XXXXXX")"
           readonly storage_tmp
-          trap 'rm -rf -- "$storage_tmp"' EXIT
+          retain_bridge_logs() {
+            shopt -s nullglob
+            for log in "$storage_tmp"/notes-bridge-*/notes-ui.log; do
+              retained="$RUNNER_TEMP/apparent-bridge-notes/$(basename "$(dirname "$log")")"
+              mkdir -p "$retained"
+              cp "$log" "$retained/notes-ui.log"
+            done
+            rm -rf -- "$storage_tmp"
+          }
+          trap retain_bridge_logs EXIT
           TMPDIR="$storage_tmp" APPARENT_STORAGE_TEST_ELECTRON="$electron" \
             APPARENT_CONNECT_TEST_ELECTRON="$electron" \
             "${bridge_runner[@]}" cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture
+      - name: Retain synthetic Notes bridge startup logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notes-bridge-startup-${{ inputs.runner }}
+          path: ${{ runner.temp }}/apparent-bridge-notes/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Install the Mac candidate (packaging, not launch acceptance)
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
         shell: bash

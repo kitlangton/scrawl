@@ -8,6 +8,10 @@ const suppliedProfile = process.argv.find(v => v.startsWith('--notes-profile='))
 const profile = suppliedProfile || fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'apparent-note-ui-'));
 const { pathToFileURL } = require('node:url');
 const readline = require('node:readline');
+// Fixed lifecycle labels only: never log note text, page contents or error messages.
+const fixtureDiagnostics = process.argv.includes('--notes-fixture-diagnostics');
+const trace = label => { if (fixtureDiagnostics) process.stderr.write(`Notes fixture: ${label}\n`); };
+trace('entry');
 const { validCommand, validSnapshot, popupBounds, badgeBounds, embeddedBadgeBounds, BADGE_WIDTH, BADGE_HEIGHT, flightBounds } = require('./protocol.cjs');
 app.setName('Apparent Notes');
 nativeTheme.themeSource = 'system';
@@ -26,6 +30,7 @@ let latest, popup, badge;
 let finishing = false, finished = false;
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\n');
 app.whenReady().then(() => {
+  trace('app-ready');
   if (process.platform === 'darwin') app.setActivationPolicy('accessory');
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, reply) => reply(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -41,8 +46,14 @@ app.whenReady().then(() => {
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('will-navigate', e => e.preventDefault());
     win.webContents.on('will-attach-webview', e => e.preventDefault());
-    win.webContents.on('render-process-gone', () => app.quit());
+    win.webContents.on('render-process-gone', () => { trace(`${surface}:renderer-gone`); app.quit(); });
+    if (fixtureDiagnostics) {
+      win.webContents.on('did-finish-load', () => trace(`${surface}:loaded`));
+      win.webContents.on('did-fail-load', () => trace(`${surface}:load-failed`));
+      win.webContents.on('preload-error', () => trace(`${surface}:preload-failed`));
+    }
     win.loadURL(page + '#notes-' + surface);
+    trace(`${surface}:created`);
     return win;
   }
   popup = window('popup', 332, 200); badge = window('badge', BADGE_WIDTH, BADGE_HEIGHT);
@@ -163,9 +174,12 @@ app.whenReady().then(() => {
     } catch { app.quit(); }
   });
   lines.on('close', () => app.quit());
+  trace('ready-probe-start');
   Promise.all([popup.webContents.executeJavaScript('document.readyState'), badge.webContents.executeJavaScript('document.readyState')]).then(() => {
+    trace('ready-probe-complete');
     const ids = [popup, badge].map(w => Number(w.getMediaSourceId().split(':')[1])).filter(n => Number.isInteger(n) && n > 0);
     send({ action: 'windows', ids }); send({ action: 'ready' });
-  }).catch(() => app.quit());
+    trace('ready-sent');
+  }).catch(() => { trace('ready-probe-failed'); app.quit(); });
 });
 app.on('window-all-closed', () => app.quit());

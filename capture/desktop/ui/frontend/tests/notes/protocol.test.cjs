@@ -1,6 +1,61 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { validCommand, validSnapshot, popupBounds, badgeBounds, embeddedBadgeBounds, flightBounds } = require('../../electron/notes/protocol.cjs');
+test('Notes fixture diagnostics preserve the real readiness barrier and omit error contents', async () => {
+  const { EventEmitter } = require('node:events');
+  const { readFileSync } = require('node:fs');
+  const { join } = require('node:path');
+  const { runInNewContext } = require('node:vm');
+  const entry = join(__dirname, '../../electron/notes/main.cjs');
+  async function run(diagnostics, reject) {
+    const windows = [], pending = [], output = [], errors = [];
+    const app = new EventEmitter();
+    let quit = 0;
+    Object.assign(app, { setName() {}, setPath() {}, setActivationPolicy() {}, whenReady: async () => {}, quit: () => quit++ });
+    class Window {
+      constructor() {
+        this.webContents = new EventEmitter();
+        Object.assign(this.webContents, { setWindowOpenHandler() {},
+          executeJavaScript: () => new Promise((resolve, fail) => pending.push({ resolve, fail })) });
+        windows.push(this);
+      }
+      removeMenu() {}
+      setAlwaysOnTop() {}
+      setVisibleOnAllWorkspaces() {}
+      loadURL() {}
+      getMediaSourceId() { return `window:${windows.indexOf(this) + 1}:0`; }
+    }
+    const electron = { app, BrowserWindow: Window, ipcMain: { handle() {} }, screen: {}, nativeTheme: {},
+      session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } } };
+    runInNewContext(readFileSync(entry, 'utf8'), { __dirname: join(__dirname, '../../electron/notes'),
+      process: { platform: 'darwin', argv: ['electron', entry, '--notes-profile=/synthetic', '--capture-frame=0,0,1000,700',
+        ...(diagnostics ? ['--notes-fixture-diagnostics'] : [])], stdout: { write: v => output.push(JSON.parse(v)) },
+        stderr: { write: v => errors.push(v) } },
+      require: name => name === 'electron' ? electron : name === '../runtime.cjs'
+        ? { installBuildIdentity() {}, installExceptionReporting() {} } : name === 'node:readline'
+        ? { createInterface: () => new EventEmitter() } : name === './protocol.cjs'
+        ? require('../../electron/notes/protocol.cjs') : require(name) });
+    await new Promise(setImmediate);
+    assert.equal(pending.length, 2);
+    assert.equal(output.length, 0, 'diagnostics must not manufacture Ready');
+    windows[0].webContents.emit('did-finish-load');
+    windows[1].webContents.emit('preload-error', {}, '/private', new Error('private note contents'));
+    pending[0].resolve('complete');
+    await new Promise(setImmediate);
+    assert.equal(output.length, 0, 'both original renderer probes remain required');
+    if (reject) pending[1].fail(new Error('private note contents'));
+    else pending[1].resolve('complete');
+    await new Promise(setImmediate);
+    if (reject) { assert.equal(output.length, 0); assert.equal(quit, 1); }
+    else assert.deepEqual(output, [{ action: 'windows', ids: [1, 2] }, { action: 'ready' }]);
+    assert.ok(errors.every(line => /^Notes fixture: [a-z:-]+\n$/.test(line)));
+    assert.ok(!errors.join('').includes('private'));
+    return errors.join('');
+  }
+  assert.equal(await run(false, false), '');
+  assert.match(await run(true, false), /ready-sent/);
+  assert.match(await run(true, true), /ready-probe-failed/);
+});
 test('embedded flight target follows physical scale and the leading row rather than the pocket', () => {
  for (const scale of [1,1.25,2]) {
   const rect=[-500*scale,34*scale,484*scale,58*scale];

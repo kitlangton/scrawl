@@ -171,7 +171,7 @@ test('temporary Mac release exception retains Linux and web limits', () => {
 
 test('Electron to Rust Settings workflow builds frontend artifacts before the bridge test', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/verification-platform.yml', import.meta.url), 'utf8')
-  const block = workflow.split('      - name: Actual Electron to Rust Settings integration (not native GUI proof)\n')[1].split('\n      - name: Install the Mac candidate')[0]
+  const block = workflow.split('      - name: Actual Electron to Rust Settings integration (not native GUI proof)\n')[1].split('\n      - ')[0]
   const script = block.split('        run: |\n')[1].split('\n').map(line => line.replace(/^          /, '')).join('\n')
   const root = mkdtempSync(join(tmpdir(), 'electron-settings-workflow-'))
   try {

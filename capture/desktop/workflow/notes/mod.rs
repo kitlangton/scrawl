@@ -109,7 +109,11 @@ impl Drop for Profile {
 // Hosted Mac bridge tests have no guaranteed EGL display. Keep this preparation
 // confined to test binaries; it does not certify production GPU/window behavior.
 fn renderer_fixture_args(test_binary: bool, macos: bool) -> &'static [&'static str] {
-    if test_binary && macos { &["--disable-gpu"] } else { &[] }
+    match (test_binary, macos) {
+        (true, true) => &["--disable-gpu", "--notes-fixture-diagnostics"],
+        (true, false) => &["--notes-fixture-diagnostics"],
+        _ => &[],
+    }
 }
 
 impl Session {
@@ -175,6 +179,8 @@ impl Session {
                                 break;
                             }
                         } else {
+                            #[cfg(test)]
+                            eprintln!("Notes fixture: protocol-rejected");
                             break;
                         }
                     }
@@ -285,7 +291,10 @@ impl Session {
                             CommandMessage::Ready => {
                                 ready = true;
                                 #[cfg(test)]
-                                ready_receipt.store(true, Ordering::Release);
+                                {
+                                    eprintln!("Notes fixture: ready-received");
+                                    ready_receipt.store(true, Ordering::Release);
+                                }
                             },
                             CommandMessage::Finished => {
                                 ensure!(completion.is_some(), "Unexpected finish receipt");
@@ -584,7 +593,11 @@ mod transport_tests {
             let mut command = Command::new("electron");
             command.args(renderer_fixture_args(test_binary, macos));
             let args: Vec<_> = command.get_args().map(|arg| arg.to_str().unwrap()).collect();
-            assert_eq!(args, if test_binary && macos { vec!["--disable-gpu"] } else { vec![] });
+            assert_eq!(args, match (test_binary, macos) {
+                (true, true) => vec!["--disable-gpu", "--notes-fixture-diagnostics"],
+                (true, false) => vec!["--notes-fixture-diagnostics"],
+                _ => vec![],
+            });
             assert!(!args.iter().any(|arg| arg.contains("sandbox")));
             assert!(command.get_envs().next().is_none());
         }

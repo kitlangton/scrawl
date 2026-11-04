@@ -769,6 +769,10 @@ whose hosted environment may lack an EGL display. Production launches retain
 normal GPU behavior and sandboxing. The fixture still requires the real renderer's
 Ready acknowledgement within eight seconds; software-rendered bridge results do
 not certify native GPU, focus or window behavior.
+Rust test binaries also request fixed-label Notes startup diagnostics on stderr.
+CI retains only the synthetic fixture's `notes-ui.log` before deleting its temporary
+root; labels contain no note text or error contents. Diagnostics do not acknowledge
+Ready, change the eight-second deadline or certify a failed bridge test.
 
 The shared Rust resolver is `capture::desktop::workflow::electron::resolve() -> Result<Resources>`;
 `Resources { executable, root }` supplies paths only. Surface owners launch their own
