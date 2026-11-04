@@ -1,5 +1,14 @@
 # Native test infrastructure
 
+## Mac verification setup
+
+`mac-setup.ts` runs the existing FFmpeg and Metal setup commands concurrently
+after Xcode selection. Both must succeed before compiler/cache/build steps.
+The helper retains command output, reports elapsed times, and terminates its
+owned process groups on failure, cancellation or the 120-second setup deadline.
+`mac-setup.test.ts` exercises the orchestration with executable fixtures; actual
+Mac setup timing and the complete main verification result remain separate gates.
+
 ## Native compiler outputs
 
 `build_cache.rs` supports the root build script's macOS native output reuse.

@@ -36,7 +36,7 @@ jobs:
         with:
           node-version: '22'
       - name: Verification receipt contracts
-        run: node --test enablement/verification/*.test.ts
+        run: node --experimental-strip-types --test enablement/verification/*.test.ts enablement/native/mac-setup.test.ts
       - name: Recipient CLI installation contracts
         run: node --experimental-strip-types --test capture/agent/scripts/tests/install-cli.test.ts
       - name: Selector and hook contracts (no native proof)
@@ -220,6 +220,12 @@ jobs:
           ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: needs.select.outputs.root == 'true'
+        with:
+          node-version: '22'
+          cache: ${{ needs.select.outputs.root == 'true' && 'npm' || '' }}
+          cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
       - name: Linux application dependencies
         if: runner.os == 'Linux' && needs.select.outputs.root == 'true'
         run: ./capture/desktop/scripts/linux/appimage/dependencies.sh
@@ -240,12 +246,9 @@ jobs:
           test -d "$selected_developer"
           printf 'DEVELOPER_DIR=%s\n' "$selected_developer" >> "$GITHUB_ENV"
           printf 'Selected developer directory: %s\n' "$selected_developer"
-      - name: Install CLI export speedup dependencies
+      - name: Prepare macOS compiler dependencies concurrently
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
-        run: command -v ffmpeg && command -v ffprobe || brew install ffmpeg
-      - name: Install the Metal toolchain
-        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
-        run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+        run: node --experimental-strip-types enablement/native/mac-setup.ts
       - uses: dtolnay/rust-toolchain@stable
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
         with:
@@ -271,12 +274,6 @@ jobs:
             . -> target
             capture/engine -> target
             connect/client -> target
-      - uses: actions/setup-node@v4
-        if: needs.select.outputs.root == 'true'
-        with:
-          node-version: '22'
-          cache: ${{ needs.select.outputs.root == 'true' && 'npm' || '' }}
-          cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
       - name: Execute Rust changed-tree checks (not GUI acceptance)
         run: |
           # Engine finalizer proofs reject group-writable cache ancestors.
