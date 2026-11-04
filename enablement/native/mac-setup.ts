@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { open, lstat, rename, unlink } from 'node:fs/promises'
+import { open, lstat, rename, unlink, link } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { pathToFileURL } from 'node:url'
@@ -158,8 +158,14 @@ async function prepareToStatus(path: string): Promise<void> {
   const startedAt = Date.now()
   const pending: PendingStatus = { state: 'pending', nonce: randomUUID(), startedAt, deadlineAt: startedAt + 120_000 }
   console.log(`macOS dependency worker startedAt=${pending.startedAt} deadlineAt=${pending.deadlineAt}`)
-  const handle = await open(path, 'wx', 0o600)
-  try { await handle.writeFile(`${JSON.stringify(pending)}\n`, 'utf8') } finally { await handle.close() }
+  // Exclusive creation alone exposes an empty file before the async write.
+  // Publish a completed sibling inode atomically, without replacing any winner.
+  const temporary = `${path}.${pending.nonce}.pending`
+  const handle = await open(temporary, 'wx', 0o600)
+  try {
+    try { await handle.writeFile(`${JSON.stringify(pending)}\n`, 'utf8') } finally { await handle.close() }
+    await link(temporary, path)
+  } finally { await unlink(temporary).catch(() => undefined) }
   let exit: 0 | 1 = 0
   try { await prepareMacDependencies(Math.max(1, pending.deadlineAt - Date.now())) }
   catch (error) { exit = 1; console.error(error instanceof Error ? error.message : String(error)) }

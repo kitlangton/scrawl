@@ -285,3 +285,53 @@ test('actual workflow shell backgrounds preparation through cache and gates the 
     } finally { f.cleanup() }
   })
 })
+
+test('initial status is invisible until its complete JSON has been written', async (t) => {
+  for (const contender of [false, true]) await t.test(contender ? 'concurrent creator wins without replacement' : 'complete initial publication', async () => {
+  const f = fixture(); const statusPath = join(f.root, 'status.json')
+  const opened = join(f.root, 'write-paused'); const release = join(f.root, 'release-write')
+  const preload = join(f.root, 'pause-initial-write.ts')
+  // Delay the actual production file handle before its first write. This catches
+  // open(status, wx) exposing an empty file without adding a runtime test knob.
+  writeFileSync(preload, `import fs from 'node:fs/promises'
+import { existsSync, writeFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const originalOpen = fs.open
+let delayed = false
+fs.open = async (...args) => {
+  const handle = await originalOpen(...args)
+  if (!delayed && args[1] === 'wx' && String(args[0]).startsWith(${JSON.stringify(statusPath)})) {
+    delayed = true
+    const originalWrite = handle.writeFile.bind(handle)
+    handle.writeFile = async (...writeArgs) => {
+      writeFileSync(${JSON.stringify(opened)}, '')
+      while (!existsSync(${JSON.stringify(release)})) await new Promise(resolve => setTimeout(resolve, 5))
+      return originalWrite(...writeArgs)
+    }
+  }
+  return handle
+}
+syncBuiltinESMExports()
+`)
+  prerequisites(f)
+  const worker = spawn(process.execPath, ['--experimental-strip-types', '--import', preload, helper, '--prepare', statusPath], { env: f.env(), stdio: 'ignore' })
+  const exited = waitExit(worker)
+  try {
+    await waitFor(opened)
+    assert.equal(existsSync(statusPath), false, 'an observer must not see a partially written initial status')
+    const winner = JSON.stringify({ owner: 'competing initializer' })
+    if (contender) writeFileSync(statusPath, winner, { flag: 'wx', mode: 0o600 })
+    writeFileSync(release, '')
+    assert.equal(await exited, contender ? 1 : 0)
+    if (contender) assert.equal(readFileSync(statusPath, 'utf8'), winner)
+    else {
+      assert.equal(status(statusPath).state, 'complete')
+      assert.equal(status(statusPath).exit, 0)
+    }
+  } finally {
+    writeFileSync(release, '')
+    await exited
+    f.cleanup()
+  }
+  })
+})
