@@ -16,11 +16,11 @@ Only `reporting_daily_active_accounts` may be synced by the existing D1 connecto
 
 | Column | Value |
 |---|---|
-| `day_utc` | TEXT `YYYY-MM-DD`, original successful server-action UTC day |
-| `active_accounts` | nonnegative INTEGER; **observed distinct-account lower bound**, not an exact census |
+| `day_utc` | TEXT `YYYY-MM-DD`, original successful server-action UTC day, or current UTC day for status metadata |
+| `active_accounts` | nullable INTEGER; positive **observed distinct-account lower bound**, or NULL for unknown status; never a fabricated zero |
 | `as_of_ms` | INTEGER, coarse global successful maintenance watermark, not an individual's action time |
 | `collection_started_at_ms` | INTEGER, immutable actual 0009 application boundary |
-| `coverage` | TEXT, always `observed_lower_bound` |
+| `coverage` | TEXT, `observed_lower_bound` for activity or `unknown` for NULL status |
 
 **This coverage qualification is necessary, not cosmetic.** Exact atomicity with
 primary writes would let metric failures break uploads/shares. Instead the actual
@@ -33,6 +33,19 @@ zero. Consumers must not zero-fill these gaps. First/current days are also parti
 identify the first from `collection_started_at_ms`, the current from UTC today.
 The accepted metric is exact distinct counting of observed eligible admissions,
 not a guaranteed census of all successful service actions.
+
+Additive migration `0010.sql` resolves an empty native-source bootstrap: when the
+current UTC day has no positive observed count, the same view includes one status
+row with `active_accounts=NULL` and `coverage='unknown'`. It is metadata, not an
+activity, zero, customer fixture or historical backfill. A positive current-day
+count replaces that day's status row; historical missing days stay absent. All
+five columns have stable SQLite declared types TEXT/INTEGER/INTEGER/INTEGER/TEXT,
+including the nullable count and coverage in both compound-view branches. Fixed
+typed fields live on the existing singleton state; no new writer, job or flag.
+Original collection start, watermark, counters, dedup and choices are untouched.
+The consumer must retain `coverage='observed_lower_bound' AND active_accounts>0`
+for its sparse count chart. A real status row makes the source nonempty but only
+actual native first-sync readback proves that PostHog materialized its table.
 
 Successful `pending`→`ready` upload completion after object verification and first
 durable share insertion qualify. SQL `RETURNING` identifies the actual winning

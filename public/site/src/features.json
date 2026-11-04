@@ -29,7 +29,7 @@
       "says": "Successful upload/share actions deduplicate per account and original UTC day inside Cloudflare. Only daily observed totals and coverage metadata are selected for sync to the existing warehouse connector. Individual PostHog events remain opt-in. Prior refusals, request privacy signals and fixture exclusions are respected; account/day attribution expires at UTC day end plus one hour. Missing days are unknown, not verified zeroes.",
       "status": "main",
       "platforms": ["mac", "linux"],
-      "note": "Server-side daily totals for this small friends project; prospective notice precedes counting. This is a fail-open observed lower bound, not an exact census or anonymity guarantee. Existing D1 Read access is account-scoped; only sync selection is restricted to reviewed views. No new browser SDK, replay, identity or export service.",
+      "note": "Server-side daily totals for this small friends project; prospective notice precedes counting. This is a fail-open observed lower bound, not an exact census or anonymity guarantee. An empty current day exposes typed NULL/unknown status metadata for warehouse bootstrap, never invented activity or zero. Existing D1 Read access is account-scoped; only sync selection is restricted to reviewed views. No new browser SDK, replay, identity or export service.",
       "docs": ["connect/docs/aggregate-dau.md"]
     },
     {
