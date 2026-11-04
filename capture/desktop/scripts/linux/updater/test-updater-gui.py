@@ -207,7 +207,7 @@ exit "$result"
                      patch.object(gui.subprocess, 'Popen', return_value=process) as launch:
                     self.assertEqual(gui.main(), 1)
                 command = launch.call_args.args[0]
-                expected = Path(__file__).resolve().parent.parent / 'gui/gui-vm.py'
+                expected = Path(__file__).resolve().parents[5] / 'enablement/native/linux/gui-vm.py'
                 self.assertEqual(Path(command[1]), expected)
                 self.assertTrue(expected.is_file())
                 self.assertIn('--isolated-network', command)

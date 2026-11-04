@@ -11,7 +11,7 @@ const { promisify } = require('node:util');
 const { _electron: electron, expect } = require('@playwright/test');
 const { readRuntimeState } = require('../electron/runtime.cjs');
 const run = promisify(execFile);
-const { pidFileSupervisor: rustSupervisor, stopOwned } = require('../../../../../enablement/native/owned-processes.ts');
+const { pidFileSupervisor: rustSupervisor, stopOwned, withinLabelled: within } = require('../../../../../enablement/native/owned-processes.ts');
 const root = path.join(__dirname, '..');
 const permissionSource = 'https://github.com/actions/runner-images/blob/main/images/macos/scripts/build/configure-tccdb-macos.sh';
 
@@ -152,15 +152,6 @@ on run argv
   end tell
 end run
 `;
-
-async function within(promise, ms, label) {
-  let timer;
-  try {
-    return await Promise.race([promise, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    })]);
-  } finally { clearTimeout(timer); }
-}
 
 test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Reset', {
   timeout: 120000,

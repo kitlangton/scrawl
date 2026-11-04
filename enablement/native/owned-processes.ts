@@ -4,11 +4,11 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const run = promisify(execFile);
 
-async function within<T>(operation: Promise<T>, ms: number): Promise<T> {
+async function within<T>(operation: Promise<T>, ms: number, message = 'Packaged smoke operation timed out'): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([operation, new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('Packaged smoke operation timed out')), ms);
+      timer = setTimeout(() => reject(new Error(message)), ms);
     })]);
   } finally { clearTimeout(timer); }
 }
@@ -143,4 +143,18 @@ async function stopOwned(child: import('node:child_process').ChildProcess | unde
   return result;
 }
 
-module.exports = { within, stopElectron, supervisor, stopBackend, pidFileSupervisor, stopOwned };
+// Preserve each driver's diagnostic text while sharing timer ownership.
+function withinLabelled<T>(operation: Promise<T>, ms: number, label: string): Promise<T> {
+  return within(operation, ms, `${label} timed out after ${ms}ms`);
+}
+
+async function stopChild(child: import('node:child_process').ChildProcess | undefined) {
+  if (child && child.exitCode === null && child.signalCode === null) {
+    const ended = new Promise((resolve) => child.once('exit', resolve));
+    child.kill('SIGTERM');
+    const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 2500);
+    try { await ended; } finally { clearTimeout(timer); }
+  }
+}
+
+module.exports = { within, withinLabelled, stopChild, stopElectron, supervisor, stopBackend, pidFileSupervisor, stopOwned };

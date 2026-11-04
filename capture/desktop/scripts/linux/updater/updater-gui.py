@@ -377,7 +377,7 @@ def main():
         'source_head': source_head, 'channel': args.channel,
         'legacy_sha256': legacy_digest,
         'scope': 'isolated Omarchy; guest-local synthetic HTTPS release contract, NOT GitHub publication'}, indent=2) + '\n')
-    command = [sys.executable, str(source.parent / 'gui/gui-vm.py'), '--template', str(args.template.resolve()),
+    command = [sys.executable, str(repository / 'enablement/native/linux/gui-vm.py'), '--template', str(args.template.resolve()),
                '--ovmf-vars', str(args.ovmf_vars.resolve()), '--ssh-key', str(args.ssh_key.resolve()),
                '--ssh-user', args.ssh_user, '--binary', str(args.appimage.resolve()),
                '--scenario', str(scenario_path), '--results', str(args.results / 'vm'),

@@ -330,7 +330,7 @@ The Electron smoke checks controls/keyboard use, disconnected/error/reconnect,
 renderer reload, minimum-width layout, sandbox/Node isolation, navigation/network
 refusal and rejection of a second renderer. It is not native platform acceptance.
 `tests/native-smoke.cjs` is a disposable-guest-only Electron entrypoint. The
-existing isolated Linux runner is `capture/desktop/scripts/linux/gui/gui-vm.py`;
+existing isolated Linux runner is `enablement/native/linux/gui-vm.py`;
 follow `../../docs/native-testing.md` for template/access/lifecycle requirements.
 In an owned disposable Mac, run it with `SCRAWL_GUI_OUTPUT` set to a private
 evidence directory. Use a fresh private HOME for disconnected checks; for live

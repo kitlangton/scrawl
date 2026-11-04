@@ -178,3 +178,52 @@ test('PID-file supervisor and receipt cleanup stop only their owned group', asyn
     await fs.rm(home, { recursive: true });
   }
 });
+
+test('reference entrypoint imports shared direct-child cleanup without executing capture', () => {
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const { createRequire } = require('node:module');
+  const entry = path.resolve(__dirname, '../../capture/desktop/ui/frontend/tests/reference-native.cjs');
+  const entryRequire = createRequire(entry);
+  const imported = [];
+  let registrations = 0;
+  const localRequire = name => {
+    if (name === 'node:test') return { test: () => { registrations++; } };
+    if (name === '@playwright/test') return {};
+    const value = entryRequire(name);
+    if (name.endsWith('/owned-processes.ts')) imported.push(value);
+    return value;
+  };
+  new Function('require', '__dirname', fs.readFileSync(entry, 'utf8'))(localRequire, path.dirname(entry));
+  assert.deepEqual(imported, [require(helper)]);
+  assert.equal(registrations, 1);
+});
+
+test('bounded waits preserve caller diagnostics, results and original failures', async () => {
+  const assert = require('node:assert/strict');
+  const { within, withinLabelled } = require(helper);
+  assert.equal(await within(Promise.resolve('ready'), 50), 'ready');
+  const original = new Error('original operation failed');
+  await assert.rejects(withinLabelled(Promise.reject(original), 50, 'read'), error => error === original);
+  await assert.rejects(within(new Promise(() => {}), 5), { message: 'Packaged smoke operation timed out' });
+  await assert.rejects(withinLabelled(new Promise(() => {}), 5, 'Storage read'), { message: 'Storage read timed out after 5ms' });
+});
+
+test('direct-child cleanup handles absent, exited and TERM-resistant owned children', async () => {
+  const assert = require('node:assert/strict');
+  const { spawn } = require('node:child_process');
+  const { once } = require('node:events');
+  const { stopChild } = require(helper);
+  await stopChild(undefined);
+  await stopChild({ exitCode: 0, signalCode: null, kill: () => assert.fail('Exited child signalled') });
+  const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)"],
+    { stdio: ['ignore', 'pipe', 'inherit'] });
+  try {
+    await once(child.stdout, 'data');
+    await stopChild(child);
+    assert.equal(child.signalCode, 'SIGKILL');
+    assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await once(child, 'exit'); }
+  }
+});

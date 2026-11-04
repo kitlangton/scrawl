@@ -5,7 +5,9 @@
 `owned-processes.ts` provides the packaged smoke driver's existing Bash
 process-group supervisor, bounded operation wrapper (`within`), `stopBackend`
 and `stopElectron`. The native Storage driver also imports `pidFileSupervisor`
-and `stopOwned` from this module. Its supervisor requires the pre-created,
+and `stopOwned` from this module; its labelled deadlines use `withinLabelled`.
+The capture-reference driver imports `stopChild` for its existing direct-child
+TERM/2.5-second KILL escalation. That helper does not manage process groups. Its supervisor requires the pre-created,
 non-symlink, owned `$TMPDIR/rust.pid` and publishes only its launched child PID.
 `stopOwned` returns a per-child cleanup receipt and refuses to signal after its
 leader exits. It treats an exited group probe's `EPERM` as failure; do not silently
@@ -106,15 +108,19 @@ disk/firmware; a matching live copy is only a partial snapshot. Keep private
 receipts and media private. No migration command launches guests, changes
 installed tools, reserves capacity or redirects an active run.
 
-## Temporary compatibility
+## Compatibility
 
-The three former paths in `capture/desktop/scripts/linux/gui/` are relative
-symlinks to this implementation, not copies. All three remain because updater
-launches the former runner path and runner/tests locate the reaper by sibling
-path. Existing frontend documentation and active owners can continue using them.
-Remove these links together only after updater callers/tests and maintained
-documentation move, and active owner reservations/runs are checked. Do not
-rewrite an active candidate merely to retire these entrypoints.
+The former runner, reaper and test symlinks in
+`capture/desktop/scripts/linux/gui/` were removed after the updater, maintained
+frontend documentation and shared VM skill adopted canonical paths. The Settings
+owner explicitly released the old paths: its current disposable controller uses
+the canonical runner and its frozen Mac packet references none. No running
+Python command named the old paths during the final audit. Historical receipts
+and older checkouts retain their own source/provenance; they do not reserve new
+main entrypoints. No VM, cold evidence or active resource was changed.
+
+The Desktop packaged-smoke helper exports remain the bounded compatibility
+contract described above; all executable VM commands use canonical paths.
 
 Further Mac/frontend extraction checks exact active hunks with their owners;
 an open PR or pending native acceptance alone does not reserve stable mechanics. Storage/retention UI assertions remain Desktop
@@ -125,3 +131,17 @@ continues to govern: shared UI and real Rust bridge primarily on Linux, affected
 native seams on their OS, unchanged-input evidence reuse, and current-package
 Mac publication smoke plus exact-main verification/signing. Relocation alone
 requires path/contract checks, not a fresh native workflow or paid resources.
+
+## Desktop scenario boundary
+
+The inspected frontend drivers remain beside Desktop: `native-smoke.cjs` asserts
+UI tabs and the real runtime bridge; `native-retention.cjs` asserts user retention
+policy and config writes (it is not evidence retention); `reference-native.cjs`
+asserts selection and actual clipboard payloads; `mac-storage-native.cjs` asserts
+Storage, reporting and native picker/recovery behavior. Their private fixtures,
+screenshots, report schemas and failure-retention decisions describe those
+scenarios. Generic supervision, waiting and child cleanup are imported here.
+Named AX controls and their allowlists remain part of Desktop acceptance; there
+is no independent cross-owner AX consumer to justify extracting their selector
+logic. Product startup/readiness adapters likewise retain their real bridge
+assertions with Desktop. This boundary does not wait for PR376 acceptance.

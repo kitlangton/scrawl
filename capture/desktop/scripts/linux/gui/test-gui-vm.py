@@ -1,1 +1,0 @@
-../../../../../enablement/native/linux/test-gui-vm.py
