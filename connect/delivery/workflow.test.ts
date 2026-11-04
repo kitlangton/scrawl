@@ -34,7 +34,7 @@ test('producer verifies before sealing and never publishes',async()=>{
  assert.ok(workflow.indexOf('Verify browser and analytics')<workflow.indexOf('Seal verified'));
  const producer=workflow.split('  publish:')[0];
  assert.doesNotMatch(producer,/wrangler deploy|cargo |secrets\.|public\/site|needs:.*(?:linux|macos)/);
- assert.equal((workflow.match(/timeout-minutes: 10/g)||[]).length,7);
+ assert.equal((workflow.match(/timeout-minutes: 10/g)||[]).length,6);
 });
 
 test('callable publisher admits independently with production controls',async()=>{
@@ -50,9 +50,42 @@ test('callable publisher admits independently with production controls',async()=
 test('durable recipient releases verify trusted provenance and preserve executability',async()=>{
  const workflow=await readFile(new URL('../../.github/workflows/connect-delivery.yml',import.meta.url),'utf8');
  const release=workflow.split('  recipient-release:')[1];
- for(const value of ['needs: recipient',"github.ref == 'refs/heads/main'",'connect/delivery/recipient/release.ts recipient-assets release-assets', 'pattern: recipient-${{ github.sha }}-${{ github.run_id }}-*','gh release create','--latest=false']) assert.ok(release.includes(value),value);
+ for(const value of ["github.ref == 'refs/heads/main'",'connect/delivery/recipient/release.ts recipient-assets release-assets', 'pattern: recipient-${{ github.sha }}-${{ github.run_id }}-*','gh release create','--latest=false']) assert.ok(release.includes(value),value);
  assert.doesNotMatch(release,/--clobber|gh release (?:edit|delete|upload)|wrangler|HOSTED_CD_ENABLED/);
  assert.ok(release.indexOf('release.ts')<release.indexOf('gh release create'));
+});
+
+test('successful recipient targets publish signed independent receipts before the four-target aggregate',async()=>{
+ const workflow=await readFile(new URL('../../.github/workflows/connect-delivery.yml',import.meta.url),'utf8');
+ const releaseSource=await readFile(new URL('./recipient/release.ts',import.meta.url),'utf8');
+ const recipient=workflow.split('\n  recipient:\n')[1].split('\n  recipient-release:')[0];
+ const aggregate=workflow.split('\n  recipient-release:\n')[1];
+ assert.match(recipient,/contents: read[\s\S]*id-token: write[\s\S]*attestations: write/);
+ assert.ok(recipient.indexOf('Test and build component only')<recipient.indexOf('Seal executable bytes'));
+ assert.doesNotMatch(recipient,/gh release create|release\.ts (?:prepare-target|publish-targets?)/);
+ assert.match(aggregate,/needs: \[select, produce, publish, recipient-select, recipient\]/);
+ assert.match(aggregate,/timeout-minutes: 2/);
+ assert.match(aggregate,/contents: write[\s\S]*id-token: write[\s\S]*attestations: write/);
+ assert.ok(aggregate.indexOf('--publication-preflight')<aggregate.indexOf('actions/download-artifact@v4'));
+ assert.doesNotMatch(aggregate.slice(0,aggregate.indexOf('--publication-preflight')),/actions\/attest-build-provenance|publish-targets|gh release create/);
+ assert.ok(aggregate.indexOf('actions/download-artifact@v4')<aggregate.indexOf('release.ts prepare-targets'));
+ assert.ok(aggregate.indexOf('release.ts prepare-targets')<aggregate.indexOf('actions/attest-build-provenance@v2'));
+ assert.ok(aggregate.indexOf('actions/attest-build-provenance@v2')<aggregate.indexOf('release.ts publish-targets'));
+ assert.match(aggregate,/WORKFLOW_BUDGET_RESERVE_SECONDS: '120'/);
+ const expected=aggregate.match(/WORKFLOW_BUDGET_EXPECTED_JOB_NAMES: '([^']+)'/)?.[1];
+ assert.ok(expected,'publisher must pin the complete job inventory for this workflow attempt');
+ assert.deepEqual(JSON.parse(expected!),['select','produce','publish','recipient-select',
+  'recipient (ubuntu-24.04, x86_64-unknown-linux-gnu)','recipient (ubuntu-24.04-arm, aarch64-unknown-linux-gnu)',
+  'recipient (macos-15, aarch64-apple-darwin)','recipient (macos-15-intel, x86_64-apple-darwin)',
+  'Recipient target release and aggregate','Workflow runtime budget']);
+ assert.match(aggregate,/if: always\(\) && !cancelled\(\)/);
+ assert.doesNotMatch(aggregate,/continue-on-error: true/);
+ assert.match(aggregate,/if: needs\.recipient\.result == 'success'/);
+ assert.match(aggregate,/gh release create/);
+ assert.match(aggregate,/--latest=false/);
+ for(const value of ['--source-ref','--source-digest',"execute('gh',['release','create'"])assert.ok(releaseSource.includes(value),value);
+ assert.match(workflow,/needs: \[select, produce, publish, recipient-select, recipient, recipient-release\]/);
+ assert.match(releaseSource,/No successful recipient targets to publish/);
 });
 
 test('recipient selection is independent of web production and a skip cannot publish native evidence',async()=>{
@@ -64,5 +97,5 @@ test('recipient selection is independent of web production and a skip cannot pub
  assert.match(recipient,/needs: recipient-select/);
  assert.match(recipient,/needs.recipient-select.outputs.required == 'true'/);
  assert.match(selection,/inputs.producer-run == ''/);
- const release=workflow.split('  recipient-release:')[1];assert.match(release,/needs: recipient/);
+ const release=workflow.split('  recipient-release:')[1];assert.match(release,/needs: \[[^\]]*recipient\]/);
 });
