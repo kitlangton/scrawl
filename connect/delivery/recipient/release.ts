@@ -11,10 +11,9 @@ export function select(root: string, sha: string, run: string, attempt: string) 
     if (!match || match[1] !== sha || match[2] !== run || BigInt(match[3]) > BigInt(attempt) || !targets.includes(match[4])) throw Error(`Invalid artifact identity: ${name}`);
     const directory = join(root,name);
     const manifest = JSON.parse(readFileSync(join(directory,'manifest.json'),'utf8'));
-    const expected = {schema:1,protocol:1,repository:'tryapparent/apparent',workflow:'.github/workflows/connect-delivery.yml',executable:'apparent-connect-recipient',sourceSha:sha,run,attempt:match[3],target:match[4],version:`recipient-${sha}-${run}-${match[3]}`,sha256:createHash('sha256').update(readFileSync(join(directory,'apparent-connect-recipient'))).digest('hex')};
-    if (Object.entries(expected).some(([key,value])=>manifest[key] !== value)) throw Error(`Invalid artifact manifest: ${name}`);
-    validate(readFileSync(join(directory,'apparent-connect-recipient')), manifest,
-      {sourceSha:sha,run,attempt:match[3],target:match[4],sha256:expected.sha256});
+    const bytes = readFileSync(join(directory,'apparent-connect-recipient'));
+    const expected = validate(bytes, manifest,
+      {sourceSha:sha,run,attempt:match[3],target:match[4],sha256:createHash('sha256').update(bytes).digest('hex')});
     return {directory, ...expected};
   });
   return targets.map(target => {
