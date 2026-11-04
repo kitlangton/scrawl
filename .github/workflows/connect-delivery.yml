@@ -12,8 +12,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      TMPDIR: ${{ runner.temp }}
-      CONNECT_EVIDENCE: ${{ runner.temp }}/connect-browser-evidence
       NODE_ENV: production
       VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
       PUBLIC_POSTHOG_ENABLED: ${{ vars.PUBLIC_POSTHOG_ENABLED || 'true' }}
@@ -21,6 +19,10 @@ jobs:
       PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
       PUBLIC_POSTHOG_ENVIRONMENT: production
     steps:
+      - name: Set runner evidence paths
+        run: |
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "CONNECT_EVIDENCE=$RUNNER_TEMP/connect-browser-evidence" >> "$GITHUB_ENV"
       - name: Verification runtime budget and ownership
         run: echo '10 minute whole-workflow execution budget; agent whose run hits the limit owns optimization and a successful rerun. Do not raise or bypass the limit.'
       - uses: actions/checkout@v4
