@@ -17,11 +17,14 @@ lib="$smoke/squashfs-root/usr/lib"
 export LD_LIBRARY_PATH="$lib"
 # Keep the exact filter honest: Rust's test harness succeeds when it selects 0 tests.
 test_name=capture::engine::runtime::audio::transcription::speech::tests::downloads_and_runs_parakeet
-listed="$(./speech-test "$test_name" --exact --ignored --list)"
-if [[ "$(printf '%s\n' "$listed" | grep -Fxc "$test_name: test")" != 1 ]]; then
-  printf 'Expected exactly one ignored test matching %s; got:\n%s\n' "$test_name" "$listed" >&2
-  exit 1
-fi
+prepared_test=capture::engine::runtime::audio::transcription::speech::tests::runs_prepared_parakeet
+for selected in "$test_name" "$prepared_test"; do
+  listed="$(./speech-test "$selected" --exact --ignored --list)"
+  if [[ "$(printf '%s\n' "$listed" | grep -Fxc "$selected: test")" != 1 ]]; then
+    printf 'Expected exactly one ignored test matching %s; got:\n%s\n' "$selected" "$listed" >&2
+    exit 1
+  fi
+done
 export APPARENT_TEST_MODEL_DIR="${APPARENT_TEST_MODEL_DIR:-$smoke/model}"
 # There must be no build-tree RPATH left in packaged libraries.
 if find "$lib" -name '*transcribe*.so*' -o -name '*ggml*.so*' | while read -r file; do
@@ -41,7 +44,11 @@ if [[ $# == 0 ]]; then
   grep -E 'calling init: .*lib(ggml|transcribe)|device:|test result:' loader.log
   grep -q 'calling init: .*cpu-smoke/squashfs-root/usr/lib/libggml-cpu' loader.log
 else
-  "$@" -- ./speech-test "$test_name" --exact --ignored --nocapture
+  # Verify the actual model bytes natively on every invocation before passing
+  # the same directory to the emulator. Missing/corrupt models fail here.
+  env -u APPARENT_TEST_NO_AVX_VNNI -u APPARENT_TEST_NO_AVX512 \
+    ./speech-test "$test_name" --exact --ignored --nocapture
+  "$@" -- ./speech-test "$prepared_test" --exact --ignored --nocapture
   # Also exercise the shipped Rust binary's keyframe/render/bundle path, without
   # a display, microphone, clipboard or an installed speech model.
   "$@" -- ./squashfs-root/usr/bin/apparent demo --out "$smoke/demo.apparent"

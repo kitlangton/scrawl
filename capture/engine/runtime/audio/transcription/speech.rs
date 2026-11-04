@@ -492,6 +492,28 @@ mod tests {
         if fresh {
             assert_eq!(last, 1.0);
         }
+        run_parakeet(&model);
+        if kept.is_none() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The packaging harness first runs downloads_and_runs_parakeet natively on
+    /// this same private directory. Only CPU-sensitive work belongs under SDE;
+    /// hashing the entire model there obscures the compatibility proof.
+    #[test]
+    #[ignore]
+    fn runs_prepared_parakeet() {
+        let dir = PathBuf::from(std::env::var_os("APPARENT_TEST_MODEL_DIR")
+            .expect("native model preparation must provide APPARENT_TEST_MODEL_DIR"));
+        let model = dir.join(PARAKEET.filename);
+        assert_eq!(std::fs::metadata(&model).unwrap().len(), PARAKEET.bytes);
+        run_parakeet(&model);
+    }
+
+    fn run_parakeet(model: &Path) {
+        let started = std::time::Instant::now();
+        let phase = |name| eprintln!("speech smoke phase={name} elapsed_ms={}", started.elapsed().as_millis());
         #[cfg(target_arch = "x86_64")]
         if std::env::var_os("APPARENT_TEST_NO_AVX512").is_some() {
             // Under SDE: proves the emulated CPU is the one without AVX-512 (#58).
@@ -507,7 +529,7 @@ mod tests {
         for device in transcribe_cpp::devices() {
             eprintln!("device: {} ({})", device.name, device.description);
         }
-        let model = Model::load(&model).unwrap();
+        let model = Model::load(model).unwrap();
         phase("model_loaded");
         let pcm: Vec<f32> = (0..32_000)
             .map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / 16_000.0).sin() * 0.1)
@@ -518,8 +540,5 @@ mod tests {
             .run(&pcm, &RunOptions::default())
             .unwrap();
         phase("inference_complete");
-        if kept.is_none() {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
     }
 }

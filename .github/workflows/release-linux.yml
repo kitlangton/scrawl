@@ -62,13 +62,15 @@ jobs:
           sparse-checkout: |
             /.github/workflows/release-linux.yml
             /capture/desktop/scripts/linux/maintenance/
+            /capture/desktop/scripts/linux/appimage/smoke-cpu.sh
+            /capture/desktop/scripts/linux/appimage/smoke-cpu.test.ts
             /enablement/release_gate.py
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.0'
-      - name: Bridge publication contracts
-        run: node --experimental-strip-types --test capture/desktop/scripts/linux/maintenance/signing-bridge.test.ts
+      - name: Bridge publication and packaged smoke contracts
+        run: node --experimental-strip-types --test capture/desktop/scripts/linux/maintenance/signing-bridge.test.ts capture/desktop/scripts/linux/appimage/smoke-cpu.test.ts
       - id: gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -188,10 +190,14 @@ jobs:
         env:
           APPARENT_POSTHOG_TOKEN: ${{ secrets.APPARENT_POSTHOG_TOKEN }}
         run: GITHUB_SHA="$CANDIDATE_SHA" cargo build --release --locked
-      - name: Unit tests and model test executable
+      # Exact-commit Linux verification owns the full unit suite. Release keeps
+      # the release-profile executable for both architectures' packaged proofs.
+      - name: Compile packaged model test executable
+        # build.rs watches this variable. Keep the same build environment so
+        # compiling tests does not invalidate the just-built native outputs.
+        env:
+          APPARENT_POSTHOG_TOKEN: ${{ secrets.APPARENT_POSTHOG_TOKEN }}
         run: |
-          GITHUB_SHA="$CANDIDATE_SHA" cargo test --release --locked -- --test-threads=2
-          GITHUB_SHA="$CANDIDATE_SHA" cargo test --release --locked speech:: -- --nocapture
           GITHUB_SHA="$CANDIDATE_SHA" cargo test --release --locked --bin apparent --no-run --message-format=json > target/test-artifacts.jsonl
           test=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "apparent" and .profile.test) | .executable // empty' target/test-artifacts.jsonl)
           test -f "$test"
