@@ -3,7 +3,6 @@ pub use super::sketch_geometry::*;
 pub use super::sketch_semantics::*;
 
 use crate::shared::model::*;
-#[cfg(test)]
 use std::f32::consts::PI;
 
 pub fn bounds(points: &[[f32; 2]]) -> [f32; 4] {

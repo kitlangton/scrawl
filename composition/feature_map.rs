@@ -125,7 +125,7 @@ fn camel_case(snake: &str) -> String {
 fn config_keys(sources: &[(PathBuf, String)]) -> BTreeSet<String> {
     let mut keys = BTreeSet::new();
     for (path, text) in sources {
-        if path.ends_with("shared/handoff/mod.rs") {
+        if path.ends_with("shared/handoff/config.rs") {
             let start = text.find("pub struct Config {").expect("handoff::Config");
             let body = &text[start..];
             let body = &body[..body.find("\n}").unwrap()];
@@ -266,6 +266,21 @@ experiment_enabled_in(&config, name);
 }
 
 #[test]
+fn config_fields_are_scanned_from_the_extracted_schema() {
+    let sources = vec![
+        (PathBuf::from("shared/handoff/mod.rs"),
+            "pub use config::*;\nset_config_value_in(path, \"facadeKey\", true);\n".to_owned()),
+        (PathBuf::from("shared/handoff/config.rs"),
+            "pub struct Config {\n    pub schema_only: Option<bool>,\n}\n".to_owned()),
+        (PathBuf::from("unrelated/config.rs"),
+            "pub struct Config {\n    pub unrelated: bool,\n}\n".to_owned()),
+    ];
+    assert_eq!(config_keys(&sources), BTreeSet::from([
+        "facadeKey".to_owned(), "schemaOnly".to_owned(),
+    ]));
+}
+
+#[test]
 fn the_scanner_sees_known_keys_and_flags() {
     let sources = sources();
     assert!(!sources.is_empty(), "scanner found no production Rust sources");
@@ -273,6 +288,7 @@ fn the_scanner_sees_known_keys_and_flags() {
         "main.rs",
         "composition/cli.rs",
         "capture/engine/runtime/mod.rs",
+        "shared/handoff/config.rs",
         "shared/handoff/config_store.rs",
         "connect/client/src/lib.rs",
     ] {
