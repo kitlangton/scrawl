@@ -5,6 +5,7 @@ import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {admitWorker,verifyArchive} from './provenance.ts';
 import {validate,effectiveEnvironment} from './artifacts.ts';
+import {selection} from '../../enablement/verification/web/baseline.ts';
 export function compatible(actual:unknown,expected:unknown){const canonical=(v:unknown)=>JSON.stringify(v,(_,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.entries(x).sort()):x);return canonical(actual)===canonical(expected);}
 export async function select(force=false){
  if(force)return '';
@@ -37,4 +38,9 @@ export async function select(force=false){
  }
  return '';
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){const selected=await select(process.env.GITHUB_EVENT_NAME==='workflow_dispatch');const {appendFile}=await import('node:fs/promises');await appendFile(process.env.GITHUB_OUTPUT!,`selected-run=${selected}\nbuild=${selected==='' }\napplicable=true\n`);}
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
+ const impact=await selection('connect',process.env.GITHUB_SHA??'',process.env.GH_TOKEN??'',process.env.GITHUB_EVENT_NAME==='workflow_dispatch');
+ const selected=await select(impact.required);const {appendFile}=await import('node:fs/promises');
+ await appendFile(process.env.GITHUB_OUTPUT!,`selected-run=${selected}\nbuild=${selected===''}\napplicable=true\n`);
+ console.log(JSON.stringify({...impact,selectedRun:selected,build:selected===''}));
+}

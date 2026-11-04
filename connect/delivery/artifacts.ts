@@ -18,7 +18,7 @@ export async function inventory(root:string,kind:string){
  const sources=[...assets.matchAll(/\['([^']+)',\s*'[^']+'\]/g)].map(m=>m[1]);if(sources.length!==5)throw Error('expected five approved assets');
  for(const p of sources)await walk(`public/site/public/assets/${p}`);
  }
- for(const p of ['.github/workflows/connect-delivery.yml','.github/actions/runtime-budget','enablement/verification/workflow-budget.ts'])await walk(p);
+ for(const p of ['.github/workflows/connect-delivery.yml','.github/actions/runtime-budget','enablement/verification/workflow-budget.ts','enablement/release_gate.py','enablement/verification/web/inputs.ts','enablement/verification/web/baseline.ts'])await walk(p);
  const tracked=new Set(execFileSync('git',['ls-files','-z'],{cwd:root,encoding:'utf8'}).split('\0'));
  const changed=execFileSync('git',['diff','HEAD','--name-only','--diff-filter=D'],{cwd:root,encoding:'utf8'}).trim().split('\n');
  for(const p of changed)if(p.startsWith(kind==='connect-browser'?'connect/web/':'connect/service/')||(p.startsWith('connect/delivery/')&&!p.startsWith('connect/delivery/recipient/'))||p.startsWith('shared/'))throw Error(`deleted input: ${p}`);

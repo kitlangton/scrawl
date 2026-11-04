@@ -10,7 +10,7 @@ test('isolated git provenance and hostile payloads',async()=>{
  const root=await mkdtemp(join(tmpdir(),'delivery-'));const dir=join(root,'artifact');
  const put=async(p:string,s='fixture')=>{await mkdir(join(root,p,'..'),{recursive:true});await writeFile(join(root,p),s)};
  try{
- for(const p of ['connect/web/package.json','connect/service/package.json','shared/ui/a','shared/analytics/a','shared/assets/a','connect/delivery/a','.github/workflows/connect-delivery.yml','.github/actions/runtime-budget/action.yml','enablement/verification/workflow-budget.ts','public/site/package.json','public/site/bun.lock','public/site/src/a','public/site/scripts/a'])await put(p);
+ for(const p of ['connect/web/package.json','connect/service/package.json','shared/ui/a','shared/analytics/a','shared/assets/a','connect/delivery/a','.github/workflows/connect-delivery.yml','.github/actions/runtime-budget/action.yml','enablement/verification/workflow-budget.ts','enablement/release_gate.py','enablement/verification/web/inputs.ts','enablement/verification/web/baseline.ts','public/site/package.json','public/site/bun.lock','public/site/src/a','public/site/scripts/a'])await put(p);
  await put('connect/delivery/recipient/source.ts');
  await mkdir(join(root,'connect/web/scripts'),{recursive:true});await cp(new URL('../web/scripts/assets.mjs',import.meta.url),join(root,'connect/web/scripts/assets.mjs'));
  for(const p of ['hosted/source-pond-v4.png','hosted/agent-pond-v4.png','hosted/agent-reading-v4.png','fonts/HostGrotesk-Variable.ttf','brand/apparent-wordmark.svg'])await put('public/site/public/assets/'+p);
@@ -36,7 +36,7 @@ test('isolated git provenance and hostile payloads',async()=>{
  execFileSync('git',['add','.'],{cwd:root});execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.invalid','commit','-m',edit+' native delivery'],{cwd:root});
  await validate(root,dir);await validate(root,worker,'connect-worker');
  }
- for(const path of ['connect/delivery/recipient-neighbor/source.ts','connect/delivery/provenance.ts','connect/delivery/select.ts','connect/delivery/artifacts.ts','enablement/verification/workflow-budget.ts']) {
+ for(const path of ['connect/delivery/recipient-neighbor/source.ts','connect/delivery/provenance.ts','connect/delivery/select.ts','connect/delivery/artifacts.ts','enablement/verification/workflow-budget.ts','enablement/release_gate.py','enablement/verification/web/inputs.ts','enablement/verification/web/baseline.ts']) {
  await put(path,'changed admission contract');
  await assert.rejects(validate(root,dir));await assert.rejects(validate(root,worker,'connect-worker'));
  await rm(join(root,path));if(path.startsWith('enablement/'))await put(path);
