@@ -434,8 +434,8 @@
       "status": "branch:t3/explore-agent-video-workflows",
       "added": "2026-10-28",
       "platforms": ["mac", "linux"],
-      "note": "Existing state/stop/cancel had Linux disposable-VM proof. New owned start/wait receipts have shared Rust contract tests; exact-candidate Linux GUI and Mac runtime proof are required before release. No media change or new experiment gate.",
-      "docs": ["capture/engine/docs/capture.md", "capture/desktop/docs/linux/linux.md", "capture/agent/docs/agent-video-workflow.md"]
+      "note": "Existing state/stop/cancel had Linux disposable-VM proof. New owned start/wait receipts have shared Rust contract tests; exact-candidate Linux GUI and Mac runtime proof are required before release. No media change or new experiment gate. The independently packaged apparent-capture executable exposes state/start/inspect/stop/cancel using the same adopted Rust client; standalone installed-provider save/cancel proof passed on Linux and macOS; Mac also exercised same-ID retry and provider-restart recovery.",
+      "docs": ["capture/engine/docs/capture.md", "capture/desktop/docs/linux/linux.md", "capture/agent/docs/agent-video-workflow.md", "capture/agent/control-client/README.md"]
     },
     {
       "id": "capsule",

@@ -213,6 +213,7 @@ version = "0.3.13"
 dependencies = [
  "ab_glyph",
  "anyhow",
+ "apparent-capture",
  "apparent-connect-client",
  "arboard",
  "ashpd 0.11.1",
@@ -254,6 +255,16 @@ dependencies = [
  "wl-clipboard-rs",
  "x11rb",
  "zbus",
+]
+
+[[package]]
+name = "apparent-capture"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "libc",
+ "serde_json",
 ]
 
 [[package]]
