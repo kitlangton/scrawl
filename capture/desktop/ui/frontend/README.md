@@ -728,6 +728,12 @@ remove. A rollback reverts this slice and keeps already saved note events
 readable. Native focus, positioning, Shift input and real output acceptance on
 both platforms remain distinct from synthetic Electron/pipe tests.
 
+Mac Rust test binaries request software rendering for the Notes bridge fixture,
+whose hosted environment may lack an EGL display. Production launches retain
+normal GPU behavior and sandboxing. The fixture still requires the real renderer's
+Ready acknowledgement within eight seconds; software-rendered bridge results do
+not certify native GPU, focus or window behavior.
+
 The shared Rust resolver is `capture::desktop::workflow::electron::resolve() -> Result<Resources>`;
 `Resources { executable, root }` supplies paths only. Surface owners launch their own
 entry and own protocol, child cleanup and native acceptance. Assets remain in

@@ -106,6 +106,12 @@ impl Drop for Profile {
     }
 }
 
+// Hosted Mac bridge tests have no guaranteed EGL display. Keep this preparation
+// confined to test binaries; it does not certify production GPU/window behavior.
+fn renderer_fixture_args(test_binary: bool, macos: bool) -> &'static [&'static str] {
+    if test_binary && macos { &["--disable-gpu"] } else { &[] }
+}
+
 impl Session {
     pub fn start(
         directory: &Path,
@@ -122,6 +128,7 @@ impl Session {
             .mode(0o600)
             .open(directory.join("notes-ui.log"))?;
         let mut command = Command::new(binary);
+        command.args(renderer_fixture_args(cfg!(test), cfg!(target_os = "macos")));
         crate::capture::ui_process::configure_build_identity(&mut command);
         crate::capture::desktop::workflow::error_reporting::configure_child(&mut command);
         // The existing Linux overlay mechanics use XWayland global coordinates and XIDs.
@@ -571,6 +578,17 @@ fn write_message(
 #[cfg(test)]
 mod transport_tests {
     use super::*;
+    #[test]
+    fn software_rendering_is_confined_to_mac_test_binaries_and_preserves_sandbox() {
+        for (test_binary, macos) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut command = Command::new("electron");
+            command.args(renderer_fixture_args(test_binary, macos));
+            let args: Vec<_> = command.get_args().map(|arg| arg.to_str().unwrap()).collect();
+            assert_eq!(args, if test_binary && macos { vec!["--disable-gpu"] } else { vec![] });
+            assert!(!args.iter().any(|arg| arg.contains("sandbox")));
+            assert!(command.get_envs().next().is_none());
+        }
+    }
     #[test]
     fn list_entry_carries_parent_focus_without_accepting_renderer_focus_tokens() {
         let (sender, receiver) = flume::bounded(1);
