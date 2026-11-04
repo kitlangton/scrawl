@@ -159,7 +159,6 @@ END
 fn watch_desktop_tooling() {
     for path in [
         "capture/desktop/scripts/packaging/Apparent.entitlements",
-        "capture/desktop/scripts/support/apparent-restore-clipboard.py",
         "capture/desktop/scripts/support/bench-start.ts",
         "capture/desktop/scripts/packaging/build-mac-preview.sh",
         "capture/desktop/scripts/support/check-ca-roots.sh",
