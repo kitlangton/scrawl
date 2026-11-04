@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,cp,rm,symlink} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,cp,rm,symlink} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -10,6 +11,7 @@ test('isolated git provenance and hostile payloads',async()=>{
  const put=async(p:string,s='fixture')=>{await mkdir(join(root,p,'..'),{recursive:true});await writeFile(join(root,p),s)};
  try{
  for(const p of ['connect/web/package.json','connect/service/package.json','shared/ui/a','shared/analytics/a','shared/assets/a','connect/delivery/a','.github/workflows/connect-delivery.yml','.github/actions/runtime-budget/action.yml','enablement/verification/workflow-budget.ts','public/site/package.json','public/site/bun.lock','public/site/src/a','public/site/scripts/a'])await put(p);
+ await put('connect/delivery/recipient/source.ts');
  await mkdir(join(root,'connect/web/scripts'),{recursive:true});await cp(new URL('../web/scripts/assets.mjs',import.meta.url),join(root,'connect/web/scripts/assets.mjs'));
  for(const p of ['hosted/source-pond-v4.png','hosted/agent-pond-v4.png','hosted/agent-reading-v4.png','fonts/HostGrotesk-Variable.ttf','brand/apparent-wordmark.svg'])await put('public/site/public/assets/'+p);
  await put('worker-artifact/dist/worker.js','export default {}');
@@ -18,6 +20,27 @@ test('isolated git provenance and hostile payloads',async()=>{
  process.env.PUBLIC_POSTHOG_TOKEN='phc_production_public_key';
  await seal(root,dir);delete process.env.PUBLIC_POSTHOG_TOKEN;await validate(root,dir);
  const worker=join(root,'worker-artifact');await seal(root,worker,'connect-worker');await put('connect/web/package.json','browser-only change');await validate(root,worker,'connect-worker');await put('connect/web/package.json');
+ // A historical broader inventory is not reinterpreted as a new baseline.
+ for(const [payload,kind] of [[dir,'connect-browser'],[worker,'connect-worker']]) {
+ const original=await readFile(join(payload,'manifest.json'),'utf8');const broad=JSON.parse(original);
+ broad.inputs['connect/delivery/recipient/source.ts']=createHash('sha256').update('fixture').digest('hex');
+ await writeFile(join(payload,'manifest.json'),JSON.stringify(broad));
+ await assert.rejects(validate(root,payload,kind),/input mismatch/);
+ await writeFile(join(payload,'manifest.json'),original);
+ }
+ for(const edit of ['change','add','delete']) {
+ if(edit==='change')await put('connect/delivery/recipient/source.ts','native change');
+ if(edit==='add')await put('connect/delivery/recipient/added.ts','native addition');
+ if(edit==='delete')await rm(join(root,'connect/delivery/recipient/source.ts'));
+ await validate(root,dir);await validate(root,worker,'connect-worker');
+ execFileSync('git',['add','.'],{cwd:root});execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.invalid','commit','-m',edit+' native delivery'],{cwd:root});
+ await validate(root,dir);await validate(root,worker,'connect-worker');
+ }
+ for(const path of ['connect/delivery/recipient-neighbor/source.ts','connect/delivery/provenance.ts','connect/delivery/select.ts','connect/delivery/artifacts.ts','enablement/verification/workflow-budget.ts']) {
+ await put(path,'changed admission contract');
+ await assert.rejects(validate(root,dir));await assert.rejects(validate(root,worker,'connect-worker'));
+ await rm(join(root,path));if(path.startsWith('enablement/'))await put(path);
+ }
  await assert.rejects(seal(root,dir));
  await put('.github/workflows/unrelated-public.yml');await put('capture/native.rs');await put('public/site/src/unrelated.ts');await put('connect/service/package.json','changed');await validate(root,dir);
  execFileSync('git',['add','.'],{cwd:root});execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.invalid','commit','-m','unrelated Public change'],{cwd:root});await validate(root,dir);
