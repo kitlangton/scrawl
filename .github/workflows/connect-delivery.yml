@@ -21,6 +21,8 @@ jobs:
       PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
       PUBLIC_POSTHOG_ENVIRONMENT: production
     steps:
+      - name: Verification runtime budget and ownership
+        run: echo '10 minute whole-workflow execution budget; agent whose run hits the limit owns optimization and a successful rerun. Do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -71,6 +73,7 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
   runtime-budget:
+    name: Workflow runtime budget
     if: always()
     needs: produce
     runs-on: ubuntu-24.04
