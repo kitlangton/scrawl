@@ -4,6 +4,7 @@ Apparent records screen, voice, cursor, clicks and ink so a human can point, tal
 
 ## Product invariants
 
+- Avoid implicit state machines: name workflow states and allowed transitions explicitly; prevent invalid combinations of flags.
 - Minimize human effort: capture, marking and handoff should be quick. Record known window, element, URL and session context instead of making agents infer it from pixels or vague references.
 - Keep images visual and text semantic. Preserve time-aligned transcript, interactions and absolute paths in bundle text; avoid rasterized captions/card chrome. Cut keyframes on meaningful action or visual change, not speech pauses; retain full frames when cropping. See `capture/engine/docs/keyframes-and-text.md`.
 - Persist user-controlled settings and feature flags in documented, inspectable config (currently `~/.config/apparent/config.json`). Settings writes update it; file edits apply at a documented time. Preserve unrelated keys and secrets. Reconcile OS-owned effects such as permissions and login registration; config values alone do not prove application. Active capture state is runtime state, but must be discoverable before restart/change.
