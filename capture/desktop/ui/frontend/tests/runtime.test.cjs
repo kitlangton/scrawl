@@ -70,12 +70,22 @@ for (const reply of ['not json\n', '{}\n', '{"state":{"phase":"new_phase"}}\n', 
   });
 }
 
-test('absolute deadline bounds an unresponsive server', async (t) => {
-  const f = await fixture(t, null);
-  const before = performance.now();
-  assert.equal((await readRuntimeState(f.home, 50)).status, 'error');
-  assert.ok(performance.now() - before < 1000);
+test('absolute deadline bounds an unresponsive server', { timeout: 2000 }, async (t) => {
+  let received;
+  const request = new Promise(resolve => { received = resolve; });
+  const f = await fixture(t, () => received());
+  // Keep real filesystem/socket I/O, but do not race its admission against a
+  // 50 ms wall-clock budget on a loaded runner. The server never replies.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let settled = false;
+  const pending = readRuntimeState(f.home, 50).then(result => { settled = true; return result; });
+  await request;
   assert.deepEqual(f.requests, ['state\n']);
+  t.mock.timers.tick(49);
+  await new Promise(setImmediate);
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  assert.equal((await pending).status, 'error');
 });
 
 test('capture reference is a bounded ID-only read and exact conditional copy', async (t) => {
