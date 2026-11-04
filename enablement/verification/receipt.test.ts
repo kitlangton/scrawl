@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,6 +37,27 @@ test('source fingerprint covers working bytes, additions and mode changes, not j
   assert.notEqual(snapshot(root).fingerprint, changed.fingerprint)
   writeFileSync(join(root, 'consumer'), 'new consumer')
   assert.notEqual(snapshot(root).fingerprint, changed.fingerprint)
+})
+
+test('snapshot preserves a stale index while detecting working bytes and dirty state', t => {
+  const { root } = fixture(t)
+  const index = join(root, '.git', 'index')
+  const prior = statSync(join(root, 'source'))
+  // Preserve bytes while making Git's cached stat data stale.
+  utimesSync(join(root, 'source'), new Date(prior.atimeMs), new Date(prior.mtimeMs + 2000))
+  const indexBefore = readFileSync(index)
+  const mtimeBefore = statSync(index).mtimeMs
+  const clean = snapshot(root)
+  assert.equal(clean.clean, true)
+  assert.deepEqual(readFileSync(index), indexBefore)
+  assert.equal(statSync(index).mtimeMs, mtimeBefore)
+
+  writeFileSync(join(root, 'source'), 'changed bytes')
+  const dirty = snapshot(root)
+  assert.equal(dirty.clean, false)
+  assert.notEqual(dirty.fingerprint, clean.fingerprint)
+  assert.deepEqual(readFileSync(index), indexBefore)
+  assert.equal(statSync(index).mtimeMs, mtimeBefore)
 })
 
 test('success records timing and identity without leaking command arguments or granting reuse', async t => {

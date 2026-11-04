@@ -9,7 +9,12 @@ import { fileURLToPath } from 'node:url'
 const source = fileURLToPath(import.meta.url)
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 function git(root: string, ...args: string[]): Buffer {
-  const result = spawnSync('git', args, { cwd: root, maxBuffer: 64 * 1024 * 1024 })
+  // Snapshot reads must not refresh the index stat cache: the build verifier
+  // treats the index as an input and protects its own reads the same way.
+  const result = spawnSync('git', args, {
+    cwd: root, maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+  })
   if (result.status !== 0) throw new Error('Cannot establish verification source identity')
   return result.stdout
 }
