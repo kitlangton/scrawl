@@ -16,7 +16,12 @@ test('bridge failure retains only synthetic Notes logs before owned temporary cl
     fs.mkdirSync(fixture, { recursive: true });
     fs.mkdirSync(retained);
     fs.writeFileSync(path.join(fixture, 'notes-ui.log'), 'Notes fixture: ready-probe-start\n');
+    fs.writeFileSync(path.join(fixture, 'notes-ui-sample.txt'), 'owned native stack\n' + 'x'.repeat(70000));
     fs.writeFileSync(path.join(fixture, 'notes.json'), 'synthetic note text must not be retained');
+    const linked = path.join(temporary, 'notes-bridge-linked');
+    fs.mkdirSync(linked);
+    fs.writeFileSync(path.join(linked, 'notes-ui.log'), 'Notes fixture: entry\n');
+    fs.symlinkSync(path.join(fixture, 'notes.json'), path.join(linked, 'notes-ui-sample.txt'));
     const workflow = fs.readFileSync(path.join(__dirname, '../../.github/workflows/verification-platform.yml'), 'utf8');
     const functionBody = workflow.slice(workflow.indexOf('          retain_bridge_logs() {'),
       workflow.indexOf('          TMPDIR="$storage_tmp"'));
@@ -25,8 +30,12 @@ test('bridge failure retains only synthetic Notes logs before owned temporary cl
     assert.equal(result.status, 101, 'retention must preserve the original test failure');
     assert.equal(fs.existsSync(temporary), false);
     const output = path.join(retained, 'apparent-bridge-notes/notes-bridge-synthetic');
-    assert.deepEqual(fs.readdirSync(output), ['notes-ui.log']);
+    assert.deepEqual(fs.readdirSync(output), ['notes-ui-sample.txt', 'notes-ui.log']);
     assert.equal(fs.readFileSync(path.join(output, 'notes-ui.log'), 'utf8'), 'Notes fixture: ready-probe-start\n');
+    const sample = fs.readFileSync(path.join(output, 'notes-ui-sample.txt'), 'utf8');
+    assert.equal(sample.length, 65536);
+    assert.ok(sample.startsWith('owned native stack\n'));
+    assert.deepEqual(fs.readdirSync(path.join(retained, 'apparent-bridge-notes/notes-bridge-linked')), ['notes-ui.log']);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
