@@ -31,16 +31,22 @@ CI is not Apple Silicon runtime proof. An image change must still pass the same
 checks before Mac publication.
 
 Linux delivery triggers only after successful `Linux verification`.
-Web delivery runs directly on main pushes and manual main dispatches. Its own
-credential-free Worker, browser, website, privacy and publication-contract checks
-admit its exact source; Pages consumes its sealed artifact while the hosted job
-rebuilds the Worker from that verified SHA. Linux/Mac application verification
-cannot block web publication. Both publishers still depend on that run's successful
-`verify` job and retain their existing activation gates and publication ordering.
-This first separation does not yet split Public and Connect's composed Pages
-artifact or select web work by changed owner inputs: every main candidate still
-runs the complete web suite. Reverting the web workflow to the Linux follower
-restores the previous routing without changing deployed data or feed identities.
+Web delivery runs on main pushes, manual main dispatches and successful trusted
+Connect producer completions, independently of native application receipts.
+Its full-delta input selector includes Public, Connect browser, shared UI/analytics
+and web delivery inputs; missing history broadens checks. Its terminal gate accepts
+only required/success or explicitly unnecessary/skipped verification. Manual refresh
+forces checks. Native-only changes can report web checks not applicable.
+Public consumes immutable independently verified Connect browser artifacts after
+trusted producer/run/digest, candidate input and current build-configuration checks.
+No compatible retained artifact means fail-closed admission, never a Connect rebuild.
+The Public verifier builds/tests/packages Public and checks composition/browser seams;
+the website publisher consumes its revision-named sealed artifact. The separate
+Worker call invokes Connect's reusable publisher after producer completion; it does
+not depend on Public checks. Existing activation/environment gates remain.
+Pages and Worker publication have independent job locks, respectively
+`website-production-eligible` and `web-delivery-production-eligible`; no caller
+workflow lock nests around the reusable Worker lock.
 Linux packaging compiles the release-profile model test executable on both
 architectures but leaves the full unit suite to that verification receipt.
 Packaged library, media and CPU compatibility checks remain release gates.
@@ -142,30 +148,22 @@ contain the new hook. Server-side policy is separate.
 
 ## Checks and artifact identity
 
-The credential-free verification job runs:
+Public's credential-free verification runs its source build, owner tests,
+allowlisted package, Pages movie HTTP tests, immutable Connect artifact composition
+and artifact-only browser/analytics seam tests. Connect's independently verified
+producer owns service workerd/D1/R2, account/device/sharing browser and consent
+product tests. Shared inputs fan out through complete candidate input validation.
 
-- `python3 -m unittest discover -s scripts/cd -p 'test_*.py'`;
-- the complete hosted TypeScript build and real local workerd/D1/R2 suite;
-- the website's frozen Bun install, public build, allowlisted `dist-apparent`
-  packaging, and six-file public website suite;
-- Connect's browser scenarios against a synthetic credentialed cross-origin API.
-
-Node 22.23.0 and Bun 1.3.10 are pinned. Browser installation uses the version of
-`playwright-core` in the website lockfile. Production is built with
-`VITE_HOSTED_API_ORIGIN=https://hosted.tryapparent.com`. The production artifact
-is saved **before** a separate loopback-configured browser build. The loopback
-package is never uploaded for deployment. Artifact download is scoped to the
-same workflow run and named with its admitted SHA. The website artifact includes
-compiled Pages Functions, provider config and a complete checksum manifest outside
-the served tree; publication uses `--no-bundle` and verifies the downloaded bytes.
-The source-built homepage is never replaced by a committed deployment snapshot.
-Website artifacts are retained for 90 days, with Pages deployment IDs and receipts
-supporting rollback without rebuilding. Production runs are serialized
-without canceling a deployment halfway through. Publishers admit verified main
-ancestors but refuse to replace an equal or newer deployed revision. Pages treats
-such a superseded revision as a successful skip, without uploading or issuing a
-deployment receipt; remote lookup, upload and readback errors still fail the job. A relevant
-later push supplies the replacement; otherwise dispatch the workflow on `main` after reviewing it.
+Node 22.23.0 and Bun 1.3.10 are pinned. Public browser installation and Pages tools
+come from its lockfile. Production uses the existing API origin. Synthetic Public
+analytics output stays in private temporary directories and reuses Connect bytes;
+it is never uploaded. Pages artifacts include the compiled Function, provider
+configuration and complete checksum manifest outside the served tree, retained
+for 90 days. Source-built Public bytes and Connect resource graphs survive
+composition without overlays. The publisher uses `--no-bundle`, verifies downloaded
+bytes and reads back the immutable and canonical deployment. Older/equal revisions
+cannot replace newer published source. Provider readback and remote errors still
+fail; a superseded Pages candidate reports an intentional successful skip.
 
 ## Website activation: Cloudflare Pages
 
@@ -215,7 +213,7 @@ Configure `hosted-production`, limited to `main`, with:
 The existing Worker's `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `BETTER_AUTH_SECRET` and `TOKEN_ENCRYPTION_KEY` stay in Cloudflare. They are never supplied to Actions or rotated by CD. Restrict the token
 as far as Cloudflare permits and review its actual access before activation.
-`hosted_config.py` validates the required public identifiers and writes an ignored
+`connect/delivery/runtime/hosted_config.py` validates the required public identifiers and writes an ignored
 `connect/service/wrangler.cd.json` next to the existing entrypoint. The fixed production
 origins retain hosted API/auth/callback and legacy transition CORS; the UI stays
 on app. The Worker owns `/auth/*`, `/v1/*`, `/s/*` and the four exact recipient assets

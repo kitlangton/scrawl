@@ -1,13 +1,13 @@
 /** Select the entire delta since successful web verification, including deletions. */
 import { execFileSync } from 'node:child_process'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 export function relevant(path: string) {
   return ['public/site/', 'connect/web/', 'connect/delivery/', 'shared/ui/', 'shared/analytics/', '.github/actions/runtime-budget/', 'enablement/verification/web/'].some(prefix => path.startsWith(prefix)) ||
     ['.github/workflows/web-delivery.yml', '.github/workflows/connect-delivery.yml', 'enablement/verification/workflow-budget.ts'].includes(path)
 }
-export function select(paths: string[], known: boolean) {
-  return { required: !known || paths.some(relevant), reason: !known ? 'No successful main web baseline; full web checks required' : paths.some(relevant) ? 'Web or shared consumer inputs changed' : 'No web consumer inputs changed' }
+export function select(paths: string[], known: boolean, force = false) {
+  return { required: force || !known || paths.some(relevant), reason: force ? 'Explicit main refresh requires web checks' : !known ? 'No successful main web baseline; full web checks required' : paths.some(relevant) ? 'Web or shared consumer inputs changed' : 'No web consumer inputs changed' }
 }
 export function gate(required: string, result: string) {
   if (!['true', 'false'].includes(required)) throw Error('Missing web selection')
@@ -30,7 +30,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         known = true; break
       } catch { /* Missing/nonancestor history cannot narrow verification. */ }
     }
-    const selection = select(paths, known)
+    const force = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' || (process.env.GITHUB_EVENT_NAME === 'workflow_run' && JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH!, 'utf8')).workflow_run?.event === 'workflow_dispatch')
+    const selection = select(paths, known, force)
     if (!process.env.GITHUB_OUTPUT) throw Error('Missing selection output')
     appendFileSync(process.env.GITHUB_OUTPUT, `required=${selection.required}\n`)
     console.log(JSON.stringify({ ...selection, paths }))

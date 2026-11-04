@@ -8,11 +8,14 @@ project `tryapparent-website`, the hosted API Worker, or `public/site/wrangler.j
 
 ## Public artifact and accepted design
 
-Build the two owners independently with Bun 1.3.10 and Node 22.23.0, with
-locked dependencies installed in each package. From the repository root:
+Use Bun 1.3.10 and Node 22.23.0. Connect publishes verified immutable browser
+artifacts separately; Public installs only its own dependencies. From the
+repository root, with an Actions-read token and the approved Public build variables:
 
 ```sh
-(cd connect/web && bun install --frozen-lockfile && VITE_HOSTED_API_ORIGIN=https://hosted.tryapparent.com npm run build)
+(cd public/site && bun install --frozen-lockfile)
+node --experimental-strip-types public/site/scripts/connect/artifact.ts .build/connect-browser
+export CONNECT_BROWSER_ARTIFACT="$PWD/.build/connect-browser/dist"
 cd public/site
 APPARENT_PUBLIC_SITE=1 npm run build
 node scripts/site-build/package-apparent.mjs
@@ -77,49 +80,59 @@ ID and digest outside served content.
 
 Set `CONNECT_BROWSER_ARTIFACT` to the downloaded `dist/` directory for
 composition and final verification. Existing local development defaults remain.
-The production workflow still uses its original composite verification until the
-coordinated Worker publisher and browser-consumer transition lands. The input
-selection and verified/not-applicable gate helpers are tested prerequisites;
-their presence alone does not change production admission.
+The production workflow consumes this artifact without installing, building or
+retesting Connect product code. Public checks composition, route/resource integrity,
+privacy metadata and the composed browser/analytics seam. Connect owns service and
+credentialed browser product verification in its producer.
 
 ## Main-branch CD
 
-The workflow starts directly on main pushes or manual main dispatches, independently
-of native application verification. Candidate admission validates canonical-main
-event and checkout identity. Both publishers require the same run's complete web
-verification; failed or skipped web checks cannot admit either publisher. Pages
-consumes the revision-named sealed artifact. The hosted publisher currently
-rebuilds its Worker from that verified SHA before publication. Public and Connect currently share the composed
-Pages artifact and web verification lane; this does not claim separate deployment
-of those two owners yet.
+The workflow starts on main pushes, manual main dispatches and successful trusted
+Connect producer completions. Candidate admission validates canonical-main event,
+workflow, checkout and ancestry identity. The full delta since a successful main
+web run selects Public/Connect browser, shared UI/analytics and delivery inputs,
+including deletions. Unknown history broadens verification. Unrelated native-only
+changes select an explicit not-applicable gate; missing, failed or unexpectedly
+skipped required checks fail closed. Manual main refreshes force checks, including
+producer manual refreshes that change recorded build configuration.
 
-PR verification has no production credentials. The production Pages artifact is
-frozen before the separate synthetic Connect build. The website job downloads only that run's revision-named artifact, checks current
-main, verifies its complete checksum inventory, and deploys without bundling. The
-credential-free job compiles the Pages Function into `_worker.js` and tests that
-compiled worker in workerd before sealing `.build/website/`. This artifact contains
-`dist-apparent/`, `wrangler.jsonc`, and a nonserved `manifest.json` binding every
-file to the admitted commit. Artifacts are retained for 90 days; provider deployment
-IDs and readback receipts identify rollback candidates independently of that TTL.
-The production job copies no Function source or repository library into staging.
-It checks HTML and emitted JS/CSS at both the immutable deployment URL and canonical
-hostname, plus movie identity and Connect privacy headers. The receipt records
-revision, deployment ID and manifest digest. Publication is serialized without
-canceling an in-flight job. The `hosted` job and its activation gate are unchanged.
+The credential-free verifier downloads a compatible successful main Connect browser
+artifact and builds Public. If the matching producer has not finished yet, admission
+fails closed; its successful completion retries the candidate. It never rebuilds
+Connect as a fallback. Shared input changes require a new producer artifact and
+Public composition checks. `CONNECT_BROWSER_ARTIFACT` identifies the route-only
+input; producer SHA/run/artifact/digest receipts remain outside served content.
 
-The synthetic integration build uses `connect/web/dist-test` and writes only
-`public/site/dist/synthetic-composition`. `COMPOSE_SYNTHETIC_ORIGIN` must name its labelled
-loopback API, and `COMPOSE_PUBLIC_INPUT` points at the saved Public package before
-composition. Production composition has no synthetic-origin exception. Never upload
-either test directory. Package fixtures cover the independent owner; the retained
-site browser suite covers the composed routes and #191 sharing interactions.
+Public builds, tests and seals `.build/website/` with the candidate revision,
+compiled Pages Function, provider config and full checksum inventory. The website
+job consumes only that run's revision-named artifact and deploys without bundling;
+`WEBSITE_CD_ENABLED` and the existing environment remain its activation controls.
+The publisher verifies current main, source ordering, immutable/canonical bytes,
+movie ranges and Connect privacy headers. Pages publication uses its own
+`website-production-eligible` job lock without canceling publication.
+
+The independent Worker call uses Connect's reusable workflow and controls, triggered
+by a successful producer completion and `HOSTED_CD_ENABLED`. It has no dependency
+on Public verification. Its publisher owns `hosted-production` and the separate
+`web-delivery-production-eligible` lock. Public's workflow neither installs the
+service nor renders provider bindings, applies migrations or deploys Worker bytes.
+No activation, provider, origin or consent settings change with this separation.
+
+The artifact-only browser smoke intercepts every external transport and exercises
+all six routes, legacy query-preserving aliases, anonymous API loading and browser
+analytics consent. Its enabled-analytics fixture builds Public into private temp
+output and reuses Connect bytes; it never replaces or uploads production output.
+Existing Connect credentialed/browser suites remain owned by the producer.
+`PUBLIC_BUILD_DIR` and `PUBLIC_SSR_DIR` select private build inputs;
+`PUBLIC_PACKAGE_OUTPUT` selects a disjoint package output. Defaults retain the
+normal paths. Packaging rejects output overlap with source inputs.
 
 Configure `website-production` for `main` only, with secret
 `WEBSITE_PAGES_API_TOKEN` (Pages edit for the existing account), then set repository
 variable `WEBSITE_CD_ENABLED=true`. The migration reuses the authorized Pages token
 stored in 1Password Hermes, `Apparent GitLab Cloudflare Pages Deploy 2026-08-21`;
 its provider expiry is **2026-11-19T10:27:38Z**. Renew/replace that scoped token before
-expiry and update the GitHub secret; never print it. The workflow does not need
+expiry and update the GitHub secret; never print it. The Pages publisher does not need
 DNS, OAuth, R2, D1 or SSH credentials. Dispatch `web-delivery.yml` on main to retry.
 A successful merge without a successful website job is not a production delivery.
 
@@ -193,9 +206,9 @@ site.
 
 ## Verification
 
-Run existing public-site tests on the source build and final package, then the Pages
-package/video tests, CD Python tests and Connect's credentialed synthetic browser
-suite. On both the immutable deployment and custom hostname run the recorded-video
+Run existing public-site tests on the source build and final package, Pages
+package/video and Public CD tests, and the artifact-only composed browser and
+analytics smoke. Connect's producer owns its credentialed synthetic browser suite. On both the immutable deployment and custom hostname run the recorded-video
 browser verifier and inspect desktop/mobile screenshots, frog jumps/waves, download
 destinations and all lazy feature frames. Check 206 Content-Range and full movie
 SHA-256. Check noindex/no-store on Connect, preserved legacy query strings, no

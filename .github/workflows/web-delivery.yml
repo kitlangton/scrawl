@@ -1,23 +1,21 @@
-name: Website and Connect — checks & deploy
+name: Website — checks & deploy
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_run:
+    workflows: [Connect producer]
+    branches: [main]
+    types: [completed]
 
 permissions:
   contents: read
   actions: read
 
-# Never cancel a deployment halfway through publication. Every publisher also
-# checks ancestry against the deployed revision while this lock is held.
-concurrency:
-  group: web-delivery-production-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   admit:
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     permissions:
       contents: read
       actions: read
@@ -25,6 +23,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.gate.outputs.sha }}
+      required: ${{ steps.selection.outputs.required }}
     steps:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
@@ -41,13 +40,18 @@ jobs:
           node-version: '22.23.0'
       - id: gate
         run: node --experimental-strip-types enablement/verification/web/candidate.ts
+      - id: selection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types enablement/verification/web/selection.ts
 
   verify:
     needs: admit
-    if: needs.admit.outputs.sha != ''
+    if: needs.admit.outputs.sha != '' && needs.admit.outputs.required == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
+      CONNECT_BROWSER_ARTIFACT: ${{ github.workspace }}/.build/connect-browser/dist
       PUBLIC_POSTHOG_ENABLED: ${{ vars.PUBLIC_POSTHOG_ENABLED || 'true' }}
       PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
       PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
@@ -61,11 +65,10 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ needs.admit.outputs.sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22.23.0'
-          cache: npm
-          cache-dependency-path: connect/service/package-lock.json
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.3.10'
@@ -73,21 +76,16 @@ jobs:
         run: |
           node --experimental-strip-types --test enablement/verification/web/*.test.ts
           python3 -m unittest discover -s public/site/scripts/cd -p 'test_*.py'
-      - name: Verify Worker in local workerd with synthetic accounts
-        working-directory: connect/service
-        run: npm ci && npm test
       - name: Install locked website dependencies and browser
         working-directory: public/site
         run: |
           bun install --frozen-lockfile
           ./node_modules/.bin/playwright-core install --with-deps chromium firefox
           echo "CHROME_PATH=$(node --input-type=module -e 'import {chromium} from "playwright-core"; console.log(chromium.executablePath())')" >> "$GITHUB_ENV"
-      - name: Independently build and verify Connect browser package
-        working-directory: connect/web
+      - name: Consume verified immutable Connect browser artifact
         env:
-          VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
-          CONNECT_EVIDENCE: ${{ runner.temp }}/connect-package-evidence
-        run: bun install --frozen-lockfile && npm test
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types public/site/scripts/connect/artifact.ts .build/connect-browser
       - name: Build and test production website package
         working-directory: public/site
         env:
@@ -100,22 +98,18 @@ jobs:
           node --test scripts/commerce/test-package-text.mjs scripts/site-build/test-expected-canonical-packaging.mjs scripts/browser-proof/test-upstream-link-guard.mjs scripts/browser-proof/test-og-stage-redirect.mjs scripts/browser-proof/test-og-video-stage-browser.mjs
           cp -a dist-apparent "$RUNNER_TEMP/public-artifact"
           node scripts/connect/compose-connect.mjs
-      - name: Verify default-enabled analytics with isolated synthetic transport
-        working-directory: connect/web
-        env:
-          CONNECT_EVIDENCE: ${{ runner.temp }}/analytics-browser-evidence
-        run: npm run test:analytics
       - name: Prepare source-built Pages artifact
         working-directory: public/site
         run: |
-          node --test scripts/connect/test-compose-connect.mjs scripts/pages/test-pages-package.ts scripts/pages/test-pages-video.mjs scripts/pages/test-pages-video-runtime.mjs
+          node --test scripts/connect/artifact*.test.ts scripts/connect/test-compose-connect.mjs scripts/pages/test-pages-package.ts scripts/pages/test-pages-video.mjs scripts/pages/test-pages-video-runtime.mjs
           node scripts/pages/prepare-pages.ts
           COMPOSE_PUBLIC_INPUT="$RUNNER_TEMP/public-artifact" node scripts/site-build/verify-composed.ts
-          PUBLIC_THEME_ARTIFACT=public/site/dist-apparent THEME_SURFACES=public,connect,recipient node ../../shared/ui/test/appearance.mjs
+          PUBLIC_THEME_ARTIFACT=public/site/dist-apparent THEME_SURFACES=public node ../../shared/ui/test/appearance.mjs
           node scripts/pages/prepare-pages-video.mjs
           ./node_modules/.bin/esbuild lib/pages-worker.ts --bundle --platform=browser --format=esm --outfile=dist-apparent/_worker.js
           PAGES_WORKER=dist-apparent/_worker.js node --test scripts/pages/test-pages-video-runtime.mjs
-          SITE_ARTIFACT=dist-apparent node --test scripts/pages/test-public-homepage.ts
+          SITE_ARTIFACT=dist-apparent node --test scripts/pages/test-public-homepage.ts scripts/connect/composed-browser.test.ts
+          SITE_ARTIFACT=dist-apparent node --experimental-strip-types scripts/connect/analytics-smoke.ts
           python3 scripts/cd/publish_pages.py seal ${{ needs.admit.outputs.sha }}
       - uses: actions/upload-artifact@v4
         with:
@@ -125,34 +119,40 @@ jobs:
           # The checked public demos use .local-media; do not drop their assets.
           include-hidden-files: true
           retention-days: 90
-      - name: Verify Connect browser behavior across credentialed origins
-        working-directory: public/site
-        env:
-          APPARENT_PUBLIC_SITE: '1'
-          VITE_HOSTED_API_ORIGIN: http://127.0.0.1:18809
-          HOSTED_TEST_API_ORIGIN: http://127.0.0.1:18809
-          COMPOSE_SYNTHETIC_ORIGIN: http://127.0.0.1:18809
-          COMPOSE_PUBLIC_INPUT: ${{ runner.temp }}/public-artifact
-          SITE_ARTIFACT: dist/synthetic-composition
-          TMPDIR: ${{ runner.temp }}
-          SITE_EVIDENCE: ${{ runner.temp }}/connect-evidence
-        run: |
-          (cd ../../connect/web && CONNECT_BUILD_DIR=dist-test npm run build)
-          node scripts/connect/compose-connect.mjs
-          node scripts/pages/prepare-pages.ts
-          node scripts/site-build/verify-composed.ts
-          npm run test:hosted
       - uses: actions/upload-artifact@v4
-        if: failure()
         with:
-          name: synthetic-connect-evidence
-          path: ${{ runner.temp }}/connect-evidence/
-          retention-days: 3
-          if-no-files-found: ignore
+          name: website-connect-input-${{ needs.admit.outputs.sha }}
+          path: .build/connect-browser-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    if: always() && needs.admit.result != 'skipped'
+    needs: [admit, verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Verification runtime budget and ownership
+        run: echo '10 minute whole-workflow execution budget; agent whose run hits the limit owns optimization and a successful rerun. Do not raise or bypass the limit.'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.admit.outputs.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Require verified or intentionally not applicable web checks
+        env:
+          WEB_REQUIRED: ${{ needs.admit.outputs.required }}
+          WEB_RESULT: ${{ needs.verify.result }}
+        run: node --experimental-strip-types enablement/verification/web/selection.ts gate
 
   website:
-    needs: [admit, verify]
-    if: github.repository == 'tryapparent/apparent' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.WEBSITE_CD_ENABLED == 'true'
+    concurrency:
+      group: website-production-eligible
+      cancel-in-progress: false
+    needs: [admit, verify, release]
+    if: needs.admit.outputs.required == 'true' && github.repository == 'tryapparent/apparent' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.WEBSITE_CD_ENABLED == 'true'
     environment:
       name: website-production
       url: https://app.tryapparent.com
@@ -191,69 +191,16 @@ jobs:
           path: website-receipt.json
           if-no-files-found: ignore
 
-  hosted:
-    needs: [admit, verify]
-    if: github.repository == 'tryapparent/apparent' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.HOSTED_CD_ENABLED == 'true'
-    environment:
-      name: hosted-production
-      url: https://hosted.tryapparent.com
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      HOSTED_WORKER_NAME: ${{ vars.HOSTED_WORKER_NAME }}
-      HOSTED_D1_NAME: ${{ vars.HOSTED_D1_NAME }}
-      HOSTED_D1_ID: ${{ vars.HOSTED_D1_ID }}
-      HOSTED_R2_BUCKET: ${{ vars.HOSTED_R2_BUCKET }}
-      POSTHOG_ENABLED: ${{ vars.POSTHOG_ENABLED || 'true' }}
-      SHARING_ENABLED: ${{ vars.SHARING_ENABLED || 'true' }}
-      WRANGLER_SEND_METRICS: 'false'
-    steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ needs.admit.outputs.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.0'
-          cache: npm
-          cache-dependency-path: connect/service/package-lock.json
-      - run: npm ci && npm run build
-        working-directory: connect/service
-      - name: Render approved resource bindings (never apply migrations)
-        run: python3 public/site/scripts/cd/hosted_config.py
-      - name: Check source ordering under the publication lock
-        id: order
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: python3 public/site/scripts/cd/verify_worker.py --publication-needed "${{ needs.admit.outputs.sha }}"
-      - name: Deploy checked main and read back version and anonymous CORS
-        if: steps.order.outputs.publish == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: |
-          set -euo pipefail
-          export GITHUB_SHA="${{ needs.admit.outputs.sha }}"
-          test -n "$CLOUDFLARE_API_TOKEN"
-          cd connect/service
-          ./node_modules/.bin/wrangler deploy --config wrangler.cd.json --tag "$GITHUB_SHA" --message "GitHub Actions $GITHUB_RUN_ID commit $GITHUB_SHA" --strict --no-autoconfig
-          cd ../..
-          python3 public/site/scripts/cd/verify_worker.py "$GITHUB_SHA" > connect-service-receipt.json
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: hosted-deployment-receipt
-          path: connect-service-receipt.json
-          if-no-files-found: ignore
+  worker:
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && vars.HOSTED_CD_ENABLED == 'true'
+    uses: ./.github/workflows/connect-delivery.yml
+    with:
+      producer-run: ${{ format('{0}', github.event.workflow_run.id) }}
+    secrets: inherit
 
   runtime-budget:
     if: always()
-    needs: [admit, verify, website, hosted]
+    needs: [admit, verify, release, website, worker]
     permissions:
       contents: read
       actions: read

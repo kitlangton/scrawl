@@ -237,13 +237,13 @@ The following exhaustive baseline ledger documents an earlier campaign proposal 
 | `scripts/bench-start.ts` | `capture/desktop/scripts/support/bench-start.ts` | MOVE | desktop |
 | `scripts/build-mac-preview.sh` | `capture/desktop/scripts/packaging/build-mac-preview.sh` | MOVE | desktop |
 | `scripts/cd/connect_redirects.json` | `public/site/scripts/cd/connect_redirects.json` | MOVE | public |
-| `scripts/cd/hosted_config.py` | `public/site/scripts/cd/hosted_config.py` | MOVE | public |
+| `scripts/cd/hosted_config.py` | `connect/delivery/runtime/hosted_config.py` | MOVE | connect |
 | `scripts/cd/publish_pages.py` | `public/site/scripts/cd/publish_pages.py` | MOVE | public |
 | `scripts/cd/publish_site.py` | `public/site/scripts/cd/publish_site.py` | MOVE | public |
-| `scripts/cd/test_hosted_delivery.py` | `public/site/scripts/cd/test_hosted_delivery.py` | MOVE | public |
+| `scripts/cd/test_hosted_delivery.py` | `connect/delivery/runtime/test_hosted_delivery.py` | MOVE | connect |
 | `scripts/cd/test_pages_delivery.py` | `public/site/scripts/cd/test_pages_delivery.py` | MOVE | public |
 | `scripts/cd/test_publish_site.py` | `public/site/scripts/cd/test_publish_site.py` | MOVE | public |
-| `scripts/cd/verify_worker.py` | `public/site/scripts/cd/verify_worker.py` | MOVE | public |
+| `scripts/cd/verify_worker.py` | `connect/delivery/runtime/verify_worker.py` | MOVE | connect |
 | `scripts/check-ca-roots.sh` | `capture/desktop/scripts/support/check-ca-roots.sh` | MOVE | desktop |
 | `scripts/check-permission-panel-dock.sh` | `capture/desktop/scripts/support/check-permission-panel-dock.sh` | MOVE | desktop |
 | `scripts/check-windows-cpu-tiers.ps1` | `scripts/check-windows-cpu-tiers.ps1` | RETAIN | desktop (legacy unsupported code; retained, out of scope) |

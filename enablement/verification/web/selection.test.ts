@@ -16,3 +16,5 @@ test('only intentional skipped checks are not applicable',()=>{
  for(const result of ['success','failure','cancelled',''])assert.throws(()=>gate('false',result))
  assert.throws(()=>gate('','skipped'))
 })
+
+test('manual refresh reruns admission even when source inputs are unchanged',()=>{assert(select([],true,true).required)})
