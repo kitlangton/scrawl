@@ -24,7 +24,8 @@ platform suites. No selection, proof reuse or release-admission rule changes.
 Its process supervisor and cleanup helpers are canonical in
 [enablement/native](../../../../enablement/native/README.md). This Desktop
 entrypoint retains package admission, Storage assertions and private evidence
-handling, and temporarily re-exports the shared helpers for existing consumers.
+handling. Its exports are the Desktop admission and Storage readback contracts;
+shared lifecycle callers import enablement directly.
 Run shared lifecycle contracts with
 `node --test enablement/native/owned-processes.test.ts`.
 Desktop host regressions run with

@@ -140,7 +140,7 @@ async function main() {
   if (failure) throw failure;
 }
 
-module.exports = { admission, stopBackend, stopElectron, supervisor, within, readLocation };
+module.exports = { admission, readLocation };
 if (require.main === module) {
   main().catch(error => { console.error(error); process.exitCode = 1; });
 }

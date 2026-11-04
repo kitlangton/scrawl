@@ -96,13 +96,23 @@ test('timed out electron close terminates owned child and fails', async () => {
     }
 });
 
-test('Desktop compatibility exports resolve to the canonical module', () => {
+test('packaged smoke imports canonical lifecycle and exports only scenario contracts', () => {
   const assert = require('node:assert/strict');
-  const shared = require(helper);
-  const desktop = require('../../capture/desktop/scripts/mac/packaged-smoke.cjs');
-  for (const name of ['within', 'stopElectron', 'supervisor', 'stopBackend']) {
-    assert.equal(desktop[name], shared[name], name);
-  }
+  const fs = require('node:fs');
+  const { createRequire } = require('node:module');
+  const entry = path.resolve(__dirname, '../../capture/desktop/scripts/mac/packaged-smoke.cjs');
+  const entryRequire = createRequire(entry);
+  const imported = [];
+  const localRequire = name => {
+    const value = entryRequire(name);
+    if (name.endsWith('/owned-processes.ts')) imported.push(value);
+    return value;
+  };
+  const loaded = { exports: {} };
+  new Function('require', 'module', '__dirname', fs.readFileSync(entry, 'utf8'))(
+    localRequire, loaded, path.dirname(entry));
+  assert.deepEqual(imported, [require(helper)]);
+  assert.deepEqual(Object.keys(loaded.exports).sort(), ['admission', 'readLocation']);
 });
 
 test('Storage entrypoint loads the canonical lifecycle without running its scenario', () => {

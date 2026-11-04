@@ -29,10 +29,8 @@ Run `node --test enablement/native/owned-processes.test.ts` for the real harmles
 child/descendant and strict cleanup contracts. The packaged smoke regressions
 moved from Desktop; additional contracts exercise the Storage caller import, PID
 file and receipt/refusal semantics. They establish no new Mac GUI acceptance.
-Desktop's packaged smoke
-entrypoint still exports the same helper objects for existing callers. Those
-exports are a transition contract: remove only after supported imports/tests and
-active frozen candidates have migrated, with an owner check. There is one
+The packaged smoke entrypoint exports only its Desktop admission/readback
+contracts; lifecycle consumers import this canonical module. There is one
 implementation, with no compatibility executable or copied helper.
 
 ## Mac verification setup
@@ -119,8 +117,9 @@ Python command named the old paths during the final audit. Historical receipts
 and older checkouts retain their own source/provenance; they do not reserve new
 main entrypoints. No VM, cold evidence or active resource was changed.
 
-The Desktop packaged-smoke helper exports remain the bounded compatibility
-contract described above; all executable VM commands use canonical paths.
+Retiring packaged-smoke lifecycle re-exports requires maintained callers to
+migrate and the active/frozen owner check to clear. All harness imports and
+executable VM commands use canonical paths.
 
 Further Mac/frontend extraction checks exact active hunks with their owners;
 an open PR or pending native acceptance alone does not reserve stable mechanics. Storage/retention UI assertions remain Desktop
