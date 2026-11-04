@@ -213,8 +213,13 @@ func screenshot(_ label: String) throws -> (OwnedWindow, [TextBox]) {
 // never guessed full-screen coordinates, synthetic content or another app's AX tree.
 func locate(_ label: String, in boxes: [TextBox]) throws -> CGRect {
     let matches = try boxes.filter { $0.bounds.midY > 0.86 }.compactMap { item -> CGRect? in
+        if label == "Copy" {
+            // Vision returned Cyrillic Es for the visible C in the retained
+            // explicit-false fixture. Accept only that exact whole-label variant.
+            guard item.text == "Copy" || item.text == "\u{0421}opy" else { return nil }
+            return try item.value.boundingBox(for: item.text.startIndex..<item.text.endIndex)?.boundingBox
+        }
         guard let range = item.text.range(of: label) else { return nil }
-        if label == "Copy" && item.text != "Copy" { return nil }
         return try item.value.boundingBox(for: range)?.boundingBox
     }
     try require(matches.count == 1, "Missing/ambiguous header label \(label): \(matches.count)")
