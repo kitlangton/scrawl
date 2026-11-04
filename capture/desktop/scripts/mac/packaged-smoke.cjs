@@ -73,9 +73,24 @@ done
 async function stopBackend(child) {
   if (!child?.pid) return;
   const exited = () => child.exitCode !== null || child.signalCode !== null;
-  const absent = () => {
+  const absent = async () => {
     try { process.kill(-child.pid, 0); return false; }
-    catch (error) { if (error.code === 'ESRCH') return true; throw error; }
+    catch (error) {
+      if (error.code === 'ESRCH') return true;
+      // XNU may report EPERM for a group whose only remaining members are
+      // zombies. Never infer that from the exited supervisor alone.
+      if (error.code !== 'EPERM' || process.platform !== 'darwin' || !exited()) throw error;
+      const { stdout } = await run('/bin/ps', ['-axo', 'pgid=,stat='],
+        { timeout: 1000, maxBuffer: 1024 * 1024 });
+      assert.ok(stdout.trim(), 'Empty backend process-group snapshot; fixture retained');
+      for (const line of stdout.split('\n').filter(line => line.trim())) {
+        const fields = line.trim().split(/\s+/);
+        assert.ok(fields.length === 2 && /^\d+$/.test(fields[0]) && /^[A-Za-z]/.test(fields[1]),
+          'Invalid backend process-group snapshot; fixture retained');
+        if (Number(fields[0]) === child.pid && !fields[1].startsWith('Z')) throw error;
+      }
+      return true; // No live members; do not signal the old group ID again.
+    }
   };
   if (!exited()) {
     process.kill(-child.pid, 'SIGTERM');
@@ -83,10 +98,11 @@ async function stopBackend(child) {
     // The supervisor ignores TERM; retain its identity until the final signal.
     if (!exited()) process.kill(-child.pid, 'SIGKILL');
   }
-  for (let n = 0; n < 40 && (!exited() || !absent()); n++) {
+  for (let n = 0; n < 40; n++) {
+    if (exited() && await absent()) return;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  assert.ok(exited() && absent(), 'Owned backend group did not exit; fixture retained');
+  assert.ok(exited() && await absent(), 'Owned backend group did not exit; fixture retained');
 }
 
 async function main() {
