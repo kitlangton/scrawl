@@ -84,8 +84,10 @@ class TempPreflightTests(unittest.TestCase):
         self.assertEqual(list(longer.iterdir()), [])
 
     def test_pr_contracts_include_preflight_tests_without_environment_admission(self):
-        with patch.dict(os.environ, TMPDIR='/missing-preflight-fixture'), patch.object(verification.subprocess, 'run') as run:
+        with patch.dict(os.environ, TMPDIR='/missing-preflight-fixture'), patch.object(verification.subprocess, 'run') as run, patch.object(
+                verification, 'run_public_site_build') as public_build:
             verification.run_pr_checks()
+        public_build.assert_called_once_with()  # Unknown history includes Public feedback.
         patterns = [call.args[0][-1] for call in run.call_args_list]
         self.assertEqual(patterns, ['enablement/file-length/check.test.ts', 'shared/ui/scripts/check-theme.py', 'test', 'test_*.py',
                                     'test_*push*.py', 'test_verification.py', 'test_release_gate.py',
