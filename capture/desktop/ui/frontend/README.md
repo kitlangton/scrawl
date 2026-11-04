@@ -278,6 +278,47 @@ compiler; bridge/native changes still require their focused native integration.
 
 ## Checks
 
+For ordinary Settings policy and renderer changes, `npm run test:settings` runs
+the TypeScript production build, unit/contract tests, shipped Electron smoke
+matrix under Xvfb, then the existing real Rust socket roundtrip. The bridge step
+runs the prepared Rust test executable directly; it never invokes Cargo or
+rustc. Its private receipt hashes the executable and all repository Rust/native
+sources, statically embedded resources, build-script inputs, Cargo manifests/lockfile,
+toolchain selectors and `.cargo` config. Loader-linked and adjacent staged shared
+libraries and the loader environment are hashed too. Compiler identity is recorded
+from preparation, not queried or revalidated by the ordinary lane.
+Preparation rejects native inputs changing during compilation. The receipt must
+name the required Storage test, the harness must list it, and the actual run must
+report exactly one executed pass; zero tests and ignored tests fail.
+Any native input, runtime library or executable change rejects the receipt and returns the work
+to native integration. This proves the current TypeScript policy and shipped
+Electron transport against that unchanged native listener; it does not replace
+the conservative `desktop-ui-integration` lane or native gates for bridge or OS
+contract changes.
+
+Prepare the native test executable once when needed, then run the owner-local
+checks without Rust tools available:
+
+```sh
+cd capture/desktop/ui/frontend
+# Explicit native preparation; compilation occurs only in this step.
+npm run prepare:settings-native
+export ELECTRON_OVERRIDE_DIST_PATH=/absolute/path/to/preinstalled/electron/dist
+# Offline runner also needs npm dependencies and the external Electron dist already installed.
+PATH=/usr/bin:/bin npm run test:settings
+```
+
+The preparation writes `~/.cache/apparent/desktop-settings-native.json` with
+mode 0600 (or under `XDG_CACHE_HOME`). On Clanker, run that preparation command
+once through `/home/simon/.local/bin/t3-build -- npm run prepare:settings-native`;
+do not nest the runner. The owner-local check requires Linux, Node 22+, Xvfb,
+installed npm dependencies and a preinstalled Electron distribution outside
+`node_modules`; it does not run `npm ci`, access the network, compile Rust or
+launch the desktop app. The existing `desktop-ui-integration` lane remains the
+conservative route for native/bridge contract changes.
+
+The existing commands below remain useful independently:
+
 Run Electron smoke files sequentially: Electron's lazy binary installation is
 shared by both tests and concurrent first launches can race during extraction.
 

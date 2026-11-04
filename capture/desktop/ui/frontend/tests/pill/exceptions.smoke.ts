@@ -13,7 +13,10 @@ test('sandboxed renderer main-world throws and rejections reach the private sock
   // Darwin's per-user TMPDIR can exceed the Unix socket path limit.
   const home = await mkdtemp(path.join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'exception-'));
   let server: net.Server | undefined;
+  let closeApplication: (() => Promise<void>) | undefined;
   t.after(async () => {
+    // Chromium can still write its profile until the owned application closes.
+    await closeApplication?.();
     if (server?.listening) await new Promise<void>(resolve => server!.close(() => resolve()));
     await rm(home, { recursive: true, force: true });
   });
@@ -38,7 +41,7 @@ test('sandboxed renderer main-world throws and rejections reach the private sock
     args: [path.resolve('electron/main.cjs'), '--no-sandbox'],
     env: { ...process.env, APPARENT_DESKTOP_REPORTING: '1', HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') },
   });
-  t.after(() => application.close());
+  closeApplication = () => application.close();
   const page = await application.firstWindow();
   await page.waitForLoadState('load');
   await expect(page.locator('#root')).not.toBeEmpty();
