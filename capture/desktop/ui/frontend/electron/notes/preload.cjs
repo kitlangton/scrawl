@@ -11,3 +11,9 @@ contextBridge.exposeInMainWorld('captureNotes', Object.freeze({
 
 // Ordered behind this renderer's already-issued save invocations. Not exposed to page JS.
 ipcRenderer.on('notes:finish', () => { void ipcRenderer.invoke('notes:finish-ready'); });
+
+// Two fixed signals only; the renderer cannot submit error text or properties.
+contextBridge.exposeInMainWorld('apparentExceptions', Object.freeze({
+  exception: () => ipcRenderer.send('apparent:unhandled', 'renderer_exception'),
+  rejection: () => ipcRenderer.send('apparent:unhandled', 'renderer_rejection'),
+}));

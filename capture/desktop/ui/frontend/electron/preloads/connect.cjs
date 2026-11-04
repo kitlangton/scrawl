@@ -15,3 +15,8 @@ contextBridge.exposeInMainWorld('apparent', Object.freeze({
   openConnectBrowser: () => ipcRenderer.invoke('apparent:connect-open-browser'),
   navigateSettings: (pane) => ipcRenderer.invoke('apparent:navigate-settings', pane),
 }));
+
+contextBridge.exposeInMainWorld('apparentExceptions', Object.freeze({
+  exception: () => ipcRenderer.send('apparent:unhandled', 'renderer_exception'),
+  rejection: () => ipcRenderer.send('apparent:unhandled', 'renderer_rejection'),
+}));

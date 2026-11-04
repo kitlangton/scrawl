@@ -42,8 +42,10 @@ Desktop startup installs reporting only when packaging supplies the publishable
 `APPARENT_POSTHOG_TOKEN` (`phc_…`) for the intended EU project. Without it, builds
 never send. The fixed destination is `https://eu.i.posthog.com/i/v0/e/`; `curl`
 must be available. CLI commands/tests never install the global reporter.
-Live ingestion, grouping and alerts require bounded synthetic verification in an
-isolated project before release; local HTTP tests are not that proof.
+Live ingestion and grouping require bounded synthetic verification in an isolated
+project or an explicitly approved test target before release; local HTTP tests
+are not that proof. Alert configuration and delivery verification are deferred
+from the initial Electron exception-capture slice; capture does not imply notifications.
 
 Reports include a fixed failure category, version/build, OS/architecture and
 repo-relative source call site. Operation errors also include typed processing
@@ -61,7 +63,17 @@ geolocation are disabled. No session replay/usage tracking. The receiving servic
 still sees the connection's IP address; transport is not anonymous.
 
 Coverage: desktop recording storage/audio/screen/phone startup, capture finalization,
-video export and Rust panics after startup. This is a synthetic call-site frame,
+video export and Rust panics after startup. Electron main uncaught exceptions and
+unhandled rejections, plus renderer error/unhandledrejection events, send fixed
+categories through the same-user Rust socket and the same consent/queue limits.
+Main failures exit with status 1 after at most 600 ms of best-effort enqueue;
+renderer reporting does not cancel the browser event. No exception payload is read.
+Only release Rust launches with an installed reporter enable these hooks; ordinary
+Electron development/test launches and debug Rust builds do not send them.
+Preload initialization exceptions and native renderer crashes remain outside coverage.
+These reports identify the runtime/category, not the original JavaScript stack.
+A missing Rust process, socket contention or exhausted queue can lose the report.
+This does not add native crash, handled fallback or Connect/CLI reporting. This is a synthetic call-site frame,
 **not a full unwound stack or native crash dump**. Segfaults, forced exits,
 Swift/Objective-C crashes and failures before startup are not captured. The queue
 holds at most 16 events, with 20 attempts/minute and a two-second HTTP timeout.

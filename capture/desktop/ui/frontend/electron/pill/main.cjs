@@ -1,3 +1,4 @@
+require('../runtime.cjs').installExceptionReporting(require('electron'));
 'use strict';
 const {app,BrowserWindow,ipcMain,session,screen,nativeTheme,Menu} = require('electron');
 const path=require('node:path');

@@ -40,7 +40,7 @@ class SigningTests(unittest.TestCase):
                 frontend = root / "capture/desktop/ui/frontend"
                 script = root / "capture/desktop/scripts/packaging/stage-settings.py"
                 script.parent.mkdir(parents=True)
-                for name in ("electron/notes/main.cjs", "electron/share/main.cjs",
+                for name in ("electron/runtime.cjs", "electron/notes/main.cjs", "electron/share/main.cjs",
                              "electron/share/preload.cjs", "electron/share/main.cts",
                              "dist/index.html", "dist/settings.html", "dist/pill/index.html",
                              "dist/onboarding.html", "dist/assets/app.js",
@@ -87,6 +87,8 @@ class SigningTests(unittest.TestCase):
                         if failure == "standalone":
                             self.assertFalse(popups.exists())
                         else:
+                            self.assertEqual((popups / "electron/runtime.cjs").read_bytes(),
+                                             (frontend / "electron/runtime.cjs").read_bytes())
                             self.assertTrue((popups / "electron/share/main.cjs").is_file())
                             self.assertFalse((popups / "electron/share/main.cts").exists())
                 self.assertEqual(sum(c[:2] == ["npm", "ci"] for c in calls), 1)

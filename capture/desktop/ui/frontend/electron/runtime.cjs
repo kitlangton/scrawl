@@ -193,3 +193,48 @@ function microphoneEnabled(home, enabled, timeoutMs = 3500) {
   }, 4096, timeoutMs, { status: 'error', code: enabled === undefined ? 'timeout' : 'outcome_unknown' });
 }
 module.exports.microphoneEnabled = microphoneEnabled;
+
+// Only fixed codes cross this boundary. Never inspect Error/rejection payloads.
+function reportException(home, kind) {
+  if (!['main_exception', 'main_rejection', 'renderer_exception', 'renderer_rejection'].includes(kind)) return Promise.resolve();
+  const request = { errorReporting: 'exception', kind,
+    deadline: Number(process.hrtime.bigint() / 1000000n) + 500 };
+  return exchange(home, JSON.stringify(request) + '\n', () => undefined, 1024, 500, undefined);
+}
+
+function installExceptionReporting({ app }, home = require('node:os').homedir()) {
+  if (process.env.APPARENT_DESKTOP_REPORTING !== '1') return;
+  let dying = false;
+  const fatal = (kind) => {
+    if (dying) return;
+    dying = true;
+    // Never continue normal execution after an uncaught main-process failure.
+    const timer = setTimeout(() => app.exit(1), 600);
+    void reportException(home, kind).catch(() => {}).finally(() => {
+      clearTimeout(timer);
+      app.exit(1);
+    });
+  };
+  process.on('uncaughtException', () => fatal('main_exception'));
+  process.on('unhandledRejection', () => fatal('main_rejection'));
+  app.on('web-contents-created', (_event, contents) => {
+    let count = 0;
+    let windowStart = Date.now();
+    contents.on('ipc-message', (event, channel, ...args) => {
+      if (channel !== 'apparent:unhandled' || args.length !== 1 ||
+          !['renderer_exception', 'renderer_rejection'].includes(args[0]) ||
+          event.senderFrame !== contents.mainFrame) return;
+      // Fixed local packaged pages only; no remote page can submit reports.
+      try {
+        const file = require('node:url').fileURLToPath(event.senderFrame.url);
+        const relative = path.relative(path.join(__dirname, '../dist'), file);
+        if (relative.startsWith('..') || path.isAbsolute(relative)) return;
+      } catch { return; }
+      if (Date.now() - windowStart >= 60000) { count = 0; windowStart = Date.now(); }
+      if (count++ >= 20) return;
+      void reportException(home, args[0]).catch(() => {});
+    });
+  });
+}
+module.exports.reportException = reportException;
+module.exports.installExceptionReporting = installExceptionReporting;

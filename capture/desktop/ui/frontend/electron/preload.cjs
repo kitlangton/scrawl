@@ -35,3 +35,9 @@ contextBridge.exposeInMainWorld('apparent', Object.freeze({
   navigateSettings: (pane) => ipcRenderer.invoke('apparent:navigate-settings', pane),
   showCaptureFolder: () => ipcRenderer.invoke('apparent:show-capture-folder'),
 }));
+
+// Two fixed signals only; the renderer cannot submit error text or properties.
+contextBridge.exposeInMainWorld('apparentExceptions', Object.freeze({
+  exception: () => ipcRenderer.send('apparent:unhandled', 'renderer_exception'),
+  rejection: () => ipcRenderer.send('apparent:unhandled', 'renderer_rejection'),
+}));

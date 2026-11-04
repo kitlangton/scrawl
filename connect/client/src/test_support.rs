@@ -703,6 +703,7 @@ struct State {
     // Optional synthetic registry: public keys and opaque storage, never crypto.
     encryption: Option<EncryptionState>,
     format: Option<String>,
+    delivery: Option<String>,
     request_routes: Vec<String>,
     list_routes: Vec<String>,
     progress: Vec<String>,
@@ -1012,6 +1013,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
             json!({"error":{"code":"expired"}}).to_string().into_bytes()
         } else if method == "POST" && parts.len() == 4 {
             let reservation: Value = serde_json::from_slice(body).unwrap();
+            s.delivery = reservation.get("delivery").and_then(Value::as_str).map(str::to_owned);
             s.format = reservation
                 .get("format")
                 .and_then(Value::as_str)
@@ -1027,7 +1029,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                 .iter()
                 .map(|v| serde_json::from_value(v.clone()).unwrap())
                 .collect();
-            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"format":s.format})
+            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"format":s.format,"delivery":s.delivery,"evidenceReady":s.delivery.is_some() && s.files.iter().filter(|f| f.path.starts_with("evidence/")).all(|f| s.data.contains_key(&f.path))})
                 .to_string()
                 .into_bytes()
         } else if parts.get(4) == Some(&"share") && parts.get(5) == Some(&"progress") {
@@ -1042,7 +1044,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
         } else if parts.get(4) == Some(&"files") {
             let path = parts[5..].join("/");
             if method == "PUT" {
-                if s.mode == "fail-file" {
+                if s.mode == "fail-file" || (s.mode == "fail-media" && path.starts_with("media/")) {
                     status = 503;
                     let _ = write!(
                         stream,
@@ -1050,7 +1052,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                     );
                     return;
                 }
-                if path == "audio.wav" || (s.encryption.is_some() && path == "envelope.json") {
+                if path == "audio.wav" || (s.encryption.is_some() && (path == "envelope.json" || path == "media/envelope.json")) {
                     if let Some(gate) = s.media_gate.clone() {
                         drop(s);
                         gate.started.store(true, Ordering::SeqCst);
@@ -1071,6 +1073,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                     assert!(
                         path == "envelope.json"
                             || (path.starts_with("sealed/part-") && path.ends_with(".age"))
+                            || ["evidence/", "media/"].iter().any(|group| path.strip_prefix(group).is_some_and(|p| p == "envelope.json" || (p.starts_with("sealed/part-") && p.ends_with(".age"))))
                     );
                 }
                 s.data.insert(path, body.to_vec());
@@ -1087,13 +1090,13 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
             }
         } else if parts.get(4) == Some(&"complete") {
             s.ready = true;
-            json!({"id":id,"status":"ready","format":s.format})
+            json!({"id":id,"status":"ready","format":s.format,"delivery":s.delivery,"evidenceReady":s.delivery.is_some() && s.files.iter().filter(|f| f.path.starts_with("evidence/")).all(|f| s.data.contains_key(&f.path))})
                 .to_string()
                 .into_bytes()
         } else {
             let mut files = s.files.clone();
             files.reverse();
-            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"files":files,"format":s.format})
+            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"files":files,"format":s.format,"delivery":s.delivery,"evidenceReady":s.delivery.is_some() && s.files.iter().filter(|f| f.path.starts_with("evidence/")).all(|f| s.data.contains_key(&f.path))})
                 .to_string()
                 .into_bytes()
         }

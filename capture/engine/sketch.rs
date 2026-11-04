@@ -876,7 +876,10 @@ fn summary_markdown_formatted(
         ));
     }
     if bundle.source.as_deref() != Some("iphone") && !bundle.context.get("microphoneCapture").is_some_and(|v| v == "off") {
-        if !bundle.has_microphone_samples(bundle_dir) {
+        // Evidence snapshots deliberately defer declared audio; its absence is
+        // not a microphone failure on the recording computer.
+        let deferred_audio = bundle.audio.is_some() && bundle_dir.join(".evidence-only.json").is_file();
+        if !bundle.has_microphone_samples(bundle_dir) && !deferred_audio {
             out.push_str("No microphone audio was saved. Check the microphone and try again.\n");
         } else if bundle.transcript.text.trim().is_empty()
             && (bundle.transcript.missing.is_some() || bundle.transcript.source == "none")
@@ -2242,6 +2245,14 @@ mod tests {
         let summary = summary_markdown(&silent, &audio_dir);
         assert!(summary.contains("No transcript: "));
         assert!(summary.contains("(en_US) was still downloading. The audio is saved"));
+
+        let wav = std::fs::read(audio_dir.join("audio.wav")).unwrap();
+        std::fs::remove_file(audio_dir.join("audio.wav")).unwrap();
+        std::fs::write(audio_dir.join(".evidence-only.json"), b"{}").unwrap();
+        assert!(!summary_markdown(&silent, &audio_dir).contains("No microphone audio was saved"));
+        std::fs::remove_file(audio_dir.join(".evidence-only.json")).unwrap();
+        assert!(summary_markdown(&silent, &audio_dir).contains("No microphone audio was saved"));
+        std::fs::write(audio_dir.join("audio.wav"), wav).unwrap();
 
         // The handoff itself must distinguish absent audio from saved audio with no words.
         let mut no_audio = silent.clone();

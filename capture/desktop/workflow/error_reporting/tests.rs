@@ -2,6 +2,18 @@
 use super::*;
 use std::net::{TcpListener, TcpStream};
 
+#[test]
+fn electron_exception_categories_are_unhandled_and_content_free() {
+    for failure in [Failure::ElectronMainException, Failure::ElectronMainRejection,
+        Failure::ElectronRendererException, Failure::ElectronRendererRejection] {
+        let report = Report::new(failure, std::panic::Location::caller(), Consent { generation: "private".into() });
+        let payload = report.payload("phc_synthetic").unwrap();
+        assert_eq!(payload["properties"]["$exception_list"][0]["mechanism"]["handled"], false);
+        assert_eq!(payload["properties"]["operation"], failure.code());
+        assert!(!payload.to_string().contains("private"));
+    }
+}
+
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {

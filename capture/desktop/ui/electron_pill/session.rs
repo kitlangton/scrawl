@@ -81,6 +81,7 @@ impl Session {
         let (app, runtime) =
             assets().ok_or_else(|| anyhow::anyhow!("Packaged recording pill unavailable"))?;
         let mut launch = Command::new(&runtime);
+        crate::capture::desktop::workflow::error_reporting::configure_child(&mut launch);
         // Ozone initializes before main.cjs runs. Appending this switch in JS
         // leaves current Electron on Wayland, where our X11 shape/ID contract
         // is invalid. Select XWayland at process startup instead.

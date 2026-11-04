@@ -14,3 +14,9 @@ contextBridge.exposeInMainWorld('apparentPill', Object.freeze({
     return () => ipcRenderer.removeListener('pill:state',listener);
   },
 }));
+
+// Two fixed signals only; the renderer cannot submit error text or properties.
+contextBridge.exposeInMainWorld('apparentExceptions', Object.freeze({
+  exception: () => ipcRenderer.send('apparent:unhandled', 'renderer_exception'),
+  rejection: () => ipcRenderer.send('apparent:unhandled', 'renderer_rejection'),
+}));

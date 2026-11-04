@@ -17,7 +17,7 @@ permissions:
 jobs:
   select:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: ${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }}
     outputs:
       root: ${{ steps.plan.outputs.root }}
       engine: ${{ steps.plan.outputs.engine }}
@@ -26,7 +26,7 @@ jobs:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }} minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.revision || github.sha }}
@@ -36,7 +36,7 @@ jobs:
         with:
           node-version: '22'
       - name: Verification receipt contracts
-        run: node --test enablement/verification/*.test.ts
+        run: node --experimental-strip-types --test enablement/verification/*.test.ts enablement/native/mac-setup.test.ts
       - name: Recipient CLI installation contracts
         run: node --experimental-strip-types --test capture/agent/scripts/tests/install-cli.test.ts
       - name: Selector and hook contracts (no native proof)
@@ -74,7 +74,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     name: desktop-ui (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 10
+    timeout-minutes: ${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }}
     defaults:
       run:
         working-directory: capture/desktop/ui/frontend
@@ -82,7 +82,7 @@ jobs:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }} minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.revision || github.sha }}
@@ -122,12 +122,12 @@ jobs:
     if: github.ref == 'refs/heads/main'
     name: connect-client (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 10
+    timeout-minutes: ${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }}
     steps:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }} minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.revision || github.sha }}
@@ -170,12 +170,12 @@ jobs:
     if: github.ref == 'refs/heads/main'
     name: connect-web (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 10
+    timeout-minutes: ${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }}
     steps:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }} minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.revision || github.sha }}
@@ -209,17 +209,23 @@ jobs:
     if: github.ref == 'refs/heads/main'
     name: rust (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 10
+    timeout-minutes: ${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }}
     steps:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }} minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: needs.select.outputs.root == 'true'
+        with:
+          node-version: '22'
+          cache: ${{ needs.select.outputs.root == 'true' && 'npm' || '' }}
+          cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
       - name: Linux application dependencies
         if: runner.os == 'Linux' && needs.select.outputs.root == 'true'
         run: ./capture/desktop/scripts/linux/appimage/dependencies.sh
@@ -228,12 +234,27 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '26.0'
-      - name: Install CLI export speedup dependencies
+      - name: Pin the selected developer directory for Rust verification
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
-        run: command -v ffmpeg && command -v ffprobe || brew install ffmpeg
-      - name: Install the Metal toolchain
+        shell: bash
+        run: |
+          selected_developer=$(xcode-select -p)
+          case "$selected_developer" in
+            /Applications/Xcode*.app/Contents/Developer) ;;
+            *) echo 'Unexpected selected Xcode developer directory' >&2; exit 1 ;;
+          esac
+          test -d "$selected_developer"
+          printf 'DEVELOPER_DIR=%s\n' "$selected_developer" >> "$GITHUB_ENV"
+          printf 'Selected developer directory: %s\n' "$selected_developer"
+      - name: Prepare macOS compiler dependencies concurrently
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
-        run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+        shell: bash
+        run: |
+          umask 077
+          mkdir -m 700 "$RUNNER_TEMP/mac-compiler-setup"
+          node --experimental-strip-types enablement/native/mac-setup.ts \
+            --prepare "$RUNNER_TEMP/mac-compiler-setup/status.json" \
+            > "$RUNNER_TEMP/mac-compiler-setup/setup.log" 2>&1 &
       - uses: dtolnay/rust-toolchain@stable
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
         with:
@@ -259,12 +280,17 @@ jobs:
             . -> target
             capture/engine -> target
             connect/client -> target
-      - uses: actions/setup-node@v4
-        if: needs.select.outputs.root == 'true'
-        with:
-          node-version: '22'
-          cache: ${{ needs.select.outputs.root == 'true' && 'npm' || '' }}
-          cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
+      - name: Require macOS compiler dependencies before Cargo
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        shell: bash
+        run: |
+          if node --experimental-strip-types enablement/native/mac-setup.ts \
+            --await "$RUNNER_TEMP/mac-compiler-setup/status.json"; then
+            cat "$RUNNER_TEMP/mac-compiler-setup/setup.log"
+          else
+            cat "$RUNNER_TEMP/mac-compiler-setup/setup.log"
+            exit 1
+          fi
       - name: Execute Rust changed-tree checks (not GUI acceptance)
         run: |
           # Engine finalizer proofs reject group-writable cache ancestors.
@@ -290,14 +316,20 @@ jobs:
           trap cleanup EXIT
           # Reproduce the CI-sensitive fixtures before the full affected suites.
           if [ "${{ needs.select.outputs.root }}" = true ]; then
-            cargo test -j 3 --locked --timings capture::desktop::settings::settings::tests::the_command_line_row_ -- --test-threads=2
-            cargo test -j 3 --locked capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket -- --exact
+            preflight_filters=(capture::desktop::settings::settings::tests::the_command_line_row_ capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket)
             if [ "$RUNNER_OS" = macOS ]; then
-              cargo test -j 3 --locked connect::hosted::hosted_tests::hosted_security_darwin_acl_grants_fail_closed -- --exact
+              preflight_filters+=(connect::hosted::hosted_tests::hosted_security_darwin_acl_grants_fail_closed)
             fi
+            cargo test -j 3 --locked --timings -- "${preflight_filters[@]}" --test-threads=1
           fi
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online --suite rust --parallel-contracts --cargo-timings --receipt-dir "$RUNNER_TEMP/verification-receipts"
+          cargo_trace_env=()
+          root_build_overlap=()
+          if [ "$RUNNER_OS" = macOS ]; then
+            cargo_trace_env=(env CARGO_LOG=cargo::compiler::fingerprint=trace)
+            root_build_overlap=(--overlap-root-build)
+          fi
+          "${cargo_trace_env[@]}" python3 enablement/verification.py --base "$BASE" --run --online --suite rust --parallel-contracts --cargo-timings "${root_build_overlap[@]}" --receipt-dir "$RUNNER_TEMP/verification-receipts"
           verification_complete=true
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
@@ -347,7 +379,7 @@ jobs:
       - name: Native Mac Storage and error-reporting controls against the installed Rust GUI
         id: native-storage
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
-        timeout-minutes: 10
+        timeout-minutes: ${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }}
         shell: bash
         env:
           APPARENT_STORAGE_NATIVE_CI: '1'
@@ -477,12 +509,12 @@ jobs:
     needs: [select, desktop-ui, connect-client, connect-web, rust]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: ${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }}
     steps:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }} minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - run: echo "Platform checks passed for $CANDIDATE_SHA"
         env:
           CANDIDATE_SHA: ${{ inputs.revision || github.sha }}

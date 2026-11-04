@@ -117,6 +117,15 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  assert.equal(await page.evaluate(()=>window.open('https://example.com')),null);
  assert.equal(await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().length),1);
  // An oversized upload offers an explicit local fallback without moving the leading row.
+ // Reload can paint with the fallback font before Host Grotesk is ready,
+ // and native bounds follow renderer measurement asynchronously. Capture the
+ // baseline only once both have caught up; keep the exact invariant below.
+ await page.evaluate(()=>document.fonts.ready);
+ await expect.poll(async()=>{
+  const width=await page.locator('main').evaluate(el=>Math.ceil(el.getBoundingClientRect().width));
+  const bounds=await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getBounds());
+  return bounds.width===width;
+ }).toBe(true);
  const anchor=await application.evaluate(({BrowserWindow,screen})=>{const w=BrowserWindow.getAllWindows()[0],b=w.getBounds(),a=screen.getDisplayMatching(b).workArea;w.setBounds({...b,y:a.y+a.height-b.height-8});return w.getBounds();});
  const completed={...base,revision:6,phase:'completed',label:'Saved',draggable:false,actions:[
  {id:'paste',label:'Paste',enabled:true,selected:false,primary:true},
@@ -152,6 +161,7 @@ test('failed renderer assets never report readiness and the parent can retain na
  await fs.mkdir(path.join(root,'electron'),{recursive:true});await fs.mkdir(path.join(root,'dist/pill'),{recursive:true});
  await fs.cp(path.resolve(__dirname,'../../electron/pill'),path.join(root,'electron/pill'),{recursive:true});
  await fs.copyFile(path.resolve(__dirname,'../../dist/pill/index.html'),path.join(root,'dist/pill/index.html'));
+ await fs.copyFile(path.resolve(__dirname,'../../electron/runtime.cjs'),path.join(root,'electron/runtime.cjs'));
  // The production HTML references deliberately absent production chunks.
  await fs.writeFile(path.join(root,'host.cjs'),"Object.defineProperty(process,'stdin',{value:new(require('node:stream').PassThrough)()});require('./electron/pill/main.cjs');\n");
  const application=await electron.launch({args:[path.join(root,'host.cjs'),'--no-sandbox'],env:{...process.env,HOME:root,XDG_CONFIG_HOME:path.join(root,'config')}});

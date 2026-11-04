@@ -34,7 +34,7 @@ class SelectionTests(unittest.TestCase):
             if suite != 'all': args += ['--suite', suite]
             with self.subTest(suite=suite), patch.object(verification.sys, 'argv', args), patch.object(
                     verification, 'plan', return_value=verification.select(['build.rs', 'connect/web/package.json'])), patch.object(
-                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout='test result: ok. 1 passed; 0 failed\n')) as run:
                 verification.main()
                 commands = [call.args[0] for call in run.call_args_list]
                 self.assertEqual(any('cargo' in command for command in commands), cargo)
@@ -44,7 +44,8 @@ class SelectionTests(unittest.TestCase):
 
     def test_receipt_wrapper_preserves_explicit_suite(self):
         args = ['verification.py', '--base', 'unknown', '--run', '--online',
-                '--suite', 'rust', '--parallel-contracts', '--cargo-timings', '--receipt-dir', '/external/receipts']
+                '--suite', 'rust', '--parallel-contracts', '--overlap-root-build',
+                '--cargo-timings', '--receipt-dir', '/external/receipts']
         with patch.object(verification.sys, 'argv', args), patch.object(verification.subprocess, 'run') as run:
             verification.main()
             command = run.call_args.args[0]
@@ -52,7 +53,19 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(command[command.index('--suite') + 1], 'platform-rust')
             self.assertIn('--online', command)
             self.assertIn('--parallel-contracts', command[command.index('--') + 1:])
+            self.assertIn('--overlap-root-build', command[command.index('--') + 1:])
             self.assertIn('--cargo-timings', command[command.index('--') + 1:])
+
+    def test_overlap_root_build_is_explicit_and_forwarded(self):
+        for enabled in (False, True):
+            args = ['verification.py', '--base', 'unknown', '--run']
+            if enabled:
+                args.append('--overlap-root-build')
+            with self.subTest(enabled=enabled), patch.object(verification.sys, 'argv', args), patch.object(
+                    verification, 'plan', return_value={'root': True, 'engine': False, 'browser': False, 'focused': []}), patch.object(
+                    verification, 'run_checks') as run:
+                verification.main()
+                self.assertEqual(run.call_args.kwargs['overlap_root_build'], enabled)
 
     def test_parallel_contracts_overlap_selected_checks_and_join_both_results(self):
         real_spawn = subprocess.Popen
@@ -73,7 +86,7 @@ class SelectionTests(unittest.TestCase):
                     if outcome == 'spawn-signal':
                         os.kill(os.getpid(), signal.SIGTERM)
                     return process
-                def selected(selection, offline, cargo_timings):
+                def selected(selection, offline, cargo_timings, overlap_root_build=False):
                     self.assertFalse(offline)
                     self.assertEqual(selection, {'root': True, 'engine': False})
                     self.assertTrue(select.select([ready_read], [], [], 5)[0], 'contracts did not start before selected checks')
@@ -125,6 +138,8 @@ class SelectionTests(unittest.TestCase):
             verification.run_selected_checks(selection, offline=False, cargo_timings=True)
         commands = [call.args[0] for call in run.call_args_list if 'cargo' in call.args[0]]
         self.assertEqual(len(commands), 4)
+        self.assertEqual([next(c for c in command if c in ('build', 'test')) for command in commands],
+                         ['test', 'build', 'build', 'test'])
         for command in commands:
             self.assertEqual(command.count('--timings'), 1)
             self.assertIn('--locked', command)
@@ -132,6 +147,308 @@ class SelectionTests(unittest.TestCase):
             if 'test' in command:
                 self.assertLess(command.index('--timings'), command.index('--'))
                 self.assertIn('--test-threads=2', command)
+
+    def test_overlap_root_build_opt_in_and_focused_remains_sequential(self):
+        for focused in ([], ['capture::']):
+            with self.subTest(focused=focused), patch.object(verification, 'overlap_cargo_test_and_build') as overlap, patch.object(
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout='test result: ok. 1 passed; 0 failed\n')) as run:
+                verification.run_selected_checks({'root': True, 'engine': False, 'focused': focused},
+                                                  overlap_root_build=True)
+                self.assertEqual(overlap.called, not focused)
+                if not focused:
+                    test_command, build_command = overlap.call_args.args
+                    self.assertIn('--message-format=json-render-diagnostics', test_command)
+                    self.assertEqual(test_command[-2:], ['--', '--test-threads=2'])
+                    self.assertIn('build', build_command)
+                else:
+                    self.assertNotIn('--message-format=json-render-diagnostics', run.call_args.args[0])
+
+    def test_overlap_root_build_uses_event_gates_and_cleans_processes(self):
+        # The harness asserts the build has not begun before the event, then
+        # waits on a build-owned marker to prove the two workloads overlap.
+        real_spawn = subprocess.Popen
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / 'build-started'
+            build_started = Path(tmp) / 'build-started'
+            build_done = Path(tmp) / 'build-done'
+            test_script = (
+                'import json,os,sys,time; '
+                'print(json.dumps({"reason":"compiler-artifact"}),flush=True); '
+                'print(json.dumps({"reason":"compiler-message","message":{"rendered":"warning: visible\\n"}}),flush=True); '
+                'assert not os.path.exists(sys.argv[2]); '
+                'print(json.dumps({"reason":"build-finished","success":True}),flush=True); '
+                'deadline=time.monotonic()+5; '
+                'exec("while not os.path.exists(sys.argv[3]):\\n if time.monotonic()>deadline: raise SystemExit(4)\\n time.sleep(.01)")')
+            build_script = 'import sys; open(sys.argv[1],"w").close(); open(sys.argv[2],"w").close()'
+            output = []
+            with patch.object(verification.subprocess, 'Popen', side_effect=lambda cmd, **kw: real_spawn(cmd, **kw)), patch.object(
+                    sys, 'stdout', type('Out', (), {'write': lambda _s, x: output.append(x), 'flush': lambda _s: None})()):
+                verification.overlap_cargo_test_and_build(
+                    [sys.executable, '-c', test_script, str(marker), str(build_started), str(build_done)],
+                    [sys.executable, '-c', build_script, str(build_started), str(build_done)])
+            self.assertTrue(marker.exists())
+            self.assertTrue(build_started.exists())
+            self.assertTrue(build_done.exists())
+            self.assertIn('warning: visible', ''.join(output))
+            self.assertNotIn('compiler-artifact', ''.join(output))
+
+    def test_overlap_root_build_fails_closed_on_false_or_missing_event(self):
+        for output in ('{"reason":"build-finished","success":false}\n',
+                       '{"reason":"compiler-artifact"}\n', 'plain output\n'):
+            script = 'import sys; sys.stdout.write(sys.argv[1]); sys.stdout.flush()'
+            build = [sys.executable, '-c', 'raise SystemExit(9)']
+            with self.subTest(output=output):
+                with self.assertRaises(RuntimeError), patch.object(verification.subprocess, 'Popen', wraps=subprocess.Popen) as spawn:
+                    verification.overlap_cargo_test_and_build([sys.executable, '-c', script, output], build)
+                self.assertEqual(spawn.call_count, 1)
+
+    def test_overlap_root_build_reaps_test_and_build_failures(self):
+        real_spawn = subprocess.Popen
+        gate = '{"reason":"build-finished","success":true}\n'
+        for mode in ('test-failure', 'build-failure'):
+            processes = []
+            def spawn(command, **kwargs):
+                process = real_spawn(command, **kwargs)
+                processes.append(process)
+                return process
+            if mode == 'test-failure':
+                started = Path(tempfile.gettempdir()) / f'overlap-started-{os.getpid()}'
+                try: started.unlink()
+                except FileNotFoundError: pass
+                self.addCleanup(started.unlink, missing_ok=True)
+                test = [sys.executable, '-c',
+                        'import os,sys,time; print(sys.argv[1],flush=True); deadline=time.monotonic()+5; '
+                        'exec("while not os.path.exists(sys.argv[2]):\\n if time.monotonic()>deadline: raise SystemExit(5)\\n time.sleep(.01)"); '
+                        'print("test failed",flush=True); raise SystemExit(8)', gate, str(started)]
+                build = [sys.executable, '-c', 'import sys; open(sys.argv[1],"w").close()', str(started)]
+            else:
+                test = [sys.executable, '-c', 'import sys,time; print(sys.argv[1],flush=True); time.sleep(10)', gate]
+                build = [sys.executable, '-c', 'raise SystemExit(9)']
+            with self.subTest(mode=mode), patch.object(verification.subprocess, 'Popen', side_effect=spawn):
+                with self.assertRaises(subprocess.CalledProcessError) as failure:
+                    verification.overlap_cargo_test_and_build(test, build)
+            self.assertEqual(failure.exception.returncode, 8 if mode == 'test-failure' else 9)
+            self.assertTrue(processes)
+            self.assertTrue(all(process.poll() is not None for process in processes))
+
+    def test_overlap_root_build_spawn_failure_and_spawn_signal_restore_handlers(self):
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        with patch.object(verification.subprocess, 'Popen', side_effect=OSError('spawn failed')):
+            with self.assertRaisesRegex(OSError, 'spawn failed'):
+                verification.overlap_cargo_test_and_build(['never'], ['never'])
+        self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+        real_spawn = subprocess.Popen
+        processes = []
+        def interrupted_spawn(command, **kwargs):
+            process = real_spawn(command, **kwargs)
+            processes.append(process)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return process
+        with patch.object(verification.subprocess, 'Popen', side_effect=interrupted_spawn):
+            with self.assertRaises(SystemExit) as error:
+                verification.overlap_cargo_test_and_build([sys.executable, '-c', 'import time; time.sleep(10)'], ['never'])
+        self.assertEqual(error.exception.code, 128 + signal.SIGTERM)
+        self.assertTrue(all(process.poll() is not None for process in processes))
+        self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+
+    def test_darwin_eperm_cleanup_accepts_only_verified_dead_groups(self):
+        real_spawn = subprocess.Popen
+        process = real_spawn([sys.executable, '-c', 'raise SystemExit(8)'], start_new_session=True)
+        self.assertEqual(process.wait(), 8)
+        with patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                verification.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), patch.object(
+                verification.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                    ['/bin/ps'], 0, stdout=f'{process.pid} Z\n')) as ps:
+            verification.cleanup_owned_processes([process])
+        ps.assert_called_once_with(['/bin/ps', '-axo', 'pgid=,stat='], check=True,
+                                  capture_output=True, text=True, timeout=5)
+        self.assertIsNotNone(process.poll())
+
+    def test_darwin_eperm_cleanup_rejects_live_or_untrustworthy_snapshots_and_continues(self):
+        real_spawn = subprocess.Popen
+        processes = []
+        for _ in range(2):
+            child = real_spawn([sys.executable, '-c', 'raise SystemExit(8)'], start_new_session=True)
+            self.assertEqual(child.wait(), 8)
+            processes.append(child)
+        for snapshot in (f'{processes[0].pid} S\n', 'not-a-process-row\n'):
+            calls = []
+            def deny(pgid, sig):
+                calls.append(pgid)
+                raise PermissionError(1, 'Operation not permitted')
+            with self.subTest(snapshot=snapshot), patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                    verification.os, 'killpg', side_effect=deny), patch.object(
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        ['/bin/ps'], 0, stdout=snapshot)):
+                with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                    verification.cleanup_owned_processes(processes)
+                self.assertEqual(calls, [p.pid for p in processes])
+
+        calls = []
+        def deny_all(pgid, sig):
+            calls.append(pgid)
+            raise PermissionError(1, 'Operation not permitted')
+        with patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                verification.os, 'killpg', side_effect=deny_all), patch.object(
+                verification.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, ['/bin/ps'])):
+            with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                verification.cleanup_owned_processes(processes)
+        self.assertEqual(calls, [p.pid for p in processes])
+        self.assertTrue(all(p.poll() == 8 for p in processes))
+
+        live = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)
+        try:
+            with patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                    verification.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')):
+                with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                    verification.cleanup_owned_processes([live])
+            self.assertIsNotNone(live.poll(), 'direct child must be killed and reaped after group cleanup fails')
+        finally:
+            if live.poll() is None:
+                live.kill()
+                live.wait()
+
+    def test_darwin_eperm_cleanup_preserves_primary_error_and_attaches_cleanup_failure(self):
+        real_spawn = subprocess.Popen
+        process = real_spawn([sys.executable, '-c', 'raise SystemExit(8)'], start_new_session=True)
+        self.assertEqual(process.wait(), 8)
+        primary = subprocess.CalledProcessError(8, process.args)
+        with patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                verification.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), patch.object(
+                verification.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                    ['/bin/ps'], 0, stdout=f'{process.pid} S\n')):
+            try:
+                raise primary
+            except subprocess.CalledProcessError as caught:
+                verification.cleanup_owned_processes([process])
+                self.assertIs(caught, primary)
+                self.assertTrue(any('cleanup' in note.lower() for note in getattr(caught, '__notes__', [])))
+        self.assertIsNotNone(process.poll())
+
+    def test_both_overlap_owners_use_darwin_dead_group_cleanup_and_restore_handlers(self):
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        real_spawn = subprocess.Popen
+        for owner in ('cargo', 'contracts'):
+            pids = []
+            def spawn(command, **kwargs):
+                if owner == 'contracts':
+                    command = [sys.executable, '-c', 'pass']
+                process = real_spawn(command, **kwargs)
+                pids.append(process.pid)
+                return process
+            def deny(pgid, sig):
+                self.assertIn(pgid, pids)
+                raise PermissionError(1, 'Operation not permitted')
+            with self.subTest(owner=owner), patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                    verification.os, 'killpg', side_effect=deny), patch.object(
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        ['/bin/ps'], 0, stdout='')), patch.object(
+                    verification.subprocess, 'Popen', side_effect=spawn):
+                if owner == 'cargo':
+                    verification.overlap_cargo_test_and_build(
+                        [sys.executable, '-c', 'import sys; print(sys.argv[1], flush=True)',
+                         '{"reason":"build-finished","success":true}\n'],
+                        [sys.executable, '-c', 'pass'])
+                else:
+                    with verification.overlapping_contracts():
+                        pass
+                self.assertTrue(pids)
+                self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+
+    def test_overlap_failure_keeps_original_child_status_when_darwin_cleanup_is_denied(self):
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        real_spawn = subprocess.Popen
+        processes = []
+        def spawn(command, **kwargs):
+            process = real_spawn(command, **kwargs)
+            processes.append(process)
+            return process
+        def denied_snapshot(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 0, stdout=f'{processes[0].pid} S\n')
+        with patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                verification.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), patch.object(
+                verification.subprocess, 'run', side_effect=denied_snapshot), patch.object(
+                verification.subprocess, 'Popen', side_effect=spawn):
+            with self.assertRaises(subprocess.CalledProcessError) as failure:
+                verification.overlap_cargo_test_and_build(
+                    [sys.executable, '-c', 'import sys; print(sys.argv[1], flush=True); raise SystemExit(8)',
+                     '{"reason":"build-finished","success":true}\n'],
+                    [sys.executable, '-c', 'pass'])
+        self.assertEqual(failure.exception.returncode, 8)
+        self.assertTrue(any('cleanup failed' in note.lower() for note in failure.exception.__notes__))
+        self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+
+    def test_overlap_root_build_second_spawn_failure_reaps_test(self):
+        real_spawn = subprocess.Popen
+        processes = []
+        def spawn(command, **kwargs):
+            if processes:
+                raise OSError('app build spawn failed')
+            process = real_spawn(command, **kwargs)
+            processes.append(process)
+            return process
+        cargo = [sys.executable, '-c',
+                 'import sys,time; print(sys.argv[1],flush=True); time.sleep(10)',
+                 '{"reason":"build-finished","success":true}\n']
+        with patch.object(verification.subprocess, 'Popen', side_effect=spawn):
+            with self.assertRaisesRegex(OSError, 'app build spawn failed'):
+                verification.overlap_cargo_test_and_build(cargo, ['never'])
+        self.assertEqual(len(processes), 1)
+        self.assertIsNotNone(processes[0].poll())
+
+    def test_overlap_root_build_notices_failure_with_partial_line_and_signal_during_build_tail(self):
+        real_spawn = subprocess.Popen
+        gate = '{"reason":"build-finished","success":true}\n'
+        # An app-build failure is noticed even when the test pipe has no newline.
+        test = [sys.executable, '-c',
+                'import sys,time; print(sys.argv[1],flush=True); sys.stdout.write("partial diagnostic"); sys.stdout.flush(); time.sleep(10)', gate]
+        build = [sys.executable, '-c', 'raise SystemExit(11)']
+        processes = []
+        def spawn(command, **kwargs):
+            process = real_spawn(command, **kwargs)
+            processes.append(process)
+            return process
+        output = []
+        with patch.object(verification.subprocess, 'Popen', side_effect=spawn), patch.object(
+                sys, 'stdout', type('Out', (), {'write': lambda _s, x: output.append(x), 'flush': lambda _s: None})()):
+            with self.assertRaises(subprocess.CalledProcessError) as failure:
+                verification.overlap_cargo_test_and_build(test, build)
+        self.assertEqual(failure.exception.returncode, 11)
+        self.assertIn('partial diagnostic', ''.join(output))
+        self.assertTrue(all(process.poll() is not None for process in processes))
+
+        # The harness exits, leaving only the app build active; SIGTERM still
+        # interrupts that tail and reaps its owned process group.
+        processes.clear()
+        test = [sys.executable, '-c', 'import sys; print(sys.argv[1],flush=True)', gate]
+        build = [sys.executable, '-c', 'import os,sys,time; os.kill(os.getppid(),15); time.sleep(10)']
+        with patch.object(verification.subprocess, 'Popen', side_effect=spawn):
+            with self.assertRaises(SystemExit) as error:
+                verification.overlap_cargo_test_and_build(test, build)
+        self.assertEqual(error.exception.code, 128 + signal.SIGTERM)
+        self.assertTrue(all(process.poll() is not None for process in processes))
+
+    def test_root_test_and_fresh_app_build_failures_stop_verification(self):
+        for focused in ([], ['capture::']):
+            for failure in ('test', 'build'):
+                commands = []
+                def execute(command, **kwargs):
+                    if 'cargo' in command:
+                        commands.append(command)
+                        self.assertTrue(kwargs['check'])
+                        if failure in command:
+                            raise subprocess.CalledProcessError(7, command)
+                    return subprocess.CompletedProcess(command, 0, stdout='test result: ok. 2 passed; 0 failed\n')
+                with self.subTest(focused=focused, failure=failure), patch.object(
+                        verification.subprocess, 'run', side_effect=execute):
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        verification.run_selected_checks({'root': True, 'engine': True,
+                                                          'browser': False, 'focused': focused})
+                self.assertEqual(len(commands), 1 if failure == 'test' else 2)
+                self.assertIn('test', commands[0])
+                if failure == 'build':
+                    self.assertIn('build', commands[1])
+                self.assertFalse(any('capture/engine/Cargo.toml' in c for c in commands))
 
     def test_explicit_platform_suites_execute_even_when_changed_tree_has_no_matching_inputs(self):
         for suite in ('rust', 'browser'):
@@ -465,16 +782,25 @@ class RuntimeBudgetTests(unittest.TestCase):
     def test_cancelled_watchdog_cleans_up_process_group(self):
         import select
         import signal
-        # Hold Popen after the real child exists but before the watchdog owns
-        # its return value. Child output is not watchdog-handler readiness.
+        # Deliver a real OS signal after Popen creates the child but before the
+        # watchdog owns its return value. Avoid an unrelated stdin rendezvous
+        # in this cancellation window. The running case still signals externally.
         driver = '''
-import runpy, subprocess, sys
+import os, runpy, signal, subprocess, sys
 watchdog = runpy.run_path(sys.argv[1])['hook_budget']
 spawn = subprocess.Popen
 def held_spawn(*args, **kwargs):
     child = spawn(*args, **kwargs)
     print(child.pid, flush=True)
-    sys.stdin.readline()
+    sig = int(sys.argv[3])
+    handler = signal.getsignal(sig)
+    observed = []
+    def record(signum, frame):
+        observed.append(signum)
+        return handler(signum, frame)
+    signal.signal(sig, record)
+    os.kill(os.getpid(), sig)
+    assert observed == [sig], 'signal must run before Popen returns'
     return child
 if sys.argv[2] == 'spawn':
     subprocess.Popen = held_spawn
@@ -487,16 +813,17 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
             for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
                 with self.subTest(phase=phase, signal=sig):
                     child_group = None
-                    with subprocess.Popen([sys.executable, '-c', driver, str(SCRIPT), phase],
-                                          text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    with subprocess.Popen([sys.executable, '-c', driver, str(SCRIPT), phase, str(sig)],
+                                          text=True, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                           stderr=subprocess.PIPE, start_new_session=True) as process:
                         try:
                             self.assertTrue(select.select([process.stdout], [], [], 5)[0], 'child did not start')
                             child_group = int(process.stdout.readline())
-                            process.send_signal(sig)
+                            if phase == 'running':
+                                process.send_signal(sig)
                             # EOF must include the whole child group, not just
                             # the watchdog. Keep the original five-second bound.
-                            stdout, stderr = process.communicate(input='release\n', timeout=5)
+                            stdout, stderr = process.communicate(timeout=5)
                             self.assertEqual(process.returncode, 128 + sig, stderr)
                             self.assertEqual(stdout, '')
                         finally:
@@ -517,14 +844,17 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
                 verification.hook_budget(30, ['synthetic-command'])
         self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
 
-    def test_supported_ci_jobs_have_ten_minute_execution_budget(self):
+    def test_supported_ci_jobs_have_platform_execution_budget(self):
         import re
         for workflow in (SCRIPT.parents[1] / '.github/workflows').glob('*.yml'):
             if workflow.name == 'release-windows.yml':
                 continue  # Retired platform is outside the supported CI contract.
             for job in re.split(r'^  [\w-]+:\n', workflow.read_text(), flags=re.M)[1:]:
                 if re.search(r'^    runs-on:', job, re.M):
-                    self.assertIn('    timeout-minutes: 10\n', job, str(workflow))
+                    expected = ("${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }}"
+                                if workflow.name == 'verification-platform.yml' else
+                                '15' if workflow.name in {'verification-mac.yml', 'native-proof-mac.yml', 'release-mac-preview.yml'} else '10')
+                    self.assertIn(f'    timeout-minutes: {expected}\n', job, str(workflow))
                     if '    name: Workflow runtime budget\n' not in job:
                         self.assertIn('agent whose run hits the limit owns optimization', job)
 

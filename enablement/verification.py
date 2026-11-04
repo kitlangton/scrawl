@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 import subprocess
 from contextlib import contextmanager
+import selectors
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -212,6 +213,169 @@ def run_contract_checks():
                     "-p", "test_temp_preflight.py"], cwd=ROOT, check=True)
 
 
+def cleanup_owned_processes(processes):
+    """Reap every owned child without hiding the verification's primary failure."""
+    primary = sys.exc_info()[1]
+    errors = []
+    for process in processes:
+        if process is None:
+            continue
+        try:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                # XNU can return EPERM for a group containing only zombies.
+                # A reaped leader alone does not exclude live descendants.
+                if sys.platform != "darwin" or process.poll() is None:
+                    raise
+                snapshot = subprocess.run(
+                    ["/bin/ps", "-axo", "pgid=,stat="], check=True,
+                    capture_output=True, text=True, timeout=5)
+                for line in snapshot.stdout.splitlines():
+                    fields = line.split()
+                    if len(fields) != 2 or not fields[0].isdigit() or not fields[1][0].isalpha():
+                        raise RuntimeError("invalid process-group cleanup snapshot")
+                    if int(fields[0]) == process.pid and not fields[1].startswith("Z"):
+                        raise
+                # No live members: do not retry a signal using an old group ID.
+        except Exception as error:
+            errors.append(error)
+        finally:
+            try:
+                if process.poll() is None:
+                    # Even when group cleanup fails, still reap our direct child.
+                    process.kill()
+                process.wait(timeout=5)
+            except Exception as error:
+                errors.append(error)
+    if errors:
+        detail = "; ".join(f"{type(error).__name__}: {error}" for error in errors)
+        if primary is not None:
+            if hasattr(primary, "add_note"):
+                primary.add_note("Owned process cleanup failed: " + detail)
+            print("Owned process cleanup failed: " + detail, file=sys.stderr, flush=True)
+        else:
+            raise RuntimeError("Owned process cleanup failed: " + detail) from errors[0]
+
+
+def overlap_cargo_test_and_build(test_command, build_command):
+    """Run the ordinary app build as soon as Cargo reports test compilation done."""
+    test_process = build_process = None
+    cancelled = None
+    def _signal(signum, _frame):
+        nonlocal cancelled
+        cancelled = 128 + signum
+    previous = {sig: signal.signal(sig, _signal)
+                for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    test_status = build_status = None
+    saw_success = False
+    selector = None
+    buffer = b""
+    stream_open = False
+    try:
+        test_process = subprocess.Popen(test_command, cwd=ROOT, stdout=subprocess.PIPE,
+                                        stderr=None, bufsize=0, start_new_session=True)
+        if cancelled is not None:
+            raise SystemExit(cancelled)
+        os.set_blocking(test_process.stdout.fileno(), False)
+        selector = selectors.DefaultSelector()
+        selector.register(test_process.stdout, selectors.EVENT_READ)
+        stream_open = True
+        while stream_open or test_process.poll() is None or (build_process is not None and build_process.poll() is None):
+            if cancelled is not None:
+                raise SystemExit(cancelled)
+            # Poll both processes while waiting for output: test stdout may be
+            # quiet during a long compile and must not hide an early build error.
+            for process, name in ((test_process, "test"), (build_process, "build")):
+                if process is not None and process.poll() is not None:
+                    status = process.returncode
+                    if name == "test": test_status = status
+                    else: build_status = status
+                    if status:
+                        # Preserve diagnostics already available without waiting
+                        # for a potentially quiet test pipe.
+                        if buffer:
+                            print(buffer.decode(errors="replace"), end="", flush=True)
+                            buffer = b""
+                        try:
+                            while True:
+                                tail = os.read(test_process.stdout.fileno(), 65536)
+                                if not tail: break
+                                print(tail.decode(errors="replace"), end="", flush=True)
+                        except BlockingIOError:
+                            pass
+                        raise subprocess.CalledProcessError(status, process.args)
+            for key, _ in selector.select(timeout=0.05):
+                chunk = os.read(key.fileobj.fileno(), 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    stream_open = False
+                    if buffer:
+                        print(buffer.decode(errors="replace"), end="", flush=True)
+                        buffer = b""
+                    continue
+                buffer += chunk
+                lines = buffer.split(b"\n")
+                buffer = lines.pop()
+                for raw_line in lines:
+                    line = raw_line.decode(errors="replace") + "\n"
+                    if not line.strip():
+                        print(line, end="", flush=True)
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        print(line, end="", flush=True)
+                        continue
+                    if not isinstance(event, dict) or "reason" not in event:
+                        print(line, end="", flush=True)
+                        continue
+                    if event.get("reason") == "compiler-message":
+                        rendered = event.get("message", {}).get("rendered")
+                        if rendered:
+                            print(rendered, end="", flush=True)
+                    elif event.get("reason") == "build-finished":
+                        if event.get("success") is not True:
+                            raise RuntimeError("Cargo test build-finished event reported failure")
+                        if not saw_success:
+                            saw_success = True
+                            print("Root test compilation complete; starting required app build alongside test execution",
+                                  flush=True)
+                            build_process = subprocess.Popen(build_command, cwd=ROOT,
+                                                             stdout=None, stderr=None,
+                                                             start_new_session=True)
+                            if cancelled is not None:
+                                raise SystemExit(cancelled)
+                    elif event.get("reason") not in ("compiler-artifact", "build-script-executed"):
+                        print(line, end="", flush=True)
+        if test_status is None:
+            test_status = test_process.wait()
+        if not saw_success:
+            raise RuntimeError("Cargo test did not report build-finished success")
+        if build_process is None:
+            raise RuntimeError("Cargo app build was not started")
+        build_status = build_process.wait()
+        if build_status:
+            raise subprocess.CalledProcessError(build_status, build_process.args)
+        if test_status:
+            raise subprocess.CalledProcessError(test_status, test_process.args)
+        print("Root test harness and required app build both succeeded", flush=True)
+    finally:
+        try:
+            cleanup_owned_processes((test_process, build_process))
+        finally:
+            try:
+                if selector is not None:
+                    selector.close()
+                if test_process is not None and test_process.stdout is not None:
+                    test_process.stdout.close()
+            finally:
+                for sig, handler in previous.items():
+                    signal.signal(sig, handler)
+
+
 @contextmanager
 def overlapping_contracts():
     """Own one isolated contract process group until both verification paths finish."""
@@ -234,29 +398,27 @@ def overlapping_contracts():
         if status:
             raise subprocess.CalledProcessError(status, process.args)
     finally:
-        if process is not None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        try:
+            cleanup_owned_processes((process,))
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
 
-def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=False):
+def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=False,
+               overlap_root_build=False):
     if selection["root"] or selection["engine"]:
         check_temp_environment()
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
     if parallel_contracts:
         with overlapping_contracts():
-            run_selected_checks(selection, offline, cargo_timings)
+            run_selected_checks(selection, offline, cargo_timings, overlap_root_build)
     else:
         run_contract_checks()
-        run_selected_checks(selection, offline, cargo_timings)
+        run_selected_checks(selection, offline, cargo_timings, overlap_root_build)
 
 
-def run_selected_checks(selection, offline=True, cargo_timings=False):
+def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_root_build=False):
     cargo = ["cargo"]
     if subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
         cargo = ["taskpolicy", "-c", "utility", "cargo"]
@@ -264,7 +426,6 @@ def run_selected_checks(selection, offline=True, cargo_timings=False):
     dependency_mode = "--offline" if offline else "--locked"
     diagnostics = ["--timings"] if cargo_timings else []
     if selection["root"]:
-        subprocess.run(cargo + ["build", "-j", jobs, dependency_mode] + diagnostics, cwd=ROOT, check=True)
         if selection.get("focused"):
             for test_filter in selection["focused"]:
                 result = subprocess.run(cargo + ["test", "-j", jobs, dependency_mode] + diagnostics + [test_filter,
@@ -274,7 +435,20 @@ def run_selected_checks(selection, offline=True, cargo_timings=False):
                 if not any(int(n) > 0 for n in re.findall(r"test result: ok\. (\d+) passed", result.stdout)):
                     raise RuntimeError(f"Focused filter selected no passing tests: {test_filter}")
         else:
-            subprocess.run(cargo + ["test", "-j", jobs, dependency_mode] + diagnostics + ["--", "--test-threads=2"], cwd=ROOT, check=True)
+            test_command = cargo + ["test", "-j", jobs, dependency_mode] + diagnostics
+            test_command += (["--message-format=json-render-diagnostics"] if overlap_root_build else [])
+            test_command += ["--", "--test-threads=2"]
+            build_command = cargo + ["build", "-j", jobs, dependency_mode] + diagnostics
+            if overlap_root_build:
+                overlap_cargo_test_and_build(test_command, build_command)
+            else:
+                subprocess.run(test_command, cwd=ROOT, check=True)
+        # Keep the preflight test harness warm before building the distinct app
+        # binary required by subsequent bridge, packaging and native checks.
+        if not (overlap_root_build and not selection.get("focused")):
+            subprocess.run(build_command if not selection.get("focused") else
+                           cargo + ["build", "-j", jobs, dependency_mode] + diagnostics,
+                           cwd=ROOT, check=True)
     if selection["engine"]:
         for command in ("build", "test"):
             args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + diagnostics
@@ -317,14 +491,11 @@ def hook_budget(seconds, command):
         return 124
     finally:
         # A successful parent must not leave background verification running.
-        if process is not None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        try:
+            cleanup_owned_processes((process,))
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
 
 def main():
@@ -340,6 +511,8 @@ def main():
     parser.add_argument("--online", action="store_true", help="CI: use locked graph instead of offline cache")
     parser.add_argument("--parallel-contracts", action="store_true",
                         help="Overlap isolated Python contracts with selected checks; require both to succeed")
+    parser.add_argument("--overlap-root-build", action="store_true",
+                        help="Overlap the broad root Cargo test harness with the app build after Cargo signals build completion")
     parser.add_argument("--cargo-timings", action="store_true", help="Record Cargo unit timings for existing builds/tests")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
@@ -354,6 +527,8 @@ def main():
         command += ['--suite', args.suite]
         if args.parallel_contracts:
             command += ['--parallel-contracts']
+        if args.overlap_root_build:
+            command += ['--overlap-root-build']
         if args.cargo_timings:
             command += ['--cargo-timings']
         command += [flag for flag, enabled in [('--pr', args.pr), ('--run', args.run), ('--online', args.online)] if enabled]
@@ -375,7 +550,8 @@ def main():
     if args.pr:
         run_pr_checks()
     if args.run:
-        run_checks(selection, offline=not args.online, parallel_contracts=args.parallel_contracts, cargo_timings=args.cargo_timings)
+        run_checks(selection, offline=not args.online, parallel_contracts=args.parallel_contracts,
+                   cargo_timings=args.cargo_timings, overlap_root_build=args.overlap_root_build)
 
 
 if __name__ == "__main__":

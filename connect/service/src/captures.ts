@@ -5,27 +5,43 @@ const live="status!='deleted' AND expires_at>? AND (status='ready' OR pending_un
 export function validPath(path: unknown): path is string {
  return typeof path==='string'&&path.length<=128&&/^(apparent\.json|notes\.json|summary\.md|contact-sheet(?:-full)?\.png|audio\.wav|recording\.(mp4|mov)|finish-trace\.json|timeline\.json|frames(?:-full)?\/frame-[0-9]+\.png)$/.test(path);
 }
-function transportPath(path:unknown,format:CaptureRow['format']): path is string {
- return format==='plaintext-v1'?validPath(path):typeof path==='string'&&/^(envelope\.json|sealed\/part-[0-9]{6}\.age)$/.test(path);
+function transportPath(path:unknown,format:CaptureRow['format'],grouped=false): path is string {
+ if(format==='plaintext-v1')return validPath(path);
+ if(typeof path!=='string')return false;
+ return grouped?/^(evidence|media)\/(envelope\.json|sealed\/part-[0-9]{6}\.age)$/.test(path):/^(envelope\.json|sealed\/part-[0-9]{6}\.age)$/.test(path);
 }
-function manifest(input: unknown,format:CaptureRow['format']) {
+function groupedDelivery(c:CaptureRow) {return c.format==='apparent-encrypted-v1'&&(JSON.parse(c.manifest) as ManifestFile[]).some(f=>f.path==='evidence/envelope.json');}
+async function evidenceReady(env:Env,c:CaptureRow) {
+ if(c.status==='ready')return true;
+ const row=await stmt(env,"SELECT count(*) total,sum(CASE WHEN object_key IS NULL THEN 1 ELSE 0 END) missing FROM files WHERE capture_id=? AND path LIKE 'evidence/%'",c.id).first<{total:number;missing:number}>();
+ return !!row&&row.total>=2&&row.missing===0;
+}
+function manifest(input: unknown,format:CaptureRow['format'],grouped=false) {
  if(!Array.isArray(input)||input.length<1||input.length>512)fail('invalid_manifest');
  const seen=new Set();let bytes=0;
  const files=input.map((f: unknown)=>{
-  if(!isRecord(f)||!transportPath(f.path,format))fail('invalid_path');
+  if(!isRecord(f)||!transportPath(f.path,format,grouped))fail('invalid_path');
   if(seen.has(f.path)||typeof f.size!=='number'||!Number.isSafeInteger(f.size)||f.size<0||typeof f.sha256!=='string'||! /^[a-f0-9]{64}$/.test(f.sha256))fail('invalid_manifest');
   if(f.size>90000000)fail('file_too_large');
   seen.add(f.path);bytes+=f.size;return {path:f.path,size:f.size,sha256:f.sha256};
  }).sort((a,b)=>a.path.localeCompare(b.path));
  if(bytes>500000000)fail('quota_exceeded',409);
- if(format==='apparent-encrypted-v1'&&(!seen.has('envelope.json')||files.length<2))fail('invalid_manifest');
+ if(format==='apparent-encrypted-v1') {
+  if(grouped) {
+   for(const group of ['evidence','media']) {
+    const chunks=files.filter(f=>f.path.startsWith(group+'/sealed/'));
+    if(!seen.has(group+'/envelope.json')||chunks.length<1||chunks.length>16)fail('invalid_manifest');
+    for(let i=0;i<chunks.length;i++)if(!seen.has(group+'/sealed/part-'+String(i).padStart(6,'0')+'.age'))fail('invalid_manifest');
+   }
+  }else if(!seen.has('envelope.json')||files.length<2)fail('invalid_manifest');
+ }
  return {files,bytes,text:JSON.stringify(files)};
 }
 async function capture(env: Env,id: string,account: string) {
  const row=await stmt(env,`SELECT * FROM captures WHERE id=? AND account_id=? AND ${live}`,id,account,Date.now(),Date.now()).first<CaptureRow>();
  if(!row)fail('not_found',404);return row;
 }
-const info = (c: CaptureRow) => ({id:c.id,status:c.status,expiresAt:new Date(c.expires_at).toISOString(),...(c.format==='plaintext-v1'?{}:{format:c.format})});
+const info = async (env:Env,c: CaptureRow) => ({id:c.id,status:c.status,expiresAt:new Date(c.expires_at).toISOString(),...(c.format==='plaintext-v1'?{}:{format:c.format}),...(groupedDelivery(c)?{delivery:'evidence-first-v1',evidenceReady:await evidenceReady(env,c)}:{})});
 export async function captureRoutes(request: Request,env: Env,url: URL) {
  if(url.pathname==='/v1/account'&&request.method==='GET') {const a=await bearer(request,env);return json({beta:a.beta,quotaBytes:500000000,usedBytes:await usage(env,a.account_id)});}
  const match=/^\/v1\/captures\/([a-f0-9]{32})(?:\/(complete|files\/(.+)))?$/.exec(url.pathname);if(!match)return null;
@@ -35,7 +51,9 @@ export async function captureRoutes(request: Request,env: Env,url: URL) {
   // Validate the complete manifest before any database write/eviction.
   const input=await body(request),format=input.format===undefined?'plaintext-v1':input.format;
   if(format!=='plaintext-v1'&&format!=='apparent-encrypted-v1')fail('unsupported_format');
-  const m=manifest(input.files,format);
+  const grouped=input.delivery==='evidence-first-v1';
+  if(input.delivery!==undefined&&(!grouped||format!=='apparent-encrypted-v1'))fail('unsupported_delivery');
+  const m=manifest(input.files,format,grouped);
   let existing=await stmt(env,'SELECT * FROM captures WHERE id=?',id).first<CaptureRow>();
   if(!existing) {
    const now=Date.now();
@@ -55,7 +73,7 @@ export async function captureRoutes(request: Request,env: Env,url: URL) {
   }
   const c=await capture(env,id,a.account_id);
   if(c.manifest!==m.text||c.format!==format)fail('manifest_conflict',409);
-  return json(info(c));
+  return json(await info(env,c));
  }
  if(!action&&method==='DELETE') {
   const c=await stmt(env,'SELECT account_id FROM captures WHERE id=?',id).first();if(!c||c.account_id!==a.account_id)fail('not_found',404);
@@ -64,20 +82,20 @@ export async function captureRoutes(request: Request,env: Env,url: URL) {
   return json({ok:true});
  }
  const c=await capture(env,id,a.account_id);
- if(!action&&method==='GET')return json({...info(c),files:JSON.parse(c.manifest)});
+ if(!action&&method==='GET')return json({...await info(env,c),files:JSON.parse(c.manifest)});
  if(action==='complete'&&method==='POST') {
-  if(c.status==='ready')return json(info(c));
+  if(c.status==='ready')return json(await info(env,c));
   const {results:files}=await stmt(env,'SELECT * FROM files WHERE capture_id=?',id).all<FileRow>();
   await checkedHeads(env,files,verified);
   await stmt(env,`UPDATE captures SET status='ready' WHERE id=? AND account_id=? AND status='pending' AND ${live}`,id,a.account_id,Date.now(),Date.now()).run();
-  const ready=await capture(env,id,a.account_id);if(ready.status!=='ready')fail('not_ready',409);return json(info(ready));
+  const ready=await capture(env,id,a.account_id);if(ready.status!=='ready')fail('not_ready',409);return json(await info(env,ready));
  }
  if(encoded) {
   let path;try {path=encoded.split('/').map(segment=>{const decoded=decodeURIComponent(segment);if(decoded.includes('/')||decoded.includes('\\'))fail('invalid_path');return decoded;}).join('/');}catch{fail('invalid_path');}
-  if(!transportPath(path,c.format))fail('invalid_path');
+  if(!transportPath(path,c.format,groupedDelivery(c)))fail('invalid_path');
   const f=await stmt(env,'SELECT * FROM files WHERE capture_id=? AND path=?',id,path).first<FileRow>();if(!f)fail('not_found',404);
   if(method==='GET') {
-   if(c.status!=='ready')fail('not_ready',409);
+   if(c.status!=='ready'&&!(groupedDelivery(c)&&path.startsWith('evidence/')&&await evidenceReady(env,c)))fail('not_ready',409);
    const object=await getObject(env,f.object_key);if(!object)fail('not_found',404);
    await capture(env,id,a.account_id);
    return new Response(object.body,{headers:{'Content-Type':mime(path),'Content-Length':String(f.size),'Content-Disposition':'attachment; filename="'+path.split('/').at(-1)+'"','X-Content-Type-Options':'nosniff'}});

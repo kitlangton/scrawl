@@ -74,6 +74,14 @@ fn pair(f: &Fixture, server: &Server) {
     }
 }
 
+// These existing cases retain coverage of admitted single-stream jobs.
+fn legacy_enqueue(f: &Fixture, bundle: &Path) -> Result<String> {
+    let id = f.client.enqueue(bundle)?;
+    let mut queued = f.client.jobs()?.into_iter().find(|j| j.id == id).unwrap();
+    queued.grouped = false;
+    f.client.save_job(&queued)?;
+    Ok(id)
+}
 fn job(f: &Fixture) -> Job {
     f.client.jobs().unwrap().remove(0)
 }
@@ -96,7 +104,7 @@ fn assert_ready(f: &Fixture) {
 fn upload(f: &Fixture, server: &Server) -> (PathBuf, String) {
     pair(f, server);
     let bundle = f.bundle();
-    let id = f.client.enqueue(&bundle).unwrap();
+    let id = legacy_enqueue(&f, &bundle).unwrap();
     f.client.process_once().unwrap();
     assert_ready(f);
     assert!(server.state.lock().unwrap().ready);
@@ -121,7 +129,7 @@ fn encrypted_unknown_asset_reports_snapshot_cause_without_uploading() {
     pair(&f, &server);
     let bundle = f.bundle();
     fs::write(bundle.join("unexpected.svg"), b"private unknown asset").unwrap();
-    f.client.enqueue(&bundle).unwrap();
+    legacy_enqueue(&f, &bundle).unwrap();
     f.client.process_once().unwrap();
     assert_eq!(job(&f).error.as_deref(), Some("unsupported_asset"));
     no_media(&server);
@@ -140,7 +148,7 @@ fn encrypted_notes_bundle_roundtrip_keeps_notes_and_excludes_local_diagnostic() 
     OpenOptions::new().write(true).create_new(true).mode(0o600)
         .open(bundle.join("notes-ui.log")).unwrap()
         .write_all(b"private local diagnostic").unwrap();
-    let id = f.client.enqueue(&bundle).unwrap();
+    let id = legacy_enqueue(&f, &bundle).unwrap();
     f.client.process_once().unwrap();
     assert_ready(&f);
     let out = f.root.join("notes-restored.apparent");
@@ -238,7 +246,7 @@ fn encrypted_login_binds_public_key_before_approval_and_read_never_enables_uploa
     // credential shortcut in this positive round trip.
     f.client.login(&server.url, "upload", true, false).unwrap();
     let bundle = f.root.join("test.apparent");
-    let id = f.client.enqueue(&bundle).unwrap();
+    let id = legacy_enqueue(&f, &bundle).unwrap();
     f.client.process_once().unwrap();
     assert_ready(&f);
     let out = f.root.join("login-roundtrip.apparent");
@@ -306,7 +314,7 @@ fn encrypted_settings_approval_preserves_endpoint_enrollment_and_roundtrip() {
     }
     assert!(f.client.settings_snapshot().unwrap().uploads_enabled);
     let bundle = f.bundle();
-    let id = f.client.enqueue(&bundle).unwrap();
+    let id = legacy_enqueue(&f, &bundle).unwrap();
     f.client.process_once().unwrap();
     assert_ready(&f);
     let out = f.root.join("settings-encrypted-roundtrip.apparent");
@@ -511,7 +519,7 @@ fn encrypted_restart_reuses_committed_ciphertext_despite_original_mutation() {
     pair(&f, &server);
     let bundle = f.bundle();
     let original_summary = fs::read(bundle.join("summary.md")).unwrap();
-    let id = f.client.enqueue(&bundle).unwrap();
+    let id = legacy_enqueue(&f, &bundle).unwrap();
     f.client.process_once().unwrap();
     let first = job(&f);
     assert!(!first.files.is_empty() && first.encryption.is_some());
@@ -774,7 +782,7 @@ fn explicit_public_copy_preserves_private_identity_and_reuses_only_public_intent
     assert!(prepared.job.public_copy && prepared.job.shared && !prepared.job.encrypted);
     assert!(prepared.job.encryption.is_none());
     assert_eq!(fs::read(&private_path).unwrap(), private_before);
-    assert_eq!(f.client.enqueue(&bundle).unwrap(), private_id);
+    assert_eq!(legacy_enqueue(&f, &bundle).unwrap(), private_id);
     assert!(f.client.pointer(&bundle).unwrap().contains(&private_id));
     assert!(!f.client.pointer(&bundle).unwrap().contains(&prepared.job.id));
     assert!(server.state.lock().unwrap().data.is_empty(), "reservation must not upload media");
@@ -820,7 +828,7 @@ fn public_intent_cannot_resurrect_cancelled_jobs_or_relabel_private_jobs() {
     assert_eq!(server.state.lock().unwrap().requests, 0);
     let link = f.client.prepare_public_link(&bundle, &|| true).unwrap();
     assert_eq!(link.job.id, staged_id);
-    let private_id = f.client.enqueue(&bundle).unwrap();
+    let private_id = legacy_enqueue(&f, &bundle).unwrap();
     assert_ne!(private_id, staged_id);
     let mut copy = link.job.clone();
     copy.public_copy = false;
@@ -836,6 +844,69 @@ fn public_intent_cannot_resurrect_cancelled_jobs_or_relabel_private_jobs() {
     assert!(!link.authorized());
     let fresh = f.client.prepare_public_link(&bundle, &|| true).unwrap();
     assert_ne!(fresh.job.id, link.job.id);
-    assert_eq!(f.client.enqueue(&bundle).unwrap(), private_id);
+    assert_eq!(legacy_enqueue(&f, &bundle).unwrap(), private_id);
     assert_eq!(f.client.jobs().unwrap().into_iter().find(|j| j.id == private_id).unwrap().status, "pending");
+}
+
+#[test]
+fn grouped_evidence_precedes_media_and_same_spool_resumes_without_source() {
+    let f = Fixture::new();
+    let server = encryption_server("fail-media");
+    pair(&f, &server);
+    let bundle = f.bundle();
+    let id = f.client.enqueue(&bundle).unwrap();
+    f.client.process_once().unwrap();
+    let queued = job(&f);
+    assert!(queued.grouped);
+    assert_eq!(queued.status, "pending");
+    assert!(!queued.files.is_empty());
+    assert!(!server.state.lock().unwrap().ready);
+    // Receiver is a separate client state with its approved identity only. No
+    // source bundle/queue/spool is needed by evidence or full retrieval.
+    let receiver = Fixture::new();
+    receiver.authorize(&server.url);
+    encrypted(&receiver);
+    let credential = f.client.credential("read", &server.url).unwrap();
+    atomic_json(&receiver.client.state.join("read.credential"), &credential).unwrap();
+    let identity = credential.encryption_identity.as_ref().unwrap();
+    fs::copy(f.client.state.join(format!("{identity}.identity")),
+        receiver.client.state.join(format!("{identity}.identity"))).unwrap();
+    let evidence = receiver.root.join("evidence.apparent");
+    receiver.client.fetch_evidence(&id, &evidence, 0).unwrap();
+    assert_eq!(fs::read(evidence.join("summary.md")).unwrap(), b"synthetic summary");
+    assert!(evidence.join("frames/frame-01.png").exists());
+    assert!(evidence.join(".evidence-only.json").exists());
+    assert!(!evidence.join("audio.wav").exists());
+    assert!(!evidence.join("recording.mov").exists());
+    assert!(receiver.client.fetch(&id, &receiver.root.join("pending.apparent"), 0).is_err());
+    assert!(receiver.client.fetch_evidence(&id, &evidence, 0).is_err(), "immutable destination");
+    let original = f.root.join("original.offline");
+    fs::rename(&bundle, &original).unwrap();
+    server.state.lock().unwrap().mode.clear();
+    let restarted = Client::new(f.client.provider.clone());
+    restarted.retry().unwrap();
+    restarted.process_once().unwrap();
+    let resumed = job(&f);
+    assert_eq!(resumed.id, id);
+    assert!(same_manifest(&queued.files, &resumed.files));
+    assert_eq!(resumed.status, "ready");
+    let complete = receiver.root.join("complete.apparent");
+    receiver.client.fetch(&id, &complete, 0).unwrap();
+    assert_bundle(&original, &complete);
+    assert!(!complete.join(".evidence-only.json").exists());
+    assert!(evidence.join(".evidence-only.json").exists());
+    // A storage attacker can rewrite the outer manifest, but cannot substitute
+    // an independently valid media envelope for evidence under the same ID.
+    {
+        let mut state = server.state.lock().unwrap();
+        let media = state.files.iter().find(|f| f.path == "media/envelope.json").unwrap().clone();
+        let bytes = state.data["media/envelope.json"].clone();
+        let envelope = state.files.iter_mut().find(|f| f.path == "evidence/envelope.json").unwrap();
+        envelope.size = media.size;
+        envelope.sha256 = media.sha256;
+        state.data.insert("evidence/envelope.json".into(), bytes);
+    }
+    let rejected = receiver.root.join("swapped.apparent");
+    assert!(receiver.client.fetch_evidence(&id, &rejected, 0).unwrap_err().to_string().contains("context_mismatch"));
+    assert!(!rejected.exists());
 }

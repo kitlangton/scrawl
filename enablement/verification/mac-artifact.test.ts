@@ -108,6 +108,111 @@ test('main Mac producer selects the tested compiler before cache restore without
 })
 
 const selectedCompiler = '1.99.1-x86_64-apple-darwin'
+test('Rust workflow exports only the existing selected Xcode directory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'xcode-selection-'))
+  try {
+    const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
+    const step = workflow.split('      - name: Pin the selected developer directory for Rust verification\n')[1].split('      - name:')[0]
+    assert.match(step, /if: runner.os == 'macOS' && needs.select.outputs.root == 'true'/)
+    const shell = step.split('        run: |\n')[1]
+    for (const [selected, exists, probeStatus, expected] of [
+      [developer, 'yes', '0', 0], ['/tmp/Xcode.app/Contents/Developer', 'yes', '0', 1],
+      [developer, 'no', '0', 1], [developer, 'yes', '7', 7],
+    ] as const) {
+      const output = join(root, 'environment'); writeFileSync(output, '')
+      const result = spawnSync('bash', ['-e', '-c', `
+xcode-select() { printf '%s\\n' "$SELECTED"; return "$PROBE_STATUS"; }
+test() { if [[ "$1" == '-d' ]]; then [[ "$2" == "$SELECTED" && "$DIRECTORY_EXISTS" == yes ]]; else builtin test "$@"; fi; }
+${shell}`], { encoding: 'utf8', env: { ...process.env, GITHUB_ENV: output, SELECTED: selected,
+        DIRECTORY_EXISTS: exists, PROBE_STATUS: probeStatus } })
+      assert.equal(result.status, expected, result.stderr)
+      assert.equal(readFileSync(output, 'utf8'), expected === 0 ? `DEVELOPER_DIR=${developer}\n` : '')
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+for (const os of ['macOS', 'Linux']) for (const status of [0, 7]) test(`verifier trace scopes ${os} environment and preserves status ${status}`, () => {
+  const root = mkdtempSync(join(tmpdir(), 'verifier-trace-'))
+  try {
+    const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
+    const start = workflow.indexOf('          cargo_trace_env=()')
+    assert.ok(start >= 0)
+    const shell = workflow.slice(start, workflow.indexOf('\n          verification_complete=true', start))
+    writeFileSync(join(root, 'python3'), '#!/bin/bash\nprintf "%s\\n" "$CARGO_LOG" "$*" >> "$TRACE_RECORD"\nexit "$TRACE_STATUS"\n', { mode: 0o755 })
+    const record = join(root, 'calls')
+    const result = spawnSync('bash', ['-e', '-c', shell + '\necho "$CARGO_LOG"'], { encoding: 'utf8',
+      env: { ...process.env, PATH: root + ':' + process.env.PATH, CARGO_LOG: 'inherited',
+        BASE: 'synthetic-base', RUNNER_TEMP: root, RUNNER_OS: os, TRACE_RECORD: record, TRACE_STATUS: String(status) } })
+    assert.equal(result.status, status, result.stderr)
+    assert.deepEqual(readFileSync(record, 'utf8').trim().split('\n'), [
+      os === 'macOS' ? 'cargo::compiler::fingerprint=trace' : 'inherited',
+      `enablement/verification.py --base synthetic-base --run --online --suite rust --parallel-contracts --cargo-timings ${os === 'macOS' ? '--overlap-root-build ' : ''}--receipt-dir ${root}/verification-receipts`,
+    ])
+    assert.equal(result.stdout.trim(), status === 0 ? 'inherited' : '')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+for (const os of ['macOS', 'Linux']) for (const status of [0, 7]) test(`combined Cargo preflight preserves ${os} selection and status ${status}`, () => {
+  const root = mkdtempSync(join(tmpdir(), 'cargo-preflight-'))
+  try {
+    const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
+    const start = workflow.indexOf('            preflight_filters=(')
+    const end = workflow.indexOf('\n          fi', start)
+    assert.ok(start >= 0 && end > start)
+    const shell = workflow.slice(start, end)
+    const record = join(root, 'calls')
+    writeFileSync(join(root, 'cargo'), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$TRACE_RECORD"\nexit "$TRACE_STATUS"\n', { mode: 0o755 })
+    const result = spawnSync('bash', ['-e', '-c', shell + '\necho reached-after-preflight'], { encoding: 'utf8', env: { ...process.env, PATH: root + ':' + process.env.PATH, RUNNER_OS: os, TRACE_RECORD: record, TRACE_STATUS: String(status) } })
+    assert.equal(result.status, status, result.stderr)
+    assert.equal(result.stdout.includes('reached-after-preflight'), status === 0)
+    const calls = readFileSync(record, 'utf8').trim().split('\n')
+    assert.equal(calls.length, 1)
+    assert.match(calls[0], /^test -j 3 --locked --timings -- /)
+    assert.match(calls[0], /the_command_line_row_.*competing_launches_cannot_remove_the_winning_control_socket/)
+    assert.equal(calls[0].includes('hosted_security_darwin_acl_grants_fail_closed'), os === 'macOS')
+    assert.match(calls[0], /--test-threads=1$/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+test('actual Cargo preflight filters run their union and propagate selected failures', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cargo-filter-union-'))
+  try {
+    mkdirSync(join(root, 'src'))
+    writeFileSync(join(root, 'Cargo.toml'), '[package]\nname="preflight-fixture"\nversion="0.1.0"\nedition="2024"\n')
+    writeFileSync(join(root, 'src/lib.rs'), `
+mod capture { mod desktop {
+mod settings { mod settings { mod tests {
+#[test] fn the_command_line_row_first() {}
+#[test] fn the_command_line_row_future_match() {}
+}}}
+mod workflow { mod agent_capture { mod tests {
+#[test] fn competing_launches_cannot_remove_the_winning_control_socket() {
+assert!(std::env::var_os("PREFLIGHT_FAIL").is_none());
+}
+}}}
+}}
+mod connect { mod hosted { mod hosted_tests {
+#[test] fn hosted_security_darwin_acl_grants_fail_closed() {}
+}}}
+#[test] fn unrelated_must_be_excluded() { panic!("unselected"); }
+`)
+    const env = { ...process.env, CARGO_TARGET_DIR: join(root, 'target'), CARGO_NET_OFFLINE: 'true',
+      CARGO_LOG: 'cargo::compiler::fingerprint=trace' }
+    const lock = spawnSync('cargo', ['generate-lockfile', '--offline'], { cwd: root, env, encoding: 'utf8', timeout: 60000 })
+    assert.equal(lock.status, 0, lock.stderr)
+    const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
+    const start = workflow.indexOf('            preflight_filters=(')
+    const shell = workflow.slice(start, workflow.indexOf('\n          fi', start))
+    for (const os of ['Linux', 'macOS']) for (const fail of [false, true]) {
+      const result = spawnSync('bash', ['-e', '-c', shell], { cwd: root, encoding: 'utf8', timeout: 60000,
+        env: { ...env, RUNNER_OS: os, ...(fail ? { PREFLIGHT_FAIL: '1' } : {}) } })
+      assert.equal(result.status, fail ? 101 : 0, result.stdout + result.stderr)
+      assert.match(result.stderr, /cargo::compiler::fingerprint:/)
+      assert.match(result.stdout, /the_command_line_row_first \.\.\. ok/)
+      assert.match(result.stdout, /the_command_line_row_future_match \.\.\. ok/)
+      assert.match(result.stdout, new RegExp('competing_launches_cannot_remove_the_winning_control_socket \\.\\.\\. ' + (fail ? 'FAILED' : 'ok')))
+      assert.equal(result.stdout.includes('hosted_security_darwin_acl_grants_fail_closed ... ok'), os === 'macOS')
+      assert.ok(!result.stdout.includes('unrelated_must_be_excluded ...'))
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 for (const outcome of ['success', 'failure', 'incomplete', 'signal']) test(`actual verification TMPDIR cleanup: ${outcome}`, () => {
   const root = mkdtempSync(join(tmpdir(), 'verification-cleanup-'))
   try {

@@ -33,6 +33,7 @@ impl Popup {
             .ok_or_else(|| anyhow::anyhow!("Invalid capture name"))?
             .to_owned();
         let mut command = Command::new(resources.executable);
+        super::super::error_reporting::configure_child(&mut command);
         crate::capture::engine::runtime::apparent_log("public-share spawn-start");
         #[cfg(target_os = "linux")]
         command.arg("--ozone-platform=x11");

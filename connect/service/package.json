@@ -9,6 +9,7 @@
     "dev": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy",
     "build:recipient": "node scripts/build-recipient.mjs",
+    "test:evidence-cli": "node --experimental-strip-types ../client/tests/evidence-service.ts",
     "test:recipient": "node test/sharing/recipient-browser.mjs"
   },
   "dependencies": {

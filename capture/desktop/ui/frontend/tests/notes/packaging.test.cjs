@@ -9,6 +9,7 @@ test('popup assets replace old output without shipping another runtime and refus
   const source = path.join(dir, 'source'), out = path.join(dir, 'installed');
   await fs.mkdir(path.join(source, 'electron/notes'), { recursive: true });
   await fs.mkdir(path.join(source, 'dist'));
+  await fs.writeFile(path.join(source, 'electron/runtime.cjs'), 'reporting runtime');
   await fs.writeFile(path.join(source, 'electron/notes/main.cjs'), 'notes');
   await fs.writeFile(path.join(source, 'dist/index.html'), 'renderer');
   const { stagePopupAssets } = await import('../../scripts/popup-entries.mjs');
@@ -37,8 +38,10 @@ test('popup packaging requires notes and includes a present independent share en
   const { stagePopupEntries } = await import('../../scripts/popup-entries.mjs');
   await assert.rejects(stagePopupEntries(root, out), { code: 'ENOENT' });
   await fs.mkdir(path.join(root, 'electron/notes'), { recursive: true });
+  await fs.writeFile(path.join(root, 'electron/runtime.cjs'), 'reporting runtime');
   await fs.writeFile(path.join(root, 'electron/notes/main.cjs'), 'notes entry');
   await stagePopupEntries(root, out);
+  assert.equal(await fs.readFile(path.join(out, 'electron/runtime.cjs'), 'utf8'), 'reporting runtime');
   assert.equal(await fs.readFile(path.join(out, 'electron/notes/main.cjs'), 'utf8'), 'notes entry');
   await fs.mkdir(path.join(root, 'electron/share'));
   await assert.rejects(stagePopupEntries(root, out), { code: 'ENOENT' });
@@ -46,6 +49,7 @@ test('popup packaging requires notes and includes a present independent share en
   await fs.writeFile(path.join(root, 'electron/share/preload.cjs'), 'separate protocol');
   await fs.writeFile(path.join(root, 'electron/share/main.cts'), 'authored TypeScript');
   await stagePopupEntries(root, out);
+  assert.equal(await fs.readFile(path.join(out, 'electron/runtime.cjs'), 'utf8'), 'reporting runtime');
   assert.equal(await fs.readFile(path.join(out, 'electron/share/main.cjs'), 'utf8'), 'share entry');
   assert.equal(await fs.readFile(path.join(out, 'electron/share/preload.cjs'), 'utf8'), 'separate protocol');
   await assert.rejects(fs.stat(path.join(out, 'electron/share/main.cts')), { code: 'ENOENT' });
