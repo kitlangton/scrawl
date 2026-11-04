@@ -6,14 +6,24 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 // Transport/UI security fixture only. Actual consent policy is tested in Rust.
-for (const mode of ['foundation', 'installed', 'installed-action']) {
+for (const mode of ['foundation', 'installed', 'installed-action', 'semantic']) {
 const installed = mode !== 'foundation', initial = mode === 'installed-action';
+const semantic = mode === 'semantic';
 test(`${mode} Connect shipped Electron IPC, consent presentation, browser action and lifecycle ownership`, { timeout: 45000 }, async t => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ec-'));
+  const clients = new Set(), requests = [];
+  let server, application;
+  t.after(async () => {
+    try { await application?.close(); }
+    finally {
+      for (const client of clients) client.destroy();
+      try { if (server?.listening) await new Promise(resolve => server.close(resolve)); }
+      finally { await fs.rm(home, { recursive: true, force: true }); }
+    }
+  });
   const directory = path.join(home, '.config/apparent/agent-control');
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await fs.chmod(directory, 0o700);
-  const clients = new Set(), requests = [];
   let closes = 0, stage = 'initial', hold, holdAction;
   const button = (command, title) => ({ command, title, enabled: true });
   const view = () => {
@@ -30,15 +40,21 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
       userCode:stage === 'approval' ? 'TEST-CODE' : null,
       verificationUri:stage === 'approval' ? 'https://example.com/device?code=TEST-CODE' : null,
       buttons,
-      presentation:{tone:stage === 'connected' ? 'success' : stage === 'approval' ? 'progress' : stage === 'disable-confirm' ? 'warning' : 'neutral',
+      ...(semantic ? { presentationState: {
+        snapshot: {connected:['connected','disable-confirm','off'].includes(stage), uploadsEnabled:['connected','disable-confirm'].includes(stage),
+          renewalRequired:stage === 'renewal', reauthorizationRequired:false, accountInitial:stage === 'connected' ? 'M' : null},
+        health:null,error:null,localError:null,consent:stage === 'consent',approval:stage === 'approval',
+        operation:stage === 'approval' ? 'login' : null,logout:false,retryDisable:null,
+        confirmation:stage === 'disable-confirm' ? false : null,closed:false,sharedLinksUrl:null,
+      }} : {presentation:{tone:stage === 'connected' ? 'success' : stage === 'approval' ? 'progress' : stage === 'disable-confirm' ? 'warning' : 'neutral',
         headline,detail:stage === 'consent' ? 'Explicit upload consent required.' : 'Synthetic transport fixture.',note:'',
         artwork:['initial','consent','approval','connected'].includes(stage),compact:stage === 'connected',
         accountMenu:['connected','renewal','off'].includes(stage),buttons,
         ...(stage === 'connected' ? {accountInitial:'M'} : {}),
-        menuActions:buttons.filter(b=>['check','request-disable','request-disconnect'].includes(b.command) && !(stage === 'renewal' && b.command === 'check')).map(b=>b.command),sharedLinksUrl:null }
+        menuActions:buttons.filter(b=>['check','request-disable','request-disconnect'].includes(b.command) && !(stage === 'renewal' && b.command === 'check')).map(b=>b.command),sharedLinksUrl:null }})
     };
   };
-  const server = net.createServer(socket => {
+  server = net.createServer(socket => {
     clients.add(socket); socket.on('error', () => {});
     let connect = false, bytes = '';
     socket.on('close', () => { clients.delete(socket); if (connect) closes += 1; });
@@ -68,12 +84,8 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
   });
   const address = path.join(directory, 'capture.sock');
   await new Promise(resolve => server.listen(address, resolve)); await fs.chmod(address, 0o600);
-  const application = await electron.launch({ args: [path.join(__dirname, '../..'), ...(installed ? ['--settings-connect'] : []), ...(initial ? ['--connect-action=connect'] : [])],
+  application = await electron.launch({ args: [path.join(__dirname, '../..'), ...(installed ? ['--settings-connect'] : []), ...(initial ? ['--connect-action=connect'] : [])],
     env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') } });
-  t.after(async () => {
-    await application.close(); for (const client of clients) client.destroy();
-    await new Promise(resolve => server.close(resolve)); await fs.rm(home, { recursive: true, force: true });
-  });
   await application.evaluate(({ shell }) => { global.openedUris = []; shell.openExternal = async uri => { global.openedUris.push(uri); }; });
   const page = await application.firstWindow();
   const card = page.getByRole('region', { name: 'Apparent Connect' });
@@ -95,7 +107,7 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
     if (!initial) assert.equal(requests.filter(r => r.command).length, 0);
   }
   if (!initial) await card.getByRole('button', { name: 'Connect', exact: true }).click();
-  await expect(card.getByText('Explicit upload consent required.')).toBeVisible();
+  await expect(card.getByText(semantic ? 'New captures upload privately, including recordings, images, audio, transcripts, context and other capture assets.' : 'Explicit upload consent required.')).toBeVisible();
   assert.equal(requests.filter(r => r.command === 'connect').length, 1);
   assert.equal(requests.filter(r => r.command === 'allow').length, 0);
   assert.deepEqual(await application.evaluate(() => global.openedUris), []);

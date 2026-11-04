@@ -19,6 +19,29 @@ function linksUri(value) {
   const url = new URL(value);
   return !url.search && ['/connect/shares', '/hosted/shares'].includes(url.pathname);
 }
+// Allowlisted semantic facts only; Connect's TypeScript owner renders them.
+function presentationState(value) {
+  const errors = new Set(['cancelled','offline','auth-required','rejected','expired','local-state','invalid-server','unverified-commit','unavailable']);
+  const nullableBoolean = v => v === null || typeof v === 'boolean';
+  const error = v => v === null || errors.has(v);
+  if (!value || !['consent','approval','logout','closed'].every(k => typeof value[k] === 'boolean') ||
+      !nullableBoolean(value.retryDisable) || !nullableBoolean(value.confirmation) ||
+      !error(value.error) || !error(value.localError) ||
+      ![null,'online','offline','auth-required'].includes(value.health) ||
+      ![null,'login','probe','disable'].includes(value.operation) ||
+      !(value.sharedLinksUrl === null || linksUri(value.sharedLinksUrl))) return;
+  let snapshot = null;
+  if (value.snapshot !== null) {
+    const s = value.snapshot;
+    if (!s || !['connected','uploadsEnabled','renewalRequired','reauthorizationRequired'].every(k => typeof s[k] === 'boolean') ||
+        !(s.accountInitial === null || typeof s.accountInitial === 'string' && /^[\p{L}\p{N}]{1,3}$/u.test(s.accountInitial))) return;
+    snapshot = {connected:s.connected, uploadsEnabled:s.uploadsEnabled, renewalRequired:s.renewalRequired,
+      reauthorizationRequired:s.reauthorizationRequired, accountInitial:s.accountInitial};
+  }
+  return { snapshot, health:value.health, error:value.error, localError:value.localError,
+    consent:value.consent, approval:value.approval, operation:value.operation, logout:value.logout,
+    retryDisable:value.retryDisable, confirmation:value.confirmation, closed:value.closed, sharedLinksUrl:value.sharedLinksUrl };
+}
 function decode(value, action) {
   if (value?.error === 'feature_disabled') return { status: 'disabled' };
   const v = value?.connect;
@@ -30,6 +53,8 @@ function decode(value, action) {
       !v.buttons.every(b => actions.has(b.command) && text(b.title) && typeof b.enabled === 'boolean') ||
       new Set(v.buttons.map(b => b.command)).size !== v.buttons.length) return failed();
   let presentation;
+  const state = v.presentationState === undefined ? undefined : presentationState(v.presentationState);
+  if (v.presentationState !== undefined && state === undefined) return failed();
   if (v.presentation !== undefined) {
     const p = v.presentation;
     if (!p || !['neutral','success','progress','warning','failure'].includes(p.tone) ||
@@ -48,9 +73,10 @@ function decode(value, action) {
   }
   if (value.openUri !== undefined && !(
       action === 'open-browser' && value.openUri === v.verificationUri && browserUri(value.openUri, v.userCode) ||
-      action === 'open-shared-links' && value.openUri === presentation?.sharedLinksUrl && linksUri(value.openUri))) return failed();
+      action === 'open-shared-links' && value.openUri === (state !== undefined ? state.sharedLinksUrl : presentation?.sharedLinksUrl) && linksUri(value.openUri))) return failed();
   return { status: 'connected', view: { title: v.title, status: v.status, detail: v.detail, note: v.note,
     ...(presentation === undefined ? {} : { presentation }),
+    ...(state === undefined ? {} : { presentationState: state }),
     server: v.server, verificationUri: v.verificationUri, userCode: v.userCode,
     buttons: v.buttons.map(({ command, title, enabled }) => ({ command, title, enabled })) },
     ...(value.openUri === undefined ? {} : { openUri: value.openUri }) };

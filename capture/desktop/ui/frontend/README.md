@@ -84,7 +84,10 @@ Electron main owns one persistent, same-user Rust socket/controller. Opening and
 one-second local refreshes never initiate network access. Each bounded request
 uses Electron's monotonic clock; a ten-second idle lease, EOF, renderer reload,
 crash or window close drops the controller and cancels pending authorization.
-Rust owns all consent, credentials, health probes and durable revocation; JS does
+Connect-owned TypeScript (`connect/client/typescript/src/settings-presentation.ts`)
+owns the Electron card's presentation from allowlisted semantic facts. Rust still
+owns the asynchronous controller, consent admission, credentials, health probes
+and durable revocation; these are explicit #529 migration debt. JS does
 not read config or implement an auth client. Raw errors/config/device secrets do
 not enter the renderer. Only an explicit zero-argument **Open browser** command
 can open the current Rust-validated public verification URI; no arbitrary URL is

@@ -637,6 +637,68 @@ impl Controller {
         }
         view
     }
+
+    /// Electron's Connect surface is presented by the TypeScript client. Keep the
+    /// native `View` intact for existing native renderers, and expose only the
+    /// controller state needed to reproduce that presentation.
+    pub fn electron_view(&self) -> serde_json::Value {
+        let mut value = serde_json::to_value(self.view())
+            .expect("Connect settings View is serializable");
+        if let Some(object) = value.as_object_mut() {
+            // Retain the legacy projection for an already installed older
+            // Electron consumer. New consumers select presentationState only.
+            let snapshot = self.snapshot.as_ref().map(|snapshot| serde_json::json!({
+                "connected": snapshot.connected,
+                "uploadsEnabled": snapshot.uploads_enabled,
+                "renewalRequired": snapshot.renewal_required,
+                "reauthorizationRequired": snapshot.reauthorization_required,
+                "accountInitial": snapshot.account_initial,
+            }));
+            let (operation, logout) = match self.request.as_ref().map(|r| r.operation) {
+                Some(Operation::Login) => (Some("login"), false),
+                Some(Operation::Probe) => (Some("probe"), false),
+                Some(Operation::Disable { logout }) => (Some("disable"), logout),
+                None => (None, false),
+            };
+            object.insert("presentationState".into(), serde_json::json!({
+                "snapshot": snapshot,
+                "health": self.health.map(health_name),
+                "error": self.error.map(error_name),
+                "localError": self.local_error.map(error_name),
+                "consent": self.consent,
+                "approval": self.approval.is_some(),
+                "operation": operation,
+                "logout": logout,
+                "retryDisable": self.retry_disable,
+                "confirmation": self.confirmation,
+                "closed": self.closed,
+                "sharedLinksUrl": self.backend.shared_links_url(),
+            }));
+        }
+        value
+    }
+}
+
+fn health_name(health: Health) -> &'static str {
+    match health {
+        Health::Online => "online",
+        Health::Offline => "offline",
+        Health::AuthRequired => "auth-required",
+    }
+}
+
+fn error_name(error: SafeError) -> &'static str {
+    match error {
+        SafeError::Cancelled => "cancelled",
+        SafeError::Offline => "offline",
+        SafeError::AuthRequired => "auth-required",
+        SafeError::Rejected => "rejected",
+        SafeError::Expired => "expired",
+        SafeError::LocalState => "local-state",
+        SafeError::InvalidServer => "invalid-server",
+        SafeError::UnverifiedCommit => "unverified-commit",
+        SafeError::Unavailable => "unavailable",
+    }
 }
 
 impl Drop for Controller {

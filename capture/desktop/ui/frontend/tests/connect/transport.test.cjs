@@ -7,6 +7,9 @@ const path = require('node:path');
 const { ConnectSettings, browserUri } = require('../../electron/connect.cjs');
 const view = { title: 'Apparent Connect', status: 'Not connected', detail: 'Local only', note: 'No public links',
   server: null, verificationUri: null, userCode: null, buttons: [{ command: 'connect', title: 'Sign in', enabled: true }] };
+const semantic = { snapshot:{connected:false,uploadsEnabled:false,renewalRequired:false,reauthorizationRequired:false,accountInitial:null},
+  health:null,error:null,localError:null,consent:false,approval:false,operation:null,logout:false,
+  retryDisable:null,confirmation:null,closed:false,sharedLinksUrl:null };
 async function fixture(t, respond = () => ({ connect: view })) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'co-'));
   const directory = path.join(home, '.config/apparent/agent-control');
@@ -41,6 +44,28 @@ async function fixture(t, respond = () => ({ connect: view })) {
     await fs.rm(home, { recursive: true, force: true });
   });
   return { client, home, address, directory, requests, clients, closed: () => closed };
+}
+test('semantic facts strip unknown secrets and cannot authorize unrelated browser actions', async t => {
+  const f = await fixture(t, () => ({connect:{...view,presentationState:{...semantic,token:'secret',
+    snapshot:{...semantic.snapshot,token:'nested-secret'}}}}));
+  assert.deepEqual((await f.client.request()).view.presentationState, semantic);
+});
+test('an explicit semantic shared-link denial cannot fall back to the legacy URL', async t => {
+  const url = 'https://connect.test/connect/shares';
+  const presentation = {tone:'neutral',headline:'Connect',detail:'Local',note:'',artwork:false,compact:false,accountMenu:true,
+    buttons:[{command:'open-shared-links',title:'Manage',enabled:true}],menuActions:['open-shared-links'],sharedLinksUrl:url};
+  const f = await fixture(t, request => ({connect:{...view,presentation,presentationState:semantic},
+    ...(request.command === 'open-shared-links' ? {openUri:url} : {})}));
+  assert.equal((await f.client.request()).status, 'connected');
+  assert.deepEqual(await f.client.request('open-shared-links'), {status:'error'});
+});
+for (const patch of [{operation:'upload'}, {error:'secret diagnostic'}, {snapshot:{...semantic.snapshot,accountInitial:'private@example.com'}},
+  {confirmation:'yes'}, {sharedLinksUrl:'https://connect.test/other'}]) {
+  test('malformed semantic facts close without falling back to old presentation '+JSON.stringify(patch), async t => {
+    const f = await fixture(t, () => ({connect:{...view,presentationState:{...semantic,...patch}}}));
+    assert.deepEqual(await f.client.request(), {status:'error'});
+    assert.equal(f.client.socket, undefined);
+  });
 }
 test('Connect stream opens locally, reuses one controller, strips unknown fields and never supplies server/URI', async t => {
   const f = await fixture(t, () => ({ connect: { ...view, token: 'synthetic-secret' }, config: 'synthetic-secret' }));

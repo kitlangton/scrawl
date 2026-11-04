@@ -114,12 +114,12 @@ async function main() {
     await fs.writeFile(credential, JSON.stringify(grant), {mode:0o600});
     await fs.writeFile(config, JSON.stringify({...original,cloud:{...original.cloud,enabled:true,uploadConsent:true}}), {mode:0o600});
     const identity = await client.request();
-    assert.equal(identity.view.presentation.accountInitial, 'M');
+    assert.equal(identity.view.presentationState.snapshot.accountInitial, 'M');
     assert.equal(JSON.stringify(identity).includes(grant.token), false);
     await fs.writeFile(credential, JSON.stringify({...grant,authRequired:true}), {mode:0o600});
-    assert.equal((await client.request()).view.presentation.accountInitial, undefined);
+    assert.equal((await client.request()).view.presentationState.snapshot.accountInitial, null);
     await fs.unlink(credential);
-    assert.equal((await client.request()).view.presentation.accountInitial, undefined);
+    assert.equal((await client.request()).view.presentationState.snapshot.accountInitial, null);
     assert.equal(calls.length, count, 'Identity display must stay local-only');
     console.log(JSON.stringify({ platform: process.platform, electron: process.versions.electron,
       bridge: 'real Rust listener/controller/production client', http: 'synthetic loopback pending-device fixture, no account approval',
