@@ -62,6 +62,7 @@ const server = createServer(async (req, res) => {
       if (url.pathname === '/v1/shares/share-1' && !scenario.unconfirmed) revoked = true
       return res.end('{"ok":true}')
     }
+    if (url.pathname === '/v1/analytics/consent') return res.end(JSON.stringify({available:false,consented:false,revision:null,noticeVersion:'product-analytics-v1'}))
     if (url.pathname === '/v1/shares') {
       shareReads.push(url.pathname + url.search)
       if (scenario.readbackUnavailable && writes.length && url.searchParams.has('before')) return res.writeHead(503).end('{}')

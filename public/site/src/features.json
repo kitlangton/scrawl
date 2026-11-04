@@ -22,6 +22,17 @@
   ],
   "features": [
     {
+      "id": "connect-aggregate-daily-activity",
+      "added": "2026-11-04",
+      "group": "settings",
+      "name": "Aggregate-only daily service activity",
+      "says": "Successful upload/share actions deduplicate per account and original UTC day inside Cloudflare. Only daily observed totals and coverage metadata are selected for sync to the existing warehouse connector. Individual PostHog events remain opt-in. Prior refusals, request privacy signals and fixture exclusions are respected; account/day attribution expires at UTC day end plus one hour. Missing days are unknown, not verified zeroes.",
+      "status": "main",
+      "platforms": ["mac", "linux"],
+      "note": "Server-side daily totals for this small friends project; prospective notice precedes counting. This is a fail-open observed lower bound, not an exact census or anonymity guarantee. Existing D1 Read access is account-scoped; only sync selection is restricted to reviewed views. No new browser SDK, replay, identity or export service.",
+      "docs": ["connect/docs/aggregate-dau.md"]
+    },
+    {
       "id": "connect-product-analytics",
       "added": "2026-11-03",
       "group": "settings",

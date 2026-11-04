@@ -2,6 +2,7 @@ import type {Env, ShareRow, ShareState, ShareModel, CaptureRow, FileRow} from '.
 import {random,hash,envelope,stmt,bearer,session,csrf,json,fail,body,isRecord} from './common.ts';
 import {getObject} from './storage.ts';
 import {validPath} from './captures.ts';
+import {queueDailyActivity} from './reporting/aggregate-dau.ts';
 
 // Capture lifetime, not a second link-retention policy. Check on every read,
 // independently of cron; an old capability never points at a new incarnation.
@@ -37,7 +38,7 @@ async function descriptor(env: Env,row: ShareRow,base: string): Promise<ShareMod
   files:ready?files.map(({path,size,sha256})=>({path,size,sha256,url:base+'/files/'+path.split('/').map(encodeURIComponent).join('/')})):[],
   thumbnailUrl:ready&&files.some(f=>f.path==='contact-sheet.png')?base+'/thumbnail.png':null};
 }
-export async function shareRoutes(request: Request,env: Env,url: URL,render: (model: ShareModel) => string) {
+export async function shareRoutes(request: Request,env: Env,url: URL,render: (model: ShareModel) => string,context?:ExecutionContext) {
  const create=/^\/v1\/captures\/([a-f0-9]{32})\/share(?:\/(progress))?$/.exec(url.pathname);
  if(create&&request.method==='POST') {
   // Deployment switch controls new grants; revocation and existing reads remain
@@ -52,7 +53,8 @@ export async function shareRoutes(request: Request,env: Env,url: URL,render: (mo
    await stmt(env,'UPDATE shares SET upload_state=? WHERE capture_id=? AND account_id=? AND revoked_at IS NULL',input.state,id,a.account_id).run();return json({ok:true});
   }
   const secret=random(),management=random(16);
-  await stmt(env,'INSERT INTO shares(id,capture_id,account_id,hash,envelope,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(capture_id) WHERE revoked_at IS NULL DO NOTHING',management,id,a.account_id,await hash(secret),await envelope(env,secret),Date.now()).run();
+  const created=await stmt(env,'INSERT INTO shares(id,capture_id,account_id,hash,envelope,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(capture_id) WHERE revoked_at IS NULL DO NOTHING RETURNING created_at',management,id,a.account_id,await hash(secret),await envelope(env,secret),Date.now()).first<{created_at:number}>();
+  if(created)queueDailyActivity(env,context,request,a.account_id,created.created_at);
   const row=await stmt(env,join+' WHERE s.capture_id=? AND s.account_id=? AND s.revoked_at IS NULL',id,a.account_id).first<ShareRow>();if(!row)fail('share_changed',409);
   available(row);return json({url:publicUrl(env,await envelope(env,row.envelope,true)),status:state(row),expiresAt:new Date(row.expires_at).toISOString()});
  }

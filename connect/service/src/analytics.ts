@@ -32,9 +32,15 @@ export async function setAnalyticsChoice(env:Env,account:string,consented:boolea
  const condition=consented?'(? IS NULL AND NOT EXISTS(SELECT 1 FROM analytics_choices WHERE account_id=?)) OR EXISTS(SELECT 1 FROM analytics_choices WHERE account_id=? AND revision=?)':'1';
  let results;
  try {
+  // Additive privacy metadata is optional on pre-0009 schemas. Old Workers also
+  // preserve it because their conflict update touches only revision/time.
+  const objection=(await stmt(env,'PRAGMA table_info(analytics_choices)').all<{name:string}>()).results.some(row=>row.name==='aggregate_objected');
+  const columns=objection?',aggregate_objected':'';
+  const value=objection?`,${consented?0:1}`:'';
+  const update=objection?`,aggregate_objected=${consented?'CASE WHEN analytics_choices.aggregate_objected=1 OR NOT EXISTS(SELECT 1 FROM analytics_consent WHERE account_id=analytics_choices.account_id) THEN 1 ELSE 0 END':'1'}`:'';
   results=await env.DB.batch([
-   stmt(env,`INSERT INTO analytics_choices(account_id,revision,decided_at) SELECT ?,?,? WHERE ${condition}
-    ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision,decided_at=excluded.decided_at`,account,next,now,...consented?[revision,account,account,revision]:[]),
+   stmt(env,`INSERT INTO analytics_choices(account_id,revision,decided_at${columns}) SELECT ?,?,?${value} WHERE ${condition}
+    ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision,decided_at=excluded.decided_at${update}`,account,next,now,...consented?[revision,account,account,revision]:[]),
    stmt(env,`DELETE FROM analytics_consent WHERE account_id=? AND ?=0 AND EXISTS
     (SELECT 1 FROM analytics_choices WHERE account_id=? AND revision=?)`,account,consented?1:0,account,next),
    stmt(env,`INSERT INTO analytics_consent(account_id,notice_version,consented_at) SELECT ?,?,?

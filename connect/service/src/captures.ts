@@ -1,6 +1,7 @@
 import type {Env, CaptureRow, FileRow, ManifestFile, AttemptSnapshot} from './types.ts';
 import {DAY,hex,json,fail,stmt,body,bearer,usage,isRecord} from './common.ts';
 import {checkedHeads,getObject,uploadAttempt,settledAttempt,deleteAttempts} from './storage.ts';
+import {queueDailyActivity} from './reporting/aggregate-dau.ts';
 const live="status!='deleted' AND expires_at>? AND (status='ready' OR pending_until>?)";
 export function validPath(path: unknown): path is string {
  return typeof path==='string'&&path.length<=128&&/^(apparent\.json|notes\.json|summary\.md|contact-sheet(?:-full)?\.png|audio\.wav|recording\.(mp4|mov)|finish-trace\.json|timeline\.json|frames(?:-full)?\/frame-[0-9]+\.png)$/.test(path);
@@ -42,7 +43,7 @@ async function capture(env: Env,id: string,account: string) {
  if(!row)fail('not_found',404);return row;
 }
 const info = async (env:Env,c: CaptureRow) => ({id:c.id,status:c.status,expiresAt:new Date(c.expires_at).toISOString(),...(c.format==='plaintext-v1'?{}:{format:c.format}),...(groupedDelivery(c)?{delivery:'evidence-first-v1',evidenceReady:await evidenceReady(env,c)}:{})});
-export async function captureRoutes(request: Request,env: Env,url: URL) {
+export async function captureRoutes(request: Request,env: Env,url: URL,context?:ExecutionContext) {
  if(url.pathname==='/v1/account'&&request.method==='GET') {const a=await bearer(request,env);return json({beta:a.beta,quotaBytes:500000000,usedBytes:await usage(env,a.account_id)});}
  const match=/^\/v1\/captures\/([a-f0-9]{32})(?:\/(complete|files\/(.+)))?$/.exec(url.pathname);if(!match)return null;
  const [,id,action,encoded]=match,method=request.method;
@@ -87,7 +88,9 @@ export async function captureRoutes(request: Request,env: Env,url: URL) {
   if(c.status==='ready')return json(await info(env,c));
   const {results:files}=await stmt(env,'SELECT * FROM files WHERE capture_id=?',id).all<FileRow>();
   await checkedHeads(env,files,verified);
-  await stmt(env,`UPDATE captures SET status='ready' WHERE id=? AND account_id=? AND status='pending' AND ${live}`,id,a.account_id,Date.now(),Date.now()).run();
+  const completed=await stmt(env,`UPDATE captures SET status='ready' WHERE id=? AND account_id=? AND status='pending' AND ${live}
+   RETURNING CAST(unixepoch('subsec')*1000 AS INTEGER) AS occurred_at`,id,a.account_id,Date.now(),Date.now()).first<{occurred_at:number}>();
+  if(completed)queueDailyActivity(env,context,request,a.account_id,completed.occurred_at);
   const ready=await capture(env,id,a.account_id);if(ready.status!=='ready')fail('not_ready',409);return json(await info(env,ready));
  }
  if(encoded) {
