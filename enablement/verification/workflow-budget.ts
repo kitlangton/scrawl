@@ -4,7 +4,8 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export function workflowBudgetSeconds(platform = 'linux'): number {
-  if (platform === 'macos') return 900
+  // Temporary release exception explicitly authorized by Simon; restore after delivery.
+  if (platform === 'macos') return 3600
   if (platform === 'linux') return 900
   if (platform === 'web') return 600
   throw new Error('Invalid workflow budget platform')

@@ -118,7 +118,7 @@ test('watched workflow starts have no standalone watchdog to spawn', () => {
 
 test('completion audit CLI fails an overrun without cancelling the underlying workflow', () => {
   const script = fileURLToPath(new URL('./workflow-budget.ts', import.meta.url))
-  for (const [platform, seconds, expected] of [['web', 599, 0], ['web', 600, 0], ['web', 601, 1], ['linux', 899, 0], ['linux', 900, 0], ['linux', 901, 1], ['macos', 899, 0], ['macos', 900, 0], ['macos', 901, 1], ['invalid', 1, 1]] as const) {
+  for (const [platform, seconds, expected] of [['web', 599, 0], ['web', 600, 0], ['web', 601, 1], ['linux', 899, 0], ['linux', 900, 0], ['linux', 901, 1], ['macos', 900, 0], ['macos', 3600, 0], ['macos', 3601, 1], ['invalid', 1, 1]] as const) {
     const bootstrap = `globalThis.fetch = async (_url, init) => {
       if (init?.method && init.method !== 'GET') throw new Error('Unexpected workflow mutation');
       return new Response(JSON.stringify({ total_count: 1, jobs: [${JSON.stringify(job(0, seconds))}] }));
@@ -139,12 +139,16 @@ test('obsolete watch invocation fails before making any API request', () => {
   assert.match(result.stderr, /completion-time audit only/)
 })
 
-test('Linux and Mac have fifteen minutes while web retains ten', () => {
+test('temporary Mac release exception retains Linux and web limits', () => {
   assert.equal(workflowBudgetSeconds(), 900)
-  assert.equal(workflowBudgetSeconds('macos'), 900)
+  assert.equal(workflowBudgetSeconds('macos'), 3600)
+  const platformWorkflow = readFileSync(new URL('../../.github/workflows/verification-platform.yml', import.meta.url), 'utf8')
+  assert.match(platformWorkflow.split('\n  rust:\n')[1], /timeout-minutes: \$\{\{ startsWith\(inputs.runner, 'macos-'\) && 60 \|\| 15 \}\}/)
+  const releaseWorkflow = readFileSync(new URL('../../.github/workflows/release-mac-preview.yml', import.meta.url), 'utf8')
+  assert.match(releaseWorkflow.split('\n  preview:\n')[1], /timeout-minutes: 60/)
   assert.throws(() => workflowBudgetSeconds('windows'), /Invalid/)
   assert.doesNotThrow(() => enforceBudget([job(0, 900)], 'macos'))
-  assert.throws(() => enforceBudget([job(0, 901)], 'macos'), /900s/)
+  assert.throws(() => enforceBudget([job(0, 3601)], 'macos'), /3600s/)
   assert.doesNotThrow(() => enforceBudget([job(0, 900)], 'linux'))
   assert.throws(() => enforceBudget([job(0, 901)], 'linux'), /900s/)
   assert.doesNotThrow(() => enforceBudget([job(0, 600)], 'web'))

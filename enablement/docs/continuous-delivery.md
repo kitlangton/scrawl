@@ -509,3 +509,14 @@ The agent whose run exceeds a budget owns optimizing the tests and rerunning
 successfully before continuing delivery. Do not increase/bypass limits, remove
 coverage or weaken checks to obtain a pass. CI logs print this instruction before
 setup so it remains visible even when GitHub terminates a timed-out job.
+
+### Temporary Mac release execution allowance
+
+On November 4, Simon explicitly authorized temporarily ignoring the 15-minute
+execution limit to deliver the next Mac update. Mac workload auditing, the platform
+Rust job and Mac preview packaging use a bounded 60-minute allowance for that
+delivery. Linux remains at 15 minutes and web at 10. Native step deadlines, actual
+assertions, release admission and signing are unchanged. Restore the Mac workload
+budget to 900 seconds and both expanded job limits to 15 minutes after verified
+publication and installed updater acceptance; this exception is not a performance
+improvement or an increase to the separate NoMac spending/session limits.

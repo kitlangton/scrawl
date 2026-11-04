@@ -49,7 +49,8 @@ jobs:
     needs: admit
     if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
     runs-on: macos-latest
-    timeout-minutes: 15
+    # Temporary Mac release exception; restore after verified delivery.
+    timeout-minutes: 60
     env:
       CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
       APPARENT_PREVIEW_NOTARIZE: ${{ vars.MAC_APPLE_SIGNING_ENABLED || 'false' }}
@@ -61,7 +62,7 @@ jobs:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo 'Temporary Simon-authorized Mac release execution allowance: 60 minutes. All signing, notarization, native acceptance and exact-source release gates remain required. Restore the allowance after verified release delivery.'
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.admit.outputs.sha }}

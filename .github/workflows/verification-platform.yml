@@ -211,12 +211,13 @@ jobs:
     if: github.ref == 'refs/heads/main'
     name: rust (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 15
+    # Temporary Mac release exception; Linux retains its existing limit.
+    timeout-minutes: ${{ startsWith(inputs.runner, 'macos-') && 60 || 15 }}
     steps:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo 'Execution budget: Linux 15 minutes; temporary Simon-authorized Mac release allowance 60 minutes. All native assertions and release gates remain required. Restore the Mac allowance after verified release delivery.'
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.revision || github.sha }}

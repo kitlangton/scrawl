@@ -867,8 +867,16 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
             for job in re.split(r'^  [\w-]+:\n', workflow.read_text(), flags=re.M)[1:]:
                 if re.search(r'^    runs-on:', job, re.M):
                     expected = ('15' if workflow.name in {'verification.yml', 'verification-platform.yml', 'release-linux.yml', 'linux-updater-harness.yml', 'verification-mac.yml', 'native-proof-mac.yml', 'release-mac-preview.yml'} else '10')
+                    temporary_mac = (workflow.name == 'release-mac-preview.yml' and '    runs-on: macos-latest\n' in job)
+                    temporary_platform = (workflow.name == 'verification-platform.yml' and '    name: rust (' in job)
+                    if temporary_platform:
+                        expected = "${{ startsWith(inputs.runner, 'macos-') && 60 || 15 }}"
+                    elif temporary_mac:
+                        expected = '60'
                     self.assertIn(f'    timeout-minutes: {expected}\n', job, str(workflow))
-                    if '    name: Workflow runtime budget\n' not in job:
+                    if temporary_mac or temporary_platform:
+                        self.assertIn('Simon-authorized Mac release', job)
+                    elif '    name: Workflow runtime budget\n' not in job:
                         self.assertIn('agent whose run hits the limit owns optimization', job)
 
 
