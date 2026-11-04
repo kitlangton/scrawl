@@ -827,3 +827,10 @@ open confirmation pauses completion dismissal; closing grants a fresh retry inte
 The share Electron entry/preload are authored as `.cts`. `npm run build` checks
 and emits their ignored `.cjs` runtime files; popup packaging stages only those
 outputs. The share smoke and hosted native case are TypeScript run by Node 22.
+
+For onboarding renderer feedback, run `npm run check:onboarding` after `npm ci`.
+It typechecks the existing onboarding entry and transitive imports, then builds
+`onboarding.html` into `node_modules/.cache/onboarding-renderer/`. It retains shared UI freshness checks,
+shared CSS/Tailwind scanning and font inputs. It does not generate Connect
+adapters or check Settings/pill TypeScript. This developer command is not a
+packaging, bridge, native or release check; the full build remains authoritative.

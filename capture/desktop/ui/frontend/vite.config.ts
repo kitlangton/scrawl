@@ -10,8 +10,13 @@ for (const file of ['button.tsx', 'tabs.tsx', 'utils.ts', 'theme.css', 'tokens.c
   if (canonical !== installed) throw new Error('Shared UI changed. Run npm ci before building.');
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   base: './',
   plugins: [react(), tailwindcss()],
-  build: { rollupOptions: { input: { foundation: 'index.html', settings: 'settings.html', onboarding: 'onboarding.html', pill: 'pill/index.html' } } },
-});
+  build: {
+    outDir: mode === 'onboarding-feedback' ? 'node_modules/.cache/onboarding-renderer' : 'dist',
+    rollupOptions: { input: mode === 'onboarding-feedback'
+      ? 'onboarding.html'
+      : { foundation: 'index.html', settings: 'settings.html', onboarding: 'onboarding.html', pill: 'pill/index.html' } },
+  },
+}));

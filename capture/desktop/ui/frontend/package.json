@@ -14,7 +14,8 @@
     "prebuild": "node scripts/build-connect.ts",
     "pretest": "node scripts/build-connect.ts",
     "prepare:settings-native": "node scripts/settings-check.ts prepare-native",
-    "test:settings": "node scripts/settings-check.ts test"
+    "test:settings": "node scripts/settings-check.ts test",
+    "check:onboarding": "tsc --project scripts/tsconfig.onboarding.json && vite build --mode onboarding-feedback"
   },
   "dependencies": {
     "@apparent/ui": "file:../../../../shared/ui",
