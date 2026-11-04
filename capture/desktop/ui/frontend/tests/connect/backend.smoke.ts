@@ -2,14 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import net from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect } from '@playwright/test';
 
 test('shipped account controller owns consent, activation, confirmation and stale browser cancellation', {timeout:45000}, async t => {
   const root = fileURLToPath(new URL('../..', import.meta.url));
-  const home = await fs.mkdtemp(path.join(os.tmpdir(),'connect-ts-'));
+  // Darwin's runner TMPDIR makes this socket exceed its 103-byte path limit.
+  // Keep a short canonical temp root and a unique private HOME on both platforms.
+  const home = await fs.mkdtemp(path.join(await fs.realpath('/tmp'),'connect-ts-'));
   const clients = new Set<net.Socket>();
   let application: Awaited<ReturnType<typeof electron.launch>> | undefined;
   let server: net.Server | undefined;
@@ -94,6 +95,7 @@ test('shipped account controller owns consent, activation, confirmation and stal
     });
   });
   const address=path.join(directory,'capture.sock');
+  assert.ok(Buffer.byteLength(address)<=103,'Fixture socket must fit macOS and Linux without truncation');
   await new Promise<void>(resolve=>server!.listen(address,()=>resolve())); await fs.chmod(address,0o600);
   application=await electron.launch({args:[root,'--settings-connect'],env:{...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,'config')}});
   await application.evaluate(({shell})=>{ (global as any).opened=[];shell.openExternal=async uri=>{(global as any).opened.push(uri);}; });
