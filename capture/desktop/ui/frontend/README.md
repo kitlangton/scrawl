@@ -659,6 +659,10 @@ avoiding overlapping Electron profiles during asynchronous retirement.
 
 ## Shift-click notes
 
+Linux recording controls retain their native drawing/input shape across unchanged
+measurements. Geometry, note-extension, pocket and display-scale changes reapply it;
+clock and microphone heartbeats keep the existing region.
+
 While the Electron recording pill is routed, its flush Lilac right extension
 shows a shared Lucide note icon and the durable saved count, hidden at zero.
 The main row stays at fixed coordinates across count changes; its transparent

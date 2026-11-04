@@ -125,6 +125,7 @@ app.whenReady().then(()=>{
   });
   // Renderer never chooses native dimensions or screen coordinates.
   // Parent's bounded state defines content; main measures its own trusted document.
+  let appliedShape=null;
   async function measure(){
     if(!loaded || window.isDestroyed())return;
     if(current?.phase!=='hidden' && Date.now()-lastInput>5000){app.exit(1);return;}
@@ -143,7 +144,16 @@ app.whenReady().then(()=>{
       if(size.revision!==current?.revision)return false;
       footprint={...next,mainWidth,rowWidth,pocketWidth:mainWidth};
       if(bounds.width!==width || bounds.height!==height || bounds.y!==next.bounds.y)position(next.bounds);
-      if(process.platform==='linux')window.setShape(geometry.shape(width,height,next.rowY,rowHeight,rowWidth,mainWidth));
+      if(process.platform==='linux'){
+        // Updating X11's bounding region is a native drawing transition, even
+        // when its rectangles are unchanged. Heartbeats only need measurement.
+        const scale=screen.getDisplayMatching(window.getBounds()).scaleFactor;
+        const key=JSON.stringify([width,height,next.rowY,rowHeight,rowWidth,mainWidth,scale]);
+        if(key!==appliedShape){
+          window.setShape(geometry.shape(width,height,next.rowY,rowHeight,rowWidth,mainWidth));
+          appliedShape=key;
+        }
+      }
       return size.revision===current?.revision;
     }catch{app.exit(1);}
   }
