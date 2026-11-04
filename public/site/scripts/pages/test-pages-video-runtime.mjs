@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { movie, chunkPath } from "../../lib/pages-video-metadata.js"
 
-// Reuse the locked runtime installed by the owning workflow's hosted step.
-const require = createRequire(new URL("../../../../connect/service/package.json", import.meta.url))
+// Public owns the locked runtime used to verify its Pages Function.
+const require = createRequire(new URL("../../package.json", import.meta.url))
 const { Miniflare } = require("miniflare")
 const { build } = require("esbuild")
 

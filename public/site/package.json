@@ -10,7 +10,9 @@
     "test:video": "node --test scripts/browser-proof/test-video-demo.mjs",
     "test:try-button": "node scripts/pages/test-try-button-browser.mjs",
     "test:hosted": "node scripts/browser-proof/test-hosted-browser.mjs",
-    "generate:og-video": "node scripts/og-video/capture.mjs"
+    "generate:og-video": "node scripts/og-video/capture.mjs",
+    "package:public": "npm run build && node scripts/site-build/package-apparent.mjs",
+    "build:pages-worker": "esbuild lib/pages-worker.ts --bundle --platform=browser --format=esm --outfile=dist-apparent/_worker.js"
   },
   "dependencies": {
     "knobs": "npm:@kitlangton/knobs@0.3.0",
@@ -25,10 +27,17 @@
     "@types/react-dom": "^19.3.0",
     "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "esbuild": "0.28.2",
     "matter-js": "0.20.0",
+    "miniflare": "4.20260730.0",
     "parse5": "8.0.1",
     "playwright-core": "1.63.0",
     "typescript": "^7.0.2",
-    "vite": "^8.3.4"
+    "vite": "^8.3.4",
+    "wrangler": "4.156.0"
+  },
+  "overrides": {
+    "sharp": "0.35.5",
+    "undici": "7.30.1"
   }
 }

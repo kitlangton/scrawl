@@ -238,7 +238,7 @@ def main():
         except SupersededMain:
             print('Skipping superseded main candidate; no website published')
             return
-        subprocess.run([str(ROOT / 'connect/service/node_modules/.bin/wrangler'), 'pages', 'deploy',
+        subprocess.run([str(ROOT / 'public/site/node_modules/.bin/wrangler'), 'pages', 'deploy',
                         '--project-name', PROJECT, '--branch', 'main', '--commit-hash', sha,
                         '--commit-dirty=false', '--no-bundle'], cwd=stage, env=env, check=True)
     receipt = verify_ready(sha, package)
