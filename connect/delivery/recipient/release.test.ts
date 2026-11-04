@@ -4,7 +4,7 @@ import { mkdtempSync,mkdirSync,writeFileSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { seal,targets } from './seal.ts';
-import { select } from './release.ts';
+import { prepareTarget,publishTarget,select } from './release.ts';
 function executable(target:string) {
  const bytes=Buffer.alloc(64); const arm=target.startsWith('aarch64');
  if(target.endsWith('linux-gnu')) {bytes.write('7f454c46',0,'hex');bytes[4]=2;bytes[5]=1;bytes.writeUInt16LE(3,16);bytes.writeUInt16LE(arm?183:62,18);}
@@ -62,4 +62,51 @@ test('release rejects an honestly hashed but wrong-architecture component before
  assert.throws(()=>publish(root,output,sha,'123','1',(()=>{throw Error('must reject before external operations');}) as typeof execFileSync),/architecture/);
  assert.equal(existsSync(output),false);
  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('one successful target creates an authenticated immutable asset receipt without the other targets',()=>{
+ const root=mkdtempSync(join(tmpdir(),'recipient-target-release-'));const sha='c'.repeat(40);const target=targets[0];
+ const input=join(root,'input');const output=join(root,'output');mkdirSync(input);
+ writeFileSync(join(input,'apparent-connect-recipient'),executable(target));seal(input,target,sha,'456','2');
+ const calls:string[][]=[];
+ const runner:typeof execFileSync=((command:string,args:string[],options:object)=>{calls.push([command,...args]);return command==='tar'?execFileSync(command,args,options):Buffer.alloc(0);}) as typeof execFileSync;
+ try {
+  const prepared=prepareTarget(input,output,sha,'456','2',target,runner);
+  assert.equal(calls.filter(call=>call[0]==='gh').length,2);
+  assert.equal(prepared.releaseTag,`recipient-${sha}-456-2-${target}`);
+  assert.equal(prepared.receipt.provenance.architecture,'x86_64');
+  const published=publishTarget(output,sha,'456','2',target,runner);
+  assert.equal(published.releaseTag,prepared.releaseTag);
+  const create=calls.find(call=>call[0]==='gh'&&call[1]==='release');
+  assert.ok(create);
+  assert.deepEqual(create.slice(2,5),['create',prepared.releaseTag,prepared.archive]);
+  assert.ok(create.some(value=>value===prepared.receiptPath));
+  assert.ok(calls.filter(call=>call[0]==='gh'&&call[1]==='attestation').length===4);
+  const receipt=JSON.parse(readFileSync(prepared.receiptPath,'utf8'));
+  assert.equal(receipt.provenance.run,'456');assert.equal(receipt.provenance.attempt,'2');
+  assert.equal(receipt.provenance.sourceSha,sha);assert.equal(receipt.provenance.target,target);
+  assert.match(receipt.archiveSha256,/^[a-f0-9]{64}$/);
+  assert.throws(()=>publishTarget(output,sha,'456','1',target,runner),/ENOENT/);
+ } finally {rmSync(root,{recursive:true,force:true});}
+});
+
+test('target publication rejects incomplete or tampered output before release creation',()=>{
+ const root=mkdtempSync(join(tmpdir(),'recipient-target-reject-'));const sha='d'.repeat(40);const target=targets[1];
+ const input=join(root,'input');const output=join(root,'output');mkdirSync(input);
+ writeFileSync(join(input,'apparent-connect-recipient'),executable(target));seal(input,target,sha,'789','1');
+ const calls:string[][]=[];const runner:typeof execFileSync=((command:string,args:string[],options:object)=>{calls.push([command,...args]);return command==='tar'?execFileSync(command,args,options):Buffer.alloc(0);}) as typeof execFileSync;
+ try {
+  writeFileSync(join(input,'unexpected'),'no');
+  assert.throws(()=>prepareTarget(input,output,sha,'789','1',target,runner),/Incomplete or unexpected/);
+  rmSync(join(input,'unexpected'));
+  const rejected:typeof execFileSync=((command:string,args:string[],options:object)=>{if(command==='gh')throw Error('attestation rejected');return execFileSync(command,args,options);}) as typeof execFileSync;
+  assert.throws(()=>prepareTarget(input,output,sha,'789','1',target,rejected),/attestation rejected/);
+  assert.equal(existsSync(output),false);
+  prepareTarget(input,output,sha,'789','1',target,runner);
+  const receiptPath=join(output,`recipient-${sha}-789-1-${target}-receipt.json`);
+  const receipt=JSON.parse(readFileSync(receiptPath,'utf8'));receipt.provenance.target=targets[0];writeFileSync(receiptPath,JSON.stringify(receipt));
+  calls.length=0;
+  assert.throws(()=>publishTarget(output,sha,'789','1',target,runner),/Incompatible target receipt target/);
+  assert.equal(calls.length,0);
+ } finally {rmSync(root,{recursive:true,force:true});}
 });

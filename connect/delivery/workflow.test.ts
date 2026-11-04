@@ -55,6 +55,23 @@ test('durable recipient releases verify trusted provenance and preserve executab
  assert.ok(release.indexOf('release.ts')<release.indexOf('gh release create'));
 });
 
+test('successful recipient targets publish signed independent receipts before the four-target aggregate',async()=>{
+ const workflow=await readFile(new URL('../../.github/workflows/connect-delivery.yml',import.meta.url),'utf8');
+ const releaseSource=await readFile(new URL('./recipient/release.ts',import.meta.url),'utf8');
+ const recipient=workflow.split('\n  recipient:\n')[1].split('\n  recipient-release:')[0];
+ const aggregate=workflow.split('\n  recipient-release:\n')[1];
+ assert.match(recipient,/contents: write[\s\S]*id-token: write[\s\S]*attestations: write/);
+ assert.ok(recipient.indexOf('Test and build component only')<recipient.indexOf('Prepare target release and publication receipt'));
+ assert.ok(recipient.indexOf('Prepare target release and publication receipt')<recipient.indexOf('Authenticate and publish this successful target'));
+ for(const value of ['release.ts prepare-target','release.ts publish-target','actions/attest-build-provenance@v2'])assert.ok(recipient.includes(value),value);
+ for(const value of ['--source-ref','--source-digest',"execute('gh',['release','create'"])assert.ok(releaseSource.includes(value),value);
+ assert.match(recipient,/GH_TOKEN: \$\{\{ github\.token \}\}/);
+ assert.match(aggregate,/needs: recipient/);
+ assert.match(aggregate,/recipient-assets release-assets/);
+ assert.match(aggregate,/gh release create/);
+ assert.match(aggregate,/--latest=false/);
+});
+
 test('recipient selection is independent of web production and a skip cannot publish native evidence',async()=>{
  const workflow=await readFile(new URL('../../.github/workflows/connect-delivery.yml',import.meta.url),'utf8');
  const selection=workflow.split('  recipient-select:')[1].split('  recipient:')[0];

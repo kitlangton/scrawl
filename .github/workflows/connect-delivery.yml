@@ -228,7 +228,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write
       id-token: write
       attestations: write
     steps:
@@ -269,6 +269,18 @@ jobs:
           path: ${{ runner.temp }}/recipient-output/*
           if-no-files-found: error
           retention-days: 90
+      - name: Prepare target release and publication receipt
+        env:
+          TARGET: ${{ matrix.target }}
+        run: node --experimental-strip-types connect/delivery/recipient/release.ts prepare-target "$RUNNER_TEMP/recipient-output" "$RUNNER_TEMP/recipient-release-output" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$TARGET"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ runner.temp }}/recipient-release-output/*
+      - name: Authenticate and publish this successful target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+        run: node --experimental-strip-types connect/delivery/recipient/release.ts publish-target "$RUNNER_TEMP/recipient-release-output" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$TARGET"
 
   recipient-release:
     needs: recipient

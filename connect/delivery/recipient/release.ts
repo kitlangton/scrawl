@@ -34,4 +34,76 @@ export function publish(root:string, output:string, sha:string, run:string, atte
   }
   writeFileSync(join(output,'recipient-identities.json'),JSON.stringify({schema:1,releaseVersion:version,targets:selected.map(({directory,...identity})=>identity)})+'\n');
 }
-if (process.argv[1]?.endsWith('/release.ts')) publish(...process.argv.slice(2) as [string,string,string,string,string]);
+
+const architecture: Record<string,string> = {
+  'x86_64-unknown-linux-gnu':'x86_64',
+  'aarch64-unknown-linux-gnu':'aarch64',
+  'aarch64-apple-darwin':'arm64',
+  'x86_64-apple-darwin':'x86_64',
+};
+
+function assertIdentity(sha:string,run:string,attempt:string,target:string) {
+  if (!/^[a-f0-9]{40}$/.test(sha) || !/^[1-9][0-9]*$/.test(run) ||
+      !/^[1-9][0-9]*$/.test(attempt) || !targets.includes(target)) throw Error('Invalid target release identity');
+}
+
+/** Prepare a durable one-target asset from exactly one successful matrix job's output. */
+export function prepareTarget(input:string,output:string,sha:string,run:string,attempt:string,target:string,
+                              execute:typeof execFileSync=execFileSync) {
+  assertIdentity(sha,run,attempt,target);
+  const names=readdirSync(input).sort();
+  if (names.join(',')!=='apparent-connect-recipient,manifest.json') throw Error('Incomplete or unexpected target output');
+  const executable=join(input,'apparent-connect-recipient');
+  const manifest=JSON.parse(readFileSync(join(input,'manifest.json'),'utf8'));
+  const bytes=readFileSync(executable);
+  const identity=validate(bytes,manifest,{sourceSha:sha,run,attempt,target,sha256:createHash('sha256').update(bytes).digest('hex')});
+  // Both build outputs must be authenticated before they are packaged.
+  for (const file of [executable,join(input,'manifest.json')]) execute('gh',['attestation','verify',file,'--repo','tryapparent/apparent','--signer-workflow','tryapparent/apparent/.github/workflows/connect-delivery.yml','--source-ref','refs/heads/main','--source-digest',sha],{stdio:'inherit'});
+  mkdirSync(output);
+  const releaseTag=`recipient-${sha}-${run}-${attempt}-${target}`;
+  const asset=`${releaseTag}.tar.gz`;
+  const archive=join(output,asset);
+  chmodSync(executable,0o755);
+  execute('tar',['-czf',archive,'-C',input,'apparent-connect-recipient','manifest.json']);
+  const archiveSha256=createHash('sha256').update(readFileSync(archive)).digest('hex');
+  const receipt={schema:1,releaseTag,asset,archiveSha256,provenance:{repository:'tryapparent/apparent',workflow:'.github/workflows/connect-delivery.yml',sourceSha:sha,run,attempt,target,architecture:architecture[target],executable:'apparent-connect-recipient',executableSha256:identity.sha256}};
+  const receiptPath=join(output,`${releaseTag}-receipt.json`);
+  writeFileSync(receiptPath,JSON.stringify(receipt)+'\n',{flag:'wx'});
+  return {archive,receiptPath,releaseTag,asset,receipt};
+}
+
+/** Verify the packaged subjects before creating their immutable per-target release. */
+export function publishTarget(output:string,sha:string,run:string,attempt:string,target:string,
+                              execute:typeof execFileSync=execFileSync) {
+  assertIdentity(sha,run,attempt,target);
+  const releaseTag=`recipient-${sha}-${run}-${attempt}-${target}`;
+  const asset=`${releaseTag}.tar.gz`;
+  const archive=join(output,asset);
+  const receiptPath=join(output,`${releaseTag}-receipt.json`);
+  const receipt=JSON.parse(readFileSync(receiptPath,'utf8'));
+  const archiveSha256=createHash('sha256').update(readFileSync(archive)).digest('hex');
+  const expected={schema:1,releaseTag,asset,archiveSha256,provenance:{repository:'tryapparent/apparent',workflow:'.github/workflows/connect-delivery.yml',sourceSha:sha,run,attempt,target,architecture:architecture[target],executable:'apparent-connect-recipient'}};
+  for (const [key,value] of Object.entries(expected)) {
+    if (key==='provenance') {
+      for (const [field,expectedValue] of Object.entries(value as Record<string,unknown>))
+        if (receipt.provenance?.[field]!==expectedValue) throw Error(`Incompatible target receipt ${field}`);
+    } else if (receipt[key]!==value) throw Error(`Incompatible target receipt ${key}`);
+  }
+  if (!/^[a-f0-9]{64}$/.test(receipt.provenance?.executableSha256 ?? '')) throw Error('Invalid target receipt executable digest');
+  const members=(execute('tar',['-tzf',archive],{encoding:'utf8'}) as unknown as string).trim().split('\n').sort();
+  if (members.join(',')!=='apparent-connect-recipient,manifest.json') throw Error('Unexpected target archive members');
+  const archivedManifest=JSON.parse(execute('tar',['-xOzf',archive,'manifest.json'],{encoding:'utf8'}) as unknown as string);
+  const archivedExecutable=execute('tar',['-xOzf',archive,'apparent-connect-recipient'],{maxBuffer:64*1024*1024}) as unknown as Buffer;
+  const verified=validate(archivedExecutable,archivedManifest,{sourceSha:sha,run,attempt,target,sha256:receipt.provenance.executableSha256});
+  if (verified.sha256!==receipt.provenance.executableSha256) throw Error('Target receipt executable digest mismatch');
+  for (const file of [archive,receiptPath]) execute('gh',['attestation','verify',file,'--repo','tryapparent/apparent','--signer-workflow','tryapparent/apparent/.github/workflows/connect-delivery.yml','--source-ref','refs/heads/main','--source-digest',sha],{stdio:'inherit'});
+  execute('gh',['release','create',releaseTag,archive,receiptPath,'--repo','tryapparent/apparent','--target',sha,'--title',releaseTag,'--notes',`Standalone recipient protocol 1. Source ${sha}; successful target job run ${run} attempt ${attempt}; target ${target}. Verify the receipt and build provenance before use. This target asset does not satisfy the four-target aggregate activation contract.`,'--latest=false'],{stdio:'inherit'});
+  return {releaseTag,asset,receiptPath,archiveSha256};
+}
+
+if (process.argv[1]?.endsWith('/release.ts')) {
+  const [command,...args]=process.argv.slice(2);
+  if (command==='prepare-target') prepareTarget(...args as [string,string,string,string,string,string]);
+  else if (command==='publish-target') publishTarget(...args as [string,string,string,string,string]);
+  else publish(command!,...args as [string,string,string,string]);
+}
