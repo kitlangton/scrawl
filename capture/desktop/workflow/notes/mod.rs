@@ -71,6 +71,8 @@ pub struct Session {
     badge_position: Option<[i32; 4]>,
     embedded: bool,
     saved_count: Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(test)]
+    renderer_ready: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // Chromium can still write its profile during Electron's `quit` event. Rust owns
@@ -177,6 +179,10 @@ impl Session {
         let stopped = Arc::clone(&stopping);
         let saved_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = Arc::clone(&saved_count);
+        #[cfg(test)]
+        let renderer_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(test)]
+        let ready_receipt = Arc::clone(&renderer_ready);
         std::thread::spawn(move || {
             let mut flying = false;
             let mut current = None;
@@ -268,7 +274,11 @@ impl Session {
                             mode = "editor";
                         }
                         Message::Action(action) => match action {
-                            CommandMessage::Ready => ready = true,
+                            CommandMessage::Ready => {
+                                ready = true;
+                                #[cfg(test)]
+                                ready_receipt.store(true, Ordering::Release);
+                            },
                             CommandMessage::Finished => {
                                 ensure!(completion.is_some(), "Unexpected finish receipt");
                                 drained = true;
@@ -452,6 +462,8 @@ impl Session {
             badge_position: None,
             embedded: false,
             saved_count,
+            #[cfg(test)]
+            renderer_ready,
         })
     }
     pub fn undo(&self, pin: u32) -> bool {
@@ -563,7 +575,8 @@ mod transport_tests {
         let (sender, receiver) = flume::bounded(1);
         let session = Session { sender, stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             finishing: true, badge_position: None, embedded: true,
-            saved_count: Arc::new(std::sync::atomic::AtomicUsize::new(1)) };
+            saved_count: Arc::new(std::sync::atomic::AtomicUsize::new(1)),
+            renderer_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)) };
         session.show_list(123, 456);
         assert!(matches!(receiver.try_recv(), Ok(Message::List { focus: 123, owner: 456 })));
         // Serde ignores extra fields on a unit variant; none can become the
@@ -578,6 +591,14 @@ mod transport_tests {
         let (events, _receiver) = flume::unbounded();
         let session = Session::start(&directory, SharedCaptureTelemetry::new(events),
             crate::shared::model::TargetFrame { x: 0.0, y: 0.0, width: 1000.0, height: 700.0, scale: 1.0 }).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while !session.renderer_ready.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            if std::fs::read_to_string(directory.join("notes-ui.log")).unwrap_or_default().contains("FATAL") { break; }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(session.renderer_ready.load(Ordering::Acquire),
+            "Notes renderer never acknowledged Ready; retained fixture: {}\n{}",
+            directory.display(), std::fs::read_to_string(directory.join("notes-ui.log")).unwrap_or_default());
         session.open(Anchor { pin: 1, t: 100, x: 0.5, y: 0.5, screen_x: 500.0, screen_y: 350.0, focus: 0, owner: 0 });
         session.sender.send(Message::Action(CommandMessage::Draft { pin: 1, text: "Only a draft".into() })).unwrap();
         assert_eq!(session.saved_count(), 0);
@@ -595,7 +616,9 @@ mod transport_tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert_eq!(session.saved_count(), 0);
-        session.finish().recv_timeout(std::time::Duration::from_secs(10)).unwrap().unwrap();
+        let finish = session.finish().recv_timeout(std::time::Duration::from_secs(10));
+        assert!(matches!(finish, Ok(Ok(()))), "Notes finish failed: {finish:?}; retained fixture: {}\n{}",
+            directory.display(), std::fs::read_to_string(directory.join("notes-ui.log")).unwrap_or_default());
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
