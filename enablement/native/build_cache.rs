@@ -12,6 +12,7 @@ use std::{
     process::{Command, Stdio},
     sync::OnceLock,
     time::{Duration, Instant},
+    thread,
 };
 
 pub fn add_field(record: &mut Vec<u8>, name: &[u8], value: &[u8]) {
@@ -428,6 +429,64 @@ where
     }
     let _ = fs::remove_file(&receipt);
     build()?;
+    publish_outputs(cache, &key, outputs)?;
+    Ok(false)
+}
+
+/// On a definitely cold cache, overlap identity discovery with compilation. Existing
+/// receipts (including invalid ones) stay on the serial path so their full identity
+/// is checked before deciding whether to reuse or rebuild.
+pub fn cold_reuse_or_build<I, F>(
+    cache: &Path,
+    outputs: &[(&str, PathBuf, bool)],
+    identity: I,
+    build: F,
+) -> std::io::Result<bool>
+where
+    I: FnOnce() -> Option<Vec<u8>> + Send,
+    F: FnOnce() -> std::io::Result<()>,
+{
+    let receipt = cache.join("receipt");
+    if !matches!(fs::symlink_metadata(&receipt), Err(error) if error.kind() == std::io::ErrorKind::NotFound) {
+        let Some(key) = identity() else {
+            let _ = fs::remove_file(&receipt);
+            return build().map(|_| false);
+        };
+        return reuse_or_build(cache, &key, outputs, build);
+    }
+
+    fs::create_dir_all(cache)?;
+    let (identity, built) = thread::scope(|scope| {
+        let identity = scope.spawn(identity);
+        let built = build();
+        let identity = identity.join();
+        (identity, built)
+    });
+    let key = identity
+        .map_err(|_| std::io::Error::other("native identity worker panicked"))?;
+    built?;
+    let Some(key) = key else {
+        let _ = fs::remove_file(&receipt);
+        return Ok(false);
+    };
+    let key = match digest(key) {
+        Ok(key) => key,
+        Err(_) => {
+            let _ = fs::remove_file(&receipt);
+            return Ok(false);
+        }
+    };
+    let _ = fs::remove_file(&receipt);
+    publish_outputs(cache, &key, outputs)?;
+    Ok(false)
+}
+
+fn publish_outputs(
+    cache: &Path,
+    key: &str,
+    outputs: &[(&str, PathBuf, bool)],
+) -> std::io::Result<()> {
+    let receipt = cache.join("receipt");
     let mut lines = format!("{key}\n");
     for (name, source, executable) in outputs {
         let bytes = fs::read(source)?;
@@ -453,7 +512,7 @@ where
     let tmp = cache.join(format!("receipt.{}.tmp", std::process::id()));
     fs::write(&tmp, lines)?;
     fs::rename(tmp, receipt)?;
-    Ok(false)
+    Ok(())
 }
 
 pub fn recipe_identity() -> Vec<u8> {
@@ -648,5 +707,61 @@ mod tests {
         );
         assert!(!receipt.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cold_identity_and_compile_overlap_and_publish_only_after_both_succeed() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let root = temp();
+        fs::create_dir_all(&root).unwrap();
+        let cache = root.join("cold-cache");
+        let out = root.join("cold-output");
+        let outputs = [("artifact", out.clone(), false)];
+        let (identity_ready, identity_started) = mpsc::channel();
+        let (compile_done, compiled) = mpsc::channel();
+        let identity_cache = cache.clone();
+        assert!(!cold_reuse_or_build(
+            &cache,
+            &outputs,
+            move || {
+                identity_ready.send(()).unwrap();
+                compiled.recv_timeout(Duration::from_secs(2)).unwrap();
+                assert!(!identity_cache.join("receipt").exists());
+                Some(b"cold identity".to_vec())
+            },
+            || {
+                identity_started.recv_timeout(Duration::from_secs(2)).unwrap();
+                assert!(!cache.join("receipt").exists());
+                fs::write(&out, b"compiled")?;
+                compile_done.send(()).unwrap();
+                Ok(())
+            },
+        ).unwrap());
+        assert!(cache.join("receipt").exists());
+        assert!(reuse_or_build(&cache, b"cold identity", &outputs, || panic!("warm hit must reuse")).unwrap());
+
+        let failed_cache = root.join("failed-cache");
+        let failed_output = root.join("failed-output");
+        let failed_outputs = [("artifact", failed_output.clone(), false)];
+        let result = cold_reuse_or_build(
+            &failed_cache,
+            &failed_outputs,
+            || Some(b"identity".to_vec()),
+            || Err(std::io::Error::other("compiler failed")),
+        );
+        assert!(result.is_err());
+        assert!(!failed_cache.join("receipt").exists());
+        assert!(!failed_output.exists());
+
+        assert!(!cold_reuse_or_build(
+            &failed_cache,
+            &failed_outputs,
+            || None,
+            || fs::write(&failed_output, b"fallback compile"),
+        ).unwrap());
+        assert!(!failed_cache.join("receipt").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }

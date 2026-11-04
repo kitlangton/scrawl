@@ -22,8 +22,8 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
-    compile_laser_shader();
     compile_helper();
+    compile_laser_shader();
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     if let Ok(output) = Command::new("xcode-select").arg("-p").output()
         && output.status.success()
@@ -266,11 +266,15 @@ fn native_key(files: &[(&str, &std::path::Path)]) -> Option<Vec<u8>> {
 }
 
 fn add_command(key: &mut Vec<u8>, command: &Command) {
+    build_cache::add_field(key, b"command", &command_args_record(command));
+}
+
+fn command_args_record(command: &Command) -> Vec<u8> {
     let mut argv = Vec::new();
     for arg in std::iter::once(command.get_program()).chain(command.get_args()) {
         build_cache::add_field(&mut argv, b"arg", arg.as_encoded_bytes());
     }
-    build_cache::add_field(key, b"command", &argv);
+    argv
 }
 
 /// Builds `apparent-helper` (Swift: SpeechAnalyzer, iPhone capture, movie decoding) beside the
@@ -355,24 +359,28 @@ fn compile_helper() {
             "-Xlinker",
         ])
         .arg(&plist);
-    let key = native_key(&sources.iter().map(|p| ("swift-source", p.as_path()))
+    let command_args = command_args_record(&command);
+    let key_inputs: Vec<_> = sources.iter().map(|p| ("swift-source", p.as_path()))
         .chain([("original-plist", original_plist.as_path()), ("effective-plist", plist.as_path())])
-        .collect::<Vec<_>>()).and_then(|mut key| {
-            add_command(&mut key, &command);
+        .collect();
+    let identity = move || native_key(&key_inputs).and_then(|mut key| {
+            // Identical field bytes/order as add_command, prepared before the
+            // compile closure takes the mutable command borrow.
+            build_cache::add_field(&mut key, b"command", &command_args);
             push_field(&mut key, b"swiftc", &build_cache::tool_identity("swiftc", &["--version"])?);
             Some(key)
         });
-    let mut compile = || -> std::io::Result<()> {
-        if !command.status()?.success() {
+    let compile = || -> std::io::Result<()> {
+        if !build_cache::timed("swift compiler execution", || command.status())?.success() {
             return Err(std::io::Error::other("apparent-helper failed to compile (needs the macOS 26 SDK; the result runs on macOS 15)"));
         }
         Ok(())
     };
     let cache = out_dir.join(".native-cache").join("swift-helper");
     let outputs = [("apparent-helper", built.clone(), true)];
-    let cached = build_cache::timed("swift-helper", || match key {
-        Some(key) => build_cache::reuse_or_build(&cache, &key, &outputs, compile).expect("Swift helper build/cache failed"),
-        None => { let _ = std::fs::remove_file(cache.join("receipt")); compile().expect("xcrun swiftc is required to build apparent-helper"); false }
+    let cached = build_cache::timed("swift-helper", || {
+        build_cache::cold_reuse_or_build(&cache, &outputs, identity, compile)
+            .expect("Swift helper build/cache failed")
     });
     println!("cargo:warning=native build swift-helper cache: {}", if cached { "reused" } else { "compiled" });
     let dest = profile_dir.join("apparent-helper");

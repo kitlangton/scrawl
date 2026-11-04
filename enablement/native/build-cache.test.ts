@@ -70,7 +70,7 @@ chmod 755 "$output"
     const initial = run(script, [])
     assert.match(initial, /cargo:rustc-env=APPARENT_VERSION_LABEL=0\.0\.0/)
     for (const phase of ['tool probe xcode-select -p', 'Apple identity tool xcrun',
-      'SDK content fingerprint', 'native compiler fingerprint swiftc']) {
+      'SDK content fingerprint', 'native compiler fingerprint swiftc', 'swift compiler execution']) {
       assert.ok(initial.includes(`cargo:warning=native build ${phase}: `), `missing executed phase: ${phase}`)
     }
     assert.match(initial, /native build SDK walk: canonicalize=[0-9.]+s metadata=[0-9.]+s enumerate-sort=[0-9.]+s link-read=[0-9.]+s file-stream=[0-9.]+s paths=3 directories=1 links=0 files=2 bytes=[0-9]+ success=true/)

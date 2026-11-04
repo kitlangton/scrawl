@@ -30,6 +30,15 @@ On each build-script execution, missing, corrupt or mismatched output rebuilds; 
 the normal compiler path without admitting a cache entry. Root Git revision and
 dirty labels continue to be calculated on every build-script invocation.
 
+When the Swift helper receipt is absent, its unchanged compiler command overlaps
+complete identity discovery in a scoped thread. Both finish before output
+validation and receipt publication; failed identity discovery leaves no receipt.
+Existing receipts retain identity-first validation, including missing or corrupt
+outputs. The helper runs before shaders so the first SDK fingerprint can overlap
+Swift compilation. Inputs must remain stable during the build, as with sequential
+compilation. The `swift-helper` duration includes identity and compilation;
+`swift compiler execution` reports the compiler command separately.
+
 An absolute, existing `DEVELOPER_DIR` matching the selected developer directory
 allows Cargo to omit the global Xcode selector symlink watch, which otherwise
 recursively watches its destination. Selected Xcode metadata, SDK contents and
