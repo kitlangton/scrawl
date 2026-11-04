@@ -283,8 +283,8 @@ fn write_tree(
 fn digest_stream(
     write: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
 ) -> std::io::Result<String> {
-    let mut child = Command::new("/usr/bin/shasum")
-        .args(["-a", "256"])
+    let mut child = Command::new("/usr/bin/openssl")
+        .args(["dgst", "-sha256", "-r"])
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("LC_ALL", "C")
@@ -296,7 +296,7 @@ fn digest_stream(
     let output = child.wait_with_output()?;
     written?;
     if !output.status.success() {
-        return Err(std::io::Error::other("shasum failed"));
+        return Err(std::io::Error::other("SHA-256 command failed"));
     }
     let hash = String::from_utf8_lossy(&output.stdout)
         .split_whitespace()
@@ -304,14 +304,14 @@ fn digest_stream(
         .unwrap_or("")
         .to_owned();
     if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(std::io::Error::other("invalid shasum output"));
+        return Err(std::io::Error::other("invalid SHA-256 output"));
     }
     Ok(hash)
 }
 
 // SDK records contain many tiny length/type/path writes. Batch their transport
 // without changing the byte stream or retaining the SDK in memory. Flush errors
-// must propagate, and the pipe must close before waiting for shasum's EOF.
+// must propagate, and the pipe must close before waiting for the hash command's EOF.
 fn write_buffered(
     sink: impl Write,
     write: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
@@ -446,6 +446,16 @@ fn command_output(program: &str, args: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn system_sha256_matches_known_vectors() {
+        for (bytes, expected) in [
+            (Vec::new(), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            (b"abc".to_vec(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            (vec![b'a'; 1_000_000], "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"),
+        ] {
+            assert_eq!(digest(bytes).unwrap(), expected);
+        }
+    }
     #[test]
     fn sdk_transport_preserves_bytes_batches_writes_and_propagates_errors() {
         #[derive(Default)]
