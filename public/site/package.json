@@ -28,6 +28,7 @@
     "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^6.1.2",
     "esbuild": "0.28.2",
+    "fflate": "0.8.2",
     "matter-js": "0.20.0",
     "miniflare": "4.20260730.0",
     "parse5": "8.0.1",

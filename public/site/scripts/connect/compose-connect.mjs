@@ -220,6 +220,6 @@ export function composeArtifacts(publicRoot, connectRoot, canonicalRoot, out, op
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const site = resolve(import.meta.dirname, '../..'), syntheticOrigin = process.env.COMPOSE_SYNTHETIC_ORIGIN
-  composeArtifacts(process.env.COMPOSE_PUBLIC_INPUT || join(site, 'dist-apparent'), join(site, '../../connect/web', syntheticOrigin ? 'dist-test' : 'dist'), join(site, 'public'), join(site, syntheticOrigin ? 'dist/synthetic-composition' : 'dist-apparent'), { syntheticOrigin })
+  composeArtifacts(process.env.COMPOSE_PUBLIC_INPUT || join(site, 'dist-apparent'), process.env.CONNECT_BROWSER_ARTIFACT || join(site, '../../connect/web', syntheticOrigin ? 'dist-test' : 'dist'), join(site, 'public'), join(site, syntheticOrigin ? 'dist/synthetic-composition' : 'dist-apparent'), { syntheticOrigin })
   console.log(`Composed independent Public + Connect artifacts (${syntheticOrigin ? 'synthetic only' : 'production origin'})`)
 }

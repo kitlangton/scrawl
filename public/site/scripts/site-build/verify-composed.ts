@@ -7,7 +7,7 @@ import { inventory, resourceGraph, routes, validateConnect, validatePreservedFil
 const site = resolve(import.meta.dirname, '../..')
 const root = resolve(process.env.SITE_ARTIFACT || join(site, 'dist-apparent'))
 const syntheticOrigin = process.env.COMPOSE_SYNTHETIC_ORIGIN
-const files = inventory(root), connect = inventory(join(site, '../../connect/web', syntheticOrigin ? 'dist-test' : 'dist'))
+const files = inventory(root), connect = inventory(process.env.CONNECT_BROWSER_ARTIFACT || join(site, '../../connect/web', syntheticOrigin ? 'dist-test' : 'dist'))
 validateConnect(connect, inventory(join(site, 'public')), { syntheticOrigin })
 validatePreservedFiles(files, connect) // No overlay may remove/change any Connect-owned byte.
 // Compare against the independently packaged source output saved before composition.

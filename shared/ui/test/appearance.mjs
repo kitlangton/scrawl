@@ -5,12 +5,16 @@ import { readFile, mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, extname, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chromium, firefox } from '../../../connect/web/node_modules/playwright-core/index.mjs'
-import { renderShare } from '../../../connect/service/.generated/recipient-render.js'
+const selectedOwners = process.env.THEME_SURFACES?.split(',')
+const publicOnly = selectedOwners?.length === 1 && selectedOwners[0] === 'public'
+const { chromium, firefox } = await import(publicOnly
+ ? '../../../public/site/node_modules/playwright-core/index.mjs'
+ : '../../../connect/web/node_modules/playwright-core/index.mjs')
+const needsRecipient = !selectedOwners || selectedOwners.includes('recipient')
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const publicDir = process.env.PUBLIC_THEME_ARTIFACT || 'public/site/dist'
 const evidence = process.env.THEME_EVIDENCE || await mkdtemp(join(tmpdir(), 'apparent-theme-'))
-const recipient = renderShare({url:'',status:'pending',uploadedBytes:0,totalBytes:1,files:[]})
+const recipient = needsRecipient ? (await import('../../../connect/service/.generated/recipient-render.js')).renderShare({url:'',status:'pending',uploadedBytes:0,totalBytes:1,files:[]}) : null
 const mime={'.html':'text/html','.css':'text/css','.js':'text/javascript','.svg':'image/svg+xml','.png':'image/png','.ttf':'font/ttf'}
 const server=createServer(async(req,res)=>{
  try {
@@ -21,7 +25,7 @@ const server=createServer(async(req,res)=>{
    const name=url.pathname.slice(1);const value={'share-view.css':assets.shareViewStyles,'share-view.js':assets.shareViewScript,'share-wordmark.svg':assets.shareWordmark,'share-font.ttf':Buffer.from(assets.shareFont,'base64')}[name]
    res.setHeader('Content-Type',mime[extname(name)]||'application/octet-stream');res.end(value);return
   }
-  const dirs=['capture/desktop/ui/frontend/dist','connect/web/dist',publicDir]
+  const dirs=publicOnly?[publicDir]:['capture/desktop/ui/frontend/dist','connect/web/dist',publicDir]
   let relative=url.pathname.slice(1)
   if(url.pathname.endsWith('/'))relative+='index.html'
   let content,path

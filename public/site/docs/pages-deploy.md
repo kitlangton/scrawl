@@ -63,6 +63,25 @@ Cargo. `npm run build:pages-worker` compiles its Pages Function; the real worker
 movie test uses Public dependencies. Production composition still requires the
 Connect browser artifact. The Pages publisher installs only Public dependencies.
 
+## Immutable Connect consumer contract
+
+The consumer helper is `node --experimental-strip-types public/site/scripts/connect/artifact.ts .build/connect-browser`
+from the repository root with an Actions-read `GH_TOKEN`. It accepts only retained
+SHA-named browser artifacts from successful canonical-main `Connect producer`
+runs, checks the Actions archive digest, then invokes Connect's published
+`artifacts.ts validate` interface against the candidate. Reuse requires identical
+complete build inputs and the currently approved production build configuration.
+Absent, expired, corrupted or incompatible artifacts fail closed; this command
+never installs or rebuilds Connect. The receipt records producer SHA, run, artifact
+ID and digest outside served content.
+
+Set `CONNECT_BROWSER_ARTIFACT` to the downloaded `dist/` directory for
+composition and final verification. Existing local development defaults remain.
+The production workflow still uses its original composite verification until the
+coordinated Worker publisher and browser-consumer transition lands. The input
+selection and verified/not-applicable gate helpers are tested prerequisites;
+their presence alone does not change production admission.
+
 ## Main-branch CD
 
 The workflow starts directly on main pushes or manual main dispatches, independently
