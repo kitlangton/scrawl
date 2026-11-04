@@ -69,6 +69,10 @@ chmod 755 "$output"
     run('rustc', ['--edition=2024', join(repo, 'build.rs'), '-o', script])
     const initial = run(script, [])
     assert.match(initial, /cargo:rustc-env=APPARENT_VERSION_LABEL=0\.0\.0/)
+    for (const phase of ['tool probe xcode-select -p', 'Apple identity tool xcrun',
+      'SDK content fingerprint', 'native compiler fingerprint swiftc']) {
+      assert.ok(initial.includes(`cargo:warning=native build ${phase}: `), `missing executed phase: ${phase}`)
+    }
     const cold = count(); assert.equal(cold, 5, 'two Metal stages per shader plus Swift')
     run(script, []); assert.equal(count(), cold, 'unchanged native outputs reused')
     file('unrelated.txt', 'modified')

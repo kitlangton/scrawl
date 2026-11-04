@@ -19,6 +19,9 @@ toolchain identity, including streamed SDK content hashes. SDK hashing runs once
 per build-script process; it does not trust a persistent timestamp-only SDK hash.
 SDK links escaping their root disable reuse. Actual hashing overhead must be
 included in the Darwin timing result. A receipt is reusable only while its output hashes match.
+Phase warnings separate tool probes, tool-byte hashing and SDK-content hashing.
+Cargo can replay these warnings for a fresh build script; replayed durations are
+not new executions or additional measurements.
 On each build-script execution, missing, corrupt or mismatched output rebuilds; failed identity discovery runs
 the normal compiler path without admitting a cache entry. Root Git revision and
 dirty labels continue to be calculated on every build-script invocation.

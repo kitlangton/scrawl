@@ -53,7 +53,9 @@ fn discover_apple_toolchain() -> Option<Vec<u8>> {
         let path = std::env::split_paths(&std::env::var_os("PATH")?)
             .map(|dir| dir.join(program))
             .find(|path| path.is_file())?;
-        fingerprint_tool(&mut record, &path)?;
+        timed(&format!("Apple identity tool {program}"), || {
+            fingerprint_tool(&mut record, &path)
+        })?;
     }
     for path in watches {
         if path.exists() {
@@ -75,7 +77,9 @@ fn discover_apple_toolchain() -> Option<Vec<u8>> {
         add_field(
             &mut record,
             b"sdk-tree-sha256",
-            tree_digest(&sdk).ok()?.as_bytes(),
+            timed("SDK content fingerprint", || tree_digest(&sdk))
+                .ok()?
+                .as_bytes(),
         );
     }
     for (name, value) in [
@@ -130,7 +134,9 @@ pub fn tool_identity(executable: &str, version_args: &[&str]) -> Option<Vec<u8>>
     };
     let path = PathBuf::from(path.trim());
     let mut record = Vec::new();
-    fingerprint_tool(&mut record, &path)?;
+    timed(&format!("native compiler fingerprint {executable}"), || {
+        fingerprint_tool(&mut record, &path)
+    })?;
     if !version_args.is_empty() {
         let mut args = sdk_args;
         args.extend_from_slice(version_args);
@@ -423,7 +429,13 @@ pub fn timed<T>(label: &str, f: impl FnOnce() -> T) -> T {
 }
 
 fn command_output(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
+    // Only fixed tool names/arguments from this module are logged, never values
+    // supplied through environment variables or paths returned by the probes.
+    let output = timed(
+        &format!("tool probe {program} {}", args.join(" ")),
+        || Command::new(program).args(args).output(),
+    )
+    .ok()?;
     output
         .status
         .success()
