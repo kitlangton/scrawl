@@ -131,6 +131,44 @@ def connect_client_typescript_selected(paths):
     )
 
 
+PUBLIC_SITE_ROOT = "public/site/"
+PUBLIC_SITE_BUILD_INPUTS = {
+    PUBLIC_SITE_ROOT + name for name in (
+        "index.html", "package.json", "bun.lock", "tsconfig.json", "vite.config.ts",
+    )
+}
+PUBLIC_SITE_TOOLING_INPUTS = {
+    PUBLIC_SITE_ROOT + "lib/public-assets.mjs",
+    PUBLIC_SITE_ROOT + "scripts/site-build/agent-files.ts",
+    PUBLIC_SITE_ROOT + "scripts/site-build/feature-audit.ts",
+    PUBLIC_SITE_ROOT + "scripts/site-build/prerender.ts",
+    "shared/analytics/config.ts",
+    "shared/ui/src/tokens.css",
+    "shared/ui/scripts/check-theme.py",
+    "shared/ui/scripts/legacy-colors.json",
+}
+PUBLIC_CONNECT_SHARED_ASSETS = {
+    "public/site/public/assets/" + path for path in (
+        "hosted/source-pond-v4.png", "hosted/agent-pond-v4.png",
+        "hosted/agent-reading-v4.png", "fonts/HostGrotesk-Variable.ttf",
+        "brand/apparent-wordmark.svg",
+    )
+}
+
+
+def public_site_build_selected(paths):
+    """Select Public's existing non-browser package build for its real inputs."""
+    if not paths:
+        # The caller's empty/unknown delta already selects conservative root
+        # checks; this focused lane requires an observed Public input.
+        return False
+    return any(
+        path in PUBLIC_SITE_BUILD_INPUTS | PUBLIC_SITE_TOOLING_INPUTS
+        or path.startswith((PUBLIC_SITE_ROOT + "src/", PUBLIC_SITE_ROOT + "public/"))
+        for path in paths
+    )
+
+
 def select(paths, history_known=True):
     paths = sorted(set(paths))
     # Unknown/shared/build/security/lifecycle input is broad by default. Do not
@@ -138,9 +176,21 @@ def select(paths, history_known=True):
     broad = not history_known or not paths
     engine = False
     browser = False
+    public_site = False
     reasons = []
     for path in paths:
         if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
+            continue
+        if path in PUBLIC_CONNECT_SHARED_ASSETS:
+            # Connect web consumes these Public-owned assets as browser inputs;
+            # preserve the existing broad root and browser checks as well.
+            public_site = True
+            browser = True
+            broad = True
+            reasons.append(path)
+            continue
+        if public_site_build_selected([path]):
+            public_site = True
             continue
         # The extracted Rust package is a real standalone Cargo workspace.
         # Its src/tests/manifest/lock inputs run package checks; only src/tests
@@ -163,6 +213,7 @@ def select(paths, history_known=True):
             broad = True
             reasons.append(path)
     return {"root": broad, "engine": broad or engine, "browser": browser,
+            "public_site": public_site,
             "focused": [], "paths": paths,
             "reason": "unknown history or empty delta" if not history_known or not paths
             else "broad inputs: " + ", ".join(reasons) if broad else "document/package-test-only delta"}
@@ -287,6 +338,8 @@ def run_pr_checks(selection=None):
                 "node_modules/@apparent/ui/package.json")):
             raise RuntimeError("Onboarding feedback needs installed dependencies: run npm ci in capture/desktop/ui/frontend, then retry the push; the hook never installs dependencies")
         subprocess.run(["npm", "run", "check:onboarding"], cwd=frontend, check=True)
+    if public_site_build_selected(paths):
+        run_public_site_build()
 
 
 def run_connect_client_typescript_tests():
@@ -314,6 +367,35 @@ def run_connect_client_typescript_tests():
             + ", ".join(missing_dependencies)
         )
     subprocess.run(["npm", "test"], cwd=package, check=True)
+
+
+def run_public_site_build():
+    package = ROOT / "public/site"
+    controls = ("package.json", "bun.lock", "tsconfig.json", "vite.config.ts", "index.html")
+    missing_controls = [name for name in controls if not (package / name).is_file()]
+    if missing_controls:
+        raise RuntimeError(
+            "Public site build inputs are missing or deleted: "
+            + ", ".join(missing_controls)
+            + "; restore them or update the pre-push contract before pushing"
+        )
+    try:
+        manifest = json.loads((package / "package.json").read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("Public site package.json must remain valid for pre-push build feedback") from error
+    dependencies = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
+    missing_dependencies = [
+        name for name in dependencies
+        if not (package / "node_modules" / name / "package.json").is_file()
+    ]
+    if missing_dependencies:
+        raise RuntimeError(
+            "Public site feedback needs installed locked dependencies; run "
+            "`bun install --frozen-lockfile` in public/site, then retry. "
+            "The pre-push hook never installs dependencies. Missing: "
+            + ", ".join(sorted(missing_dependencies))
+        )
+    subprocess.run(["npm", "run", "build"], cwd=package, check=True)
 
 
 def run_contract_checks():
