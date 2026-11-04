@@ -5,7 +5,7 @@ const fs = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { waitForStorageReads } = require('./storage/native-readiness.ts');
+const { waitForStorageReads, captureLocationStatus } = require('./storage/native-readiness.ts');
 
 test('Retention save/reset/readback, failure, usage loading/error and stale response isolation', { timeout: 45000 }, async t => {
   // Shipped Electron main/preload/production renderer; synthetic backend, not native proof.
@@ -105,7 +105,7 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   // Regression for native Mac's old ambiguous locator: usage legitimately
   // repeats the folder, so the location readback must be independently scoped.
   await expect(card.getByText('/captures', { exact: true })).toHaveCount(2);
-  await expect(card.locator(':scope > [role="status"]').getByText('/captures', { exact: true })).toBeVisible();
+  await expect(captureLocationStatus(card).getByText('/captures', { exact: true })).toBeVisible();
   const select = page.getByLabel('Keep recordings');
   // A genuine single-worker busy response hides an unverified policy. The
   // native helper must use the visible Refresh recovery before asserting it.

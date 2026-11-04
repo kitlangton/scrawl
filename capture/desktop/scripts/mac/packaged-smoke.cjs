@@ -8,6 +8,7 @@ const { createHash } = require('node:crypto');
 const run = promisify(execFile);
 const { within, stopElectron, supervisor, stopBackend } = require('../../../../enablement/native/owned-processes.ts');
 const frontend = path.resolve(__dirname, '../../ui/frontend');
+const { captureLocationStatus } = require('../../ui/frontend/tests/storage/native-readiness.ts');
 
 // A location render starts retention/usage reads on Rust's same bounded worker.
 // Retry only explicit worker contention, never malformed replies or other errors.
@@ -94,7 +95,7 @@ async function main() {
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
       await expect(page.getByRole('heading', { name: 'Storage', exact: true })).toBeVisible({ timeout: budget() });
-      await expect(page.getByRole('region', { name: 'Capture location', exact: true })
+      await expect(captureLocationStatus(page.getByRole('region', { name: 'Capture location', exact: true }))
         .getByText('~/synthetic-captures', { exact: true })).toBeVisible({ timeout: budget() });
       await page.screenshot({ path: path.join(output, `settings-${cycle}.png`), timeout: budget() });
       const replies = [];

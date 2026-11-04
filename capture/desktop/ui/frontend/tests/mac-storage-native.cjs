@@ -10,7 +10,7 @@ const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { _electron: electron, expect } = require('@playwright/test');
 const { readRuntimeState } = require('../electron/runtime.cjs');
-const { waitForStorageReads } = require('./storage/native-readiness.ts');
+const { waitForStorageReads, captureLocationStatus } = require('./storage/native-readiness.ts');
 const run = promisify(execFile);
 const { pidFileSupervisor: rustSupervisor, stopOwned, withinLabelled: within } = require('../../../../../enablement/native/owned-processes.ts');
 const root = path.join(__dirname, '..');
@@ -366,7 +366,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     const card = page.getByRole('region', { name: 'Capture location', exact: true });
     // Usage repeats the effective path; location assertions must target the
     // location's own status, not any descendant text in the Storage card.
-    const locationStatus = card.locator(':scope > [role="status"]');
+    const locationStatus = captureLocationStatus(card);
     const change = card.getByRole('button', { name: 'Change…', exact: true });
     const reset = card.getByRole('button', { name: 'Reset', exact: true });
     const assertFiles = async (savedPath) => {
