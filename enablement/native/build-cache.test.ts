@@ -73,6 +73,7 @@ chmod 755 "$output"
       'SDK content fingerprint', 'native compiler fingerprint swiftc']) {
       assert.ok(initial.includes(`cargo:warning=native build ${phase}: `), `missing executed phase: ${phase}`)
     }
+    assert.match(initial, /native build SDK walk: canonicalize=[0-9.]+s metadata=[0-9.]+s enumerate-sort=[0-9.]+s link-read=[0-9.]+s file-stream=[0-9.]+s paths=3 directories=1 links=0 files=2 bytes=[0-9]+ success=true/)
     const cold = count(); assert.equal(cold, 5, 'two Metal stages per shader plus Swift')
     run(script, []); assert.equal(count(), cold, 'unchanged native outputs reused')
     file('unrelated.txt', 'modified')

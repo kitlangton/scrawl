@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::OnceLock,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 pub fn add_field(record: &mut Vec<u8>, name: &[u8], value: &[u8]) {
@@ -223,9 +223,46 @@ pub fn digest(bytes: Vec<u8>) -> std::io::Result<String> {
 
 // Stream SDK bytes rather than holding an SDK in memory or starting one hash
 // process per header/module. Escaping symlinks and special files disable reuse.
+#[derive(Default)]
+struct TreeMetrics {
+    canonicalize: Duration,
+    metadata: Duration,
+    enumerate: Duration,
+    link_read: Duration,
+    file_stream: Duration,
+    paths: u64,
+    directories: u64,
+    links: u64,
+    files: u64,
+    bytes: u64,
+}
+
+fn measure<T>(elapsed: &mut Duration, operation: impl FnOnce() -> T) -> T {
+    let start = Instant::now();
+    let result = operation();
+    *elapsed += start.elapsed();
+    result
+}
+
 fn tree_digest(path: &Path) -> std::io::Result<String> {
-    let root = fs::canonicalize(path)?;
-    digest_stream(|input| write_tree(&root, &root, &mut BTreeSet::new(), input))
+    let mut metrics = TreeMetrics::default();
+    let result = (|| {
+        let root = measure(&mut metrics.canonicalize, || fs::canonicalize(path))?;
+        digest_stream(|input| {
+            write_tree(&root, &root, &mut BTreeSet::new(), input, &mut metrics)
+        })
+    })();
+    // Aggregate existing operations only: no paths, file contents, extra reads or
+    // traversals. File streaming includes open/read and writes to the hash pipe;
+    // it is not an isolated disk-I/O or hashing measurement.
+    println!(
+        "cargo:warning=native build SDK walk: canonicalize={:.3}s metadata={:.3}s enumerate-sort={:.3}s link-read={:.3}s file-stream={:.3}s paths={} directories={} links={} files={} bytes={} success={}",
+        metrics.canonicalize.as_secs_f64(), metrics.metadata.as_secs_f64(),
+        metrics.enumerate.as_secs_f64(), metrics.link_read.as_secs_f64(),
+        metrics.file_stream.as_secs_f64(), metrics.paths, metrics.directories,
+        metrics.links, metrics.files, metrics.bytes, result.is_ok(),
+    );
+    result
 }
 
 fn write_tree(
@@ -233,7 +270,9 @@ fn write_tree(
     root: &Path,
     seen: &mut BTreeSet<PathBuf>,
     input: &mut dyn Write,
+    metrics: &mut TreeMetrics,
 ) -> std::io::Result<()> {
+    metrics.paths += 1;
     fn field(input: &mut dyn Write, value: &[u8]) -> std::io::Result<()> {
         input.write_all(&(value.len() as u64).to_be_bytes())?;
         input.write_all(value)
@@ -245,33 +284,44 @@ fn write_tree(
             .as_os_str()
             .as_encoded_bytes(),
     )?;
-    let resolved = fs::canonicalize(path)?;
+    let resolved = measure(&mut metrics.canonicalize, || fs::canonicalize(path))?;
     if !resolved.starts_with(root) {
         return Err(std::io::Error::other("SDK symlink escapes SDK root"));
     }
-    let metadata = fs::symlink_metadata(path)?;
+    let metadata = measure(&mut metrics.metadata, || fs::symlink_metadata(path))?;
     if metadata.file_type().is_symlink() {
+        metrics.links += 1;
         input.write_all(b"L")?;
-        field(input, fs::read_link(path)?.as_os_str().as_encoded_bytes())?;
-        return write_tree(&resolved, root, seen, input);
+        let link = measure(&mut metrics.link_read, || fs::read_link(path))?;
+        field(input, link.as_os_str().as_encoded_bytes())?;
+        return write_tree(&resolved, root, seen, input, metrics);
     }
     if !seen.insert(resolved) {
         return input.write_all(b"R");
     }
     if metadata.is_dir() {
+        metrics.directories += 1;
         input.write_all(b"D")?;
-        let mut children = fs::read_dir(path)?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<std::io::Result<Vec<_>>>()?;
-        children.sort();
+        let children = measure(&mut metrics.enumerate, || {
+            let mut children = fs::read_dir(path)?
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<std::io::Result<Vec<_>>>()?;
+            children.sort();
+            Ok::<_, std::io::Error>(children)
+        })?;
         input.write_all(&(children.len() as u64).to_be_bytes())?;
         for child in children {
-            write_tree(&child, root, seen, input)?;
+            write_tree(&child, root, seen, input, metrics)?;
         }
     } else if metadata.is_file() {
+        metrics.files += 1;
         input.write_all(b"F")?;
         input.write_all(&metadata.len().to_be_bytes())?;
-        if std::io::copy(&mut fs::File::open(path)?, input)? != metadata.len() {
+        let bytes = measure(&mut metrics.file_stream, || {
+            std::io::copy(&mut fs::File::open(path)?, input)
+        })?;
+        metrics.bytes += bytes;
+        if bytes != metadata.len() {
             return Err(std::io::Error::other("SDK file changed while hashing"));
         }
     } else {
@@ -447,6 +497,25 @@ fn command_output(program: &str, args: &[&str]) -> Option<String> {
 mod tests {
     use super::*;
     #[test]
+    fn sdk_metrics_preserve_serialization_and_operation_errors() {
+        let root = temp();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a"), b"abc").unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let mut bytes = Vec::new();
+        let mut metrics = TreeMetrics::default();
+        write_tree(&root, &root, &mut BTreeSet::new(), &mut bytes, &mut metrics).unwrap();
+        // Existing format: empty root path, directory/one child, path "a",
+        // regular file/three bytes, then its unchanged payload.
+        assert_eq!(bytes, b"\0\0\0\0\0\0\0\0D\0\0\0\0\0\0\0\x01\0\0\0\0\0\0\0\x01aF\0\0\0\0\0\0\0\x03abc");
+        assert_eq!((metrics.paths, metrics.directories, metrics.files, metrics.bytes), (2, 1, 1, 3));
+        let error = measure(&mut metrics.metadata, || {
+            Err::<(), _>(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "fixture"))
+        }).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn system_sha256_matches_known_vectors() {
         for (bytes, expected) in [
             (Vec::new(), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
@@ -475,10 +544,13 @@ mod tests {
         }
         let root = fs::canonicalize(root).unwrap();
         let mut direct = Sink::default();
-        write_tree(&root, &root, &mut BTreeSet::new(), &mut direct).unwrap();
+        let mut metrics = TreeMetrics::default();
+        write_tree(&root, &root, &mut BTreeSet::new(), &mut direct, &mut metrics).unwrap();
+        assert_eq!((metrics.paths, metrics.directories, metrics.links, metrics.files, metrics.bytes),
+            (4001, 1, 0, 4000, 68000));
         let mut buffered = Sink::default();
         write_buffered(&mut buffered, |input| {
-            write_tree(&root, &root, &mut BTreeSet::new(), input)
+            write_tree(&root, &root, &mut BTreeSet::new(), input, &mut TreeMetrics::default())
         }).unwrap();
         assert_eq!(direct.bytes, buffered.bytes);
         eprintln!("SDK fixture: {} bytes, {} direct writes, {} buffered writes",
