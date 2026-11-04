@@ -717,14 +717,17 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
                 verification.hook_budget(30, ['synthetic-command'])
         self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
 
-    def test_supported_ci_jobs_have_ten_minute_execution_budget(self):
+    def test_supported_ci_jobs_have_platform_execution_budget(self):
         import re
         for workflow in (SCRIPT.parents[1] / '.github/workflows').glob('*.yml'):
             if workflow.name == 'release-windows.yml':
                 continue  # Retired platform is outside the supported CI contract.
             for job in re.split(r'^  [\w-]+:\n', workflow.read_text(), flags=re.M)[1:]:
                 if re.search(r'^    runs-on:', job, re.M):
-                    self.assertIn('    timeout-minutes: 10\n', job, str(workflow))
+                    expected = ("${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }}"
+                                if workflow.name == 'verification-platform.yml' else
+                                '15' if workflow.name in {'verification-mac.yml', 'native-proof-mac.yml', 'release-mac-preview.yml'} else '10')
+                    self.assertIn(f'    timeout-minutes: {expected}\n', job, str(workflow))
                     if '    name: Workflow runtime budget\n' not in job:
                         self.assertIn('agent whose run hits the limit owns optimization', job)
 

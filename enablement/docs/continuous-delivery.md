@@ -464,8 +464,8 @@ Preparation, exact evidence and rollback constraints are in
 ## Verification runtime budgets
 
 The complete pre-commit hook has 60 seconds; pre-push has 300 seconds.
-Each supported-platform workflow attempt has a 10-minute workload execution
-budget. The final `runtime-budget` gate reads all jobs in that exact run attempt,
+Linux workflow attempts have a 10-minute workload execution budget; Mac
+verification, native proof and preview release attempts have 15 minutes. The final `runtime-budget` gate reads all jobs in that exact run attempt,
 including reusable workflows, and measures the union of their execution intervals.
 Parallel jobs count once. Gaps with no executing workload job (runner, dependency
 and concurrency waiting) and budget-audit jobs are excluded. Setup, checks,
@@ -474,10 +474,11 @@ API errors, incomplete inventories, nonterminal jobs or invalid timestamps fail
 closed. Skipped jobs consume no execution time.
 
 Enforce the whole-workflow budget at completion: fail the final audit above
-600 seconds without automatic whole-workflow cancellation or a standalone
+600 seconds for Linux or 900 seconds for Mac without automatic whole-workflow cancellation or a standalone
 waiting-runner watchdog. This is Simon's selected policy. The final read-only
 composite audit waits for all workload jobs; it does not poll or cancel them.
-Existing 10-minute workload-job timeouts remain additional safeguards. A failed
+Workload-job timeouts remain additional safeguards: 10 minutes for Linux,
+15 minutes for Mac. A failed
 verification workflow cannot admit downstream releases. Native proof, cleanup
 requirements and correctness/release gates remain required. Same-workflow
 publication may finish before the final audit fails; audit success never replaces
