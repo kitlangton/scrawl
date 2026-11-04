@@ -60,9 +60,10 @@ pages do not consume that Function allowance.
 
 The workflow starts directly on main pushes or manual main dispatches, independently
 of native application verification. Candidate admission validates canonical-main
-event and checkout identity. Publication requires the same run's complete web
-verification and revision-named sealed artifact; failed or skipped web checks
-cannot admit either publisher. Public and Connect currently share the composed
+event and checkout identity. Both publishers require the same run's complete web
+verification; failed or skipped web checks cannot admit either publisher. Pages
+consumes the revision-named sealed artifact. The hosted publisher currently
+rebuilds its Worker from that verified SHA before publication. Public and Connect currently share the composed
 Pages artifact and web verification lane; this does not claim separate deployment
 of those two owners yet.
 

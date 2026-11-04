@@ -28,7 +28,8 @@ checks before Mac publication.
 Linux delivery triggers only after successful `Linux verification`.
 Web delivery runs directly on main pushes and manual main dispatches. Its own
 credential-free Worker, browser, website, privacy and publication-contract checks
-admit its exact source and sealed artifact; Linux/Mac application verification
+admit its exact source; Pages consumes its sealed artifact while the hosted job
+rebuilds the Worker from that verified SHA. Linux/Mac application verification
 cannot block web publication. Both publishers still depend on that run's successful
 `verify` job and retain their existing activation gates and publication ordering.
 This first separation does not yet split Public and Connect's composed Pages
