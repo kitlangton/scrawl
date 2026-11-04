@@ -14,6 +14,12 @@ On each build-script execution, missing, corrupt or mismatched output rebuilds; 
 the normal compiler path without admitting a cache entry. Root Git revision and
 dirty labels continue to be calculated on every build-script invocation.
 
+An absolute, existing `DEVELOPER_DIR` matching the selected developer directory
+allows Cargo to omit the global Xcode selector symlink watch, which otherwise
+recursively watches its destination. Selected Xcode metadata, SDK contents and
+compiler inputs remain watched and fingerprinted. Without an explicit selection,
+the global watch remains; an invalid or mismatched override disables reuse.
+
 Run `node --test enablement/native/build-cache.test.ts` for the production
 build-script regression with synthetic compilers. Its fixtures establish cache
 decisions and truthful identity behavior, not Darwin compilation or performance.

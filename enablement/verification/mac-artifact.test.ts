@@ -108,6 +108,28 @@ test('main Mac producer selects the tested compiler before cache restore without
 })
 
 const selectedCompiler = '1.99.1-x86_64-apple-darwin'
+test('Rust workflow exports only the existing selected Xcode directory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'xcode-selection-'))
+  try {
+    const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
+    const step = workflow.split('      - name: Pin the selected developer directory for Rust verification\n')[1].split('      - name:')[0]
+    assert.match(step, /if: runner.os == 'macOS' && needs.select.outputs.root == 'true'/)
+    const shell = step.split('        run: |\n')[1]
+    for (const [selected, exists, probeStatus, expected] of [
+      [developer, 'yes', '0', 0], ['/tmp/Xcode.app/Contents/Developer', 'yes', '0', 1],
+      [developer, 'no', '0', 1], [developer, 'yes', '7', 7],
+    ] as const) {
+      const output = join(root, 'environment'); writeFileSync(output, '')
+      const result = spawnSync('bash', ['-e', '-c', `
+xcode-select() { printf '%s\\n' "$SELECTED"; return "$PROBE_STATUS"; }
+test() { if [[ "$1" == '-d' ]]; then [[ "$2" == "$SELECTED" && "$DIRECTORY_EXISTS" == yes ]]; else builtin test "$@"; fi; }
+${shell}`], { encoding: 'utf8', env: { ...process.env, GITHUB_ENV: output, SELECTED: selected,
+        DIRECTORY_EXISTS: exists, PROBE_STATUS: probeStatus } })
+      assert.equal(result.status, expected, result.stderr)
+      assert.equal(readFileSync(output, 'utf8'), expected === 0 ? `DEVELOPER_DIR=${developer}\n` : '')
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 for (const os of ['macOS', 'Linux']) for (const status of [0, 7]) test(`verifier trace scopes ${os} environment and preserves status ${status}`, () => {
   const root = mkdtempSync(join(tmpdir(), 'verifier-trace-'))
   try {

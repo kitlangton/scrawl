@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync, unlinkSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync, unlinkSync, existsSync, readdirSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -153,5 +153,61 @@ fn main() { unsafe { std::env::set_var("CARGO_CFG_TARGET_OS", "macos"); } produc
     file('unrelated.txt', 'rerun after native output removal')
     run('cargo', ['build', '--offline', '-j', '1'], cargoEnv)
     assert.equal(count(), before + 2, 'build-script rerun rebuilds missing native output instead of accepting a stale receipt')
+    mkdirSync(join(bin, 'developer'))
+    const explicit = { DEVELOPER_DIR: join(bin, 'developer') }
+    run(script, [], explicit)
+    before = count()
+    run(script, [], explicit); assert.equal(count(), before)
+    file('bin/sdk/usr/include/fixture.h', '// explicit selection SDK edit\n')
+    run(script, [], explicit); assert.equal(count(), before + 5, 'explicit selection retains SDK content invalidation')
+    before = count()
+    file('bin/tool', '# explicit selection compiler edit\n')
+    run(script, [], explicit); assert.equal(count(), before + 5, 'explicit selection retains compiler byte invalidation')
+    before = count()
+    for (const invalid of ['relative', join(bin, 'missing'), bin]) {
+      run(script, [], { DEVELOPER_DIR: invalid })
+      run(script, [], { DEVELOPER_DIR: invalid })
+      assert.equal(count(), before + 10, 'invalid override must bypass reuse on both executions')
+      before = count()
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('Cargo watches global selection only without a validated explicit developer directory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'developer-watch-'))
+  try {
+    const developer = join(root, 'Xcode/Contents/Developer')
+    mkdirSync(developer, { recursive: true }); mkdirSync(join(root, 'src'))
+    const metadata = join(root, 'Xcode/Contents/Info.plist')
+    const unrelated = join(developer, 'unrelated')
+    writeFileSync(metadata, 'metadata'); writeFileSync(unrelated, 'first')
+    symlinkSync(developer, join(root, 'selector'), 'dir')
+    writeFileSync(join(root, 'Cargo.toml'), '[package]\nname="developer-watch"\nversion="0.1.0"\nedition="2024"\n')
+    writeFileSync(join(root, 'src/lib.rs'), '')
+    writeFileSync(join(root, 'build.rs'), `#[allow(dead_code)] mod cache { include!(${JSON.stringify(resolve('enablement/native/build_cache.rs'))}); }
+fn main() {
+println!("cargo:rerun-if-env-changed=DEVELOPER_DIR");
+let explicit = std::env::var_os("DEVELOPER_DIR");
+for path in cache::developer_watches(std::path::Path::new(${JSON.stringify(developer)}), explicit.as_deref(), std::path::Path::new("selector")).expect("invalid explicit developer") {
+if path.exists() { println!("cargo:rerun-if-changed={}", path.display()); }
+}
+}`)
+    const build = (explicit?: string, success = true) => {
+      const env = { ...process.env, CARGO_TARGET_DIR: join(root, 'target') }
+      delete env.DEVELOPER_DIR
+      if (explicit !== undefined) env.DEVELOPER_DIR = explicit
+      const result = spawnSync('cargo', ['build', '--offline'], { cwd: root, env, encoding: 'utf8', timeout: 60000 })
+      assert.equal(result.status === 0, success, result.stderr)
+      return result.stderr
+    }
+    build(); assert.doesNotMatch(build(), /Compiling developer-watch/)
+    writeFileSync(unrelated, 'global watched edit')
+    assert.match(build(), /Compiling developer-watch/)
+    build(developer); assert.doesNotMatch(build(developer), /Compiling developer-watch/)
+    writeFileSync(unrelated, 'irrelevant global directory edit')
+    assert.doesNotMatch(build(developer), /Compiling developer-watch/)
+    writeFileSync(metadata, 'selected metadata edit')
+    assert.match(build(developer), /Compiling developer-watch/)
+    build('relative', false); build(root, false)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

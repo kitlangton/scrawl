@@ -39,6 +39,11 @@ pub fn apple_toolchain_identity() -> Option<Vec<u8>> {
 
 fn discover_apple_toolchain() -> Option<Vec<u8>> {
     let dev = command_output("xcode-select", &["-p"])?;
+    let watches = developer_watches(
+        Path::new(dev.trim()),
+        std::env::var_os("DEVELOPER_DIR").as_deref(),
+        Path::new("/var/db/xcode_select_link"),
+    )?;
     let xcode = command_output("xcodebuild", &["-version"])?;
     let sdk_path = command_output("xcrun", &["--sdk", "macosx", "--show-sdk-path"])?;
     let sdk_version = command_output("xcrun", &["--sdk", "macosx", "--show-sdk-version"])?;
@@ -50,14 +55,7 @@ fn discover_apple_toolchain() -> Option<Vec<u8>> {
             .find(|path| path.is_file())?;
         fingerprint_tool(&mut record, &path)?;
     }
-    // Watch the selected Xcode metadata and the selector link, not a nonexistent
-    // Developer/Contents path (which would force Cargo to rerun on every build).
-    let developer = PathBuf::from(dev.trim());
-    for path in [
-        developer.parent()?.join("Info.plist"),
-        developer.parent()?.join("version.plist"),
-        PathBuf::from("/var/db/xcode_select_link"),
-    ] {
+    for path in watches {
         if path.exists() {
             println!("cargo:rerun-if-changed={}", path.display());
         }
@@ -90,6 +88,31 @@ fn discover_apple_toolchain() -> Option<Vec<u8>> {
         add_field(&mut record, name.as_bytes(), value.as_bytes());
     }
     Some(record)
+}
+
+pub fn developer_watches(
+    selected: &Path,
+    explicit: Option<&std::ffi::OsStr>,
+    selector: &Path,
+) -> Option<Vec<PathBuf>> {
+    let mut watches = vec![
+        selected.parent()?.join("Info.plist"),
+        selected.parent()?.join("version.plist"),
+    ];
+    if let Some(explicit) = explicit {
+        let explicit = Path::new(explicit);
+        if !explicit.is_absolute()
+            || !explicit.is_dir()
+            || fs::canonicalize(explicit).ok()? != fs::canonicalize(selected).ok()?
+        {
+            return None;
+        }
+        // Cargo follows directory symlinks recursively. An explicit validated
+        // selection makes the global selector (and its entire Xcode tree) irrelevant.
+    } else {
+        watches.push(selector.to_path_buf());
+    }
+    Some(watches)
 }
 
 pub fn tool_identity(executable: &str, version_args: &[&str]) -> Option<Vec<u8>> {
