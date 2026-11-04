@@ -817,7 +817,7 @@ fn toggles_and_popups_write_their_keys() {
     assert!(serde_json::to_value(&view).unwrap().get("autoSend").is_none());
     set(&mut panel, &mut host, "autoSend", true.into());
     assert!(read_json(&host.path).get("autoSend").is_none());
-    assert_eq!(view.retention.preset, Some("month"));
+    assert_eq!(view.retention.preset.as_deref(), Some("month"));
     assert_eq!(
         view.retention.note,
         format!(
@@ -1014,7 +1014,7 @@ fn command_shows_only_while_it_is_configured() {
     let mut panel = Panel::default();
     std::fs::write(&host.path, r#"{"transcriber":"command"}"#).unwrap();
     let view = panel.view(&host).transcriber;
-    assert_eq!((view.engine, view.command), ("apple", None));
+    assert_eq!((view.engine.as_str(), view.command), ("apple", None));
 
     std::fs::write(
         &host.path,
@@ -1177,7 +1177,7 @@ fn the_command_line_row_installs_uninstalls_and_says_why_not() {
     let mut panel = Panel::default();
     // A development build has nothing to link.
     let row = panel.view(&host).command_line;
-    assert_eq!((row.button, row.enabled), (Some("install"), false));
+    assert_eq!((row.button.as_deref(), row.enabled), (Some("install"), false));
     assert_eq!(
         row.caption,
         if cfg!(target_os = "linux") {
@@ -1197,7 +1197,7 @@ fn the_command_line_row_installs_uninstalls_and_says_why_not() {
     host.cli.target = Some(std::fs::canonicalize(macos.join("apparent")).unwrap());
     let row = panel.view(&host).command_line;
     assert_eq!(
-        (row.button, row.enabled, row.path),
+        (row.button.as_deref(), row.enabled, row.path),
         (Some("install"), true, None)
     );
     assert!(
@@ -1213,7 +1213,7 @@ fn the_command_line_row_installs_uninstalls_and_says_why_not() {
         host.cli.target.clone().unwrap()
     );
     let row = panel.view(&host).command_line;
-    assert_eq!(row.button, Some("uninstall"));
+    assert_eq!(row.button.as_deref(), Some("uninstall"));
     assert_eq!(row.path, Some(crate::composition::command_line::tilde(&link)));
     // Not Homebrew's or /usr/local's bin, so it may not be on PATH.
     assert!(row.caption.contains("to your PATH"), "{}", row.caption);
@@ -1221,7 +1221,7 @@ fn the_command_line_row_installs_uninstalls_and_says_why_not() {
 
     panel.on(Action::UninstallCli, &mut host);
     assert!(link.symlink_metadata().is_err());
-    assert_eq!(panel.view(&host).command_line.button, Some("install"));
+    assert_eq!(panel.view(&host).command_line.button.as_deref(), Some("install"));
 
     // Someone else's apparent stays, and the row says so.
     std::fs::write(&link, "other").unwrap();

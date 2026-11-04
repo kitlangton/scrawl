@@ -133,6 +133,14 @@ and permission-repair windows retain their existing behavior.
 
 ## Settings (`capture/desktop/settings/settings.rs`, `capture/desktop/native/Settings.swift`)
 
+Settings' owned presentation and helper wire models live in
+`settings/settings/models.rs`, reexported through `settings.rs`. GPUI consumes the
+same typed snapshot in process; only the Swift helper state crosses a serialized
+process boundary. GPUI-only playback defaults are omitted from that wire payload.
+Storage and Connect continue to receive their narrow socket projections, with the
+existing native fallbacks and routing. This extraction adds no config writer or
+route switch; native presentations remain until their shared replacement is accepted.
+
 ### Settings ownership inventory and Storage transition
 
 This bounded inventory records the current control contracts before the Settings

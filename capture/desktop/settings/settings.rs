@@ -209,337 +209,8 @@ fn open_login_items_settings() {
 
 // MARK: What the window shows
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Pane {
-    General,
-    Recording,
-    Storage,
-    Permissions,
-    Agents,
-    About,
-}
-
-/// The capture-reading skill source is `capture/agent/skills/apparent/SKILL.md`.
-pub const SKILL_COMMAND: &str = "bunx skills add https://github.com/tryapparent/apparent/tree/main/capture/agent/skills/apparent";
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct View {
-    pub version: String,
-    pub connect: Option<super::connect::View>,
-    pub hosted: Option<crate::connect::hosted::AccountView>,
-    pub login: LoginView,
-    pub error_reporting: bool,
-    pub agent_demo_video: bool,
-    pub shortcuts: Vec<ShortcutView>,
-    pub microphone: MicrophoneView,
-    pub transcriber: TranscriberView,
-    pub lower_playback: bool,
-    pub playback_level: u8,
-    pub video_export: bool,
-    pub retention: RetentionView,
-    /// How much the captures folder takes, once measured.
-    pub captures_size: Option<String>,
-    pub captures_dir: CapturesDirView,
-    pub permissions: Vec<PermissionView>,
-    pub updates: bool,
-    pub update_check: UpdateCheck,
-    pub update_channel: &'static str,
-    pub main_updates: bool,
-    pub command_line: CommandLineView,
-    pub skill_command: &'static str,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateCheck {
-    pub checking: bool,
-    pub result: Option<UpdateResult>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum UpdateResult {
-    Available,
-    Current,
-    Failed,
-}
-
-impl UpdateResult {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Available => "Update available",
-            Self::Current => "No update available",
-            Self::Failed => "Update check failed",
-        }
-    }
-}
-
-/// The "Command-line tool" row.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CommandLineView {
-    /// Where `apparent` is linked, once it is.
-    pub path: Option<String>,
-    /// "install", "uninstall", or none.
-    pub button: Option<&'static str>,
-    pub enabled: bool,
-    pub caption: String,
-    pub error: bool,
-}
-
-impl CommandLineView {
-    fn new(state: &crate::composition::command_line::State, error: Option<&str>) -> Self {
-        use crate::composition::command_line::{State, tilde, usually_on_path};
-        let folder = |link: &std::path::Path| link.parent().map_or_else(String::new, tilde);
-        let mut view = Self {
-            path: None,
-            button: Some("install"),
-            enabled: true,
-            caption: String::new(),
-            error: false,
-        };
-        match state {
-            State::Installed { link, homebrew } => {
-                view.path = Some(tilde(link));
-                view.caption = "Agents and your terminal can run apparent to read captures, zoom \
-                                into a moment and export video."
-                    .to_owned();
-                if *homebrew {
-                    view.button = None;
-                    view.caption = "Installed with Homebrew. Agents and your terminal can run \
-                                    apparent to read captures, zoom into a moment and export video."
-                        .to_owned();
-                } else {
-                    view.button = Some("uninstall");
-                    if !usually_on_path(link) {
-                        view.caption = format!(
-                            "If your shell can't find apparent, add {} to your PATH.",
-                            folder(link)
-                        );
-                    }
-                }
-            }
-            State::Missing { link } => {
-                view.caption = format!(
-                    "Links apparent into {}, so agents and your terminal can run it.",
-                    folder(link)
-                );
-            }
-            State::Stale { link } => {
-                view.caption = format!(
-                    "{} points to another copy of Apparent. Install links it to this one.",
-                    tilde(link)
-                );
-            }
-            State::Taken { link } => {
-                view.button = None;
-                view.error = true;
-                view.caption = format!(
-                    "{} is another program, so Apparent leaves it alone.",
-                    tilde(link)
-                );
-            }
-            State::Nowhere => {
-                view.enabled = false;
-                view.error = true;
-                view.caption =
-                    "There's no folder on your PATH that Apparent can write to.".to_owned();
-            }
-            State::Unavailable => {
-                view.enabled = false;
-                view.caption = if cfg!(target_os = "linux") {
-                    "The command-line tool links to Apparent's AppImage; run Apparent from one."
-                } else {
-                    "The command-line tool works in the installed app."
-                }
-                .to_owned();
-            }
-        }
-        if let Some(error) = error {
-            view.error = true;
-            view.caption = error.to_owned();
-        }
-        view
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginView {
-    pub on: bool,
-    pub available: bool,
-    pub needs_approval: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShortcutView {
-    pub kind: ShortcutKind,
-    pub title: &'static str,
-    pub label: String,
-    pub key: String,
-    pub shift: bool,
-    pub control: bool,
-    pub option: bool,
-    pub command: bool,
-    pub is_default: bool,
-    /// A live system binding owns this chord; change it in the compositor instead.
-    pub externally_managed: bool,
-    /// It can be turned off (paste); `label` is empty while it is.
-    pub clearable: bool,
-    /// The recorder is waiting for a new combination.
-    pub recording: bool,
-    /// Why the last combination was turned down.
-    pub error: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct MicrophoneView {
-    /// `"default"` or the chosen device's id.
-    pub selected: String,
-    /// What the popup says.
-    pub value: String,
-    /// "System default (…)", a separator (`id` "-"), then each input; a chosen device that
-    /// isn't connected comes last, disabled.
-    pub options: Vec<MenuOptionView>,
-    /// Why another device is recording.
-    pub note: Option<String>,
-    /// The device whose level the window shows, only once Microphone is allowed.
-    pub meter: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct MenuOptionView {
-    pub id: String,
-    pub title: String,
-    pub enabled: bool,
-}
-
-fn microphone_view(
-    choice: Option<&crate::capture::engine::runtime::audio::mic::Choice>,
-    inputs: Option<&crate::capture::engine::runtime::audio::mic::Inputs>,
-    allowed: bool,
-) -> MicrophoneView {
-    use crate::capture::engine::runtime::audio::mic::Pick;
-    let option = |id: &str, title: String, enabled: bool| MenuOptionView {
-        id: id.to_owned(),
-        title,
-        enabled,
-    };
-    let empty = crate::capture::engine::runtime::audio::mic::Inputs::default();
-    let pick = Pick::new(choice, inputs.unwrap_or(&empty));
-    let default_title = match inputs.and_then(crate::capture::engine::runtime::audio::mic::Inputs::default_input) {
-        Some(input) => format!("System default ({})", input.name),
-        None => "System default".to_owned(),
-    };
-    let mut options = vec![option("default", default_title, true)];
-    if let Some(inputs) = inputs.filter(|i| !i.devices.is_empty()) {
-        options.push(option("-", String::new(), false));
-        options.extend(
-            inputs
-                .devices
-                .iter()
-                .map(|input| option(&input.id, input.name.clone(), true)),
-        );
-    }
-    // Until the first list arrives, a choice is shown as it was saved, not as missing.
-    let loaded = inputs.is_some();
-    if let (Some(choice), true, Pick::Missing { .. }) = (choice, loaded, &pick) {
-        options.push(option(
-            &choice.id,
-            format!("{} (not connected)", choice.name),
-            false,
-        ));
-    }
-    MicrophoneView {
-        selected: choice.map_or_else(|| "default".to_owned(), |c| c.id.clone()),
-        value: match (choice, &pick) {
-            (_, Pick::Chosen(input)) => input.name.clone(),
-            (Some(choice), _) => choice.name.clone(),
-            (None, _) => "System default".to_owned(),
-        },
-        options,
-        note: if loaded { pick.note() } else { None },
-        meter: pick
-            .device()
-            .filter(|_| allowed && loaded)
-            .map(|input| input.id.clone()),
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranscriberView {
-    /// What recordings use now: "apple", "hex" or "command".
-    pub engine: &'static str,
-    pub hex_title: &'static str,
-    pub hex_enabled: bool,
-    pub language: String,
-    pub apple_locale: String,
-    pub models: Vec<ModelView>,
-    /// The program's file name while `transcribeCommand` is usable (read, never run); Command
-    /// is offered only then.
-    pub command: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct ModelView {
-    pub id: String,
-    pub title: String,
-    pub chosen: bool,
-}
-
-/// Settings › Storage › Location: where new captures go (`"capturesDir"`).
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CapturesDirView {
-    /// The folder, with the home folder as `~`.
-    pub path: String,
-    /// Chosen in Settings rather than the built-in folder, so Reset shows.
-    pub custom: bool,
-}
-
-impl CapturesDirView {
-    fn new(config: &crate::shared::handoff::Config) -> Self {
-        let chosen = config
-            .captures_dir
-            .as_deref()
-            .and_then(crate::shared::handoff::configured_captures_dir);
-        Self {
-            custom: chosen.is_some(),
-            path: crate::composition::command_line::tilde(
-                &chosen.unwrap_or_else(crate::shared::handoff::builtin_captures_dir),
-            ),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct RetentionView {
-    /// The chosen preset, or `None` for a policy written by hand.
-    pub preset: Option<&'static str>,
-    pub options: Vec<OptionView>,
-    pub note: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct OptionView {
-    pub id: &'static str,
-    pub label: &'static str,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PermissionView {
-    pub permission: Permission,
-    pub status: Status,
-    pub required: bool,
-    pub requested: bool,
-    /// Granted, but on only after Apparent reopens.
-    pub relaunch: bool,
-}
+mod models;
+pub use models::*;
 
 pub(crate) fn preset_id(preset: crate::capture::engine::bundle::retention::Preset) -> &'static str {
     match preset {
@@ -551,9 +222,9 @@ pub(crate) fn preset_id(preset: crate::capture::engine::bundle::retention::Prese
 
 pub(crate) fn retention_view(policy: &crate::capture::engine::bundle::retention::Policy) -> RetentionView {
     RetentionView {
-        preset: policy.preset().map(preset_id),
+        preset: policy.preset().map(|p| preset_id(p).into()),
         options: crate::capture::engine::bundle::retention::Preset::ALL.into_iter()
-            .map(|p| OptionView { id: preset_id(p), label: p.label() }).collect(),
+            .map(|p| OptionView { id: preset_id(p).into(), label: p.label().into() }).collect(),
         note: retention_note(policy),
     }
 }
@@ -592,7 +263,7 @@ fn shortcut_view(
     let mods = cfg.carbon_modifiers;
     ShortcutView {
         kind,
-        title: kind.name(),
+        title: kind.name().into(),
         label: cfg.label.clone(),
         key: cfg.key_label().to_owned(),
         shift: mods & CARBON_SHIFT_KEY != 0,
@@ -1136,14 +807,16 @@ impl Panel {
                 self.status(Permission::Microphone) == Status::Granted,
             ),
             lower_playback: config.lower_playback.unwrap_or(false),
+            playback_available: models::playback_available(),
+            playback_note: models::playback_note(),
             playback_level: config.recording_volume(),
             transcriber: TranscriberView {
                 engine: match engine {
                     crate::capture::engine::runtime::audio::transcription::transcribe::Engine::Command if command.is_some() => "command",
                     _ if menu.hex_checked => "hex",
                     _ => "apple",
-                },
-                hex_title: menu.hex_title,
+                }.into(),
+                hex_title: menu.hex_title.into(),
                 hex_enabled: menu.hex_enabled,
                 language: crate::shared::handoff::hex_language_from(&config),
                 apple_locale: crate::shared::handoff::apple_locale_from(&config)
@@ -1154,6 +827,7 @@ impl Panel {
                     .map(|(id, title, chosen)| ModelView { id, title, chosen })
                     .collect(),
                 command,
+                speech: None,
             },
             video_export: config.video_export_enabled(),
             retention: retention_view(&policy),
@@ -1176,13 +850,13 @@ impl Panel {
                 "main"
             } else {
                 "stable"
-            },
+            }.into(),
             main_updates: cfg!(target_os = "linux"),
             command_line: CommandLineView::new(
                 &crate::composition::command_line::state(&host.command_line()),
                 self.cli_error.as_deref(),
             ),
-            skill_command: SKILL_COMMAND,
+            skill_command: SKILL_COMMAND.into(),
         }
     }
 }
@@ -1285,6 +959,12 @@ impl Event {
     }
 }
 
+/// GPUI receives owned state directly; existing control envelopes retain their wire adapter.
+pub(crate) enum PresentationMessage {
+    State(View),
+    Control(serde_json::Value),
+}
+
 /// Native or Electron presentation. Separate children register their exact live
 /// process with capture's own-window exclusion; all use the same bounded actions.
 pub(super) enum Transport {
@@ -1292,7 +972,7 @@ pub(super) enum Transport {
         child: crate::capture::ui_process::UiChild,
         stdin: Option<std::process::ChildStdin>,
     },
-    InProcess(Option<flume::Sender<serde_json::Value>>),
+    InProcess(Option<flume::Sender<PresentationMessage>>),
 }
 
 /// The open Settings window.
@@ -1305,7 +985,7 @@ pub struct Session {
     transport: Transport,
     polling: std::sync::Arc<std::sync::atomic::AtomicBool>,
     events: std::sync::Arc<dyn Fn(Event) + Send + Sync>,
-    last_view: String,
+    last_view: Option<View>,
     _microphones: crate::capture::engine::runtime::audio::mic::Watch,
 }
 
@@ -1376,7 +1056,7 @@ impl Session {
             transport,
             polling,
             events,
-            last_view: String::new(),
+            last_view: None,
             _microphones: microphones,
         })
     }
@@ -1499,7 +1179,7 @@ impl Session {
                     self.generation = generation;
                     self.storage = false;
                     self.connect_presentation = true;
-                    self.last_view.clear();
+                    self.last_view = None;
                     super::presentation::retire(std::mem::replace(&mut self.transport, transport));
                     return Effect::None;
                 }
@@ -1543,7 +1223,7 @@ impl Session {
                 if let Ok((transport, storage)) = Self::open_presentation(Some(Pane::Storage), generation, &self.events, false) {
                     self.generation = generation;
                     self.storage = storage;
-                    self.last_view.clear();
+                    self.last_view = None;
                     super::presentation::retire(std::mem::replace(&mut self.transport, transport));
                     self.sync(host);
                     return Effect::None;
@@ -1644,7 +1324,7 @@ impl Session {
                         self.generation = generation;
                         self.storage = storage;
                         self.connect_presentation = false;
-                        self.last_view.clear();
+                        self.last_view = None;
                         super::presentation::retire(std::mem::replace(&mut self.transport, transport));
                     }
                     Err(error) => crate::capture::engine::runtime::apparent_log(format!("Settings navigation failed: {error:#}")),
@@ -1674,20 +1354,26 @@ impl Session {
         // Storage reads its narrow projected socket contract. Do not forward the
         // other pages' state to a renderer which does not present those pages.
         if self.storage || self.connect_presentation { return; }
-        let mut view = serde_json::to_value(self.panel.view(host)).unwrap_or_default();
-        view["type"] = "state".into();
+        let mut view = self.panel.view(host);
         // Switched from Hex to Apple Speech: get its model now, not at the first capture.
         let speech = crate::capture::engine::runtime::audio::transcription::speech_model::current();
-        if view["transcriber"]["engine"] == "apple"
+        if view.transcriber.engine == "apple"
             && speech.state == crate::capture::engine::runtime::audio::transcription::speech_model::State::Unknown
         {
             crate::capture::engine::runtime::audio::transcription::speech_model::ensure();
         }
-        view["transcriber"]["speech"] = serde_json::to_value(speech).unwrap_or_default();
-        let text = view.to_string();
-        if text != self.last_view {
-            self.send(&view);
-            self.last_view = text;
+        view.transcriber.speech = Some(speech.into());
+        if self.last_view.as_ref() != Some(&view) {
+            if let Transport::InProcess(sender) = &mut self.transport {
+                if let Some(channel) = sender.as_ref() {
+                    if channel.send(PresentationMessage::State(view.clone())).is_err() { *sender = None; }
+                }
+            } else {
+                #[derive(Serialize)]
+                struct State<'a> { r#type: &'static str, #[serde(flatten)] view: &'a View }
+                self.send(&serde_json::to_value(State { r#type: "state", view: &view }).unwrap());
+            }
+            self.last_view = Some(view);
         }
     }
 
@@ -1705,7 +1391,7 @@ impl Session {
             }
             Transport::InProcess(sender) => {
                 if let Some(channel) = sender.as_ref()
-                    && channel.send(message.clone()).is_err()
+                    && channel.send(PresentationMessage::Control(message.clone())).is_err()
                 {
                     *sender = None;
                 }
