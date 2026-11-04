@@ -1,5 +1,5 @@
 import './runtime/exceptions';
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Settings2, CircleDot, HardDrive, ShieldCheck, Terminal, Info } from 'lucide-react';
 import { Storage } from './storage';
@@ -17,13 +17,11 @@ declare global {
 
 function Settings() {
   const connect = new URLSearchParams(location.search).get('surface') === 'connect';
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.title = `Apparent Settings — ${connect ? 'Connect' : 'Storage'}`;
-    let painted: number | undefined;
-    const committed = requestAnimationFrame(() => {
-      painted = requestAnimationFrame(() => { void window.apparentSettingsMounted?.().catch(() => {}); });
-    });
-    return () => { cancelAnimationFrame(committed); if (painted !== undefined) cancelAnimationFrame(painted); };
+    // React has committed the real DOM. The host separately requires first
+    // paint; hidden-page animation callbacks must not gate this acknowledgement.
+    void window.apparentSettingsMounted?.().catch(() => {});
   }, [connect]);
   const [error, setError] = useState('');
   const [navigating, setNavigating] = useState(false);

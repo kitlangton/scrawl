@@ -39,3 +39,30 @@ test('missing Settings renderer stays hidden and exits for native fallback', { t
   assert.equal(await exit, 1, 'A missing entry must release the parent into native fallback');
   assert.equal(output.join('').includes('"action":"close"'), false, 'Failure must not masquerade as user dismissal');
 });
+
+// Hidden documents may defer animation callbacks even after React commits.
+// Load the shipped renderer while modelling that scheduling constraint only.
+test('mounted Settings becomes visible without hidden animation callbacks', { timeout: 25000 }, async t => {
+  const frontend = fileURLToPath(new URL('../..', import.meta.url));
+  const fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'ap-mounted-'));
+  let app: Awaited<ReturnType<typeof _electron.launch>> | undefined;
+  t.after(async () => {
+    if (app) await app.close();
+    await fs.rm(fixture, { recursive: true, force: true });
+  });
+  await fs.cp(path.join(frontend, 'electron'), path.join(fixture, 'electron'), { recursive: true });
+  await fs.cp(path.join(frontend, 'dist'), path.join(fixture, 'dist'), { recursive: true });
+  await fs.symlink(path.join(frontend, 'node_modules'), path.join(fixture, 'node_modules'), 'dir');
+  await fs.writeFile(path.join(fixture, 'package.json'), JSON.stringify({ main: 'electron/main.cjs' }));
+  const html = path.join(fixture, 'dist/settings.html');
+  await fs.writeFile(path.join(fixture, 'dist/paused-animation.js'),
+    'window.requestAnimationFrame = () => 1; window.cancelAnimationFrame = () => {};');
+  await fs.writeFile(html, (await fs.readFile(html, 'utf8')).replace('<head>', '<head><script src="./paused-animation.js"></script>'));
+  app = await _electron.launch({ args: [fixture, '--settings-storage'],
+    env: { ...process.env, HOME: fixture, XDG_CONFIG_HOME: path.join(fixture, 'config') } });
+  const page = await app.firstWindow();
+  await page.locator('.settings-shell').waitFor();
+  const { expect } = await import('@playwright/test');
+  await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true);
+  await expect(page.getByText('CAPTURE SETTINGS', { exact: true })).toBeVisible();
+});

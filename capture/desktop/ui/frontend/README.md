@@ -406,8 +406,10 @@ separate `npm start` window remains a developer harness; it is not installed or
 used by the Settings route. Browser preview has no Storage bridge.
 
 Installed Storage and Connect windows stay hidden until Electron's first paint
-and the React surface's post-commit paint acknowledgement, including when the
-native parent sends `show` during loading. A first paint alone can be an empty
+and the React surface's DOM-commit acknowledgement, including when the
+native parent sends `show` during loading. React acknowledges its committed DOM
+without waiting for hidden-page animation callbacks; the host still separately
+requires first paint. A first paint alone can be an empty
 document when its entry module is missing. Startup without that acknowledgement
 exits after 15 seconds so the parent restores its native fallback; a startup
 failure does not emit the user-dismissal action. Later `show`
@@ -417,6 +419,8 @@ the shipped host's event ordering with a delayed first paint; it is synthetic
 lifecycle coverage, not macOS focus or rendering acceptance. The real Electron
 `tests/storage/readiness.smoke.ts` removes the shipped React entry from a private
 app copy and verifies hidden failure/exit rather than an empty visible window.
+It also withholds animation callbacks while loading the real Settings renderer
+and requires the committed surface to become visible.
 Reverting this guard
 restores immediate window display. The native/Electron pane replacement remains
 in place; this guard alone does not resolve or certify issue #562's intermittent
