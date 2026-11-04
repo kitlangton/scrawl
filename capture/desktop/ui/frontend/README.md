@@ -715,6 +715,14 @@ compositor's visible pinned order can diverge from X11's input stack after focus
 returns to the recorded app. The notes worker checks that stack at most every
 100 ms and raises its visible surfaces only when needed. Renderer commands cannot
 place windows. Counter/editor clicks are excluded from capture telemetry.
+After an explicit editor/list opening, native placement also restores X11 keyboard
+focus after Hyprland placement completes. The compositor's active-client identity
+alone is insufficient: X11 focus can be cleared during that handoff. Only the
+still-active compositor note can receive this repair. Dismissed or replaced
+surface requests cannot reclaim focus; counters and decorative flights
+remain inactive. This is a Linux adapter correction; notes routing is unchanged.
+Focus ownership is checked after geometry placement, before compositor activation
+and again before the X11 repair, so an intervening app switch wins.
 
 Rust owns the private Chromium profile and removes it after reaping Electron,
 before the Finish receipt. Deleting it in Electron's `quit` event races Chromium's

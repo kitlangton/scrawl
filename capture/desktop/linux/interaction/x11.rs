@@ -953,6 +953,50 @@ mod tests {
 
     #[test]
     #[ignore = "requires an isolated X server; run under xvfb-run"]
+    fn note_keyboard_focus_survives_compositor_placement() {
+        use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
+        let x = x().expect("isolated X server");
+        let id = x.conn.generate_id().unwrap();
+        x.conn.create_window(x11rb::COPY_DEPTH_FROM_PARENT, id, x.root,
+            0, 0, 332, 220, 0, WindowClass::INPUT_OUTPUT, x11rb::COPY_FROM_PARENT,
+            &CreateWindowAux::new()).unwrap().check().unwrap();
+        assert!(prepare_floating(id));
+        x.conn.map_window(id).unwrap().check().unwrap();
+        focus(id);
+        crate::capture::desktop::platform::place_note_with_keyboard_focus(
+            || {
+                // Observed on X1: placement leaves Hyprland's active client on
+                // the note, but clears X11 focus after Electron's first focus.
+                x.conn.set_input_focus(InputFocus::POINTER_ROOT, x11rb::NONE, x11rb::CURRENT_TIME)
+                    .unwrap().check().unwrap();
+                Ok(())
+            },
+            true,
+            || true,
+            || focus(id),
+        ).unwrap();
+        assert_eq!(x.conn.get_input_focus().unwrap().reply().unwrap().focus, id,
+            "the visible note must receive keyboard input after compositor placement");
+
+        let current = std::cell::Cell::new(true);
+        crate::capture::desktop::platform::place_note_with_keyboard_focus(
+            || {
+                x.conn.set_input_focus(InputFocus::POINTER_ROOT, x11rb::NONE, x11rb::CURRENT_TIME)
+                    .unwrap().check().unwrap();
+                current.set(false); // A dismissal/replacement won while placement was in flight.
+                Ok(())
+            },
+            true,
+            || current.get(),
+            || focus(id),
+        ).unwrap();
+        assert_eq!(x.conn.get_input_focus().unwrap().reply().unwrap().focus, x11rb::NONE,
+            "a stale placement must not take keyboard focus back");
+        x.conn.destroy_window(id).unwrap().check().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires an isolated X server; run under xvfb-run"]
     fn electron_surface_setup_preserves_owner_visibility() {
         use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
         let x = x().expect("isolated X server");

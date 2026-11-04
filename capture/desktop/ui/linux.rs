@@ -1006,6 +1006,11 @@ mod note_anchor_tests {
 struct NoteSurface { id: u32, generation: u64, worker: bool, rect: [i32; 4], focus: bool, flying: bool }
 #[derive(Clone, Copy, Default)]
 struct NoteSurfaces { pid: u32, slots: [NoteSurface; 2] }
+impl NoteSurfaces {
+    fn current(&self, pid: u32, id: u32, index: usize, generation: u64) -> bool {
+        self.pid == pid && self.slots[index].id == id && self.slots[index].generation == generation
+    }
+}
 static NOTE_SURFACES: std::sync::Mutex<NoteSurfaces> = std::sync::Mutex::new(NoteSurfaces {
     pid: 0, slots: [NoteSurface { id: 0, generation: 0, worker: false, rect: [0; 4], focus: false, flying: false }; 2],
 });
@@ -1039,6 +1044,21 @@ pub(in crate::capture::desktop) fn maintain_note_surfaces(pid: u32) {
     if owned { raise_note_surfaces(); }
 }
 
+/// Hyprland can leave X11 keyboard focus at None while still reporting the
+/// popup as its active client. Reconcile X11 after the compositor's placement,
+/// and only while the same visible surface request still owns that focus.
+pub(in crate::capture::desktop) fn place_note_with_keyboard_focus(
+    place: impl FnOnce() -> anyhow::Result<()>,
+    wants_focus: bool,
+    still_current: impl Fn() -> bool,
+    focus: impl FnOnce(),
+) -> anyhow::Result<()> {
+    if !still_current() { return Ok(()); }
+    place()?;
+    if wants_focus && still_current() { focus(); }
+    Ok(())
+}
+
 fn pin_note_surface(id: u32, pid: u32, index: usize) {
     let mut failures = 0;
     loop {
@@ -1049,7 +1069,30 @@ fn pin_note_surface(id: u32, pid: u32, index: usize) {
             (slot.generation, slot.rect, slot.focus)
         };
         let visible = x11::window_info(id as isize).is_some_and(|w| w.pid == pid && w.on_screen());
-        let result = if visible { linux::hyprland::place_note(id, pid, rect, focus) } else { Ok(()) };
+        let result = if visible {
+            place_note_with_keyboard_focus(
+                || linux::hyprland::place_note(id, pid, rect, focus, || {
+                    let state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state.current(pid, id, index, generation)
+                        && x11::window_info(id as isize).is_some_and(|w| w.pid == pid && w.on_screen())
+                }),
+                focus,
+                || {
+                    let state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state.current(pid, id, index, generation)
+                        && x11::window_info(id as isize).is_some_and(|w| w.pid == pid && w.on_screen())
+                },
+                || {
+                    // An intervening app switch must win over delayed placement.
+                    if !linux::hyprland::note_is_active(id, pid) { return; }
+                    let state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if state.current(pid, id, index, generation)
+                        && x11::window_info(id as isize).is_some_and(|w| w.pid == pid && w.on_screen()) {
+                        x11::focus(id);
+                    }
+                },
+            )
+        } else { Ok(()) };
         if visible && result.is_ok() { raise_note_surfaces(); } else { failures += 1; }
         let retry = {
             let mut state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1103,3 +1146,37 @@ pub(in crate::capture::desktop) fn place_note_surface(id: u32, pid: u32, rect: [
 
 /// Current compositor/window owner, including owned Electron children.
 pub(in crate::capture::desktop) fn share_foreground_pid() -> u32 { note_focus().1 }
+
+#[cfg(test)]
+mod note_focus_tests {
+    use super::*;
+
+    #[test]
+    fn note_focus_requires_current_process_surface_and_placement() {
+        let mut state = NoteSurfaces { pid: 10, ..Default::default() };
+        state.slots[1] = NoteSurface { id: 20, generation: 3, ..Default::default() };
+        assert!(state.current(10, 20, 1, 3));
+        assert!(!state.current(11, 20, 1, 3));
+        assert!(!state.current(10, 21, 1, 3));
+        assert!(!state.current(10, 20, 1, 2));
+        assert!(!state.current(10, 20, 0, 3));
+        state.slots[1].generation += 1;
+        assert!(!state.current(10, 20, 1, 3));
+    }
+
+    #[test]
+    fn unavailable_failed_and_nonfocus_placements_never_take_focus() {
+        place_note_with_keyboard_focus(
+            || panic!("stale request placed a window"), true, || false,
+            || panic!("stale request took focus"),
+        ).unwrap();
+        assert!(place_note_with_keyboard_focus(
+            || anyhow::bail!("placement failed"), true, || true,
+            || panic!("failed placement took focus"),
+        ).is_err());
+        place_note_with_keyboard_focus(
+            || Ok(()), false, || true,
+            || panic!("badge or decorative flight took focus"),
+        ).unwrap();
+    }
+}

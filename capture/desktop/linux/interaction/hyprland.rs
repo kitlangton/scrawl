@@ -419,6 +419,17 @@ pub fn pill_title(xid: u32) -> String {
 
 pub fn note_title(xid: u32) -> String { format!("Apparent notes {xid:x}") }
 
+pub fn note_is_active(xid: u32, pid: u32) -> bool {
+    request("j/activewindow").ok().and_then(|reply| serde_json::from_str::<serde_json::Value>(&reply).ok())
+        .is_some_and(|window| active_note_matches(&window, xid, pid))
+}
+
+fn active_note_matches(window: &serde_json::Value, xid: u32, pid: u32) -> bool {
+    window["pid"].as_u64() == Some(u64::from(pid))
+        && window["title"].as_str() == Some(&note_title(xid))
+        && window["xwayland"].as_bool() == Some(true)
+}
+
 pub fn pin_note(xid: u32, pid: u32) -> Result<()> {
     if let Some(command) = owned_pin_command(&request("j/clients")?, pid, &note_title(xid), syntax()?)? {
         run(&command)?;
@@ -428,7 +439,7 @@ pub fn pin_note(xid: u32, pid: u32) -> Result<()> {
 
 /// X11 geometry can diverge from Hyprland's scene for override-redirect Electron
 /// windows. Reconcile the exact registered child surface in the compositor too.
-pub fn place_note(xid: u32, pid: u32, rect: [i32; 4], focus: bool) -> Result<()> {
+pub fn place_note(xid: u32, pid: u32, rect: [i32; 4], focus: bool, still_current: impl Fn() -> bool) -> Result<()> {
     pin_note(xid, pid)?;
     let clients: Vec<serde_json::Value> = serde_json::from_str(&request("j/clients")?)?;
     let title = note_title(xid);
@@ -440,15 +451,33 @@ pub fn place_note(xid: u32, pid: u32, rect: [i32; 4], focus: bool) -> Result<()>
     let layout: Vec<Monitor> = serde_json::from_str(&request("j/monitors")?)?;
     let outputs: Vec<_> = super::x11::monitors().into_iter().map(|m| (m.name, m.rect)).collect();
     let [x,y,width,height] = note_layout_rect(rect, &layout, &outputs).context("Notes output unavailable")?;
-    match syntax()? {
-        Syntax::Lua => run(&format!("eval local w = hl.get_windows({{ title = '{title}' }})[1]; assert(w and w.address == '{address}', 'Notes surface changed'); hl.dispatch(hl.dsp.window.resize({{ window = w, x = {width}, y = {height}, relative = false }})); hl.dispatch(hl.dsp.window.move({{ window = w, x = {x}, y = {y}, relative = false }})); {}", if focus { "hl.dispatch(hl.dsp.focus({ window = w }))" } else { "" })),
-        Syntax::Hyprlang => {
-            run(&format!("dispatch resizewindowpixel exact {width} {height},address:{address}"))?;
-            run(&format!("dispatch movewindowpixel exact {x} {y},address:{address}"))?;
-            if focus { run(&format!("dispatch focuswindow address:{address}"))?; }
-            Ok(())
-        }
-    }
+    let syntax = syntax()?;
+    place_then_focus(
+        || match syntax {
+            Syntax::Lua => run(&format!("eval local w = hl.get_windows({{ title = '{title}' }})[1]; assert(w and w.address == '{address}', 'Notes surface changed'); hl.dispatch(hl.dsp.window.resize({{ window = w, x = {width}, y = {height}, relative = false }})); hl.dispatch(hl.dsp.window.move({{ window = w, x = {x}, y = {y}, relative = false }}))")),
+            Syntax::Hyprlang => {
+                run(&format!("dispatch resizewindowpixel exact {width} {height},address:{address}"))?;
+                run(&format!("dispatch movewindowpixel exact {x} {y},address:{address}"))
+            }
+        },
+        || focus && still_current() && note_is_active(xid, pid),
+        || match syntax {
+            Syntax::Lua => run(&format!("eval local w = hl.get_windows({{ title = '{title}' }})[1]; assert(w and w.address == '{address}', 'Notes surface changed'); hl.dispatch(hl.dsp.focus({{ window = w }}))")),
+            Syntax::Hyprlang => run(&format!("dispatch focuswindow address:{address}")),
+        },
+    )
+}
+
+// Placement RPCs can outlive the user's focus intent. Check it after the final
+// geometry operation, before either compositor focus backend can take focus.
+fn place_then_focus(
+    place: impl FnOnce() -> Result<()>,
+    owns_focus: impl FnOnce() -> bool,
+    focus: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    place()?;
+    if owns_focus() { focus()?; }
+    Ok(())
 }
 
 fn pill_pin_command(clients: &str, pid: u32, xid: u32, syntax: Syntax) -> Result<Option<String>> {
@@ -733,6 +762,32 @@ pub fn watch_reloads(reloaded: impl Fn() + Send + 'static) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn note_app_switch_during_placement_prevents_compositor_focus() {
+        use std::cell::{Cell, RefCell};
+        let active = RefCell::new(serde_json::json!({"pid":10,"title":"Apparent notes 14","xwayland":true}));
+        let focus_calls = Cell::new(0);
+        place_then_focus(
+            || { *active.borrow_mut() = serde_json::json!({"pid":99,"title":"Other app","xwayland":false}); Ok(()) },
+            || active_note_matches(&active.borrow(), 20, 10),
+            || { focus_calls.set(focus_calls.get() + 1); Ok(()) },
+        ).unwrap();
+        assert_eq!(focus_calls.get(), 0, "placement must not override an intervening app switch");
+        place_then_focus(|| Ok(()), || true,
+            || { focus_calls.set(focus_calls.get() + 1); Ok(()) }).unwrap();
+        assert_eq!(focus_calls.get(), 1, "a still-owned note retains compositor activation");
+    }
+    #[test]
+    fn note_focus_requires_the_exact_active_xwayland_surface() {
+        let note = serde_json::json!({"pid": 10, "title": "Apparent notes 14", "xwayland": true});
+        assert!(super::active_note_matches(&note, 20, 10));
+        assert!(!super::active_note_matches(&note, 21, 10));
+        assert!(!super::active_note_matches(&note, 20, 11));
+        assert!(!super::active_note_matches(&serde_json::json!({}), 20, 10));
+        let mut native = note;
+        native["xwayland"] = serde_json::json!(false);
+        assert!(!super::active_note_matches(&native, 20, 10));
+    }
     use super::*;
 
     const ALT_SHIFT: u32 = CARBON_OPTION_KEY | CARBON_SHIFT_KEY;
