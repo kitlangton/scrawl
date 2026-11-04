@@ -252,9 +252,13 @@ jobs:
     steps:
       - name: Runtime budget ownership
         run: echo '10 minute execution budget; agent whose run hits the limit owns optimization and a successful rerun. Do not raise or bypass the limit.'
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - uses: actions/download-artifact@v4
         with:
-          pattern: recipient-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-*
+          pattern: recipient-${{ github.sha }}-${{ github.run_id }}-*
           path: recipient-assets
       - name: Verify provenance and publish durable component version
         env:
@@ -263,14 +267,7 @@ jobs:
         run: |
           set -euo pipefail
           version="recipient-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir release-assets
-          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin x86_64-apple-darwin; do
-            directory="recipient-assets/$version-$target"
-            gh attestation verify "$directory/apparent-connect-recipient" --repo tryapparent/apparent --signer-workflow tryapparent/apparent/.github/workflows/connect-delivery.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA"
-            gh attestation verify "$directory/manifest.json" --repo tryapparent/apparent --signer-workflow tryapparent/apparent/.github/workflows/connect-delivery.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA"
-            chmod 755 "$directory/apparent-connect-recipient"
-            tar -czf "release-assets/$version-$target.tar.gz" -C "$directory" apparent-connect-recipient manifest.json
-          done
+          node --experimental-strip-types connect/delivery/recipient/release.ts recipient-assets release-assets "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
           cd release-assets
           sha256sum *.tar.gz > SHA256SUMS
           gh release create "$version" ./* --repo tryapparent/apparent --target "$GITHUB_SHA" --title "$version" --notes "Standalone recipient protocol 1. Source $GITHUB_SHA; trusted main producer run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT. Component binaries are not Apple signed or notarized. Desktop publication gates still apply." --latest=false

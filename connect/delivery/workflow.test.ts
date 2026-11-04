@@ -23,7 +23,7 @@ test('callable publisher admits independently with production controls',async()=
 test('durable recipient releases verify trusted provenance and preserve executability',async()=>{
  const workflow=await readFile(new URL('../../.github/workflows/connect-delivery.yml',import.meta.url),'utf8');
  const release=workflow.split('  recipient-release:')[1];
- for(const value of ['needs: recipient',"github.ref == 'refs/heads/main'",'--source-ref refs/heads/main','--source-digest "$GITHUB_SHA"','--signer-workflow tryapparent/apparent/.github/workflows/connect-delivery.yml','chmod 755','gh release create','--latest=false']) assert.ok(release.includes(value),value);
+ for(const value of ['needs: recipient',"github.ref == 'refs/heads/main'",'connect/delivery/recipient/release.ts recipient-assets release-assets', 'pattern: recipient-${{ github.sha }}-${{ github.run_id }}-*','gh release create','--latest=false']) assert.ok(release.includes(value),value);
  assert.doesNotMatch(release,/--clobber|gh release (?:edit|delete|upload)|wrangler|HOSTED_CD_ENABLED/);
- assert.ok(release.indexOf('chmod 755')<release.indexOf('tar -czf'));
+ assert.ok(release.indexOf('release.ts')<release.indexOf('gh release create'));
 });

@@ -76,3 +76,17 @@ verify GitHub attestations with the expected repository/workflow identity, valid
 platform/architecture/protocol and hash the downloaded executable before copying
 it into the application. Never fall back to source compilation. App signing,
 notarization, updater identity and exact-commit publication gates remain required.
+
+Recipient failed-job reruns reuse successful targets from earlier attempts of the
+same run and source SHA. The publisher validates every discovered name, manifest
+and executable digest, authenticates both files (including superseded candidates),
+and selects the greatest producer attempt per target no later than the release
+attempt. Missing targets and invalid candidates fail closed.
+
+The release tag and archive prefix identify the current publication attempt.
+Embedded manifests remain byte-for-byte original and may identify earlier producer
+attempts. `recipient-identities.json` schema 1 contains `releaseVersion` and a
+`targets` array of complete selected manifest identities. Consumers must pin the
+release version separately from each target's producer attempt/version, validate
+the original manifest against that reviewed producer identity, and verify both
+attestations. The index is discovery metadata, not an independent trust anchor.
