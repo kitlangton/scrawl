@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const { waitForStorageReads } = require('./storage/native-readiness.ts');
 
 test('Retention save/reset/readback, failure, usage loading/error and stale response isolation', { timeout: 45000 }, async t => {
   // Shipped Electron main/preload/production renderer; synthetic backend, not native proof.
@@ -91,9 +92,16 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   releaseLocation();
   await expect(page.getByText('Calculating folder usage…')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Refresh usage', exact: true })).toBeDisabled();
-  releaseUsage(); releaseUsage = undefined;
-  await expect(page.getByText('12 MB in captures')).toBeVisible();
   const card = page.getByRole('region', { name: 'Capture location', exact: true });
+  let nativeReady = false;
+  const readiness = waitForStorageReads(card, 5000).then(() => { nativeReady = true; });
+  // The held real renderer request keeps native action admission closed.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(nativeReady, false, 'Native action raced the initial usage read');
+  releaseUsage(); releaseUsage = undefined;
+  await readiness;
+  assert.equal(nativeReady, true);
+  await expect(page.getByText('12 MB in captures')).toBeVisible();
   // Regression for native Mac's old ambiguous locator: usage legitimately
   // repeats the folder, so the location readback must be independently scoped.
   await expect(card.getByText('/captures', { exact: true })).toHaveCount(2);

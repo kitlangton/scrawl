@@ -10,6 +10,7 @@ const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { _electron: electron, expect } = require('@playwright/test');
 const { readRuntimeState } = require('../electron/runtime.cjs');
+const { waitForStorageReads } = require('./storage/native-readiness.ts');
 const run = promisify(execFile);
 const { pidFileSupervisor: rustSupervisor, stopOwned, withinLabelled: within } = require('../../../../../enablement/native/owned-processes.ts');
 const root = path.join(__dirname, '..');
@@ -392,6 +393,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       await card.getByRole('button', { name: 'Refresh location', exact: true }).click({ timeout: budget(1000) });
       throw new Error('Location refresh pending');
     }, 'Rendered initial capture location');
+    await waitForStorageReads(card, budget());
     await change.click({ timeout: budget() });
     report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');
     // Only the OS picker receives the path. Never pass it through renderer/IPC.
@@ -426,6 +428,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.retention = await require('./native-retention.cjs')(page, { config, captures: selected, output });
     const beforeCancel = await fs.readFile(config);
     const beforeCancelStat = await fs.stat(config, { bigint: true });
+    await waitForStorageReads(card, budget());
     await change.click({ timeout: budget() });
     report.nativeBeforeCancel = await poll(() => panel('inspect'), 'Reopened native picker');
     await panel('cancel');
@@ -437,6 +440,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.cancel = { ...await snapshot(), files: await assertFiles(selected),
       bytesUnchanged: true, inodeUnchanged: true, mtimeUnchanged: true };
     assert.deepEqual(report.cancel.location, report.change.location);
+    await waitForStorageReads(card, budget());
     await reset.click({ timeout: budget() });
     const resetRead = await poll(async () => {
       const next = await snapshot();
