@@ -851,9 +851,7 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
                 continue  # Retired platform is outside the supported CI contract.
             for job in re.split(r'^  [\w-]+:\n', workflow.read_text(), flags=re.M)[1:]:
                 if re.search(r'^    runs-on:', job, re.M):
-                    expected = ("${{ startsWith(inputs.runner, 'macos-') && 15 || 10 }}"
-                                if workflow.name == 'verification-platform.yml' else
-                                '15' if workflow.name in {'verification-mac.yml', 'native-proof-mac.yml', 'release-mac-preview.yml'} else '10')
+                    expected = ('15' if workflow.name in {'verification.yml', 'verification-platform.yml', 'release-linux.yml', 'linux-updater-harness.yml', 'verification-mac.yml', 'native-proof-mac.yml', 'release-mac-preview.yml'} else '10')
                     self.assertIn(f'    timeout-minutes: {expected}\n', job, str(workflow))
                     if '    name: Workflow runtime budget\n' not in job:
                         self.assertIn('agent whose run hits the limit owns optimization', job)

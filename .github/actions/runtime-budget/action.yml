@@ -2,7 +2,7 @@ name: Whole-workflow runtime audit
 description: Fail closed if the completed workflow workload exceeded its execution budget.
 inputs:
   platform:
-    description: Supported workload platform (linux or macos)
+    description: Supported workload platform (linux, macos or web)
     default: linux
 runs:
   using: composite
