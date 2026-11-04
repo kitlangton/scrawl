@@ -1,0 +1,4 @@
+{
+  "extends": "../tsconfig.json",
+  "include": ["../src/onboarding/main.tsx", "../vite.config.ts"]
+}
