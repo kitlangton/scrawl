@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {relevant, type Owner} from './inputs.ts'
+import {readFileSync} from 'node:fs'
 const owners:Owner[]=['public','connect','recipient']
+test('build entrypoints scope the color guard to their declared consumers; repository guard remains global',()=>{
+ for(const [path,owner] of [['public/site','public'],['connect/web','connect'],['connect/service','connect']]) {
+  const manifest=JSON.parse(readFileSync(new URL(`../../../${path}/package.json`,import.meta.url),'utf8'))
+  assert.ok(manifest.scripts.build.includes(`check-theme.py --owner ${owner} &&`),path)
+ }
+ const verifier=readFileSync(new URL('../../verification.py',import.meta.url),'utf8')
+ assert.match(verifier,/\["python3", "shared\/ui\/scripts\/check-theme.py"\]/)
+})
 test('actual owner, generated Public content and reverse shared consumers select their lanes',()=>{
   for(const path of ['public/site/src/Home.tsx','README.md','capture/agent/skills/apparent/SKILL.md'])assert(relevant('public',path),path)
   assert(!relevant('connect','README.md'));assert(!relevant('recipient','public/site/src/Home.tsx'))

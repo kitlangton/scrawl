@@ -51,6 +51,9 @@ Known unrelated changes skip the matrix only after such a baseline exists. Expli
 dispatches force owner work. These skips neither create a new component identity nor
 admit another commit's verification as current proof. Native package consumers still
 require their real reviewed artifacts and applicable platform acceptance.
+Public and Connect builds invoke the color guard for their own frontend surfaces
+plus shared sources. The default repository-wide color guard still checks all
+owners, including Desktop; no fixed-color allowances or global checks were removed.
 Public consumes immutable independently verified Connect browser artifacts after
 trusted producer/run/digest, candidate input and current build-configuration checks.
 No compatible retained artifact means fail-closed admission, never a Connect rebuild.
