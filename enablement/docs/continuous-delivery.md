@@ -533,3 +533,18 @@ assertions, release admission and signing are unchanged. Restore the Mac workloa
 budget to 900 seconds and both expanded job limits to 15 minutes after verified
 publication and installed updater acceptance; this exception is not a performance
 improvement or an increase to the separate NoMac spending/session limits.
+
+### Onboarding entry feedback before feature pushes
+
+Feature pre-push verification runs the existing Desktop `npm run check:onboarding`
+command when the full merge-base delta includes
+`capture/desktop/ui/frontend/src/onboarding/main.tsx`. This is entry-change
+coverage only: edits solely to transitive dependencies do not trigger it.
+The command checks the entry's transitive TypeScript imports and renderer build;
+shared CSS/Tailwind and shared UI freshness checks remain part of that build.
+It runs in `capture/desktop/ui/frontend`, without installing dependencies or
+using the network. Missing dependencies reject the push with an `npm ci` action
+for the developer. Deleting or renaming the entry requires updating this check's
+contract before pushing. Existing repository contracts, exact-HEAD/clean-tree
+checks, conservative selection and native/release gates remain unchanged.
+This adds developer feedback, not a guarantee that all product tests run in hooks.

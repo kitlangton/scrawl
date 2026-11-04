@@ -196,13 +196,23 @@ def check_temp_environment():
         reject(f"socket fixture needs {size} pathname bytes; platform permits {limit}")
 
 
-def run_pr_checks():
+def run_pr_checks(selection=None):
     subprocess.run(["node", "--experimental-strip-types", "--test", "enablement/file-length/check.test.ts"], cwd=ROOT, check=True)
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
     for pattern in ("test_*push*.py", "test_verification.py", "test_release_gate.py",
                     "test_temp_preflight.py", "test_owner_lanes.py"):
         subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                         "-p", pattern], cwd=ROOT, check=True)
+    entry = "capture/desktop/ui/frontend/src/onboarding/main.tsx"
+    if selection and entry in selection["paths"]:
+        frontend = ROOT / "capture/desktop/ui/frontend"
+        if not (ROOT / entry).is_file():
+            raise RuntimeError("Onboarding entry was deleted or renamed; update its focused check contract before pushing")
+        if not all((frontend / item).is_file() for item in (
+                "node_modules/typescript/bin/tsc", "node_modules/vite/bin/vite.js",
+                "node_modules/@apparent/ui/package.json")):
+            raise RuntimeError("Onboarding feedback needs installed dependencies: run npm ci in capture/desktop/ui/frontend, then retry the push; the hook never installs dependencies")
+        subprocess.run(["npm", "run", "check:onboarding"], cwd=frontend, check=True)
 
 
 def run_contract_checks():
@@ -549,7 +559,7 @@ def main():
             for key in ("root", "engine", "browser"):
                 output.write(f"{key}={str(selection[key]).lower()}\n")
     if args.pr:
-        run_pr_checks()
+        run_pr_checks(selection)
     if args.run:
         run_checks(selection, offline=not args.online, parallel_contracts=args.parallel_contracts,
                    cargo_timings=args.cargo_timings, overlap_root_build=args.overlap_root_build)
