@@ -94,7 +94,6 @@ class SelectionTests(unittest.TestCase):
             "public/site/scripts/site-build/agent-files.ts",
             "public/site/scripts/site-build/feature-audit.ts",
             "public/site/scripts/site-build/prerender.ts",
-            "shared/analytics/config.ts", "shared/ui/src/tokens.css",
             "shared/ui/scripts/check-theme.py", "shared/ui/scripts/legacy-colors.json",
         )
         for path in inputs:
@@ -116,6 +115,25 @@ class SelectionTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertFalse(verification.public_site_build_selected([path]))
+
+    def test_public_shared_inputs_keep_connect_browser_checks(self):
+        for path in ("shared/analytics/browser.ts", "shared/analytics/config.ts", "shared/ui/src/tokens.css"):
+            with self.subTest(path=path):
+                selection = verification.select([path])
+                self.assertTrue(selection["public_site"])
+                self.assertTrue(selection["browser"])
+                self.assertTrue(selection["root"])
+                self.assertTrue(verification.public_site_build_selected([path]))
+
+    def test_unknown_history_runs_public_feedback_on_feature_pushes(self):
+        for paths in ([], ["capture/desktop/native/linux.rs"]):
+            with self.subTest(paths=paths), patch.object(verification.subprocess, "run"), patch.object(
+                    verification, "run_connect_client_typescript_tests"), patch.object(
+                    verification, "run_public_site_build") as build:
+                selection = verification.select(paths, history_known=False)
+                verification.run_pr_checks(selection)
+                build.assert_called_once_with()
+        self.assertTrue(verification.public_site_build_selected([]))
 
     def test_public_site_build_runs_declared_build_and_only_after_locked_dependencies_exist(self):
         with tempfile.TemporaryDirectory() as directory:

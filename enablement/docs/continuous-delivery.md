@@ -591,14 +591,15 @@ full merge-base delta changes Public source, served assets, the package/build
 controls, or the build's direct tooling inputs. This command runs the Public
 theme contract, TypeScript check, client and SSR Vite builds, and prerender. It
 does not package Pages output or run browser/video checks. The five Public
-brand assets also consumed by Connect web retain their broader root and Connect
-browser checks; unrelated Connect-only and native-only deltas skip the Public
-build.
+brand assets also consumed by Connect web, shared analytics and shared UI tokens
+retain their broader root and Connect browser checks; unrelated Connect-only and
+native-only deltas skip the Public build. Unknown history selects the Public build
+conservatively even on feature pushes, where broad root checks do not execute.
 
 The selector follows the build's actual closure: `public/site/src`,
 `public/site/public`, `index.html`, `package.json`, `bun.lock`, `tsconfig.json`,
 `vite.config.ts`, the Public asset plugin and site-build prerender inputs, plus
-`shared/analytics/config.ts`, shared UI tokens and the theme guard inputs.
+`shared/analytics/{config,browser}.ts`, shared UI tokens and the theme guard inputs.
 Deleted or renamed source paths still select the build. Missing/deleted package
 controls fail with an instruction to restore or update the contract. Bun 1.3.10
 and locked dependencies must already be installed with

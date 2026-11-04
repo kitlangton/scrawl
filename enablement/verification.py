@@ -143,6 +143,7 @@ PUBLIC_SITE_TOOLING_INPUTS = {
     PUBLIC_SITE_ROOT + "scripts/site-build/feature-audit.ts",
     PUBLIC_SITE_ROOT + "scripts/site-build/prerender.ts",
     "shared/analytics/config.ts",
+    "shared/analytics/browser.ts",
     "shared/ui/src/tokens.css",
     "shared/ui/scripts/check-theme.py",
     "shared/ui/scripts/legacy-colors.json",
@@ -154,14 +155,15 @@ PUBLIC_CONNECT_SHARED_ASSETS = {
         "brand/apparent-wordmark.svg",
     )
 }
+PUBLIC_CONNECT_SHARED_INPUTS = PUBLIC_CONNECT_SHARED_ASSETS | {
+    "shared/analytics/config.ts", "shared/analytics/browser.ts", "shared/ui/src/tokens.css",
+}
 
 
 def public_site_build_selected(paths):
     """Select Public's existing non-browser package build for its real inputs."""
     if not paths:
-        # The caller's empty/unknown delta already selects conservative root
-        # checks; this focused lane requires an observed Public input.
-        return False
+        return True  # Feature-push contracts do not run the selected root suite.
     return any(
         path in PUBLIC_SITE_BUILD_INPUTS | PUBLIC_SITE_TOOLING_INPUTS
         or path.startswith((PUBLIC_SITE_ROOT + "src/", PUBLIC_SITE_ROOT + "public/"))
@@ -181,9 +183,9 @@ def select(paths, history_known=True):
     for path in paths:
         if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
             continue
-        if path in PUBLIC_CONNECT_SHARED_ASSETS:
-            # Connect web consumes these Public-owned assets as browser inputs;
-            # preserve the existing broad root and browser checks as well.
+        if path in PUBLIC_CONNECT_SHARED_INPUTS:
+            # Shared browser sources and Public-owned assets have Connect
+            # consumers; preserve broad root and browser checks as well.
             public_site = True
             browser = True
             broad = True
@@ -213,7 +215,7 @@ def select(paths, history_known=True):
             broad = True
             reasons.append(path)
     return {"root": broad, "engine": broad or engine, "browser": browser,
-            "public_site": public_site,
+            "public_site": public_site or not history_known or not paths,
             "focused": [], "paths": paths,
             "reason": "unknown history or empty delta" if not history_known or not paths
             else "broad inputs: " + ", ".join(reasons) if broad else "document/package-test-only delta"}
@@ -338,7 +340,7 @@ def run_pr_checks(selection=None):
                 "node_modules/@apparent/ui/package.json")):
             raise RuntimeError("Onboarding feedback needs installed dependencies: run npm ci in capture/desktop/ui/frontend, then retry the push; the hook never installs dependencies")
         subprocess.run(["npm", "run", "check:onboarding"], cwd=frontend, check=True)
-    if public_site_build_selected(paths):
+    if (selection or {}).get("public_site", public_site_build_selected(paths)):
         run_public_site_build()
 
 

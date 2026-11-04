@@ -105,10 +105,13 @@ class PrePushGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), str(self.repo))
 
-    def test_feature_push_runs_contracts_without_cargo(self):
+    def test_unknown_history_feature_push_runs_owner_checks_without_cargo(self):
+        site = self.public_site_delta()
+        run("git", "update-ref", "-d", "refs/remotes/origin/main", cwd=self.repo)
         result = self.push(remote="refs/heads/feature")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.log.exists())
+        self.assertIn(f"{site}:run build\n", self.npm_log.read_text())
 
     def onboarding_delta(self, dependencies=True, delete=False, rename=False):
         frontend = self.repo / "capture/desktop/ui/frontend"
