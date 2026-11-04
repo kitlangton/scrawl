@@ -28,4 +28,26 @@ These commands operate on TypeScript and npm dependencies; they do not invoke Ca
 - `age-encryption@0.3.1` is the upstream FiloSottile TypeScript age implementation: <https://github.com/FiloSottile/typage>. Its README documents Node.js 20+, binary `Uint8Array` streams and age CLI interoperability.
 - `@noble/ed25519@3.2.0` supplies Ed25519. Verification explicitly uses the library's strict (`zip215: false`) mode and rejects small-order public keys and `R`, matching the current Rust caller's strict verification intent.
 
-On 2026-11-04, a temporary offline Rust harness using the pinned `age 0.11.5` and `ed25519-dalek 3.0.0` produced/consumed synthetic 80,000-byte age payloads through multipart reassembly in both directions. It also produced an Ed25519 signature that matched the TypeScript signature byte-for-byte. The temporary harness and keys were kept outside the repository. This establishes dependency-level wire interoperability only; production `pack`/`unpack` and a checked-in Rust-generated fixture remain required before claiming full envelope compatibility.
+The reproducible `production_typescript_crypto_interop` Rust test calls the
+actual production `pack` and `unpack` functions. It generates private synthetic
+identities and a 33 MiB payload, then invokes `test/production-interop.ts`.
+TypeScript verifies Rust's signed bytes/signature, stored identities, multipart
+stream and original bytes, and publishes a newly encrypted/signed stream for
+Rust to unpack. Both sides reject wrong recipients and tampering; strict
+Ed25519 negative vectors are checked against Rust's `verify_strict` result.
+All generated identities and payloads stay in the private test fixture and are
+removed by its existing cleanup. No static private keys or large binaries are
+checked in. Run this migration-only compatibility lane from the repository root:
+
+```sh
+APPARENT_CONNECT_INTEROP_NODE="$(command -v node)" \
+APPARENT_CONNECT_INTEROP_SCRIPT="$PWD/connect/client/typescript/test/production-interop.ts" \
+cargo test --manifest-path connect/client/Cargo.toml --offline \
+  production_typescript_crypto_interop -- --ignored --nocapture
+```
+
+On Clanker, wrap that Cargo command once with `t3-build`, per root instructions.
+This explicit cross-language migration check needs Rust; ordinary package
+install/build/test/pack commands above do not. The fixture does not certify
+production TypeScript transport, filesystem publication, account enrollment or
+grouped evidence/media consumers, which remain migration work.
