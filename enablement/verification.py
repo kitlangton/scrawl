@@ -466,6 +466,16 @@ def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_ro
     jobs = os.environ.get("T3_BUILD_JOBS", "3")
     dependency_mode = "--offline" if offline else "--locked"
     diagnostics = ["--timings"] if cargo_timings else []
+    # The standalone Engine package is a smaller consumer than the root app.
+    # Run it first when both lanes are selected so package-local compiler or
+    # test failures stop before the broader application compile. Root checks
+    # still run for every source change because production remains a root module.
+    if selection["engine"]:
+        for command in ("build", "test"):
+            args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + diagnostics
+            if command == "test":
+                args += ["--", "--test-threads=2"]
+            subprocess.run(args, cwd=ROOT, check=True)
     if selection["root"]:
         if selection.get("focused"):
             for test_filter in selection["focused"]:
@@ -490,14 +500,6 @@ def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_ro
             subprocess.run(build_command if not selection.get("focused") else
                            cargo + ["build", "-j", jobs, dependency_mode] + diagnostics,
                            cwd=ROOT, check=True)
-    # Keep existing root failure/order semantics, then run fast package checks
-    # for early package-specific feedback before later non-Cargo lanes.
-    if selection["engine"]:
-        for command in ("build", "test"):
-            args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + diagnostics
-            if command == "test":
-                args += ["--", "--test-threads=2"]
-            subprocess.run(args, cwd=ROOT, check=True)
     if selection.get("browser"):
         # Use the existing package fixtures, including the separate loopback
         # build. Do not substitute a production artifact with synthetic config.

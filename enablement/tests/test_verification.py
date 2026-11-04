@@ -160,7 +160,9 @@ class SelectionTests(unittest.TestCase):
         commands = [call.args[0] for call in run.call_args_list if 'cargo' in call.args[0]]
         self.assertEqual(len(commands), 4)
         self.assertEqual([next(c for c in command if c in ('build', 'test')) for command in commands],
-                         ['test', 'build', 'build', 'test'])
+                         ['build', 'test', 'test', 'build'])
+        self.assertTrue(all('capture/engine/Cargo.toml' in command for command in commands[:2]))
+        self.assertTrue(all('capture/engine/Cargo.toml' not in command for command in commands[2:]))
         for command in commands:
             self.assertEqual(command.count('--timings'), 1)
             self.assertIn('--locked', command)
@@ -472,7 +474,7 @@ class SelectionTests(unittest.TestCase):
                     if 'cargo' in command:
                         commands.append(command)
                         self.assertTrue(kwargs['check'])
-                        if failure in command:
+                        if 'capture/engine/Cargo.toml' not in command and failure in command:
                             raise subprocess.CalledProcessError(7, command)
                     return subprocess.CompletedProcess(command, 0, stdout='test result: ok. 2 passed; 0 failed\n')
                 with self.subTest(focused=focused, failure=failure), patch.object(
@@ -480,11 +482,12 @@ class SelectionTests(unittest.TestCase):
                     with self.assertRaises(subprocess.CalledProcessError):
                         verification.run_selected_checks({'root': True, 'engine': True,
                                                           'browser': False, 'focused': focused})
-                self.assertEqual(len(commands), 1 if failure == 'test' else 2)
-                self.assertIn('test', commands[0])
+                self.assertEqual(len(commands), 3 if failure == 'test' else 4)
+                self.assertTrue(all('capture/engine/Cargo.toml' in command for command in commands[:2]))
+                self.assertIn('test', commands[2])
                 if failure == 'build':
-                    self.assertIn('build', commands[1])
-                self.assertFalse(any('capture/engine/Cargo.toml' in c for c in commands))
+                    self.assertIn('build', commands[3])
+                self.assertFalse(any('capture/engine/Cargo.toml' in c for c in commands[2:]))
 
     def test_explicit_platform_suites_execute_even_when_changed_tree_has_no_matching_inputs(self):
         for suite in ('rust', 'browser'):
@@ -537,6 +540,29 @@ class SelectionTests(unittest.TestCase):
                 verification.run_selected_checks(verification.select(["capture/engine/tests/process.rs"]))
         self.assertEqual(len(commands), 1)
         self.assertIn("capture/engine/Cargo.toml", commands[0])
+
+    def test_engine_source_failure_stops_before_selected_root_compile(self):
+        commands = []
+        selection = verification.select(["capture/engine/src/session.rs"])
+        self.assertTrue(selection["root"])
+        self.assertTrue(selection["engine"])
+
+        def fail_package(command, **kwargs):
+            if command[0] == "cargo":
+                commands.append(command)
+            if "cargo" in command and "capture/engine/Cargo.toml" in command:
+                if command not in commands:
+                    commands.append(command)
+                raise subprocess.CalledProcessError(9, command)
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(verification.subprocess, "run", side_effect=fail_package):
+            with self.assertRaises(subprocess.CalledProcessError) as failure:
+                verification.run_selected_checks(selection)
+        self.assertEqual(failure.exception.returncode, 9)
+        self.assertEqual(len(commands), 1)
+        self.assertIn("capture/engine/Cargo.toml", commands[0])
+        self.assertNotIn("--", commands[0])
 
     def test_unknown_shared_build_security_lifecycle_and_tooling_broaden(self):
         for path in ["new-owner/foo.rs", "Cargo.toml", "Cargo.lock", "build.rs",

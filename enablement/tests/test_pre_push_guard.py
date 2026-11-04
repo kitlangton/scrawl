@@ -175,10 +175,10 @@ class PrePushGuardTests(unittest.TestCase):
         result = self.push()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text().splitlines(), [
-            "-c utility cargo test -j 3 --offline -- --test-threads=2",
-            "-c utility cargo build -j 3 --offline",
             "-c utility cargo build --manifest-path capture/engine/Cargo.toml -j 3 --offline",
             "-c utility cargo test --manifest-path capture/engine/Cargo.toml -j 3 --offline -- --test-threads=2",
+            "-c utility cargo test -j 3 --offline -- --test-threads=2",
+            "-c utility cargo build -j 3 --offline",
         ])
 
     def test_failed_verification_rejects_push(self):
@@ -190,10 +190,10 @@ class PrePushGuardTests(unittest.TestCase):
         result = self.push(env=dict(self.env, T3_BUILD_JOBS="7"))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text().splitlines(), [
-            "-c utility cargo test -j 7 --offline -- --test-threads=2",
-            "-c utility cargo build -j 7 --offline",
             "-c utility cargo build --manifest-path capture/engine/Cargo.toml -j 7 --offline",
             "-c utility cargo test --manifest-path capture/engine/Cargo.toml -j 7 --offline -- --test-threads=2",
+            "-c utility cargo test -j 7 --offline -- --test-threads=2",
+            "-c utility cargo build -j 7 --offline",
         ])
 
     def test_document_only_push_avoids_cargo(self):
