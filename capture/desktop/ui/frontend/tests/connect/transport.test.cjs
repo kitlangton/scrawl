@@ -33,7 +33,7 @@ async function fixture(t, respond = () => ({ connect: view })) {
   const address = path.join(directory, 'capture.sock');
   await new Promise(resolve => server.listen(address, resolve));
   await fs.chmod(address, 0o600);
-  const client = new ConnectSettings(home, 150);
+  const client = new ConnectSettings(home);
   t.after(async () => {
     client.close();
     for (const socket of clients) socket.destroy();
@@ -83,14 +83,28 @@ test('Connect close invalidates in-flight receipt, closes controller and reopen 
   assert.deepEqual(await f.client.request(), { status: 'connected', view });
   assert.equal(f.requests.at(-1).connect, 'settings');
 });
-test('Connect timeout closes ambiguous controller without retrying a command', async t => {
-  const f = await fixture(t, request => request.command ? undefined : { connect: view });
-  await f.client.request();
-  const before = performance.now();
-  assert.deepEqual(await f.client.request('allow'), { status: 'cancelled' });
-  assert.ok(performance.now() - before < 1000);
+test('Connect timeout closes ambiguous controller without retrying a command', { timeout: 2000 }, async t => {
+  let received;
+  const admitted = new Promise(resolve => { received = resolve; });
+  const f = await fixture(t, request => {
+    if (request.command) { received(); return; }
+    return { connect: view };
+  });
+  assert.deepEqual(await f.client.request(), { status: 'connected', view });
+  f.client.timeout = 150;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let settled = false;
+  const pending = f.client.request('allow').then(result => { settled = true; return result; });
+  await admitted;
+  t.mock.timers.tick(149);
+  await new Promise(setImmediate);
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  assert.deepEqual(await pending, { status: 'cancelled' });
+  assert.equal(f.client.socket, undefined);
   assert.equal(f.requests.filter(r => r.command === 'allow').length, 1);
 });
+
 for (const response of [{ error: 'feature_disabled' }, { error: 'synthetic-secret' },
   { connect: { ...view, userCode: 'secret with spaces' } },
   { connect: view, openUri: 'https://example.com/' }]) {
