@@ -12,7 +12,8 @@ export function workflowBudgetSeconds(platform = 'linux'): number {
 }
 export const auditName = 'Workflow runtime budget'
 export const optimization = 'Optimize the tests. The agent whose run exceeded the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
-export type Job = { name: string; status: string; conclusion: string | null; started_at: string | null; completed_at: string | null }
+export type Job = { name: string; status: string; conclusion: string | null; started_at: string | null; completed_at: string | null;
+  runner_id?: number | null; runner_name?: string | null; steps?: unknown[] }
 
 export function executionSeconds(jobs: Job[]): number {
   const intervals: [number, number][] = []
@@ -21,6 +22,10 @@ export function executionSeconds(jobs: Job[]): number {
     if (job.name === auditName || job.name.endsWith(` / ${auditName}`)) continue
     if (job.status !== 'completed') throw new Error(`Workflow job is not terminal: ${job.name}`)
     if (job.conclusion === 'skipped') continue
+    // GitHub gives unacquired, cancelled jobs queue timestamps in started_at.
+    // Require all three explicit no-execution fields; missing metadata still counts.
+    if (job.conclusion === 'cancelled' && job.runner_id === 0 && job.runner_name === '' &&
+        Array.isArray(job.steps) && job.steps.length === 0) continue
     const start = Date.parse(job.started_at ?? '')
     const end = Date.parse(job.completed_at ?? '')
     if (!Number.isFinite(start) || !Number.isFinite(end) || end < start)
