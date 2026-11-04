@@ -248,7 +248,13 @@ jobs:
           printf 'Selected developer directory: %s\n' "$selected_developer"
       - name: Prepare macOS compiler dependencies concurrently
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
-        run: node --experimental-strip-types enablement/native/mac-setup.ts
+        shell: bash
+        run: |
+          umask 077
+          mkdir -m 700 "$RUNNER_TEMP/mac-compiler-setup"
+          node --experimental-strip-types enablement/native/mac-setup.ts \
+            --prepare "$RUNNER_TEMP/mac-compiler-setup/status.json" \
+            > "$RUNNER_TEMP/mac-compiler-setup/setup.log" 2>&1 &
       - uses: dtolnay/rust-toolchain@stable
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
         with:
@@ -274,6 +280,17 @@ jobs:
             . -> target
             capture/engine -> target
             connect/client -> target
+      - name: Require macOS compiler dependencies before Cargo
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        shell: bash
+        run: |
+          if node --experimental-strip-types enablement/native/mac-setup.ts \
+            --await "$RUNNER_TEMP/mac-compiler-setup/status.json"; then
+            cat "$RUNNER_TEMP/mac-compiler-setup/setup.log"
+          else
+            cat "$RUNNER_TEMP/mac-compiler-setup/setup.log"
+            exit 1
+          fi
       - name: Execute Rust changed-tree checks (not GUI acceptance)
         run: |
           # Engine finalizer proofs reject group-writable cache ancestors.
