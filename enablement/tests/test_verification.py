@@ -481,6 +481,42 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(result["root"])
         self.assertTrue(result["engine"])
 
+    def test_engine_package_source_and_metadata_get_fast_feedback_and_root_when_needed(self):
+        for path in ("capture/engine/src/session.rs", "capture/engine/src/lib.rs"):
+            with self.subTest(path=path):
+                result = verification.select([path])
+                self.assertTrue(result["root"])
+                self.assertTrue(result["engine"])
+        for path in ("capture/engine/Cargo.toml", "capture/engine/Cargo.lock"):
+            with self.subTest(path=path):
+                result = verification.select([path])
+                self.assertTrue(result["root"])
+                self.assertTrue(result["engine"])
+
+    def test_engine_deletions_and_unrelated_owners_select_conservatively(self):
+        # The selector consumes both sides of a deletion/rename diff, so a
+        # deleted package test still keeps the standalone package route.
+        self.assertTrue(verification.select(["capture/engine/tests/process.rs"])["engine"])
+        unrelated = verification.select(["README.md"])
+        self.assertFalse(unrelated["root"])
+        self.assertFalse(unrelated["engine"])
+
+    def test_engine_package_failure_stops_before_root_checks(self):
+        commands = []
+        def cargo_command(command):
+            return command[0] == "cargo" or command[:4] == ["taskpolicy", "-c", "utility", "cargo"]
+        def fail_engine(command, **kwargs):
+            if cargo_command(command):
+                commands.append(command)
+            if cargo_command(command) and "capture/engine/Cargo.toml" in command:
+                raise subprocess.CalledProcessError(1, command)
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(verification.subprocess, "run", side_effect=fail_engine):
+            with self.assertRaises(subprocess.CalledProcessError):
+                verification.run_selected_checks(verification.select(["capture/engine/tests/process.rs"]))
+        self.assertEqual(len(commands), 1)
+        self.assertIn("capture/engine/Cargo.toml", commands[0])
+
     def test_unknown_shared_build_security_lifecycle_and_tooling_broaden(self):
         for path in ["new-owner/foo.rs", "Cargo.toml", "Cargo.lock", "build.rs",
                      "assets/icon.png", "src/ui/recording_completion.rs", "src/handoff.rs",
