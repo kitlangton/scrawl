@@ -20,6 +20,7 @@ test('authenticated pagination reaches direct producer beyond thirty receipt-onl
  try{
  for(const p of ['connect/web/scripts','connect/service','connect/delivery','shared/ui','shared/analytics','shared/assets','public/site/public/assets','.github/workflows','.github/actions/runtime-budget','enablement/verification'])await mkdir(join(root,p),{recursive:true});
  for(const p of ['connect/service/source.ts','connect/delivery/source.ts','shared/ui/source.ts','shared/analytics/source.ts','shared/assets/source.ts','.github/workflows/connect-delivery.yml','.github/actions/runtime-budget/source.ts','enablement/verification/workflow-budget.ts'])await writeFile(join(root,p),'fixture');
+ await mkdir(join(root,'connect/delivery/recipient'));await writeFile(join(root,'connect/delivery/recipient/source.ts'),'native fixture');
  await writeFile(join(root,'connect/web/scripts/assets.mjs'),Array.from({length:5},(_,i)=>`['${i}.svg', 'unused']`).join('\n'));
  for(let i=0;i<5;i++)await writeFile(join(root,`public/site/public/assets/${i}.svg`),'<svg/>');
  git('init');git('add','.');git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','source');const sha=git('rev-parse','HEAD');process.chdir(root);process.env.GH_TOKEN='synthetic';
@@ -44,6 +45,16 @@ test('authenticated pagination reaches direct producer beyond thirty receipt-onl
  else if(/actions\/artifacts\/\d+\/zip/.test(p))return new Response(blobs.get(Number(p.split('/')[2])));
  else throw Error(`unexpected API ${p}`);return Response.json(value);};
  assert.equal(await select(),'1');assert.deepEqual(pages,[1,2]);
+ for(const edit of ['change','add','delete']) {
+ if(edit==='change')await writeFile(join(root,'connect/delivery/recipient/source.ts'),'native change');
+ if(edit==='add')await writeFile(join(root,'connect/delivery/recipient/new.ts'),'native addition');
+ if(edit==='delete')await rm(join(root,'connect/delivery/recipient/source.ts'));
+ git('add','.');git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m',edit+' native delivery');
+ assert.equal(await select(),'1',edit+' must reuse the complete verified web baseline');
+ }
+ for(const path of ['connect/delivery/source.ts','.github/workflows/connect-delivery.yml','enablement/verification/workflow-budget.ts']) {
+ await writeFile(join(root,path),'changed shared admission');assert.equal(await select(),'');await writeFile(join(root,path),'fixture');
+ }
  const downloaded=await downloadWorker('200',join(root,'download'));assert.equal(downloaded.sourceSha,sha);
  for(const patch of [{expired:true},{digest:'sha256:'+'0'.repeat(64)},{workflow_run:{id:1,head_sha:sha,head_branch:'foreign'}}]){
  const original={...artifacts[0]};Object.assign(artifacts[0],patch);assert.equal(await select(),'');Object.assign(artifacts[0],original);
