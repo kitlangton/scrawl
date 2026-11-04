@@ -4,13 +4,19 @@
 
 `owned-processes.ts` provides the packaged smoke driver's existing Bash
 process-group supervisor, bounded operation wrapper (`within`), `stopBackend`
-and `stopElectron`. Import it from a Node 22.18+ driver; the main verification
+and `stopElectron`. The native Storage driver also imports `pidFileSupervisor`
+and `stopOwned` from this module. Its supervisor requires the pre-created,
+non-symlink, owned `$TMPDIR/rust.pid` and publishes only its launched child PID.
+`stopOwned` returns a per-child cleanup receipt and refuses to signal after its
+leader exits. It treats an exited group probe's `EPERM` as failure; do not silently
+substitute the packaged smoke's different, snapshot-validated cleanup contract.
+Import it from a Node 22.18+ driver; the main verification
 workflow uses Node 22. It has no Playwright, Desktop or application dependency.
 Callers retain admission, isolated HOME/config, operation budgets, assertions,
 evidence/report writing and fixture retention. Keep the supervisor's stdin open
 until teardown; EOF stops its owned group if the driver disappears.
 
-Cleanup preserves the existing anchored TERM/KILL sequence. Darwin `EPERM` is
+Packaged-smoke cleanup preserves its existing TERM/KILL sequence. Darwin `EPERM` is
 accepted only after the supervisor exits and a successful bounded, validated
 `ps` snapshot establishes no live group members. Live, unknown or malformed
 results fail and the caller retains its private fixture. A timed-out Electron
@@ -18,8 +24,10 @@ close kills its owned child and still fails the check. `within` bounds waiting;
 it does not cancel the operation. Callers must arrange owned cleanup.
 
 Run `node --test enablement/native/owned-processes.test.ts` for the real harmless
-child/descendant and strict cleanup contracts. These moved from Desktop's host
-regressions; they establish no new Mac GUI acceptance. Desktop's packaged smoke
+child/descendant and strict cleanup contracts. The packaged smoke regressions
+moved from Desktop; additional contracts exercise the Storage caller import, PID
+file and receipt/refusal semantics. They establish no new Mac GUI acceptance.
+Desktop's packaged smoke
 entrypoint still exports the same helper objects for existing callers. Those
 exports are a transition contract: remove only after supported imports/tests and
 active frozen candidates have migrated, with an owner check. There is one

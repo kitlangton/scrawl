@@ -104,3 +104,77 @@ test('Desktop compatibility exports resolve to the canonical module', () => {
     assert.equal(desktop[name], shared[name], name);
   }
 });
+
+test('Storage entrypoint loads the canonical lifecycle without running its scenario', () => {
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const { createRequire } = require('node:module');
+  const entry = path.resolve(__dirname, '../../capture/desktop/ui/frontend/tests/mac-storage-native.cjs');
+  const entryRequire = createRequire(entry);
+  const imported = [];
+  const registered = [];
+  const localRequire = name => {
+    if (name === 'node:test') return { test: (...args) => registered.push(args) };
+    if (name === '@playwright/test') return {};
+    const value = entryRequire(name);
+    if (name.endsWith('/owned-processes.ts')) imported.push(value);
+    return value;
+  };
+  new Function('require', '__dirname', fs.readFileSync(entry, 'utf8'))(localRequire, path.dirname(entry));
+  assert.deepEqual(imported, [require(helper)]);
+  assert.equal(registered.length, 1);
+});
+
+test('receipt cleanup refuses unanchored live or unknown groups', async () => {
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const source = stripTypeScriptTypes(fs.readFileSync(helper, 'utf8'));
+  const { stopOwned } = require(helper);
+  assert.deepEqual(await stopOwned(undefined, 'missing'), { started: false });
+  assert.deepEqual(await stopOwned({ pid: undefined }, 'spawn'), { started: false, spawnFailed: true });
+  for (const status of ['present', 'ESRCH', 'EPERM']) {
+    const signals = [];
+    const fakeProcess = { platform: 'darwin', kill: (pid, signal) => {
+      signals.push([pid, signal]);
+      if (status !== 'present') throw Object.assign(new Error(status), { code: status });
+    } };
+    const loaded = { exports: {} };
+    new Function('require', 'module', 'process', source)(require, loaded, fakeProcess);
+    const operation = loaded.exports.stopOwned({ pid: 4321, exitCode: 0, signalCode: null }, 'retained', true);
+    if (status === 'ESRCH') {
+      assert.deepEqual(await operation, { pid: 4321, group: true, exitCode: 0, signalCode: null,
+        exited: true, groupAbsent: true });
+    } else await assert.rejects(operation, status === 'EPERM' ? /EPERM/ : /refusing unanchored cleanup/);
+    assert.deepEqual(signals, [[-4321, 0]], 'Only probe the old group; never signal it');
+  }
+});
+
+test('PID-file supervisor and receipt cleanup stop only their owned group', async () => {
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs/promises');
+  const os = require('node:os');
+  const { spawn } = require('node:child_process');
+  const { once } = require('node:events');
+  const { pidFileSupervisor, stopOwned } = require(helper);
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'owned-group-'));
+  const pidFile = path.join(home, 'rust.pid');
+  await fs.writeFile(pidFile, '', { flag: 'wx', mode: 0o600 });
+  const child = spawn('/bin/bash', ['-c', pidFileSupervisor, 'owned-fixture', pidFile,
+    '/bin/bash', '-c', 'echo $$; exec sleep 60'], {
+    env: { ...process.env, TMPDIR: home }, detached: true, stdio: ['pipe', 'pipe', 'inherit'],
+  });
+  try {
+    const [line] = await once(child.stdout, 'data');
+    const descendant = Number(line.toString().trim());
+    assert.equal(Number((await fs.readFile(pidFile, 'utf8')).trim()), descendant);
+    const receipt = await stopOwned(child, 'owned fixture', true);
+    assert.equal(receipt.pid, child.pid);
+    assert.equal(receipt.exited, true);
+    assert.equal(receipt.groupAbsent, true);
+    assert.equal(receipt.SIGTERM, true);
+    assert.throws(() => process.kill(descendant, 0), { code: 'ESRCH' });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) await stopOwned(child, 'fixture finalizer', true);
+    await fs.rm(home, { recursive: true });
+  }
+});

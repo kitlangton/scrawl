@@ -11,33 +11,9 @@ const { promisify } = require('node:util');
 const { _electron: electron, expect } = require('@playwright/test');
 const { readRuntimeState } = require('../electron/runtime.cjs');
 const run = promisify(execFile);
+const { pidFileSupervisor: rustSupervisor, stopOwned } = require('../../../../../enablement/native/owned-processes.ts');
 const root = path.join(__dirname, '..');
 const permissionSource = 'https://github.com/actions/runner-images/blob/main/images/macos/scripts/build/configure-tccdb-macos.sh';
-
-// Retain the process-group leader while the installed GUI and helpers run.
-// TERM interrupts read with status >128, not EOF. Keep stdin open until the
-// anchored group stop; EOF also stops this owned group if the driver dies.
-const rustSupervisor = `
-set +e
-set +m
-trap ':' TERM
-pid_file=$1
-shift
-if [ "$pid_file" != "\${TMPDIR%/}/rust.pid" ] || [ ! -f "$pid_file" ] || [ -L "$pid_file" ] || [ ! -O "$pid_file" ]; then
-  exit 64
-fi
-"$@" &
-printf '%s\\n' "$!" > "$pid_file"
-while :; do
-  IFS= read -r line
-  status=$?
-  if [ "$status" -eq 1 ]; then
-    kill -TERM -- -$$ 2>/dev/null || true
-    sleep 0.2
-    kill -KILL -- -$$
-  fi
-done
-`;
 
 // Resolve only window 1 of the exact owned PID, then descend its sheets. Do not
 // search other processes, use coordinates, or guess which Return commits a picker.
@@ -184,45 +160,6 @@ async function within(promise, ms, label) {
       timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
     })]);
   } finally { clearTimeout(timer); }
-}
-
-async function stopOwned(child, label, group = false) {
-  if (!child) return { started: false };
-  if (!child.pid) return { started: false, spawnFailed: true };
-  const result = { pid: child.pid, group, exitCode: child.exitCode, signalCode: child.signalCode };
-  const exited = () => child.exitCode !== null || child.signalCode !== null;
-  const groupAbsent = () => {
-    if (!group) return true;
-    try { process.kill(-child.pid, 0); return false; }
-    catch (error) { if (error.code === 'ESRCH') return true; throw error; }
-  };
-  const wait = async (ms) => {
-    const until = Date.now() + ms;
-    while ((!exited() || !groupAbsent()) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50));
-    return exited() && groupAbsent();
-  };
-  const signal = (value) => {
-    assert.ok(!exited(), `${label}: leader exited; refusing an unanchored signal`);
-    try {
-      if (group) process.kill(-child.pid, value); else child.kill(value);
-      result[value] = true;
-    } catch (error) {
-      if (error.code !== 'ESRCH') throw error;
-      result[value] = 'already absent';
-    }
-  };
-  if (exited()) {
-    assert.ok(groupAbsent(), `${label}: leader exited with a surviving group; refusing unanchored cleanup`);
-    return { ...result, exited: true, groupAbsent: group ? true : undefined };
-  }
-  // Stop descendants while the supervisor is still the live group anchor.
-  // Reap it last; never signal a group after its leader exits.
-  signal('SIGTERM');
-  if (!await wait(2000)) { signal('SIGKILL'); await wait(1500); }
-  Object.assign(result, { exitCode: child.exitCode, signalCode: child.signalCode,
-    exited: exited(), groupAbsent: group ? groupAbsent() : undefined });
-  assert.ok(result.exited && groupAbsent(), `${label} did not exit completely; owned PID/group ${child.pid}`);
-  return result;
 }
 
 test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Reset', {

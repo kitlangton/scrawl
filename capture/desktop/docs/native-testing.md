@@ -3,7 +3,10 @@
 Reusable VM lifecycle, expiry, evidence retention and owned native-test process
 cleanup live in
 [enablement/native](../../../enablement/native/README.md). Desktop keeps the
-behavior-specific scenarios and acceptance recipes below.
+behavior-specific scenarios and acceptance recipes below. The Mac Storage
+driver imports its owned-process lifecycle from enablement; its chooser, Settings,
+reporting and recovery assertions remain Desktop-owned. Generic lifecycle changes
+must preserve each caller's cleanup receipts and refusal semantics.
 
 Shared Electron UI is verified primarily on Linux. Mac execution covers affected
 OS boundaries and a short packaged integration smoke, rather than a second full
