@@ -145,7 +145,7 @@ for (const os of ['macOS', 'Linux']) for (const status of [0, 7]) test(`verifier
     assert.equal(result.status, status, result.stderr)
     assert.deepEqual(readFileSync(record, 'utf8').trim().split('\n'), [
       os === 'macOS' ? 'cargo::compiler::fingerprint=trace' : 'inherited',
-      `enablement/verification.py --base synthetic-base --run --online --suite rust --parallel-contracts --cargo-timings --receipt-dir ${root}/verification-receipts`,
+      `enablement/verification.py --base synthetic-base --run --online --suite rust --parallel-contracts --cargo-timings ${os === 'macOS' ? '--overlap-root-build ' : ''}--receipt-dir ${root}/verification-receipts`,
     ])
     assert.equal(result.stdout.trim(), status === 0 ? 'inherited' : '')
   } finally { rmSync(root, { recursive: true, force: true }) }

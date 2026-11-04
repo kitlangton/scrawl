@@ -324,10 +324,12 @@ jobs:
           fi
           BASE=$(git hash-object -t tree /dev/null)
           cargo_trace_env=()
+          root_build_overlap=()
           if [ "$RUNNER_OS" = macOS ]; then
             cargo_trace_env=(env CARGO_LOG=cargo::compiler::fingerprint=trace)
+            root_build_overlap=(--overlap-root-build)
           fi
-          "${cargo_trace_env[@]}" python3 enablement/verification.py --base "$BASE" --run --online --suite rust --parallel-contracts --cargo-timings --receipt-dir "$RUNNER_TEMP/verification-receipts"
+          "${cargo_trace_env[@]}" python3 enablement/verification.py --base "$BASE" --run --online --suite rust --parallel-contracts --cargo-timings "${root_build_overlap[@]}" --receipt-dir "$RUNNER_TEMP/verification-receipts"
           verification_complete=true
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'

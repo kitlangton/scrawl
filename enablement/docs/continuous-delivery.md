@@ -327,11 +327,19 @@ Receipt wrapping forwards the explicit choice and labels it `platform-rust` or
 `platform-browser`; the default remains `changed-tree`.
 
 The platform Rust job uses `--parallel-contracts` to overlap the existing isolated
-Python selector/hook/temp contracts with the selected build/test sequence. Cargo
-commands remain sequential with their existing worker limit. Both paths must
+Python selector/hook/temp contracts with the selected build/test sequence. Both paths must
 succeed before the receipt succeeds; failure or cancellation terminates and reaps
 the owned contract process group. The receipt wrapper forwards this option.
 Local invocations remain sequential unless the option is explicitly supplied.
+
+Mac CI also supplies `--overlap-root-build`: after Cargo reports successful full
+root test compilation, the ordinary app build runs alongside test execution.
+Cargo still launches the tests with two test threads, and each build retains its
+existing worker limit. Both commands must succeed before Engine or downstream
+checks; failure or cancellation kills the owned process groups and reaps both
+direct children. The fresh app binary remains required. Focused filters and
+invocations without this option keep sequential test/build ordering. This overlap
+does not establish a runtime improvement until measured on the actual Mac run.
 
 `--cargo-timings` records Cargo unit reports on the existing build/test commands;
 the platform job retains available HTML reports even when later verification
