@@ -57,25 +57,31 @@ Recipient producer prerequisite
 
 `connect-delivery.yml` runs only on canonical main and builds the standalone
 Rust recipient in a temporary source directory, outside root Cargo configuration.
-Each of four macOS/Linux architecture jobs tests and builds the standalone Rust
-recipient in a temporary source directory, outside root Cargo configuration. Its
-executable and protocol-1 manifest seal the actual executable SHA256, full source
-SHA, target and unique workflow run/attempt version. GitHub build attestations
-cover both files. After that target job succeeds, it verifies those attestations,
-packages the target, writes a receipt naming its source, workflow, run, attempt,
-architecture and immutable asset identity, attests the archive and receipt, then
-creates a target-specific release `recipient-<SHA>-<run>-<attempt>-<target>`.
-This lets a successful target ship when another matrix target is unavailable. A
-separate aggregate release still requires all four authenticated targets and keeps
-the `recipient-<SHA>-<run>-<attempt>` version and `recipient-identities.json`
-contract. Target receipts do not satisfy that aggregate or the four-target native
-activation contract. Existing tags/assets must never be edited, deleted or
+Each of four macOS/Linux architecture jobs tests and builds the recipient in a
+temporary source directory. Its executable and protocol-1 manifest seal the actual
+executable SHA256, full source SHA, target and unique workflow run/attempt version.
+GitHub build attestations cover both files; successful job outputs travel as
+90-day Actions artifacts.
+
+One publisher waits until every payload job is terminal. Before downloading any
+target artifact or creating a release, its preflight counts completed workload
+against the shared 600-second workflow cap and reserves the publisher's full
+120-second timeout. The final workflow audit still counts the publisher's actual
+runtime with all other work. No new budget is added. The publisher selects and
+authenticates the successful targets available from the run, packages and attests
+each receipt/archive, then creates immutable per-target releases named
+`recipient-<SHA>-<run>-<source-attempt>-publication-<publisher-attempt>-<target>`.
+A target receipt identifies its successful build job and immutable asset digest.
+
+The aggregate release is created only when all four matrix jobs succeeded; its
+`recipient-<SHA>-<run>-<attempt>` version and `recipient-identities.json` contract
+remain unchanged. Target receipts do not satisfy that aggregate or the four-target
+native activation contract. Existing tags/assets must never be edited, deleted or
 overwritten; release creation fails on an existing tag and has no clobber path.
-Actions archives remain intermediate transport. GitHub repository administrators
-can alter releases, so consumers must verify the receipt/archive attestations and
-embedded executable/manifest identity rather than trust a URL or checksum alone.
-These binaries are not Apple signed or notarized. No Desktop packaging, app release
-or hosted activation is included.
+GitHub repository administrators can alter releases, so consumers must verify the
+receipt/archive attestations and embedded executable/manifest identity rather than
+trust a URL or checksum alone. These binaries are not Apple signed or notarized.
+No Desktop packaging, app release or hosted activation is included.
 
 Before adoption, authenticate the canonical workflow run on main and its source,
 verify GitHub attestations with the expected repository/workflow identity, validate

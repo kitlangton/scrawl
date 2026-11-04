@@ -228,7 +228,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
       id-token: write
       attestations: write
     steps:
@@ -269,27 +269,17 @@ jobs:
           path: ${{ runner.temp }}/recipient-output/*
           if-no-files-found: error
           retention-days: 90
-      - name: Prepare target release and publication receipt
-        env:
-          TARGET: ${{ matrix.target }}
-        run: node --experimental-strip-types connect/delivery/recipient/release.ts prepare-target "$RUNNER_TEMP/recipient-output" "$RUNNER_TEMP/recipient-release-output" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$TARGET"
-      - uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: ${{ runner.temp }}/recipient-release-output/*
-      - name: Authenticate and publish this successful target
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET: ${{ matrix.target }}
-        run: node --experimental-strip-types connect/delivery/recipient/release.ts publish-target "$RUNNER_TEMP/recipient-release-output" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$TARGET"
 
   recipient-release:
-    needs: recipient
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && inputs.producer-run == ''
+    name: Recipient target release and aggregate
+    needs: [select, produce, publish, recipient-select, recipient]
+    if: always() && !cancelled() && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && inputs.producer-run == '' && needs.recipient-select.result == 'success' && (needs.recipient.result == 'success' || needs.recipient.result == 'failure' || needs.recipient.result == 'cancelled')
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 2
     permissions:
       contents: write
-      attestations: read
+      id-token: write
+      attestations: write
     steps:
       - name: Runtime budget ownership
         run: echo '10 minute execution budget; agent whose run hits the limit owns optimization and a successful rerun. Do not raise or bypass the limit.'
@@ -297,11 +287,31 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Reserve shared workflow budget before durable publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_BUDGET_PLATFORM: web
+          WORKFLOW_BUDGET_PUBLISHER_NAME: Recipient target release and aggregate
+          WORKFLOW_BUDGET_RESERVE_SECONDS: '120'
+          WORKFLOW_BUDGET_EXPECTED_JOB_NAMES: '["select","produce","publish","recipient-select","recipient (ubuntu-24.04, x86_64-unknown-linux-gnu)","recipient (ubuntu-24.04-arm, aarch64-unknown-linux-gnu)","recipient (macos-15, aarch64-apple-darwin)","recipient (macos-15-intel, x86_64-apple-darwin)","Recipient target release and aggregate","Workflow runtime budget"]'
+        run: node --experimental-strip-types enablement/verification/workflow-budget.ts --publication-preflight
       - uses: actions/download-artifact@v4
         with:
           pattern: recipient-${{ github.sha }}-${{ github.run_id }}-*
           path: recipient-assets
+      - name: Prepare authenticated successful target assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types connect/delivery/recipient/release.ts prepare-targets recipient-assets "$RUNNER_TEMP/recipient-release-output" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ runner.temp }}/recipient-release-output/*
+      - name: Verify all target receipts and publish successful targets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types connect/delivery/recipient/release.ts publish-targets "$RUNNER_TEMP/recipient-release-output" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
       - name: Verify provenance and publish durable component version
+        if: needs.recipient.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

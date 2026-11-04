@@ -4,7 +4,7 @@ import { mkdtempSync,mkdirSync,writeFileSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { seal,targets } from './seal.ts';
-import { prepareTarget,publishTarget,select } from './release.ts';
+import { prepareTarget,prepareTargets,publishTarget,publishTargets,select } from './release.ts';
 function executable(target:string) {
  const bytes=Buffer.alloc(64); const arm=target.startsWith('aarch64');
  if(target.endsWith('linux-gnu')) {bytes.write('7f454c46',0,'hex');bytes[4]=2;bytes[5]=1;bytes.writeUInt16LE(3,16);bytes.writeUInt16LE(arm?183:62,18);}
@@ -71,9 +71,9 @@ test('one successful target creates an authenticated immutable asset receipt wit
  const calls:string[][]=[];
  const runner:typeof execFileSync=((command:string,args:string[],options:object)=>{calls.push([command,...args]);return command==='tar'?execFileSync(command,args,options):Buffer.alloc(0);}) as typeof execFileSync;
  try {
-  const prepared=prepareTarget(input,output,sha,'456','2',target,runner);
+  const prepared=prepareTarget(input,output,sha,'456','2',target,'2',runner);
   assert.equal(calls.filter(call=>call[0]==='gh').length,2);
-  assert.equal(prepared.releaseTag,`recipient-${sha}-456-2-${target}`);
+  assert.equal(prepared.releaseTag,`recipient-${sha}-456-2-publication-2-${target}`);
   assert.equal(prepared.receipt.provenance.architecture,'x86_64');
   const published=publishTarget(output,sha,'456','2',target,runner);
   assert.equal(published.releaseTag,prepared.releaseTag);
@@ -97,16 +97,34 @@ test('target publication rejects incomplete or tampered output before release cr
  const calls:string[][]=[];const runner:typeof execFileSync=((command:string,args:string[],options:object)=>{calls.push([command,...args]);return command==='tar'?execFileSync(command,args,options):Buffer.alloc(0);}) as typeof execFileSync;
  try {
   writeFileSync(join(input,'unexpected'),'no');
-  assert.throws(()=>prepareTarget(input,output,sha,'789','1',target,runner),/Incomplete or unexpected/);
+  assert.throws(()=>prepareTarget(input,output,sha,'789','1',target,'1',runner),/Incomplete or unexpected/);
   rmSync(join(input,'unexpected'));
   const rejected:typeof execFileSync=((command:string,args:string[],options:object)=>{if(command==='gh')throw Error('attestation rejected');return execFileSync(command,args,options);}) as typeof execFileSync;
-  assert.throws(()=>prepareTarget(input,output,sha,'789','1',target,rejected),/attestation rejected/);
+  assert.throws(()=>prepareTarget(input,output,sha,'789','1',target,'1',rejected),/attestation rejected/);
   assert.equal(existsSync(output),false);
-  prepareTarget(input,output,sha,'789','1',target,runner);
-  const receiptPath=join(output,`recipient-${sha}-789-1-${target}-receipt.json`);
+  prepareTarget(input,output,sha,'789','1',target,'1',runner);
+  const receiptPath=join(output,`recipient-${sha}-789-1-publication-1-${target}-receipt.json`);
   const receipt=JSON.parse(readFileSync(receiptPath,'utf8'));receipt.provenance.target=targets[0];writeFileSync(receiptPath,JSON.stringify(receipt));
   calls.length=0;
   assert.throws(()=>publishTarget(output,sha,'789','1',target,runner),/Incompatible target receipt target/);
   assert.equal(calls.length,0);
+ } finally {rmSync(root,{recursive:true,force:true});}
+});
+
+test('budget-gated publisher prepares and ships available targets while keeping source and publication attempts distinct',()=>{
+ const root=mkdtempSync(join(tmpdir(),'recipient-targets-release-'));const sha='e'.repeat(40);const input=join(root,'input');const output=join(root,'output');mkdirSync(input);
+ const add=(target:string,attempt:string)=>{const directory=join(input,`recipient-${sha}-321-${attempt}-${target}`);mkdirSync(directory);writeFileSync(join(directory,'apparent-connect-recipient'),executable(target));seal(directory,target,sha,'321',attempt);};
+ add(targets[0],'1');add(targets[0],'2');add(targets[1],'1');add(targets[3],'2');
+ const calls:string[][]=[];const runner:typeof execFileSync=((command:string,args:string[],options:object)=>{calls.push([command,...args]);return command==='tar'?execFileSync(command,args,options):Buffer.alloc(0);}) as typeof execFileSync;
+ try {
+  const prepared=prepareTargets(input,output,sha,'321','3',runner);
+  assert.equal(prepared.length,3);assert.equal(prepared.find(item=>item.receipt.provenance.target===targets[0])?.receipt.provenance.attempt,'2');
+  assert.ok(prepared.every(item=>item.receipt.provenance.publicationAttempt==='3'));
+  calls.length=0;
+  const published=publishTargets(output,sha,'321','3',runner);
+  assert.equal(published.length,3);
+  assert.equal(calls.filter(call=>call[0]==='gh'&&call[1]==='release'&&call[2]==='create').length,3);
+  assert.ok(published.every(item=>item.releaseTag.includes('-publication-3-')));
+  assert.throws(()=>select(input,sha,'321','3'),/Missing or ambiguous target/);
  } finally {rmSync(root,{recursive:true,force:true});}
 });
