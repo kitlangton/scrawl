@@ -120,12 +120,18 @@ mod tests {
     use std::process::{Command, Stdio};
 
     #[test]
-    #[ignore = "requires built frontend and Linux Xvfb; see frontend/README.md"]
+    #[ignore = "requires built frontend and a desktop (Linux uses Xvfb); see frontend/README.md"]
     fn build_identity_electron_rust_roundtrip() {
         let frontend = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("capture/desktop/ui/frontend");
-        let mut command = Command::new("xvfb-run");
-        command.args(["-a", "node", "--test", "tests/build/identity.smoke.ts"])
+        let mut command = if cfg!(target_os = "linux") {
+            let mut command = Command::new("xvfb-run");
+            command.args(["-a", "node"]);
+            command
+        } else {
+            Command::new("node")
+        };
+        command.args(["--test", "tests/build/identity.smoke.ts"])
             .current_dir(frontend)
             .env("APPARENT_RUNNING_BUILD_LABEL", "0.0.0 · fffffff")
             .env("APPARENT_EXPECTED_BUILD_LABEL", env!("APPARENT_VERSION_LABEL"));
