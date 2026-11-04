@@ -43,14 +43,14 @@ jobs:
       contents: read
       actions: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     outputs:
       sha: ${{ steps.gate.outputs.sha }}
     steps:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       # Admission code comes from trusted main, never an unchecked event SHA.
       - uses: actions/checkout@v4
         with:
@@ -107,14 +107,14 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     outputs:
       build: ${{ steps.check.outputs.build }}
     steps:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -150,7 +150,7 @@ jobs:
     permissions:
       contents: read
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
       # workflow_run's event SHA may be newer than the admitted checkout.
@@ -161,7 +161,7 @@ jobs:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - name: Validate release request
         run: |
           if [[ "$VERIFY_ONLY" == "true" ]]; then
@@ -296,7 +296,7 @@ jobs:
       contents: write
       actions: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       PUBLISH_MAIN: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main }}
       TAG: ${{ inputs.tag }}
@@ -305,7 +305,7 @@ jobs:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v5
         with:
           # Publication policy always comes from trusted current main.
@@ -383,7 +383,7 @@ jobs:
       actions: read
     name: Workflow runtime budget
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:

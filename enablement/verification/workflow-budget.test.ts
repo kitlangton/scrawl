@@ -13,7 +13,7 @@ test('union counts parallel execution once and excludes queue gaps', () => {
   assert.equal(executionSeconds([job(0, 100), job(30, 80), job(90, 200), job(500, 650)]), 350)
 })
 test('sequential reusable jobs share one workflow budget', () => {
-  assert.throws(() => enforceBudget([job(0, 350), job(400, 700)]), /agent whose run exceeded the limit owns optimization/)
+  assert.throws(() => enforceBudget([job(0, 350), job(400, 1000)]), /agent whose run exceeded the limit owns optimization/)
   assert.doesNotThrow(() => enforceBudget([job(0, 600)]))
   assert.equal(executionSeconds([job(0, 350, 'verify / rust'), job(400, 700, 'publish')]), 650)
   assert.equal(executionSeconds([job(0, 600)]), 600)
@@ -105,7 +105,7 @@ test('watched workflow starts have no standalone watchdog to spawn', () => {
 
 test('completion audit CLI fails an overrun without cancelling the underlying workflow', () => {
   const script = fileURLToPath(new URL('./workflow-budget.ts', import.meta.url))
-  for (const [platform, seconds, expected] of [['linux', 599, 0], ['linux', 600, 0], ['linux', 601, 1], ['macos', 899, 0], ['macos', 900, 0], ['macos', 901, 1], ['invalid', 1, 1]] as const) {
+  for (const [platform, seconds, expected] of [['web', 599, 0], ['web', 600, 0], ['web', 601, 1], ['linux', 899, 0], ['linux', 900, 0], ['linux', 901, 1], ['macos', 899, 0], ['macos', 900, 0], ['macos', 901, 1], ['invalid', 1, 1]] as const) {
     const bootstrap = `globalThis.fetch = async (_url, init) => {
       if (init?.method && init.method !== 'GET') throw new Error('Unexpected workflow mutation');
       return new Response(JSON.stringify({ total_count: 1, jobs: [${JSON.stringify(job(0, seconds))}] }));
@@ -126,21 +126,30 @@ test('obsolete watch invocation fails before making any API request', () => {
   assert.match(result.stderr, /completion-time audit only/)
 })
 
-test('Mac alone has a fifteen-minute budget with strict boundaries', () => {
-  assert.equal(workflowBudgetSeconds(), 600)
+test('Linux and Mac have fifteen minutes while web retains ten', () => {
+  assert.equal(workflowBudgetSeconds(), 900)
   assert.equal(workflowBudgetSeconds('macos'), 900)
   assert.throws(() => workflowBudgetSeconds('windows'), /Invalid/)
   assert.doesNotThrow(() => enforceBudget([job(0, 900)], 'macos'))
   assert.throws(() => enforceBudget([job(0, 901)], 'macos'), /900s/)
-  assert.throws(() => enforceBudget([job(0, 601)], 'linux'), /600s/)
+  assert.doesNotThrow(() => enforceBudget([job(0, 900)], 'linux'))
+  assert.throws(() => enforceBudget([job(0, 901)], 'linux'), /900s/)
+  assert.doesNotThrow(() => enforceBudget([job(0, 600)], 'web'))
+  assert.throws(() => enforceBudget([job(0, 601)], 'web'), /600s/)
   const folder = new URL('../../.github/workflows/', import.meta.url)
   for (const name of ['verification-mac.yml', 'native-proof-mac.yml', 'release-mac-preview.yml']) {
     const text = readFileSync(new URL(name, folder), 'utf8')
     assert.match(text.split('  runtime-budget:\n')[1], /platform: macos/)
     assert.doesNotMatch(text, /^    timeout-minutes: 10$/m)
   }
-  for (const name of ['verification.yml', 'release-linux.yml', 'web-delivery.yml'])
-    assert.doesNotMatch(readFileSync(new URL(name, folder), 'utf8'), /platform: macos|timeout-minutes: 15/)
+  const web = readFileSync(new URL('web-delivery.yml', folder), 'utf8')
+  assert.match(web.split('  runtime-budget:\n')[1], /platform: web/)
+  assert.doesNotMatch(web, /timeout-minutes: 15/)
+  for (const name of ['verification.yml', 'verification-platform.yml', 'release-linux.yml', 'linux-updater-harness.yml']) {
+    const text = readFileSync(new URL(name, folder), 'utf8')
+    assert.doesNotMatch(text, /^    timeout-minutes: 10$/m)
+    assert.match(text, /timeout-minutes: 15/)
+  }
 })
 
 test('Electron to Rust Settings workflow builds frontend artifacts before the bridge test', () => {

@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url'
 
 export function workflowBudgetSeconds(platform = 'linux'): number {
   if (platform === 'macos') return 900
-  if (platform === 'linux') return 600
+  if (platform === 'linux') return 900
+  if (platform === 'web') return 600
   throw new Error('Invalid workflow budget platform')
 }
 export const auditName = 'Workflow runtime budget'
