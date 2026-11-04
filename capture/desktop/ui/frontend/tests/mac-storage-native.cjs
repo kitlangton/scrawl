@@ -11,6 +11,7 @@ const { promisify } = require('node:util');
 const { _electron: electron, expect } = require('@playwright/test');
 const { readRuntimeState } = require('../electron/runtime.cjs');
 const { waitForStorageReads, captureLocationStatus } = require('./storage/native-readiness.ts');
+const { retainPickerFailure } = require('./storage/native-diagnostics.ts');
 const run = promisify(execFile);
 const { pidFileSupervisor: rustSupervisor, stopOwned, withinLabelled: within } = require('../../../../../enablement/native/owned-processes.ts');
 const root = path.join(__dirname, '..');
@@ -394,6 +395,13 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       throw new Error('Location refresh pending');
     }, 'Rendered initial capture location');
     await waitForStorageReads(card, expect, budget());
+    report.prePickerWindow = await within(application.evaluate(({ BrowserWindow }) => {
+      const windows = BrowserWindow.getAllWindows();
+      if (windows.length !== 1) throw new Error('Unknown owned window count');
+      return { pid: process.pid, title: windows[0].getTitle(), bounds: windows[0].getBounds() };
+    }), budget(), 'Owned pre-picker window identity');
+    try { report.prePickerAX = await panel('diagnose'); }
+    catch (error) { report.prePickerAXUnavailable = error.message; }
     await change.click({ timeout: budget() });
     report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');
     // Only the OS picker receives the path. Never pass it through renderer/IPC.
@@ -461,6 +469,12 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.error = { message: error.message, stack: error.stack,
       subprocess: error.cause && { code: error.cause.code, signal: error.cause.signal,
         killed: error.cause.killed, stderr: error.cause.stderr } };
+    if (report.prePickerWindow && electronChild && Date.now() < deadline) {
+      try {
+        report.pickerFailureEvidence = await retainPickerFailure(report.prePickerWindow,
+          electronChild.pid, output, run, budget, env);
+      } catch (diagnosticError) { report.pickerFailureEvidenceUnavailable = diagnosticError.message; }
+    }
     if (page && Date.now() < deadline) {
       try {
         report.errorReportingFailure = {
