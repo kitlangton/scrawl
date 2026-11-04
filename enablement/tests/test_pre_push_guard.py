@@ -85,6 +85,60 @@ class PrePushGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.log.exists())
 
+    def onboarding_delta(self, dependencies=True, delete=False, rename=False):
+        frontend = self.repo / "capture/desktop/ui/frontend"
+        entry = frontend / "src/onboarding/main.tsx"
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        entry.write_text("// original entry\n")
+        if dependencies:
+            for name in ("typescript/bin/tsc", "vite/bin/vite.js", "@apparent/ui/package.json"):
+                target = frontend / "node_modules" / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("fixture\n")
+        run("git", "add", ".", cwd=self.repo)
+        run("git", "commit", "-qm", "entry baseline", cwd=self.repo)
+        run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=self.repo)
+        if rename:
+            entry.rename(entry.with_name("renamed.tsx"))
+        elif delete:
+            entry.unlink()
+        else:
+            entry.write_text("// changed entry\n")
+        run("git", "add", "-A", cwd=self.repo)
+        run("git", "commit", "-qm", "entry delta", cwd=self.repo)
+        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        npm = self.bin / "npm"
+        npm.write_text('#!/bin/sh\nprintf "%s:%s\\n" "$PWD" "$*" >> "$COMMAND_LOG"\nexit "${NPM_STATUS:-0}"\n')
+        npm.chmod(0o755)
+        return frontend
+
+    def test_onboarding_feature_delta_runs_existing_command_in_frontend(self):
+        frontend = self.onboarding_delta()
+        result = self.push(remote="refs/heads/feature")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.log.read_text(), f"{frontend}:run check:onboarding\n")
+
+    def test_onboarding_command_failure_rejects_feature_push(self):
+        self.onboarding_delta()
+        result = self.push(remote="refs/heads/feature", env=dict(self.env, NPM_STATUS="1"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("push rejected", result.stderr)
+
+    def test_onboarding_missing_dependencies_never_install(self):
+        self.onboarding_delta(dependencies=False)
+        result = self.push(remote="refs/heads/feature")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run npm ci in capture/desktop/ui/frontend", result.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_onboarding_deleted_or_renamed_entry_requires_contract_update(self):
+        for rename in (False, True):
+            with self.subTest(rename=rename):
+                self.onboarding_delta(delete=not rename, rename=rename)
+                result = self.push(remote="refs/heads/feature")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("deleted or renamed", result.stderr)
+
     def test_clean_head_requires_build_and_tests(self):
         result = self.push()
         self.assertEqual(result.returncode, 0, result.stderr)
