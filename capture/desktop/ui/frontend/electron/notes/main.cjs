@@ -179,7 +179,12 @@ app.whenReady().then(() => {
   });
   lines.on('close', () => app.quit());
   trace('ready-probe-start');
-  Promise.all([popup.webContents.executeJavaScript('document.readyState'), badge.webContents.executeJavaScript('document.readyState')]).then(() => {
+  const probe = (win, surface) => {
+    const result = win.webContents.executeJavaScript('document.readyState');
+    if (!fixtureDiagnostics) return result;
+    return result.then(value => { trace(`${surface}:probe-complete`); return value; });
+  };
+  Promise.all([probe(popup, 'popup'), probe(badge, 'badge')]).then(() => {
     trace('ready-probe-complete');
     const ids = [popup, badge].map(w => Number(w.getMediaSourceId().split(':')[1])).filter(n => Number.isInteger(n) && n > 0);
     send({ action: 'windows', ids }); send({ action: 'ready' });

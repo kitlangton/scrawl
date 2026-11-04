@@ -621,14 +621,48 @@ mod transport_tests {
         let directory = std::env::temp_dir().join(format!("notes-bridge-{}", crate::shared::ids::make_bundle_id()));
         std::fs::create_dir(&directory).unwrap();
         let (events, _receiver) = flume::unbounded();
-        let session = Session::start(&directory, SharedCaptureTelemetry::new(events),
+        let telemetry = SharedCaptureTelemetry::new(events);
+        let session = Session::start(&directory, Arc::clone(&telemetry),
             crate::shared::model::TargetFrame { x: 0.0, y: 0.0, width: 1000.0, height: 700.0, scale: 1.0 }).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
         while !session.renderer_ready.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
             if std::fs::read_to_string(directory.join("notes-ui.log")).unwrap_or_default().contains("FATAL") { break; }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert!(session.renderer_ready.load(Ordering::Acquire),
+        // Freeze the original eight-second outcome before collecting evidence.
+        // A renderer becoming ready during sampling must still fail this run.
+        let ready = session.renderer_ready.load(Ordering::Acquire);
+        #[cfg(target_os = "macos")]
+        if !ready {
+            use std::io::Read;
+            let pid = telemetry.note_ui_pid.load(Ordering::Acquire);
+            if pid > 0 {
+                let output = directory.join("notes-ui-sample.txt");
+                if let Ok(mut sampler) = Command::new("/usr/bin/sample")
+                    .args([pid.to_string(), "1".into(), "1".into(), "-file".into()])
+                    .arg(&output).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+                {
+                    let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                    while matches!(sampler.try_wait(), Ok(None)) && std::time::Instant::now() < cutoff {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    let _ = sampler.kill();
+                    let _ = sampler.wait();
+                    // Only this synthetic fixture's owned Electron PID is sampled.
+                    // Keep bounded stack text separately from the live child's log,
+                    // whose file offset it still owns. Never retain notes.json.
+                    if let Ok(file) = std::fs::File::open(&output) {
+                        let mut bytes = Vec::new();
+                        if file.take(65_536).read_to_end(&mut bytes).is_ok() {
+                            let _ = std::fs::write(&output, bytes);
+                        } else {
+                            let _ = std::fs::remove_file(&output);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(ready,
             "Notes renderer never acknowledged Ready; retained fixture: {}\n{}",
             directory.display(), std::fs::read_to_string(directory.join("notes-ui.log")).unwrap_or_default());
         session.open(Anchor { pin: 1, t: 100, x: 0.5, y: 0.5, screen_x: 500.0, screen_y: 350.0, focus: 0, owner: 0 });

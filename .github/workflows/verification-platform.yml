@@ -376,6 +376,10 @@ jobs:
               retained="$RUNNER_TEMP/apparent-bridge-notes/$(basename "$(dirname "$log")")"
               mkdir -p "$retained"
               cp "$log" "$retained/notes-ui.log"
+              sample="$(dirname "$log")/notes-ui-sample.txt"
+              if [ -f "$sample" ] && [ ! -L "$sample" ]; then
+                head -c 65536 "$sample" > "$retained/notes-ui-sample.txt"
+              fi
             done
             rm -rf -- "$storage_tmp"
           }

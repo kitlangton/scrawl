@@ -43,6 +43,8 @@ test('Notes fixture diagnostics preserve the real readiness barrier and omit err
     pending[0].resolve('complete');
     await new Promise(setImmediate);
     assert.equal(output.length, 0, 'both original renderer probes remain required');
+    assert.equal(errors.join('').includes('popup:probe-complete'), diagnostics);
+    assert.ok(!errors.join('').includes('badge:probe-complete'), 'pending badge remains observable without acknowledging Ready');
     if (reject) pending[1].fail(new Error('private note contents'));
     else pending[1].resolve('complete');
     await new Promise(setImmediate);
