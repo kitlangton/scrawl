@@ -11,6 +11,7 @@ function validSnapshot(v) {
   const note = n => n && pin(n.pin) && Number.isSafeInteger(n.t) && n.t >= 0 &&
     [n.x, n.y].every(p => Number.isFinite(p) && p >= 0 && p <= 1) && text(n.text);
   return v && ['badge', 'editor', 'list'].includes(v.mode) && (v.current === null || pin(v.current)) &&
+    (v.embedded == null || typeof v.embedded === 'boolean') &&
     (v.badgeRect == null || (Array.isArray(v.badgeRect) && v.badgeRect.length === 4 && v.badgeRect.every(Number.isFinite))) &&
     Array.isArray(v.position) && v.position.length === 2 && v.position.every(Number.isFinite) &&
     Array.isArray(v.notes) && v.notes.length <= 100 && v.notes.every(note) &&
@@ -26,6 +27,11 @@ function popupBounds(point, area, height) {
 const BADGE_WIDTH = 116;
 const BADGE_HEIGHT = 44;
 const BADGE_GAP = 16;
+// Rust's Linux anchors use physical X11 pixels; macOS anchors use points.
+function embeddedBadgeBounds(rect, scale = 1) {
+  const width = 72 * scale;
+  return { x: rect[0] + rect[2] - width, y: rect[1], width, height: rect[3] };
+}
 function badgeBounds(rect, area) {
   const [x, y, width, height] = rect;
   let bx = x + width + BADGE_GAP, by = y + (height - BADGE_HEIGHT) / 2;
@@ -49,4 +55,4 @@ function flightBounds(from, badge) {
   return { bounds: { x, y, width, height }, start: [start[0] - x, start[1] - y],
     delta: [end[0] - start[0], end[1] - start[1]] };
 }
-module.exports = { validCommand, validSnapshot, popupBounds, badgeBounds, BADGE_WIDTH, BADGE_HEIGHT, flightBounds };
+module.exports = { validCommand, validSnapshot, popupBounds, badgeBounds, embeddedBadgeBounds, BADGE_WIDTH, BADGE_HEIGHT, flightBounds };

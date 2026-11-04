@@ -60,6 +60,8 @@ enum Message {
     Action(CommandMessage),
     Stop,
     BadgePosition([i32; 4]),
+    Embedded(bool),
+    List { focus: u64, owner: u32 },
     Finish(flume::Sender<std::result::Result<(), String>>),
 }
 pub struct Session {
@@ -67,6 +69,8 @@ pub struct Session {
     stopping: Arc<std::sync::atomic::AtomicBool>,
     finishing: bool,
     badge_position: Option<[i32; 4]>,
+    embedded: bool,
+    saved_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 // Chromium can still write its profile during Electron's `quit` event. Rust owns
@@ -171,6 +175,8 @@ impl Session {
         let mut store = Store::new(directory);
         let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stopped = Arc::clone(&stopping);
+        let saved_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::clone(&saved_count);
         std::thread::spawn(move || {
             let mut flying = false;
             let mut current = None;
@@ -184,6 +190,7 @@ impl Session {
             let mut finish_deadline = None;
             let mut drained = false;
             let mut badge_position = None;
+            let mut embedded = false;
             let mut failed_writes = std::collections::BTreeSet::new();
             #[cfg(target_os = "linux")]
             let mut stack_checked_at = std::time::Instant::now();
@@ -225,6 +232,15 @@ impl Session {
                     match message {
                         Message::Stop => return Ok(()),
                         Message::BadgePosition(point) => badge_position = Some(point),
+                        Message::Embedded(value) => embedded = value,
+                        Message::List { focus: token, owner: pid } => {
+                            focus = token;
+                            owner = pid;
+                            mode = "list";
+                            if let Some([x, y, width, height]) = badge_position.filter(|_| embedded) {
+                                position = [f64::from(x + width), f64::from(y + height)];
+                            }
+                        }
                         Message::Finish(reply) => {
                             completion = Some(reply);
                             finish_deadline =
@@ -305,7 +321,12 @@ impl Session {
                                 store.dismiss();
                                 mode = "badge";
                             }
-                            CommandMessage::List => mode = "list",
+                            CommandMessage::List => {
+                                mode = "list";
+                                if let Some([x, y, width, height]) = badge_position.filter(|_| embedded) {
+                                    position = [f64::from(x + width), f64::from(y + height)];
+                                }
+                            }
                             CommandMessage::Surface {
                                 id,
                                 rect,
@@ -365,8 +386,10 @@ impl Session {
                 telemetry
                     .notes_editing
                     .store(mode != "badge", Ordering::Release);
+                // Store::notes contains only durable saves, never unsent drafts.
+                count.store(store.notes().len(), Ordering::Release);
                 if ready {
-                    let snapshot = serde_json::json!({ "mode": mode, "current": current, "position": position, "badgeRect": badge_position,
+                    let snapshot = serde_json::json!({ "mode": mode, "current": current, "position": position, "badgeRect": badge_position, "embedded": embedded,
                         "notes": store.notes(), "drafts": store.drafts(), "error": result.err().map(|_| "Could not save this note. Your text is kept; try again.") });
                     if write_message(
                         &mut input,
@@ -380,6 +403,7 @@ impl Session {
                     }
                 }
             }
+            count.store(0, Ordering::Release);
             if !stopped.load(Ordering::Acquire) && !drained {
                 let _ = telemetry
                     .ui_sender
@@ -426,6 +450,8 @@ impl Session {
             stopping,
             finishing: false,
             badge_position: None,
+            embedded: false,
+            saved_count,
         })
     }
     pub fn undo(&self, pin: u32) -> bool {
@@ -436,6 +462,20 @@ impl Session {
 
     pub fn outside(&self) {
         let _ = self.sender.try_send(Message::Action(CommandMessage::Outside));
+    }
+
+    pub fn saved_count(&self) -> usize {
+        self.saved_count.load(Ordering::Acquire)
+    }
+
+    pub fn show_list(&self, focus: u64, owner: u32) {
+        let _ = self.sender.try_send(Message::List { focus, owner });
+    }
+
+    pub fn set_embedded(&mut self, embedded: bool) {
+        if self.embedded != embedded && self.sender.try_send(Message::Embedded(embedded)).is_ok() {
+            self.embedded = embedded;
+        }
     }
 
     pub fn position_badge(&mut self, point: [f64; 4]) {
@@ -518,6 +558,46 @@ fn write_message(
 #[cfg(test)]
 mod transport_tests {
     use super::*;
+    #[test]
+    fn list_entry_carries_parent_focus_without_accepting_renderer_focus_tokens() {
+        let (sender, receiver) = flume::bounded(1);
+        let session = Session { sender, stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            finishing: true, badge_position: None, embedded: true,
+            saved_count: Arc::new(std::sync::atomic::AtomicUsize::new(1)) };
+        session.show_list(123, 456);
+        assert!(matches!(receiver.try_recv(), Ok(Message::List { focus: 123, owner: 456 })));
+        // Serde ignores extra fields on a unit variant; none can become the
+        // parent's native focus target through the renderer command.
+        assert!(matches!(serde_json::from_str::<CommandMessage>(r#"{"action":"list","focus":123,"owner":456}"#), Ok(CommandMessage::List)));
+    }
+    #[test]
+    #[ignore = "requires built Electron assets and an isolated sandbox-capable desktop"]
+    fn notes_electron_rust_roundtrip() {
+        let directory = std::env::temp_dir().join(format!("notes-bridge-{}", crate::shared::ids::make_bundle_id()));
+        std::fs::create_dir(&directory).unwrap();
+        let (events, _receiver) = flume::unbounded();
+        let session = Session::start(&directory, SharedCaptureTelemetry::new(events),
+            crate::shared::model::TargetFrame { x: 0.0, y: 0.0, width: 1000.0, height: 700.0, scale: 1.0 }).unwrap();
+        session.open(Anchor { pin: 1, t: 100, x: 0.5, y: 0.5, screen_x: 500.0, screen_y: 350.0, focus: 0, owner: 0 });
+        session.sender.send(Message::Action(CommandMessage::Draft { pin: 1, text: "Only a draft".into() })).unwrap();
+        assert_eq!(session.saved_count(), 0);
+        session.sender.send(Message::Action(CommandMessage::Save { pin: 1, text: "Attached note".into() })).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while session.saved_count() != 1 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(session.saved_count(), 1);
+        assert!(std::fs::read_to_string(directory.join("notes.json")).unwrap().contains("Attached note"));
+        session.show_list(0, 0);
+        session.sender.send(Message::Action(CommandMessage::Delete { pin: 1 })).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        while session.saved_count() != 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(session.saved_count(), 0);
+        session.finish().recv_timeout(std::time::Duration::from_secs(10)).unwrap().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     #[test]
     fn profile_is_private_and_cleaned_after_the_child_finishes_writing() {
         use std::os::unix::fs::PermissionsExt;

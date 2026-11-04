@@ -52,6 +52,7 @@ pub enum PillAction {
     RecordSelected,
     Cancel,
     Whiteboard,
+    Notes,
     Finish,
     Paste(Option<[f32; 2]>),
     CopyLink,

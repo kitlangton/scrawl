@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./button": "./src/button.tsx",
+    "./icons": "./src/icons.ts",
     "./tabs": "./src/tabs.tsx",
     "./theme.css": "./src/theme.css",
     "./status-card": "./src/status-card.tsx",
@@ -19,6 +20,7 @@
     "react": "^19.2.0"
   },
   "dependencies": {
+    "lucide-react": "1.67.0",
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-tabs": "^1.1.13",
     "class-variance-authority": "^0.7.1",

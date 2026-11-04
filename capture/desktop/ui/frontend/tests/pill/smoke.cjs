@@ -156,6 +156,63 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  assert.deepEqual(errors,[]);
 });
 
+test('notes extension preserves native control coordinates and opens only the existing list action',async t=>{
+ const home=await fs.mkdtemp(path.join(os.tmpdir(),'pill-count-'));
+ const application=await electron.launch({args:[path.resolve(__dirname,'host.cjs'),'--no-sandbox'],env:{...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,'config')}});
+ t.after(async()=>{await application.close().catch(()=>{});await fs.rm(home,{recursive:true,force:true});});
+ const page=await application.firstWindow(),sent=[];let buffer='';
+ application.process().stdout.on('data',chunk=>{buffer+=chunk;let end;while((end=buffer.indexOf('\n'))>=0){try{sent.push(JSON.parse(buffer.slice(0,end)));}catch{}buffer=buffer.slice(end+1);}});
+ let revision=20;
+ const controls=[base.actions[2],base.actions[0],base.actions[1]];
+ async function publish(noteCount){
+  await application.evaluate((_e,state)=>process.stdin.emit('data',JSON.stringify({type:'state',view:state})+'\n'+JSON.stringify({type:'activate'})+'\n'),{
+   ...base,revision:++revision,inputLevel:.5,noteCount,actions:noteCount?[...controls,{id:'notes',label:'Open notes',enabled:true,selected:false,primary:false}]:controls});
+  await expect.poll(()=>page.locator('main').getAttribute('data-revision')).toBe(String(revision));
+  await expect.poll(()=>page.locator('.pill-notes').count()).toBe(noteCount?1:0);
+  await page.waitForTimeout(300); // Native main measures its committed layout every 250ms.
+ }
+ async function screenControls(){
+  const origin=await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getBounds());
+  const boxes=await Promise.all(['Cancel','Whiteboard','Finish'].map(async name=>{
+   const b=await page.getByRole('button',{name,exact:true}).boundingBox();return {x:origin.x+b.x,y:origin.y+b.y,width:b.width,height:b.height};
+  }));return boxes;
+ }
+ await publish(0);const initial=await screenControls();
+ const evidence=process.env.APPARENT_PILL_EVIDENCE;if(evidence)await fs.mkdir(evidence,{recursive:true,mode:0o700});
+ for(const noteCount of [1,12,100,0]){
+  await publish(noteCount);assert.deepEqual(await screenControls(),initial,'Count changes must not move actual screen targets');
+  if(noteCount){
+   const row=await page.locator('.pill-row').boundingBox(),layer=await page.locator('.pill-notes-layer').boundingBox();
+   assert.equal(layer.y,row.y);assert.equal(layer.height,row.height);
+   await expect(page.getByRole('button',{name:`${noteCount} saved notes. Open notes`})).toHaveText(noteCount>99?'99+':String(noteCount));
+  }
+  for(const scheme of ['light','dark']){
+   await page.emulateMedia({colorScheme:scheme});
+   if(evidence)await page.screenshot({path:path.join(evidence,`notes-${noteCount}-${scheme}.png`),animations:'disabled'});
+  }
+ }
+ await publish(12);
+ const counter=page.getByRole('button',{name:'12 saved notes. Open notes'});
+ await counter.focus();await expect(counter).toBeFocused();
+ assert.equal(await counter.evaluate(el=>getComputedStyle(el).outlineOffset),'-4px');
+ if(evidence)await page.screenshot({path:path.join(evidence,'notes-focused.png'),animations:'disabled'});
+ await counter.press('Enter');
+ await expect.poll(()=>sent.filter(x=>x.action==='notes').length).toBe(1);
+ assert.deepEqual(sent.find(x=>x.action==='notes'),{revision,action:'notes'});
+ assert.equal(sent.some(x=>['save','delete','finish'].includes(x.action)),false);
+ // A 320px work area must retain usable controls even with the native reserve.
+ await application.evaluate(({screen})=>{
+  const original=screen.getDisplayMatching.bind(screen);
+  screen.getDisplayMatching=b=>{const display=original(b);return {...display,workArea:{...display.workArea,x:0,width:320}};};
+ });
+ await publish(0);const narrow=await screenControls();
+ for(const count of [1,12,0]){
+  await publish(count);
+  for(const name of ['Cancel','Whiteboard','Finish'])await expect(page.getByRole('button',{name,exact:true})).toBeInViewport();
+  assert.deepEqual(await screenControls(),narrow);
+ }
+});
+
 test('failed renderer assets never report readiness and the parent can retain native controls',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'pill-assets-'));
  await fs.mkdir(path.join(root,'electron'),{recursive:true});await fs.mkdir(path.join(root,'dist/pill'),{recursive:true});

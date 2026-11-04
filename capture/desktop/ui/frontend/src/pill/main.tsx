@@ -2,6 +2,7 @@ import '../runtime/exceptions';
 import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Button} from '@apparent/ui/button';
+import {StickyNote} from '@apparent/ui/icons';
 import type {PillView} from './bridge';
 import './style.css';
 import {UploadPocket} from './UploadPocket';
@@ -56,7 +57,11 @@ function Pill() {
   return <main data-revision={view.revision} className="pill settings-shell" aria-label={view.phase==='selecting'?view.label:undefined} data-phase={view.phase} data-reduced={view.reducedMotion} data-warning={view.warning!==null}>
     <UploadPocket notice={error?null:view.notice} pocket={error?{tone:'failure',title:'Action not confirmed',description:'Use the recording shortcut or tray menu.',actionIds:[]}:view.pocket??(view.warning?{tone:'warning',title:'Recording notice',description:view.warning,actionIds:[]}:view.notice?{tone:'info',title:'Control changed',description:'',actionIds:[]}:null)} onLayout={layout}
       actions={view.pocket?.actionIds.map(id=>{const action=view.actions.find(a=>a.id===id);return action && <Button key={id} variant="outline" disabled={!action.enabled || pending} onClick={()=>void act(id)}>{action.label}</Button>;})}>
-    {trigger=><div className="pill-row">
+    {trigger=><div className={`pill-surface${view.noteCount>0?' has-notes':''}`}>
+    {view.noteCount>0 && <div className="pill-notes-layer"><Button className="pill-notes" variant="ghost"
+      aria-label={`${view.noteCount} saved notes. Open notes`} disabled={pending || !view.actions.some(a=>a.id==='notes' && a.enabled)}
+      onClick={()=>void act('notes')}><StickyNote aria-hidden="true"/><span>{view.noteCount>99?'99+':view.noteCount}</span></Button></div>}
+    <div className="pill-row">
     {(view.phase!=='selecting' || trigger) && <div className={`lead ${view.draggable?'movable':''} ${window.apparentPill?.manualDrag?'manual-drag':''}`} title={view.draggable?'Drag recording controls':undefined}
       onPointerDown={event=>{if(view.draggable && !(event.target as HTMLElement).closest('button') && window.apparentPill?.manualDrag && event.button===0 && event.isPrimary)void window.apparentPill.beginDrag(view.revision).catch(()=>{});}}>
       <span className={`indicator-slot ${view.phase}`}>
@@ -68,7 +73,7 @@ function Pill() {
     </div>}
     {view.inputLevel!==null && view.phase==='recording' && <span className="meter" aria-label="Microphone input level">{[.55,.8,1,.75,.5].map((gain,index)=><i key={index} style={{height:`${3+19*gain*view.inputLevel!}px`}}/>)}</span>}
     {view.actions.length>0 && <div className="controls" role="group" aria-label="Recording controls" aria-busy={pending}>
-      {view.actions.map(action=>{const Icon=actionIcons[action.id];const iconOnly=action.id==='cancel'||action.id==='dismiss';return <Button key={action.id} variant={action.primary?'default':action.selected?'secondary':'ghost'}
+      {view.actions.filter(action=>action.id!=='notes').map(action=>{const Icon=actionIcons[action.id];const iconOnly=action.id==='cancel'||action.id==='dismiss';return <Button key={action.id} variant={action.primary?'default':action.selected?'secondary':'ghost'}
         size={iconOnly?'icon':'default'} data-icon-only={iconOnly} aria-label={action.label} title={iconOnly?action.label:undefined}
         data-primary={action.primary}
         aria-pressed={action.id.startsWith('select-')?action.selected:undefined}
@@ -78,6 +83,7 @@ function Pill() {
         onPointerCancel={()=>{pasteStart.current=null;void window.apparentPill?.cancelPaste();}}
         onClick={event=>{if(action.id!=='paste' || event.detail===0)void act(action.id);}}>{Icon && <Icon aria-hidden="true"/>}{!iconOnly && <span>{action.label}</span>}</Button>;})}
     </div>}
+    </div>
     </div>}
     </UploadPocket>
   </main>;

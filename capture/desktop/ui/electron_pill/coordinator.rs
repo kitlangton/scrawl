@@ -11,7 +11,8 @@ impl ApparentCoordinator {
             crate::shared::handoff::experiment("movableRecordingControls"),
         )
         .with_handoff(self.completed_dir.is_some(), self.review_bundle.is_some())
-        .with_completion_notice(self.completed_note.as_deref());
+        .with_completion_notice(self.completed_note.as_deref())
+        .with_notes(self.note_ui.as_ref().map_or(0, |ui| ui.saved_count()));
         let kind = if self.share_copied.as_ref() == self.completed_dir.as_ref() && self.completed_dir.is_some() {
             crate::connect::hosted::UploadQueueKind::PublicCopy
         } else { crate::connect::hosted::UploadQueueKind::Private };

@@ -11,7 +11,7 @@ app.setPath('userData',path.join(app.getPath('appData'),'apparent-pill'));
 nativeTheme.themeSource='system';
 const page=pathToFileURL(path.join(__dirname,'../../dist/pill/index.html')).href;
 let window,current=null,buffer='',pending=false,loaded=false,placed=false,activated=false,pendingPlace=null;
-let footprint={rowY:0,rowHeight:58};
+let footprint={rowY:0,rowHeight:58,mainWidth:640,rowWidth:640,pocketWidth:640};
 let lastInput=Date.now(),hovered=false,expected=null,rendererReady=false,readySent=false,renderDeadline=Date.now()+5000,pasteGesture=null,lastFrame='';
 function position(bounds){
  const next={...window.getBounds(),...bounds};
@@ -29,8 +29,12 @@ function applyPlacement(point){
 }
 function emit(message){process.stdout.write(JSON.stringify(message)+'\n');}
 function reportFrame(){
-  if(process.platform!=='darwin' || !rendererReady || current?.phase!=='recording' || !window.isVisible())return;
-  const b=window.getBounds(),frame=[b.x,b.y,b.width,b.height],revision=current.revision,key=JSON.stringify({revision,frame});
+ if(!rendererReady || current?.phase!=='recording' || !window.isVisible())return;
+ const b=window.getBounds();
+ const start={x:b.x,y:b.y+footprint.rowY},end={x:b.x+b.width,y:b.y+footprint.rowY+footprint.rowHeight};
+ const first=process.platform==='linux'?screen.dipToScreenPoint(start):start;
+ const last=process.platform==='linux'?screen.dipToScreenPoint(end):end;
+ const frame=[first.x,first.y,last.x-first.x,last.y-first.y],revision=current.revision,key=JSON.stringify({revision,frame});
   if(key!==lastFrame){lastFrame=key;emit({revision,frame});}
 }
 function publish(value){
@@ -126,18 +130,20 @@ app.whenReady().then(()=>{
     if(current?.phase!=='hidden' && Date.now()-lastInput>5000){app.exit(1);return;}
     try{
       const area=screen.getDisplayMatching(window.getBounds()).workArea;
-      const size=await window.webContents.executeJavaScript(`(() => {document.documentElement.style.setProperty('--pill-limit', '${area.width}px');const element=document.querySelector('main'),rect=element?.getBoundingClientRect();return rect && {width:Math.ceil(rect.width),height:Math.ceil(rect.height),rowHeight:Math.ceil(document.querySelector('.pill-row')?.getBoundingClientRect().height??rect.height),revision:Number(element.dataset.revision)};})()`);
+      const size=await window.webContents.executeJavaScript(`(() => {document.documentElement.style.setProperty('--pill-limit', '${area.width}px');const element=document.querySelector('main'),rect=element?.getBoundingClientRect(),row=document.querySelector('.pill-row')?.getBoundingClientRect();return rect && {width:Math.ceil(rect.width),height:Math.ceil(rect.height),mainWidth:Math.ceil(row?.width??rect.width),rowHeight:Math.ceil(row?.height??rect.height),revision:Number(element.dataset.revision)};})()`);
       if(!size || !Number.isFinite(size.width)||!Number.isFinite(size.height))return false;
       const bounds=window.getBounds();
       const width=Math.min(area.width,Math.max(100,Math.ceil(size.width)));
       const height=Math.min(area.height,360,Math.max(58,Math.ceil(size.height)));
       const rowHeight=Math.min(height,Math.max(56,Math.ceil(size.rowHeight)));
-      const next=geometry.layout(bounds,area,width,height,rowHeight,footprint.rowY);
+      const mainWidth=Math.min(width,Math.max(1,size.mainWidth));
+      const rowWidth=current.phase==='recording' && current.noteCount>0?width:mainWidth;
+      const next=geometry.layout(bounds,area,width,height,rowHeight,footprint.rowY,mainWidth,footprint.mainWidth);
       await window.webContents.executeJavaScript(`document.querySelector('main')?.setAttribute('data-pocket-side', '${next.side}')`);
       if(size.revision!==current?.revision)return false;
-      footprint=next;
+      footprint={...next,mainWidth,rowWidth,pocketWidth:mainWidth};
       if(bounds.width!==width || bounds.height!==height || bounds.y!==next.bounds.y)position(next.bounds);
-      if(process.platform==='linux')window.setShape(geometry.shape(width,height,next.rowY,rowHeight));
+      if(process.platform==='linux')window.setShape(geometry.shape(width,height,next.rowY,rowHeight,rowWidth,mainWidth));
       return size.revision===current?.revision;
     }catch{app.exit(1);}
   }
@@ -181,7 +187,7 @@ app.whenReady().then(()=>{
   });
   const pointerTimer=setInterval(()=>{
     if(!loaded || window.isDestroyed())return;
-    const inside=window.isVisible() && geometry.contains(screen.getCursorScreenPoint(),window.getBounds(),footprint.rowY,footprint.rowHeight);
+    const inside=window.isVisible() && geometry.contains(screen.getCursorScreenPoint(),window.getBounds(),footprint.rowY,footprint.rowHeight,footprint.rowWidth,footprint.pocketWidth);
     if(inside!==hovered){hovered=inside;emit({hovered});}
     if(pasteGesture && Date.now()>pasteGesture.until)pasteGesture=null;
     if(process.platform==='darwin')window.setIgnoreMouseEvents(!inside && !pasteGesture,{forward:true});

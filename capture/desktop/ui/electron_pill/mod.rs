@@ -24,6 +24,7 @@ pub struct View {
     pub reduced_motion: bool,
     pub draggable: bool,
     pub input_level: Option<f32>,
+    pub note_count: usize,
     pub actions: Vec<Control>,
 }
 
@@ -78,6 +79,7 @@ impl View {
             reduced_motion: snapshot.reduced_motion,
             draggable: false,
             input_level: None,
+            note_count: 0,
             actions: vec![],
         };
         match &snapshot.pres {
@@ -106,10 +108,11 @@ impl View {
                 if *chips {
                     view.modes(*has_iphone, None, true);
                 } else {
+                    view.control("cancel", "Cancel", true, false, false);
                     view.control("whiteboard", "Whiteboard", true, false, false);
                     view.control("finish", "Finish", true, false, view.warning.is_none());
                 }
-                view.control("cancel", "Cancel", true, false, false);
+                if *chips { view.control("cancel", "Cancel", true, false, false); }
             }
             Pres::Processing => {
                 view.phase = "processing";
@@ -137,6 +140,14 @@ impl View {
         }
         view.project_notifications();
         view
+    }
+
+    pub fn with_notes(mut self, count: usize) -> Self {
+        if self.phase == "recording" && count > 0 {
+            self.note_count = count.min(100);
+            self.control("notes", "Open notes", true, false, false);
+        }
+        self
     }
 
     fn project_notifications(&mut self) {
@@ -279,6 +290,7 @@ impl View {
             "cancel" => PillAction::Cancel,
             "finish" => PillAction::Finish,
             "whiteboard" => PillAction::Whiteboard,
+            "notes" => PillAction::Notes,
             "paste" => PillAction::Paste(command.target),
             "copy-link" => PillAction::CopyLink,
             "inspect" => PillAction::Inspect,

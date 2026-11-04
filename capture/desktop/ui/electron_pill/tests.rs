@@ -17,6 +17,20 @@ fn command(revision: u64, action: &str) -> Command {
     }
 }
 #[test]
+fn electron_pill_notes_count_has_recording_scoped_authority() {
+    let recording = snapshot(Pres::Recording { chips: false, has_iphone: false });
+    let empty = View::new(&recording, 3, true).with_notes(0);
+    assert_eq!(empty.note_count, 0);
+    assert!(empty.admit(command(3, "notes")).is_none());
+    let saved = View::new(&recording, 4, true).with_notes(12);
+    assert_eq!(saved.note_count, 12);
+    assert!(matches!(saved.admit(command(4, "notes")), Some(PillAction::Notes)));
+    assert!(saved.admit(command(3, "notes")).is_none());
+    assert_eq!(View::new(&snapshot(Pres::Processing), 5, false).with_notes(12).note_count, 0);
+    assert_eq!(View::new(&recording, 6, true).with_notes(usize::MAX).note_count, 100);
+    assert_eq!(empty.actions.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["cancel", "whiteboard", "finish"]);
+}
+#[test]
 #[cfg(target_os = "linux")]
 fn electron_pill_drag_admission_stays_with_current_recording() {
     let mut view = View::new(&snapshot(Pres::Recording { chips: false, has_iphone: false }), 12, true);
@@ -161,8 +175,8 @@ fn electron_pill_real_pipe_roundtrip() {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::MetadataExt;
-        let helper = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("capture/desktop/ui/frontend/node_modules/electron/dist/chrome-sandbox");
+        let (_, runtime) = super::session::assets().expect("Packaged Electron runtime missing");
+        let helper = runtime.parent().unwrap().join("chrome-sandbox");
         let root_suid = std::fs::metadata(helper).is_ok_and(|m| m.uid() == 0 && m.permissions().mode() & 0o4000 != 0);
         // Admission only: a successful namespace probe is not sandbox/native proof.
         // Refuse before spawning Session or consuming a desktop attempt on unsupported hosts.
