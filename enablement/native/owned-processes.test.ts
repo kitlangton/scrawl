@@ -135,6 +135,22 @@ test('Storage entrypoint loads the canonical lifecycle without running its scena
   assert.equal(registered.length, 1);
 });
 
+test('Storage readiness helper loads before frontend dependencies are installed', () => {
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storage-import-'));
+  try {
+    const entry = path.join(root, 'native-readiness.ts');
+    fs.copyFileSync(path.resolve(__dirname, '../../capture/desktop/ui/frontend/tests/storage/native-readiness.ts'), entry);
+    const result = spawnSync(process.execPath, ['--experimental-strip-types', '-e',
+      'if (typeof require(' + JSON.stringify(entry) + ').waitForStorageReads !== "function") process.exit(2)'],
+      { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('receipt cleanup refuses unanchored live or unknown groups', async () => {
   const assert = require('node:assert/strict');
   const fs = require('node:fs');

@@ -94,7 +94,7 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   await expect(page.getByRole('button', { name: 'Refresh usage', exact: true })).toBeDisabled();
   const card = page.getByRole('region', { name: 'Capture location', exact: true });
   let nativeReady = false;
-  const readiness = waitForStorageReads(card, 5000).then(() => { nativeReady = true; });
+  const readiness = waitForStorageReads(card, expect, 5000).then(() => { nativeReady = true; });
   // The held real renderer request keeps native action admission closed.
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(nativeReady, false, 'Native action raced the initial usage read');
