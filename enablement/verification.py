@@ -110,6 +110,27 @@ def directory_width_contract_selected(paths):
                for path in paths)
 
 
+CONNECT_CLIENT_TYPESCRIPT = "connect/client/typescript/"
+CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
+    CONNECT_CLIENT_TYPESCRIPT + name
+    for name in ("package.json", "package-lock.json", "tsconfig.json")
+}
+
+
+def connect_client_typescript_selected(paths):
+    """Select the existing client package test for its full local input set."""
+    if not paths:
+        return True  # Unknown history stays conservative.
+    return any(
+        path in CONNECT_CLIENT_TYPESCRIPT_CONFIG
+        or path.startswith(CONNECT_CLIENT_TYPESCRIPT + "src/")
+        or (path.startswith(CONNECT_CLIENT_TYPESCRIPT + "test/")
+            and "/" not in path[len(CONNECT_CLIENT_TYPESCRIPT + "test/"):]
+            and path.endswith(".test.ts"))
+        for path in paths
+    )
+
+
 def select(paths, history_known=True):
     paths = sorted(set(paths))
     # Unknown/shared/build/security/lifecycle input is broad by default. Do not
@@ -230,6 +251,8 @@ def run_pr_checks(selection=None):
     subprocess.run(["node", "--experimental-strip-types", "--test", "enablement/file-length/check.test.ts"], cwd=ROOT, check=True)
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
     paths = selection["paths"] if selection else []
+    if connect_client_typescript_selected(paths):
+        run_connect_client_typescript_tests()
     if directory_width_contract_selected(paths):
         subprocess.run(["python3", "-m", "unittest", "discover", "-s",
                         "enablement/directory-width/tests", "-p", "test_*.py"],
@@ -264,6 +287,33 @@ def run_pr_checks(selection=None):
                 "node_modules/@apparent/ui/package.json")):
             raise RuntimeError("Onboarding feedback needs installed dependencies: run npm ci in capture/desktop/ui/frontend, then retry the push; the hook never installs dependencies")
         subprocess.run(["npm", "run", "check:onboarding"], cwd=frontend, check=True)
+
+
+def run_connect_client_typescript_tests():
+    package = ROOT / "connect/client/typescript"
+    controls = ("package.json", "package-lock.json", "tsconfig.json")
+    missing_controls = [name for name in controls if not (package / name).is_file()]
+    if missing_controls:
+        raise RuntimeError(
+            "Connect client TypeScript package controls are missing or deleted: "
+            + ", ".join(missing_controls)
+            + "; restore them or update the pre-push contract before pushing"
+        )
+    dependencies = (
+        "node_modules/typescript/bin/tsc",
+        "node_modules/@types/node/package.json",
+        "node_modules/age-encryption/package.json",
+        "node_modules/@noble/ed25519/package.json",
+    )
+    missing_dependencies = [name for name in dependencies if not (package / name).is_file()]
+    if missing_dependencies:
+        raise RuntimeError(
+            "Connect client TypeScript feedback needs installed locked dependencies; "
+            "run `npm ci --no-audit --no-fund` in connect/client/typescript, then retry. "
+            "The pre-push hook never installs dependencies. Missing: "
+            + ", ".join(missing_dependencies)
+        )
+    subprocess.run(["npm", "test"], cwd=package, check=True)
 
 
 def run_contract_checks():

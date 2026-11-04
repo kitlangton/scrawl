@@ -39,6 +39,16 @@ class PrePushGuardTests(unittest.TestCase):
         for name in ("test_fixture_push.py", "test_verification.py", "test_release_gate.py",
                      "test_temp_preflight.py", "test_owner_lanes.py"):
             (self.repo / "enablement" / "tests" / name).write_text(fixture_test)
+        client = self.repo / "connect/client/typescript"
+        for name in ("package.json", "package-lock.json", "tsconfig.json"):
+            destination = client / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(HOOK.parents[1] / "connect/client/typescript" / name, destination)
+        (client / ".gitignore").write_text("node_modules/\n")
+        (client / "src").mkdir()
+        (client / "src/index.ts").write_text("export const value = 1;\n")
+        (client / "test").mkdir()
+        (client / "test/index.test.ts").write_text("// package test input\n")
         shutil.copy2(SELECTOR, self.repo / "enablement" / "verification.py")
         # File-length tests exercise pre-commit only, so this closure stays
         # finite and never recursively invokes the pre-push test suite.
@@ -60,14 +70,25 @@ class PrePushGuardTests(unittest.TestCase):
         run("git", "add", ".", cwd=self.repo)
         run("git", "commit", "-qm", "original", cwd=self.repo)
         self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        self.client = self.repo / "connect/client/typescript"
+        for name in ("typescript/bin/tsc", "@types/node/package.json",
+                     "age-encryption/package.json", "@noble/ed25519/package.json"):
+            dependency = self.client / "node_modules" / name
+            dependency.parent.mkdir(parents=True, exist_ok=True)
+            dependency.write_text("fixture\n")
         self.bin = Path(self.tmp.name) / "bin"
         self.bin.mkdir()
         self.log = Path(self.tmp.name) / "commands"
+        self.npm_log = Path(self.tmp.name) / "npm-commands"
         taskpolicy = self.bin / "taskpolicy"
         taskpolicy.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$COMMAND_LOG\"\nexit \"${MOCK_STATUS:-0}\"\n")
         taskpolicy.chmod(0o755)
+        npm = self.bin / "npm"
+        npm.write_text('#!/bin/sh\nprintf "%s:%s\\n" "$PWD" "$*" >> "$NPM_COMMAND_LOG"\nexit "${NPM_STATUS:-0}"\n')
+        npm.chmod(0o755)
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
-                        COMMAND_LOG=str(self.log), PYTHONDONTWRITEBYTECODE="1", TMPDIR=self.tmp.name)
+                        COMMAND_LOG=str(self.log), NPM_COMMAND_LOG=str(self.npm_log),
+                        PYTHONDONTWRITEBYTECODE="1", TMPDIR=self.tmp.name)
         # Default-policy fixtures must not inherit the live build runner's
         # allocation. Exercise explicit allocations separately below.
         self.env.pop("T3_BUILD_JOBS", None)
@@ -115,6 +136,21 @@ class PrePushGuardTests(unittest.TestCase):
         npm.write_text('#!/bin/sh\nprintf "%s:%s\\n" "$PWD" "$*" >> "$COMMAND_LOG"\nexit "${NPM_STATUS:-0}"\n')
         npm.chmod(0o755)
         return frontend
+
+    def connect_client_delta(self, path="src/index.ts", delete=False):
+        run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=self.repo)
+        target = self.client / path
+        if delete:
+            target.unlink()
+        elif path in ("package.json", "package-lock.json", "tsconfig.json"):
+            target.write_text(target.read_text() + "\n")
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("// changed Connect client input\n")
+        run("git", "add", "-A", cwd=self.repo)
+        run("git", "commit", "-qm", "Connect TypeScript delta", cwd=self.repo)
+        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        return self.client
 
     def test_onboarding_feature_delta_runs_existing_command_in_frontend(self):
         frontend = self.onboarding_delta()
@@ -174,6 +210,69 @@ class PrePushGuardTests(unittest.TestCase):
                 result = self.push(remote="refs/heads/feature")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("deleted or renamed", result.stderr)
+
+    def test_connect_client_typescript_delta_runs_declared_test_in_package(self):
+        package = self.connect_client_delta()
+        result = self.push(remote="refs/heads/feature")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.npm_log.read_text(), f"{package}:test\n")
+        self.assertFalse(self.log.exists())
+
+    def test_deleted_connect_client_source_still_runs_declared_test(self):
+        package = self.connect_client_delta("src/index.ts", delete=True)
+        result = self.push(remote="refs/heads/feature")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.npm_log.read_text(), f"{package}:test\n")
+
+    def test_connect_client_lock_change_selects_test(self):
+        package = self.connect_client_delta("package-lock.json")
+        result = self.push(remote="refs/heads/feature")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.npm_log.read_text(), f"{package}:test\n")
+
+    def test_later_connect_document_commit_keeps_client_source_in_full_delta(self):
+        package = self.connect_client_delta()
+        (package / "README.md").write_text("later owner note\n")
+        run("git", "add", "-A", cwd=self.repo)
+        run("git", "commit", "-qm", "later client documentation", cwd=self.repo)
+        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        result = self.push(remote="refs/heads/feature")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.npm_log.read_text(), f"{package}:test\n")
+
+    def test_connect_client_package_control_deletion_fails_actionably(self):
+        self.connect_client_delta("package-lock.json", delete=True)
+        result = self.push(remote="refs/heads/feature")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("package-lock.json", result.stderr)
+        self.assertIn("restore them or update the pre-push contract", result.stderr)
+        self.assertFalse(self.npm_log.exists())
+
+    def test_connect_client_missing_dependencies_never_install(self):
+        (self.client / "node_modules/typescript/bin/tsc").unlink()
+        self.connect_client_delta()
+        result = self.push(remote="refs/heads/feature")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("run `npm ci --no-audit --no-fund` in connect/client/typescript", result.stderr)
+        self.assertIn("never installs dependencies", result.stderr)
+        self.assertFalse(self.npm_log.exists())
+
+    def test_connect_client_test_failure_rejects_feature_push(self):
+        self.connect_client_delta()
+        result = self.push(remote="refs/heads/feature", env=dict(self.env, NPM_STATUS="1"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("push rejected", result.stderr)
+
+    def test_unrelated_connect_owner_skips_connect_client_typescript_test(self):
+        run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=self.repo)
+        (self.repo / "connect/service").mkdir(parents=True)
+        (self.repo / "connect/service/README.md").write_text("service owner\n")
+        run("git", "add", "-A", cwd=self.repo)
+        run("git", "commit", "-qm", "Connect service docs", cwd=self.repo)
+        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        result = self.push(remote="refs/heads/feature")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.npm_log.exists())
 
     def test_clean_head_requires_build_and_tests(self):
         result = self.push()

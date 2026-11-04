@@ -18,6 +18,71 @@ spec.loader.exec_module(verification)
 
 
 class SelectionTests(unittest.TestCase):
+    def test_connect_client_typescript_inputs_select_package_tests_without_narrowing_rust(self):
+        prefix = "connect/client/typescript/"
+        selected = (
+            "package.json", "package-lock.json", "tsconfig.json",
+            "src/settings-controller.cts", "src/device-flow.cts",
+            "test/settings-controller.test.ts", "test/device-flow.test.ts",
+        )
+        for name in selected:
+            with self.subTest(path=name):
+                self.assertTrue(verification.connect_client_typescript_selected([prefix + name]))
+        unrelated = (
+            "README.md", ".gitignore", "test/production-interop.ts",
+            "test/nested/ignored.test.ts", "connect/client/Cargo.toml",
+            "connect/service/src/worker.ts", "connect/web/src/main.tsx",
+            "shared/handoff/config_store.rs",
+        )
+        for path in unrelated:
+            with self.subTest(path=path):
+                self.assertFalse(verification.connect_client_typescript_selected([path]))
+        self.assertTrue(verification.connect_client_typescript_selected([]))
+        root_selection = verification.select([prefix + "src/index.ts"])
+        self.assertTrue(root_selection["root"])
+        self.assertTrue(root_selection["engine"])
+
+    def test_connect_client_check_uses_declared_npm_test_from_owner_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "connect/client/typescript"
+            for name in ("package.json", "package-lock.json", "tsconfig.json",
+                         "node_modules/typescript/bin/tsc",
+                         "node_modules/@types/node/package.json",
+                         "node_modules/age-encryption/package.json",
+                         "node_modules/@noble/ed25519/package.json"):
+                target = package / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.touch()
+            with patch.object(verification, "ROOT", root), patch.object(
+                    verification.subprocess, "run") as run:
+                verification.run_pr_checks({"paths": [
+                    "connect/client/typescript/src/settings-controller.cts"]})
+            command = ["npm", "test"]
+            calls = [call for call in run.call_args_list if call.args[0] == command]
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0].kwargs["cwd"], package)
+            self.assertTrue(calls[0].kwargs["check"])
+            patterns = [call.args[0][-1] for call in run.call_args_list
+                        if call.args[0][:4] == ["python3", "-m", "unittest", "discover"]]
+            self.assertLess(run.call_args_list.index(calls[0]), next(
+                index for index, call in enumerate(run.call_args_list)
+                if call.args[0][:4] == ["python3", "-m", "unittest", "discover"]))
+            self.assertIn("test_*push*.py", patterns)
+
+    def test_connect_client_missing_locked_dependencies_fails_without_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "connect/client/typescript"
+            package.mkdir(parents=True)
+            for name in ("package.json", "package-lock.json", "tsconfig.json"):
+                (package / name).touch()
+            with patch.object(verification, "ROOT", root), patch.object(
+                    verification.subprocess, "run") as run:
+                with self.assertRaisesRegex(RuntimeError, r"npm ci --no-audit --no-fund"):
+                    verification.run_connect_client_typescript_tests()
+                run.assert_not_called()
+
     def test_each_real_onboarding_input_selects_renderer_feedback(self):
         frontend = "capture/desktop/ui/frontend/"
         inputs = [frontend + name for name in (
