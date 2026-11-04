@@ -489,6 +489,8 @@ and concurrency waiting) and budget-audit jobs are excluded. Setup, checks,
 cleanup and post actions in workload jobs count. Reruns audit their own attempt.
 API errors, incomplete inventories, nonterminal jobs or invalid timestamps fail
 closed. Skipped jobs consume no execution time.
+Mac followers with every workload job skipped also skip the audit, so an
+ineligible Linux completion does not produce a successful Mac verification run.
 
 Enforce the whole-workflow budget at completion: fail the final audit above
 900 seconds for Linux/Mac or 600 seconds for web-only delivery without automatic whole-workflow cancellation or a standalone

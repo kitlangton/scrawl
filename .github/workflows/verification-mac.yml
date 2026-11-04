@@ -64,7 +64,9 @@ jobs:
     uses: ./.github/workflows/native-proof-mac.yml
 
   runtime-budget:
-    if: always()
+    # An ineligible follower has no workload; keep the entire run skipped.
+    # Still audit failed/cancelled attempts whenever a workload was admitted.
+    if: always() && (needs.admit.result != 'skipped' || needs.verify.result != 'skipped' || needs.connect-native.result != 'skipped')
     needs: [admit, verify, connect-native]
     permissions:
       contents: read
