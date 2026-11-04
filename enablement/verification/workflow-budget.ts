@@ -45,7 +45,7 @@ export function executionSeconds(jobs: Job[]): number {
 export async function loadJobs(api: string, repository: string, run: string, attempt: string,
                                token: string, request: typeof fetch = fetch): Promise<Job[]> {
   if (!/^https:\/\//.test(api) || !/^[\w.-]+\/[\w.-]+$/.test(repository) ||
-      !/^\d+$/.test(run) || !/^\d+$/.test(attempt) || !token)
+      !/^[1-9][0-9]*$/.test(run) || !/^[1-9][0-9]*$/.test(attempt) || !token)
     throw new Error('Missing or invalid workflow budget API identity')
   const jobs: Job[] = []
   for (let page = 1; ; page++) {
@@ -70,12 +70,55 @@ export function enforceBudget(jobs: Job[], platform = 'linux'): string {
   return report
 }
 
+/** Reserve a bounded publication job against completed work before it can mutate durable releases. */
+export function enforcePublicationReservation(jobs: Job[], publisherName: string, reservedSeconds: number,
+                                             expectedJobNames: string[], platform = 'web'): string {
+  const budgetSeconds = workflowBudgetSeconds(platform)
+  if (!publisherName || !Number.isSafeInteger(reservedSeconds) || reservedSeconds <= 0 || reservedSeconds > budgetSeconds ||
+      !Array.isArray(expectedJobNames) || !expectedJobNames.length || expectedJobNames.some(name => typeof name !== 'string' || !name) ||
+      new Set(expectedJobNames).size !== expectedJobNames.length)
+    throw new Error('Invalid publication reservation')
+  const actualNames = jobs.map(job => job.name).sort()
+  const expectedNames = [...expectedJobNames].sort()
+  if (actualNames.length !== expectedNames.length || actualNames.some((name, index) => name !== expectedNames[index]))
+    throw new Error('Workflow job inventory does not match the expected publication attempt')
+  const publishers = jobs.filter(job => job.name === publisherName)
+  if (publishers.length !== 1) throw new Error('Missing or ambiguous publication job identity')
+  const publisher = publishers[0]
+  if (publisher.status !== 'in_progress' || publisher.conclusion !== null ||
+      !Number.isFinite(Date.parse(publisher.started_at ?? '')) || publisher.completed_at !== null)
+    throw new Error('Publication job is not the active job in this workflow attempt')
+
+  const audits = jobs.filter(job => job.name === auditName || job.name.endsWith(` / ${auditName}`))
+  if (audits.length !== 1 || !['queued', 'pending'].includes(audits[0].status) || audits[0].conclusion !== null)
+    throw new Error('Runtime audit job is missing, ambiguous, or not pending')
+
+  const completed = jobs.filter(job => job !== publisher && job !== audits[0])
+  const observedSeconds = executionSeconds(completed)
+  const reservedTotal = observedSeconds + reservedSeconds
+  const report = `Publication reservation: ${observedSeconds.toFixed(1)}s completed + ${reservedSeconds}s reserved = ${reservedTotal.toFixed(1)}s / ${budgetSeconds}s (parallel jobs counted once; audit and runner-only waiting excluded).`
+  if (reservedTotal > budgetSeconds) throw new Error(`${report} ${optimization}`)
+  return report
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv.length !== 2) throw new Error("Usage: workflow-budget.ts (completion-time audit only)")
+    const mode = process.argv[2] ?? 'audit'
+    if (process.argv.length > 3 || !['audit', '--publication-preflight'].includes(mode))
+      throw new Error('Usage: workflow-budget.ts (completion-time audit only; optional --publication-preflight)')
     const env = process.env
     const jobs = await loadJobs(env.GITHUB_API_URL!, env.GITHUB_REPOSITORY!, env.GITHUB_RUN_ID!, env.GITHUB_RUN_ATTEMPT!, env.GH_TOKEN!)
-    const report = enforceBudget(jobs, env.WORKFLOW_BUDGET_PLATFORM)
+    let report: string
+    if (mode === '--publication-preflight') {
+      if (env.GITHUB_JOB !== 'recipient-release' || env.GITHUB_WORKFLOW !== 'Connect producer' ||
+          env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_REF !== 'refs/heads/main')
+        throw new Error('Publication preflight must run in the canonical Connect producer on main')
+      const reserve = Number(env.WORKFLOW_BUDGET_RESERVE_SECONDS)
+      let expectedNames: string[]
+      try { expectedNames = JSON.parse(env.WORKFLOW_BUDGET_EXPECTED_JOB_NAMES ?? '') }
+      catch { throw new Error('Missing or invalid expected workflow job inventory') }
+      report = enforcePublicationReservation(jobs, env.WORKFLOW_BUDGET_PUBLISHER_NAME!, reserve, expectedNames, env.WORKFLOW_BUDGET_PLATFORM)
+    } else report = enforceBudget(jobs, env.WORKFLOW_BUDGET_PLATFORM)
     console.log(report)
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `\n${report}\n\n${optimization}\n`)
 
