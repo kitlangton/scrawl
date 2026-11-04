@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { executionSeconds, enforceBudget, workflowBudgetSeconds, loadJobs, auditName, type Job } from './workflow-budget.ts'
-import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -159,22 +159,49 @@ test('Electron to Rust Settings workflow builds frontend artifacts before the br
 printf 'npm:%s\\n' "$*" >> "$CALLS"
 case "$*" in *'run build'*) exit "$BUILD_STATUS";; esac
 `, { mode: 0o700 })
+    const sandbox = join(root, 'capture/desktop/ui/frontend/node_modules/electron/dist/chrome-sandbox')
+    writeFileSync(sandbox, 'synthetic helper')
+    writeFileSync(join(root, 'sudo'), `#!/bin/sh
+printf 'sudo:%s\\n' "$*" >> "$CALLS"
+exit "${'${SUDO_STATUS:-0}'}"
+`, { mode: 0o700 })
+    writeFileSync(join(root, 'stat'), '#!/bin/sh\nprintf "%s\\n" "$HELPER_STAT"\n', { mode: 0o700 })
+    writeFileSync(join(root, 'xvfb-run'), '#!/bin/sh\nprintf "xvfb:%s\\n" "$*" >> "$CALLS"\nshift\nexec "$@"\n', { mode: 0o700 })
     for (const name of ['cargo', 'node']) writeFileSync(join(root, name), `#!/bin/sh
 printf '${name}:%s\\n' "$*" >> "$CALLS"
 `, { mode: 0o700 })
     for (const os of ['Linux', 'macOS']) for (const status of ['0', '7']) {
       writeFileSync(calls, '')
       const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], { cwd: root, encoding: 'utf8',
-        env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CALLS: calls, BUILD_STATUS: status, HOME: root, RUNNER_OS: os } })
+        env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CALLS: calls, BUILD_STATUS: status, HOME: root, RUNNER_OS: os, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', HELPER_STAT: '0:0:4755' } })
       assert.equal(result.status, Number(status), result.stderr)
       const lines = readFileSync(calls, 'utf8').trim().split('\n')
       assert.equal(lines[0], 'npm:--prefix capture/desktop/ui/frontend ci --no-audit --no-fund')
       assert.equal(lines[1], 'npm:--prefix capture/desktop/ui/frontend run build')
       if (status === '0') {
         assert.match(lines[2], /^node:-e /)
-        assert.equal(lines[3], 'cargo:test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture')
-        assert.equal(lines.length, 4)
+        assert.deepEqual(lines.slice(3), os === 'Linux' ? [
+          `sudo:chown root:root -- ${sandbox}`, `sudo:chmod 4755 -- ${sandbox}`,
+          'xvfb:-a cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture',
+          'cargo:test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture',
+        ] : ['cargo:test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture'])
       } else assert.equal(lines.length, 2, 'build failure must stop before Electron or Cargo')
+    }
+    for (const scenario of ['not-hosted', 'wrong-mode', 'sudo-failure', 'symlink', 'missing']) {
+      writeFileSync(calls, '')
+      if (scenario === 'symlink' || scenario === 'missing') {
+        rmSync(sandbox)
+        if (scenario === 'symlink') symlinkSync(join(root, 'npm'), sandbox)
+      }
+      const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], { cwd: root, encoding: 'utf8',
+        env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CALLS: calls, BUILD_STATUS: '0', HOME: root,
+          RUNNER_OS: 'Linux', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: scenario === 'not-hosted' ? 'self-hosted' : 'github-hosted',
+          HELPER_STAT: scenario === 'wrong-mode' ? '1000:1000:755' : '0:0:4755', SUDO_STATUS: scenario === 'sudo-failure' ? '9' : '0' } })
+      assert.notEqual(result.status, 0, scenario)
+      const recorded = readFileSync(calls, 'utf8')
+      assert.doesNotMatch(recorded, /^cargo:|^xvfb:/m, scenario)
+      if (['not-hosted', 'symlink', 'missing'].includes(scenario)) assert.doesNotMatch(recorded, /^sudo:/m, scenario)
+      if (scenario === 'symlink' || scenario === 'missing') { rmSync(sandbox, { force: true }); writeFileSync(sandbox, 'synthetic helper') }
     }
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
