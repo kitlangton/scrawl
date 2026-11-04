@@ -193,14 +193,29 @@ class SelectionTests(unittest.TestCase):
             self.assertNotIn('compiler-artifact', ''.join(output))
 
     def test_overlap_root_build_fails_closed_on_false_or_missing_event(self):
+        real_cleanup = verification.cleanup_owned_processes
+        probe = ["/bin/ps", "-axo", "pgid=,stat="]
         for output in ('{"reason":"build-finished","success":false}\n',
                        '{"reason":"compiler-artifact"}\n', 'plain output\n'):
-            script = 'import sys; sys.stdout.write(sys.argv[1]); sys.stdout.flush()'
-            build = [sys.executable, '-c', 'raise SystemExit(9)']
-            with self.subTest(output=output):
-                with self.assertRaises(RuntimeError), patch.object(verification.subprocess, 'Popen', wraps=subprocess.Popen) as spawn:
-                    verification.overlap_cargo_test_and_build([sys.executable, '-c', script, output], build)
-                self.assertEqual(spawn.call_count, 1)
+            for with_probe in (False, True):
+                script = 'import sys; sys.stdout.write(sys.argv[1]); sys.stdout.flush()'
+                test = [sys.executable, '-c', script, output]
+                build = [sys.executable, '-c', 'raise SystemExit(9)']
+                def cleanup(processes):
+                    real_cleanup(processes)
+                    if with_probe:
+                        # Darwin cleanup can legitimately launch this probe.
+                        # Exercise it deterministically on either supported OS.
+                        subprocess.run(probe, check=True, capture_output=True, text=True)
+                with self.subTest(output=output, cleanup_probe=with_probe):
+                    with self.assertRaises(RuntimeError), patch.object(
+                            verification.subprocess, 'Popen', wraps=subprocess.Popen) as spawn, patch.object(
+                            verification, 'cleanup_owned_processes', side_effect=cleanup):
+                        verification.overlap_cargo_test_and_build(test, build)
+                    commands = [call.args[0] for call in spawn.call_args_list]
+                    self.assertEqual([command for command in commands if command != probe], [test])
+                    self.assertNotIn(build, commands)
+                    self.assertGreaterEqual(commands.count(probe), int(with_probe))
 
     def test_overlap_root_build_reaps_test_and_build_failures(self):
         real_spawn = subprocess.Popen
