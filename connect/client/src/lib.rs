@@ -1933,17 +1933,18 @@ impl Client {
         Ok(())
     }
     pub fn fetch(&self, id: &str, out: &Path, wait: u64) -> Result<PathBuf> {
-        self.fetch_inner(id, out, wait, false).map_err(|error| {
-            match error.to_string().as_str() {
-                "Hosted API: not_found" => anyhow::anyhow!("Capture unavailable (not_found). The sender may still be uploading, the capture may have expired or been deleted, or this account/API origin may not have access. Check apparent connect status and confirm the API origin and approved read account with the sender; ask the sender to check upload status or provide a fresh handoff. Retry with --wait 120 if upload is still in progress."),
-                message if message.starts_with("auth_required:") || matches!(message, "Hosted API: unauthorized" | "Hosted API: forbidden" | "Hosted API: reauthorization_required") => anyhow::anyhow!("Capture read authorization failed. Run `{}` and ask the user to approve its verification link/code, then retry inspection.", self.read_login_command().unwrap_or_else(|_| "apparent connect login".into())),
-                _ => error,
-            }
-        })
+        self.fetch_inner(id, out, wait, false).map_err(|error| self.fetch_error(error))
+    }
+    fn fetch_error(&self, error: anyhow::Error) -> anyhow::Error {
+        match error.to_string().as_str() {
+            "Hosted API: not_found" => anyhow::anyhow!("Capture unavailable (not_found). The sender may still be uploading, the capture may have expired or been deleted, or this account/API origin may not have access. Check apparent connect status and confirm the API origin and approved read account with the sender; ask the sender to check upload status or provide a fresh handoff. Retry with --wait 120 if upload is still in progress."),
+            message if message.starts_with("auth_required:") || matches!(message, "Hosted API: unauthorized" | "Hosted API: forbidden" | "Hosted API: reauthorization_required") => anyhow::anyhow!("Capture read authorization failed. Run `{}` and ask the user to approve its verification link/code, then retry inspection.", self.read_login_command().unwrap_or_else(|_| "apparent connect login".into())),
+            _ => error,
+        }
     }
     /// Fetch an immutable evidence snapshot; legacy captures retain full retrieval.
     pub fn fetch_evidence(&self, id: &str, out: &Path, wait: u64) -> Result<PathBuf> {
-        self.fetch_inner(id, out, wait, true)
+        self.fetch_inner(id, out, wait, true).map_err(|error| self.fetch_error(error))
     }
     fn fetch_inner(&self, id: &str, out: &Path, wait: u64, evidence: bool) -> Result<PathBuf> {
         ensure!(

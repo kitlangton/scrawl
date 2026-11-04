@@ -17,9 +17,13 @@ const root = await realpath(await mkdtemp(join(tmpdir(), 'apparent-evidence-serv
 const children = new Set<ReturnType<typeof spawn>>();
 let service: Awaited<ReturnType<typeof fixture>>;
 let failMedia = true;
+let denyRead = false;
 const server = createServer(async (req, res) => {
   try {
     assert(req.url?.startsWith('/v1/'));
+    if (denyRead && req.method === 'GET' && req.url.startsWith('/v1/captures/')) {
+      req.resume(); res.writeHead(401); res.end('{"error":{"code":"unauthorized"}}'); return;
+    }
     if (failMedia && req.method === 'PUT' && req.url.includes('/files/media/')) {
       req.resume(); res.writeHead(503); res.end('{"error":{"code":"temporary_unavailable"}}'); return;
     }
@@ -68,6 +72,12 @@ try {
     assert(approval); await approval;
   }
   await login(receiver, 'read'); await login(sender, 'upload');
+  denyRead = true;
+  await assert.rejects(cli(receiver,['inspect','0'.repeat(32)]), /Capture read authorization failed.*apparent connect login/s);
+  assert(!(await readdir(receiver)).some(name => name.endsWith('.evidence.apparent') || name.startsWith('.apparent-fetch-')));
+  denyRead = false;
+  // A rejected grant must be explicitly approved again before normal reads.
+  await login(receiver, 'read');
   const bundle = join(sender, 'synthetic.apparent');
   await mkdir(join(bundle, 'frames'), {recursive:true,mode:0o700});
   const metadata = {version:1,id:'synthetic',createdAtMs:1,durationMs:200,
