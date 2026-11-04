@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { targets } from './seal.ts';
+import { validate } from './validate.ts';
 export function select(root: string, sha: string, run: string, attempt: string) {
   if (!/^[a-f0-9]{40}$/.test(sha) || !/^[1-9][0-9]*$/.test(run) || !/^[1-9][0-9]*$/.test(attempt)) throw Error('Invalid release identity');
   const candidates = readdirSync(root).map(name => {
@@ -12,6 +13,8 @@ export function select(root: string, sha: string, run: string, attempt: string) 
     const manifest = JSON.parse(readFileSync(join(directory,'manifest.json'),'utf8'));
     const expected = {schema:1,protocol:1,repository:'tryapparent/apparent',workflow:'.github/workflows/connect-delivery.yml',executable:'apparent-connect-recipient',sourceSha:sha,run,attempt:match[3],target:match[4],version:`recipient-${sha}-${run}-${match[3]}`,sha256:createHash('sha256').update(readFileSync(join(directory,'apparent-connect-recipient'))).digest('hex')};
     if (Object.entries(expected).some(([key,value])=>manifest[key] !== value)) throw Error(`Invalid artifact manifest: ${name}`);
+    validate(readFileSync(join(directory,'apparent-connect-recipient')), manifest,
+      {sourceSha:sha,run,attempt:match[3],target:match[4],sha256:expected.sha256});
     return {directory, ...expected};
   });
   return targets.map(target => {
