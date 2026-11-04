@@ -93,6 +93,23 @@ BROWSER_FILES = {"connect/web/" + path for path in (
 )}
 
 
+DIRECTORY_WIDTH_CONTRACT_INPUTS = {
+    ".githooks/pre-commit",
+    "enablement/directory-width/check.py",
+    "enablement/file-length/check.ts",
+    "enablement/verification.py",
+}
+
+
+def directory_width_contract_selected(paths):
+    """Select its existing integration suite only when its inputs changed."""
+    if not paths:
+        return True  # Unknown history stays conservative.
+    return any(path in DIRECTORY_WIDTH_CONTRACT_INPUTS
+               or path.startswith("enablement/directory-width/tests/")
+               for path in paths)
+
+
 def select(paths, history_known=True):
     paths = sorted(set(paths))
     # Unknown/shared/build/security/lifecycle input is broad by default. Do not
@@ -212,6 +229,11 @@ def check_temp_environment():
 def run_pr_checks(selection=None):
     subprocess.run(["node", "--experimental-strip-types", "--test", "enablement/file-length/check.test.ts"], cwd=ROOT, check=True)
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
+    paths = selection["paths"] if selection else []
+    if directory_width_contract_selected(paths):
+        subprocess.run(["python3", "-m", "unittest", "discover", "-s",
+                        "enablement/directory-width/tests", "-p", "test_*.py"],
+                       cwd=ROOT, check=True)
     for pattern in ("test_*push*.py", "test_verification.py", "test_release_gate.py",
                     "test_temp_preflight.py", "test_owner_lanes.py"):
         subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
@@ -230,7 +252,6 @@ def run_pr_checks(selection=None):
             "src/main.tsx", "src/base.css",
         )
     }
-    paths = selection["paths"] if selection else []
     if any(path == frontend_root + "src/onboarding/main.tsx"
            or path.startswith(onboarding_inputs) or path in onboarding_exact
            or path.startswith("shared/ui/")
