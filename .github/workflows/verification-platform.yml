@@ -36,7 +36,7 @@ jobs:
         with:
           node-version: '22'
       - name: Verification receipt contracts
-        run: node --experimental-strip-types --test enablement/verification/*.test.ts enablement/native/mac-setup.test.ts
+        run: node --experimental-strip-types --test enablement/verification/*.test.ts enablement/native/mac-setup.test.ts enablement/native/owned-processes.test.ts
       - name: Recipient CLI installation contracts
         run: node --experimental-strip-types --test capture/agent/scripts/tests/install-cli.test.ts
       - name: Selector and hook contracts (no native proof)

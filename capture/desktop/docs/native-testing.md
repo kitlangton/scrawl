@@ -1,6 +1,7 @@
 # Desktop verification
 
-Reusable VM lifecycle, expiry and evidence retention live in
+Reusable VM lifecycle, expiry, evidence retention and owned native-test process
+cleanup live in
 [enablement/native](../../../enablement/native/README.md). Desktop keeps the
 behavior-specific scenarios and acceptance recipes below.
 

@@ -21,7 +21,13 @@ focus or shortcuts; those retain their existing targeted native acceptance.
 It does not certify Apple Silicon behavior when run on Intel. CI keeps compilation,
 this smoke step and deeper native scenarios distinct, but still runs the full
 platform suites. No selection, proof reuse or release-admission rule changes.
-Host regressions run with
+Its process supervisor and cleanup helpers are canonical in
+[enablement/native](../../../../enablement/native/README.md). This Desktop
+entrypoint retains package admission, Storage assertions and private evidence
+handling, and temporarily re-exports the shared helpers for existing consumers.
+Run shared lifecycle contracts with
+`node --test enablement/native/owned-processes.test.ts`.
+Desktop host regressions run with
 `python3 -m unittest discover -s capture/desktop/scripts/tests/mac -p test_packaged_smoke.py`.
 
 ## Toolchain setup
