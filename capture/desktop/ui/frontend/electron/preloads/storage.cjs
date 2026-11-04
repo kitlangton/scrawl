@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
+contextBridge.exposeInMainWorld('apparentSettingsMounted', () => ipcRenderer.invoke('apparent:settings-mounted'));
 contextBridge.exposeInMainWorld('apparentBuild', Object.freeze({
   read: () => ipcRenderer.invoke('apparent:build-identity'),
 }));

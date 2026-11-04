@@ -9,7 +9,7 @@
     "start": "npm run build && electron .",
     "preview": "npm run build && vite preview --host 127.0.0.1",
     "test": "node scripts/build-storage-policy.ts && node --test ../../../../shared/ui/test/contracts.cjs && python3 -m unittest discover -s ../../../../shared/ui/test -p \"test_*.py\" && node --test tests/storage/*.test.ts tests/*.test.cjs tests/connect/*.test.cjs tests/notes/*.test.cjs tests/pill/*.test.cjs tests/pill/*.test.ts",
-    "test:electron": "npm run build && npm run typecheck:share-proof && node --test --test-concurrency=1 tests/electron-smoke.cjs tests/storage-smoke.cjs tests/connect/smoke.cjs tests/connect/backend.smoke.ts tests/retention-smoke.cjs tests/appearance/smoke.cjs tests/notes/smoke.cjs tests/share/smoke.ts tests/pill/smoke.cjs tests/pill/exceptions.smoke.ts",
+    "test:electron": "npm run build && npm run typecheck:share-proof && node --test --test-concurrency=1 tests/electron-smoke.cjs tests/storage-smoke.cjs tests/storage/readiness.smoke.ts tests/connect/smoke.cjs tests/connect/backend.smoke.ts tests/retention-smoke.cjs tests/appearance/smoke.cjs tests/notes/smoke.cjs tests/share/smoke.ts tests/pill/smoke.cjs tests/pill/exceptions.smoke.ts",
     "typecheck:share-proof": "tsc --noEmit --allowImportingTsExtensions --skipLibCheck --module NodeNext --moduleResolution NodeNext --target ES2022 --types node --typeRoots node_modules/@types --strict false ../../../../connect/service/test/native/desktop-share.ts tests/share/smoke.ts",
     "prebuild": "node scripts/build-connect.ts",
     "pretest": "node scripts/build-connect.ts",

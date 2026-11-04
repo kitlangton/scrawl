@@ -12,10 +12,17 @@ test('Settings renderer and window follow Electron theme changes without reload'
   // Playwright otherwise forces light media even when Electron follows the OS.
   await page.emulateMedia({colorScheme:null});
   await page.locator('.settings-shell').waitFor();
+  await expect.poll(() => application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true);
+  const contentBounds = await page.locator('.apparent-window-content').boundingBox();
+  const shellBounds = await page.locator('.settings-shell').boundingBox();
+  assert.equal(shellBounds.height, contentBounds.height, 'Settings must fit above the build label without an outer scroll area');
+  await expect(page.getByText('CAPTURE SETTINGS', {exact:true})).toBeVisible();
   assert.equal(await application.evaluate(({nativeTheme})=>nativeTheme.themeSource),'system');
   for(const mode of ['light','dark','light']) {
     await application.evaluate(({nativeTheme},mode)=>{nativeTheme.themeSource=mode;},mode);
     await expect(page.locator('body')).toHaveCSS('background-color',mode==='dark'?'rgb(32, 27, 36)':'rgb(245, 240, 232)');
+    await expect(page.locator('.settings-sidebar')).toHaveCSS('background-color','rgb(2, 1, 2)');
+    await expect(page.locator('.settings-sidebar')).toHaveCSS('color','rgb(245, 240, 232)');
     assert.equal(await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getBackgroundColor().slice(0,7).toLowerCase()),mode==='dark'?'#201b24':'#f5f0e8');
   }
   await application.evaluate(({nativeTheme})=>{nativeTheme.themeSource='system';});

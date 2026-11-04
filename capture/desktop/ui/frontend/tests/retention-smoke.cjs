@@ -156,12 +156,13 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
     'saveRetention', 'resetRetention', 'readCaptureUsage', 'navigateSettings', 'showCaptureFolder',
   ].sort());
   // Even a direct main-process call from this legitimate frame must not reach
-  // unrelated handlers. The passive build identity is shared by all windows;
+  // unrelated handlers. Build identity and the mounted acknowledgement are
+  // passive window lifecycle capabilities;
   // other non-Storage capabilities must remain refused, including direct calls.
   const denied = await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents;
     const event = { sender, senderFrame: sender.mainFrame };
-    const allowed = new Set(['build-identity', 'read-capture-location', 'change-capture-location', 'reset-capture-location',
+    const allowed = new Set(['build-identity', 'settings-mounted', 'read-capture-location', 'change-capture-location', 'reset-capture-location',
       'read-retention', 'save-retention', 'reset-retention', 'read-capture-usage', 'navigate-settings', 'show-capture-folder']);
     const rejected = [];
     for (const [channel, handler] of ipcMain._invokeHandlers) {
