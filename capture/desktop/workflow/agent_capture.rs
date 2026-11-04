@@ -376,6 +376,7 @@ enum Wire {
     ErrorReporting(ErrorReportingRequest),
     Microphone(super::notes::audio::Request),
     Connect(u64),
+    ConnectBackend(u64),
 }
 
 // A single rendezvous worker handles the two bounded Settings contracts. A
@@ -450,6 +451,9 @@ impl ErrorReportingRequest {
 }
 
 fn parse_request(line: &str) -> Option<Wire> {
+    if let Some(deadline) = super::connect_settings::backend_opening_deadline(line) {
+        return Some(Wire::ConnectBackend(deadline.min(storage_clock_ms() + 3000)));
+    }
     if let Some(deadline) = super::connect_settings::opening_deadline(line) {
         return Some(Wire::Connect(deadline.min(storage_clock_ms() + 3000)));
     }
@@ -596,13 +600,17 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
     // Rendezvous channel: one persistent worker, no queued/accumulating blocked writers.
     // The listener and GUI remain free while this worker waits on the existing flock.
     let (storage_tx, storage_rx) = std::sync::mpsc::sync_channel::<(SettingsRequest, u64, UnixStream)>(0);
-    let (connect_tx, connect_rx) = std::sync::mpsc::sync_channel::<(u64, UnixStream)>(0);
+    let (connect_tx, connect_rx) = std::sync::mpsc::sync_channel::<(bool, u64, UnixStream)>(0);
     let connect_config = config_path.clone();
     std::thread::Builder::new()
         .name("apparent-connect-settings".into())
         .spawn(move || {
-            while let Ok((deadline, stream)) = connect_rx.recv() {
-                super::connect_settings::serve(stream, deadline, &connect_config);
+            while let Ok((backend, deadline, stream)) = connect_rx.recv() {
+                if backend {
+                    super::connect_settings::backend::serve(stream, deadline, &connect_config);
+                } else {
+                    super::connect_settings::serve(stream, deadline, &connect_config);
+                }
             }
         })?;
     std::thread::Builder::new().name("apparent-storage-control".into()).spawn(move || {
@@ -638,15 +646,20 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
                 let response = if valid_frame {
                     if let Some(wire) = parse_request(line.trim()) {
                         let (action, deadline_ms) = match wire {
-                            Wire::Connect(deadline) => {
+                            wire @ (Wire::Connect(_) | Wire::ConnectBackend(_)) => {
+                                let (backend, deadline) = match wire {
+                                    Wire::Connect(deadline) => (false, deadline),
+                                    Wire::ConnectBackend(deadline) => (true, deadline),
+                                    _ => unreachable!(),
+                                };
                                 if line.len() > 4096 {
                                     let _ = writeln!(stream, "{{\"error\":\"invalid_request\"}}");
                                     continue;
                                 }
-                                match connect_tx.try_send((deadline, stream)) {
+                                match connect_tx.try_send((backend, deadline, stream)) {
                                     Ok(()) => {}
-                                    Err(std::sync::mpsc::TrySendError::Full((_, mut stream))
-                                        | std::sync::mpsc::TrySendError::Disconnected((_, mut stream))) => {
+                                    Err(std::sync::mpsc::TrySendError::Full((_, _, mut stream))
+                                        | std::sync::mpsc::TrySendError::Disconnected((_, _, mut stream))) => {
                                         let _ = writeln!(stream, "{{\"error\":\"app_busy\"}}");
                                     }
                                 }
@@ -1455,6 +1468,9 @@ mod tests {
     #[test]
     #[ignore = "needs the frontend Electron binary; see frontend/README.md"]
     fn connect_settings_electron_rust_roundtrip() {
+        // Unit-test builds deliberately disable default experiments. Exercise
+        // the normal encrypted endpoint-enrollment path in this isolated lane.
+        crate::shared::handoff::enable_experiment(apparent_connect_client::HOSTED_ENCRYPTION);
         let electron = std::env::var_os("APPARENT_CONNECT_TEST_ELECTRON")
             .expect("Set APPARENT_CONNECT_TEST_ELECTRON to the frontend Electron executable");
         let home = std::env::temp_dir().join(format!("ce-{}", &new_id().unwrap()[..8]));

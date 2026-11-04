@@ -1,6 +1,8 @@
-# Connect crypto compatibility primitives
+# Connect TypeScript client components
 
-This package is the bounded TypeScript prerequisite for migrating Connect crypto callers. It preserves the current Rust `encryption.rs` wire rules:
+This package supplies the adopted Electron account controller/presentation and
+the crypto compatibility primitives for #529. It preserves the current Rust
+`encryption.rs` wire rules:
 
 - age v1 binary X25519 streams, concatenated after transport part splitting;
 - archive bytes as a big-endian u32 descriptor length, ordered JSON descriptor, and exact file bytes;
@@ -8,6 +10,34 @@ This package is the bounded TypeScript prerequisite for migrating Connect crypto
 - strict Ed25519 verification (canonical encodings, weak public keys and small-order `R` rejected).
 
 It does not implement identity persistence, filesystem permissions, envelope/asset policy validation, service authorization, or production transfer lifecycle. Those remain migration work. In particular, this package's synthetic tests do not replace exercising the production Rust `pack`/`unpack` functions against TypeScript output.
+
+## Account Settings adoption
+
+`settings-controller.cts` owns explicit consent, confirmation, asynchronous
+request/receipt ownership, cancellation, retries, browser-action admission and
+worker-activation intent. `settings-presentation.ts` owns the card presentation.
+Desktop's existing `electron/connect.cjs` entry is generated from a thin TypeScript
+composition entry plus these modules; prebuild/pretest compile them without Rust.
+The installed Settings stager copies the same generated asset tree and existing
+Electron runtime. No second runtime, service or config writer is introduced.
+
+`settings-transport.cts` consumes the narrow backend RPC on the existing private
+socket (`connect: backend`, `version: 1`; responses carry `account.version: 1`).
+Native code supplies local snapshots, existing device auth/renewal and
+durable mutations. Login pins the origin displayed at consent; activation needs
+a successful matching operation and fresh committed upload gates. EOF, timeout
+or feature disable before activation retains native durable cancellation. Failed
+readback starts durable cleanup instead of leaving a reusable authorization.
+These Rust auth/snapshot/storage dependencies remain explicit migration debt;
+this adoption does not complete the account or Rust-free stream acceptance.
+
+Fallback to `legacy-settings.cts` is allowed only for an unsupported **read-only
+opening**, before any action. It preserves the prior transport for older native
+versions; its mechanically retained unchecked types are bounded compatibility
+debt. No ambiguous mutation is retried. Remove it and the native controller only
+after all supported consumers and native fallback surfaces migrate. The existing
+native Settings path remains available for surfaces not yet replaced; no two
+controllers drive one window.
 
 ## Local commands
 
@@ -19,9 +49,14 @@ npm test
 npm run typecheck
 npm run build
 npm run pack
+npm run dev
 ```
 
-These commands operate on TypeScript and npm dependencies; they do not invoke Cargo. `package-lock.json` pins the direct and transitive npm graph.
+These commands operate on TypeScript and npm dependencies; they do not invoke Cargo.
+`dev` watches the owner package output; rebuild/relaunch the existing Desktop
+frontend to consume a changed controller there, against an unchanged native
+backend. `prepack` builds the exported runtime/declarations. `package-lock.json`
+pins the direct and transitive npm graph.
 
 ## Dependency provenance and bridge evidence
 

@@ -20,8 +20,8 @@ independent `connectSettings` flag supports an explicit false opt-out; close and
 reopen Settings after editing it. Visibility does not grant upload consent. They use the same client device flow, private credentials,
 renewal, queue cancellation and config writer as the CLI. There is no Connect
 onboarding step. Connect owns account Settings policy even in Desktop's shell.
-The asynchronous Rust controller still physically resides under Desktop as
-migration debt; the client's
+The Electron asynchronous controller now lives in Connect TypeScript. The retained
+Rust controller serves older/native fallback consumers as migration debt; the client's
 secret-free presentation API supplies fresh local state, a validated public
 verification URL/code and explicit bounded health checks, never raw responses.
 See [Settings](../../capture/desktop/docs/onboarding-and-settings.md#apparent-connect)
@@ -29,17 +29,22 @@ for consent, cancellation, disable/disconnect and recovery behavior. Compilation
 alone does not prove account approval, deployment or native behavior; the readiness
 map records the separately executed bounded beta acceptance and its limits.
 
-The Electron card uses Connect's TypeScript presentation policy from
-`client/typescript/src/settings-presentation.ts`, based on allowlisted semantic
-state from the existing controller. The Rust wire reply retains its legacy
-presentation for older installed Electron assets and native callers; the new
-renderer selects the TypeScript presentation only. Invalid semantic state fails
-closed rather than falling back to legacy presentation. Rollback may use the
-previous renderer against the additive reply, preserving its confirmation UI.
-Remove the legacy presentation only after those older/native consumers migrate
-and their affected seams pass. Controller/auth/credentials/queue ownership has
-not yet switched writers; this presentation adoption is not full account or
-Rust-free Connect acceptance.
+`client/typescript/src/settings-controller.cts` and `settings-presentation.ts` own
+the Electron workflow and presentation. The generated Desktop entry uses the
+existing private socket's backend RPC for local snapshots, auth/renewal and durable
+mutations. The TypeScript controller admits explicit consent, confirmation,
+receipt handling and activation intent; native guards retain durable cancellation
+until a matching successful login is activated against fresh committed gates.
+No generic mutation, private credential or arbitrary browser URL enters the renderer.
+
+An unsupported read-only opening may fall back to the retained legacy transport
+before any action; ambiguous mutations never retry against another controller.
+Older installed assets/native callers retain the previous Rust projection.
+Rollback may use the previous client assets and unchanged file formats against
+that retained route. Remove legacy policy/transport only after those consumers
+and native fallback surfaces migrate and their affected seams pass. Rust
+auth/snapshot/credentials/queue remain explicit debt; no state writer has switched,
+and this controller adoption is not full account or Rust-free Connect acceptance.
 
 `connect/client` is the production `apparent-connect-client` library, not a
 protocol-only staging package. It owns transfer, device auth, credentials, queue

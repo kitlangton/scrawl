@@ -1,4 +1,6 @@
-// One Rust controller per owned stream. EOF cancels login; never retry a command.
+// @ts-nocheck
+// Bounded compatibility route for installed Rust versions without backend RPC.
+// Preserved transport code; retire once all supported runtimes expose that RPC.
 const { lstat } = require('node:fs/promises');
 const net = require('node:net');
 const path = require('node:path');
@@ -82,6 +84,7 @@ function decode(value, action) {
     ...(value.openUri === undefined ? {} : { openUri: value.openUri }) };
 }
 class ConnectSettings {
+  [key: string]: any;
   constructor(home, timeout = 3500) {
     this.home = home;
     this.timeout = timeout;
@@ -164,4 +167,4 @@ class ConnectSettings {
     } finally { this.busy = false; }
   }
 }
-module.exports = { ConnectSettings, actions, browserUri };
+export { ConnectSettings as LegacySettings, actions, browserUri, linksUri };

@@ -13,6 +13,8 @@ const MAX_FRAME: usize = 4096;
 const FRAME_MS: u64 = 3000;
 const LEASE: Duration = Duration::from_secs(10);
 
+pub(super) mod backend;
+
 #[derive(Deserialize)]
 #[serde(tag = "connect", rename_all = "lowercase", deny_unknown_fields)]
 enum Opening { Settings { deadline: u64 } }
@@ -27,6 +29,9 @@ pub(super) fn opening_deadline(line: &str) -> Option<u64> {
     if line.len() > MAX_FRAME { return None; }
     let Opening::Settings { deadline } = serde_json::from_str(line).ok()?;
     Some(deadline)
+}
+pub(super) fn backend_opening_deadline(line: &str) -> Option<u64> {
+    backend::opening_deadline(line)
 }
 fn clock_ms() -> u64 { super::agent_capture::storage_clock_ms() }
 fn enabled(config: &Path) -> Result<(), &'static str> {

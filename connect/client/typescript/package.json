@@ -1,9 +1,19 @@
 {
-  "name": "@apparent/connect-crypto",
+  "name": "@apparent/connect-client",
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "files": ["dist"],
+  "exports": {
+    ".": "./dist/index.js",
+    "./settings-controller": "./dist/settings-controller.cjs",
+    "./settings-transport": "./dist/settings-transport.cjs",
+    "./settings-presentation": "./dist/settings-presentation.js"
+  },
   "scripts": {
+    "dev": "tsc --watch",
+    "prepack": "npm run build",
+    "pretest": "npm run build",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc",

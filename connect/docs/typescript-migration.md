@@ -16,6 +16,16 @@ includes `settings_backend`, `copy_link_handoff`, `prepare_public_link_handoff`,
 sharing state/progress/size helpers, `account_view_in`, `command`, `fetch`,
 `inspect_source`, and `start_worker`.
 
+The adopted Electron account workflow additionally enters Connect's
+`client/typescript/src/settings-controller.cts` through the generated Desktop
+entry. Its backend RPC uses the existing Connect socket worker for Rust local
+snapshots/auth/durable operations. The TypeScript controller owns consent,
+confirmation, cancellation/receipt handling and activation intent. Native EOF
+guards and the current client writer remain authoritative for durable effects.
+Legacy opening fallback is read-only and occurs before any mutation; older/native
+surfaces retain their previous controller. This is explicit coexistence debt,
+not a second queue/config writer or completed account migration.
+
 CLI contract currently lives in `ConnectCommand`/`SharesCommand` in
 `connect/client/src/lib.rs`: `login`, `status [--account]`, `disable`, `logout`,
 `retry`, `upload <bundle>`, and `shares list|revoke <id>`. `cloud` is a retained

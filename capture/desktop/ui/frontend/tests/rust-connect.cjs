@@ -1,11 +1,11 @@
-// Actual Electron Node runtime -> production Rust listener/controller/client.
+// Shipped TypeScript controller in Electron Node -> production Rust listener/auth client.
 // Only the HTTP device endpoint is a labelled local pending-approval fixture.
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
-const { ConnectSettings } = require('../electron/connect.cjs');
+const { ConnectSettings } = require(process.env.APPARENT_CONNECT_TEST_MODULE || '../electron/connect.cjs');
 const [home, config] = process.argv.slice(2);
 const address = path.join(home, '.config/apparent/agent-control/capture.sock');
 const state = path.join(path.dirname(config), 'hosted');
@@ -42,19 +42,39 @@ async function raw(request, command) {
 }
 async function main() {
   const calls = [];
+  const frames = [];
+  const createConnection = net.createConnection;
+  net.createConnection = (...args) => {
+    const socket = createConnection(...args);
+    if (args[0] === address) {
+      const write = socket.write.bind(socket);
+      socket.write = (chunk, ...rest) => {
+        try { const frame = JSON.parse(String(chunk)); frames.push({connect:frame.connect,version:frame.version}); } catch {}
+        return write(chunk, ...rest);
+      };
+    }
+    return socket;
+  };
   const clients = new Set();
   let client;
   let origin;
+  let deviceMode = 'pending';
+  const enrollment = [];
   const server = http.createServer((request, response) => {
     calls.push(request.url);
-    request.resume();
+    const body = [];
+    request.on('data', chunk => body.push(chunk));
+    request.on('end', () => {
     response.setHeader('Content-Type', 'application/json');
+    if (request.url === '/v1/device/start') enrollment.push(JSON.parse(Buffer.concat(body).toString('utf8')));
+    if (deviceMode === 'offline') { response.writeHead(503); response.end('{"error":"synthetic-private-service-error"}'); return; }
     if (request.url === '/v1/device/start') return response.end(JSON.stringify({
-      deviceCode: 'synthetic-private-device-secret', userCode: 'TEST-CODE', expiresIn: 60, interval: 1,
+      deviceCode: 'synthetic-private-device-secret', userCode: 'TEST-CODE', expiresIn: deviceMode === 'expired' ? 0 : 60, interval: 1,
       verificationUri: origin + '/hosted/device?code=TEST-CODE',
     }));
-    if (request.url === '/v1/device/poll') return response.end('{"status":"pending"}');
+    if (request.url === '/v1/device/poll') return response.end(JSON.stringify({status:deviceMode === 'rejected' ? 'rejected' : 'pending'}));
     response.writeHead(500); response.end('{"error":"unexpected_test_endpoint"}');
+    });
   });
   server.on('connection', socket => { clients.add(socket); socket.on('close', () => clients.delete(socket)); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -99,6 +119,26 @@ async function main() {
       assert.deepEqual(saved.cloud.privateNested, original.cloud.privateNested);
       if (ending === 'close') await until(() => client.request(), r => r.status === 'connected', 'Closed stream did not reopen locally');
     }
+    for (const expected of ['rejected', 'expired', 'offline']) {
+      deviceMode = expected;
+      await client.request('connect');
+      await client.request('allow');
+      const failed = await until(() => client.request(), r => r.view?.presentationState?.error === expected,
+        `Actual account ${expected} result was not projected`);
+      assert.equal(JSON.stringify(failed).includes('synthetic-private'), false);
+      assert.ok(failed.view.buttons.some(button => button.command === 'connect' && button.enabled));
+    }
+    deviceMode = 'pending';
+    assert.ok(frames.some(frame => frame.connect === 'backend' && frame.version === 1));
+    assert.equal(frames.some(frame => frame.connect === 'settings'), false, 'New runtime must exercise the TypeScript controller, not the legacy fallback');
+    assert.ok(enrollment.length >= 5);
+    for (const request of enrollment) {
+      assert.equal(request.scope, 'upload');
+      assert.deepEqual(Object.keys(request).sort(), ['encryptionKey', 'scope']);
+      assert.equal(request.encryptionKey.version, 1);
+      assert.match(request.encryptionKey.recipient, /^age1[a-z0-9]{58}$/);
+      assert.match(request.encryptionKey.signing, /^[a-f0-9]{64}$/);
+    }
     client.close(); await wait(80);
     assert.equal((await raw({ connect: 'settings', deadline: 1 })).error, 'admission_expired');
     assert.equal((await raw({ connect: 'settings', deadline: Number(process.hrtime.bigint()/1000000n)+3000, secret: 'synthetic' })).error, 'invalid_request');
@@ -122,12 +162,15 @@ async function main() {
     assert.equal((await client.request()).view.presentationState.snapshot.accountInitial, null);
     assert.equal(calls.length, count, 'Identity display must stay local-only');
     console.log(JSON.stringify({ platform: process.platform, electron: process.versions.electron,
-      bridge: 'real Rust listener/controller/production client', http: 'synthetic loopback pending-device fixture, no account approval',
-      checks: 'disabled/local-only/no-consent/public-projection/cancel/EOF/durable-off/preserved-config/expired-frame/account-initial/revoked-identity', requests: calls.length }));
+      bridge: 'shipped TypeScript controller + real Rust listener/auth client', controllerProtocol:'backend-v1',
+      packagedController:process.env.APPARENT_CONNECT_TEST_MODULE !== undefined,
+      http: 'synthetic loopback pending-device fixture, no account approval',
+      checks: 'disabled/local-only/no-consent/public-projection/cancel/EOF/durable-off/preserved-config/rejection/expiry/offline/retry/key-enrollment/expired-frame/account-initial/revoked-identity', requests: calls.length }));
   } catch (error) {
     console.error(JSON.stringify({ fixtureEndpointsObserved: calls }));
     throw error;
   } finally {
+    net.createConnection = createConnection;
     client?.close(); for (const socket of clients) socket.destroy();
     await new Promise(resolve => server.close(resolve));
   }

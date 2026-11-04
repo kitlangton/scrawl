@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { ConnectSettings, browserUri } = require('../../electron/connect.cjs');
+const { LegacySettings: ConnectSettings, browserUri } = require('../../electron/connect.cjs');
 const view = { title: 'Apparent Connect', status: 'Not connected', detail: 'Local only', note: 'No public links',
   server: null, verificationUri: null, userCode: null, buttons: [{ command: 'connect', title: 'Sign in', enabled: true }] };
 const semantic = { snapshot:{connected:false,uploadsEnabled:false,renewalRequired:false,reauthorizationRequired:false,accountInitial:null},

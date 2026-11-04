@@ -80,26 +80,33 @@ the existing Settings pages. Missing assets and startup/crash failure restore th
 native General presentation. No onboarding route changes. See
 `../../docs/onboarding-and-settings.md` for consent and recovery behavior.
 
-Electron main owns one persistent, same-user Rust socket/controller. Opening and
+Electron main owns one persistent, same-user backend socket. Opening and
 one-second local refreshes never initiate network access. Each bounded request
 uses Electron's monotonic clock; a ten-second idle lease, EOF, renderer reload,
-crash or window close drops the controller and cancels pending authorization.
-Connect-owned TypeScript (`connect/client/typescript/src/settings-presentation.ts`)
-owns the Electron card's presentation from allowlisted semantic facts. Rust still
-owns the asynchronous controller, consent admission, credentials, health probes
-and durable revocation; these are explicit #529 migration debt. JS does
+crash or window close closes the lease and cancels pending authorization.
+Connect-owned TypeScript (`connect/client/typescript/src/settings-controller.cts`
+and `settings-presentation.ts`) owns the asynchronous controller, consent and
+confirmation workflow, receipt ownership, activation intent and presentation.
+Rust retains local snapshots, auth/renewal, credentials, health probes and durable
+mutations behind closed backend RPC operations; these are explicit #529 migration
+debt. Native EOF/lease enforcement durably cancels a login until activation has
+been explicitly acknowledged against fresh committed gates. JS does
 not read config or implement an auth client. Raw errors/config/device secrets do
 not enter the renderer. Only an explicit zero-argument **Open browser** command
 can open the current Rust-validated public verification URI; no arbitrary URL is
 accepted from the renderer. Ambiguous commands are never retried automatically.
 
-`tests/connect/transport.test.cjs` exercises real Unix-stream transport and projection;
-`tests/connect/smoke.cjs` exercises shipped Electron main/preload/renderer against
-an explicitly synthetic socket. `tests/rust-connect.cjs`, launched by the ignored
+`tests/connect/transport.test.cjs` exercises the retained legacy transport;
+Connect's owner tests cover the new controller/transport. `tests/connect/backend.smoke.ts`
+exercises the shipped Electron controller through main/preload/React, including
+consent, activation, confirmation and stale browser cancellation. The retained
+`smoke.cjs` scenarios verify old-server fallback against labelled synthetic sockets.
+`tests/rust-connect.cjs`, launched by the ignored
 Rust `connect_settings_electron_rust_roundtrip` test, exercises the actual Rust
-listener/controller/production client using Electron's real clock and a synthetic
-loopback pending-device HTTP fixture. It verifies explicit consent admission,
-public-only projection, durable cancel/EOF revocation and preserved config;
+listener/auth client and shipped TypeScript controller using Electron's real clock
+and a synthetic loopback device HTTP fixture. It verifies explicit consent,
+public projection, durable cancel/EOF revocation, preserved config, rejection,
+expiry, offline/retry and public encryption-key enrollment;
 it does not approve a real account or upload media. Run it from the root with
 `APPARENT_CONNECT_TEST_ELECTRON` set to the absolute frontend Electron executable:
 `cargo test --offline connect_settings_electron_rust_roundtrip -- --ignored --nocapture`.
