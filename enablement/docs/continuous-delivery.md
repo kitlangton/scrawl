@@ -19,8 +19,13 @@ use focused checks, independent review, current-base integration and required
 native/platform proof before merge. Do not wait for full branch CI as a merge gate.
 Linux's terminal job is `verify / Release verification`; Mac's terminal receipt
 includes the exact tested SHA, since a workflow-run control SHA may be newer.
-General Mac verification uses `macos-15-intel` so it does not depend on the
-standard Apple Silicon runner pool. The required Xcode/macOS SDK remains selected
+General Mac verification uses `macos-26-intel` so it does not depend on the
+standard Apple Silicon runner pool. The prior macOS 15 Intel pool failed twice
+to acquire any runner for the release candidate, with no platform steps executed.
+The standard macOS 26 Intel image lists the same selected Xcode 26.0.1/macOS 26.0
+SDK; that selection remains explicit. Admission and development-artifact consumers
+require the new image's complete jobs and do not reinterpret old-image receipts.
+Focused branch-only native proof routes retain their existing image and authority. The required Xcode/macOS SDK remains selected
 explicitly. Preview publication stays on `macos-latest` for arm64 packaging; Intel
 CI is not Apple Silicon runtime proof. An image change must still pass the same
 checks before Mac publication.

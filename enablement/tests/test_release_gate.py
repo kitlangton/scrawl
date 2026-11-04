@@ -98,20 +98,21 @@ class AdmissionTests(unittest.TestCase):
 
     def test_intel_mac_receipt_matches_workflow_and_is_required(self):
         workflow = Path(__file__).resolve().parents[2] / gate.WORKFLOWS['macos']
-        self.assertIn('runner: macos-15-intel', workflow.read_text())
-        names = ['verify / select', 'verify / desktop-ui (macos-15-intel)',
-                 'verify / rust (macos-15-intel)', 'verify / connect-client (macos-15-intel)',
-                 'verify / connect-web (macos-15-intel)',
+        self.assertIn('runner: macos-26-intel', workflow.read_text())
+        names = ['verify / select', 'verify / desktop-ui (macos-26-intel)',
+                 'verify / rust (macos-26-intel)', 'verify / connect-client (macos-26-intel)',
+                 'verify / connect-web (macos-26-intel)',
                  'verify / Release verification']
         self.jobs['macos'] = [dict(name=name, status='completed', conclusion='success')
                               for name in names]
         self.assertEqual(self.admit('macos'), self.sha)
-        for job in self.jobs['macos']:
-            job['name'] = job['name'].replace('macos-15-intel', 'macos-latest')
-        with self.assertRaises(ValueError): self.admit('macos')
+        for other_runner in ('macos-15-intel', 'macos-latest'):
+            self.jobs['macos'] = [dict(name=name.replace('macos-26-intel', other_runner),
+                                     status='completed', conclusion='success') for name in names]
+            with self.assertRaises(ValueError): self.admit('macos')
 
     def test_independent_client_is_required_even_with_legacy_success_receipts(self):
-        for platform, runner in [('linux', 'ubuntu-24.04'), ('macos', 'macos-15-intel')]:
+        for platform, runner in [('linux', 'ubuntu-24.04'), ('macos', 'macos-26-intel')]:
             name = f'verify / connect-client ({runner})'
             self.assertIn(name, gate.REQUIRED[platform])
             original = copy.deepcopy(self.jobs[platform])
@@ -139,7 +140,7 @@ class AdmissionTests(unittest.TestCase):
 
     def test_browser_stream_is_required_and_separated_from_rust(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/verification-platform.yml').read_text()
-        for platform, runner in [('linux', 'ubuntu-24.04'), ('macos', 'macos-15-intel')]:
+        for platform, runner in [('linux', 'ubuntu-24.04'), ('macos', 'macos-26-intel')]:
             self.assertIn(f'verify / connect-web ({runner})', gate.REQUIRED[platform])
         browser = workflow.split('\n  connect-web:\n')[1].split('\n  rust:\n')[0]
         self.assertIn('needs: select', browser)

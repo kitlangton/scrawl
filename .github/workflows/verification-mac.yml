@@ -56,7 +56,7 @@ jobs:
     uses: ./.github/workflows/verification-platform.yml
     with:
       # General Mac CI can use Intel capacity; arm64 packaging stays on Apple Silicon.
-      runner: macos-15-intel
+      runner: macos-26-intel
       revision: ${{ needs.admit.outputs.sha }}
 
   connect-native:

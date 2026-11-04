@@ -21,7 +21,7 @@ REQUIRED = {
                f'verify / rust ({runner})', f'verify / connect-client ({runner})',
                f'verify / connect-web ({runner})',
                'verify / Release verification'}
-    for platform, runner in [('linux', 'ubuntu-24.04'), ('macos', 'macos-15-intel')]
+    for platform, runner in [('linux', 'ubuntu-24.04'), ('macos', 'macos-26-intel')]
 }
 
 

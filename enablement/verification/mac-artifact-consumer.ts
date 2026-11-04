@@ -38,7 +38,7 @@ export function admit(run: any, artifact: any, jobs: any[], runId: string, artif
   check(String(artifact.id) === artifactId && artifact.expired === false && artifact.workflow_run?.id === run.id &&
     artifact.name === `mac-dev-executables-${runId}-${attempt}`, 'Wrong or expired artifact')
   check(/^sha256:[a-f0-9]{64}$/.test(artifact.digest), 'Missing trusted archive digest')
-  const rust = jobs.filter(j => j.name === (kind === 'verified-main' ? 'verify / rust (macos-15-intel)' : route.buildJob))
+  const rust = jobs.filter(j => j.name === (kind === 'verified-main' ? 'verify / rust (macos-26-intel)' : route.buildJob))
   check(rust.length === 1 && rust[0].status === 'completed' && rust[0].conclusion === 'success' &&
     String(rust[0].run_id) === runId && String(rust[0].run_attempt) === attempt, 'Producer job did not succeed')
   return { kind, run: runId, attempt, artifact: artifactId, digest: artifact.digest as string,

@@ -9,7 +9,7 @@ import { admit, verify, unpack } from './mac-artifact-consumer.ts'
 const repository = { full_name: 'tryapparent/apparent' }
 const run = { id: 123, repository, head_repository: repository, path: '.github/workflows/verification-mac.yml', head_branch: 'main', event: 'workflow_run', status: 'completed', conclusion: 'success', run_attempt: 2 }
 const artifact = { digest: 'sha256:' + 'e'.repeat(64), id: 456, expired: false, workflow_run: { id: 123 }, name: 'mac-dev-executables-123-2' }
-const job = { name: 'verify / rust (macos-15-intel)', status: 'completed', conclusion: 'success', run_id: 123, run_attempt: 2 }
+const job = { name: 'verify / rust (macos-26-intel)', status: 'completed', conclusion: 'success', run_id: 123, run_attempt: 2 }
 test('admits immutable successful trusted producer and exact attempt', () => {
   assert.deepEqual(admit(run, artifact, [job], '123', '456'), { kind: 'verified-main', run: '123', attempt: '2', artifact: '456', digest: artifact.digest })
 })

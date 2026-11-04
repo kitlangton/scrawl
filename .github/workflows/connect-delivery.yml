@@ -173,6 +173,9 @@ jobs:
     name: Workflow runtime budget
     if: always()
     needs: [select, produce, publish]
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
