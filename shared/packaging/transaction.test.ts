@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -97,6 +97,7 @@ test('one managed app transaction upgrades both components; failed admission lea
     assert.equal(readFileSync(join(destination, 'Contents/MacOS/apparent'), 'utf8'), 'pin-upgrade');
     const candidate = prepareApplication(destination); app(candidate, 'rollback');
     assert.throws(() => publishValidatedDirectory(candidate, destination, () => {}, () => { throw Error('final publication failed'); }), /final publication failed/);
+    assert.equal(readFileSync(join(candidate, 'Contents/MacOS/apparent'), 'utf8'), 'rollback');
     discardApplication(candidate);
     assert.equal(readFileSync(join(destination, 'Contents/MacOS/apparent'), 'utf8'), 'pin-upgrade');
     const collision = join(root, 'component'); mkdirSync(collision);
@@ -104,4 +105,35 @@ test('one managed app transaction upgrades both components; failed admission lea
     assert.throws(() => publishValidatedDirectory(source, collision), /already exists/);
     assert(existsSync(source) && existsSync(collision));
   } finally { rmSync(root, { recursive: true }); }
+});
+test('post-commit cleanup failure reports committed publication and retains the private backup', () => {
+  const root = mkdtempSync(join(tmpdir(), 'publication-committed-cleanup-'));
+  const destination = join(root, 'Apparent.app');
+  const candidate = join(root, 'candidate.app');
+  app(destination, 'old');
+  app(candidate, 'new');
+  const originalRemove = fs.rmSync;
+  const originalWarning = process.emitWarning;
+  const warnings: string[] = [];
+  fs.rmSync = ((path, options) => {
+    if (String(path).startsWith(join(root, '.package-publication-'))) throw Error('cleanup unavailable');
+    return originalRemove(path, options);
+  }) as typeof fs.rmSync;
+  process.emitWarning = ((message: string) => { warnings.push(message); }) as typeof process.emitWarning;
+  syncBuiltinESMExports();
+  try {
+    assert.doesNotThrow(() => publishValidatedDirectory(candidate, destination, () => {}));
+    assert.equal(readFileSync(join(destination, 'Contents/MacOS/apparent'), 'utf8'), 'new');
+    const retained = readdirSync(root).filter(name => name.startsWith('.package-publication-'));
+    assert.equal(retained.length, 1);
+    assert.equal(readFileSync(join(root, retained[0], 'previous/Contents/MacOS/apparent'), 'utf8'), 'old');
+    assert.equal(statSync(join(root, retained[0])).mode & 0o777, 0o700);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /Publication committed; private cleanup retained at/);
+  } finally {
+    fs.rmSync = originalRemove;
+    process.emitWarning = originalWarning;
+    syncBuiltinESMExports();
+    rmSync(root, { recursive: true });
+  }
 });

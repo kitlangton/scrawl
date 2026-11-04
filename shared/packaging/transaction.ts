@@ -62,7 +62,10 @@ export function publishValidatedDirectory(candidate: string, destination: string
     afterPublish(); state = 'committed';
   } catch (error) {
     try {
-      if (state === 'published') rmSync(output, { recursive: true });
+      if (state === 'published') {
+        assert(!existsSync(candidate), 'Candidate rollback destination already exists');
+        renameSync(output, candidate);
+      }
       if (existsSync(previous)) renameSync(previous, output);
       state = 'rolled-back';
     } catch (rollback) {
@@ -70,7 +73,16 @@ export function publishValidatedDirectory(candidate: string, destination: string
       throw new AggregateError([error, rollback], `Publication failed; previous application retained at ${previous}`);
     }
     throw error;
-  } finally { if (state !== 'rollback-failed') rmSync(transaction, { recursive: true }); }
+  } finally {
+    if (state !== 'rollback-failed') {
+      try { rmSync(transaction, { recursive: true }); }
+      catch {
+        // Cleanup cannot change a committed installation into a failed one, or
+        // obscure the original failure after a successful rollback.
+        process.emitWarning(`Publication ${state}; private cleanup retained at ${transaction}`);
+      }
+    }
+  }
 }
 
 function application(path: string) {
