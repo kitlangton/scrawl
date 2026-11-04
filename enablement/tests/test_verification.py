@@ -806,7 +806,19 @@ watchdog = runpy.run_path(sys.argv[1])['hook_budget']
 spawn = subprocess.Popen
 def held_spawn(*args, **kwargs):
     child = spawn(*args, **kwargs)
+    # Intercept only the initial owned launch, never cleanup's ps subprocess.
+    subprocess.Popen = spawn
     print(child.pid, flush=True)
+    if sys.argv[2] == 'spawn-darwin-cleanup':
+        # Exercise XNU's zombie-only EPERM path using real owned children and
+        # the real ps helper on either supported host, within the same bound.
+        sys.platform = 'darwin'
+        real_killpg = os.killpg
+        def killed_group_reports_eperm(pgid, signum):
+            real_killpg(pgid, signum)
+            child.wait(timeout=2)
+            raise PermissionError('synthetic XNU zombie-only group')
+        os.killpg = killed_group_reports_eperm
     sig = int(sys.argv[3])
     handler = signal.getsignal(sig)
     observed = []
@@ -817,15 +829,17 @@ def held_spawn(*args, **kwargs):
     os.kill(os.getpid(), sig)
     assert observed == [sig], 'signal must run before Popen returns'
     return child
-if sys.argv[2] == 'spawn':
+if sys.argv[2].startswith('spawn'):
     subprocess.Popen = held_spawn
     command = 'sleep 30 & wait'
 else:
     command = 'sleep 30 & echo $$; wait'
 sys.exit(watchdog(30, ['sh', '-c', command]))
 '''
-        for phase in ('spawn', 'running'):
-            for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        for phase in ('spawn', 'running', 'spawn-darwin-cleanup'):
+            signals = ((signal.SIGTERM,) if phase == 'spawn-darwin-cleanup' else
+                       (signal.SIGTERM, signal.SIGHUP, signal.SIGINT))
+            for sig in signals:
                 with self.subTest(phase=phase, signal=sig):
                     child_group = None
                     with subprocess.Popen([sys.executable, '-c', driver, str(SCRIPT), phase, str(sig)],
