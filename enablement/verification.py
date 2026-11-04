@@ -104,7 +104,20 @@ def select(paths, history_known=True):
     for path in paths:
         if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
             continue
-        if path.startswith("capture/engine/tests/") or path == "capture/engine/README.md":
+        # The extracted Rust package is a real standalone Cargo workspace.
+        # Its src/tests/manifest/lock inputs run package checks; only src/tests
+        # are isolated from the root app, while manifest/lock changes may
+        # affect shared build resolution and therefore stay broad.
+        if path.startswith(("capture/engine/src/", "capture/engine/tests/")):
+            engine = True
+            if path.startswith("capture/engine/src/"):
+                broad = True  # root production modules still consume this code
+                reasons.append(path)
+        elif path in {"capture/engine/Cargo.toml", "capture/engine/Cargo.lock"}:
+            engine = True
+            broad = True
+            reasons.append(path)
+        elif path == "capture/engine/README.md":
             engine = True
         elif path in BROWSER_FILES:
             browser = True
@@ -460,6 +473,8 @@ def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_ro
             subprocess.run(build_command if not selection.get("focused") else
                            cargo + ["build", "-j", jobs, dependency_mode] + diagnostics,
                            cwd=ROOT, check=True)
+    # Keep existing root failure/order semantics, then run fast package checks
+    # for early package-specific feedback before later non-Cargo lanes.
     if selection["engine"]:
         for command in ("build", "test"):
             args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + diagnostics
