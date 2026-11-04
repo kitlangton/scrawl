@@ -28,6 +28,18 @@ test('failed and cancelled execution still counts; uncertain timestamps fail clo
   for (const entry of [{ ...job(0, 10), status: 'queued' }, { ...job(0, 10), started_at: null }, job(20, 10)])
     assert.throws(() => executionSeconds([entry]))
 })
+test('unacquired Mac cancellations exclude queue time only with explicit runner and step evidence', () => {
+  const cancelled: Job = { ...job(0, 1351, 'recipient (macos-15, aarch64-apple-darwin)'),
+    conclusion: 'cancelled', runner_id: 0, runner_name: '', steps: [] }
+  assert.equal(executionSeconds([cancelled, job(2, 304)]), 302)
+  assert.doesNotThrow(() => enforceBudget([cancelled, job(2, 304)], 'web'))
+  for (const change of [{ runner_id: 42 }, { runner_id: undefined }, { runner_name: 'runner' },
+    { runner_name: undefined }, { steps: [{}] }, { steps: undefined }, { conclusion: 'failure' }]) {
+    assert.equal(executionSeconds([{ ...cancelled, ...change }]), 1351)
+    assert.throws(() => enforceBudget([{ ...cancelled, ...change }], 'web'), /1351.0s \/ 600s/)
+  }
+  assert.throws(() => executionSeconds([{ ...cancelled, status: 'queued' }]), /not terminal/)
+})
 test('read all pages from exact run attempt, without redirecting credentials', async () => {
   const urls: string[] = []
   const request = async (url: string | URL | Request, options?: RequestInit) => {
