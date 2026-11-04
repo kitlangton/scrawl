@@ -57,10 +57,15 @@ test('feed step fetches immutable tags created after checkout without accepting 
     run(remote, 'config', 'uploadpack.allowFilter', 'true');
     run(dir, 'clone', '--filter=blob:none', '--no-checkout', '--no-tags', `file://${remote}`, checkout);
     const sparseBlocks = [...workflow.matchAll(/sparse-checkout-cone-mode: false\n          sparse-checkout: \|\n((?:            .*\n)+)/g)];
-    assert.equal(sparseBlocks.length, 2, 'admission and publication use the same bounded checkout');
-    assert.equal(sparseBlocks[0][1], sparseBlocks[1][1]);
-    const patterns = sparseBlocks[0][1].trim().split('\n').map(line => line.trim());
-    run(checkout, 'sparse-checkout', 'set', '--no-cone', ...patterns);
+    assert.equal(sparseBlocks.length, 2, 'admission and publication retain bounded checkouts');
+    const patterns = sparseBlocks.map(block => block[1].trim().split('\n').map(line => line.trim()));
+    const smokeInputs = ['/capture/desktop/scripts/linux/appimage/smoke-cpu.sh',
+      '/capture/desktop/scripts/linux/appimage/smoke-cpu.test.ts'];
+    assert.deepEqual(patterns[1], ['/.github/workflows/release-linux.yml',
+      '/capture/desktop/scripts/linux/maintenance/', '/enablement/release_gate.py']);
+    assert.deepEqual(patterns[0].filter(path => !smokeInputs.includes(path)), patterns[1]);
+    for (const path of smokeInputs) assert.ok(patterns[0].includes(path));
+    run(checkout, 'sparse-checkout', 'set', '--no-cone', ...patterns[0]);
     run(checkout, 'checkout', 'HEAD');
     for (const file of ['enablement/release_gate.py', '.github/workflows/release-linux.yml',
       'capture/desktop/scripts/linux/maintenance/main-feed.ts',
@@ -69,8 +74,12 @@ test('feed step fetches immutable tags created after checkout without accepting 
     }
     assert.equal(existsSync(join(checkout, 'public/site')), false);
     execFileSync(process.execPath, ['--experimental-strip-types', '--test',
-      'capture/desktop/scripts/linux/maintenance/signing-bridge.test.ts'], { cwd: checkout, stdio: 'pipe' });
+      'capture/desktop/scripts/linux/maintenance/signing-bridge.test.ts',
+      'capture/desktop/scripts/linux/appimage/smoke-cpu.test.ts'], { cwd: checkout, stdio: 'pipe' });
     execFileSync('python3', ['enablement/release_gate.py', '--help'], { cwd: checkout, stdio: 'pipe' });
+    run(checkout, 'sparse-checkout', 'set', '--no-cone', ...patterns[1]);
+    assert.equal(existsSync(join(checkout, 'capture/desktop/scripts/linux/appimage/smoke-cpu.sh')), false);
+    assert.ok(existsSync(join(checkout, 'capture/desktop/scripts/linux/maintenance/main-feed.ts')));
     assert.equal(run(checkout, 'config', '--get', 'remote.origin.partialclonefilter'), 'blob:none');
     assert.equal(run(checkout, 'rev-parse', '--is-shallow-repository'), 'false');
     assert.equal(run(checkout, 'rev-list', 'HEAD'), run(remote, 'rev-list', 'HEAD'));

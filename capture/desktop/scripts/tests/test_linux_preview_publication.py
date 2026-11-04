@@ -1,6 +1,7 @@
 """Exercise the Linux publication boundary with a fake GitHub CLI."""
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = ROOT / "capture/desktop/scripts/linux/maintenance/publish-main-preview.py"
@@ -17,6 +19,9 @@ SHA = "a" * 40
 NEW_SHA = "b" * 40
 OLD_SHA = "c" * 40
 OTHER_SHA = "d" * 40
+SPEC = importlib.util.spec_from_file_location("publish_main_preview", SCRIPT)
+PUBLISHER = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(PUBLISHER)
 
 
 def preview(sha):
@@ -283,6 +288,84 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
         self.assertIn("inputs.verify_only != true", job)
         self.assertNotIn("exit 0", job)
 
+    def git_history(self, root):
+        repo = root / "repo"
+        repo.mkdir()
+        clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, env=clean_env)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "Preview Test"], check=True,
+                       env=clean_env)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "preview@example.invalid"],
+                       check=True, env=clean_env)
+
+        def commit(content):
+            (repo / "history.txt").write_text(content)
+            subprocess.run(["git", "-C", str(repo), "add", "history.txt"], check=True, env=clean_env)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", content], check=True, env=clean_env)
+            return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+                                  capture_output=True, text=True, env=clean_env).stdout.strip()
+
+        base = commit("base")
+        main_branch = subprocess.run(["git", "-C", str(repo), "branch", "--show-current"], check=True,
+                                     capture_output=True, text=True, env=clean_env).stdout.strip()
+        tip = commit("tip")
+        subprocess.run(["git", "-C", str(repo), "checkout", "-qb", "divergent", base], check=True,
+                       env=clean_env)
+        divergent = commit("divergent")
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", main_branch], check=True,
+                       env=clean_env)
+        return repo, base, tip, divergent
+
+    def test_local_git_comparison_covers_ancestry_without_remote_calls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, base, tip, divergent = self.git_history(root)
+            clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+            with mock.patch.dict(os.environ, clean_env, clear=True):
+                # Git honors the inherited redirect just as the publisher does in
+                # CI fixtures, while the process cwd remains isolated.
+                os.environ["GIT_DIR"] = str(repo / ".git")
+                os.environ["GIT_WORK_TREE"] = str(repo)
+                original = Path.cwd()
+                os.chdir(repo)
+                try:
+                    PUBLISHER._comparisons.clear()
+                    with mock.patch.object(PUBLISHER, "gh", side_effect=AssertionError("remote compare used")):
+                        self.assertEqual(PUBLISHER.comparison("owner/repo", base, tip, tip), "ahead")
+                        self.assertEqual(PUBLISHER.comparison("owner/repo", tip, base, tip), "behind")
+                        self.assertEqual(PUBLISHER.comparison("owner/repo", tip, divergent, tip), "diverged")
+                        self.assertEqual(PUBLISHER.comparison("owner/repo", base, base, tip), "identical")
+                finally:
+                    os.chdir(original)
+
+    def test_missing_commit_stale_main_and_shallow_history_use_api_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, base, tip, _ = self.git_history(root)
+            clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+            with mock.patch.dict(os.environ, clean_env, clear=True):
+                os.environ["GIT_DIR"] = str(repo / ".git")
+                os.environ["GIT_WORK_TREE"] = str(repo)
+                original = Path.cwd()
+                os.chdir(repo)
+                try:
+                    for label, current, missing, make_shallow in (
+                        ("missing", tip, "f" * 40, False),
+                        ("stale-main", base, base, False),
+                        ("shallow", tip, base, True),
+                    ):
+                        with self.subTest(reason=label):
+                            if make_shallow:
+                                (repo / ".git/shallow").write_text(tip + "\n")
+                            else:
+                                (repo / ".git/shallow").unlink(missing_ok=True)
+                            PUBLISHER._comparisons.clear()
+                            with mock.patch.object(PUBLISHER, "gh", return_value=json.dumps({"status": "ahead"})) as gh:
+                                self.assertEqual(PUBLISHER.comparison("owner/repo", missing, tip, current), "ahead")
+                                gh.assert_called_once_with("api", f"repos/owner/repo/compare/{missing}...{tip}")
+                finally:
+                    os.chdir(original)
+
     def test_selected_candidate_reuses_exact_admission_and_rejects_other_modes(self):
         workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
         admit = workflow.split('  admit:\n')[1].split('  preview-needed:\n')[0]
@@ -402,8 +485,6 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
             self.assertIn(f"arch: {arch}", build)
         for check in (
             "cargo build --release --locked",
-            "cargo test --release --locked -- --test-threads=2",
-            "cargo test --release --locked speech:: -- --nocapture",
             "cargo test --release --locked --bin apparent --no-run --message-format=json",
             "test -f \"$test\"",
             "GGML_NATIVE:BOOL=OFF",

@@ -39,6 +39,8 @@ jobs:
         run: node --experimental-strip-types --test enablement/verification/*.test.ts enablement/native/mac-setup.test.ts enablement/native/owned-processes.test.ts enablement/native/cache-command-timing.test.ts
       - name: Recipient CLI installation contracts
         run: node --experimental-strip-types --test capture/agent/scripts/tests/install-cli.test.ts
+      - name: Linux release download cache contracts
+        run: node --experimental-strip-types --test capture/desktop/scripts/linux/appimage/*.test.ts
       - name: Selector and hook contracts (no native proof)
         run: |
           python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'

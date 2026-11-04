@@ -179,6 +179,37 @@ jobs:
       - name: Confirm build identity
         if: env.TAG == ''
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+          cache: npm
+          cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
+      - name: Configure release cache paths
+        run: |
+          echo "APPARENT_TEST_MODEL_DIR=$RUNNER_TEMP/speech-model" >> "$GITHUB_ENV"
+          echo "APPARENT_PACKAGING_TOOLS_MANIFEST=$RUNNER_TEMP/packaging-tools.json" >> "$GITHUB_ENV"
+          echo "APPARENT_PACKAGING_TOOLS_DIR=$RUNNER_TEMP/packaging-tools" >> "$GITHUB_ENV"
+      - name: Resolve pinned packaging tools
+        # Older admitted candidates retain their original packaging path.
+        if: hashFiles('capture/desktop/scripts/linux/appimage/packaging-tools.ts') != ''
+        id: packaging-tools
+        run: node --experimental-strip-types capture/desktop/scripts/linux/appimage/packaging-tools.ts resolve "$RUNNER_TEMP/packaging-tools.json" "$GITHUB_OUTPUT"
+      - name: Cache verified speech model
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/speech-model
+          key: release-linux-speech-model-${{ hashFiles('capture/engine/runtime/audio/transcription/speech.rs') }}
+      - name: Cache Electron download
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron
+          key: release-linux-electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('capture/desktop/ui/frontend/package-lock.json') }}
+      - name: Cache verified packaging tools
+        if: steps.packaging-tools.outputs.key != ''
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/packaging-tools
+          key: release-linux-packaging-tools-${{ matrix.arch }}-${{ steps.packaging-tools.outputs.key }}
       - name: Install build and packaging dependencies
         run: ./capture/desktop/scripts/linux/appimage/dependencies.sh
       - uses: dtolnay/rust-toolchain@stable

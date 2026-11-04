@@ -13,19 +13,17 @@ root="$(cd "$(dirname "$0")/../../../../.." && pwd)"
 binary="$(realpath "${1:-$root/target/release/apparent}")"
 arch="$(uname -m)"
 out="$root/target/appimage"
-tools="$out/tools"
+tools="${APPARENT_PACKAGING_TOOLS_DIR:-$out/tools}"
 appdir="$out/AppDir"
 mkdir -p "$tools"
+manifest="${APPARENT_PACKAGING_TOOLS_MANIFEST:-$out/packaging-tools.json}"
+if [[ -z "${APPARENT_PACKAGING_TOOLS_MANIFEST:-}" ]]; then
+  node --experimental-strip-types "$root/capture/desktop/scripts/linux/appimage/packaging-tools.ts" resolve "$manifest"
+fi
+node --experimental-strip-types "$root/capture/desktop/scripts/linux/appimage/packaging-tools.ts" install "$manifest" "$tools"
 rm -rf "$appdir"
 python3 "$root/capture/desktop/scripts/packaging/stage-settings.py" "$appdir/usr/share/apparent/settings" \
   --popups-destination "$appdir/usr/lib/apparent/note-ui"
-
-fetch() {
-  [ -s "$tools/$2" ] || curl -fsSL -o "$tools/$2" "$1"
-  chmod +x "$tools/$2"
-}
-fetch "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$arch.AppImage" linuxdeploy
-fetch "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gstreamer/master/linuxdeploy-plugin-gstreamer.sh" linuxdeploy-plugin-gstreamer.sh
 
 multiarch="$(gcc -print-multiarch 2>/dev/null || echo "$arch-linux-gnu")"
 export GSTREAMER_PLUGINS_DIR="/usr/lib/$multiarch/gstreamer-1.0"

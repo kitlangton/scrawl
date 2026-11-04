@@ -56,7 +56,13 @@ repair together; pending transactions may coalesce, but running feed replacement
 cannot be interrupted by a newer build. This uses the concurrency syntax accepted
 by pinned actionlint 1.7.12. Unknown or
 divergent identities fail closed. Mac also retains its monotonic Sparkle build
-number check. All writers must use these workflow locks; out-of-band deployment
+number check. Linux release jobs use bounded Actions caches for the checksummed
+speech model, Electron downloads and checksum-pinned packaging tools. The tool
+manifest is resolved from official release metadata on every run before its
+architecture-specific cache lookup; a miss uses the ordinary download path.
+Every build still verifies and runs the model, executes packaging and all AppImage
+smoke gates, and uses the existing exact-SHA admission and publication checks.
+Cached bytes are not release evidence. All writers must use these workflow locks; out-of-band deployment
 is not coordinated by Actions. Activation variables, schema and consent
 requirements remain unchanged. Desktop proof follows the
 [shared-behavior/native-boundary split](../../capture/desktop/docs/native-testing.md):
