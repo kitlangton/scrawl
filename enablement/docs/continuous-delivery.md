@@ -565,8 +565,9 @@ contract. Unrelated Connect service/web files skip this package command.
 
 This adds early TypeScript client feedback while retaining conservative root
 Cargo and Connect Rust consumer verification in current-main CI. The separate
-`test/production-interop.ts` fixture remains covered by its explicit Rust bridge
-test, not by the package's `test/*.test.ts` script.
+`test/production-interop.ts` fixture has an opt-in Rust bridge test marked
+`#[ignore]`, requiring explicit environment setup. Ordinary Cargo runs, feature
+hooks and the package's `test/*.test.ts` script do not execute that fixture.
 
 ### Onboarding entry feedback before feature pushes
 
