@@ -213,6 +213,53 @@ def run_contract_checks():
                     "-p", "test_temp_preflight.py"], cwd=ROOT, check=True)
 
 
+def cleanup_owned_processes(processes):
+    """Reap every owned child without hiding the verification's primary failure."""
+    primary = sys.exc_info()[1]
+    errors = []
+    for process in processes:
+        if process is None:
+            continue
+        try:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                # XNU can return EPERM for a group containing only zombies.
+                # A reaped leader alone does not exclude live descendants.
+                if sys.platform != "darwin" or process.poll() is None:
+                    raise
+                snapshot = subprocess.run(
+                    ["/bin/ps", "-axo", "pgid=,stat="], check=True,
+                    capture_output=True, text=True, timeout=5)
+                for line in snapshot.stdout.splitlines():
+                    fields = line.split()
+                    if len(fields) != 2 or not fields[0].isdigit() or not fields[1][0].isalpha():
+                        raise RuntimeError("invalid process-group cleanup snapshot")
+                    if int(fields[0]) == process.pid and not fields[1].startswith("Z"):
+                        raise
+                # No live members: do not retry a signal using an old group ID.
+        except Exception as error:
+            errors.append(error)
+        finally:
+            try:
+                if process.poll() is None:
+                    # Even when group cleanup fails, still reap our direct child.
+                    process.kill()
+                process.wait(timeout=5)
+            except Exception as error:
+                errors.append(error)
+    if errors:
+        detail = "; ".join(f"{type(error).__name__}: {error}" for error in errors)
+        if primary is not None:
+            if hasattr(primary, "add_note"):
+                primary.add_note("Owned process cleanup failed: " + detail)
+            print("Owned process cleanup failed: " + detail, file=sys.stderr, flush=True)
+        else:
+            raise RuntimeError("Owned process cleanup failed: " + detail) from errors[0]
+
+
 def overlap_cargo_test_and_build(test_command, build_command):
     """Run the ordinary app build as soon as Cargo reports test compilation done."""
     test_process = build_process = None
@@ -316,19 +363,17 @@ def overlap_cargo_test_and_build(test_command, build_command):
             raise subprocess.CalledProcessError(test_status, test_process.args)
         print("Root test harness and required app build both succeeded", flush=True)
     finally:
-        if selector is not None:
-            selector.close()
-        for process in (test_process, build_process):
-            if process is not None:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
-        if test_process is not None and test_process.stdout is not None:
-            test_process.stdout.close()
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        try:
+            cleanup_owned_processes((test_process, build_process))
+        finally:
+            try:
+                if selector is not None:
+                    selector.close()
+                if test_process is not None and test_process.stdout is not None:
+                    test_process.stdout.close()
+            finally:
+                for sig, handler in previous.items():
+                    signal.signal(sig, handler)
 
 
 @contextmanager
@@ -353,14 +398,11 @@ def overlapping_contracts():
         if status:
             raise subprocess.CalledProcessError(status, process.args)
     finally:
-        if process is not None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        try:
+            cleanup_owned_processes((process,))
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
 
 def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=False,
@@ -449,14 +491,11 @@ def hook_budget(seconds, command):
         return 124
     finally:
         # A successful parent must not leave background verification running.
-        if process is not None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        try:
+            cleanup_owned_processes((process,))
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
 
 def main():

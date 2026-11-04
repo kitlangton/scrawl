@@ -251,6 +251,133 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(all(process.poll() is not None for process in processes))
         self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
 
+    def test_darwin_eperm_cleanup_accepts_only_verified_dead_groups(self):
+        real_spawn = subprocess.Popen
+        process = real_spawn([sys.executable, '-c', 'raise SystemExit(8)'], start_new_session=True)
+        self.assertEqual(process.wait(), 8)
+        with patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                verification.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), patch.object(
+                verification.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                    ['/bin/ps'], 0, stdout=f'{process.pid} Z\n')) as ps:
+            verification.cleanup_owned_processes([process])
+        ps.assert_called_once_with(['/bin/ps', '-axo', 'pgid=,stat='], check=True,
+                                  capture_output=True, text=True, timeout=5)
+        self.assertIsNotNone(process.poll())
+
+    def test_darwin_eperm_cleanup_rejects_live_or_untrustworthy_snapshots_and_continues(self):
+        real_spawn = subprocess.Popen
+        processes = []
+        for _ in range(2):
+            child = real_spawn([sys.executable, '-c', 'raise SystemExit(8)'], start_new_session=True)
+            self.assertEqual(child.wait(), 8)
+            processes.append(child)
+        for snapshot in (f'{processes[0].pid} S\n', 'not-a-process-row\n'):
+            calls = []
+            def deny(pgid, sig):
+                calls.append(pgid)
+                raise PermissionError(1, 'Operation not permitted')
+            with self.subTest(snapshot=snapshot), patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                    verification.os, 'killpg', side_effect=deny), patch.object(
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        ['/bin/ps'], 0, stdout=snapshot)):
+                with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                    verification.cleanup_owned_processes(processes)
+                self.assertEqual(calls, [p.pid for p in processes])
+
+        calls = []
+        def deny_all(pgid, sig):
+            calls.append(pgid)
+            raise PermissionError(1, 'Operation not permitted')
+        with patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                verification.os, 'killpg', side_effect=deny_all), patch.object(
+                verification.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, ['/bin/ps'])):
+            with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                verification.cleanup_owned_processes(processes)
+        self.assertEqual(calls, [p.pid for p in processes])
+        self.assertTrue(all(p.poll() == 8 for p in processes))
+
+        live = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)
+        try:
+            with patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                    verification.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')):
+                with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
+                    verification.cleanup_owned_processes([live])
+            self.assertIsNotNone(live.poll(), 'direct child must be killed and reaped after group cleanup fails')
+        finally:
+            if live.poll() is None:
+                live.kill()
+                live.wait()
+
+    def test_darwin_eperm_cleanup_preserves_primary_error_and_attaches_cleanup_failure(self):
+        real_spawn = subprocess.Popen
+        process = real_spawn([sys.executable, '-c', 'raise SystemExit(8)'], start_new_session=True)
+        self.assertEqual(process.wait(), 8)
+        primary = subprocess.CalledProcessError(8, process.args)
+        with patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                verification.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), patch.object(
+                verification.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                    ['/bin/ps'], 0, stdout=f'{process.pid} S\n')):
+            try:
+                raise primary
+            except subprocess.CalledProcessError as caught:
+                verification.cleanup_owned_processes([process])
+                self.assertIs(caught, primary)
+                self.assertTrue(any('cleanup' in note.lower() for note in getattr(caught, '__notes__', [])))
+        self.assertIsNotNone(process.poll())
+
+    def test_both_overlap_owners_use_darwin_dead_group_cleanup_and_restore_handlers(self):
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        real_spawn = subprocess.Popen
+        for owner in ('cargo', 'contracts'):
+            pids = []
+            def spawn(command, **kwargs):
+                if owner == 'contracts':
+                    command = [sys.executable, '-c', 'pass']
+                process = real_spawn(command, **kwargs)
+                pids.append(process.pid)
+                return process
+            def deny(pgid, sig):
+                self.assertIn(pgid, pids)
+                raise PermissionError(1, 'Operation not permitted')
+            with self.subTest(owner=owner), patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                    verification.os, 'killpg', side_effect=deny), patch.object(
+                    verification.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        ['/bin/ps'], 0, stdout='')), patch.object(
+                    verification.subprocess, 'Popen', side_effect=spawn):
+                if owner == 'cargo':
+                    verification.overlap_cargo_test_and_build(
+                        [sys.executable, '-c', 'import sys; print(sys.argv[1], flush=True)',
+                         '{"reason":"build-finished","success":true}\n'],
+                        [sys.executable, '-c', 'pass'])
+                else:
+                    with verification.overlapping_contracts():
+                        pass
+                self.assertTrue(pids)
+                self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+
+    def test_overlap_failure_keeps_original_child_status_when_darwin_cleanup_is_denied(self):
+        previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        real_spawn = subprocess.Popen
+        processes = []
+        def spawn(command, **kwargs):
+            process = real_spawn(command, **kwargs)
+            processes.append(process)
+            return process
+        def denied_snapshot(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 0, stdout=f'{processes[0].pid} S\n')
+        with patch.object(verification.sys, 'platform', 'darwin'), patch.object(
+                verification.os, 'killpg', side_effect=PermissionError(1, 'Operation not permitted')), patch.object(
+                verification.subprocess, 'run', side_effect=denied_snapshot), patch.object(
+                verification.subprocess, 'Popen', side_effect=spawn):
+            with self.assertRaises(subprocess.CalledProcessError) as failure:
+                verification.overlap_cargo_test_and_build(
+                    [sys.executable, '-c', 'import sys; print(sys.argv[1], flush=True); raise SystemExit(8)',
+                     '{"reason":"build-finished","success":true}\n'],
+                    [sys.executable, '-c', 'pass'])
+        self.assertEqual(failure.exception.returncode, 8)
+        self.assertTrue(any('cleanup failed' in note.lower() for note in failure.exception.__notes__))
+        self.assertEqual({sig: signal.getsignal(sig) for sig in previous}, previous)
+
     def test_overlap_root_build_second_spawn_failure_reaps_test(self):
         real_spawn = subprocess.Popen
         processes = []
