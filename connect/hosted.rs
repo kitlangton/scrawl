@@ -63,6 +63,14 @@ pub fn settings_backend(
     Arc::new(SettingsBackend(client_at(config.into()), config.into()))
 }
 
+// Private fact reader, consumed only by Connect's main-process state policy.
+pub(crate) fn settings_facts(config: &Path) -> std::result::Result<serde_json::Value, settings_controller::SafeError> {
+    let backend = SettingsBackend(client_at(config.to_owned()), config.to_owned());
+    let mut facts = backend.0.settings_facts().map_err(settings_error)?;
+    facts["sharedLinksUrl"] = settings_controller::Backend::shared_links_url(&backend).into();
+    Ok(facts)
+}
+
 // Temporary private device transaction/HTTP executor for the TypeScript flow.
 pub(crate) fn begin_device_login(config: &Path, server: &str, allowed: Arc<dyn Fn() -> bool + Send + Sync>) -> Result<apparent_connect_client::DeviceLogin> {
     client_at(config.to_owned()).begin_device_login(server, "upload", true, allowed)

@@ -31,11 +31,17 @@ executes the two allowlisted HTTP calls and the existing single-writer credentia
 config transaction. It retains the approved response and original issue time;
 commit consumes it once after fresh cancellation/marker/queue checks.
 
-Native code still supplies local snapshots, renewal and durable mutations. Login pins the origin displayed at consent; activation needs
+`settings-state.cts` derives local account state from `stateFacts: 1` private
+metadata: configured origin, independent upload gates, grant usability/current
+access, renewal/reauthorization and bounded account initial. It never probes or
+mutates state. Raw facts and unknown metadata are stripped before renderer views;
+malformed facts fail closed rather than using a legacy snapshot.
+
+Native code still supplies safe private-record reads, renewal and durable mutations. Login pins the origin displayed at consent; activation needs
 a successful matching operation and fresh committed upload gates. EOF, timeout
 or feature disable before activation retains native durable cancellation. Failed
 readback starts durable cleanup instead of leaving a reusable authorization.
-These Rust HTTP/renewal/snapshot/storage dependencies and older-consumer auth remain explicit migration debt;
+These Rust HTTP/renewal/private-record/storage dependencies and older-consumer auth remain explicit migration debt;
 this adoption does not complete the account or Rust-free stream acceptance.
 
 Fallback to `legacy-settings.cts` is allowed only for an unsupported **read-only

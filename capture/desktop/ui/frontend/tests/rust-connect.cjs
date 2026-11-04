@@ -43,10 +43,19 @@ async function raw(request, command) {
 async function main() {
   const calls = [];
   const frames = [];
+  const factVersions = [];
   const createConnection = net.createConnection;
   net.createConnection = (...args) => {
     const socket = createConnection(...args);
     if (args[0] === address) {
+      let received='';
+      socket.on('data',chunk=>{
+        received+=String(chunk);
+        if(received.endsWith('\n')) {
+          try {const reply=JSON.parse(received);if(reply.account?.stateFacts!==undefined)factVersions.push(reply.account.stateFacts);}catch{}
+          received='';
+        }
+      });
       const write = socket.write.bind(socket);
       socket.write = (chunk, ...rest) => {
         try { const frame = JSON.parse(String(chunk)); frames.push({connect:frame.connect,version:frame.version,command:frame.command}); } catch {}
@@ -144,6 +153,7 @@ async function main() {
     assert.equal(JSON.parse(await fs.readFile(config,'utf8')).cloud.enabled,true,'Confirmation must not revoke before explicit action');
     await client.request('disable');
     await until(()=>client.request(),r=>r.view?.presentationState?.snapshot?.uploadsEnabled === false && r.view.presentationState.operation === null,'Approved grant disable did not settle');
+    assert.ok(factVersions.includes(1),'Real runtime must exercise the TypeScript facts projection');
     assert.ok(frames.some(frame=>frame.command === 'device-login'));
     assert.ok(frames.some(frame=>frame.command === 'device-poll'));
     assert.ok(frames.some(frame=>frame.command === 'device-commit'));
@@ -178,11 +188,18 @@ async function main() {
     assert.equal(JSON.stringify(identity).includes(grant.token), false);
     await fs.writeFile(credential, JSON.stringify({...grant,authRequired:true}), {mode:0o600});
     assert.equal((await client.request()).view.presentationState.snapshot.accountInitial, null);
+    const expiredAt=Math.floor(Date.now()/1000)-1;
+    await fs.writeFile(credential,JSON.stringify({...grant,expiresAt:expiredAt}),{mode:0o600});
+    assert.equal((await client.request()).view.presentationState.snapshot.reauthorizationRequired,true);
+    await fs.writeFile(credential,JSON.stringify({...grant,expiresAt:expiredAt,refreshToken:'synthetic-renewable',
+      refreshExpiresAt:expiredAt+3600,grantId:'synthetic-renewable-grant'}),{mode:0o600});
+    const renewable=(await client.request()).view.presentationState.snapshot;
+    assert.equal(renewable.connected,false);assert.equal(renewable.renewalRequired,true);assert.equal(renewable.accountInitial,'M');
     await fs.unlink(credential);
     assert.equal((await client.request()).view.presentationState.snapshot.accountInitial, null);
     assert.equal(calls.length, count, 'Identity display must stay local-only');
     console.log(JSON.stringify({ platform: process.platform, electron: process.versions.electron,
-      bridge: 'shipped TypeScript controller + real Rust listener/auth client', controllerProtocol:'backend-v1',
+      bridge: 'shipped TypeScript controller + real Rust listener/auth client', controllerProtocol:'backend-v1',snapshotPolicy:'typescript-facts-v1',
       packagedController:process.env.APPARENT_CONNECT_TEST_MODULE !== undefined,
       http: 'synthetic loopback device approval; private isolated credentials, no uploads',
       checks: 'disabled/local-only/no-consent/public-projection/cancel/EOF/durable-off/preserved-config/approval-commit/rejection/expiry/offline/retry/key-enrollment/expired-frame/account-initial/revoked-identity', requests: calls.length }));

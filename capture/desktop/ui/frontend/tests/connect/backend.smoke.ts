@@ -25,6 +25,10 @@ test('shipped account controller owns consent, activation, confirmation and stal
   await fs.mkdir(directory,{recursive:true,mode:0o700}); await fs.chmod(directory,0o700);
   const snapshot={server:'https://connect.test',connected:false,uploadsEnabled:false,
     renewalRequired:false,reauthorizationRequired:false,accountInitial:null as string|null};
+  const facts=()=>({cloud:{server:snapshot.server,enabled:snapshot.uploadsEnabled,uploadConsent:snapshot.uploadsEnabled},
+    hostedSync:true,revocationPending:false,read:null,sharedLinksUrl:null,
+    upload:snapshot.connected ? {server:snapshot.server,scope:'upload',authRequired:false,hasRefresh:false,
+      expiresAt:null,refreshExpiresAt:null,accountInitial:snapshot.accountInitial,token:'synthetic-private-secret'} : null});
   let serial=0, login:number|undefined, activations=0, closed=0;
   let approved=false;
   let holdRead=false, held:(()=>void)|undefined;
@@ -46,7 +50,7 @@ test('shipped account controller owns consent, activation, confirmation and stal
         if (!['backend','backend-read','backend-command'].includes(request.connect)) {socket.end('{"error":"feature_disabled"}\n');continue;}
         owned=true;
         const account: Record<string,unknown>={version:1,snapshot:{...snapshot,credential:'synthetic-private-secret'},
-          error:null,deviceFlow:1,sharedLinksUrl:null,events:events.splice(0),credential:'synthetic-private-secret'};
+          error:null,deviceFlow:1,stateFacts:1,facts:facts(),sharedLinksUrl:null,events:events.splice(0),credential:'synthetic-private-secret'};
         if (request.command) {
           commands.push({command:request.command,operation:request.operation});
           if (request.command==='device-login') {
@@ -81,7 +85,8 @@ test('shipped account controller owns consent, activation, confirmation and stal
             events.push({operation,kind:'probe',health:'online'});
           }
         }
-        account.snapshot={...snapshot,credential:'synthetic-private-secret'};
+        account.snapshot={...snapshot,connected:!snapshot.connected,uploadsEnabled:!snapshot.uploadsEnabled,credential:'synthetic-private-secret'};
+        account.facts=facts(); // The current renderer must use facts rather than this contradictory legacy snapshot.
         const reply=()=>socket.write(JSON.stringify({account})+'\n');
         if (holdRead && request.connect==='backend-read') {held=reply;continue;}
         reply();

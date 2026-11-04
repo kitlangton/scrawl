@@ -355,3 +355,26 @@ fn settings_is_silent_and_cli_output_is_compatible() {
         }
     }
 }
+
+#[test]
+fn settings_private_facts_are_fresh_secret_free_and_never_renew() {
+    let f = Fixture::new();
+    let server = Server::new("upload");
+    f.authorize(&server.url);
+    let facts = f.client.settings_facts().unwrap();
+    assert_eq!(facts["cloud"]["server"], server.url);
+    assert_eq!(facts["upload"]["scope"], "upload");
+    assert_eq!(facts["upload"]["hasRefresh"], false);
+    assert_eq!(facts["upload"].as_object().unwrap().len(), 7);
+    let serialized = facts.to_string();
+    assert!(!serialized.contains("synthetic-upload-secret"));
+    assert!(!serialized.contains("synthetic-read-secret"));
+    assert!(!serialized.contains(f.root.to_str().unwrap()));
+    let mut credential = f.client.stored_credential("upload").unwrap();
+    credential.auth_required = true;
+    atomic_json(&f.client.state.join("upload.credential"), &credential).unwrap();
+    assert_eq!(f.client.settings_facts().unwrap()["upload"]["authRequired"], true);
+    fs::write(f.client.state.join("read.credential"), b"malformed").unwrap();
+    assert!(matches!(f.client.settings_facts(), Err(settings::SafeError::LocalState)));
+    assert_eq!(server.state.lock().unwrap().requests, 0);
+}

@@ -1,6 +1,7 @@
 import { lstat } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
+import { deriveLocalState } from './settings-state.cjs';
 import { authorizeDevice, DeviceFlowError } from './device-flow.cjs';
 import { AccountController } from './settings-controller.cjs';
 import type { AccountBackend, Approval, Health, LocalState, Snapshot } from './settings-controller.cjs';
@@ -30,10 +31,17 @@ function decode(value: unknown, opening: boolean): Account {
   if (opening && response.account === undefined && response.connect !== undefined) throw new BridgeError('unsupported');
   const a = record(response.account);
   if (a.version !== 1) bad();
-  const error = safeError(a.error);
+  let error = safeError(a.error);
+  let sharedLinksUrl = a.sharedLinksUrl as string|null;
   if (!(a.sharedLinksUrl === null || linksUri(a.sharedLinksUrl))) bad();
   let snapshot: Snapshot | null = null;
-  if (a.snapshot !== null) {
+  if (a.stateFacts !== undefined) {
+    if (a.stateFacts !== 1) bad();
+    const state = deriveLocalState(a.facts);
+    snapshot = state.snapshot;
+    error = error ?? state.error;
+    sharedLinksUrl = state.sharedLinksUrl;
+  } else if (a.snapshot !== null) {
     const s = record(a.snapshot);
     if (!['connected','uploadsEnabled','renewalRequired','reauthorizationRequired'].every(k => typeof s[k] === 'boolean') ||
         !(s.server === null || text(s.server) && browserUri(s.server, null)) ||
@@ -57,7 +65,7 @@ function decode(value: unknown, opening: boolean): Account {
   });
   if (a.deviceFlow !== undefined && a.deviceFlow !== 1) bad();
   if (a.activated !== undefined && typeof a.activated !== 'boolean') bad();
-  return {snapshot,error,sharedLinksUrl:a.sharedLinksUrl as string|null,events,...(a.deviceFlow === 1 ? {deviceFlow:1 as const} : {}),
+  return {snapshot,error,sharedLinksUrl,events,...(a.deviceFlow === 1 ? {deviceFlow:1 as const} : {}),
     ...(a.operation === undefined ? {} : {operation:id(a.operation)}),
     ...(a.activated === undefined ? {} : {activated:a.activated as boolean})};
 }

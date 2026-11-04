@@ -137,6 +137,7 @@ struct Receipt {
     id: u64,
     event: serde_json::Value,
 }
+type FactsReader = Arc<dyn Fn() -> Result<serde_json::Value, SafeError> + Send + Sync>;
 type DeviceFactory = Arc<
     dyn Fn(
             &str,
@@ -168,6 +169,10 @@ pub(crate) fn serve(stream: UnixStream, deadline: u64, config: &Path) {
                 crate::connect::hosted::begin_device_login(&config, server, allowed)
             }
         })),
+        Some(Arc::new({
+            let config = config.to_owned();
+            move || crate::connect::hosted::settings_facts(&config)
+        })),
     )
 }
 fn run(
@@ -178,6 +183,7 @@ fn run(
     mut worker: impl FnMut(),
     lease_duration: Duration,
     device_factory: Option<DeviceFactory>,
+    facts_reader: Option<FactsReader>,
 ) {
     use std::io::ErrorKind;
     if stream
@@ -201,6 +207,23 @@ fn run(
         inner: backend_fn(),
         config: config.to_owned(),
     });
+    // The legacy snapshot remains only for older installed client compatibility.
+    // Current TypeScript consumers derive their own local state from private facts.
+    let envelope = |backend: &dyn Backend, events, operation| {
+        let mut reply = envelope(backend, events, operation);
+        if let Some(read) = &facts_reader {
+            reply["account"]["stateFacts"] = 1.into();
+            match read() {
+                Ok(facts) => reply["account"]["facts"] = facts,
+                Err(error) => {
+                    reply["account"]["facts"] = serde_json::Value::Null;
+                    reply["account"]["error"] = safe_error(error).into();
+                    reply["account"]["snapshot"] = serde_json::Value::Null;
+                }
+            }
+        }
+        reply
+    };
     let (tx, rx) = mpsc::sync_channel::<Receipt>(64);
     let mut buffer = Vec::new();
     let mut frame_until = None;

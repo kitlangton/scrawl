@@ -118,6 +118,7 @@ impl Session {
                 },
                 Duration::from_secs(2),
                 None,
+                None,
             )
         });
         Self {

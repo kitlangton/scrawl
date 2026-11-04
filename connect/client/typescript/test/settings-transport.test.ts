@@ -187,3 +187,23 @@ test('invalid approved grant does not commit or activate, and unsupported device
   assert.equal(invalid.requests.length,1);
   assert.equal(invalid.requests[0]!.connect,'backend');
 });
+
+test('native facts are authoritative over legacy snapshot and malformed facts never fall back',async t=>{
+  const facts={cloud:{server:'https://accounts.example',enabled:true,uploadConsent:true},hostedSync:true,
+    revocationPending:false,upload:{server:'https://accounts.example',scope:'upload',authRequired:false,
+      hasRefresh:false,expiresAt:null,refreshExpiresAt:null,accountInitial:'M',token:'private-fact-secret'},
+    read:null,sharedLinksUrl:null,privateSecret:'private-fact-secret'};
+  let current:unknown=facts;
+  const f=await fixture(t,()=>({account:{...account,snapshot:null,stateFacts:1,facts:current}}));
+  const ready=await f.client.request() as any;
+  assert.equal(ready.view.presentationState.snapshot.connected,true);
+  assert.equal(ready.view.presentationState.snapshot.uploadsEnabled,true);
+  assert.equal(JSON.stringify(ready).includes('private-fact-secret'),false);
+  current={...facts,hostedSync:'true'};
+  const broken=await f.client.request() as any;
+  assert.equal(broken.view.presentationState.snapshot,null);
+  assert.equal(broken.view.presentationState.localError,'local-state');
+  current={...facts,revocationPending:true};
+  assert.equal((await f.client.request() as any).view.presentationState.snapshot,null);
+  assert.equal(f.requests.some(r=>r.command!==undefined),false,'Local projection must not probe/renew/mutate');
+});

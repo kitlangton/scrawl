@@ -41,6 +41,10 @@ Only the main process receives device replies. The temporary native executor has
 closed device-start/poll routes and a one-shot commit of its retained approved
 response under the existing queue/config locks; no Node filesystem writer exists.
 Failed flows retire before a same-lease retry, and failed commit settles durable off.
+`settings-state.cts` derives the local connection/upload/renewal/reauthorization
+state from versioned private grant metadata. Native code validates safe disk
+reads; TypeScript owns their Settings meaning and drops unsafe optional display
+metadata. A malformed facts response never falls back to the legacy projection.
 No generic mutation, private credential or arbitrary browser URL enters the renderer.
 
 An unsupported read-only opening may fall back to the retained legacy transport
@@ -49,7 +53,7 @@ Older installed assets/native callers retain the previous Rust projection.
 Rollback may use the previous client assets and unchanged file formats against
 that retained route. Remove legacy policy/transport only after those consumers
 and native fallback surfaces migrate and their affected seams pass. Rust
-HTTP/renewal/snapshot/credentials/queue and older-consumer auth remain explicit debt; no state writer has switched,
+HTTP/renewal/private-record/credentials/queue and older-consumer auth remain explicit debt; no state writer has switched,
 and this controller adoption is not full account or Rust-free Connect acceptance.
 
 `connect/client` is the production `apparent-connect-client` library, not a
