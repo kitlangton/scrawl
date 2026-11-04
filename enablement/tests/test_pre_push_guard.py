@@ -40,6 +40,13 @@ class PrePushGuardTests(unittest.TestCase):
                      "test_temp_preflight.py", "test_owner_lanes.py"):
             (self.repo / "enablement" / "tests" / name).write_text(fixture_test)
         shutil.copy2(SELECTOR, self.repo / "enablement" / "verification.py")
+        # File-length tests exercise pre-commit only, so this closure stays
+        # finite and never recursively invokes the pre-push test suite.
+        for name in (".githooks/pre-commit", "enablement/directory-width/check.py",
+                     "enablement/file-length/check.ts", "enablement/file-length/check.test.ts"):
+            destination = self.repo / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(HOOK.parents[1] / name, destination)
         # The real verifier now runs the shared frontend color guard. Preserve
         # its actual dependency closure in this disposable hook repository.
         theme = self.repo / "shared/ui/scripts"

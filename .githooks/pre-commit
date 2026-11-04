@@ -1,9 +1,10 @@
 #!/bin/sh
-# Enforce width against the staged tree, never the mutable worktree.
+# Enforce repository size limits against the index, never mutable file contents.
 set -eu
 repo_root=$(git rev-parse --show-toplevel)
 if [ "${1:-}" != --within-budget ]; then
     exec python3 "$repo_root/enablement/verification.py" --hook-budget 60 sh "$0" --within-budget "$@"
 fi
 shift
-exec python3 "$repo_root/enablement/directory-width/check.py"
+python3 "$repo_root/enablement/directory-width/check.py"
+exec node --experimental-strip-types "$repo_root/enablement/file-length/check.ts"

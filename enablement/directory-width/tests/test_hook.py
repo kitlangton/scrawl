@@ -29,6 +29,9 @@ class DirectoryWidthHookTests(unittest.TestCase):
         target = self.repo / "enablement/directory-width"
         target.mkdir(parents=True)
         shutil.copy2(CHECKER, target / "check.py")
+        length = self.repo / "enablement/file-length"
+        length.mkdir(parents=True)
+        shutil.copy2(ROOT / "enablement/file-length/check.ts", length / "check.ts")
         shutil.copy2(ROOT / "enablement/verification.py", self.repo / "enablement/verification.py")
         self.git("config", "core.hooksPath", ".githooks")
 

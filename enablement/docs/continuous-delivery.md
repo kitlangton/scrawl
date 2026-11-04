@@ -97,7 +97,10 @@ enable a disabled publisher, provision resources or apply migrations.
 Activate the versioned hooks in each clone with `git config --local core.hooksPath
 .githooks`. This common-repository setting also applies to linked worktrees;
 cloning or pulling does not activate hooks automatically. Keep the existing
-pre-commit directory-width check and pre-push verification enabled.
+pre-commit directory-width and [2,000-line staged-file checks](../file-length/README.md)
+and pre-push verification enabled. Lockfiles and the documented generated/binary
+exclusions do not receive the file-length check; existing oversized files must
+meet the limit when changed.
 
 `.githooks/reference-transaction` requires `git verify-commit` to accept every
 new commit introduced by a local branch or detached HEAD update. It runs before
