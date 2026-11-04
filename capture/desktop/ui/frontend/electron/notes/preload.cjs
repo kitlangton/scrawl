@@ -1,4 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
+contextBridge.exposeInMainWorld('apparentBuild', Object.freeze({
+  read: () => ipcRenderer.invoke('apparent:build-identity'),
+}));
 contextBridge.exposeInMainWorld('captureNotes', Object.freeze({
   onSnapshot: (callback) => {
     const receive = (_event, state) => callback(state);

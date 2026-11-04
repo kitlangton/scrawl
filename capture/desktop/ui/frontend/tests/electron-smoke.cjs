@@ -181,3 +181,6 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
     } finally { other.destroy(); }
   }, path.join(__dirname, '..')), true);
 });
+
+// Shared identity rendering and click-through checks use the shipped renderer.
+require('./build/identity.smoke.ts');

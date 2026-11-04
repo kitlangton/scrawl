@@ -14,7 +14,8 @@
     "./tokens.css": "./src/tokens.css",
     "./window-theme": "./src/window-theme.cjs",
     "./collapsible": "./src/feedback/collapsible.tsx",
-    "./alert": "./src/feedback/alert.tsx"
+    "./alert": "./src/feedback/alert.tsx",
+    "./build-identity": "./src/build-identity/index.tsx"
   },
   "peerDependencies": {
     "react": "^19.2.0"

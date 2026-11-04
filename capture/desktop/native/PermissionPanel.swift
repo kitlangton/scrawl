@@ -28,6 +28,26 @@ import ApplicationServices
 import CoreGraphics
 import SwiftUI
 
+private struct RunningBuildLabel: View {
+  private var text: String {
+    let value = ProcessInfo.processInfo.environment["APPARENT_RUNNING_BUILD_LABEL"] ?? "build unknown"
+    if value == "build unknown" { return value }
+    let parts = value.components(separatedBy: " · ")
+    guard parts.count == 2 else { return "build unknown" }
+    let candidate = parts[1]
+    if candidate == "build unknown" || candidate.range(of: "^[0-9a-fA-F]{7}( \\+modified)?$", options: .regularExpression) != nil {
+      return candidate
+    }
+    return "build unknown"
+  }
+  var body: some View {
+    Text(text).font(.system(size: 10, weight: .medium, design: .monospaced))
+      .foregroundStyle(.secondary).padding(.horizontal, 5).padding(.vertical, 2)
+      .background(.ultraThinMaterial, in: Capsule()).allowsHitTesting(false)
+      .accessibilityLabel("Running build \(text)")
+  }
+}
+
 enum PermissionPanel {
   // MARK: Tuning
 
@@ -358,6 +378,7 @@ extension PermissionPanel {
           .opacity(model.phase == .granted ? 0 : 1)
       }
       .frame(width: layout.cardSize.width, height: layout.cardSize.height, alignment: .topLeading)
+      .overlay(alignment: .topTrailing) { RunningBuildLabel().padding(4) }
       .scaleEffect(model.contentScale)
       .blur(radius: model.contentBlur)
       .opacity(model.contentOpacity)

@@ -1924,6 +1924,7 @@ impl Session {
         use std::process::{Command, Stdio};
 
         let mut command = Command::new(crate::capture::desktop::helper::path()?);
+        crate::capture::ui_process::configure_build_identity(&mut command);
         command.arg("settings");
         if let Some(serde_json::Value::String(pane)) = pane.map(serde_json::to_value).transpose()? {
             command.args(["--pane", &pane]);

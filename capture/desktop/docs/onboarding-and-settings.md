@@ -299,6 +299,40 @@ The sidebar is the helper's alone: a row selects on mouse-down and its pane repl
 
 About shows the package version and the running binary's build-time commit, for example `Version 0.3.13 · ad8d4b1`. Tracked local edits add `+modified`; builds without Git metadata or a valid CI revision say `build unknown`. This identifies the compiled build, not the selected update channel or an update staged for the next launch. Both the Mac helper and Linux GPUI Settings use the same label.
 
+### Window corner build identity
+
+Visible Apparent windows carry a passive short commit label, enabled by default,
+except the recording pill and transparent ink/laser canvases, which are explicitly
+exempt. The Linux ink overlay remains free of version text in recorded pixels.
+It uses the same build-time `APPARENT_VERSION_LABEL` as About, shortened to the
+commit and optional `+modified`. Missing identity reads `build unknown`. It does
+not read the user's checkout, identify Electron's version, or describe a staged
+update. It takes no keyboard focus and has no action.
+
+Rust supplies `APPARENT_RUNNING_BUILD_LABEL` explicitly when launching Electron
+or Swift helpers, overriding inherited shell metadata. Electron freezes the
+value at startup and exposes only a read-only request from owned packaged main
+frames through the isolated preload. Standalone frontend launches have no
+backend identity and show `build unknown`. This adds no settings writer or flag.
+
+| Surface | Presentation owners |
+| --- | --- |
+| Onboarding/tour and permission guides | React onboarding, GPUI onboarding, Swift onboarding/PermissionPanel |
+| Settings | React Settings, GPUI Settings, Swift Settings |
+| Foundation, share/completion and notes | Shared React component; native completion/review fallback where reachable |
+| Target picker | Existing GPUI platform adapters; recording pill is exempt |
+| Whiteboard and lab | Existing GPUI rendering adapters |
+
+Decommissioned iPhone/mirror surfaces are outside this inventory.
+The offscreen Linux keepalive window is intentionally invisible. Transient
+transparent note-flight sprites carry no controls and are also left clear. Labels do not
+keep transient overlays mapped, change capture exclusion, or activate a different
+renderer. Existing routing and fallback remain authoritative. Rollback removes
+the common label and its read-only transport together; native counterparts are
+removed only when their route, consumers and packaging are independently retired.
+The React label migrates this presentation slice without moving capture policy,
+permission decisions or unrelated Settings workflows.
+
 About has a Star on GitHub button below the update control. Its heading, action and caption share one box in the Mac helper and Linux GPUI Settings. It opens `https://github.com/tryapparent/apparent` in the browser; starring remains the user's choice on GitHub.
 
 Settings follows system light or dark appearance without storing a preference. The Mac helper resolves the SwiftUI theme from its environment and the titlebar background from a dynamic AppKit color; an open window updates when macOS appearance changes. Linux reads the desktop portal before opening, then watches its color-scheme revision and repaints the open GPUI window. Hovered buttons and menu items use black on light lilac (`#c4a9e6`) in light mode, and cream on dark lilac (`#302442`) in dark mode; the selected sidebar always has cream text. The Linux update result panel also follows the palette, including its secondary actions.

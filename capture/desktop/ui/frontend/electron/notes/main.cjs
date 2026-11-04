@@ -1,3 +1,4 @@
+require('../runtime.cjs').installBuildIdentity(require('electron'));
 require('../runtime.cjs').installExceptionReporting(require('electron'));
 // Only Rust's private inherited stdin supplies capture state. Never opens a socket or backend.
 const { app, BrowserWindow, ipcMain, screen, session, nativeTheme } = require('electron');

@@ -1,4 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
+contextBridge.exposeInMainWorld('apparentBuild', Object.freeze({
+  read: () => ipcRenderer.invoke('apparent:build-identity'),
+}));
 
 // Installed Connect exposes no Storage, clipboard, reporting or capture commands.
 contextBridge.exposeInMainWorld('apparent', Object.freeze({

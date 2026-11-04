@@ -1220,6 +1220,7 @@ impl Render for OnboardingWindow {
         let phase = self.opened.elapsed().as_secs_f32();
         let root = div()
             .id("onboarding-root")
+            .relative()
             .when_some(self.focus.as_ref(), |d, focus| d.track_focus(focus))
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
                 if !view
@@ -1283,7 +1284,7 @@ impl Render for OnboardingWindow {
             .font_family(if cfg!(target_os = "windows") { ".SystemUIFont" } else { "Host Grotesk" })
             .children(self.caption(cx));
         let Some(state) = self.state.clone() else {
-            return root;
+            return root.child(crate::capture::desktop::running_build_badge());
         };
         let (s, paste, _) = self.labels();
         let tray = if cfg!(not(target_os = "macos")) {
@@ -1418,6 +1419,7 @@ impl Render for OnboardingWindow {
                 .child(div().flex_1())
                 .child(self.footer(&state, cx)),
         )
+        .child(crate::capture::desktop::running_build_badge())
         .w(relative(1.0))
     }
 }

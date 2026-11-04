@@ -80,6 +80,30 @@ const ACCENT_COLOR: u32 = 0x3b5cf6;
 const ACCENT_HOVER: u32 = 0x4b6bff;
 const INK_RED: u32 = 0xff3b30;
 
+/// The build identity compiled into the running backend, shared by native UI surfaces.
+pub(super) fn running_build_label() -> String {
+    let full = env!("APPARENT_VERSION_LABEL");
+    full.split_once(" · ")
+        .map(|(_, revision)| revision.to_owned())
+        .unwrap_or_else(|| "build unknown".to_owned())
+}
+
+/// Small, noninteractive marker for owner-local GPUI windows and overlays.
+pub(super) fn running_build_badge() -> Div {
+    div()
+        .absolute()
+        .top(px(5.0))
+        .right(px(5.0))
+        .px(px(5.0))
+        .py(px(2.0))
+        .rounded(px(5.0))
+        .bg(rgba(0x17151bcc))
+        .text_size(px(10.0))
+        .text_color(rgb(0xf3eff8))
+        .font_family("monospace")
+        .child(running_build_label())
+}
+
 // Dynamic Island capsule geometry. GPUI boxes are border-box, so the hairline border is part of
 // the inset: R_outer (20) = R_chip (16) + border (1) + pad (3), on every side.
 const ISLAND_H: f32 = 40.0;
@@ -5132,7 +5156,8 @@ impl Render for TargetPickerWindow {
             root = root.child(camera_cursor_badge(cx_local, cy_local));
         }
 
-        root.when_some(badge, |d, ([bx, by], text_w, label)| {
+        root.child(running_build_badge())
+        .when_some(badge, |d, ([bx, by], text_w, label)| {
             d.child(
                 div()
                     .absolute()
@@ -5528,6 +5553,7 @@ impl Render for BundleReviewWindow {
             let c_keydown = self.coordinator.clone();
             return div()
                 .id("apparent-review-empty")
+                .relative()
                 .track_focus(&self.focus)
                 .on_key_down(move |event: &KeyDownEvent, window, cx| {
                     let handled = c_keydown
@@ -5585,6 +5611,7 @@ impl Render for BundleReviewWindow {
                             ),
                         ),
                 )
+                .child(running_build_badge())
                 .into_any_element();
         };
 
@@ -5690,6 +5717,7 @@ impl Render for BundleReviewWindow {
 
         div()
             .id("apparent-review-root")
+            .relative()
             .track_focus(&self.focus)
             .on_key_down(move |event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
@@ -5768,7 +5796,8 @@ impl Render for BundleReviewWindow {
                 div()
                     .h(px(48.0))
                     .pl(px(platform::HEADER_LEAD))
-                    .pr(px(platform::HEADER_TRAIL))
+                    // Reserve the corner for the passive build label, including +modified.
+                    .pr(px(platform::HEADER_TRAIL.max(144.0)))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -6113,6 +6142,7 @@ impl Render for BundleReviewWindow {
                             ),
                     ),
             )
+            .child(running_build_badge())
             .into_any_element()
     }
 }

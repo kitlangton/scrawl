@@ -1,4 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
+contextBridge.exposeInMainWorld('apparentBuild', Object.freeze({
+  read: () => ipcRenderer.invoke('apparent:build-identity'),
+}));
 
 // Installed Storage has no Connect, reporting, clipboard or runtime capabilities.
 contextBridge.exposeInMainWorld('apparent', Object.freeze({

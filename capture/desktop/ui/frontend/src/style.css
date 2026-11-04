@@ -22,7 +22,7 @@
 .settings-sidebar button:hover { background: var(--color-accent); }
 .settings-sidebar button[aria-current='page'] { background: var(--color-accent); border-color: var(--color-ring); }
 .settings-sidebar button:focus-visible { outline: 2px solid var(--color-ring); outline-offset: -4px; }
-.settings-content { min-width: 0; flex: 1; padding: 30px; }
+.settings-content { min-width: 0; flex: 1; padding: 30px 30px 76px; }
 .settings-content header { margin-bottom: 28px; }
 .settings-content h1 { font-size: 25px; line-height: 1.25; font-weight: 650; margin-bottom: 8px; }
 .settings-content header p { color: var(--color-muted-foreground); font-size: 14px; }
@@ -36,7 +36,7 @@
   .settings-sidebar button { padding-inline: 16px; }
   .settings-brand { padding-inline: 16px; }
   .settings-brand img { width: 116px; }
-  .settings-content { padding: 24px 20px; }
+  .settings-content { padding: 24px 20px 76px; }
 }
 
 .settings-content button[class*="border-input"] { background: var(--color-muted); color: var(--color-foreground); border-color: var(--color-input); }

@@ -1,4 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
+contextBridge.exposeInMainWorld('apparentBuild', Object.freeze({
+  read: () => ipcRenderer.invoke('apparent:build-identity'),
+}));
 
 // No generic invoke/send, paths, revisions or dialog options from the renderer.
 contextBridge.exposeInMainWorld('apparent', Object.freeze({

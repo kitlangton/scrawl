@@ -1,3 +1,4 @@
+require('./runtime.cjs').installBuildIdentity(require('electron'));
 require('./runtime.cjs').installExceptionReporting(require('electron'));
 if(process.argv.includes('--onboarding')) { require('./onboarding.cjs'); } else {
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, nativeTheme } = require('electron');

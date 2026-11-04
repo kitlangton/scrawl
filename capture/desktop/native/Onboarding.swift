@@ -7,6 +7,26 @@ import CoreText
 import Speech
 import SwiftUI
 
+private struct RunningBuildLabel: View {
+  private var text: String {
+    let value = ProcessInfo.processInfo.environment["APPARENT_RUNNING_BUILD_LABEL"] ?? "build unknown"
+    if value == "build unknown" { return value }
+    let parts = value.components(separatedBy: " · ")
+    guard parts.count == 2 else { return "build unknown" }
+    let candidate = parts[1]
+    if candidate == "build unknown" || candidate.range(of: "^[0-9a-fA-F]{7}( \\+modified)?$", options: .regularExpression) != nil {
+      return candidate
+    }
+    return "build unknown"
+  }
+  var body: some View {
+    Text(text).font(.system(size: 10, weight: .medium, design: .monospaced))
+      .foregroundStyle(.secondary).padding(.horizontal, 5).padding(.vertical, 2)
+      .background(.ultraThinMaterial, in: Capsule()).allowsHitTesting(false)
+      .accessibilityLabel("Running build \(text)")
+  }
+}
+
 // `apparent-helper onboarding`: the welcome window. Apparent decides what it shows
 // (`src/onboarding.rs`) and sends it as JSON lines on stdin:
 //   {"type":"state","step":"permissions","index":2,"count":4,"rows":[{"permission":"microphone",
@@ -590,6 +610,7 @@ struct OnboardingView: View {
     .animation(Motion.state, value: state.ready)
     .animation(Motion.state, value: state.tutorialSeen)
     .frame(width: 620, height: state.height)
+    .overlay(alignment: .topTrailing) { RunningBuildLabel().padding(5) }
   }
 
   @ViewBuilder private var page: some View {

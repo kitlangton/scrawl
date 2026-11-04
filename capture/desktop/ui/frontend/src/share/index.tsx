@@ -6,7 +6,7 @@ export function ShareCapture(){
  const [snapshot,setSnapshot]=useState<Snapshot>();const [submitted,setSubmitted]=useState(false);
  useEffect(()=>window.apparentShare?.subscribe(setSnapshot),[]);
  const state=snapshot?.state;
- return <main className="space-y-5 p-6"><h1 className="text-xl font-semibold">Share capture</h1>
+ return <main className="space-y-5 p-6 pb-20"><h1 className="text-xl font-semibold">Share capture</h1>
  <p className="break-all text-sm text-muted-foreground">{snapshot?.capture??'Reading capture…'}</p>
  {state==='confirm'&&<><p>Anyone with this link can view this capture. Shared captures are not end-to-end encrypted.</p>
  <Button disabled={submitted} onClick={()=>{setSubmitted(true);void window.apparentShare?.confirm().catch(()=>setSnapshot(current=>current?{...current,state:"failed"}:current));}}>Create and copy public link</Button></>}

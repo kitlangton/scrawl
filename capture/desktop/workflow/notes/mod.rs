@@ -122,6 +122,7 @@ impl Session {
             .mode(0o600)
             .open(directory.join("notes-ui.log"))?;
         let mut command = Command::new(binary);
+        crate::capture::ui_process::configure_build_identity(&mut command);
         crate::capture::desktop::workflow::error_reporting::configure_child(&mut command);
         // The existing Linux overlay mechanics use XWayland global coordinates and XIDs.
         // GPUI intentionally hides WAYLAND_DISPLAY; Electron must use that same X11 route.

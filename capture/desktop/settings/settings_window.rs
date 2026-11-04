@@ -2341,6 +2341,7 @@ impl Render for SettingsWindow {
         };
         let root = div()
             .id("settings-root")
+            .relative()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key == "tab" && view.recording().is_none() {
@@ -2381,7 +2382,9 @@ impl Render for SettingsWindow {
             .font_family("Host Grotesk")
             .text_color(theme.text());
         let Some(state) = self.state.clone() else {
-            return root.children(caption_buttons(theme));
+            return root
+                .children(caption_buttons(theme))
+                .child(crate::capture::desktop::running_build_badge());
         };
         let viewport = window.viewport_size();
         let (sidebar, content) = column_widths(f32::from(viewport.width));
@@ -2391,6 +2394,7 @@ impl Render for SettingsWindow {
             .children(caption_buttons(theme))
             .children(self.menu_layer(theme, viewport, cx))
             .children(self.update_result_layer(theme, &state, window, cx))
+            .child(crate::capture::desktop::running_build_badge())
     }
 }
 

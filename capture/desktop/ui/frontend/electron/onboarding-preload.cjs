@@ -1,4 +1,7 @@
 const {contextBridge, ipcRenderer} = require('electron');
+contextBridge.exposeInMainWorld('apparentBuild', Object.freeze({
+  read: () => ipcRenderer.invoke('apparent:build-identity'),
+}));
 // Parent state may arrive before React's first effect. Keep one current value
 // per presentation message so a late subscription receives the saved shortcut.
 const latest = new Map();

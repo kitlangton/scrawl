@@ -2,6 +2,7 @@ import '../runtime/exceptions';
 import {useEffect,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Button} from '@apparent/ui/button';
+import {BuildIdentityFrame} from '@apparent/ui/build-identity';
 import '../style.css';
 type Editor={label:string;externallyManaged:boolean;recording:boolean;error?:string};
 type View={type:string;step?:string;ready?:boolean;index?:number;count?:number;label?:string;shortcut?:Editor;firstCaptureRequired?:boolean;shortcutChosen?:boolean;shortcutEditing?:boolean;rows?:{permission:string;status:string;requested:boolean;required:boolean;reopening:boolean;relaunch:boolean}[]};
@@ -14,7 +15,7 @@ function Onboarding(){
  useEffect(()=>window.onboarding.subscribe(v=>{if(v.type==='state')setView(v);if(v.type==='shortcut'&&v.label)setShortcut(v.label);if(v.type==='shortcut-editor')setEditor(v.shortcut)}),[]);
  const act=(a:Action)=>{setError('');void window.onboarding.action(a).catch(()=>setError('This action could not be sent. Please try again.'))};
  const editing=editor?.recording??view.shortcutEditing;
- return <main style={{padding:40,maxWidth:620,margin:'auto'}}><p>{view.step==='done'?'Apparent · Setup complete':`Apparent · ${(view.index??0)+1} / ${view.count??6}`}</p><h1>{titles[view.step??'welcome']??'Apparent'}</h1>
+ return <main style={{padding:'40px 40px 76px',maxWidth:620,margin:'auto'}}><p>{view.step==='done'?'Apparent · Setup complete':`Apparent · ${(view.index??0)+1} / ${view.count??6}`}</p><h1>{titles[view.step??'welcome']??'Apparent'}</h1>
  {view.step==='welcome'&&<p>Give your agent the context you can see. Record your screen, explain aloud and point to what matters.</p>}
  {view.step==='how-it-works'&&<ol><li>Press your shortcut to record.</li><li>Talk, point and draw to explain your idea.</li><li>Press the shortcut again, then hand the capture to your agent.</li></ol>}
  {view.step==='permissions'&&<p>Apparent checks permission with your operating system. Return here after changing a permission in Settings.</p>}
@@ -25,4 +26,4 @@ function Onboarding(){
  {view.step==='done'&&<p>Use {shortcut} whenever you need to explain something on screen. Finish setup below.</p>}
  {error&&<p role="alert">{error}</p>}<footer style={{display:'flex',gap:12,marginTop:32}}><Button disabled={!view.index} onClick={()=>act('back')}>Back</Button><Button onClick={()=>act('later')}>Later</Button><Button disabled={!view.step||(view.step==='permissions'&&!view.ready)||(view.step==='shortcut'&&view.firstCaptureRequired&&!view.shortcutChosen)||(view.step==='try-it'&&view.firstCaptureRequired)} onClick={()=>act('continue')}>{view.step==='done'?'Finish':'Continue'}</Button></footer></main>
 }
-createRoot(document.getElementById('root')!).render(<Onboarding/>);
+createRoot(document.getElementById('root')!).render(<BuildIdentityFrame><Onboarding/></BuildIdentityFrame>);

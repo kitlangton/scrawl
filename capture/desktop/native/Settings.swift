@@ -5,6 +5,26 @@ import Combine
 import CoreText
 import SwiftUI
 
+private struct RunningBuildLabel: View {
+  private var text: String {
+    let value = ProcessInfo.processInfo.environment["APPARENT_RUNNING_BUILD_LABEL"] ?? "build unknown"
+    if value == "build unknown" { return value }
+    let parts = value.components(separatedBy: " · ")
+    guard parts.count == 2 else { return "build unknown" }
+    let candidate = parts[1]
+    if candidate == "build unknown" || candidate.range(of: "^[0-9a-fA-F]{7}( \\+modified)?$", options: .regularExpression) != nil {
+      return candidate
+    }
+    return "build unknown"
+  }
+  var body: some View {
+    Text(text).font(.system(size: 10, weight: .medium, design: .monospaced))
+      .foregroundStyle(.secondary).padding(.horizontal, 5).padding(.vertical, 2)
+      .background(.ultraThinMaterial, in: Capsule()).allowsHitTesting(false)
+      .accessibilityLabel("Running build \(text)")
+  }
+}
+
 // `apparent-helper settings [--pane P] [--icon PNG] [--render DIR]`: the Settings window.
 // Apparent decides everything (`src/settings.rs`) and sends what to show as JSON lines on stdin:
 //   {"type":"state","version":"0.3.2","login":{"on":false,"available":true,"needsApproval":false},
@@ -916,6 +936,7 @@ struct SettingsView: View {
     }
     .frame(width: SettingsMetrics.width, height: SettingsMetrics.height)
     .environment(\.settingsTheme, theme)
+    .overlay(alignment: .topTrailing) { RunningBuildLabel().padding(5) }
   }
 
   // Sidebar

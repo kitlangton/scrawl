@@ -2,6 +2,12 @@
 use std::{collections::HashMap, process::{Child, ExitStatus}, sync::{Arc, Mutex, Weak}};
 
 static CHILDREN: Mutex<Option<HashMap<u32, (Weak<Mutex<Child>>, bool)>>> = Mutex::new(None);
+
+/// Override inherited shell metadata with the identity of this running backend.
+/// UI helpers must never resolve a checkout or identify their Electron runtime.
+pub(crate) fn configure_build_identity(command: &mut std::process::Command) {
+    command.env("APPARENT_RUNNING_BUILD_LABEL", env!("APPARENT_VERSION_LABEL"));
+}
 #[cfg(target_os = "linux")]
 static SETTINGS_WINDOWS: Mutex<Option<HashMap<u32, Weak<()>>>> = Mutex::new(None);
 
@@ -112,6 +118,21 @@ pub(crate) fn is_external_app(pid: i32) -> bool {
 mod tests {
     use super::*;
     use std::process::{Command, Stdio};
+
+    #[test]
+    #[ignore = "requires built frontend and Linux Xvfb; see frontend/README.md"]
+    fn build_identity_electron_rust_roundtrip() {
+        let frontend = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capture/desktop/ui/frontend");
+        let mut command = Command::new("xvfb-run");
+        command.args(["-a", "node", "--test", "tests/build/identity.smoke.ts"])
+            .current_dir(frontend)
+            .env("APPARENT_RUNNING_BUILD_LABEL", "0.0.0 · fffffff")
+            .env("APPARENT_EXPECTED_BUILD_LABEL", env!("APPARENT_VERSION_LABEL"));
+        configure_build_identity(&mut command);
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    }
     #[cfg(target_os = "linux")]
     #[test]
     fn settings_subjects_follow_exact_window_and_child_lifetimes() {

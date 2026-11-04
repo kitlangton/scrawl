@@ -1,3 +1,4 @@
+require('../runtime.cjs').installBuildIdentity(require('electron'));
 require('../runtime.cjs').installExceptionReporting(require('electron'));
 const {app,BrowserWindow,ipcMain,session,nativeTheme}:typeof import('electron')=require('electron');
 const {pathToFileURL}:typeof import('node:url')=require('node:url');

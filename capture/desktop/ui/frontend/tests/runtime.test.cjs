@@ -371,3 +371,7 @@ for (const kind of ['main_exception', 'main_rejection']) {
     assert.equal(writes, 1);
   });
 }
+
+// Keep identity contract logic in TypeScript and share this existing runner entry.
+require('./build/identity.test.ts');
+require('./build/transport.test.ts');

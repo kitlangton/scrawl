@@ -288,3 +288,24 @@ function installExceptionReporting({ app }, home = require('node:os').homedir())
 }
 module.exports.reportException = reportException;
 module.exports.installExceptionReporting = installExceptionReporting;
+
+// Identity comes only from the backend that launched this UI process. A
+// standalone renderer has no backend identity, so it must say build unknown.
+function installBuildIdentity({ ipcMain, BrowserWindow }) {
+  const supplied = process.env.APPARENT_RUNNING_BUILD_LABEL;
+  const label = typeof supplied === 'string' && supplied.length <= 128 &&
+    /^[0-9][0-9A-Za-z.+-]* · (?:[a-fA-F0-9]{7}(?: \+modified)?|build unknown)$/.test(supplied)
+    ? supplied : 'build unknown';
+  const pages = new Set(['index.html', 'settings.html', 'onboarding.html']);
+  ipcMain.handle('apparent:build-identity', (event, ...args) => {
+    if (args.length || event.senderFrame !== event.sender.mainFrame ||
+        !BrowserWindow.fromWebContents(event.sender)) throw Error('Forbidden build identity request');
+    let file;
+    try { file = require('node:url').fileURLToPath(event.senderFrame.url); }
+    catch { throw Error('Forbidden build identity page'); }
+    const relative = path.relative(path.join(__dirname, '../dist'), file).split(path.sep).join('/');
+    if (!pages.has(relative)) throw Error('Forbidden build identity page');
+    return label;
+  });
+}
+module.exports.installBuildIdentity = installBuildIdentity;
