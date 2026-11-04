@@ -9,10 +9,34 @@ test('Settings renderer and window follow Electron theme changes without reload'
   const application = await electron.launch({args:[path.resolve(__dirname,'../..'),'--settings-storage'],env:{...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,'config')}});
   t.after(async()=>{await application.close();await fs.rm(home,{recursive:true,force:true});});
   const page = await application.firstWindow();
+  await application.evaluate(({BrowserWindow, ipcMain}) => {
+    global.settingsStartupObservation = { paintObserved: false, mountedReceived: false, mountedAccepted: false };
+    BrowserWindow.getAllWindows()[0].once('ready-to-show', () => { global.settingsStartupObservation.paintObserved = true; });
+    // Observe the existing handler without replacing its authorization or result.
+    const handlers = ipcMain._invokeHandlers;
+    const mounted = handlers?.get('apparent:settings-mounted');
+    if (typeof mounted === 'function') handlers.set('apparent:settings-mounted', (...args) => {
+      global.settingsStartupObservation.mountedReceived = true;
+      const result = mounted(...args);
+      global.settingsStartupObservation.mountedAccepted = true;
+      return result;
+    });
+  });
+  // Observe startup before DevTools media emulation can invalidate its first paint.
+  await page.locator('.settings-shell').waitFor();
+  try {
+    await expect.poll(() => application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true);
+  } catch (error) {
+    t.diagnostic(JSON.stringify(await application.evaluate(({BrowserWindow, app}) => {
+      const w = BrowserWindow.getAllWindows()[0];
+      return { visible: w.isVisible(), destroyed: w.isDestroyed(), loading: w.webContents.isLoading(), crashed: w.webContents.isCrashed(), readiness: global.settingsStartupObservation, gpu: app.getGPUFeatureStatus() };
+    })));
+    t.diagnostic(JSON.stringify(await page.evaluate(() => ({ readyState: document.readyState, visibility: document.visibilityState,
+      mountedBridge: typeof window.apparentSettingsMounted, shellPresent: !!document.querySelector('.settings-shell') }))));
+    throw error;
+  }
   // Playwright otherwise forces light media even when Electron follows the OS.
   await page.emulateMedia({colorScheme:null});
-  await page.locator('.settings-shell').waitFor();
-  await expect.poll(() => application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true);
   const contentBounds = await page.locator('.apparent-window-content').boundingBox();
   const shellBounds = await page.locator('.settings-shell').boundingBox();
   assert.equal(shellBounds.height, contentBounds.height, 'Settings must fit above the build label without an outer scroll area');
