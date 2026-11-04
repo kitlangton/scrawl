@@ -216,10 +216,27 @@ def run_pr_checks(selection=None):
                     "test_temp_preflight.py", "test_owner_lanes.py"):
         subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                         "-p", pattern], cwd=ROOT, check=True)
-    entry = "capture/desktop/ui/frontend/src/onboarding/main.tsx"
-    if selection and entry in selection["paths"]:
+    frontend_root = "capture/desktop/ui/frontend/"
+    onboarding_inputs = (
+        frontend_root + "src/onboarding/",
+        frontend_root + "src/shared/",
+        frontend_root + "src/components/",
+        frontend_root + "src/styles/",
+    )
+    onboarding_exact = {
+        frontend_root + path for path in (
+            "onboarding.html", "package.json", "package-lock.json", "vite.config.ts",
+            "scripts/tsconfig.onboarding.json", "tsconfig.json", "src/style.css",
+            "src/main.tsx", "src/base.css",
+        )
+    }
+    paths = selection["paths"] if selection else []
+    if any(path == frontend_root + "src/onboarding/main.tsx"
+           or path.startswith(onboarding_inputs) or path in onboarding_exact
+           or path.startswith("shared/ui/")
+           or path == "shared/assets/fonts/HostGrotesk-Variable.ttf" for path in paths):
         frontend = ROOT / "capture/desktop/ui/frontend"
-        if not (ROOT / entry).is_file():
+        if not (ROOT / (frontend_root + "src/onboarding/main.tsx")).is_file():
             raise RuntimeError("Onboarding entry was deleted or renamed; update its focused check contract before pushing")
         if not all((frontend / item).is_file() for item in (
                 "node_modules/typescript/bin/tsc", "node_modules/vite/bin/vite.js",

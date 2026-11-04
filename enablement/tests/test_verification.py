@@ -18,6 +18,27 @@ spec.loader.exec_module(verification)
 
 
 class SelectionTests(unittest.TestCase):
+    def test_each_real_onboarding_input_selects_renderer_feedback(self):
+        frontend = "capture/desktop/ui/frontend/"
+        inputs = [frontend + name for name in (
+            "src/style.css", "tsconfig.json", "scripts/tsconfig.onboarding.json",
+            "vite.config.ts", "package-lock.json", "src/onboarding/main.tsx")]
+        inputs += ["shared/assets/fonts/HostGrotesk-Variable.ttf", "shared/ui/theme.css"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("src/onboarding/main.tsx", "node_modules/typescript/bin/tsc",
+                         "node_modules/vite/bin/vite.js", "node_modules/@apparent/ui/package.json"):
+                target = root / frontend / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.touch()
+            for name in inputs + ["public/site/src/features.json"]:
+                with self.subTest(path=name), patch.object(verification, "ROOT", root), patch.object(
+                        verification.subprocess, "run") as run:
+                    verification.run_pr_checks({"paths": [name]})
+                    selected = any(call.args[0] == ["npm", "run", "check:onboarding"]
+                                   for call in run.call_args_list)
+                    self.assertEqual(selected, name in inputs)
+
     def setUp(self):
         guard = patch.object(verification, "check_temp_environment")
         guard.start()

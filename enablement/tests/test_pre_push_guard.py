@@ -124,6 +124,38 @@ class PrePushGuardTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("push rejected", result.stderr)
 
+    def test_transitive_onboarding_inputs_run_existing_renderer_check(self):
+        frontend = self.onboarding_delta()
+        for path in (
+                "capture/desktop/ui/frontend/src/onboarding/form.tsx",
+                "capture/desktop/ui/frontend/src/shared/theme.css",
+                "capture/desktop/ui/frontend/vite.config.ts",
+                "capture/desktop/ui/frontend/package.json",
+                "shared/ui/src/button.tsx"):
+            target = self.repo / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("// changed transitive input\n")
+        run("git", "add", "-A", cwd=self.repo)
+        run("git", "commit", "-qm", "transitive inputs", cwd=self.repo)
+        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        result = self.push(remote="refs/heads/feature")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.log.read_text(), f"{frontend}:run check:onboarding\n")
+
+    def test_unrelated_public_owner_skips_onboarding_renderer_check(self):
+        frontend = self.onboarding_delta()
+        entry = frontend / "src/onboarding/main.tsx"
+        entry.write_text("// original entry\n")
+        target = self.repo / "public/site/src/features.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{}\n")
+        run("git", "add", "-A", cwd=self.repo)
+        run("git", "commit", "-qm", "public owner input", cwd=self.repo)
+        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        result = self.push(remote="refs/heads/feature")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.log.exists())
+
     def test_onboarding_missing_dependencies_never_install(self):
         self.onboarding_delta(dependencies=False)
         result = self.push(remote="refs/heads/feature")
