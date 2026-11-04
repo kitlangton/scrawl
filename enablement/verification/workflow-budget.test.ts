@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { executionSeconds, enforceBudget, loadJobs, auditName, type Job } from './workflow-budget.ts'
+import { executionSeconds, enforceBudget, workflowBudgetSeconds, loadJobs, auditName, type Job } from './workflow-budget.ts'
 import { readFileSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -76,17 +76,17 @@ test('watched workflow starts have no standalone watchdog to spawn', () => {
 
 test('completion audit CLI fails an overrun without cancelling the underlying workflow', () => {
   const script = fileURLToPath(new URL('./workflow-budget.ts', import.meta.url))
-  for (const [seconds, expected] of [[599, 0], [600, 0], [601, 1]]) {
+  for (const [platform, seconds, expected] of [['linux', 599, 0], ['linux', 600, 0], ['linux', 601, 1], ['macos', 899, 0], ['macos', 900, 0], ['macos', 901, 1], ['invalid', 1, 1]] as const) {
     const bootstrap = `globalThis.fetch = async (_url, init) => {
       if (init?.method && init.method !== 'GET') throw new Error('Unexpected workflow mutation');
       return new Response(JSON.stringify({ total_count: 1, jobs: [${JSON.stringify(job(0, seconds))}] }));
     }; process.argv = [process.execPath, ${JSON.stringify(script)}]; await import(${JSON.stringify(new URL('./workflow-budget.ts', import.meta.url).href)});`
     const result = spawnSync(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', bootstrap], {
       encoding: 'utf8', env: { ...process.env, GITHUB_API_URL: 'https://api.github.com', GITHUB_REPOSITORY: 'synthetic/repo',
-        GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1', GH_TOKEN: 'synthetic', GITHUB_STEP_SUMMARY: '' },
+        GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1', GH_TOKEN: 'synthetic', GITHUB_STEP_SUMMARY: '', WORKFLOW_BUDGET_PLATFORM: platform },
     })
     assert.equal(result.status, expected, result.stderr)
-    if (expected) assert.match(result.stderr, /Optimize the tests/)
+    if (expected) assert.match(result.stderr, platform === 'invalid' ? /Invalid workflow budget platform/ : /Optimize the tests/)
     assert.doesNotMatch(result.stderr, /Unexpected workflow mutation/)
   }
 })
@@ -95,4 +95,21 @@ test('obsolete watch invocation fails before making any API request', () => {
   const result = spawnSync(process.execPath, ['--experimental-strip-types', fileURLToPath(new URL('./workflow-budget.ts', import.meta.url)), '--watch'], { encoding: 'utf8' })
   assert.equal(result.status, 1)
   assert.match(result.stderr, /completion-time audit only/)
+})
+
+test('Mac alone has a fifteen-minute budget with strict boundaries', () => {
+  assert.equal(workflowBudgetSeconds(), 600)
+  assert.equal(workflowBudgetSeconds('macos'), 900)
+  assert.throws(() => workflowBudgetSeconds('windows'), /Invalid/)
+  assert.doesNotThrow(() => enforceBudget([job(0, 900)], 'macos'))
+  assert.throws(() => enforceBudget([job(0, 901)], 'macos'), /900s/)
+  assert.throws(() => enforceBudget([job(0, 601)], 'linux'), /600s/)
+  const folder = new URL('../../.github/workflows/', import.meta.url)
+  for (const name of ['verification-mac.yml', 'native-proof-mac.yml', 'release-mac-preview.yml']) {
+    const text = readFileSync(new URL(name, folder), 'utf8')
+    assert.match(text.split('  runtime-budget:\n')[1], /platform: macos/)
+    assert.doesNotMatch(text, /^    timeout-minutes: 10$/m)
+  }
+  for (const name of ['verification.yml', 'release-linux.yml', 'web-delivery.yml'])
+    assert.doesNotMatch(readFileSync(new URL(name, folder), 'utf8'), /platform: macos|timeout-minutes: 15/)
 })

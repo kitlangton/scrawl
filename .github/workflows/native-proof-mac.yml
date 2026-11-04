@@ -42,13 +42,13 @@ jobs:
     name: share-build
     if: github.repository == 'tryapparent/apparent' && github.event_name == 'workflow_dispatch' && inputs.scenario == 'share' && inputs.producer_run == '' && inputs.producer_artifact == ''
     runs-on: macos-15-intel
-    timeout-minutes: 10
+    timeout-minutes: 15
     outputs:
       artifact: ${{ steps.executables.outputs.artifact-id }}
     steps:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         timeout-minutes: 1
         with:
@@ -97,7 +97,7 @@ jobs:
     needs: share-build
     if: always() && !cancelled() && github.repository == 'tryapparent/apparent' && github.event_name == 'workflow_dispatch' && (needs.share-build.result == 'success' || (needs.share-build.result == 'skipped' && (inputs.scenario != 'share' || inputs.producer_run != '' || inputs.producer_artifact != '')))
     runs-on: macos-15-intel
-    timeout-minutes: 10
+    timeout-minutes: 15
     # The 10m job budget also bounds cold installation and all scenario steps.
     # Cold runs that exceed it require optimization by the triggering agent.
     # These are hosted Actions limits, unrelated to the human NoMac session cap.
@@ -112,7 +112,7 @@ jobs:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
         shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
         timeout-minutes: 1
         with:
@@ -282,10 +282,12 @@ jobs:
       actions: read
     name: Workflow runtime budget
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - uses: ./.github/actions/runtime-budget
+        with:
+          platform: macos

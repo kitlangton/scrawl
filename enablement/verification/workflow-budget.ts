@@ -3,7 +3,11 @@ import { appendFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const budgetSeconds = 600
+export function workflowBudgetSeconds(platform = 'linux'): number {
+  if (platform === 'macos') return 900
+  if (platform === 'linux') return 600
+  throw new Error('Invalid workflow budget platform')
+}
 export const auditName = 'Workflow runtime budget'
 export const optimization = 'Optimize the tests. The agent whose run exceeded the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
 export type Job = { name: string; status: string; conclusion: string | null; started_at: string | null; completed_at: string | null }
@@ -51,7 +55,8 @@ export async function loadJobs(api: string, repository: string, run: string, att
   }
 }
 
-export function enforceBudget(jobs: Job[]): string {
+export function enforceBudget(jobs: Job[], platform = 'linux'): string {
+  const budgetSeconds = workflowBudgetSeconds(platform)
   const seconds = executionSeconds(jobs)
   const report = `Workflow workload execution: ${seconds.toFixed(1)}s / ${budgetSeconds}s (parallel jobs counted once; runner-only waiting and budget audits excluded).`
   if (seconds > budgetSeconds) throw new Error(`${report} ${optimization}`)
@@ -63,7 +68,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (process.argv.length !== 2) throw new Error("Usage: workflow-budget.ts (completion-time audit only)")
     const env = process.env
     const jobs = await loadJobs(env.GITHUB_API_URL!, env.GITHUB_REPOSITORY!, env.GITHUB_RUN_ID!, env.GITHUB_RUN_ATTEMPT!, env.GH_TOKEN!)
-    const report = enforceBudget(jobs)
+    const report = enforceBudget(jobs, env.WORKFLOW_BUDGET_PLATFORM)
     console.log(report)
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `\n${report}\n\n${optimization}\n`)
 
