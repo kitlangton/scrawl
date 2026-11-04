@@ -226,13 +226,15 @@ def run_pr_checks(selection=None):
     onboarding_exact = {
         frontend_root + path for path in (
             "onboarding.html", "package.json", "package-lock.json", "vite.config.ts",
-            "scripts/tsconfig.onboarding.json", "src/main.tsx", "src/base.css",
+            "scripts/tsconfig.onboarding.json", "tsconfig.json", "src/style.css",
+            "src/main.tsx", "src/base.css",
         )
     }
     paths = selection["paths"] if selection else []
     if any(path == frontend_root + "src/onboarding/main.tsx"
            or path.startswith(onboarding_inputs) or path in onboarding_exact
-           or path.startswith("shared/ui/") for path in paths):
+           or path.startswith("shared/ui/")
+           or path == "shared/assets/fonts/HostGrotesk-Variable.ttf" for path in paths):
         frontend = ROOT / "capture/desktop/ui/frontend"
         if not (ROOT / (frontend_root + "src/onboarding/main.tsx")).is_file():
             raise RuntimeError("Onboarding entry was deleted or renamed; update its focused check contract before pushing")
