@@ -291,7 +291,17 @@ jobs:
           # Reproduce the CI-sensitive fixtures before the full affected suites.
           if [ "${{ needs.select.outputs.root }}" = true ]; then
             cargo test -j 3 --locked --timings capture::desktop::settings::settings::tests::the_command_line_row_ -- --test-threads=2
-            cargo test -j 3 --locked capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket -- --exact
+            if [ "$RUNNER_OS" = macOS ]; then
+              cargo_trace_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo "Cargo competing_launches trace started at $cargo_trace_started_at"
+              cargo_trace_status=0
+              CARGO_LOG=cargo::core::compiler::fingerprint=trace cargo test -j 3 --locked capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket -- --exact || cargo_trace_status=$?
+              cargo_trace_ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo "Cargo competing_launches trace ended at $cargo_trace_ended_at (status $cargo_trace_status)"
+              if [ "$cargo_trace_status" -ne 0 ]; then exit "$cargo_trace_status"; fi
+            else
+              cargo test -j 3 --locked capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket -- --exact
+            fi
             if [ "$RUNNER_OS" = macOS ]; then
               cargo test -j 3 --locked connect::hosted::hosted_tests::hosted_security_darwin_acl_grants_fail_closed -- --exact
             fi

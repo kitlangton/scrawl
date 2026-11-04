@@ -108,6 +108,29 @@ test('main Mac producer selects the tested compiler before cache restore without
 })
 
 const selectedCompiler = '1.99.1-x86_64-apple-darwin'
+for (const os of ['macOS', 'Linux']) for (const status of [0, 7]) test(`Cargo preflight trace preserves ${os} status ${status}`, () => {
+  const root = mkdtempSync(join(tmpdir(), 'cargo-trace-'))
+  try {
+    const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
+    const start = workflow.indexOf('            if [ "$RUNNER_OS" = macOS ]; then\n              cargo_trace_started_at=')
+    assert.ok(start >= 0)
+    const end = workflow.indexOf('\n            fi', start) + '\n            fi'.length
+    const shell = workflow.slice(start, end)
+    const record = join(root, 'calls')
+    writeFileSync(join(root, 'cargo'), '#!/bin/bash\nprintf "%s|%s\\n" "${CARGO_LOG-unset}" "$*" >> "$TRACE_RECORD"\nexit "$TRACE_STATUS"\n', { mode: 0o755 })
+    const result = spawnSync('bash', ['-e', '-c', shell + '\necho reached-after-preflight'], {
+      encoding: 'utf8', env: { ...process.env, CARGO_LOG: '', PATH: root + ':' + process.env.PATH,
+        RUNNER_OS: os, TRACE_RECORD: record, TRACE_STATUS: String(status) },
+    })
+    assert.equal(result.status, status, result.stderr)
+    const calls = readFileSync(record, 'utf8').trim().split('\n')
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0], `${os === 'macOS' ? 'cargo::core::compiler::fingerprint=trace' : ''}|test -j 3 --locked capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket -- --exact`)
+    assert.equal(result.stdout.includes('reached-after-preflight'), status === 0)
+    assert.equal(result.stdout.includes('trace started at'), os === 'macOS')
+    assert.equal(result.stdout.includes(`(status ${status})`), os === 'macOS')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 for (const outcome of ['success', 'failure', 'incomplete', 'signal']) test(`actual verification TMPDIR cleanup: ${outcome}`, () => {
   const root = mkdtempSync(join(tmpdir(), 'verification-cleanup-'))
   try {
