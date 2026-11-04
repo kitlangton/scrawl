@@ -382,7 +382,7 @@ jobs:
           trap retain_bridge_logs EXIT
           TMPDIR="$storage_tmp" APPARENT_STORAGE_TEST_ELECTRON="$electron" \
             APPARENT_CONNECT_TEST_ELECTRON="$electron" \
-            "${bridge_runner[@]}" cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture
+            "${bridge_runner[@]}" cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture --test-threads=1
       - name: Retain synthetic Notes bridge startup logs
         if: always()
         uses: actions/upload-artifact@v4

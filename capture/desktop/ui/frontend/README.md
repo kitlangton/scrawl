@@ -773,6 +773,10 @@ Rust test binaries also request fixed-label Notes startup diagnostics on stderr.
 CI retains only the synthetic fixture's `notes-ui.log` before deleting its temporary
 root; labels contain no note text or error contents. Diagnostics do not acknowledge
 Ready, change the eight-second deadline or certify a failed bridge test.
+The CI Rust-to-Electron bridge fixtures run serially on their shared desktop;
+independent application startup is not a concurrent desktop stress test. The
+Notes native-startup labels distinguish activation-policy and window-construction
+stalls without increasing the readiness deadline.
 
 The shared Rust resolver is `capture::desktop::workflow::electron::resolve() -> Result<Resources>`;
 `Resources { executable, root }` supplies paths only. Surface owners launch their own

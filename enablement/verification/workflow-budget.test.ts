@@ -208,9 +208,9 @@ printf '${name}:%s\\n' "$*" >> "$CALLS"
         assert.match(lines[2], /^node:-e /)
         assert.deepEqual(lines.slice(3), os === 'Linux' ? [
           `sudo:chown root:root -- ${sandbox}`, `sudo:chmod 4755 -- ${sandbox}`,
-          'xvfb:-a cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture',
-          'cargo:test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture',
-        ] : ['cargo:test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture'])
+          'xvfb:-a cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture --test-threads=1',
+          'cargo:test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture --test-threads=1',
+        ] : ['cargo:test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture --test-threads=1'])
       } else assert.equal(lines.length, 2, 'build failure must stop before Electron or Cargo')
     }
     for (const scenario of ['not-hosted', 'wrong-mode', 'sudo-failure', 'symlink', 'missing']) {
