@@ -548,3 +548,17 @@ for the developer. Deleting or renaming the entry requires updating this check's
 contract before pushing. Existing repository contracts, exact-HEAD/clean-tree
 checks, conservative selection and native/release gates remain unchanged.
 This adds developer feedback, not a guarantee that all product tests run in hooks.
+
+Connect automatic main producers use one stable concurrency group with
+`cancel-in-progress: false`: GitHub retains one active run and replaces the pending
+slot with the latest arrival. This is arrival coalescing, not commit-order FIFO.
+An admitted run remains active even when its remaining matrix target is queued
+for a hosted runner; newer pushes do not cancel it or its executing targets.
+Manual dispatches, explicit rerun attempts and reusable Worker publishers have
+run-specific groups; publisher candidate IDs also distinguish calls in one run.
+The producer group differs from the existing publication lock, preventing caller/
+callee lock reuse. No redundant matrix lock or `queue` key unsupported by pinned
+actionlint 1.7.12 is added; omitting it selects GitHub's single-pending default.
+Runs created with older workflow definitions are not retroactively coordinated;
+existing-run cleanup remains an explicit owner action. Budgets and admission,
+attestation and publication gates are unchanged.

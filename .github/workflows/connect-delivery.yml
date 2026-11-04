@@ -12,6 +12,12 @@ on:
     secrets:
       CLOUDFLARE_API_TOKEN:
         required: false
+# Finish the admitted run, including matrix jobs waiting for a runner; retain
+# only the latest pending automatic main run. Explicit dispatches and reusable
+# Worker publishers must not evict that candidate or inherit its lock.
+concurrency:
+  group: connect-producer-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.producer-run == '' && 'automatic-main' || github.run_id }}-${{ inputs.producer-run }}
+  cancel-in-progress: false
 permissions:
   contents: read
   actions: read
@@ -269,5 +275,5 @@ jobs:
           version="recipient-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           node --experimental-strip-types connect/delivery/recipient/release.ts recipient-assets release-assets "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
           cd release-assets
-          sha256sum *.tar.gz > SHA256SUMS
+          sha256sum -- *.tar.gz > SHA256SUMS
           gh release create "$version" ./* --repo tryapparent/apparent --target "$GITHUB_SHA" --title "$version" --notes "Standalone recipient protocol 1. Source $GITHUB_SHA; trusted main producer run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT. Component binaries are not Apple signed or notarized. Desktop publication gates still apply." --latest=false
