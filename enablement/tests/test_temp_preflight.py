@@ -87,7 +87,7 @@ class TempPreflightTests(unittest.TestCase):
         with patch.dict(os.environ, TMPDIR='/missing-preflight-fixture'), patch.object(verification.subprocess, 'run') as run:
             verification.run_pr_checks()
         patterns = [call.args[0][-1] for call in run.call_args_list]
-        self.assertEqual(patterns, ['enablement/file-length/check.test.ts', 'shared/ui/scripts/check-theme.py', 'test_*.py',
+        self.assertEqual(patterns, ['enablement/file-length/check.test.ts', 'shared/ui/scripts/check-theme.py', 'test', 'test_*.py',
                                     'test_*push*.py', 'test_verification.py', 'test_release_gate.py',
                                     'test_temp_preflight.py', 'test_owner_lanes.py'])
         self.assertTrue(all(call.kwargs['check'] for call in run.call_args_list))

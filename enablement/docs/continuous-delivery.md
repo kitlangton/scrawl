@@ -551,6 +551,24 @@ budget to 900 seconds and both expanded job limits to 15 minutes after verified
 publication and installed updater acceptance; this exception is not a performance
 improvement or an increase to the separate NoMac spending/session limits.
 
+### Connect client TypeScript feedback before feature pushes
+
+Feature pre-push runs the existing `npm test` command in
+`connect/client/typescript` when the full merge-base delta changes its
+`package.json`, `package-lock.json`, `tsconfig.json`, `src/**`, or direct
+`test/*.test.ts` inputs. The command's declared `pretest` builds the package
+before running its Node tests. Node and the locked npm dependencies must already
+be installed; if package dependencies are missing, the hook prints the exact
+`npm ci --no-audit --no-fund` command and never installs them itself. Deleted
+package control files fail with an instruction to restore or update the check
+contract. Unrelated Connect service/web files skip this package command.
+
+This adds early TypeScript client feedback while retaining conservative root
+Cargo and Connect Rust consumer verification in current-main CI. The separate
+`test/production-interop.ts` fixture has an opt-in Rust bridge test marked
+`#[ignore]`, requiring explicit environment setup. Ordinary Cargo runs, feature
+hooks and the package's `test/*.test.ts` script do not execute that fixture.
+
 ### Onboarding entry feedback before feature pushes
 
 Feature pre-push verification runs the existing Desktop `npm run check:onboarding`
