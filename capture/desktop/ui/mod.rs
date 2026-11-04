@@ -1,3 +1,4 @@
+pub(super) mod coordinator;
 // Desktop-owned UI pieces; the top-level desktop module remains their shared context.
 pub(super) mod desktop_completion;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

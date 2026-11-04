@@ -188,7 +188,7 @@ fn experiments(sources: &[(PathBuf, String)]) -> Result<BTreeSet<String>, String
                     flags.insert(name.to_owned());
                     continue;
                 }
-                let path_arg = arg[..arg.find(')').unwrap_or(arg.len())].trim();
+                let path_arg = arg[..arg.find(')').unwrap_or(arg.len())].trim().trim_end_matches(',').trim_end();
                 let name = path_arg.rsplit("::").next().unwrap_or(path_arg);
                 match consts.get(name) {
                     Some(value) => {
@@ -278,6 +278,18 @@ fn config_fields_are_scanned_from_the_extracted_schema() {
     assert_eq!(config_keys(&sources), BTreeSet::from([
         "facadeKey".to_owned(), "schemaOnly".to_owned(),
     ]));
+}
+
+#[test]
+fn trailing_commas_preserve_experiment_constant_resolution() {
+    let sources = vec![(PathBuf::from("fixture.rs"), r#"
+const FLAG: &str = "fixtureFlag";
+experiment(crate::flags::FLAG,
+);
+experiment_enabled_in(&config, crate::flags::FLAG,
+);
+"#.to_owned())];
+    assert_eq!(experiments(&sources).unwrap(), BTreeSet::from(["fixtureFlag".to_owned()]));
 }
 
 #[test]

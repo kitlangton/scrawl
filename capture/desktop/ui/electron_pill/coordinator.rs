@@ -81,7 +81,7 @@ impl ApparentCoordinator {
         let mut view = self.electron_pill_view(0);
         let selection = self.electron_pill_selection();
         #[cfg(target_os = "linux")]
-        if matches!(self.island_phase, IslandPhase::Recording) {
+        if matches!(self.presentation.island_phase, IslandPhase::Recording) {
             let activity =
                 self.active_recording
                     .as_ref()
@@ -92,7 +92,7 @@ impl ApparentCoordinator {
                         } => audio.input_activity(),
                         _ => None,
                     });
-            self.electron_equalizer.step(activity, self.reduced_motion);
+            self.electron_equalizer.step(activity, self.presentation.reduced_motion);
             view.input_level = Some(self.electron_equalizer.level.clamp(0.0, 1.0));
         }
         if let Some(session) = &mut self.electron_pill {
@@ -110,7 +110,7 @@ impl ApparentCoordinator {
             self.electron_pill_failed = true;
             self.electron_pill_routed = false;
             apparent_log("Electron recording controls unavailable; restoring native controls");
-            if !matches!(self.island_phase, IslandPhase::Hidden | IslandPhase::Dismissing) {
+            if !matches!(self.presentation.island_phase, IslandPhase::Hidden | IslandPhase::Dismissing) {
                 let coordinator = cx.entity().clone();
                 cx.defer(move |cx| super::super::super::ensure_hud_pill_open(&coordinator, cx));
             }
@@ -132,7 +132,7 @@ impl ApparentCoordinator {
                 }
             }
             self.electron_pill_routed = true;
-            self.island_await_frame = false;
+            self.presentation.island_await_frame = false;
             self.native_pill.take();
             // Only the previous pill closes; picker/ink and recordings retain their owner.
             let coordinator = cx.entity().clone();
@@ -159,7 +159,7 @@ impl ApparentCoordinator {
             self.apply_pill_action(action, cx);
             self.sync_electron_pill();
         }
-        if matches!(self.island_phase, IslandPhase::Hidden) {
+        if matches!(self.presentation.island_phase, IslandPhase::Hidden) {
             self.sync_electron_pill();
         }
     }
@@ -176,7 +176,7 @@ mod upload_projection_tests {
         let bundle = std::path::PathBuf::from("/synthetic/selected.apparent");
         coord.completed_dir = Some(bundle.clone());
         coord.capture_generation = 7;
-        coord.island_phase = IslandPhase::Completed { finished_at: std::time::Instant::now(), frame_count: 1, duration_ms: 1000, inbox_count: 1 };
+        coord.presentation.island_phase = IslandPhase::Completed { finished_at: std::time::Instant::now(), frame_count: 1, duration_ms: 1000, inbox_count: 1 };
         let failure = UploadSizeFailure { kind: UploadQueueKind::Private, size: 90_000_001, limit: 90_000_000 };
         coord.completed_upload_size_failure = Some((bundle.clone(), 7, failure));
         assert_eq!(coord.electron_pill_view(1).pocket.unwrap().title, "Too large to upload");
@@ -186,9 +186,9 @@ mod upload_projection_tests {
         coord.completed_dir = Some("/synthetic/other.apparent".into());
         assert!(coord.electron_pill_view(3).pocket.is_none());
         coord.completed_dir = Some(bundle.clone());
-        coord.island_phase = IslandPhase::Hidden;
+        coord.presentation.island_phase = IslandPhase::Hidden;
         assert!(coord.electron_pill_view(4).pocket.is_none());
-        coord.island_phase = IslandPhase::Completed { finished_at: std::time::Instant::now(), frame_count: 1, duration_ms: 1000, inbox_count: 1 };
+        coord.presentation.island_phase = IslandPhase::Completed { finished_at: std::time::Instant::now(), frame_count: 1, duration_ms: 1000, inbox_count: 1 };
         coord.share_copied = Some(bundle);
         assert!(coord.electron_pill_view(5).pocket.is_none(), "private failure cannot become public-copy admission feedback");
         coord.completed_upload_size_failure.as_mut().unwrap().2.kind = UploadQueueKind::PublicCopy;
