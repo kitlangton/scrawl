@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createManifest, validateArtifact, validateTarget } from './contract.ts'
@@ -23,7 +23,13 @@ function sanitizedEnvironment() {
 }
 
 const sourceSha = cleanTrackedSource()
-if (readdirSync(packageRoot).includes('dist') && readdirSync(output).length) throw new Error('Native artifact output must be absent or empty')
+if (existsSync(output)) {
+  if (lstatSync(output).isSymbolicLink() || !lstatSync(output).isDirectory()) throw new Error('Native artifact output must be a real directory')
+  if (readdirSync(output).length) {
+    validateArtifact(output, targetConfig.target)
+    rmSync(output, { recursive: true })
+  }
+}
 mkdirSync(output, { recursive: true })
 const cargoTargetDir = resolve(packageRoot, '.build', 'cargo-target')
 const cargoCommon = ['--locked', '--target', targetConfig.triple, '--target-dir', cargoTargetDir]
