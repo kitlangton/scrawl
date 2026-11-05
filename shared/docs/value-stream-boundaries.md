@@ -29,6 +29,68 @@ These ownership boundaries do not require one process, service or repository per
 stream. Desktop remains a capture tool; the recipient workspace belongs to Connect.
 Capture-native support remains macOS/Linux only.
 
+### Record, Agent and Engine output boundary
+
+Accepted clarification, 2026-11-05. This supersedes the Desktop/Agent wording
+above for capture-to-handoff output ownership; it records a target, not completed
+adoption. Record is an independent TypeScript value stream, not a Desktop shell
+subsystem. There is no separate Processing value stream.
+
+- **Record:** capture what the user means and make it ready to hand off. Owns
+  the capture-to-handoff workflow and default output policy: keyframe selection,
+  transcript/notes assembly and bundle assembly. Exposes a headless TypeScript
+  API so Agent can request the standard outcome without Electron.
+- **Agent:** understand recordings and demonstrate work. Owns inspection,
+  targeted extraction and proof-video workflows/recipes. Consumes Record's
+  headless API for standard capture-to-handoff, and published Engine capabilities
+  for specific native operations. Starting a capture from Agent does not transfer
+  ownership of default output policy to Agent.
+- **Engine:** Rust/native capture and media execution, including transcription
+  inference, decoding, visual measurements, rendering and safe finalization.
+  Record and Agent choose product policy; Engine enforces native safety,
+  resource lifetime and truthful execution/completion facts.
+
+Dependency direction for the standard outcome is Agent → Record → Engine;
+Agent may also consume Engine directly for specific native operations. Record
+does not depend on Agent. Connect consumes completed output for authorized
+delivery/viewing without owning its production policy. Existing implementations
+remain authoritative until each replacement and its consumers are verified.
+
+### Remaining capture feature ownership
+
+Recorded 2026-11-05 under Simon's authorization to resolve the remaining gaps.
+These target assignments supersede older generic Desktop/Engine product-policy
+assignments for the features below. They do not claim implementation parity,
+schedule another thread's work, switch routing or authorize deletion/activation.
+Record and Agent product behavior stays TypeScript; Engine stays Rust/native.
+No additional Processing, Storage, Phone or Settings value stream is required.
+
+| User outcome / feature | Accountable owner | Capability boundary and consumers |
+| --- | --- | --- |
+| Keep local recordings available without filling the disk | Record | Owns capture location, local retention preferences, eligibility/scheduling, usage presentation and recovery experience. Engine provides bounded filesystem/media operations, durable recovery/finalization and exclusion protecting live captures/readers. Record proposes cleanup; Engine may refuse unsafe operations. Agent consumes the same local lifecycle policy rather than adding another cleanup scheduler. |
+| Preserve recordings while they are being delivered | Record locally; Connect remotely | Connect owns transfer lifecycle and remote retention/deletion. It holds an explicit artifact-use claim during transfer; Engine enforces the claim against local cleanup. Record does not inspect Connect queue internals. Local expiry and remote revocation/deletion are separate actions; neither implies the other. Preserve current pending-transfer protections until an accepted replacement exists. |
+| Capture an attached iPhone | Deferred; no current maintenance obligation | Simon explicitly deferred iPhone support. Phone discovery, mirroring, recording and phone-specific shrinking need not be maintained or adopted by Record, Engine, Agent or Onboarding in the current rebuild. They are not acceptance gates. Existing code is retained pending separately scoped removal; preserve existing recording data/readers. Resumption requires an explicit scope decision. |
+| Draw, type notes or use a whiteboard while explaining | Record | Owns pen/notes/whiteboard workflow, preferences and semantic inclusion in default output. Engine/native adapters supply actual input, overlay/window mechanics and capture-safe geometry/exclusion. Onboarding consumes factual Record outcomes for teaching; it does not implement drawing or manufacture accepted-stroke facts. |
+| Configure recording, transcription and export | Record | Owns recording preferences, provider/model selection intent, default output/export recipes and user-facing fallback choices. Engine reports supported providers/models, readiness and execution failures and performs inference/rendering. Provider secrets remain behind their supported credential adapter. Agent owns preferences specific to its proof recipes. Existing Engine policy remains authoritative until the complete replacement is verified. |
+| Inspect frames, zoom into evidence, reprocess or retranscribe | Agent | Owns command behavior, targeted inspection and recovery messages. Uses Record's headless API for standard bundle regeneration/default output; uses Engine for specific decode/crop/transcription operations. Distinguish derived inspection artifacts from an explicit rewrite of the canonical bundle. Record retains default output policy. |
+| Export a recording or produce a proof video | Record for standard recording export; Agent for proof workflows | Record owns the ordinary export recipe and human export workflow. Agent owns proof-specific sequencing, narration and evidence recipes. Engine executes rendering, synthesis and encoding with safe destination/finalization rules. Shared native execution does not transfer recipe ownership or require a second renderer. |
+| Share, retry, revoke or retrieve a recording | Connect | Owns consent, account/auth, credentials, encryption, durable transfer/retry, remote access and recipient viewing. Record offers an authorized artifact and presents delivery facts; Agent consumes Connect's public client for retrieval/sharing. Local save, copied link and ready-to-watch remain distinct facts. Connect is excluded from the current Agent slice, not unowned. |
+| Install, update and launch the assembled application reliably | Platform / Composition | Owns app-level startup/login preference, About/build identity, update channel, update/relaunch/recovery UX, artifact assembly and installer/updater integration in TypeScript. Native adapters own OS registration, signing/update installation mechanics and truthful installed state. Relaunch respects active Engine sessions. This is app infrastructure within the existing Platform owner, not another value stream or permission to publish. |
+| Configure a stream in one Settings window | Each stream; Composition hosts | Each stream owns its settings schema, validation, persistence and effects. Composition owns navigation, system-theme presentation and supported host/config adapters. One authoritative transactional mutation contract preserves unrelated keys/secrets. There is no central Settings policy owner or second config writer. |
+| Learn capture and repair setup | Onboarding for teaching; Record for recording readiness | Onboarding owns journey/progress, practice association and coaching. It consumes Record's general capability API; Record consumes Engine/native permission facts and allowed repair actions. Composition supplies bounded window/activation/persistence effects. OS grants and successful registration must be observed, never inferred from saved preferences. |
+| Install Agent tooling and skills | Agent | Owns standalone CLI/skill installation, compatibility and actual installation checks, plus agent-demo/proof preferences. Composition hosts its Settings contribution; Onboarding may explain it without owning the installer. |
+| Diagnose failures with consent | Each owner; Platform composes app consent | Each owner owns its errors and recovery diagnostics. Platform owns the app-wide technical-reporting preference and common transport adapter; streams respect it and preserve redaction. No capture/transcript upload follows from diagnostic consent. Enablement owns test infrastructure, not product recovery policy. |
+| Legacy dev-page registration and smart routing | Agent for any retained developer integration | Existing registration/SDK remnants are compatibility/dead-code assessment inputs, not an active delivery feature. Record preserves explicit local handoff; Connect owns authorized remote delivery. Do not restore automatic routing or send to a session. Verify consumers/build inputs and separately scope removal before deleting legacy code. |
+
+Implementation coverage remains distinct from this ownership map. Record's
+output/lifecycle adoption, Agent CLI/media parity, Connect client integration
+and Platform's installed maintenance route remain acceptance work for their
+respective owners. A package skeleton, fixture or successful build does not prove
+native recording, permission, clipboard, device or packaged-app behavior.
+Provider changes require affected consumer/OS checks; retain existing formats,
+sole writers, active-use protections and installed fallbacks until adoption is
+verified. This clarification alone creates no new implementation thread.
+
 ## Contracts and authority
 
 Engine publishes commands, structured events and artifact references; consumers

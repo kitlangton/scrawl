@@ -4,6 +4,12 @@ Read this before changing `capture/engine/runtime/phone.rs`, `shared/routing.rs`
 
 ## iPhone sources (`capture/engine/runtime/phone.rs`, `capture/native/ and desktop/native/`)
 
+Status, 2026-11-05: iPhone support is deferred by Simon and does not need to be
+maintained or adopted in the current rebuild. Phone-specific capture, mirroring
+and shrinking are not acceptance gates. The details below describe retained
+legacy implementation, not a current support commitment. This decision does not
+delete code or existing recordings; resumption requires explicit scope.
+
 - `apparent-helper` (Swift, built by `build.rs` into `target/<profile>/`, copied and signed into `Apparent.app/Contents/MacOS` by `install-app.sh`) does SpeechAnalyzer, CoreMediaIO/AVFoundation phone capture with the mirror window, and movie decoding. Swift was chosen over objc2 bindings because SpeechAnalyzer has no Objective-C surface and `objc2-av-foundation` is not in the lockfile.
 - Picker discovery (`apparent-helper devices`) reads the USB registry only: it is instant and never touches AVFoundation, so opening the picker can't raise a camera prompt or hang. The first time iPhone is chosen without Camera, Apparent closes the picker and opens the onboarding window's Camera row instead of starting the mirror (whose prompt would land under the picker).
 - Live capture: the mirror window's rect (global top-left points, streamed by the helper) is the telemetry target, so ink/laser/clicks normalize into phone coordinates; inputs are re-based onto the movie's clock (`recording.startedAt`) at finish. Keyframes are selected on 320 px candidates and re-decoded from the native video at a 1600 px long edge.
