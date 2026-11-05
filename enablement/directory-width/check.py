@@ -8,6 +8,18 @@ import subprocess
 import sys
 
 LIMIT = 10
+# Dot-prefixed immediate root directories are configuration/tooling areas and
+# are excluded from the ordinary owner-directory count. Their contents remain
+# eligible and checked at their own levels.
+# GitHub Actions requires one workflow file per independently scheduled stream.
+# This exact inventory is the sole nested width exception; unknown entries fail.
+WORKFLOW_DIRECTORY = b".github/workflows"
+WORKFLOW_FILES = {
+    b"connect-delivery.yml", b"linux-updater-harness.yml", b"native-proof-mac.yml",
+    b"release-linux.yml", b"release-mac-preview.yml", b"release-windows.yml",
+    b"value-stream-delivery.yml", b"verification-mac.yml",
+    b"verification-platform.yml", b"verification.yml", b"web-delivery.yml",
+}
 # Eligibility is by tracked first-party tree scope, not filename suffix. Every
 # non-excluded blob is repo-owned content for width purposes (including files
 # with extensionless or uncommon source names). Keep generated/dependency
@@ -139,7 +151,24 @@ def inspect(root: Path) -> list[tuple[bytes, int, int]]:
         direct = after_children.get(directory, {})
         files = sum(kind == "file" for kind in direct.values())
         dirs = sum(kind == "directory" for kind in direct.values())
-        if files > LIMIT or dirs > LIMIT:
+        if directory == b"":
+            normal_dirs = sum(
+                kind == "directory" and not name.startswith(b".")
+                for name, kind in direct.items()
+            )
+            width_exceeded = files > LIMIT or normal_dirs > LIMIT
+        elif directory == WORKFLOW_DIRECTORY:
+            normal_dirs = dirs
+            width_exceeded = dirs > LIMIT
+        else:
+            normal_dirs = dirs
+            width_exceeded = files > LIMIT or dirs > LIMIT
+        unknown_workflow_entries = (
+            directory == WORKFLOW_DIRECTORY
+            and bool(set(direct) - WORKFLOW_FILES)
+        )
+        workflow_file_overflow = directory == WORKFLOW_DIRECTORY and files > 11
+        if width_exceeded or unknown_workflow_entries or workflow_file_overflow:
             violations.append((directory, files, dirs))
     return violations
 
@@ -161,7 +190,12 @@ def main() -> int:
     if violations:
         print("pre-commit: staged candidate exceeds the directory-width limit:", file=sys.stderr)
         for path, files, dirs in violations:
-            print(f"  {decode_path(path)}: {files} files, {dirs} subdirectories (limit 10 each)", file=sys.stderr)
+            if path == b"":
+                print(f"  <root>: {files} files, {dirs} subdirectories (limit 10 files, 10 non-hidden directories)", file=sys.stderr)
+            elif path == WORKFLOW_DIRECTORY:
+                print(f"  {decode_path(path)}: {files} files, {dirs} subdirectories (limit 11 listed files, 10 subdirectories)", file=sys.stderr)
+            else:
+                print(f"  {decode_path(path)}: {files} files, {dirs} subdirectories (limit 10 each)", file=sys.stderr)
         print("Split changes by responsibility and stage only the intended changes; this hook does not edit or stage files.", file=sys.stderr)
         return 1
     return 0
