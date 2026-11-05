@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { assemble, verifyAssembly } from '../scripts/assemble.ts';
 import { buildShell, buildStream, root } from '../scripts/build.ts';
 import { digest } from '../scripts/artifacts.ts';
+import { verifyPackagedApplication } from '../scripts/package.ts';
 
 test('CI explicitly installs Electron before provisioning its sandbox helper', async () => {
   const workflow = await readFile(join(root, '../../.github/workflows/value-stream-delivery.yml'), 'utf8');
@@ -71,6 +72,16 @@ test('independent stream rebuild and compiler-free assembly preserve unchanged a
   assert.deepEqual(await readFile(join(second, 'renderer.js')), shellBytes);
   await assert.rejects(assemble(shell, [alpha, beta], second), /exists/i);
   await verifyAssembly(second); // An occupied destination remains intact.
+
+  // Match Electron Packager's actual Mac distribution layout. Checking the
+  // containing directory as if it were the .app would miss assembly.json.
+  const distribution = join(directory, 'mac-distribution');
+  const application = join(distribution, 'apparent-foundation.app');
+  const packagedPayload = join(application, 'Contents/Resources/app');
+  await cp(second, packagedPayload, { recursive: true });
+  assert.equal(await verifyPackagedApplication(distribution, 'darwin'), application);
+  await writeFile(join(packagedPayload, 'streams/alpha/index.js'), 'tampered');
+  await assert.rejects(verifyPackagedApplication(distribution, 'darwin'), /checksum/);
 });
 
 test('assembly rejects incompatible, duplicate, tampered and unsafe inputs before publication', async t => {

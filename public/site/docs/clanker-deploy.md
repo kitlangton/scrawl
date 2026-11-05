@@ -25,7 +25,7 @@ The homepage builds directly from TypeScript/React source; follow
 
 ## Homepage marker guard
 
-`scripts/site-build/package-apparent.mjs` uses `scripts/site-build/package-page-text.mjs` as a parser-only stale-build
+`scripts/site-build/package-apparent.ts` uses `scripts/site-build/package-page-text.ts` as a parser-only stale-build
 marker guard, not an HTML sanitizer or proof of CSS/layout visibility. Its
 intended content boundary is parsed body text, excluding `script`, `style`,
 `template`, `noscript`, and `iframe` subtrees, any subtree with a `hidden`
@@ -38,7 +38,7 @@ The guard does not evaluate the CSS cascade, CSS escapes or variables, external
 CSS, layout, or dynamic state. Other ways of concealing content remain outside
 its scope; browser visibility still needs browser verification. Normal body
 text across inline elements and decoded entities can supply markers. Extraction
-does not rewrite the packaged HTML. Run `node --test scripts/commerce/test-package-text.mjs`
+does not rewrite the packaged HTML. Run `node --test scripts/commerce/test-package-text.ts`
 to check acceptance and rejection through the real packager, including preservation
 of the previous artifact when marker validation rejects a build.
 
@@ -57,12 +57,12 @@ and verify it normally. Generated snapshots and compiled-bundle overlays are
 retired. See `pages-deploy.md` for artifact sealing and main-branch publication.
 
 After building and packaging, run the source and artifact Node tests with
-`node --test scripts/brand/test-brand-favicon.mjs scripts/browser-proof/test-github-stars.mjs scripts/pages/test-latest-download.mjs scripts/pages/test-platform-os.mjs scripts/pages/test-public-homepage.ts scripts/browser-proof/test-video-demo.mjs`.
+`node --test scripts/brand/test-brand-favicon.ts scripts/browser-proof/test-github-stars.ts scripts/pages/test-latest-download.ts scripts/pages/test-platform-os.ts scripts/pages/test-public-homepage.ts scripts/browser-proof/test-video-demo.ts`.
 Browser scripts accept `SITE_ARTIFACT`/`SITE_EVIDENCE` inputs; the wildcard is not
 a standalone suite.
 Against a
 server that supports HTTP byte ranges, run
-`node scripts/browser-proof/verify-video-demo-browser.mjs <URL> <private evidence directory>`.
+`node scripts/browser-proof/verify-video-demo-browser.ts <URL> <private evidence directory>`.
 `CHROME_PATH` can select an existing Chrome installation. The browser check covers
 first-load chapter seeking, play/pause, replay, all chapters, sound, pointer and
 keyboard seeking, absence of drawing controls and Shift-drag ink, natural ending, rapid switching, missing-media
@@ -72,7 +72,7 @@ and Chrome can clamp an early seek to zero. Require a live `206` response with
 the correct `Content-Range`, compare the downloaded movie's SHA-256 with the
 packaged source, and rerun the browser check on the public URL after cutover.
 
-For layout changes, run `node scripts/browser-proof/verify-page-density-browser.mjs <URL>`
+For layout changes, run `node scripts/browser-proof/verify-page-density-browser.ts <URL>`
 against the packaged page. It checks the download gap, shorter hero, uncropped
 movie, and visible, reachable playback/chapter controls at seven desktop and
 phone sizes, including a 600px-tall desktop. The movie width follows viewport
