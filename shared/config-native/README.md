@@ -9,18 +9,23 @@ here. Rust is limited to native locking and durable publication.
 
 The helper takes a fixed absolute config path and owner ID on its command line:
 `apparent-config-host --config /absolute/config.json --owner onboarding`.
-Requests cannot change either binding. Line-delimited protocol 1 accepts only
-`read` or `compareAndSwap` with a correlation ID. CAS takes an expected numeric
-revision and a JSON value; it returns `saved`, `conflict` with current state, or
-`unknown` when success cannot be confirmed. Reads and conflicts do not rewrite
-the file. Never retry an uncertain write without reading persisted state.
+Requests cannot change either binding. Line-delimited protocol 1 accepts
+`read`, `compareAndSwap`, `readForAdoption` and `adoptLegacy` with a correlation
+ID. Adoption reads the owner entry and only the top-level legacy key whose name
+is exactly the bound owner ID. Its presence envelope distinguishes missing from
+JSON null. `adoptLegacy` requires the owner entry to remain absent and the
+legacy presence/value to match the supplied snapshot under the same writer
+lock; it writes owner revision 1 and never removes the legacy key. Conflicts
+return a fresh snapshot. Reads and conflicts do not rewrite the file. Never
+retry an uncertain write without reading persisted state.
 
 Host envelopes live under `streamState[owner]` as `{revision,value}`. An absent
 entry reads as revision 0 and null. Revisions are monotonically increasing safe
 JavaScript integers. Unrelated keys, secrets and other owner entries remain
 opaque and preserved. A malformed existing config or selected owner envelope
 fails closed. Owner codecs define schema and legacy interpretation outside this
-resource. Existing legacy configuration keys retain their authoritative writers.
+resource. Existing legacy configuration keys retain their authoritative writers;
+this primitive does not interpret or delete legacy values.
 
 The native producer in `composition/config/native` supplies precompiled
 Linux/macOS x64 artifacts and exercises the exact staged executable. Normal

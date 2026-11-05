@@ -63,3 +63,38 @@ test('real helper rejects malformed existing config and never overwrites its byt
     } finally { await f.close(); }
   }
 });
+
+
+test('real helper adopts owner-interpreted legacy progress once without losing original keys', async () => {
+  const f = await fixture();
+  try {
+    const legacy = { seen: true, deferred: true, resume: 'permissions', granted: ['microphone'], relaunchAt: 123, reopenFix: true };
+    await writeFile(f.configPath, JSON.stringify({ onboarding: legacy, secret: 'synthetic-only', streamState: { agent: { revision: 9, value: 'opaque' } } }), { mode: 0o600 });
+    const left = await f.peer();
+    const right = await f.peer();
+    const snapshot = await left.readForAdoption('onboarding');
+    assert.deepEqual(snapshot, { owner: { present: false, revision: 0, value: null }, legacy: { present: true, value: legacy } });
+    const before = await readFile(f.configPath, 'utf8');
+    await right.readForAdoption('onboarding');
+    assert.equal(await readFile(f.configPath, 'utf8'), before);
+    // These encoded owner values represent owner codec output, not host journey policy.
+    const results = await Promise.all([
+      left.adoptLegacy('onboarding', snapshot.legacy, { schema: 1, stage: 'permissions', imported: true }),
+      right.adoptLegacy('onboarding', snapshot.legacy, { schema: 1, stage: 'welcome', imported: true }),
+    ]);
+    assert.equal(results.filter(result => result.status === 'saved').length, 1);
+    const conflict = results.find(result => result.status === 'conflict');
+    assert(conflict?.status === 'conflict');
+    assert.deepEqual(conflict.snapshot, await left.readForAdoption('onboarding'));
+    assert.equal(conflict.snapshot.owner.present, true);
+    assert.equal(conflict.snapshot.owner.revision, 1);
+    const raw = JSON.parse(await readFile(f.configPath, 'utf8'));
+    assert.deepEqual(raw.onboarding, legacy);
+    assert.equal(raw.secret, 'synthetic-only');
+    assert.deepEqual(raw.streamState.agent, { revision: 9, value: 'opaque' });
+    await left.close();
+    const resumed = await f.peer();
+    assert.deepEqual(await resumed.readForAdoption('onboarding'), conflict.snapshot);
+    assert.equal((await resumed.adoptLegacy('onboarding', snapshot.legacy, null)).status, 'conflict');
+  } finally { await f.close(); }
+});
