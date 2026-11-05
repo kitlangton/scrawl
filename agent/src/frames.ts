@@ -252,6 +252,20 @@ export async function decodeFrames(client: MediaClient, bundleInput: string, run
       !Number.isSafeInteger(selection.fps) || selection.fps < 1 || selection.fps > MAX_FPS || selection.requestedBundleMs.length < 1 ||
       selection.requestedBundleMs.length > MAX_FRAMES || !selection.requestedBundleMs.every(time => Number.isSafeInteger(time) && time >= selection.fromMs && time < selection.toMs))
     throw new Error('Invalid frame selection; timestamps must be safe slots within a positive bounded range');
+  return decodeFrameRequests(client, bundleInput, runtimePath, selection.requestedBundleMs, observeCancel, testHarness);
+}
+
+/** Decode caller-selected ordered timestamps exactly, including an endpoint and duplicates. */
+export async function decodeFrameTimes(client: MediaClient, bundleInput: string, runtimePath: string, requestedBundleMs: number[],
+  observeCancel: () => boolean = () => false, testHarness?: { allowTestDouble: true }) {
+  if (requestedBundleMs.length < 1 || requestedBundleMs.length > MAX_FRAMES ||
+      !requestedBundleMs.every(time => Number.isSafeInteger(time) && time >= 0))
+    throw new Error(`Frame request must contain 1..${MAX_FRAMES} safe timestamps`);
+  return decodeFrameRequests(client, bundleInput, runtimePath, requestedBundleMs, observeCancel, testHarness);
+}
+
+async function decodeFrameRequests(client: MediaClient, bundleInput: string, runtimePath: string, requestedBundleMs: number[],
+  observeCancel: () => boolean, testHarness?: { allowTestDouble: true }): Promise<{ jobId: string; bundlePath: string; outputDirectory: string; frames: MediaFrameRef[] }> {
   const handshake = await client.handshake();
   if ((handshake.implementation !== 'native' && !(testHarness?.allowTestDouble === true && handshake.implementation === 'test-double')) ||
       (handshake.implementation === 'native' && !handshake.capabilities.decodeFrames))
@@ -259,7 +273,7 @@ export async function decodeFrames(client: MediaClient, bundleInput: string, run
   const input = await sourceFor(bundleInput);
   const jobId = createMediaJobId();
   const outputDirectory = await freshJobOutput(runtimePath, jobId);
-  const request = { jobId, source: input.source, requestedBundleMs: [...selection.requestedBundleMs], outputDirectory,
+  const request = { jobId, source: input.source, requestedBundleMs: [...requestedBundleMs], outputDirectory,
     limits: { maxFrames: MAX_FRAMES, maxEdge: 1280, maxTotalPixels: 64_000_000, deadlineMs: 30_000 } } as Omit<DecodeRequest, 'channel'|'protocolVersion'|'clientId'|'rpcId'|'method'>;
   let result: DecodeResult;
   let decodeSettled = false;
