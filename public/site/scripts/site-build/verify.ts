@@ -1,8 +1,9 @@
-// Standalone Public verification. Composed Connect/cross-origin and Pages
-// preparation remain in the web consumer; this is not a publication command.
-import { accessSync, constants, existsSync } from 'node:fs'
+// Standalone Public verification. Pages preparation and publication remain
+// in the Public deployment job; this is not a publication command.
+import { accessSync, constants } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { installPublicBrowsers } from '../browser-setup/install.ts'
 
 const args = new Set(process.argv.slice(2))
 for (const arg of args) if (!['--installed', '--install-browser'].includes(arg)) throw new Error(`Unknown argument: ${arg}`)
@@ -18,16 +19,7 @@ function executable(path: string): boolean {
 }
 if (!args.has('--installed')) run('bun', ['install', '--frozen-lockfile'])
 if (env.CHROME_PATH && !executable(env.CHROME_PATH)) throw new Error(`CHROME_PATH is not executable: ${env.CHROME_PATH}`)
-if (args.has('--install-browser')) {
-  const { chromium, firefox } = await import('playwright-core')
-  // The responsive homepage suite exercises Firefox even with a custom Chrome.
-  const browsers = env.CHROME_PATH ? ['firefox'] : ['chromium', 'firefox']
-  run('./node_modules/.bin/playwright-core', ['install', '--with-deps', ...browsers])
-  env.CHROME_PATH ??= chromium.executablePath()
-  for (const path of [env.CHROME_PATH, firefox.executablePath()]) {
-    if (!existsSync(path)) throw new Error(`Installed browser is missing: ${path}`)
-  }
-}
+if (args.has('--install-browser')) env.CHROME_PATH = await installPublicBrowsers({ environment: env })
 
 run('npm', ['run', 'build'])
 run('node', ['scripts/site-build/package-apparent.ts'])
@@ -44,5 +36,5 @@ const tests = [
   'browser-proof/test-og-stage-redirect.ts', 'browser-proof/test-og-video-stage-browser.ts',
 ]
 run('node', ['--test', ...tests.map(path => `scripts/${path}`)])
-run('node', ['--test', 'scripts/cd/publish-pages.test.ts', 'scripts/cd/source-boundary.test.ts', 'scripts/cd/stream-artifact.test.ts'])
+run('node', ['--test', 'scripts/browser-setup/install.test.ts', 'scripts/cd/publish-pages.test.ts', 'scripts/cd/source-boundary.test.ts', 'scripts/cd/stream-artifact.test.ts'])
 run('node', ['--experimental-strip-types', 'scripts/cd/analytics-smoke.ts'])

@@ -20,6 +20,45 @@ const publicationNames = ['completed payload', 'select', 'produce', 'publish', '
 test('union counts parallel execution once and excludes queue gaps', () => {
   assert.equal(executionSeconds([job(0, 100), job(30, 80), job(90, 200), job(500, 650)]), 350)
 })
+const admissionReceipt: Job = { ...job(10, 68, 'value-stream admission'),
+  runner_id: null, runner_name: null, steps: [], labels: [] }
+test('Agent run 42100426107 inventory excludes the synthetic admission receipt before and after completion', async () => {
+  // Sanitized exact-attempt API shape: 20s contracts + 28s producer. The
+  // synthetic check overlaps both and waits for this audit, not a runner.
+  for (const status of ['in_progress', 'completed']) {
+    const receipt = { ...admissionReceipt, status, conclusion: status === 'completed' ? 'failure' : null,
+      completed_at: status === 'completed' ? admissionReceipt.completed_at : null }
+    const inventory = [job(0, 20, 'deliver / Delivery contracts'), receipt,
+      job(24, 52, 'verify-pr / pr-stream (agent, linux-x64)'),
+      { ...job(22, 22, 'deliver / stream'), conclusion: 'skipped' },
+      { ...pendingAudit, name: `deliver / ${auditName}`, status: 'in_progress' }]
+    const pages = [inventory.slice(0, 2), inventory.slice(2)]
+    let page = 0
+    const loaded = await loadJobs('https://api.github.com', 'tryapparent/apparent', '42100426107', '1', 'synthetic',
+      (async () => Response.json({ total_count: inventory.length, jobs: pages[page++] })) as typeof fetch)
+    assert.equal(loaded.length, 5, 'the complete API inventory must still be validated and retained')
+    assert.equal(page, 2)
+    assert.match(enforceBudget(loaded), /48.0s \/ 900s/)
+  }
+})
+test('real, unknown or incompletely identified jobs cannot use the admission receipt exclusion', () => {
+  for (const change of [{ name: 'unknown control check' }, { runner_id: 123 }, { runner_name: 'runner' },
+    { steps: [{}] }, { labels: ['ubuntu-24.04'] }, { runner_id: undefined }, { runner_name: undefined },
+    { steps: undefined }, { labels: undefined }]) {
+    const candidate = { ...admissionReceipt, ...change }
+    assert.throws(() => executionSeconds([{ ...candidate, status: 'in_progress' }]), /not terminal/)
+    assert.equal(executionSeconds([candidate]), 58, 'completed lookalikes retain their entire execution interval')
+    assert.throws(() => enforceBudget([{ ...candidate, ...job(0, 901, candidate.name) }]), /901.0s \/ 900s/)
+  }
+})
+test('publication inventory excludes only the identified synthetic admission receipt', () => {
+  const publisher = publicationJob()
+  const inventory = [job(0, 480, 'completed payload'), ...publicationNames.filter(name => !['completed payload', publisher.name].includes(name)).map(name => job(0, 0, name)), publisher]
+  const receipt = { ...admissionReceipt, status: 'in_progress', conclusion: null, completed_at: null }
+  assert.match(enforcePublicationReservation([...inventory, receipt], publisher.name, 120, publicationNames), /600.0s \/ 600s/)
+  assert.throws(() => enforcePublicationReservation([...inventory, { ...receipt, name: 'unknown check' }], publisher.name, 120, publicationNames), /Workflow job inventory/)
+  assert.throws(() => enforcePublicationReservation([...inventory, { ...receipt, runner_id: 123 }], publisher.name, 120, publicationNames), /Workflow job inventory/)
+})
 test('sequential reusable jobs share one workflow budget', () => {
   assert.throws(() => enforceBudget([job(0, 350), job(400, 1000)]), /agent whose run exceeded the limit owns optimization/)
   assert.doesNotThrow(() => enforceBudget([job(0, 600)]))

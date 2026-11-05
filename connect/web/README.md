@@ -21,8 +21,8 @@ CONNECT_EVIDENCE="$TMPDIR/connect-browser-check" npm test
 
 `npm test` rebuilds the production artifact, checks its shape/privacy, then builds
 an isolated `dist-test` and runs the inherited browser scenarios against a labelled
-synthetic API. `CHROME_PATH` selects Chromium (default is the repository's
-`/home/simon/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome`). No live
+synthetic API. `CHROME_PATH` overrides Chromium; otherwise Playwright selects
+the executable matching its locked package and `PLAYWRIGHT_BROWSERS_PATH` cache. No live
 OAuth, real account, backend deployment, native app or production routing is proved.
 If Bun is not on PATH, `npx --yes bun@1.3.10 install --frozen-lockfile` works.
 Do not generate an npm lock. The ordinary generated Bun lock stays below 2,000 lines.

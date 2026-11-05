@@ -7,6 +7,7 @@ on:
     workflows:
       - agent delivery
       - app-shell delivery
+      - Connect browser delivery
       - Connect client delivery
       - engine-media-native delivery
       - engine-native delivery

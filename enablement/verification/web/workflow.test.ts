@@ -15,7 +15,7 @@ const eventPaths = (source: string, event: string) => {
 const section = (source: string, name: string) => source.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z-]+:\n/)[0] ?? ''
 const registrations: Record<string, string> = {
   'app-shell': 'composition/app/delivery.json', record: 'record/delivery.json',
-  'connect-client': 'connect/delivery.json', engine: 'engine/delivery.json',
+  'connect-browser': 'connect/tooling/hosting/delivery.json', 'connect-client': 'connect/delivery.json', engine: 'engine/delivery.json',
   'engine-native': 'engine/delivery/native/delivery.json', 'engine-media-native': 'engine/delivery/media/delivery.json',
   'platform-config': 'composition/config/native/delivery.json', onboarding: 'onboarding/delivery.json',
   agent: 'agent/delivery.json', public: 'public/delivery.json',
@@ -85,6 +85,8 @@ test('Public alone owns Pages deployment without Connect inputs or completion tr
   assert.deepEqual([...deploy.matchAll(/^\s+needs: (.+)$/gm)].map(match => match[1]), ['stream'])
   assert.doesNotMatch(deploy, /scripts\/connect\/|CONNECT_BROWSER_ARTIFACT|COMPOSE_|connect-browser|VITE_HOSTED_API_ORIGIN/)
   assert.match(deploy, /scripts\/artifact\/verify\.ts/)
+  assert.match(deploy, /node scripts\/browser-setup\/install\.ts/)
+  assert.doesNotMatch(deploy, /playwright-core install --with-deps/)
   assert.match(deploy, /scripts\/pages\/prepare-pages-video\.ts/)
   assert.match(deploy, /scripts\/pages\/test-public-homepage\.ts/)
   assert.match(section(publicEntry, 'deploy'), /permissions:\n      contents: read\n      actions: read/)
