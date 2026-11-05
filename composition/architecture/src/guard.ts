@@ -173,13 +173,6 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
         if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) errors.push(`${path.relative(root,file)}:${line}: tsconfig alias resolves outside the repository (${spec})`);
         else if (to !== from) errors.push(`${path.relative(root,file)}:${line}: tsconfig alias crosses ${from} -> ${to} (${spec})`);
       }
-      const pkg = packageRef(spec, packageNames);
-      if (pkg) {
-        const target = packageOwners[pkg.name] ?? packageNames.get(pkg.name)!.owner;
-        if (!allowed(from, target)) errors.push(`${path.relative(root,file)}:${line}: forbidden package dependency ${from} -> ${target} (${spec})`);
-        if (!manifestExports(root, pkg.name, packageNames).has(pkg.subpath)) errors.push(`${path.relative(root,file)}:${line}: private or undeclared package subpath ${spec}`);
-        return;
-      }
       // baseUrl and package-import mappings can resolve bare names to source
       // without a paths entry. Use TypeScript's resolver rather than guessing.
       if (!spec.startsWith('.') && !spec.startsWith('/') && !spec.startsWith('file:') && scope.options) {
@@ -191,6 +184,13 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
             errors.push(`${path.relative(root,file)}:${line}: resolved bare import crosses owner boundary (${spec})`);
           }
         }
+      }
+      const pkg = packageRef(spec, packageNames);
+      if (pkg) {
+        const target = packageOwners[pkg.name] ?? packageNames.get(pkg.name)!.owner;
+        if (!allowed(from, target)) errors.push(`${path.relative(root,file)}:${line}: forbidden package dependency ${from} -> ${target} (${spec})`);
+        if (!manifestExports(root, pkg.name, packageNames).has(pkg.subpath)) errors.push(`${path.relative(root,file)}:${line}: private or undeclared package subpath ${spec}`);
+        return;
       }
       if (spec.startsWith('.') || spec.startsWith('/') || spec.startsWith('file:')) {
         const local = resolveLocal(root,file,spec);

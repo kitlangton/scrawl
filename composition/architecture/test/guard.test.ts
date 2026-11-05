@@ -67,7 +67,11 @@ test('baseUrl-only bare imports cannot reach another owner implementation', () =
   'record/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '..', moduleResolution: 'NodeNext', module: 'NodeNext' } }),
   'record/src/index.ts': "import 'engine/sdk/src/private.js';",
   'engine/sdk/src/private.ts': 'export const privateImplementation = true;',
-}, root => assert(checkArchitecture(root).some(error => error.includes('resolved bare import crosses owner boundary')))));
+  'record/faux/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '../../engine/sdk/src', moduleResolution: 'NodeNext', module: 'NodeNext' } }),
+  'record/faux/index.ts': "import '@apparent/engine-sdk';",
+  'engine/sdk/package.json': engine,
+  'engine/sdk/src/@apparent/engine-sdk.ts': 'export const hiddenByPackageName = true;',
+}, root => assert.equal(checkArchitecture(root).filter(error => error.includes('resolved bare import crosses owner boundary')).length, 2)));
 
 test('rejects private package subpaths and computed imports', () => fixture({
   'engine/sdk/package.json': engine,
