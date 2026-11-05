@@ -9,7 +9,19 @@ the crypto compatibility primitives for #529. It preserves the current Rust
 - `apparent-encrypted-v1\0signed-envelope\0` followed by the signed JSON in Rust struct field order;
 - strict Ed25519 verification (canonical encodings, weak public keys and small-order `R` rejected).
 
-It does not implement identity persistence, filesystem permissions, envelope/asset policy validation, service authorization, or production transfer lifecycle. Those remain migration work. In particular, this package's synthetic tests do not replace exercising the production Rust `pack`/`unpack` functions against TypeScript output.
+`validateRecipientEnvelope` is the parsed-DTO recipient boundary: it bounds the
+envelope, enforces the v1 context and ordered multipart chunk rules, pins every
+context field to caller supplied expectations, and verifies the signature with
+the caller's trusted sender signing key. Its typed error categories contain no
+wire content. Signature integrity is not service authorization: callers must
+resolve the sender grant/key from current trusted authorization state first.
+Because the API takes an already parsed object, raw JSON must be read under a
+128 KiB cap by a strict decoder that rejects duplicate object keys; `JSON.parse`
+alone cannot establish that property. Asset content/group manifest checks,
+identity persistence, filesystem permissions, service authorization, and
+production transfer lifecycle remain migration work. Existing Rust callers
+remain authoritative; this module is not installed in a production recipient
+path and does not replace production Rust `pack`/`unpack` interoperability.
 
 ## Account Settings adoption
 
@@ -98,4 +110,9 @@ On Clanker, wrap that Cargo command once with `t3-build`, per root instructions.
 This explicit cross-language migration check needs Rust; ordinary package
 install/build/test/pack commands above do not. The fixture does not certify
 production TypeScript transport, filesystem publication, account enrollment or
-grouped evidence/media consumers, which remain migration work.
+grouped evidence/media consumers, which remain migration work. The new envelope
+validator has synthetic compatibility/failure tests only; next adoption requires
+a real recipient caller to supply bounded strict decoding, current
+authorization-derived sender key and pinned expected context, then retain Rust
+unpack/native publication and authorization gates until those consumers are
+independently verified.
