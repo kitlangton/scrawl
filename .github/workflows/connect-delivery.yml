@@ -97,11 +97,11 @@ jobs:
         run: |
           (cd connect/service && npm ci --include=dev)
           (cd connect/web && bun install --frozen-lockfile)
-          (cd connect/web && ./node_modules/.bin/playwright-core install --with-deps chromium firefox)
           cd connect/web
+          node --experimental-strip-types scripts/playwright-runtime.ts
           echo "CHROME_PATH=$(node --input-type=module -e 'import {chromium} from "playwright-core"; console.log(chromium.executablePath())')" >> "$GITHUB_ENV"
       - name: Verify producer contracts
-        run: node --experimental-strip-types --test connect/delivery/*.test.ts
+        run: node --experimental-strip-types --test connect/delivery/*.test.ts connect/web/scripts/*.test.ts
       - name: Verify service
         run: cd connect/service && npm test
       - name: Verify browser and analytics
