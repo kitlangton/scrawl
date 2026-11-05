@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
-import { assessPrior, catalog, inputDigest, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPath } from './core.ts'
+import { assessPrior, catalog, inputDigest, makePlan, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPath } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
 // accidentally use the hook caller's index, object database or worktree.
@@ -35,10 +35,24 @@ test('catalog reports absent owners pending and blocks present owners without re
   mkdirSync(resolve(path, 'composition/app'), { recursive: true })
   const missing = catalog(path)
   assert.deepEqual(missing.blocked, ['app-shell: source exists without delivery registration'])
-  assert.deepEqual(missing.pending, ['record', 'engine', 'onboarding', 'agent'])
+  assert.deepEqual(missing.pending, ['record', 'engine', 'engine-native', 'onboarding', 'agent'])
   mkdirSync(resolve(path, 'record')); mkdirSync(resolve(path, 'shared/ui'), { recursive: true })
   writeFileSync(resolve(path, 'record/delivery.json'), JSON.stringify({ ...owner, inputs: ['shared/ui/'] }))
   assert.match(catalog(path).blocked.join(';'), /Package source must be covered/)
+})
+
+test('native Engine and SDK are independent lanes with the same architectural owner', () => {
+  const path = resolve(temp, 'native-plan')
+  mkdirSync(resolve(path, 'engine/sdk'), { recursive: true })
+  mkdirSync(resolve(path, 'engine/delivery/native'), { recursive: true })
+  writeFileSync(resolve(path, 'engine/delivery.json'), JSON.stringify({ ...owner, id: 'engine', package: 'engine/sdk', inputs: ['engine/'] }))
+  writeFileSync(resolve(path, 'engine/delivery/native/delivery.json'), JSON.stringify({ ...owner, id: 'engine-native', kind: 'directory', language: 'native', package: 'engine/delivery/native', artifactPath: 'dist', inputs: ['engine/'], targets: ['linux-x64', 'macos-x64'] }))
+  const plan = makePlan(path)
+  assert.deepEqual(plan.blocked, [])
+  const sdk = plan.matrix.include.filter(row => row.id === 'engine')
+  const native = plan.matrix.include.filter(row => row.id === 'engine-native')
+  assert.equal(sdk.length, 1); assert.equal(sdk[0].language, 'typescript')
+  assert.equal(native.length, 2); assert(native.every(row => row.language === 'native' && row.architecture_owner === 'engine'))
 })
 
 test('packed consumer imports code but verifies stylesheet exports as contained assets', () => {

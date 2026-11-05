@@ -15,6 +15,7 @@ const roots = [
   { id: 'app-shell', source: 'composition/app', registration: 'composition/app/delivery.json' },
   { id: 'record', source: 'record', registration: 'record/delivery.json' },
   { id: 'engine', source: 'engine/sdk', registration: 'engine/delivery.json' },
+  { id: 'engine-native', source: 'engine/delivery/native', registration: 'engine/delivery/native/delivery.json' },
   { id: 'onboarding', source: 'onboarding', registration: 'onboarding/delivery.json' },
   { id: 'agent', source: 'agent', registration: 'agent/delivery.json' },
 ]
@@ -105,7 +106,8 @@ function fingerprint(root: string, owner: Owner, target: Target, revision = 'HEA
 export function inputDigest(root: string, owner: Owner, target: Target = owner.targets[0]): string { return fingerprint(root, owner, target) }
 export function makePlan(root: string) {
   const { owners, pending, blocked } = catalog(root)
-  const include = owners.flatMap(owner => owner.targets.map(target => ({ id: owner.id, target, runner: target === 'linux-x64' ? 'ubuntu-24.04' : 'macos-26-intel', kind: owner.kind, stage: owner.stage, package: owner.package, verify: owner.verify, build: owner.build, language: owner.language })))
+  const guardOwners: Record<string, string> = { 'app-shell': 'composition', engine: 'engine', 'engine-native': 'engine', record: 'record', agent: 'agent', onboarding: 'onboarding' }
+  const include = owners.flatMap(owner => owner.targets.map(target => ({ id: owner.id, target, runner: target === 'linux-x64' ? 'ubuntu-24.04' : 'macos-26-intel', kind: owner.kind, stage: owner.stage, package: owner.package, verify: owner.verify, build: owner.build, language: owner.language, architecture_owner: guardOwners[owner.id] ?? '' })))
   return { matrix: { include }, has_ready: include.length > 0, pending, blocked }
 }
 

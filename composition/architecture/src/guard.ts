@@ -4,7 +4,7 @@ import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-type Owner = 'engine' | 'record' | 'agent' | 'onboarding' | 'shared' | 'composition' | 'legacy' | 'other';
+export type Owner = 'engine' | 'record' | 'agent' | 'onboarding' | 'shared' | 'composition' | 'legacy' | 'other';
 const product = ['engine', 'record', 'agent', 'onboarding'] as const;
 const packageRoots: Record<string, string> = {
   '@apparent/engine-sdk': 'engine/sdk', '@apparent/record': 'record',
@@ -92,13 +92,14 @@ function resolveLocal(root: string, source: string, spec: string): string {
   return canonical(candidate);
 }
 
-export function checkArchitecture(rootInput: string): string[] {
+export function checkArchitecture(rootInput: string, owners?: readonly Owner[]): string[] {
   const root = canonical(path.resolve(rootInput));
   const errors: string[] = [];
+  const selected = (owner: Owner) => !owners || owners.includes(owner);
   const gitFiles = (patterns: string[]) => execFileSync('git', ['-C', root, 'ls-files', '-z', '-co', '--exclude-standard', '--', ...patterns], { encoding: 'buffer', env: gitEnvironment }).toString().split('\0').filter(Boolean);
   const files = gitFiles(['*.ts', '*.tsx', '*.cts', '*.mts'])
     .map(p => path.resolve(root, p)).filter(p => sourceExt.has(path.extname(p)) && !p.split(path.sep).some(part => ignoredParts.has(part)) && existsSync(p));
-  for (const file of files) if (ownerOf(root,canonical(file)) !== ownerOf(root,file)) errors.push(`${path.relative(root,file)}: source symlink resolves into ${ownerOf(root,canonical(file))}`);
+  for (const file of files) if (selected(ownerOf(root,file)) && ownerOf(root,canonical(file)) !== ownerOf(root,file)) errors.push(`${path.relative(root,file)}: source symlink resolves into ${ownerOf(root,canonical(file))}`);
   const fileOwner = new Map(files.map(f => [f, ownerOf(root, f)]));
   const manifests = gitFiles(['*/package.json', '**/package.json']).map(p => path.resolve(root,p)).filter(p => !p.split(path.sep).some(part => ignoredParts.has(part)) && existsSync(p));
   const packageNames = new Map<string,{owner:Owner;dir:string}>();
@@ -107,15 +108,16 @@ export function checkArchitecture(rootInput: string): string[] {
     if (value.name) {
       const expectedRoot = packageRoots[value.name];
       if (expectedRoot && canonical(path.dirname(mf)) !== canonical(path.resolve(root, expectedRoot))) {
-        errors.push(`${path.relative(root,mf)}: public package identity ${value.name} belongs at ${expectedRoot}`);
+        if (selected(ownerOf(root,mf))) errors.push(`${path.relative(root,mf)}: public package identity ${value.name} belongs at ${expectedRoot}`);
         continue;
       }
-      if (packageNames.has(value.name)) errors.push(`${path.relative(root,mf)}: duplicate package identity ${value.name}`);
+      if (packageNames.has(value.name) && selected(ownerOf(root,mf))) errors.push(`${path.relative(root,mf)}: duplicate package identity ${value.name}`);
       packageNames.set(value.name,{owner:ownerOf(root,path.dirname(mf)),dir:path.dirname(mf)});
     }
   }
   for (const mf of manifests) {
     const manifestOwner=ownerOf(root,path.dirname(mf));
+    if (!selected(manifestOwner)) continue;
     if (!['engine','record','agent','onboarding','shared','composition'].includes(manifestOwner)) continue;
     let manifest: { dependencies?: Record<string,string>; devDependencies?: Record<string,string>; optionalDependencies?: Record<string,string>; peerDependencies?: Record<string,string> };
     try { manifest = JSON.parse(readFileSync(mf, 'utf8')); } catch { continue; }
@@ -160,6 +162,7 @@ export function checkArchitecture(rootInput: string): string[] {
   }
   for (const file of files) {
     const from = fileOwner.get(file)!;
+    if (!selected(from)) continue;
     if (!product.includes(from as typeof product[number]) && from !== 'shared' && from !== 'composition') continue;
     const text = readFileSync(file, 'utf8');
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);

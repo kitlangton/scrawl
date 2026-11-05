@@ -84,6 +84,14 @@ test('peer dependencies and npm aliases cannot hide a reversed product edge', ()
   assert(errors.some(error => error.includes('canonical public name')));
 }));
 
+test('owner-scoped CI does not make an unrelated stream fail', () => fixture({
+  'agent/src/index.ts': "const destination = '../record/src/index.js'; import(destination);",
+  'record/src/index.ts': 'export const ready = true;',
+}, root => {
+  assert.deepEqual(checkArchitecture(root, ['record']), []);
+  assert(checkArchitecture(root, ['agent']).some(error => error.includes('computed dynamic import')));
+}));
+
 test('checks nested package manifests and validates local package targets', () => fixture({
   'record/package.json': JSON.stringify({name:'@apparent/record',dependencies:{'@apparent/engine-sdk':'file:../agent'}}),
   'engine/sdk/package.json': engine,
