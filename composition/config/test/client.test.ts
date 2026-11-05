@@ -75,3 +75,36 @@ test('rejects unverified executables and unsafe caller binding before launch', a
     await assert.rejects(createConfigBackend({ ...base, executable: alias }), /artifact/i);
   } finally { await rm(root, { recursive: true }); }
 });
+
+
+test('adoption stays owner-bound and validates presence, conflict and one-time revision', async () => {
+  for (const mode of ['ok', 'conflict', 'invalid-adoption']) {
+    const backend = await createConfigBackend(await options(mode));
+    try {
+      const snapshot = await backend.readForAdoption('onboarding');
+      assert.deepEqual(snapshot, { owner: { present: false, revision: 0, value: null }, legacy: { present: true, value: { seen: true } } });
+      await assert.rejects(backend.readForAdoption('agent'), /owner/i);
+      await assert.rejects(backend.adoptLegacy('agent', snapshot.legacy, {}), /owner/i);
+      await assert.rejects(backend.adoptLegacy('onboarding', { present: false, value: {} }, {}), /snapshot/i);
+      await assert.rejects(backend.adoptLegacy('onboarding', snapshot.legacy, { invalid: Infinity }), /JSON/i);
+      const result = await backend.adoptLegacy('onboarding', snapshot.legacy, { stage: 'resume' });
+      if (mode === 'ok') assert.deepEqual(result, { status: 'saved', revision: 1 });
+      if (mode === 'conflict') assert.deepEqual(result, { status: 'conflict', snapshot: { owner: { present: true, revision: 2, value: null }, legacy: { present: false, value: null } } });
+      if (mode === 'invalid-adoption') {
+        assert.equal(result.status, 'unknown');
+        await assert.rejects(backend.readForAdoption('onboarding'), /unavailable/i);
+      }
+    } finally { await backend.close(); }
+  }
+});
+
+test('adoption loses no safety on unknown publication or transport loss', async () => {
+  for (const mode of ['unknown', 'exit', 'wrong-id', 'oversized']) {
+    const backend = await createConfigBackend(await options(mode));
+    try {
+      assert.equal((await backend.adoptLegacy('onboarding', { present: false, value: null }, {})).status, 'unknown');
+      if (mode === 'unknown') assert.deepEqual(await backend.read('onboarding'), { revision: 0, value: null });
+      else await assert.rejects(backend.read('onboarding'), /unavailable/i);
+    } finally { await backend.close(); }
+  }
+});
