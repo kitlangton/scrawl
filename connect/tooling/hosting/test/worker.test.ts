@@ -47,6 +47,52 @@ test("HEAD is bodyless and other methods fail closed without touching assets", a
   assert.equal(calls, 1)
 })
 
+test("exact legacy hosted routes redirect to the canonical origin without touching assets", async () => {
+  let assetCalls = 0
+  const env = {
+    SITE_ORIGIN: "https://app.tryapparent.com",
+    ASSETS: { fetch: async () => { assetCalls++; return new Response("unexpected") } },
+  } as never
+  const routes = [
+    ["/hosted", "/connect"], ["/hosted/", "/connect/"],
+    ["/hosted/device", "/connect/device"], ["/hosted/device/", "/connect/device/"],
+    ["/hosted/shares", "/connect/shares"], ["/hosted/shares/", "/connect/shares/"],
+    ["/hosted/source-pond-v4.png", "/connect/assets/source-pond-v4.png"],
+    ["/hosted/agent-pond-v4.png", "/connect/assets/agent-pond-v4.png"],
+    ["/hosted/agent-reading-v4.png", "/connect/assets/agent-reading-v4.png"],
+  ]
+  for (const [legacy, canonical] of routes) {
+    const query = "?code=AB%2fCD&keep=a+b"
+    const response = await worker.fetch(new Request(`https://attacker.invalid${legacy}${query}`, {
+      headers: { Cookie: "session=private", Authorization: "Bearer private" },
+    }), env)
+    assert.equal(response.status, 302, legacy)
+    assert.equal(response.headers.get("location"), `https://app.tryapparent.com${canonical}${query}`)
+    assert.equal(response.headers.get("cache-control"), "no-store")
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer")
+    assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow, noarchive")
+    assert.equal(response.headers.has("set-cookie"), false)
+    assert.equal(await response.text(), "")
+  }
+  const head = await worker.fetch(new Request("https://attacker.invalid/hosted/device?code=HEAD%2fCODE", { method: "HEAD" }), env)
+  assert.equal(head.status, 302)
+  assert.equal(head.headers.get("location"), "https://app.tryapparent.com/connect/device?code=HEAD%2fCODE")
+  assert.equal(await head.text(), "")
+  for (const path of ["/hosted/other", "/hosted/device/extra", "/hosted/%64evice", "/hosted/private.json", "/hosted/source-pond-v5.png"]) {
+    assert.equal((await worker.fetch(new Request(`https://app.tryapparent.com${path}`), env)).status, 404, path)
+  }
+  const post = await worker.fetch(new Request("https://app.tryapparent.com/hosted/device?code=PRIVATE", { method: "POST" }), env)
+  assert.equal(post.status, 405)
+  assert.equal(post.headers.get("allow"), "GET, HEAD")
+  assert.equal(assetCalls, 0)
+  const unsafeOrigin = await worker.fetch(new Request("https://app.tryapparent.com/hosted"), {
+    SITE_ORIGIN: "https://attacker.invalid",
+    ASSETS: { fetch: async () => { assetCalls++; return new Response("unexpected") } },
+  } as never)
+  assert.equal(unsafeOrigin.status, 404)
+  assert.equal(assetCalls, 0)
+})
+
 test("canonical API and viewer requests dispatch to the existing service handler", async () => {
   let assets = 0
   const env = {

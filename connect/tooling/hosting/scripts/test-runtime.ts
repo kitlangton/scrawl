@@ -41,7 +41,7 @@ try {
   assert.equal(head.status, 200)
   assert.equal(await head.text(), "")
   assert.equal((await fetch(`${origin}/connect`, { method: "POST" })).status, 405)
-  for (const path of ["/", "/unknown", "/connect/other", "/hosted", "/connectivity", "/connect%2Fdevice", "/connect/assets/%2e%2e%2findex.js", "/connect/assets/.env", "/connect/assets/manifest.json", "/connect/assets/private.json", "/connect/assets/missing.js", "/connect/private/secret"]) {
+  for (const path of ["/", "/unknown", "/connect/other", "/hosted/other", "/connectivity", "/connect%2Fdevice", "/connect/assets/%2e%2e%2findex.js", "/connect/assets/.env", "/connect/assets/manifest.json", "/connect/assets/private.json", "/connect/assets/missing.js", "/connect/private/secret"]) {
     const response = await fetch(`${origin}${path}`)
     assert.equal(response.status, 404, path)
     assert.equal(response.headers.get("cache-control"), "no-store")
@@ -66,6 +66,37 @@ try {
   assert.equal(viewerAsset.status, 200)
   assert.match(viewerAsset.headers.get("content-type") ?? "", /text\/javascript/)
   assert.equal(viewerAsset.headers.has("set-cookie"), false)
+  const legacyRoutes = [
+    ["/hosted", "/connect"], ["/hosted/", "/connect/"],
+    ["/hosted/device", "/connect/device"], ["/hosted/device/", "/connect/device/"],
+    ["/hosted/shares", "/connect/shares"], ["/hosted/shares/", "/connect/shares/"],
+    ["/hosted/source-pond-v4.png", "/connect/assets/source-pond-v4.png"],
+    ["/hosted/agent-pond-v4.png", "/connect/assets/agent-pond-v4.png"],
+    ["/hosted/agent-reading-v4.png", "/connect/assets/agent-reading-v4.png"],
+  ]
+  for (const [legacy, canonical] of legacyRoutes) {
+    const query = "?code=RUNTIME%2fCODE&keep=a+b"
+    const response = await fetch(`${origin}${legacy}${query}`, { redirect: "manual", headers: { Cookie: "synthetic=private", Authorization: "Bearer synthetic" } })
+    assert.equal(response.status, 302, legacy)
+    assert.equal(response.headers.get("location"), `https://app.tryapparent.com${canonical}${query}`)
+    assert.equal(response.headers.get("cache-control"), "no-store")
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer")
+    assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow, noarchive")
+    assert.equal(response.headers.has("set-cookie"), false)
+    assert.equal(await response.text(), "")
+  }
+  const legacyHead = await fetch(`${origin}/hosted/device?code=HEAD%2fCODE`, { method: "HEAD", redirect: "manual" })
+  assert.equal(legacyHead.status, 302)
+  assert.equal(legacyHead.headers.get("location"), "https://app.tryapparent.com/connect/device?code=HEAD%2fCODE")
+  assert.equal(await legacyHead.text(), "")
+  const legacyPost = await fetch(`${origin}/hosted/device?code=PRIVATE`, { method: "POST", redirect: "manual" })
+  assert.equal(legacyPost.status, 405)
+  assert.equal(legacyPost.headers.get("allow"), "GET, HEAD")
+  for (const path of ["/hosted/other", "/hosted/device/extra", "/hosted/%64evice", "/hosted/private.json", "/hosted/source-pond-v5.png"]) {
+    const response = await fetch(`${origin}${path}`)
+    assert.equal(response.status, 404, path)
+    assert.equal(response.headers.get("cache-control"), "no-store")
+  }
   // Exercise hydration against the rewritten package through the real asset binding.
   // Every nonlocal request is intercepted; no live account or telemetry is used.
   const { chromium } = createRequire(resolve(packageRoot, "../../web/package.json"))("playwright-core")
