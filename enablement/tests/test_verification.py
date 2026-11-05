@@ -248,7 +248,10 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(workflow["root"])
         delivery_workflow = verification.select([".github/workflows/value-stream-delivery.yml"])
         self.assertTrue(delivery_workflow["app_shell"])
-        self.assertTrue(delivery_workflow["root"])
+        self.assertFalse(delivery_workflow["root"])
+        entry_workflow = verification.select([".github/workflows/streams/app-shell.yml"])
+        self.assertTrue(entry_workflow["app_shell"])
+        self.assertFalse(entry_workflow["root"])
         self.assertFalse(verification.select(["composition/cli.rs"])["app_shell"])
 
     def test_delivery_sources_select_app_shell_and_dependency_free_node_contracts_only(self):

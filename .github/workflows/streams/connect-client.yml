@@ -1,0 +1,29 @@
+name: Connect client delivery
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'connect/delivery/client/**'
+      - 'connect/delivery.json'
+      - '.github/workflows/streams/connect-client.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
+permissions:
+  contents: read
+jobs:
+  deliver:
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'connect-client'
+      targets: '{"include":[{"id":"connect-client","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"library","package":"connect/delivery/client","verify":["typecheck","test"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"connect"}]}'
+      workflow_path: '.github/workflows/streams/connect-client.yml'

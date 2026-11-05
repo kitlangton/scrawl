@@ -124,8 +124,9 @@ CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
 # shared UI components; these paths do not feed the Rust application build.
 APP_SHELL_ROOT = "composition/app/"
 APP_SHELL_DELIVERY_ROOT = "composition/delivery/"
-APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/", "shared/ui/")
-APP_SHELL_WORKFLOW = ".github/workflows/value-stream-delivery.yml"
+APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/", "shared/ui/",
+                    ".github/workflows/value-stream-delivery.yml")
+APP_SHELL_WORKFLOW = ".github/workflows/streams/app-shell.yml"
 
 RECORD_PACKAGE_ROOT = "record/"
 RECORD_FRONTEND_ROOT = "capture/desktop/ui/frontend/"
@@ -299,6 +300,8 @@ def select(paths, history_known=True):
             continue
         if path.startswith(APP_SHELL_INPUTS) or path == APP_SHELL_WORKFLOW:
             app_shell = True
+            if path == APP_SHELL_WORKFLOW or path == ".github/workflows/value-stream-delivery.yml":
+                continue
             # Shared UI also feeds existing consumers, so continue through
             # the ordinary selector for those paths.
             if path.startswith(APP_SHELL_ROOT) or path.startswith(APP_SHELL_DELIVERY_ROOT) or path.startswith("shared/contracts/"):

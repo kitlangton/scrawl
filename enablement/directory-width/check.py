@@ -20,6 +20,7 @@ WORKFLOW_FILES = {
     b"value-stream-delivery.yml", b"verification-mac.yml",
     b"verification-platform.yml", b"verification.yml", b"web-delivery.yml",
 }
+WORKFLOW_DIRECTORIES = {b"streams"}
 # Eligibility is by tracked first-party tree scope, not filename suffix. Every
 # non-excluded blob is repo-owned content for width purposes (including files
 # with extensionless or uncommon source names). Keep generated/dependency
@@ -165,7 +166,7 @@ def inspect(root: Path) -> list[tuple[bytes, int, int]]:
             width_exceeded = files > LIMIT or dirs > LIMIT
         unknown_workflow_entries = (
             directory == WORKFLOW_DIRECTORY
-            and bool(set(direct) - WORKFLOW_FILES)
+            and bool(set(direct) - WORKFLOW_FILES - WORKFLOW_DIRECTORIES)
         )
         workflow_file_overflow = directory == WORKFLOW_DIRECTORY and files > 11
         if width_exceeded or unknown_workflow_entries or workflow_file_overflow:

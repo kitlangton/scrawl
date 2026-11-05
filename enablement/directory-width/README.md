@@ -12,7 +12,8 @@ start with a dot remain included in the root file count.
 
 GitHub Actions requires a separate workflow file for each independently
 scheduled delivery stream. The exact `.github/workflows/` inventory may contain
-11 files (including `value-stream-delivery.yml`) and at most 10 subdirectories.
+11 files (including `value-stream-delivery.yml`) and the one `streams/` directory
+holding owner entrypoints, plus at most 9 other immediate subdirectories.
 Unknown entries remain blocked; this exception does not apply elsewhere under
 `.github`.
 

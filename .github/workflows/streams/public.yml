@@ -1,0 +1,41 @@
+name: public delivery
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'public/**'
+      - 'shared/ui/**'
+      - 'shared/analytics/**'
+      - 'shared/assets/**'
+      - 'README.md'
+      - 'capture/agent/skills/apparent/SKILL.md'
+      - '.npmrc'
+      - 'bunfig.toml'
+      - '.bunfig.toml'
+      - '.github/workflows/streams/public.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
+  workflow_run:
+    workflows: [Connect producer]
+    branches: [main]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  deliver:
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository))
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'public'
+      targets: '{"include":[{"id":"public","target":"web","runner":"ubuntu-24.04","kind":"directory","stage":"website","package":"public/site","verify":[],"build":"verify:installed","language":"typescript","packageManager":"bun","architecture_owner":""}]}'
+      workflow_path: '.github/workflows/streams/public.yml'
+    secrets: inherit

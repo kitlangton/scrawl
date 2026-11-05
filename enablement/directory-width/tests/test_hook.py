@@ -135,7 +135,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(b"<root>: 11 files", result.stderr)
 
-    def test_workflow_directory_allows_only_its_exact_eleven_file_inventory(self) -> None:
+    def test_workflow_directory_allows_exact_workflow_files_and_streams_directory(self) -> None:
         workflows = (
             "connect-delivery.yml", "linux-updater-harness.yml", "native-proof-mac.yml",
             "release-linux.yml", "release-mac-preview.yml", "release-windows.yml",
@@ -144,6 +144,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
         )
         for name in workflows:
             self.put(f".github/workflows/{name}")
+        self.put(".github/workflows/streams/record.yml")
         self.stage(".github/workflows")
         allowed = self.run_hook()
         self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())

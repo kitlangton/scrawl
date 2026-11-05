@@ -1,0 +1,30 @@
+name: record delivery
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'record/**'
+      - 'shared/ui/**'
+      - 'shared/assets/fonts/**'
+      - '.github/workflows/streams/record.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
+permissions:
+  contents: read
+jobs:
+  deliver:
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'record'
+      targets: '{"include":[{"id":"record","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"library","package":"record","verify":["typecheck","test","test:package"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"record"}]}'
+      workflow_path: '.github/workflows/streams/record.yml'

@@ -115,7 +115,7 @@ test('same-run consumer verifies receipt identity and extracts the exact compone
   const root = resolve(import.meta.dirname, '../../../..'), core = await import('../../../../composition/delivery/core.ts')
   const owner = core.catalog(root).owners.find(candidate => candidate.id === 'public')!
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
-  const env = { ...process.env, GITHUB_SHA: head, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main', PUBLIC_COMPONENT_INPUT_DIGEST: inputDigest, ImageOS: 'ubuntu24', ImageVersion: 'consumer-image-does-not-matter' }
+  const env = { ...process.env, GITHUB_SHA: head, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/streams/public.yml@refs/heads/main', PUBLIC_COMPONENT_INPUT_DIGEST: inputDigest, ImageOS: 'ubuntu24', ImageVersion: 'consumer-image-does-not-matter' }
   const input = inputDigest
   const source = core.sourceDigest(root, owner, head), environment = core.environmentDigest(owner, env), tarBytes = componentTar()
   const receipt = { schema: 1, id: 'public', target: 'web', stage: 'website', sourceSha: head, inputDigest: input, sourceDigest: source, environmentDigest: environment, sha256: hash(tarBytes), size: tarBytes.length, runId: '91', runAttempt: '2' }
@@ -131,7 +131,7 @@ test('same-run consumer verifies receipt identity and extracts the exact compone
 test('same-run consumer rejects receipt path, payload hash, workflow identity and environment mismatches without touching output', () => withRoot(async tempRoot => {
   const root = resolve(import.meta.dirname, '../../../..'), core = await import('../../../../composition/delivery/core.ts')
   const owner = core.catalog(root).owners.find(candidate => candidate.id === 'public')!, head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
-  const env = { ...process.env, GITHUB_SHA: head, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main', PUBLIC_COMPONENT_INPUT_DIGEST: inputDigest, ImageOS: 'ubuntu24', ImageVersion: 'consumer-image-does-not-matter' }
+  const env = { ...process.env, GITHUB_SHA: head, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/streams/public.yml@refs/heads/main', PUBLIC_COMPONENT_INPUT_DIGEST: inputDigest, ImageOS: 'ubuntu24', ImageVersion: 'consumer-image-does-not-matter' }
   const input = inputDigest, tarBytes = componentTar()
   const base = { schema: 1, id: 'public', target: 'web', stage: 'website', sourceSha: head, inputDigest: input, sourceDigest: core.sourceDigest(root, owner, head), environmentDigest: core.environmentDigest(owner, env), sha256: hash(tarBytes), size: tarBytes.length, runId: '91', runAttempt: '2' }
   const component = join(tempRoot, 'component'); mkdirSync(component); writeFileSync(join(component, 'component.tar.gz'), tarBytes)

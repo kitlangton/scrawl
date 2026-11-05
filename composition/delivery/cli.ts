@@ -2,7 +2,7 @@ import { appendFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { assessPrior, buildOwner, catalog, inputDigest, makePlan, reusePayload, sealPayload, type Owner, type Target, workflowPath } from './core.ts'
+import { assessPrior, buildOwner, catalog, inputDigest, makePlan, reusePayload, sealPayload, type Owner, type Target, workflowPathFor } from './core.ts'
 
 const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
 function output(values: Record<string, string | boolean | number | null>) {
@@ -50,11 +50,12 @@ async function main(args: string[]) {
     let result
     try {
       if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('Invalid repository identity')
-      const workflow = gh<{ id: number; path: string }>(repo, `repos/${repo}/actions/workflows/${basename(workflowPath)}`)
-      if (workflow.path !== workflowPath) throw new Error('Workflow API identity mismatch')
+      const producerPath = workflowPathFor(owner.id, env)
+      const workflow = gh<{ id: number; path: string }>(repo, `repos/${repo}/actions/workflows/${basename(producerPath)}`)
+      if (workflow.path !== producerPath) throw new Error('Workflow API identity mismatch')
       const runsResponse = gh<{ workflow_runs: Array<{ id: number; run_attempt: number; head_sha: string; head_branch: string; event: string; conclusion: string | null }> }>(repo, `repos/${repo}/actions/workflows/${workflow.id}/runs?branch=main&event=push&per_page=100`)
       // The workflow ID was resolved from, and checked against, the exact workflow file path.
-      const runs = runsResponse.workflow_runs.map(r => ({ ...r, path: workflowPath }))
+      const runs = runsResponse.workflow_runs.map(r => ({ ...r, path: producerPath }))
       result = assessPrior(root, owner, target, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), repo, runs,
         run => ghPages<{ name: string; status: string; conclusion: string | null }>(repo, `repos/${repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`),
         run => ghPages<{ id: number; name: string; expired: boolean }>(repo, `repos/${repo}/actions/runs/${run.id}/artifacts`))
