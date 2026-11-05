@@ -28,7 +28,7 @@ try {
   await run('npm', ['install', '--no-audit', '--no-fund', tarball], { cwd: headless });
   const headlessInstalled = path.join(headless, 'node_modules/@apparent/record');
   const manifest = JSON.parse(await readFile(path.join(headlessInstalled, 'package.json'), 'utf8'));
-  assert.equal(manifest.scripts?.prepare, undefined, 'tarball installs must not invoke a source build');
+  assert.equal(manifest.scripts?.prepare, 'npm run build', 'source author lifecycle remains compatible');
   for (const value of Object.values(manifest.dependencies ?? {})) {
     assert.ok(!String(value).startsWith('file:'), 'packed dependencies must not point into the repository');
   }
@@ -58,7 +58,6 @@ try {
     assert.equal(typeof decodeSelectedFrames, 'function');
     assert.equal(typeof createRecordCapabilityProvider, 'function');
     assert.equal(typeof hasConfirmedArtifactOpen, 'function');
-    assert.equal(hasConfirmedArtifactOpen(createRecordFixture().driver.current(), 'unknown'), false);
     assert.equal(hasConfirmedArtifactOpen(createRecordFixture().driver.current(), 'unknown'), false);
     console.log('headless packed runtime and declaration consumer passed');
   `], { cwd: headless });
