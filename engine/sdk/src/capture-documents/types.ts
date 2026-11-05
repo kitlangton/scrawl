@@ -13,9 +13,8 @@ export interface MaterialsPayload {
   root: string;
   leaseId: Id;
   clock: { epoch: "capture-admission-monotonic"; units: "integer-milliseconds"; durationMs: number; videoOffsetMs: number; audioOffsetMs?: number };
-  // Native facts remain opaque until their existing-format schemas are frozen.
-  confirmedSource: unknown;
-  invocation: unknown;
+  confirmedSource: ConfirmedSource;
+  invocation: InvocationFact;
   files: SealedFile[];
   video: { file: string; width: number; height: number; durationMs: number };
   audio?: { file: string; durationMs: number; sampleRate: number; channels: number };
@@ -24,6 +23,39 @@ export interface MaterialsPayload {
   warnings: Array<{ code: string; atMs?: number }>;
   safety: { nativeRemoteDelivery: "forbidden"; safeForProcessing: boolean };
 }
+
+export interface ConfirmedSource {
+  id: string; generation: Id; confirmedAtMs: number;
+  kind: "display" | "area"; displayId: number;
+  rectangle: { x: number; y: number; width: number; height: number; scale: number };
+  confirmation: { kind: "portal" | "native-picker" | "explicit-display"; id: Id };
+}
+export type InvocationFact = { invocationId: Id; observedAtMs: number } & (
+  | { kind: "explicit" }
+  | { kind: "picker"; confirmationId: Id }
+  | { kind: "shortcut"; hostEventId: Id; consumedReservationId?: Id }
+);
+export type Observed<T> = { state: "collected"; value: T } | { state: "unavailable"; reason: string };
+export interface ContextFacts {
+  schema: "apparent.capture-context/1"; identity: { captureId: Id; materialsId: Id };
+  source: ConfirmedSource; invocation: InvocationFact;
+  context: Observed<{ values: Record<string, string>; changes: Array<{ timeMs: number; key: string; value: string | null }> }>;
+  session: Observed<{ id: string; directory?: string; url?: string }>;
+  windows: Observed<Array<{ timeMs: number; entries: Array<{ id: number; app: string; bundleId?: string; title?: string; regular?: boolean; bounds: [number, number, number, number]; layer: number; frontmost?: boolean }> }>>;
+  cursor: Observed<Array<[number, number, number]>>;
+}
+export type InteractionEventFact =
+  | { kind: "note"; t: number; pin: number; x: number; y: number; text: string }
+  | { kind: "click"; t: number; x: number; y: number; button?: string; label?: string; role?: string }
+  | { kind: "drag"; t: number; t1: number; x0: number; y0: number; x1: number; y1: number; label?: string; button?: string; path?: Array<[number, number]> }
+  | { kind: "scroll"; t: number; x: number; y: number; dx: number; dy: number; label?: string }
+  | { kind: "point"; t: number; x: number; y: number; label?: string }
+  | { kind: "key"; t: number; shortcut: string }
+  | { kind: "app_change"; t: number; app: string; window_title?: string }
+  | { kind: "app_event"; t: number; label: string };
+export interface InteractionFacts { schema: "apparent.capture-interactions/1"; identity: { captureId: Id; materialsId: Id }; events: InteractionEventFact[] }
+export interface CandidateFacts { schema: "apparent.capture-candidates/1"; identity: { captureId: Id; materialsId: Id }; candidates: Array<{ candidateId: Id; timeMs: number; file: string; width: number; height: number; visualChange?: number }> }
+export interface TranscriptFacts { schema: "apparent.capture-transcript/1"; identity: { captureId: Id; materialsId: Id }; provider: string; model: string; text: string; segments: Array<{ startMs: number; endMs?: number; text: string }> }
 export interface MaterialsManifest { schema: "apparent.capture-materials/1"; key: MaterialsKey; root: string; leaseId: Id; payloadFile: SealedFile }
 export interface MaterialsDocument { manifest: MaterialsManifest; payload: MaterialsPayload }
 
