@@ -4,6 +4,23 @@
 
 `EngineSdkAdapter` composes an already constructed, packed `@apparent/engine-sdk` client. `createRecordHostRuntime` from `@apparent/record/host` composes it with `RecordWorkflow`, `SqliteCaptureMappingStore` and `PrivateBundleAllocator` using explicit private roots (Node 22.13+). The runtime reconciles persisted request IDs before admitting starts; active or ambiguous captures remain visible and block admission. The host subpath does not import React or Electron. It does not choose or launch an executable, select runtime locations, or establish capture readiness. The reusable pill is adopted through the existing legacy host; it does not install a replacement Electron main/preload route.
 
+`@apparent/record/processing` exports `decodeSelectedFrames` and
+`assembleProcessingOutput`. The decode function consumes an injected public
+`@apparent/engine-sdk/media` client and Record-selected bundle-clock timestamps;
+the Engine owns decoding, safe output publication and truthful execution facts.
+The caller supplies an existing verified media runtime, a fresh private output
+directory, source identity and selected frames. Assembly formats those facts as
+semantic handoff text with absolute frame/video/bundle paths; it does not select
+frames, transcribe, create images or write a bundle. Linux worker conformance is
+documented by Engine, but packaged runtime discovery and Record adoption remain
+pending the Engine owner's committed artifact and verified discovery/launch/
+platform handoff. No native proof is claimed here. The caller must complete the
+SDK handshake first and retain the full client and job ID: a rejected decode is
+not proof that execution stopped. Reconcile with SDK inspect/cancel before
+retrying or cleaning its output. Assembly covers supplied transcript, notes and
+frame facts only; target/session context, interaction events, marks and processing
+warnings still need adoption before this can replace the full legacy handoff.
+
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 
 The interface follows the existing GUI capture control contract: a caller-owned request ID for start, real-frame readiness distinguishing `starting` from `recording`, and ID-scoped stop/cancel/inspect receipts. Stop transport failures retain the same capture ID for retry. The Engine retains capture safety, permission checks, native media execution, finalization and bundle truth. `EngineClient.readiness()` is a future capability for querying actual native admission readiness; the existing CLI does not expose that as a separate query yet, so an adapter cannot infer it from an idle capture state.
