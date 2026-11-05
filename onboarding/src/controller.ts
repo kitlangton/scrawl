@@ -104,7 +104,12 @@ export class OnboardingController {
     const p = this.#state.progress;
     if (this.#disposed || this.#state.saving || this.#state.publication !== "confirmed" || this.#state.command === "unknown" || snapshot.connection !== "connected") return;
     const capture = p.attemptId ? snapshot.captures.find(c => c.captureId === p.attemptId) : undefined;
-    if (!capture || capture.phase === "cancelled" || capture.phase === "failed" || capture.phase === "unknown") return;
+    if (!capture || capture.phase === "unknown") return;
+    if ((capture.phase === "cancelled" || capture.phase === "failed") && stages.indexOf(p.stage) >= stages.indexOf("screen") && stages.indexOf(p.stage) < stages.indexOf("complete")) {
+      void this.persist({ ...p, status: "in-progress", stage: "practice-start", attemptId: null, practiceBaselineIds: snapshot.captures.map(c => c.captureId), manualPasteConfirmed: false });
+      this.set({ ...this.#state, error: "That capture ended before practice was finished. Start another with your shortcut." });
+      return;
+    }
     let stage = p.stage;
     if (stage === "whiteboard" && successful(snapshot, p.attemptId, "whiteboard")) stage = "board-ink";
     if (stage === "stop" && successful(snapshot, p.attemptId, "processing") && ["processing", "saved"].includes(capture.phase)) stage = "preparing";

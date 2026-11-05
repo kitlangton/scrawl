@@ -138,6 +138,25 @@ test("mounted Close keeps setup visible when deferral save is unknown", async ()
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
 });
 
+test("mounted shortcut action reaches Record and cancellation returns practice to a fresh attempt", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await f.controller.load();
+  const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" }); Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Change shortcut")!.click(); await Promise.resolve(); });
+  assert.equal(f.driver.commands().at(-1)?.type, "shortcut-begin-edit");
+  f.progress.value = { ...f.progress.value, stage: "screen-ink", attemptId: "cancelled-practice" };
+  await f.controller.load(); publish(f.driver, [capture("cancelled-practice", "cancelled", [])]); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(f.controller.state.progress.stage, "practice-start"); assert.equal(f.controller.state.progress.attemptId, null);
+  await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
+});
+
+test("failed copy offers a scoped copy retry for the saved practice capture", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "preparing", attemptId: "copy-retry" }; await f.controller.load();
+  publish(f.driver, [capture("copy-retry", "saved", [outcome("save"), { ...outcome("copy"), ok: false }], "artifact-copy")]);
+  const result = await f.controller.retryPracticeCopy(); assert.equal(result?.status, "accepted"); assert.equal(f.driver.commands().at(-1)?.type, "copy-local"); f.controller.dispose();
+});
+
 test("mismatched Record response IDs cannot authorize progress", async () => {
   const f = fixture(); await f.controller.load(); await f.controller.dispatch("continue");
   f.client.execute = async command => ({ status: "applied", requestId: "retired-request", snapshot: f.driver.current() });
