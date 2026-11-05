@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "id": "connect-client",
+  "kind": "npm",
+  "package": "connect/delivery/client",
+  "inputs": ["connect/delivery/client/"],
+  "verify": ["typecheck", "test"],
+  "build": "build",
+  "targets": ["linux-x64"],
+  "stage": "library",
+  "language": "typescript"
+}

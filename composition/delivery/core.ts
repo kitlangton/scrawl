@@ -14,6 +14,7 @@ export const workflowPath = '.github/workflows/value-stream-delivery.yml'
 const roots = [
   { id: 'app-shell', source: 'composition/app', registration: 'composition/app/delivery.json' },
   { id: 'record', source: 'record', registration: 'record/delivery.json' },
+  { id: 'connect-client', source: 'connect/delivery/client', registration: 'connect/delivery.json' },
   { id: 'engine', source: 'engine/sdk', registration: 'engine/delivery.json' },
   { id: 'engine-native', source: 'engine/delivery/native', registration: 'engine/delivery/native/delivery.json' },
   { id: 'platform-config', source: 'composition/config/native', registration: 'composition/config/native/delivery.json' },
@@ -120,7 +121,7 @@ export function environmentDigest(owner: Owner, env = process.env): string { ret
 export function inputDigest(root: string, owner: Owner, target: Target = owner.targets[0]): string { return fingerprint(root, owner, target) }
 export function makePlan(root: string) {
   const { owners, pending, blocked } = catalog(root)
-  const guardOwners: Record<string, string> = { 'app-shell': 'composition', engine: 'engine', 'engine-native': 'engine', 'platform-config': 'composition', record: 'record', agent: 'agent', onboarding: 'onboarding' }
+  const guardOwners: Record<string, string> = { 'app-shell': 'composition', engine: 'engine', 'engine-native': 'engine', 'platform-config': 'composition', record: 'record', 'connect-client': 'connect', agent: 'agent', onboarding: 'onboarding' }
   const include = owners.flatMap(owner => owner.targets.map(target => ({ id: owner.id, target, runner: target === 'linux-x64' || target === 'web' ? 'ubuntu-24.04' : 'macos-26-intel', kind: owner.kind, stage: owner.stage, package: owner.package, verify: owner.verify, build: owner.build, language: owner.language, packageManager: owner.packageManager ?? 'npm', architecture_owner: guardOwners[owner.id] ?? '' })))
   return { matrix: { include }, has_ready: include.length > 0, pending, blocked }
 }

@@ -113,7 +113,7 @@ def directory_width_contract_selected(paths):
                for path in paths)
 
 
-CONNECT_CLIENT_TYPESCRIPT = "connect/client/typescript/"
+CONNECT_CLIENT_TYPESCRIPT = "connect/delivery/client/"
 CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
     CONNECT_CLIENT_TYPESCRIPT + name
     for name in ("package.json", "package-lock.json", "tsconfig.json")
@@ -570,7 +570,7 @@ def run_delivery_tests():
 
 
 def run_connect_client_typescript_tests():
-    package = ROOT / "connect/client/typescript"
+    package = ROOT / "connect/delivery/client"
     controls = ("package.json", "package-lock.json", "tsconfig.json")
     missing_controls = [name for name in controls if not (package / name).is_file()]
     if missing_controls:
@@ -589,7 +589,7 @@ def run_connect_client_typescript_tests():
     if missing_dependencies:
         raise RuntimeError(
             "Connect client TypeScript feedback needs installed locked dependencies; "
-            "run `npm ci --no-audit --no-fund` in connect/client/typescript, then retry. "
+            "run `npm ci --no-audit --no-fund` in connect/delivery/client, then retry. "
             "The pre-push hook never installs dependencies. Missing: "
             + ", ".join(missing_dependencies)
         )
