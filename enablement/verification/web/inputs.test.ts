@@ -6,7 +6,7 @@ const owners:Owner[]=['public','connect','recipient']
 test('build entrypoints scope the color guard to their declared consumers; repository guard remains global',()=>{
  for(const [path,owner] of [['public/site','public'],['connect/web','connect'],['connect/service','connect']]) {
   const manifest=JSON.parse(readFileSync(new URL(`../../../${path}/package.json`,import.meta.url),'utf8'))
-  assert.ok(manifest.scripts.build.includes(`check-theme.${owner === 'public' ? 'ts' : 'py'} --owner ${owner} &&`),path)
+  assert.ok(manifest.scripts.build.includes(`check-theme.${path === 'connect/service' ? 'py' : 'ts'} --owner ${owner} &&`),path)
  }
  const verifier=readFileSync(new URL('../../verification.py',import.meta.url),'utf8')
  assert.match(verifier,/\["python3", "shared\/ui\/scripts\/check-theme.py"\]/)

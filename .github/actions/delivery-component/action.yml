@@ -89,7 +89,7 @@ runs:
       # The installer bounds update/install process groups to 60/180 seconds.
       run: node --experimental-strip-types composition/delivery/media-dependencies.ts
     - uses: oven-sh/setup-bun@v2
-      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.packageManager == 'bun'
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && (inputs.packageManager == 'bun' || inputs.id == 'connect-browser')
       with:
         bun-version: '1.3.10'
     - name: Independently install, verify and build the owner artifact
