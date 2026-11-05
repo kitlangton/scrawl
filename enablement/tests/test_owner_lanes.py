@@ -168,7 +168,7 @@ class OwnerTests(unittest.TestCase):
             result = subprocess.run([node, str(script)], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertEqual(len(calls), 5)
+            self.assertEqual(len(calls), 8)
             self.assertTrue(all(call[2:] == ['1', 'https://hosted.tryapparent.com'] for call in calls))
             self.assertIn('scripts/site-build/package-apparent.ts', calls[2][1])
             log.unlink()

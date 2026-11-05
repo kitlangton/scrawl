@@ -15,6 +15,7 @@ export function relevant(owner: Owner, path: string): boolean {
       path==='enablement/verification/web/inputs.ts' || path==='enablement/verification/web/baseline.ts' ||
       path==='.github/workflows/connect-delivery.yml') return true
   if (publicExternal.has(path)) return owner==='public' || (owner==='connect' && path==='enablement/release_gate.py')
+  if (path === 'public/delivery.json' || path.startsWith('composition/delivery/') || path === '.github/workflows/value-stream-delivery.yml') return owner === 'public'
   if (path.startsWith('public/site/')) return owner==='public' || (owner==='connect' && browserAssets.has(path))
   if (path.startsWith('connect/web/') || path.startsWith('connect/service/')) return owner==='connect' || (owner==='public' && path.startsWith('connect/web/'))
   if (path.startsWith('connect/client/')) return owner==='recipient'

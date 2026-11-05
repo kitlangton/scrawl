@@ -7,13 +7,12 @@ Use `python3 enablement/verification.py --base <base> --run` for explicit affect
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
 `.github/workflows/value-stream-delivery.yml` is the independent main shipping
-workflow for the App Shell and other registered TypeScript streams. Its fast plan
-selects App Shell on Linux and Mac, Record's npm library checks, and Engine's
-SDK contract tests. The current Engine slice proves its SDK contract only; it
-does not claim that production Engine has moved out of the root Rust app.
-Onboarding and Agent registration are pending and are reported as such rather
-than represented as shipping checks. Existing Connect and Public delivery
-pipelines remain independent. Feature-push selection runs the App Shell installed
+workflow for registered components, including Public's Bun-built web artifact and
+native Engine providers. The registry records each owner's supported targets and
+artifact stage; missing registrations remain explicitly pending or blocked. A
+component artifact does not certify installed capture routing or native readiness.
+Public's website pipeline consumes its verified component for composition and
+publication. Connect retains its separate producer. Feature-push selection runs the App Shell installed
 check for its package inputs. Changes under `composition/delivery/` run that
 check plus the dependency-free Node delivery contracts. Neither hook path
 installs packages.
@@ -43,8 +42,13 @@ CI is not Apple Silicon runtime proof. An image change must still pass the same
 checks before Mac publication.
 
 Linux delivery triggers only after successful `Linux verification`.
-Web delivery runs on main pushes, manual main dispatches and successful trusted
-Connect producer completions, independently of native application receipts.
+Web delivery runs on main pushes, manual main dispatches, trusted Connect producer
+completions and common value-stream completions, independently of native application receipts.
+Public production bytes build/test/package once in `stream (public, web)`; the website
+workflow consumes current-source/config-compatible Public receipts, including verified
+unchanged ancestors. Public and shared-contract/runtime-audit jobs must succeed even
+when another component fails. No compatible Public artifact means fail-closed admission;
+there is no website-workflow source rebuild.
 Its full-delta input selector includes Public, Connect browser, shared UI/analytics/assets,
 root README and the Agent skill consumed by generated pages, publisher policy and
 web delivery inputs. It starts from a successful run with actual owner verification
@@ -69,7 +73,7 @@ owners, including Desktop; no fixed-color allowances or global checks were remov
 Public consumes immutable independently verified Connect browser artifacts after
 trusted producer/run/digest, candidate input and current build-configuration checks.
 No compatible retained artifact means fail-closed admission, never a Connect rebuild.
-The Public verifier builds/tests/packages Public and checks composition/browser seams;
+The common Public lane builds/tests/packages Public; the website consumer checks composition/browser seams;
 the website publisher consumes its revision-named sealed artifact. The separate
 Worker call invokes Connect's reusable publisher after producer completion; it does
 not depend on Public checks. Existing activation/environment gates remain.
@@ -183,9 +187,10 @@ and artifact-only browser/analytics seam tests. Connect's independently verified
 producer owns service workerd/D1/R2, account/device/sharing browser and consent
 product tests. Shared inputs fan out through complete candidate input validation.
 
-Node 22.23.0 and Bun 1.3.10 are pinned. Public browser installation and Pages tools
+Public/common delivery pins Node 22.23.4; Connect retains its declared Node pin.
+Bun 1.3.10 is pinned. Public browser installation and Pages tools
 come from its lockfile. Production uses the existing API origin. Synthetic Public
-analytics output stays in private temporary directories and reuses Connect bytes;
+analytics output stays in private producer temporary directories without Connect;
 it is never uploaded. Pages artifacts include the compiled Function, provider
 configuration and complete checksum manifest outside the served tree, retained
 for 90 days. Source-built Public bytes and Connect resource graphs survive
