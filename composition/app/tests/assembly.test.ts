@@ -8,6 +8,20 @@ import { assemble, verifyAssembly } from '../scripts/assemble.ts';
 import { buildShell, buildStream, root } from '../scripts/build.ts';
 import { digest } from '../scripts/artifacts.ts';
 
+test('CI explicitly installs Electron before provisioning its sandbox helper', async () => {
+  const workflow = await readFile(join(root, '../../.github/workflows/verification-platform.yml'), 'utf8');
+  const job = workflow.split('\n  app-shell-foundation:\n')[1]?.split('\n  desktop-ui:\n')[0];
+  assert(job, 'Foundation job must exist');
+  const install = job.indexOf('run: npm run prepare:electron');
+  const sandbox = job.indexOf('sudo install -o root -g root -m 4755 node_modules/electron/dist/chrome-sandbox');
+  const smoke = job.indexOf('run: xvfb-run -a npm run test:electron');
+  assert(install > job.lastIndexOf('run: npm ci') && sandbox > install && smoke > sandbox,
+    'Package installation must precede runtime installation, helper provisioning and Electron execution');
+  const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  assert.equal(metadata.scripts['prepare:electron'], 'node node_modules/electron/install.js');
+  assert.equal(metadata.scripts.prestart, 'npm run prepare:electron');
+});
+
 test('independent stream rebuild and compiler-free assembly preserve unchanged artifacts', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'app-foundation-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

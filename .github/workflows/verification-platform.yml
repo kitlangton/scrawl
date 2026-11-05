@@ -97,6 +97,8 @@ jobs:
       - run: npm ci --no-audit --no-fund
         working-directory: shared/contracts
       - run: npm ci --no-audit --no-fund
+      - name: Prepare the pinned Electron runtime
+        run: npm run prepare:electron
       - name: Linux Electron dependencies
         run: npx --no-install playwright install-deps chromium
       - name: Prepare the pinned Electron sandbox helper
