@@ -8,6 +8,6 @@ export { PermissionRepairContribution, createPermissionRepairContribution } from
 export type { PermissionRepairContributionProps } from "./permissions/react.js";
 export { onboardingProgressCodec } from "./model.js";
 export { onboardingContributionFactory } from "./factory.js";
-export type { OnboardingFactoryDependencies } from "./factory.js";
+export type { OnboardingContributionFactory, OnboardingFactoryDependencies, OnboardingHostedContribution } from "./factory.js";
 export { adoptOnboardingProgress } from "./adoption.js";
 export type { OnboardingAdoptionResult } from "./adoption.js";
