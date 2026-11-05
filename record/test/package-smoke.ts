@@ -8,6 +8,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 const run=promisify(execFile);
 const scratch=await mkdtemp(path.join(tmpdir(),'record-packed-'));
+const hostOnly=await mkdtemp(path.join(tmpdir(),'record-host-only-'));
 const root=fileURLToPath(new URL('../',import.meta.url));
 try {
   await run('npm',['pack','--pack-destination',scratch],{cwd:root});
@@ -27,13 +28,26 @@ try {
     import {hasConfirmedArtifactOpen} from '@apparent/record/capabilities';
     import {createRecordFixture} from '@apparent/record/fixtures';
     import {RecordingPill} from '@apparent/record/ui';
-    import {SqliteCaptureMappingStore, PrivateBundleAllocator} from '@apparent/record/host';
+    import {SqliteCaptureMappingStore, PrivateBundleAllocator, createRecordHostRuntime} from '@apparent/record/host';
     assert.equal(typeof RecordWorkflow,'function');
     assert.equal(typeof SqliteCaptureMappingStore,'function');
     assert.equal(typeof PrivateBundleAllocator,'function');
+    assert.equal(typeof createRecordHostRuntime,'function');
     assert.equal(hasConfirmedArtifactOpen(createRecordFixture().driver.current(),'unknown'),false);
     assert.match(renderToString(React.createElement(RecordingPill)),/Connecting/);
     console.log('clean packed root/capabilities/fixtures/ui consumer passed');
   `],{cwd:scratch});
   process.stdout.write(stdout);
-} finally { await rm(scratch,{recursive:true,force:true}); }
+  await writeFile(path.join(hostOnly,'package.json'),JSON.stringify({private:true,type:'module'}));
+  await run('npm',['install','--omit=peer','--ignore-scripts','--no-audit','--no-fund','--package-lock=false',path.join(scratch,'apparent-record-0.1.0.tgz')],{cwd:hostOnly});
+  const headless=await run(process.execPath,['--input-type=module','-e',`
+    import assert from 'node:assert/strict';
+    import {createRequire} from 'node:module';
+    import {createRecordHostRuntime} from '@apparent/record/host';
+    assert.equal(typeof createRecordHostRuntime,'function');
+    assert.throws(()=>createRequire(import.meta.url).resolve('react'));
+    assert.throws(()=>createRequire(import.meta.url).resolve('electron'));
+    console.log('headless host subpath loads without React or Electron');
+  `],{cwd:hostOnly});
+  process.stdout.write(headless.stdout);
+} finally { await Promise.all([rm(scratch,{recursive:true,force:true}),rm(hostOnly,{recursive:true,force:true})]); }

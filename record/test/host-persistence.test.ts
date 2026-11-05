@@ -41,6 +41,8 @@ test("SQLite put-if-absent serializes independent processes and persists the imm
   const store = new SqliteCaptureMappingStore(root);
   assert.deepEqual(await store.getByRequestId(first.requestId), results[0]);
   assert.deepEqual(await store.getByCaptureId(results[0].captureId), results[0]);
+  assert.deepEqual(await store.listRequestIds(), [first.requestId]);
+  assert.equal(JSON.stringify(await store.listRequestIds()).includes(first.ownerToken), false);
   assert.deepEqual(await store.putIfAbsent(second), results[0]);
   const ambiguous = mapping("committed-before-lost-reply", "7".repeat(32), "8".repeat(64));
   await assert.rejects(runChild(root, ambiguous, true), /host child failed/);
