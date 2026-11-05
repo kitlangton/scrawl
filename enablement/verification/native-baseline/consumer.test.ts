@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { validate } from './consumer.ts'
 
-const hash = (value: string) => createHash('sha256').update(value).digest('hex')
+const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 function fixture() {
   const payload = Buffer.from(JSON.stringify({ sourceSha: 'a'.repeat(40), sourceTree: 'b'.repeat(40),
     workflowBlob: 'c'.repeat(40), trackedInputs: [{ path: 'main.rs', sha256: hash('native') }] }))

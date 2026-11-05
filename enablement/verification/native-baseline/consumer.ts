@@ -11,6 +11,7 @@ const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex')
 export function validate(receipt: any, payloadBytes: Buffer, expected: {
   repository: string; platform: string; arch: string; target: string; profile: string;
   sourceSha: string; sourceTree: string; workflowBlob: string; environment: Record<string, unknown>;
+  sourceInputs: Array<{ path: string; sha256: string; mode?: number }>;
 }) {
   assert(receipt?.schema === 2 && receipt.kind === 'successful-full-native-verification-baseline', 'Unsupported baseline receipt')
   assert(receipt.completeness?.eligible === false && receipt.completeness.externalInputs === false,
