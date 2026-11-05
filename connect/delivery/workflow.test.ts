@@ -30,7 +30,14 @@ test('automatic main producers share one noncanceling pending lane; explicit can
 });
 test('producer verifies before sealing and never publishes',async()=>{
  const workflow=await readFile(new URL('../../.github/workflows/connect-delivery.yml',import.meta.url),'utf8');
- for(const requirement of ["branches: [main]","node-version: '22.23.0'","bun-version: '1.3.10'",'npm ci --include=dev','bun install --frozen-lockfile','scripts/playwright-runtime.ts','shared/analytics/config.test.ts','platform: web','connect-browser-${{ github.sha }}','connect-worker-${{ github.sha }}'])assert.ok(workflow.includes(requirement),requirement);
+ for(const requirement of ["node-version: '22.23.0'","bun-version: '1.3.10'",'npm ci --include=dev','bun install --frozen-lockfile','scripts/playwright-runtime.ts','shared/analytics/config.test.ts','platform: web','connect-browser-${{ github.sha }}','connect-worker-${{ github.sha }}'])assert.ok(workflow.includes(requirement),requirement);
+ const triggers=workflow.split('\nconcurrency:')[0];
+ assert.match(triggers,/^  workflow_dispatch:/m);
+ assert.match(triggers,/^  workflow_call:/m);
+ assert.doesNotMatch(triggers,/^  (?:push|pull_request):/m);
+ const produce=workflow.split('\n  produce:\n')[1].split('\n  publish:')[0];
+ assert.match(produce,/github.repository == 'tryapparent\/apparent'/);
+ assert.match(produce,/github.ref == 'refs\/heads\/main'/);
  assert.doesNotMatch(workflow,/playwright-core install --with-deps/);
  assert.ok(workflow.indexOf('Verify browser and analytics')<workflow.indexOf('Seal verified'));
  const producer=workflow.split('  publish:')[0];
