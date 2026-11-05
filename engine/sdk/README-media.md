@@ -88,9 +88,10 @@ Every envelope has the literal `channel: "media"`, `protocolVersion: 1`,
 `bundleId`, absolute bundle and video paths, nonnegative `videoOffsetMs`, and
 caller-supplied video file identity (`device`, `inode`, `size`, nanosecond
 modification time). The identity metadata is a consistency key, not
-authorization to access arbitrary paths. The native worker is not implemented;
-descriptor pinning, before/after identity checks, bundle validation and path
-swap rejection remain native conformance gates.
+authorization to access arbitrary paths. Native implementation status and
+platform acceptance are recorded in [`../README-media.md`](../README-media.md).
+Descriptor pinning, before/after identity checks, bundle validation and path
+swap rejection are native conformance gates, independent of SDK validation.
 
 `requestedBundleMs` is an ordered array of 1–48 request slots. Values
 are safe nonnegative integers and may repeat or be out of order. The SDK
@@ -217,6 +218,6 @@ A conforming peer must cover these cases against the real protocol implementatio
    directory; file+directory durability precedes atomic manifest publication
    and response. Test synthetic refs never pass as native evidence.
 
-The separate `apparent-engine-frames` Rust executable and its native decoder,
-provider manifest/inventory, platform distribution and real decode proofs are
-not implemented by this SDK contract checkpoint.
+The SDK itself supplies no native decoder, provider inventory or platform
+distribution. See the Engine-owned native worker documentation above for its
+implementation, measured proof and remaining delivery/platform gates.
