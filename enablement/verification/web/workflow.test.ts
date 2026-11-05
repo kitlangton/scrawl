@@ -71,6 +71,7 @@ test('Public composition consumes only its verified Public and Connect artifacts
   assert.match(publicEntry, /head_repository\.full_name == github\.repository/)
   assert.match(publicEntry, /secrets: inherit/)
   const deploy = section(reusable, 'deploy')
+  assert.match(section(reusable, 'stream-public'), /needs: contracts/)
   assert.match(deploy, /needs: stream-public/)
   assert.match(deploy, /stream-artifact\.ts --current/)
   assert.match(deploy, /publish-pages\.ts seal/)
