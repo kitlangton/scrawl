@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { lstat, mkdir, open } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { readManifest, resolveBundle, safeReference } from './bundle.js';
@@ -41,9 +41,61 @@ export function selectFrameTimes(from: string, to: string, fps: number): FrameSe
   if (fromMs > toMs) throw new Error('Frame range ends before it starts');
   if (!Number.isSafeInteger(fps) || fps < 1 || fps > MAX_FPS) throw new Error('FPS must be an integer between 1 and 240');
   // Match legacy range semantics: sample [from,to), at the selected frame rate.
-  const count = Math.ceil((toMs - fromMs) * fps / 1_000);
+  const count = fromMs === toMs ? 1 : Math.ceil((toMs - fromMs) * fps / 1_000);
   if (count > MAX_FRAMES) throw new Error(`Frame request exceeds the ${MAX_FRAMES}-frame limit`);
   return { fromMs, toMs, fps, requestedBundleMs: Array.from({ length: count }, (_, i) => fromMs + Math.floor(i * 1_000 / fps)) };
+}
+
+/** Select retained manifest keyframes without decoding or claiming video timestamps. */
+export async function savedKeyframes(bundleInput: string, selection: FrameSelection) {
+  const bundlePath = await resolveBundle(bundleInput);
+  await assertNoSymlinkPath(bundlePath);
+  const { value } = await readManifest(bundlePath);
+  const margin = Math.floor(Math.ceil(1_000 / selection.fps) / 2);
+  const lower = Math.max(0, selection.fromMs - margin), upper = selection.toMs + margin;
+  const chosen: Array<{ timestampMs: number; path: string }> = [];
+  for (const frame of value.keyframes) {
+    if (!Number.isSafeInteger(frame.t) || frame.t < lower || frame.t > upper || typeof frame.file !== 'string') continue;
+    if (!safeReference(frame.file) || !frame.file.startsWith('frames/') || !frame.file.endsWith('.png')) continue;
+    const path = join(bundlePath, frame.file);
+    await assertNoSymlinkPath(path);
+    const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW).catch(() => undefined);
+    if (!file) continue;
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile() || stat.size < 24 || stat.size > 16 * 1024 * 1024) continue;
+      const header = Buffer.alloc(24);
+      const { bytesRead } = await file.read(header, 0, header.length, 0);
+      const width = header.readUInt32BE(16), height = header.readUInt32BE(20);
+      if (bytesRead !== 24 || header.toString('hex', 0, 8) !== '89504e470d0a1a0a' || !width || !height || width * height > 64_000_000) continue;
+      const canonical = await realpath(path);
+      if (!canonical.startsWith(`${join(bundlePath, 'frames')}${sep}`)) continue;
+      chosen.push({ timestampMs: frame.t, path: canonical });
+    } finally { await file.close(); }
+  }
+  chosen.sort((a, b) => a.timestampMs - b.timestampMs || a.path.localeCompare(b.path));
+  const seen = new Set<string>();
+  const frames = chosen.filter(frame => !seen.has(frame.path) && !!seen.add(frame.path));
+  if (frames.length > MAX_FRAMES) throw new Error(`Saved keyframe selection exceeds the ${MAX_FRAMES}-frame limit`);
+  return { bundlePath, frames };
+}
+
+export async function hasSourceVideo(bundleInput: string): Promise<boolean> {
+  const bundlePath = await resolveBundle(bundleInput);
+  await assertNoSymlinkPath(bundlePath);
+  const pending = await lstat(join(bundlePath, '.media-pending')).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
+  if (pending) throw new Error('Bundle media is still pending (.media-pending)');
+  const evidence = await lstat(join(bundlePath, '.evidence-only.json')).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
+  if (evidence) throw new Error('Evidence-only bundle has no local source video');
+  const { value } = await readManifest(bundlePath);
+  const reference = value.video ?? (await existsRegular(join(bundlePath, 'recording.mp4')) ? 'recording.mp4' : 'recording.mov');
+  if (!safeReference(reference)) throw new Error('Bundle has unsafe video metadata');
+  const path = join(bundlePath, reference);
+  await assertNoSymlinkPath(path);
+  const info = await lstat(path).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
+  if (!info) return false;
+  if (!info.isFile()) throw new Error('Bundle source video is not a regular no-follow file');
+  return true;
 }
 
 async function assertNoSymlinkPath(path: string, includeLeaf = true): Promise<void> {

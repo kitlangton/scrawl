@@ -7,7 +7,7 @@ import { resolveBundle, readManifest, readBundle, readRegular, checkImageReferen
 import { recordWithEngine } from './recording.js';
 import { semanticSummary } from './summary.js';
 import { issueCommand, issueHelp, IssueCliError } from './issue.js';
-import { decodeFrames, selectFrameTimes, verifyFramesExecutable, verifyPrivateRuntime } from './frames.js';
+import { decodeFrames, hasSourceVideo, savedKeyframes, selectFrameTimes, verifyFramesExecutable, verifyPrivateRuntime } from './frames.js';
 
 const VERSION = '0.1.0';
 function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection and Engine foreground recording/frame selection.\n\nUsage: apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent inspect [BUNDLE|latest] [--experiment agentContext] [--stored-summary]\n       apparent-agent frames BUNDLE --from TIME --to TIME [--fps 4] [--json]\n       apparent-agent skill\n       apparent-agent record --duration <seconds> --out <absolute.apparent-path>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent issue --title <TEXT> (--body <TEXT> | --body-file <PATH>) [--submit]\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\nDefault inspect output is generated from the manifest; --stored-summary prints producer text.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nFrames require APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nIssue previews are offline by default; --submit publishes approved text to tryapparent/apparent.\n`); }
@@ -134,8 +134,17 @@ async function frames(args: string[]) {
   const selection = selectFrameTimes(from, to, fps);
   if (!selection.requestedBundleMs.length) throw new Error('Frame range must select at least one timestamp');
   const executable = process.env.APPARENT_ENGINE_FRAMES_EXECUTABLE, runtime = process.env.APPARENT_ENGINE_RUNTIME;
+  const emitSaved = async () => {
+    const saved = await savedKeyframes(bundle, selection);
+    if (!saved.frames.length) throw new Error('No saved keyframes match this range; video extraction is unavailable without an installed Engine media provider');
+    process.stderr.write('Using saved keyframes; no video was decoded.\n');
+    if (json) process.stdout.write(`${JSON.stringify({ bundle: saved.bundlePath, mode: 'saved-keyframes', source: 'bundle-manifest', frames: saved.frames }, null, 2)}\n`);
+    else for (const frame of saved.frames) process.stdout.write(`${frame.path}\n`);
+  };
+  if (selection.fromMs === selection.toMs || (!executable && !runtime)) { await emitSaved(); return 0; }
   if (!executable || !runtime || !isAbsolute(executable) || !isAbsolute(runtime) || resolve(executable) !== executable || resolve(runtime) !== runtime)
     throw new Error('Set APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME to explicit canonical absolute paths');
+  if (!await hasSourceVideo(bundle)) { await emitSaved(); return 0; }
   await verifyFramesExecutable(executable);
   await verifyPrivateRuntime(runtime);
   const sdk = await import('@apparent/engine-sdk/media');
@@ -144,8 +153,11 @@ async function frames(args: string[]) {
   const onSignal = () => { signalRequested = true; };
   process.on('SIGINT', onSignal); process.on('SIGTERM', onSignal);
   try {
+    const handshake = await client.handshake();
+    if (handshake.implementation === 'native' && !handshake.capabilities.decodeFrames) { await emitSaved(); return 0; }
     const result = await decodeFrames(client, bundle, runtime, selection, () => signalRequested);
     if (json) process.stdout.write(`${JSON.stringify({ bundle: result.bundlePath, jobId: result.jobId, outputDirectory: result.outputDirectory,
+      mode: 'decoded-video', source: 'engine-media-sdk',
       frames: result.frames.map(frame => ({ ...frame, clamped: frame.clampedToStart || frame.clampedToEnd })) }, null, 2)}\n`);
     else for (const frame of result.frames) process.stdout.write(`${frame.path}\n`);
     return 0;

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { MediaClient, type MediaRequest, type MediaResponse, type MediaTransport } from '@apparent/engine-sdk/media';
 import { ReferenceMediaPeer, type MediaTestScenario } from '@apparent/engine-sdk/media/testing';
-import { decodeFrames, parseClockMs, selectFrameTimes } from '../dist/frames.js';
+import { decodeFrames, parseClockMs, savedKeyframes, selectFrameTimes } from '../dist/frames.js';
 
 const target = { mode:'display', app:null, bundleId:null, windowTitle:null, windowId:null, displayId:0, frame:{x:0,y:0,width:10,height:10,scale:1} };
 const pngHeader = (w: number, h: number) => { const b=Buffer.alloc(24); Buffer.from('89504e470d0a1a0a','hex').copy(b); b.writeUInt32BE(w,16); b.writeUInt32BE(h,20); return b; };
@@ -57,7 +57,52 @@ test('clock parser and range selection are integer bounded, ordered, and reject 
   assert.throws(()=>selectFrameTimes('0','13',4),/48-frame/);
   assert.throws(()=>selectFrameTimes('0','1',1.5),/integer/);
   assert.throws(()=>parseClockMs('9007199254740992ms'),/invalid time/);
+  assert.deepEqual(selectFrameTimes('1','1',4).requestedBundleMs,[1000]);
 });
+
+test('saved keyframe selection is inclusive, ordered, deduplicated, safe and keeps manifest timestamps', async () => fixture(async (_root,bundle,_runtime,video) => {
+  const frames = join(bundle, 'frames'); await mkdir(frames);
+  const values = [
+    {t:1250,file:'frames/a space.png'}, {t:1000,file:'frames/dup.png'},
+    {t:1000,file:'frames/dup.png'}, {t:2000,file:'frames/z.png'}, {t:2126,file:'frames/outside.png'}
+  ];
+  for (const value of values) await writeFile(join(bundle, value.file), pngHeader(2,2));
+  const manifest = JSON.parse(await readFile(join(bundle,'apparent.json'),'utf8')); manifest.keyframes=values;
+  await writeFile(join(bundle,'apparent.json'),JSON.stringify(manifest)); await rm(video);
+  const result=await savedKeyframes(bundle,selectFrameTimes('1','2',4));
+  assert.deepEqual(result.frames.map(frame=>frame.timestampMs),[1000,1250,2000]);
+  assert.match(result.frames[1].path,/a space\.png$/);
+}));
+
+test('saved fallback rejects unsafe or corrupt references and empty selections', async () => fixture(async (_root,bundle,_runtime) => {
+  const frames=join(bundle,'frames'); await mkdir(frames);
+  const manifest=JSON.parse(await readFile(join(bundle,'apparent.json'),'utf8'));
+  manifest.keyframes=[{t:100,file:'frames/good.png'},{t:100,file:'../outside.png'},{t:100,file:'frames/bad.png'},{t:100,file:'frames/missing.png'}];
+  await writeFile(join(bundle,'apparent.json'),JSON.stringify(manifest));
+  await writeFile(join(frames,'good.png'),pngHeader(1,1)); await writeFile(join(frames,'bad.png'),Buffer.alloc(24));
+  const result=await savedKeyframes(bundle,selectFrameTimes('0.1','0.1',4));
+  assert.equal(result.frames.length,1); assert.equal(result.frames[0].timestampMs,100);
+  const fifo=join(frames,'fifo.png'); assert.equal(spawnSync('mkfifo',[fifo]).status,0);
+  manifest.keyframes.push({t:100,file:'frames/fifo.png'}); await writeFile(join(bundle,'apparent.json'),JSON.stringify(manifest));
+  assert.equal((await savedKeyframes(bundle,selectFrameTimes('0.1','0.1',4))).frames.length,1);
+  await symlink(join(frames,'good.png'),join(frames,'linked.png'));
+  manifest.keyframes.push({t:100,file:'frames/linked.png'}); await writeFile(join(bundle,'apparent.json'),JSON.stringify(manifest));
+  await assert.rejects(()=>savedKeyframes(bundle,selectFrameTimes('0.1','0.1',4)),/symlink/);
+  await writeFile(join(bundle,'apparent.json'),'{');
+  await assert.rejects(()=>savedKeyframes(bundle,selectFrameTimes('0.1','0.1',4)),/not valid JSON/);
+}));
+
+test('saved fallback rejects oversized matches instead of truncating and ignores non-PNG suffixes', async () => fixture(async (_root,bundle,_runtime) => {
+  const frames=join(bundle,'frames'); await mkdir(frames);
+  const manifest=JSON.parse(await readFile(join(bundle,'apparent.json'),'utf8'));
+  manifest.keyframes=[];
+  for(let i=0;i<49;i++) {
+    const file=`frames/${String(i).padStart(2,'0')}.png`; manifest.keyframes.push({t:100,file}); await writeFile(join(bundle,file),pngHeader(1,1));
+  }
+  manifest.keyframes.push({t:100,file:'frames/not-png.dat'}); await writeFile(join(bundle,'frames/not-png.dat'),pngHeader(1,1));
+  await writeFile(join(bundle,'apparent.json'),JSON.stringify(manifest));
+  await assert.rejects(()=>savedKeyframes(bundle,selectFrameTimes('0.1','0.1',4)),/exceeds the 48-frame limit/);
+}));
 
 test('media adapter preserves requested order and duplicates and reports offset saturation', async () => fixture(async (_root,bundle,runtime) => {
   const transport = new MaterializingPeer(); const client = new MediaClient(transport,{allowTestDouble:true});
@@ -176,11 +221,38 @@ test('cancelling acknowledgment remains nonterminal and close uncertainty is rep
   assert.equal(await client.close(),'term-requested-after-timeout');
 }));
 
-test('CLI requires explicit provider paths and never falls back to PATH or source', () => {
+test('CLI with no bundle reports the local bundle error before looking for providers', () => {
   const cli = new URL('../dist/cli.js', import.meta.url).pathname;
   const result = spawnSync(process.execPath,[cli,'frames','./clip.apparent','--from','0','--to','1'],{encoding:'utf8',env:{...process.env,APPARENT_ENGINE_FRAMES_EXECUTABLE:'',APPARENT_ENGINE_RUNTIME:''}});
-  assert.equal(result.status,2); assert.equal(result.stdout,''); assert.match(result.stderr,/APPARENT_ENGINE_FRAMES_EXECUTABLE/);
+  assert.equal(result.status,2); assert.equal(result.stdout,''); assert.match(result.stderr,/Local bundle directory not found/);
 });
+
+test('installed CLI uses saved keyframes offline when video is removed and marks JSON source', async () => fixture(async (_root,bundle,_runtime,video) => {
+  const frames=join(bundle,'frames'); await mkdir(frames);
+  await writeFile(join(frames,'saved frame.png'),pngHeader(3,2));
+  const manifest=JSON.parse(await readFile(join(bundle,'apparent.json'),'utf8'));
+  manifest.keyframes=[{t:1750,file:'frames/saved frame.png'}]; await writeFile(join(bundle,'apparent.json'),JSON.stringify(manifest)); await rm(video);
+  const cli=new URL('../dist/cli.js',import.meta.url).pathname;
+  const result=spawnSync(process.execPath,[cli,'frames',bundle,'--from','1.7','--to','1.7','--json'],{encoding:'utf8',env:{...process.env,APPARENT_ENGINE_FRAMES_EXECUTABLE:'',APPARENT_ENGINE_RUNTIME:''}});
+  assert.equal(result.status,0,result.stderr); assert.equal(result.stderr,'Using saved keyframes; no video was decoded.\n');
+  const output=JSON.parse(result.stdout); assert.equal(output.mode,'saved-keyframes'); assert.equal(output.frames[0].timestampMs,1750); assert.match(output.frames[0].path,/saved frame\.png$/);
+}));
+
+test('installed CLI uses saved images when the source video is missing even with provider paths configured', async () => fixture(async (_root,bundle,_runtime,video) => {
+  const frames=join(bundle,'frames'); await mkdir(frames); await writeFile(join(frames,'saved.png'),pngHeader(2,2));
+  const manifest=JSON.parse(await readFile(join(bundle,'apparent.json'),'utf8')); manifest.keyframes=[{t:500,file:'frames/saved.png'}];
+  await writeFile(join(bundle,'apparent.json'),JSON.stringify(manifest)); await rm(video);
+  const cli=new URL('../dist/cli.js',import.meta.url).pathname;
+  const result=spawnSync(process.execPath,[cli,'frames',bundle,'--from','0','--to','0.5'],{encoding:'utf8',env:{...process.env,APPARENT_ENGINE_FRAMES_EXECUTABLE:'/missing/engine',APPARENT_ENGINE_RUNTIME:'/missing/runtime'}});
+  assert.equal(result.status,0,result.stderr); assert.match(result.stdout,/saved\.png/); assert.match(result.stderr,/no video was decoded/);
+}));
+
+test('installed CLI does not claim extraction when no saved image matches', async () => fixture(async (_root,bundle,_runtime,video) => {
+  await rm(video);
+  const cli=new URL('../dist/cli.js',import.meta.url).pathname;
+  const result=spawnSync(process.execPath,[cli,'frames',bundle,'--from','1','--to','2'],{encoding:'utf8',env:{...process.env,APPARENT_ENGINE_FRAMES_EXECUTABLE:'',APPARENT_ENGINE_RUNTIME:''}});
+  assert.equal(result.status,2); assert.equal(result.stdout,''); assert.match(result.stderr,/No saved keyframes match.*video extraction is unavailable/);
+}));
 
 test('a frame replaced with a FIFO is rejected without waiting for a writer', {timeout: 2000}, async () => fixture(async (_root,bundle,runtime) => {
   const peer = new MaterializingPeer();
