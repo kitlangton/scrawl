@@ -6,7 +6,8 @@ export type PillView = {
   noteCount:number;
   actions:{id:string;label:string;enabled:boolean;selected:boolean;primary:boolean}[];
 };
-declare global { interface Window { apparentPill?: {
+/** Existing Desktop host capability consumed by the pill presentation. */
+export type PillHost = {
   read:()=>Promise<PillView|null>;
   layout:(revision:number)=>Promise<void>;
   manualDrag:boolean;
@@ -15,4 +16,4 @@ declare global { interface Window { apparentPill?: {
   cancelPaste:()=>Promise<void>;
   act:(revision:number,action:string,drop?:boolean)=>Promise<void>;
   subscribe:(callback:(state:PillView)=>void)=>()=>void;
-}; } }
+};
