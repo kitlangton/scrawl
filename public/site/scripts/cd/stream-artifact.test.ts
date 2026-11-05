@@ -52,7 +52,7 @@ function fixture(runOverrides: Record<string, unknown> = {}) {
   const calls: string[] = []
   const api = async (path: string) => {
     calls.push(path)
-    if (path.includes('/runs?')) return { workflow_runs: [run] }
+    if (path === '/actions/workflows/stream-public.yml/runs?branch=main&status=completed&per_page=100') return { workflow_runs: [run] }
     if (path.includes('/jobs?')) return { total_count: jobs.length, jobs }
     if (path.includes('/artifacts?')) return { total_count: 1, artifacts: [artifact] }
     throw new Error(`Unexpected API path: ${path}`)
