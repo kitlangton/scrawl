@@ -18,7 +18,7 @@ test('actual owner, generated Public content and reverse shared consumers select
   for(const owner of ['public','connect'] as Owner[])for(const path of ['connect/web/package.json','shared/ui/token.css','shared/analytics/config.ts','shared/assets/brand/logo.svg','enablement/release_gate.py'])assert(relevant(owner,path),`${owner}: ${path}`)
   assert(relevant('connect','public/site/public/assets/fonts/HostGrotesk-Variable.ttf'))
   assert(!relevant('connect','public/site/src/Home.tsx'))
-  for(const path of ['connect/client/Cargo.lock','connect/delivery/recipient/seal.ts']) {
+  for(const path of ['connect/client/Cargo.lock','connect/delivery/recipient/seal.ts','shared/config-native/src/lib.rs','shared/config-native/Cargo.lock']) {
     assert(relevant('recipient',path));assert(!relevant('public',path));assert(!relevant('connect',path))
   }
 })

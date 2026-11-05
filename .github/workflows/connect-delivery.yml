@@ -245,10 +245,11 @@ jobs:
       - name: Isolate component from root build configuration
         shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/recipient-source" "$RUNNER_TEMP/recipient-output"
-          cp -R connect/client/. "$RUNNER_TEMP/recipient-source/"
+          mkdir -p "$RUNNER_TEMP/recipient-source/connect/client" "$RUNNER_TEMP/recipient-source/shared/config-native" "$RUNNER_TEMP/recipient-output"
+          cp -R connect/client/. "$RUNNER_TEMP/recipient-source/connect/client/"
+          cp -R shared/config-native/. "$RUNNER_TEMP/recipient-source/shared/config-native/"
       - name: Test and build component only
-        working-directory: ${{ runner.temp }}/recipient-source
+        working-directory: ${{ runner.temp }}/recipient-source/connect/client
         shell: bash
         env:
           MACOSX_DEPLOYMENT_TARGET: '15.0'
