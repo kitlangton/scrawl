@@ -35,11 +35,12 @@ try {
   const declarations = path.join(headless, 'consumer.ts');
   await writeFile(declarations, `
     import { RecordWorkflow } from '@apparent/record';
-    import { createRecordHostRuntime } from '@apparent/record/host';
-    import { decodeSelectedFrames } from '@apparent/record/processing';
+    import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator } from '@apparent/record/host';
+    import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
+    import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
     import { createRecordFixture } from '@apparent/record/fixtures';
-    void [RecordWorkflow, createRecordHostRuntime, decodeSelectedFrames, createRecordCapabilityProvider, hasConfirmedArtifactOpen];
+    void [RecordWorkflow, createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, decodeSelectedFrames, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory, createRecordCapabilityProvider, hasConfirmedArtifactOpen];
   `);
   const tsc = path.join(root, 'node_modules/typescript/bin/tsc');
   await run(process.execPath, [tsc, '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', declarations], { cwd: headless });
@@ -47,8 +48,9 @@ try {
     import assert from 'node:assert/strict';
     import { createRequire } from 'node:module';
     import { RecordWorkflow } from '@apparent/record';
-    import { createRecordHostRuntime } from '@apparent/record/host';
-    import { decodeSelectedFrames } from '@apparent/record/processing';
+    import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator } from '@apparent/record/host';
+    import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
+    import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
     import { createRecordFixture } from '@apparent/record/fixtures';
     const require = createRequire(import.meta.url);
@@ -56,6 +58,7 @@ try {
     assert.equal(typeof RecordWorkflow, 'function');
     assert.equal(typeof createRecordHostRuntime, 'function');
     assert.equal(typeof decodeSelectedFrames, 'function');
+    for (const exported of [SqliteCaptureMappingStore, PrivateBundleAllocator, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory]) assert.equal(typeof exported, 'function');
     assert.equal(typeof createRecordCapabilityProvider, 'function');
     assert.equal(typeof hasConfirmedArtifactOpen, 'function');
     assert.equal(hasConfirmedArtifactOpen(createRecordFixture().driver.current(), 'unknown'), false);

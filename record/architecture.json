@@ -6,5 +6,11 @@
     "env": "APPARENT_ENGINE_SDK_CONSUMER",
     "package": "@apparent/engine-sdk",
     "exports": [".", "./testing"]
+  }, {
+    "file": "test/processing/media-consumer.test.ts",
+    "function": "packedMediaSdk",
+    "env": "APPARENT_ENGINE_SDK_MEDIA_CONSUMER",
+    "package": "@apparent/engine-sdk",
+    "exports": ["./media"]
   }]
 }

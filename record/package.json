@@ -31,6 +31,10 @@
       "types": "./dist/backend/processing/index.d.ts",
       "import": "./dist/backend/processing/index.js"
     },
+    "./processing/media-consumer": {
+      "types": "./dist/backend/processing/media-consumer.d.ts",
+      "import": "./dist/backend/processing/media-consumer.js"
+    },
     "./ui": {
       "types": "./dist/ui/index.d.ts",
       "import": "./dist/ui/index.js"

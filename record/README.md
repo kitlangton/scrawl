@@ -5,22 +5,22 @@
 `EngineSdkAdapter` composes an already constructed, packed `@apparent/engine-sdk` client. `createRecordHostRuntime` from `@apparent/record/host` composes it with `RecordWorkflow`, `SqliteCaptureMappingStore` and `PrivateBundleAllocator` using explicit private roots (Node 22.13+). The runtime reconciles persisted request IDs before admitting starts; active or ambiguous captures remain visible and block admission. The host subpath does not import React or Electron. It does not choose or launch an executable, select runtime locations, or establish capture readiness. The reusable pill is adopted through the existing legacy host; it does not install a replacement Electron main/preload route.
 
 `@apparent/record/processing` exports `decodeSelectedFrames` and
-`assembleProcessingOutput`. The decode function consumes an injected public
-`@apparent/engine-sdk/media` client and Record-selected bundle-clock timestamps;
-the Engine owns decoding, safe output publication and truthful execution facts.
-The caller supplies an existing verified media runtime, a fresh private output
-directory, source identity and selected frames. Assembly formats those facts as
-semantic handoff text with absolute frame/video/bundle paths; it does not select
-frames, transcribe, create images or write a bundle. Linux worker conformance is
-documented by Engine, but packaged runtime discovery and Record adoption remain
-pending the Engine owner's committed artifact and verified discovery/launch/
-platform handoff. No native proof is claimed here. The caller must complete the
-SDK handshake first and retain the full client and job ID: a rejected decode is
-not proof that execution stopped. Reconcile with SDK inspect/cancel before
-retrying or cleaning its output. Assembly preserves supplied transcript, selected frames, typed notes/pins, target/device,
-session/context changes, interaction labels, marks and processing warnings. Window
-titles remain manifest-only. It does not select frames, write the canonical bundle
-or perform clipboard/link handoff; those adoption steps remain outstanding.
+`assembleProcessingOutput`; `@apparent/record/processing/media-consumer` exports
+the durable media/1 consumer. A host admits the
+Engine artifact through existing delivery contracts and injects a packed SDK
+client launched from its explicit absolute worker path and private runtime
+directory. Record does not discover or activate a production route. The consumer
+has a real Linux native PNG proof using an isolated synthetic completed H.264
+bundle and Engine's retained media artifact from source
+`463f0053908a9c6030d3c5665aacd10089884aa`; this does not claim capture-v1
+readiness, macOS media, or current-main artifact admission. Record retains the
+same client and job ID after decode rejection/timeout and requires SDK inspect or
+cancel reconciliation before another dispatch or cleanup. Assembly preserves
+supplied transcript, selected frames, typed notes/pins, target/device,
+session/context changes, interaction labels, marks and processing warnings.
+Window titles remain manifest-only. It does not select frames, write the
+canonical bundle or perform clipboard/link handoff; those adoption steps remain
+outstanding.
 
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 
@@ -107,10 +107,11 @@ fallback route remains authoritative.
 | Permission grant, usability, relaunch and repair actions | Provider translation seam implemented; Platform producer blocked | Native requirement facts are copied from the injected native port; missing/failed binding yields unavailable. Platform owns the same-user `capture.sock` GUI actor extension and shared public host-port types/client; it has committed direct parent-Record-thread notification with the committed API/injection and platform evidence. |
 | Shortcut configuration, registration, edit/save/cancel | Provider translation seam implemented; Platform producer blocked | Effective configured binding and OS registration remain distinct facts. The native producer owns them; this provider neither binds shortcuts nor duplicates the transport. Same Platform notification route as above. |
 | Next-shortcut admission and local-only admission | Explicitly unavailable | Current capture-v1 has neither reservation enforcement nor local-only enforcement. Record refuses local-only starts and refuses arm when the producer reports unavailable; it never infers enforcement from intent. A future producer must publish reservation consumption/cancellation/expiry and effective per-capture delivery readback. Engine committed parent-thread notification when usable native capabilities land. |
-| Semantic processing assembly and frame decode | Implemented in `@apparent/record/processing`; consumer-only | PR #704 (main `7c2afd5`) added `assembleProcessingOutput` and `decodeSelectedFrames`, using supplied transcript/notes/selected frame facts and an injected public Engine media client. It has no real decode proof. The semantic formatter now also preserves supplied target/device, session/context changes, notes/pins, interaction labels, marks and warnings. It does not implement frame selection, canonical bundle writing, default output selection or installed handoff adoption. |
+| Transcript association | Implemented in the headless package | `associateTranscriptWithSelectedFrames` partitions supplied word/segment facts across existing selected frames using measured clause/anchor rules. Source-derived Rust parity tests cover Unicode whitespace, punctuation, gaps and boundary timing. This does not select images or supply missing native visual metrics. |
+| Semantic processing assembly and frame decode | Consumer implemented; installed adoption partial | PR #704 (main `7c2afd5`) added the formatter and decoder seam; this slice adds durable job ownership and real PNG decode proof against the retained Linux `media/1` artifact. It does not implement frame selection, canonical bundle writing, default output selection or installed handoff adoption. |
 | Capture material to Record bundle assembly and authenticated publication | Blocked on Engine producer contract | Engine is preparing the separately negotiated capture-material → Record assembly → authenticated publish channel because capture-v1 `saved` semantics cannot supply Record policy assembly. Current capture-v1 remains unavailable. Engine has committed direct notification to the parent Record thread when a usable capture SDK/native artifact and authoritative capabilities land. Independent packaged-media notification is also established; it does not prove this Record assembly channel or real decode. |
 | Keyframes, transcript, bundle contents, warnings and default output | Partially implemented; full adoption blocked | Record formats supplied semantic inputs, including target/session context, interaction labels/marks and processing warnings; default keyframe selection, canonical bundle write and installed handoff are still unadopted. Provider maps Engine v1 `saved` to Record `processing`; only authenticated Record output facts may publish `saved` or a successful save outcome. |
-| Clipboard copy, link and artifact open | Dispatch seam only; production receipts blocked | Copy/open actions may be dispatched through the native port, but dispatch is not success. Copy needs a clipboard receipt; link needs the existing link producer; artifact open needs the exact-artifact viewer acknowledgement or supported OS observation. No such production receipts are synthesized here. |
+| Clipboard copy, link and artifact open | Local prompt policy implemented; native effects and receipts blocked | `formatLocalHandoff` preserves semantic context, warnings and the timed request, with access instructions first and no clipboard/publication effect. Copy/open actions may be dispatched through the native port, but dispatch is not success. Copy needs a clipboard receipt; link needs the existing link producer; artifact open needs the exact-artifact viewer acknowledgement or supported OS observation. No such production receipts are synthesized here. |
 | Pill/runtime installed binding | Existing UI and runtime adopted through current fallback | Reusable pill and injected workflow host are packaged. This capability provider is owner-local and does not install an Electron main/preload route or switch routing. |
 | Platform proof | Blocked for this provider route | No new OS boundary is claimed. Platform's committed evidence notification must name the native facts/action contract and affected macOS/Linux evidence; existing Desktop platform gates still apply before any route adoption. |
 | Windows | Excluded | Apparent supports macOS and Linux only. |
