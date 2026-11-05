@@ -60,7 +60,7 @@ async function main(args: string[]) {
     let result
     try {
       if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('Invalid repository identity')
-      const producerPath = workflowPathFor(owner.id, env)
+      const producerPath = workflowPathFor(owner.id)
       const workflow = gh<{ id: number; path: string }>(repo, `repos/${repo}/actions/workflows/${basename(producerPath)}`)
       if (workflow.path !== producerPath) throw new Error('Workflow API identity mismatch')
       const runsResponse = gh<{ workflow_runs: Array<{ id: number; run_attempt: number; head_sha: string; head_branch: string; event: string; conclusion: string | null }> }>(repo, `repos/${repo}/actions/workflows/${workflow.id}/runs?branch=main&event=push&per_page=100`)

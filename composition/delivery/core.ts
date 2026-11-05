@@ -10,8 +10,8 @@ export type Stage = 'library' | 'contract' | 'development-app' | 'website'
 export type Owner = { schema: 1; id: string; kind: Kind; package: string; inputs: string[]; verify: string[]; build: string; targets: Target[]; stage: Stage; language: 'typescript' | 'native'; artifactPath?: string; packageManager?: 'npm' | 'bun'; files?: string[]; environment?: string[] }
 export const auditJob = 'Workflow runtime budget'
 export const contractsJob = 'Delivery contracts'
-export function workflowPathFor(ownerId: string, env = process.env): string {
-  return env.APPARENT_DELIVERY_WORKFLOW_PATH ?? `.github/workflows/stream-${ownerId}.yml`
+export function workflowPathFor(ownerId: string): string {
+  return `.github/workflows/stream-${ownerId}.yml`
 }
 const roots = [
   { id: 'app-shell', source: 'composition/app', registration: 'composition/app/delivery.json' },
@@ -238,7 +238,7 @@ export function sealPayload(root: string, owner: Owner, target: Target, inputDir
   if (!statSync(source).isDirectory()) throw new Error('Payload input is not a directory')
   const check = (dir: string) => { for (const name of readdirSync(dir)) { const p = resolve(dir, name); const stat = lstatSync(p); if (stat.isSymbolicLink()) { const link = readlinkSync(p); if (isAbsolute(link) || windows(link)) throw new Error('Unsafe payload symlink'); const resolved = resolve(dirname(p), link); const rel = relative(source, resolved); if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('Payload symlink escapes input directory'); let actual: string; try { actual = realpathSync(p) } catch { throw new Error('Broken payload symlink') } const actualRel = relative(source, actual); if (actualRel === '..' || actualRel.startsWith(`..${sep}`) || isAbsolute(actualRel)) throw new Error('Payload symlink escapes input directory'); } else if (stat.isDirectory()) check(p); else if (!stat.isFile()) throw new Error('Unsupported payload filesystem entry') } }
   check(source)
-  if (env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${workflowPathFor(owner.id, env)}@refs/heads/main` || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID ?? '') || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT ?? '')) throw new Error('Sealing requires canonical main workflow identity')
+  if (env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${workflowPathFor(owner.id)}@refs/heads/main` || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID ?? '') || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT ?? '')) throw new Error('Sealing requires canonical main workflow identity')
   const output = outsideCheckout(root, outputDir)
   if (output === source || output.startsWith(`${source}${sep}`) || source.startsWith(`${output}${sep}`)) throw new Error('Output directory overlaps payload input')
   const sha = git(root, ['rev-parse', 'HEAD']).trim()
@@ -258,7 +258,7 @@ function requireNoSymlink(path: string) { if (lstatSync(path).isSymbolicLink()) 
 /** Reissue an admitted, byte-verified archive; never extract its application payload. */
 export function reusePayload(root: string, owner: Owner, target: Target, zip: string, outputDir: string, digest: string, priorSha: string, artifactId: string, priorRunId: string, priorAttempt: string, env = process.env) {
   if (!owner.targets.includes(target) || !/^[0-9a-f]{64}$/.test(digest) || !/^[0-9a-f]{40,64}$/.test(priorSha) || !/^[1-9][0-9]*$/.test(artifactId)) throw new Error('Invalid reuse identity')
-  if (env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${workflowPathFor(owner.id, env)}@refs/heads/main` || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID ?? '') || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT ?? '')) throw new Error('Reuse requires canonical main workflow identity')
+  if (env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${workflowPathFor(owner.id)}@refs/heads/main` || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID ?? '') || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT ?? '')) throw new Error('Reuse requires canonical main workflow identity')
   const entries = execFileSync('unzip', ['-Z1', zip], { encoding: 'utf8', maxBuffer: 4096 }).trim().split('\n').sort()
   if (JSON.stringify(entries) !== JSON.stringify(['component.tar.gz', 'receipt.json'])) throw new Error('Unexpected artifact ZIP inventory')
   const original = JSON.parse(execFileSync('unzip', ['-p', zip, 'receipt.json'], { encoding: 'utf8', maxBuffer: 16384 }))

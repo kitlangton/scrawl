@@ -18,6 +18,17 @@ const repo = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: '
 const temp = mkdtempSync(resolve(tmpdir(), 'delivery-core-'))
 after(() => rmSync(temp, { recursive: true, force: true }))
 const owner: Owner = { schema: 1, id: 'record', kind: 'npm', package: 'record', inputs: ['record/', 'shared/ui/'], verify: ['typecheck', 'test'], build: 'build', targets: ['linux-x64'], stage: 'library', language: 'typescript' }
+test('canonical producer identity belongs to the owner regardless of the running stream', () => {
+  const previous = process.env.APPARENT_DELIVERY_WORKFLOW_PATH
+  try {
+    process.env.APPARENT_DELIVERY_WORKFLOW_PATH = '.github/workflows/stream-agent.yml'
+    assert.equal(workflowPathFor('record'), '.github/workflows/stream-record.yml')
+    assert.equal(workflowPathFor('public'), '.github/workflows/stream-public.yml')
+  } finally {
+    if (previous === undefined) delete process.env.APPARENT_DELIVERY_WORKFLOW_PATH
+    else process.env.APPARENT_DELIVERY_WORKFLOW_PATH = previous
+  }
+})
 function git(cwd: string, ...args: string[]) { execFileSync('git', args, { cwd, stdio: 'ignore' }) }
 function newRepo(path: string) {
   mkdirSync(path, { recursive: true }); git(path, 'init', '-q'); git(path, 'config', 'user.email', 'delivery-test@example.invalid'); git(path, 'config', 'user.name', 'delivery test')
