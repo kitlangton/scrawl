@@ -315,7 +315,7 @@ class SelectionTests(unittest.TestCase):
                 run.assert_not_called()
 
     def test_connect_client_typescript_inputs_select_package_tests_without_narrowing_rust(self):
-        prefix = "connect/client/typescript/"
+        prefix = "connect/delivery/client/"
         selected = (
             "package.json", "package-lock.json", "tsconfig.json",
             "src/settings-controller.cts", "src/device-flow.cts",
@@ -341,7 +341,7 @@ class SelectionTests(unittest.TestCase):
     def test_connect_client_check_uses_declared_npm_test_from_owner_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            package = root / "connect/client/typescript"
+            package = root / "connect/delivery/client"
             for name in ("package.json", "package-lock.json", "tsconfig.json",
                          "node_modules/typescript/bin/tsc",
                          "node_modules/@types/node/package.json",
@@ -353,7 +353,7 @@ class SelectionTests(unittest.TestCase):
             with patch.object(verification, "ROOT", root), patch.object(
                     verification.subprocess, "run") as run:
                 verification.run_pr_checks({"paths": [
-                    "connect/client/typescript/src/settings-controller.cts"]})
+                    "connect/delivery/client/src/settings-controller.cts"]})
             command = ["npm", "test"]
             calls = [call for call in run.call_args_list if call.args[0] == command]
             self.assertEqual(len(calls), 1)
@@ -369,7 +369,7 @@ class SelectionTests(unittest.TestCase):
     def test_connect_client_missing_locked_dependencies_fails_without_install(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            package = root / "connect/client/typescript"
+            package = root / "connect/delivery/client"
             package.mkdir(parents=True)
             for name in ("package.json", "package-lock.json", "tsconfig.json"):
                 (package / name).touch()
@@ -406,7 +406,7 @@ class SelectionTests(unittest.TestCase):
             "public/site/scripts/site-build/verify.ts",
             "public/site/functions/Apparent-ghost-demo-v4-lilac.mp4.ts",
             "public/site/video-demo/Cargo.toml",
-            "connect/client/typescript/src/index.ts", "connect/web/src/Hosted.tsx",
+            "connect/delivery/client/src/index.ts", "connect/web/src/Hosted.tsx",
             "connect/service/src/worker.ts", "capture/desktop/native/linux.rs",
         ):
             with self.subTest(path=path):

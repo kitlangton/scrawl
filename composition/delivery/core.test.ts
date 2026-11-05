@@ -35,7 +35,7 @@ test('catalog reports absent owners pending and blocks present owners without re
   mkdirSync(resolve(path, 'composition/app'), { recursive: true })
   const missing = catalog(path)
   assert.deepEqual(missing.blocked, ['app-shell: source exists without delivery registration'])
-  assert.deepEqual(missing.pending, ['record', 'engine', 'engine-native', 'engine-media-native', 'platform-config', 'onboarding', 'agent', 'public'])
+  assert.deepEqual(missing.pending, ['record', 'connect-client', 'engine', 'engine-native', 'engine-media-native', 'platform-config', 'onboarding', 'agent', 'public'])
   mkdirSync(resolve(path, 'record')); mkdirSync(resolve(path, 'shared/ui'), { recursive: true })
   writeFileSync(resolve(path, 'record/delivery.json'), JSON.stringify({ ...owner, inputs: ['shared/ui/'] }))
   assert.match(catalog(path).blocked.join(';'), /Package source must be covered/)

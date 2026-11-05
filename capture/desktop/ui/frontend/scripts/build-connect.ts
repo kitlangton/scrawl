@@ -5,7 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
-const source = path.resolve(root, '../../../../connect/client/typescript/src');
+const source = path.resolve(root, '../../../../connect/delivery/client/src');
 const output = path.join(root, 'electron/connect-client');
 await fs.mkdir(output, { recursive: true });
 // The pure presentation module is ESM; controller and transport have explicit

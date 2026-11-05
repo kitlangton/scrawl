@@ -1,5 +1,21 @@
 # Connect TypeScript migration inventory (#529)
 
+## Accepted rebuild and current checkpoint
+
+Connect has Delivery and Viewing modules under one accountable owner during the
+rebuild. Delivery owns account authority, consent, transfers, access and retrieval;
+Viewing owns the browser recipient/account experience. TypeScript owns product
+behavior, CLI, tests and tooling; React/shared controls supply UI. Worker/D1/R2
+remain the hosted runtime. Cross-module consumers use published contracts.
+
+The first replacement checkpoint moves the adopted account/crypto package to
+`connect/delivery/client` and registers its independent value-stream artifact.
+Desktop still consumes the same emitted controller. The hosted service, viewer,
+remaining Rust state/queue/CLI and their production consumers remain migration
+work; this checkpoint does not establish whole-Connect independence. Subsequent
+slices must adopt those callers, preserve one writer and retire replaced donors.
+
+
 Read with [hosted-client.md](hosted-client.md), [hosted-api.md](hosted-api.md),
 and [hosted-encryption.md](hosted-encryption.md). This is a source inventory,
 not proof that the TypeScript replacement or routing has been adopted.
@@ -17,7 +33,7 @@ sharing state/progress/size helpers, `account_view_in`, `command`, `fetch`,
 `inspect_source`, and `start_worker`.
 
 The adopted Electron account workflow additionally enters Connect's
-`client/typescript/src/settings-controller.cts` through the generated Desktop
+`delivery/client/src/settings-controller.cts` through the generated Desktop
 entry. Its backend RPC uses the existing Connect socket worker for Rust local
 private-record facts/renewal/durable operations. `settings-state.cts` owns
 local account-state meaning from `stateFacts: 1`; the old snapshot remains only

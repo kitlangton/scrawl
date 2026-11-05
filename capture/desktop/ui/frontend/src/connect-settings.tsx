@@ -7,7 +7,7 @@ import '@apparent/ui/status.css';
 import frogs from '../../../../../shared/assets/brand/connect-frogs.png';
 import font from '../../../../../shared/assets/fonts/HostGrotesk-Variable.ttf?url';
 import type { ConnectAction, ConnectSettings, ConnectView } from './bridge';
-import { presentConnect } from '../../../../../connect/client/typescript/src/settings-presentation';
+import { presentConnect } from '../../../../../connect/delivery/client/src/settings-presentation';
 
 export function ConnectSettingsCard() {
   const [result, setResult] = useState<ConnectSettings>({ status: 'disabled' });

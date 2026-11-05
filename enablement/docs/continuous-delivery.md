@@ -588,7 +588,7 @@ improvement or an increase to the separate NoMac spending/session limits.
 ### Connect client TypeScript feedback before feature pushes
 
 Feature pre-push runs the existing `npm test` command in
-`connect/client/typescript` when the full merge-base delta changes its
+`connect/delivery/client` when the full merge-base delta changes its
 `package.json`, `package-lock.json`, `tsconfig.json`, `src/**`, or direct
 `test/*.test.ts` inputs. The command's declared `pretest` builds the package
 before running its Node tests. Node and the locked npm dependencies must already

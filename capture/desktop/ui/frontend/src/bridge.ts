@@ -56,15 +56,15 @@ export type CaptureLocation =
 
 export type ErrorReporting = { status: 'connected'; enabled: boolean } |
   { status: 'disconnected' | 'incompatible' } | { status: 'error'; code: string };
-export type ConnectAction = import('../../../../../connect/client/typescript/src/settings-presentation').Action;
+export type ConnectAction = import('../../../../../connect/delivery/client/src/settings-presentation').Action;
 export type ConnectView = {
   title: string; status: string; detail: string; server: string | null;
   verificationUri: string | null; userCode: string | null;
   buttons: ConnectButton[]; note: string;
-  presentationState?: import('../../../../../connect/client/typescript/src/settings-presentation').PresentationState;
-  presentation?: import('../../../../../connect/client/typescript/src/settings-presentation').Presentation;
+  presentationState?: import('../../../../../connect/delivery/client/src/settings-presentation').PresentationState;
+  presentation?: import('../../../../../connect/delivery/client/src/settings-presentation').Presentation;
 };
-export type ConnectButton = import('../../../../../connect/client/typescript/src/settings-presentation').Button;
+export type ConnectButton = import('../../../../../connect/delivery/client/src/settings-presentation').Button;
 export type ConnectSettings =
   | { status: 'connected'; view: ConnectView }
   | { status: 'disabled' | 'disconnected' | 'cancelled' }
