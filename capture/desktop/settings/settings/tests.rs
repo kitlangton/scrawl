@@ -479,6 +479,19 @@ fn shortcuts_round_trip_through_the_config_keeping_other_keys_and_0600() {
     assert_eq!(read_json(&path)["ingestToken"], "secret");
 }
 
+#[test]
+fn native_shortcut_compare_and_save_refuses_a_changed_persisted_value() {
+    let dir = TempDir::new("native-shortcut-cas");
+    let path = dir.0.join("config.json");
+    let legacy = dir.0.join("absent-legacy");
+    let expected = ShortcutConfig::default_record();
+    let current = ShortcutConfig { key_code: R, carbon_modifiers: CTRL_OPT, label: label(CTRL_OPT, "R") };
+    let proposed = ShortcutConfig { key_code: V, carbon_modifiers: CTRL_OPT, label: label(CTRL_OPT, "V") };
+    save_shortcut_in(&path, ShortcutKind::Record, &current).unwrap();
+    assert!(!save_shortcut_if_current_in(&path, ShortcutKind::Record, &expected, &proposed).unwrap());
+    assert_eq!(Shortcuts::load_from(&path, &legacy).0.record, current);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn copilot_record_shortcut_from_config_is_the_only_record_shortcut_in_settings() {

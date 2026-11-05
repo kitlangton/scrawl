@@ -612,6 +612,23 @@ fn backend() -> Backend {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+pub fn shortcut_registration_status(telemetry: &SharedCaptureTelemetry) -> &'static str {
+    if telemetry.shortcuts_paused.load(Ordering::Acquire) { return "unknown"; }
+    match backend() {
+        Backend::Portal => "externally-managed",
+        Backend::X11 => {
+            let Some(grabs) = grabs() else { return "unknown"; };
+            let held = grabs.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (_, paste) = telemetry.shortcuts();
+            let record_live = held.iter().any(|(_, _, kind)| *kind == ShortcutKind::Record);
+            let paste_live = paste.is_unset() || held.iter().any(|(_, _, kind)| *kind == ShortcutKind::Paste);
+            if record_live && paste_live { "registered" } else { "unknown" }
+        }
+        // GNOME can report a failed external bind while its setter still returns Ok.
+        Backend::Gnome | Backend::Kde | Backend::Hyprland | Backend::Devices | Backend::None => "unknown",
+    }
+}
+
 fn set_backend(backend: Backend) {
     *BACKEND
         .lock()

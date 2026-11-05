@@ -336,6 +336,12 @@ impl ActiveRecording {
 /// Shared coordinator owned by the GPUI app.
 pub struct ApparentCoordinator {
     telemetry: Arc<SharedCaptureTelemetry>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(super) native_host_epoch: String,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(super) native_host_revision: u64,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(super) native_host_fingerprint: Option<String>,
     note_ui: Option<workflow::notes::Session>,
     admitted_microphone: Option<bool>,
     whiteboard: Rc<RefCell<whiteboard::Board>>,
