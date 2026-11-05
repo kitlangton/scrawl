@@ -16,9 +16,11 @@ export interface ShortcutBinding {
   externallyManaged: boolean;
   draft: null | { sessionId: string; value: string; error?: string };
 }
+export type PenColor = "coral" | "purple" | "blue" | "green";
+/** Named penColor preference; drawing tool modes are a separate capability. */
 export interface PenPreference {
-  effective: string;
-  supported: string[];
+  effective: PenColor | null;
+  supported: PenColor[];
   error?: string;
 }
 export type CaptureOutcomeKind =
@@ -98,7 +100,7 @@ export type RecordCommand = CommandBase & (
   | { type: "shortcut-cancel"; sessionId: string }
   | { type: "shortcut-reset" }
   | { type: "shortcut-open-desktop-config" }
-  | { type: "select-pen"; value: string }
+  | { type: "select-pen"; value: PenColor }
   | { type: "start-capture"; delivery: "local-only" | "host-default" }
   | { type: "arm-next-shortcut"; admissionId: string; delivery: "local-only" | "host-default"; expiresAt: string }
   | { type: "cancel-next-shortcut"; admissionId: string }

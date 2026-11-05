@@ -25,9 +25,9 @@ test("external shortcut save and failed pen write preserve effective facts", asy
   assert.equal(saved.status, "refused");
   assert.equal(saved.snapshot.shortcut.registration, "externally-managed");
   const pen = createRecordFixture("pen-write-failure-preserves-effective");
-  const selected = await pen.client.execute(command(pen.driver.current(), { type: "select-pen", value: "laser" }));
+  const selected = await pen.client.execute(command(pen.driver.current(), { type: "select-pen", value: "blue" }));
   assert.equal(selected.status, "refused");
-  assert.equal(selected.snapshot.pen.effective, "ink");
+  assert.equal(selected.snapshot.pen.effective, "coral");
 });
 
 test("command acceptance is distinct from explicit provider facts and observer delivery", async () => {
@@ -204,7 +204,7 @@ test("shortcut admission is refused until supported; dispatch alone does not arm
 
   const armed: CapabilitySnapshot = { ...driver.current(), revision: driver.current().revision + 1, nextShortcutAdmission: { state: "armed", admissionId: "admission-1", delivery: "local-only", expiresAt: "2025-01-01T00:01:00Z" } };
   assert.equal(driver.publish(armed), true);
-  assert.equal((await client.execute(command(armed, { type: "start-capture", delivery: "local-only" }))).status, "accepted");
+  assert.equal((await client.execute(command(armed, { type: "start-capture", delivery: "local-only" }))).status, "refused");
   assert.equal(driver.current().captures.length, 0);
   assert.equal(driver.current().nextShortcutAdmission.state, "armed");
 
@@ -233,4 +233,35 @@ test("cancelling a shortcut reservation does not cancel an already recording cap
   const cancelled = { ...driver.current(), revision: driver.current().revision + 1, nextShortcutAdmission: { state: "cancelled", admissionId: "admission-cancel" } as const };
   assert.equal(driver.publish(cancelled), true);
   assert.equal(driver.captureContinues(), true);
+});
+
+test('pen colors match named writer values and change only after effective readback', async () => {
+  const {client,driver}=createRecordFixture('reconnect-with-saved-history');
+  const supported=['coral','purple','blue','green'] as const;
+  assert.deepEqual(driver.current().pen.supported,supported);
+  for(const color of supported) {
+    const previous=driver.current();
+    const reply=await client.execute(command(previous,{type:'select-pen',value:color}));
+    assert.equal(reply.status,'accepted');
+    assert.equal(driver.current().pen.effective,previous.pen.effective);
+    driver.publish({...previous,revision:previous.revision+1,pen:{...previous.pen,effective:color}});
+    assert.equal(driver.current().pen.effective,color);
+  }
+  // @ts-expect-error a drawing tool is not a penColor value
+  const tool=command(driver.current(),{type:'select-pen',value:'ink'});
+  assert.equal((await client.execute(tool)).status,'refused');
+  const legacy=driver.current();
+  driver.publish({...legacy,revision:legacy.revision+1,pen:{...legacy.pen,effective:null}});
+  assert.equal(driver.current().pen.effective,null);
+});
+
+test('explicit Start resumes only after next-shortcut reservation is no longer armed', async () => {
+  const {client,driver}=createRecordFixture('reconnect-with-saved-history');
+  const initial=driver.current();
+  driver.publish({...initial,revision:initial.revision+1,nextShortcutAdmission:{state:'armed',admissionId:'one',delivery:'local-only',expiresAt:'2025-01-01T00:01:00Z'}});
+  assert.equal((await client.execute(command(driver.current(),{type:'start-capture',delivery:'host-default'}))).status,'refused');
+  const armed=driver.current();
+  driver.publish({...armed,revision:armed.revision+1,nextShortcutAdmission:{state:'cancelled',admissionId:'one'}});
+  assert.equal((await client.execute(command(driver.current(),{type:'start-capture',delivery:'host-default'}))).status,'accepted');
+  assert.deepEqual(driver.current().captures,initial.captures);
 });

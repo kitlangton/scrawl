@@ -27,7 +27,7 @@ function initial(scenario: FixtureScenario): CapabilitySnapshot {
     version: 2, providerEpoch: "fixture-epoch-1", revision: 1, connection: "connected",
     readiness: { requirements: [{ id: "screen-capture", required: true, status: "granted", usableNow: true, relaunchNeeded: false, allowedRepairActions: [] }] },
     shortcut: { effective: "Ctrl+Shift+R", label: "Ctrl Shift R", registration: "registered", externallyManaged: false, draft: null },
-    pen: { effective: "ink", supported: ["ink", "laser", "cursor"] }, captures: [],
+    pen: { effective: "coral", supported: ["coral", "purple", "blue", "green"] }, captures: [],
     // No current production adapter owns an armed-shortcut reservation.
     nextShortcutAdmission: { state: "unavailable" },
   };
@@ -79,6 +79,7 @@ export function createRecordFixture(scenario: FixtureScenario = "permission-gran
     if (command.expected.providerEpoch !== snapshot.providerEpoch || command.expected.revision !== snapshot.revision) return "stale provider epoch or revision";
     const active = snapshot.captures.some(c => ["starting", "recording", "processing", "unknown"].includes(c.phase));
     if (command.type === "start-capture") {
+      if (snapshot.nextShortcutAdmission.state === "armed") return "capture reserved for the next shortcut; cancel the reservation before explicit Start";
       if (active) return "capture already active or unresolved";
       if (snapshot.readiness.requirements.some(r => r.required && (!r.usableNow || r.relaunchNeeded))) return "capture requirements not usable";
     }

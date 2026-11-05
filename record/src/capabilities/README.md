@@ -112,3 +112,27 @@ by the Record host adapter. This change defines the fact and controlled fixture
 coverage only; no private app monitoring, new viewer or native route is added.
 Until a verified producer exists, consumers cannot complete a confirmation-based
 stage from actual production facts. Their policy stays outside Record.
+
+Explicit `start-capture` must refuse while a next-shortcut admission is `armed`.
+The caller must observe consumption, cancellation or expiry before requesting an
+explicit Start. An accepted cancel command alone does not disarm it. This avoids
+silently applying a shortcut-only delivery reservation to an unrelated start.
+
+## Pen color, not tool mode
+
+`PenColor` is `coral | purple | blue | green`. `PenPreference.effective` is a
+confirmed named color or `null` when unknown; `supported` lists those color
+choices. `select-pen.value` is a PenColor. Ink/laser/cursor are tool modes, not
+color choices and are not exposed by this preference. Fixtures begin with an
+explicit synthetic stored coral selection, not a claim about product defaults.
+The donor's unnamed legacy red fallback must not be relabelled coral.
+
+The inspected donor at `87c8268c162fc259457cea6babe52cbae84d3dc6` implements
+`shared/handoff/pen.rs::save`: validate the palette, persist `penColor` through
+`set_config_value_in`, then apply the color in memory. A failed write does not
+apply the new color. That writer exists in the release-baseline donor; this
+contract does not copy it to main, add another writer or change release/#658.
+The eventual Record host must delegate to the authoritative writer and publish
+only effective readback. Dispatch acceptance never selects a color; write
+failure preserves the last confirmed effective color. Production mapping is
+still unavailable, while the fixture supports all four explicit readbacks.
