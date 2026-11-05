@@ -8,7 +8,8 @@ import type { InstallerDependencies, InstallerInput, InventoryLimits } from './t
 import { DEFAULT_LIMITS, MAX_AGENT_ARCHIVE_BYTES, MAX_MANIFEST_BYTES } from './types.js';
 
 const AGENT_VERSION = '0.1.0';
-const SDK_VERSION = '0.2.0';
+// SDK 0.3 adds capture/2 exports; its media/1 implementation is unchanged.
+const MEDIA_SDK_VERSIONS = new Set(['0.2.0', '0.3.0']);
 const SHA256 = /^[a-f0-9]{64}$/;
 const PRIVATE_MODE = 0o700;
 
@@ -30,7 +31,7 @@ function validatePackageMetadata(agent: unknown, sdk: unknown) {
   if (!sdk || typeof sdk !== 'object' || Array.isArray(sdk)) fail('installed Engine SDK package metadata is invalid');
   const sdkPackage = sdk as Record<string, any>;
   const mediaExport = sdkPackage.exports?.['./media'];
-  if (sdkPackage.name !== '@apparent/engine-sdk' || sdkPackage.version !== SDK_VERSION ||
+  if (sdkPackage.name !== '@apparent/engine-sdk' || !MEDIA_SDK_VERSIONS.has(sdkPackage.version) ||
       !mediaExport || mediaExport.import !== './dist/src/media.js' || mediaExport.types !== './dist/src/media.d.ts') {
     fail('installed SDK media export/version mismatch');
   }
@@ -84,7 +85,7 @@ export async function installLocal(
     const sdkPackagePath = join(installRoot, 'node_modules/@apparent/agent/node_modules/@apparent/engine-sdk/package.json');
     const agentPackage = JSON.parse((await readRegularFile(agentPackagePath, MAX_MANIFEST_BYTES)).toString('utf8'));
     const sdkPackage = JSON.parse((await readRegularFile(sdkPackagePath, MAX_MANIFEST_BYTES)).toString('utf8'));
-    const { mediaImport } = validatePackageMetadata(agentPackage, sdkPackage);
+    const { mediaImport, sdkPackage: validatedSdk } = validatePackageMetadata(agentPackage, sdkPackage);
     const cliPath = join(installRoot, 'node_modules/@apparent/agent/dist/cli.js');
     const mediaModule = join(dirname(sdkPackagePath), mediaImport);
     await readRegularFile(cliPath, MAX_MANIFEST_BYTES);
@@ -127,7 +128,7 @@ export async function installLocal(
       agentTarballSha256: input.agentSha256,
       nativeManifestSha256: input.manifestSha256,
       agentVersion: AGENT_VERSION,
-      sdkVersion: SDK_VERSION,
+      sdkVersion: validatedSdk.version,
       platform: 'linux-x64',
       cliPath,
       launcher: launcherPath,

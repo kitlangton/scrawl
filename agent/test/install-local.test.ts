@@ -335,6 +335,39 @@ test('test-double handshake and uncertain worker shutdown never publish success 
   }
 }));
 
+test('reviewed SDK 0.3 media consumer installs and records its actual SDK version', async () => withTemp(async (directory) => {
+  const { input, prefix } = await fixtureInputs(directory);
+  const dependencies = fixtureDependencies({
+    installNpm(snapshot, root, home) {
+      fixtureDependencies().installNpm(snapshot, root, home);
+      const path = join(root, 'node_modules/@apparent/agent/node_modules/@apparent/engine-sdk/package.json');
+      const pkg = JSON.parse(readFileSync(path, 'utf8'));
+      pkg.version = '0.3.0';
+      writeFileSync(path, JSON.stringify(pkg));
+    },
+  });
+  await installLocal(input, dependencies);
+  const receipt = JSON.parse(await readFile(join(prefix, 'install-receipt.json'), 'utf8'));
+  assert.equal(receipt.sdkVersion, '0.3.0');
+}));
+
+test('unreviewed SDK versions still fail without a success receipt', async () => withTemp(async (directory) => {
+  for (const version of ['0.4.0', '0.3.0-next']) {
+    const { input, prefix } = await fixtureInputs(directory, `sdk-${version}`);
+    const dependencies = fixtureDependencies({
+      installNpm(snapshot, root, home) {
+        fixtureDependencies().installNpm(snapshot, root, home);
+        const path = join(root, 'node_modules/@apparent/agent/node_modules/@apparent/engine-sdk/package.json');
+        const pkg = JSON.parse(readFileSync(path, 'utf8'));
+        pkg.version = version;
+        writeFileSync(path, JSON.stringify(pkg));
+      },
+    });
+    await assert.rejects(installLocal(input, dependencies), /SDK media export\/version mismatch/);
+    await assert.rejects(lstat(join(prefix, 'install-receipt.json')), { code: 'ENOENT' });
+  }
+}));
+
 test('hashing refuses symlinks and non-regular or changing files using bounded no-follow reads', async () => withTemp(async (directory) => {
   const file = join(directory, 'regular');
   await writeFile(file, 'bounded bytes');

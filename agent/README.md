@@ -53,7 +53,8 @@ OS routing change. The two SHA-256 values must come from a trusted upstream
 admission or receipt; a native manifest hash proves integrity only, not who
 produced it. The installer checks the package hash before npm, validates the
 entire native inventory against its manifest before and after copying, and
-requires the installed Agent 0.1.0 and SDK 0.2.0 media export. Node 22.6+ and
+requires the installed Agent 0.1.0 and SDK 0.2.0 or 0.3.0 media export. SDK 0.3's
+capture/2 interface does not enable native recording in this installer. Node 22.6+ and
 an existing npm are required.
 
 ```sh
