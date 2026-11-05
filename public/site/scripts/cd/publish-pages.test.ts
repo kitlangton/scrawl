@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -21,7 +22,7 @@ function fixture(root: string) {
   return join(root, '.build/website')
 }
 async function temp<T>(run: (root: string) => Promise<T> | T): Promise<T> {
-  const root = mkdtempSync(join(tmpdir(), 'pages-delivery-test-'))
+  const root = mkdtempSync(join(tmpdir(), 'pages delivery test-'))
   try { return await run(root) } finally { rmSync(root, { recursive: true, force: true }) }
 }
 const project = (revision = sha) => ({ canonical_deployment: { id: 'deployment', url: 'https://deployment.apparent-capture.pages.dev', latest_stage: { status: 'success' }, deployment_trigger: { metadata: { commit_hash: revision } } } })
@@ -150,7 +151,8 @@ test('publisher stages exact bytes, writes success receipt, skips superseded can
     assert.equal(staged.length, 1)
     assert.equal(existsSync(staged[0]), false)
 
-    await main({ ...deps, publicationNeeded: async () => false })
+    await assert.rejects(main({ ...deps, api: async () => ({}) }), /Missing canonical deployment identity/)
+  await main({ ...deps, publicationNeeded: async () => false })
     assert.equal(staged.length, 1)
 
     process.env.GITHUB_REF = 'refs/heads/feature'
@@ -188,3 +190,14 @@ test('readiness retries transient HTTP and propagation failures only', async () 
   assert.deepEqual(sleeps, [])
   await assert.rejects(publicationNeeded('example/project', sha, 'z'.repeat(40), async () => ({ status: 'identical' })), /Unknown publication revision/)
 })
+
+test('publisher CLI seals from a source path containing spaces', () => temp(root => {
+  fixture(root)
+  rmSync(join(root, '.build/website'), { recursive: true })
+  const script = join(root, 'public/site/scripts/cd/publish-pages.ts')
+  mkdirSync(join(script, '..'), { recursive: true })
+  writeFileSync(script, readFileSync(new URL('./publish-pages.ts', import.meta.url)))
+  const result = spawnSync(process.execPath, [script, 'seal', sha], { encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(verifyArtifact(sha, join(root, '.build/website')).revision, sha)
+}))

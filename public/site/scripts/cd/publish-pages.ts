@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
 export const ACCOUNT = 'a54dcebead3b8ad688f891da0ab54d1f'
 export const PROJECT = 'apparent-capture'
@@ -105,6 +106,7 @@ async function defaultApi(path: string, fetcher: typeof fetch): Promise<any> {
 }
 async function currentMain(sha: string, deps: PublisherDeps): Promise<void> {
   const project = await (deps.api ?? (path => defaultApi(path, deps.fetch ?? fetch)))(`/accounts/${ACCOUNT}/pages/projects/${PROJECT}`)
+  if (!project || !Object.hasOwn(project, 'canonical_deployment')) throw new Error('Missing canonical deployment identity')
   const deployment = project.canonical_deployment
   const published = deployment == null ? null : deployment.deployment_trigger.metadata.commit_hash
   if (!(await (deps.publicationNeeded ?? publicationNeeded)(process.env.GITHUB_REPOSITORY!, sha, published))) throw new SupersededMain('An equal or newer website revision is already deployed')
@@ -212,7 +214,7 @@ export async function main(deps: PublisherDeps = {}) {
   console.log(JSON.stringify(receipt))
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2)
   if (args.length === 2 && args[0] === 'seal') seal(args[1])
   else if (args.length === 0) await main()
