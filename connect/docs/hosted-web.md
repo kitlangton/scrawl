@@ -195,7 +195,10 @@ The parent CI entrypoints are `npm ci`, `npm run typecheck`, `npm run build`, an
 `npm test` from `connect/tooling/hosting`; the common CI lane calls
 `npm run verify:artifact`, which installs locked web dependencies, prepares browsers,
 runs the browser suite and the real local Worker checks, and builds the final
-asset/runtime payload. Install Connect web with
+asset/runtime payload. PR verification isolates its synthetic analytics environment
+from this publishable graph by disabling analytics there; production main keeps
+its configured, fingerprinted analytics values and rejects fixture contamination.
+Install Connect web with
 `bun install --frozen-lockfile` from `connect/web` first. Build output is
 `connect/tooling/hosting/.output/dist`: six `index.html` documents, one hashed
 JS/CSS pair under `connect/assets/`, the font and wordmark under that same

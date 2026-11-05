@@ -6,6 +6,11 @@ import { resolve, join } from 'node:path'
 const root = resolve(import.meta.dirname, '..')
 const web = resolve(root, '../../web')
 const evidence = mkdtempSync(join(tmpdir(), 'connect-hosting-proof-'))
+// PR jobs inherit a synthetic analytics key. The publishable graph must never
+// contain it; production main retains its actual, fingerprinted configuration.
+const artifactEnvironment: Record<string, string> = process.env.GITHUB_EVENT_NAME === 'pull_request'
+  ? { PUBLIC_POSTHOG_ENABLED: 'false', PUBLIC_POSTHOG_TOKEN: '', PUBLIC_POSTHOG_ENVIRONMENT: 'production' }
+  : {}
 function run(command: string, args: string[], cwd = root, extra: Record<string, string> = {}) {
   const result = spawnSync(command, args, { cwd, stdio: 'inherit', env: { ...process.env, NODE_ENV: 'production', CONNECT_EVIDENCE: evidence, TMPDIR: process.env.TMPDIR || tmpdir(), WRANGLER_SEND_METRICS: 'false', ...extra } })
   if (result.error) throw result.error
@@ -13,6 +18,6 @@ function run(command: string, args: string[], cwd = root, extra: Record<string, 
 }
 run('bun', ['install', '--frozen-lockfile'], web, { NODE_ENV: 'development' })
 run(process.execPath, ['--experimental-strip-types', 'scripts/playwright-runtime.ts'], web)
-run('npm', ['test'], web)
-run('npm', ['test'])
+run('npm', ['test'], web, artifactEnvironment)
+run('npm', ['test'], root, artifactEnvironment)
 console.log(`Synthetic browser evidence retained privately: ${evidence}`)
