@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { resolve, join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { inventory, resourceGraph, routes, validateConnect, validatePreservedFiles } from '../connect/compose-connect.mjs'
+import { inventory, resourceGraph, routes, validateConnect, validatePreservedFiles } from '../connect/compose-connect.ts'
 const site = resolve(import.meta.dirname, '../..')
 const root = resolve(process.env.SITE_ARTIFACT || join(site, 'dist-apparent'))
 const syntheticOrigin = process.env.COMPOSE_SYNTHETIC_ORIGIN

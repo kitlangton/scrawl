@@ -63,6 +63,23 @@ class PrePushGuardTests(unittest.TestCase):
             dependency = app_node_modules / name / "package.json"
             dependency.parent.mkdir(parents=True, exist_ok=True)
             dependency.write_text("fixture\n")
+        # Unknown history includes Record's independent renderer. Provision
+        # dependency markers as for the shell; npm itself remains mocked.
+        for package, names in (
+            ("record", ("typescript/bin/tsc", "@types/node/package.json",
+                        "@types/react/package.json", "@apparent/ui/package.json",
+                        "lucide-react/package.json", "esbuild/package.json",
+                        "@tailwindcss/cli/package.json")),
+            ("capture/desktop/ui/frontend", ("typescript/bin/tsc", "vite/bin/vite.js",
+                         "@apparent/record/package.json", "@apparent/ui/package.json")),
+        ):
+            root = self.repo / package
+            root.mkdir(parents=True, exist_ok=True)
+            (root / ".gitignore").write_text("node_modules/\ndist/\n")
+            for name in names:
+                dependency = root / "node_modules" / name
+                dependency.parent.mkdir(parents=True, exist_ok=True)
+                dependency.write_text("fixture\n")
         shutil.copy2(SELECTOR, self.repo / "enablement" / "verification.py")
         # Preserve the dependency-free delivery check closure for conservative
         # unknown-history selection; it never invokes this hook suite.
@@ -85,7 +102,7 @@ class PrePushGuardTests(unittest.TestCase):
         # its actual dependency closure in this disposable hook repository.
         theme = self.repo / "shared/ui/scripts"
         theme.mkdir(parents=True)
-        for name in ("check-theme.py", "legacy-colors.json"):
+        for name in ("check-theme.py", "check-theme.ts", "legacy-colors.json"):
             shutil.copy2(SELECTOR.parents[1] / "shared/ui/scripts" / name, theme / name)
         run("git", "add", ".", cwd=self.repo)
         run("git", "commit", "-qm", "original", cwd=self.repo)
@@ -139,6 +156,8 @@ class PrePushGuardTests(unittest.TestCase):
         entry = frontend / "src/onboarding/main.tsx"
         entry.parent.mkdir(parents=True, exist_ok=True)
         entry.write_text("// original entry\n")
+        if not dependencies:
+            shutil.rmtree(frontend / "node_modules", ignore_errors=True)
         if dependencies:
             for name in ("typescript/bin/tsc", "vite/bin/vite.js", "@apparent/ui/package.json"):
                 target = frontend / "node_modules" / name
@@ -277,6 +296,12 @@ class PrePushGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text(),
                          f"{self.repo / 'composition/app'}:run check\n"
+                         f"{self.repo / 'record'}:run typecheck\n"
+                         f"{self.repo / 'record'}:test\n"
+                         f"{self.repo / 'record'}:run build\n"
+                         f"{self.repo / 'record'}:pack --dry-run\n"
+                         f"{frontend}:run build\n"
+                         f"{frontend}:test\n"
                          f"{frontend}:run check:onboarding\n")
 
     def test_unrelated_public_owner_skips_onboarding_renderer_check(self):
@@ -454,6 +479,7 @@ class PrePushGuardTests(unittest.TestCase):
         result = self.push()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text().splitlines(), [
+            f"node {self.repo}/shared/ui/scripts/check-theme.ts",
             "bun install --frozen-lockfile", "bun run build",
             "node --test test/artifact.test.mjs test/closure.test.mjs test/routes.test.mjs",
             "node scripts/test-browser.mjs",

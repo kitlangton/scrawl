@@ -125,6 +125,49 @@ APP_SHELL_DELIVERY_ROOT = "composition/delivery/"
 APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/", "shared/ui/")
 APP_SHELL_WORKFLOW = ".github/workflows/value-stream-delivery.yml"
 
+RECORD_PACKAGE_ROOT = "record/"
+RECORD_FRONTEND_ROOT = "capture/desktop/ui/frontend/"
+RECORD_UI_INPUTS = {
+    RECORD_FRONTEND_ROOT + "pill/index.html",
+}
+RECORD_TYPESCRIPT_INPUTS = {
+    RECORD_PACKAGE_ROOT + name for name in (
+        "package.json", "package-lock.json", "tsconfig.json",
+        "scripts/copy-ui-assets.ts", "scripts/build-ui.ts",
+        "src/index.ts", "src/backend/engine/client.ts", "src/backend/workflow/controller.ts",
+        "src/capabilities/index.ts", "src/capabilities/fixtures.ts",
+        "src/ui/index.ts", "src/ui/recording-pill.tsx", "src/ui/UploadPocket.tsx",
+        "src/ui/types.ts", "src/ui/style.css", "src/ui/styles.d.ts",
+        "test/workflow.test.ts", "test/capabilities.test.ts", "test/package-smoke.ts",
+    )
+}
+RECORD_PILL_INPUTS = RECORD_UI_INPUTS | {
+    RECORD_FRONTEND_ROOT + "src/pill/" + name for name in (
+        "main.tsx", "legacy-mount.tsx", "legacy.css", "bridge.d.ts",
+    )
+}
+RECORD_PILL_INPUTS |= {
+    RECORD_FRONTEND_ROOT + "tests/pill/" + name for name in (
+        "host.cjs", "smoke.cjs", "protocol.test.cjs", "pinning.test.ts",
+        "exceptions.smoke.ts", "shape.test.ts", "framing.cjs", "visibility.test.ts",
+        "host-swap.smoke.ts",
+    )
+}
+
+
+def record_typescript_selected(paths):
+    """Select Record checks for its package and the retained pill consumer seam."""
+    if not paths:
+        return True  # Unknown history must include the independently built renderer.
+    return any(
+        (path.startswith(RECORD_PACKAGE_ROOT) and not path.endswith(".md"))
+        or path.startswith(("shared/ui/", "shared/assets/fonts/"))
+        or path in RECORD_UI_INPUTS
+        or path.startswith(RECORD_FRONTEND_ROOT + "src/pill/")
+        or path.startswith(RECORD_FRONTEND_ROOT + "tests/pill/")
+        for path in paths
+    )
+
 
 # This new owner has no legacy Rust/build consumer. SDK changes remain broad,
 # while also exercising its Agent consumer. Unknown/native Agent files stay broad.
@@ -167,7 +210,7 @@ PUBLIC_SITE_BUILD_INPUTS = {
     )
 }
 PUBLIC_SITE_TOOLING_INPUTS = {
-    PUBLIC_SITE_ROOT + "lib/public-assets.mjs",
+    PUBLIC_SITE_ROOT + "lib/public-assets.ts",
     PUBLIC_SITE_ROOT + "scripts/site-build/agent-files.ts",
     PUBLIC_SITE_ROOT + "scripts/site-build/feature-audit.ts",
     PUBLIC_SITE_ROOT + "scripts/site-build/prerender.ts",
@@ -175,6 +218,7 @@ PUBLIC_SITE_TOOLING_INPUTS = {
     "shared/analytics/browser.ts",
     "shared/ui/src/tokens.css",
     "shared/ui/scripts/check-theme.py",
+    "shared/ui/scripts/check-theme.ts",
     "shared/ui/scripts/legacy-colors.json",
 }
 PUBLIC_CONNECT_SHARED_ASSETS = {
@@ -209,6 +253,7 @@ def select(paths, history_known=True):
     browser = False
     public_site = False
     app_shell = False
+    record = not history_known or record_typescript_selected(paths)
     delivery = False
     agent = agent_tests_selected(paths)
     reasons = []
@@ -216,6 +261,8 @@ def select(paths, history_known=True):
         if isolated_agent_input(path):
             continue
         if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
+            continue
+        if path in RECORD_TYPESCRIPT_INPUTS or path in RECORD_PILL_INPUTS:
             continue
         if path.startswith(APP_SHELL_INPUTS) or path == APP_SHELL_WORKFLOW:
             app_shell = True
@@ -258,6 +305,7 @@ def select(paths, history_known=True):
             reasons.append(path)
     return {"root": broad, "engine": broad or engine, "browser": browser, "agent": agent,
             "app_shell": app_shell or not history_known or not paths,
+            "record": record,
             "delivery": delivery or not history_known or not paths,
             "public_site": public_site or not history_known or not paths,
             "focused": [], "paths": paths,
@@ -352,6 +400,8 @@ def run_pr_checks(selection=None):
         run_agent_tests()
     if (selection or {}).get("app_shell", app_shell_selected(paths)):
         run_app_shell_check()
+    if (selection or {}).get("record", record_typescript_selected(paths)):
+        run_record_typescript_check()
     if (selection or {}).get("delivery", delivery_tests_selected(paths)):
         run_delivery_tests()
     if connect_client_typescript_selected(paths):
@@ -462,6 +512,46 @@ def run_connect_client_typescript_tests():
             + ", ".join(missing_dependencies)
         )
     subprocess.run(["npm", "test"], cwd=package, check=True)
+
+
+def run_record_typescript_check():
+    """Verify the owner package and its existing Desktop pill consumer without Cargo."""
+    package = ROOT / "record"
+    package_dependencies = (
+        "node_modules/typescript/bin/tsc",
+        "node_modules/@types/node/package.json",
+        "node_modules/@types/react/package.json",
+        "node_modules/@apparent/ui/package.json",
+        "node_modules/lucide-react/package.json",
+        "node_modules/esbuild/package.json",
+        "node_modules/@tailwindcss/cli/package.json",
+    )
+    missing = [name for name in package_dependencies if not (package / name).is_file()]
+    if missing:
+        raise RuntimeError(
+            "Record TypeScript feedback needs installed locked dependencies; run `npm ci --no-audit --no-fund` in record. The pre-push hook never installs dependencies. Missing: "
+            + ", ".join(missing)
+        )
+    frontend = ROOT / "capture/desktop/ui/frontend"
+    frontend_dependencies = (
+        "node_modules/typescript/bin/tsc",
+        "node_modules/vite/bin/vite.js",
+        "node_modules/@apparent/record/package.json",
+        "node_modules/@apparent/ui/package.json",
+    )
+    missing = [name for name in frontend_dependencies if not (frontend / name).is_file()]
+    if missing:
+        raise RuntimeError(
+            "Record pill consumer feedback needs installed locked dependencies; run `npm ci --no-audit --no-fund` in capture/desktop/ui/frontend. The pre-push hook never installs dependencies. Missing: "
+            + ", ".join(missing)
+        )
+    for command in (
+        ["npm", "run", "typecheck"], ["npm", "test"], ["npm", "run", "build"],
+        ["npm", "pack", "--dry-run"],
+    ):
+        subprocess.run(command, cwd=package, check=True)
+    for command in (["npm", "run", "build"], ["npm", "test"]):
+        subprocess.run(command, cwd=frontend, check=True)
 
 
 def run_public_site_build():
@@ -708,6 +798,8 @@ def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=
 
 
 def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_root_build=False):
+    if selection.get("record"):
+        run_record_typescript_check()
     if selection.get("agent"):
         run_agent_tests()
     if selection.get("app_shell"):
@@ -838,9 +930,9 @@ def main():
         return
     selection = plan(args.base, args.head)
     if args.suite == 'rust':
-        selection.update(root=True, engine=True, browser=False, app_shell=False, agent=False, focused=[])
+        selection.update(root=True, engine=True, browser=False, app_shell=False, agent=False, record=False, focused=[])
     elif args.suite == 'browser':
-        selection.update(root=False, engine=False, browser=True, app_shell=False, agent=False, focused=[])
+        selection.update(root=False, engine=False, browser=True, app_shell=False, agent=False, record=False, focused=[])
     print(json.dumps(selection, sort_keys=True), flush=True)
     if args.github_output:
         with args.github_output.open("a") as output:

@@ -148,7 +148,7 @@ def run_lane(lane, online=False):
         run(['npm', 'test'], directory)
         run((['xvfb-run', '-a'] if sys.platform == 'linux' else []) + ['npm', 'run', 'test:electron'], directory)
     elif lane == 'public-site':
-        run(['node', 'scripts/site-build/verify.mjs'], 'public/site')
+        run(['node', 'scripts/site-build/verify.ts'], 'public/site')
 
 
 def main():

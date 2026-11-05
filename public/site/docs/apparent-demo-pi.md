@@ -6,4 +6,4 @@ The narration was generated locally with Piper’s `en_GB-cori-medium` voice. Th
 
 The screen recording was made with T3 Code’s collaborative browser recording of the local production build. The interactive demo was played from t=0; the browser capture was cropped to its 1200×720 stage and trimmed to 21.3 s. The recording hid only the interactive player’s sound hint and replay overlay. The first cut mixed in the new Mac narration 3.6 s into the video; Simon rejected the voice, so the MP4 was remuxed with `-map 0:v:0 -c:v copy -an` to remove its audio stream without re-encoding the picture.
 
-Build with `APPARENT_PUBLIC_SITE=1 bun run build && node scripts/site-build/package-apparent.mjs` from `public/site/`. The allowlisted `dist-apparent` artifact omits the retired video and poster, previous narration, Apparent releases, the update feed, and the feature map.
+Build with `APPARENT_PUBLIC_SITE=1 bun run build && node scripts/site-build/package-apparent.ts` from `public/site/`. The allowlisted `dist-apparent` artifact omits the retired video and poster, previous narration, Apparent releases, the update feed, and the feature map.

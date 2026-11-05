@@ -6,7 +6,7 @@ const section = (name: string) => workflow.split(`\n  ${name}:\n`)[1]?.split(/\n
 test('Public consumes immutable Connect output without native or Connect product builds', () => {
   assert.doesNotMatch(workflow, /cargo|rust-toolchain|Linux verification|working-directory: connect\/(?:web|service)|cd .*connect\/(?:web|service)|npm run test:hosted|npm run test:analytics/)
   const verify = section('verify')
-  assert(verify.indexOf('scripts/connect/artifact.ts') < verify.indexOf('node scripts/connect/compose-connect.mjs'))
+  assert(verify.indexOf('scripts/connect/artifact.ts') < verify.indexOf('node scripts/connect/compose-connect.ts'))
   assert.match(verify, /CONNECT_BROWSER_ARTIFACT:/)
   assert.match(verify, /fetch-depth: 0/)
   assert.match(verify, /scripts\/connect\/composed-browser.test.ts/)

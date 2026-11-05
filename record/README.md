@@ -1,6 +1,8 @@
 # Record package
 
-`@apparent/record` is an independently installable TypeScript workflow package. It owns explicit local recording states and consumes an injected `EngineClient`. `EngineSdkAdapter` is an injected host composition adapter for the packed `@apparent/engine-sdk`; it does not choose an executable, runtime directory, bundle allocator, or durable private mapping store.
+`@apparent/record` is an independently installable TypeScript workflow and presentation package. Its local recording controller consumes an injected `EngineClient`; its reusable React pill consumes an injected typed `PillHost`. Neither creates a recording or ships a fake/default production capture adapter.
+
+`EngineSdkAdapter` is a host composition adapter for an already constructed, packed `@apparent/engine-sdk` client. It does not choose or launch an executable, select a runtime directory, allocate bundles, or provide a durable private mapping store. The reusable pill is adopted through the existing legacy host; it does not install a replacement Electron main/preload route.
 
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 
@@ -12,7 +14,7 @@ Run `npm ci`, `npm run typecheck`, `npm test`, and `npm run build` in this direc
 
 ## Adoption limits
 
-The `EngineSdkAdapter` consumes an already constructed SDK client. The host still owns explicit executable/runtime selection, private durable mapping storage, bundle allocation, Electron main/preload wiring, and any adopted React surface. The current SDK contract has no native executable, so it cannot provide production readiness or native capture evidence. The adapter is not an installed route.
+The repository's `apparent capture` CLI already implements GUI start/stop/cancel/inspect control over a same-user Unix socket on macOS/Linux; a separate readiness query is not currently exposed. The native delivery package now builds and stages an explicit `apparent-engine` executable wrapper, but its provider reports `screenCapture: false` and `readiness: "unavailable"`, and cannot perform real capture. Thus the wrapper is not production readiness or native capture evidence. A host still needs to select and launch the executable with a private runtime directory, provide durable private mapping storage and bundle allocation, wire an accepted readiness/capture capability into `EngineClient`, and complete affected platform seam proof before adopting this adapter as a route. The adapter is not an installed route, and this package makes no production recording-availability claim.
 
 ## Asynchronous ownership
 
@@ -41,3 +43,20 @@ throws is detached; remaining subscribers still receive the state. Its exception
 cannot abort Engine event processing or strand command ownership. Hosts should
 handle presentation errors within their own observer and may resubscribe after
 repair. No capture is cancelled as a side effect of an observer failure.
+
+## Pill presentation adoption
+
+`src/ui` owns the existing Desktop recording pill presentation and CSS. The `@apparent/record/ui` export exposes `RecordingPill`, `PillView`, `PocketView` and the injected `PillHost` API; it has no window globals or app mount assumptions. The Record build places the CSS and Host Grotesk font beside the emitted component. The Desktop renderer imports the built package through its file dependency. Its thin `src/pill` legacy adapter injects the existing privileged Electron preload API, mounts the component, and applies the transparent window reset.
+
+The existing Electron `electron/pill` host and Rust `ui/electron_pill` lifecycle/transport remain authoritative. Installed routing stays on its existing fallback-aware path; this adoption does not enable or switch a native route, add config, or claim capture capability. Rollback restores the previous frontend package dependency and pill component mount. Remove that adapter and its legacy consumers only when a separately accepted host migration retires the current runtime, and remove the old native pill only after the recorded native acceptance gates in `capture/desktop/ui/frontend/README.md` pass.
+
+The public UI artifact bundles shared controls and icons; only React/React DOM
+remain host peers. Import `@apparent/record/ui/style.css` with `RecordingPill`.
+Its stylesheet is precompiled and ships its font: packed consumers need neither
+shared source nor Tailwind tooling. Shared UI is a development/build input only.
+`npm run test:package` installs a tarball in an isolated temporary consumer and
+exercises root, capabilities, fixtures and server-rendered UI imports. This
+explicit artifact check may install React peers; hooks do not install dependencies.
+Source builds require the repository's `shared/ui` and shared font inputs, but
+never Rust. Replacing an injected PillHost remounts its presentation session,
+clearing old revisions, pending actions and subscriptions before new interaction.
