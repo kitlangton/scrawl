@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { createServer } from 'node:net';
+import { createServer, type Socket } from 'node:net';
 import { chmod, mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +16,7 @@ const facts = {
   },
 };
 
+const DROP = Symbol('close without a reply');
 async function withSocket(reply: (request: Record<string, unknown>) => unknown, action: () => Promise<unknown>, corruptId = false) {
   const root = await mkdtemp(join(tmpdir(), 'apparent-native-host-'));
   const socketDir = join(root, '.config/apparent/agent-control');
@@ -25,14 +26,21 @@ async function withSocket(reply: (request: Record<string, unknown>) => unknown, 
   await chmod(join(root, '.config/apparent'), 0o700);
   await chmod(socketDir, 0o700);
   const path = join(socketDir, 'capture.sock');
+  const connections = new Set<Socket>();
   const server = createServer(connection => {
+    connections.add(connection);
+    connection.once('close', () => connections.delete(connection));
     let input = '';
-    connection.on('data', chunk => {
+    let handled = false;
+    connection.on('data', async chunk => {
+      if (handled) return;
       input += chunk.toString('utf8');
       const end = input.indexOf('\n');
       if (end < 0) return;
+      handled = true;
       const request = JSON.parse(input.slice(0, end)) as Record<string, unknown>;
-      const result = reply(request);
+      const result = await reply(request);
+      if (result === DROP) { connection.end(); return; }
       connection.end(`${JSON.stringify({ protocol: 1, id: corruptId ? `${request.id}-other` : request.id, result })}\n`);
     });
   });
@@ -44,6 +52,7 @@ async function withSocket(reply: (request: Record<string, unknown>) => unknown, 
   try { return await action(); }
   finally {
     if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
+    for (const connection of connections) connection.destroy();
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
@@ -76,4 +85,80 @@ test('rejects unsupported operations and permission identifiers before connectin
   await assert.rejects(port.requestPermission('../config', { processEpoch: 'e', revision: 1 }), /Unsupported permission/);
   await assert.rejects(port.validateRecordShortcut('x'.repeat(17), 2560, { processEpoch: 'e', revision: 1 }), /Invalid shortcut/);
   await assert.rejects(port.saveRecordShortcut({ keyCode: 999, modifiers: 2560, label: '⌥⇧S' }, { processEpoch: 'e', revision: 1 }), /Invalid shortcut/);
+});
+
+
+const expected = { processEpoch: 'epoch-a', revision: 4 };
+const shortcut = { keyCode: 1, modifiers: 2560, label: '⌥⇧S' };
+
+test('lost, mismatched, oversized and invalid mutation replies remain unknown without retry', async () => {
+  for (const mode of ['drop', 'bad-id', 'oversized', 'invalid-result']) {
+    let dispatches = 0;
+    await withSocket(() => {
+      dispatches++;
+      if (mode === 'drop') return DROP;
+      if (mode === 'oversized') return { padding: 'x'.repeat(4096) };
+      if (mode === 'invalid-result') return { status: 'refused', reason: 'unsupported-reason' };
+      return { status: 'accepted' };
+    }, async () => {
+      assert.deepEqual(await createNativeHostPort().saveRecordShortcut(shortcut, expected), { status: 'outcome-unknown' }, mode);
+    }, mode === 'bad-id');
+    assert.equal(dispatches, 1, mode);
+  }
+});
+
+test('every effect method preserves explicit refusal and uncertainty', async () => {
+  for (const response of [{ status: 'refused', reason: 'stale' }, { status: 'outcome-unknown' }]) {
+    await withSocket(() => response, async () => {
+      const port = createNativeHostPort();
+      assert.deepEqual(await port.requestPermission('microphone', expected), response);
+      assert.deepEqual(await port.openSystemSettings('accessibility', expected), response);
+      assert.deepEqual(await port.validateRecordShortcut('s', 2560, expected), response);
+      assert.deepEqual(await port.saveRecordShortcut(shortcut, expected), response);
+    });
+  }
+});
+
+test('rejects malformed facts and validation success before they become a save candidate', async () => {
+  const malformed = [
+    { ...facts, permissions: [...facts.permissions, ...facts.permissions] },
+    { ...facts, permissions: [{ ...facts.permissions[0], id: 'unknown-permission' }] },
+    { ...facts, shortcuts: { ...facts.shortcuts, record: { ...facts.shortcuts.record, configured: { ...shortcut, keyCode: -1 } } } },
+    { ...facts, shortcuts: { ...facts.shortcuts, record: { ...facts.shortcuts.record, canSave: true } } },
+  ];
+  for (const value of malformed) await withSocket(() => value, async () => {
+    await assert.rejects(createNativeHostPort().readSnapshot(), /Native host unavailable/);
+  });
+  for (const candidate of [{ ...shortcut, keyCode: 256 }, { ...shortcut, label: '' }, { ...shortcut, extra: true }]) {
+    await withSocket(() => ({ status: 'accepted', shortcut: candidate }), async () => {
+      assert.deepEqual(await createNativeHostPort().validateRecordShortcut('s', 2560, expected), { status: 'outcome-unknown' });
+    });
+  }
+});
+
+test('captures the endpoint and request revision instead of following later caller mutations', async () => {
+  await withSocket(request => {
+    assert.deepEqual(request.expected, expected);
+    return { status: 'accepted' };
+  }, async () => {
+    const port = createNativeHostPort();
+    const state = { ...expected };
+    const saving = port.saveRecordShortcut(shortcut, state);
+    state.revision = 99;
+    process.env.HOME = join(tmpdir(), 'not-the-bound-native-home');
+    assert.deepEqual(await saving, { status: 'accepted' });
+  });
+});
+
+test('bounds concurrent pending connections per injected facade', async () => {
+  let release!: () => void, dispatches = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await withSocket(async () => { dispatches++; await gate; return facts; }, async () => {
+    const port = createNativeHostPort();
+    const pending = Array.from({ length: 16 }, () => port.readSnapshot());
+    await assert.rejects(port.readSnapshot(), /Native host unavailable/);
+    release();
+    await Promise.all(pending);
+    assert.equal(dispatches, 16);
+  });
 });
