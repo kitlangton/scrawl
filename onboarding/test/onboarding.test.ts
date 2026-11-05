@@ -12,6 +12,8 @@ import { initialProgress, normalizeProgress, type OnboardingProgress, type Progr
 import { OnboardingContribution } from "../dist/react.js";
 import { onboardingContributionFactory } from "../dist/factory.js";
 import { onboardingProgressCodec } from "../dist/model.js";
+import type { RepairTimer } from "../dist/permissions/controller.js";
+import type { HostedContribution } from "@apparent/app-contracts/host";
 
 class Store implements ProgressStore {
   revision = 1; value = initialProgress(); conflict = false; unknown = false;
@@ -23,6 +25,12 @@ class Store implements ProgressStore {
   }
 }
 const TestButton = ({ children, variant: _variant, size: _size, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string }) => createElement("button", props, children);
+class FactoryTimer implements RepairTimer {
+  entries = new Map<number, { callback: () => void; delay: number }>(); next = 0;
+  set(callback: () => void, delay: number) { const id = ++this.next; this.entries.set(id, { callback, delay }); return id; }
+  clear(handle: unknown) { this.entries.delete(handle as number); }
+  fire(delay: number) { for (const [id, entry] of [...this.entries]) if (entry.delay === delay) { this.clear(id); entry.callback(); } }
+}
 function fixture(scenario: Parameters<typeof createRecordFixture>[0] = "reconnect-with-saved-history") {
   const progress = new Store(), record = createRecordFixture(scenario), controller = new OnboardingController({ progress, record: record.client, id: (() => { let n = 0; return () => `onboarding-${++n}`; })() });
   return { progress, ...record, controller };
@@ -63,7 +71,8 @@ test("host factory loads before rendering and applies first-launch versus explic
   Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => { root.render(createElement(hosted.module.Screen)); await Promise.resolve(); });
-  assert.equal(dom.window.document.querySelector("main.onboarding-shell"), null);
+  const hiddenTour = dom.window.document.querySelector("main.onboarding-shell");
+  assert.ok(hiddenTour?.parentElement?.hasAttribute("hidden"), "the stable tour remains mounted while hidden");
   await act(async () => { await hosted.activation.activate({ reason: "resume" }); });
   assert.equal(f.progress.value.stage, "screen-ink"); assert.equal(f.progress.value.status, "in-progress");
   await act(async () => { await Promise.resolve(); });
@@ -509,5 +518,167 @@ test('host activation waits for a pending owner write before reading progress ag
   assert.equal(reads, 1);
   await act(async () => { finish(); await activation; });
   assert.equal(reads, 2); assert.equal(dom.window.document.querySelector('main')?.getAttribute('data-stage'), 'pen');
+  await act(async () => root.unmount()); await hosted.activation.dispose(); f.controller.dispose(); dom.window.close();
+});
+
+test("one factory Screen switches tour to repair and back without changing tour state", async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window }); Object.defineProperty(globalThis, 'document', { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, value: true });
+  const timer = new FactoryTimer(); let closed = 0;
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => "same-owner-id", Button: TestButton, close() { closed++; }, repairTimer: timer });
+  await hosted.activation.activate({ reason: "resume" });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => root.render(createElement(hosted.module.Screen)));
+  assert.equal(dom.window.document.querySelector("main.onboarding-shell")?.getAttribute("data-stage"), "welcome");
+  const before = structuredClone(f.progress.value);
+  await act(async () => hosted.activation.permissionRepair.activate(["camera"]));
+  assert.match(dom.window.document.querySelector("#permission-repair-title")?.textContent ?? "", /get access working/);
+  assert.deepEqual(f.progress.value, before);
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(button => button.textContent === "Later")!.click(); await Promise.resolve(); });
+  assert.equal(dom.window.document.querySelector("main.onboarding-shell")?.getAttribute("data-stage"), "welcome");
+  assert.deepEqual(f.progress.value, before); assert.equal(closed, 0);
+  await act(async () => root.unmount()); await hosted.activation.dispose(); dom.window.close();
+});
+
+test("completed and deferred repair preserves progress; hidden repair returns to host close", async () => {
+  for (const status of ["completed", "deferred"] as const) {
+    const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window }); Object.defineProperty(globalThis, 'document', { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, value: true });
+    f.progress.value = status === "completed"
+      ? { ...initialProgress(), status, stage: "complete", attemptId: "saved", manualPasteConfirmed: true }
+      : { ...initialProgress(), status, stage: "screen-ink", attemptId: "practice", manualPasteConfirmed: true };
+    const before = structuredClone(f.progress.value); let closed = 0;
+    const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => "repair-only", Button: TestButton, close() { closed++; } });
+    await hosted.activation.activate({ reason: "firstLaunch" });
+    const root = createRoot(dom.window.document.getElementById("root")!);
+    await act(async () => root.render(createElement(hosted.module.Screen)));
+    await act(async () => hosted.activation.permissionRepair.activate(["camera"]));
+    assert.deepEqual(f.progress.value, before);
+    await act(async () => { [...dom.window.document.querySelectorAll("button")].find(button => button.textContent === "Later")!.click(); await Promise.resolve(); });
+    assert.equal(closed, 1); assert.deepEqual(f.progress.value, before);
+    assert.deepEqual(f.progress.value, before);
+    await act(async () => root.unmount()); await hosted.activation.dispose(); dom.window.close();
+  }
+});
+
+test("repair activation retargets, identical activation is idempotent, ready closes after 800ms, and unmount adds no late close", async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window }); Object.defineProperty(globalThis, 'document', { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, value: true });
+  const timer = new FactoryTimer(); let closed = 0;
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => "repair-timer", Button: TestButton, close() { closed++; }, repairTimer: timer });
+  await hosted.activation.activate({ reason: "resume" });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => root.render(createElement(hosted.module.Screen)));
+  await act(async () => hosted.activation.permissionRepair.activate(["camera"]));
+  await act(async () => hosted.activation.permissionRepair.activate(["camera"]));
+  await act(async () => hosted.activation.permissionRepair.activate(["camera", "camera"]));
+  assert.equal(timer.entries.size, 0);
+  await act(async () => hosted.activation.permissionRepair.activate(["microphone"]));
+  const current = f.driver.current();
+  const ready = { id: "microphone", required: false, status: "granted" as const, usableNow: true, relaunchNeeded: false, allowedRepairActions: [] };
+  assert.equal(f.driver.publish({ ...current, revision: current.revision + 1, readiness: { requirements: [ready] } }), true);
+  assert.equal(timer.entries.size, 1); assert.equal([...timer.entries.values()][0].delay, 800);
+  await act(async () => timer.fire(800)); await act(async () => { await Promise.resolve(); });
+  assert.equal(dom.window.document.querySelector("main.onboarding-shell")?.getAttribute("data-stage"), "welcome");
+  assert.equal(closed, 0);
+  await act(async () => root.unmount()); timer.fire(800); assert.equal(closed, 0);
+  await hosted.activation.dispose(); dom.window.close();
+});
+
+test("concrete owner repair capability stays owner-only while generic host shape remains compatible", async () => {
+  const f = fixture();
+  const concrete = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => "typed-owner", Button: TestButton, close() {} });
+  const generic: HostedContribution = concrete;
+  assert.equal(typeof concrete.activation.permissionRepair.activate, "function");
+  assert.equal(Object.keys(generic).sort().join(","), "activation,module");
+  assert.equal(typeof generic.activation.activate, "function");
+  await concrete.activation.dispose();
+});
+
+test('repair unmount cancels its timers without closing the host; remount resumes the request', async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: 'http://localhost' });
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window }); Object.defineProperty(globalThis, 'document', { configurable: true, value: dom.window.document });
+  const timer = new FactoryTimer(); let closes = 0;
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => 'unmount', Button: TestButton, close() { closes++; }, repairTimer: timer });
+  const current = f.driver.current(); f.driver.publish({ ...current, revision: current.revision + 1, readiness: { requirements: [{ id: 'microphone', required: true, status: 'granted', usableNow: true, relaunchNeeded: false, allowedRepairActions: [] }] } });
+  await hosted.activation.permissionRepair.activate(['microphone']);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  await act(async () => root.render(createElement(hosted.module.Screen)));
+  assert.equal(timer.entries.size, 1);
+  await act(async () => root.render(null));
+  assert.equal(timer.entries.size, 0); timer.fire(800); assert.equal(closes, 0);
+  await act(async () => root.render(createElement(hosted.module.Screen)));
+  assert.equal(timer.entries.size, 1);
+  await act(async () => timer.fire(800));
+  assert.equal(closes, 1);
+  await act(async () => root.unmount()); await hosted.activation.dispose(); f.controller.dispose(); dom.window.close();
+});
+
+test('failed disposal clears repair timers before coaching cleanup and rejects every activation', async () => {
+  const f = fixture('permission-granted-relaunch-needed'), timer = new FactoryTimer(); let unavailable = true;
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => 'dispose-repair', Button: TestButton, close() {}, repairTimer: timer, coaching: {
+    async show() { return { status: 'ok' }; }, async update() { return { status: 'ok' }; }, async hide() { return unavailable ? { status: 'unavailable', capability: 'hide' } : { status: 'ok' }; },
+  } });
+  await hosted.activation.permissionRepair.activate(['screen-capture']);
+  assert.equal(timer.entries.size, 1);
+  await assert.rejects(hosted.activation.dispose(), /could not be removed/);
+  assert.equal(timer.entries.size, 0); timer.fire(1000); assert.deepEqual(f.driver.commands(), []);
+  await assert.rejects(hosted.activation.permissionRepair.activate(['microphone']), /cannot be activated/);
+  await assert.rejects(hosted.activation.activate({ reason: 'resume' }), /cannot be activated/);
+  unavailable = false; await hosted.activation.dispose(); f.controller.dispose();
+});
+
+test('a queued old repair close cannot hide the next retargeted request', async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: 'http://localhost' });
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window }); Object.defineProperty(globalThis, 'document', { configurable: true, value: dom.window.document });
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => 'retarget-race', Button: TestButton, close() { assert.fail('must retain new repair'); } });
+  await hosted.activation.permissionRepair.activate(['camera']);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  await act(async () => root.render(createElement(hosted.module.Screen)));
+  await act(async () => {
+    const retarget = hosted.activation.permissionRepair.activate(['microphone']);
+    [...dom.window.document.querySelectorAll('button')].find(b => b.textContent === 'Later')!.click();
+    await retarget;
+  });
+  assert.equal(dom.window.document.querySelector('.permission-repair-row strong')?.textContent, 'Microphone');
+  await assert.rejects(hosted.activation.activate({ reason: 'resume' }), /during permission repair/);
+  await act(async () => root.unmount()); await hosted.activation.dispose(); f.controller.dispose(); dom.window.close();
+});
+
+test('host close failure stays visible and retryable without an unhandled rejection', async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: 'http://localhost' });
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window }); Object.defineProperty(globalThis, 'document', { configurable: true, value: dom.window.document });
+  let fails = true, closes = 0, attempts = 0;
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => 'close-error', Button: TestButton, close() { attempts++; if (fails) throw new Error('private native detail'); closes++; } });
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  await act(async () => root.render(createElement(hosted.module.Screen)));
+  await act(async () => hosted.activation.permissionRepair.activate(['camera']));
+  await act(async () => [...dom.window.document.querySelectorAll('button')].find(b => b.textContent === 'Later')!.click());
+  assert.match(dom.window.document.querySelector('[role=alert]')?.textContent ?? '', /could not be closed/);
+  assert.doesNotMatch(dom.window.document.body.textContent ?? '', /private native/);
+  await act(async () => { const current = f.driver.current(); f.driver.publish({ ...current, revision: current.revision + 1 }); });
+  assert.equal(attempts, 1, 'provider polling must not retry host close');
+  fails = false;
+  await act(async () => [...dom.window.document.querySelectorAll('button')].find(b => b.textContent === 'Try closing again')!.click());
+  assert.equal(closes, 1); assert.equal(dom.window.document.querySelector('[role=alert]'), null);
+  await act(async () => root.unmount()); await hosted.activation.dispose(); f.controller.dispose(); dom.window.close();
+});
+
+test('the hidden tour keeps factual practice progress without stopping the associated capture', async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: 'http://localhost' });
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window }); Object.defineProperty(globalThis, 'document', { configurable: true, value: dom.window.document });
+  f.progress.value = { ...initialProgress(), status: 'in-progress', stage: 'stop', attemptId: 'practice-live' };
+  publish(f.driver, [capture('practice-live', 'recording', [outcome('first-frame-start')], undefined, 'local-only')]);
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => 'hidden-practice', Button: TestButton, close() {} });
+  await hosted.activation.activate({ reason: 'resume' });
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  await act(async () => root.render(createElement(hosted.module.Screen)));
+  await act(async () => hosted.activation.permissionRepair.activate(['camera']));
+  assert.equal([...dom.window.document.querySelectorAll('main')].filter(main => !main.closest('[hidden]')).length, 1);
+  await act(async () => publish(f.driver, [capture('practice-live', 'saved', [outcome('processing'), outcome('save'), outcome('copy')], 'artifact-live', 'local-only')]));
+  assert.equal(f.progress.value.stage, 'copied');
+  assert.equal(f.progress.value.attemptId, 'practice-live'); assert.deepEqual(f.driver.commands(), []);
+  await act(async () => [...dom.window.document.querySelectorAll('button')].find(b => b.textContent === 'Later')!.click());
+  assert.equal(dom.window.document.querySelector('main[data-stage=copied]')?.parentElement?.hasAttribute('hidden'), false);
   await act(async () => root.unmount()); await hosted.activation.dispose(); f.controller.dispose(); dom.window.close();
 });

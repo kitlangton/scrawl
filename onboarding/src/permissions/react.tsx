@@ -7,6 +7,8 @@ export type PermissionRepairContributionProps = {
   requestedIds: readonly string[];
   Button: ComponentType<ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "default" | "ghost" | "outline"; size?: "default" | "icon" }>;
   close(): void;
+  /** Owner factory controls suspend/resume; unmount must not imply a repair cancellation. */
+  manageLifecycle?: boolean;
 };
 
 const names: Record<string, string> = {
@@ -18,7 +20,7 @@ const names: Record<string, string> = {
   "speech-recognition": "Speech Recognition",
 };
 
-export function PermissionRepairContribution({ controller, requestedIds, Button, close }: PermissionRepairContributionProps) {
+export function PermissionRepairContribution({ controller, requestedIds, Button, close, manageLifecycle = true }: PermissionRepairContributionProps) {
   const [state, setState] = useState<RepairState>(controller.state);
   const closeNotified = useRef(false);
   const requestKey = requestedIds.join("\0");
@@ -26,8 +28,8 @@ export function PermissionRepairContribution({ controller, requestedIds, Button,
     const off = controller.subscribe(setState);
     controller.activate(requestedIds);
     setState(controller.state);
-    return () => { off(); controller.cancel(); };
-  }, [controller, requestKey]);
+    return () => { off(); if (manageLifecycle) controller.cancel(); };
+  }, [controller, requestKey, manageLifecycle]);
   useEffect(() => {
     if (state.phase !== "closed") closeNotified.current = false;
     else if (controller.state.phase === "closed" && !closeNotified.current) { closeNotified.current = true; close(); }
