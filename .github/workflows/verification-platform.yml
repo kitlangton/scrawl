@@ -412,24 +412,6 @@ jobs:
           fi
           "${cargo_trace_env[@]}" python3 enablement/verification.py --base "$BASE" --run --online --suite rust --parallel-contracts --cargo-timings "${root_build_overlap[@]}" --receipt-dir "$RUNNER_TEMP/verification-receipts"
           verification_complete=true
-      - name: Seal completed native verification baseline
-        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
-        env:
-          GITHUB_JOB: rust
-        run: node --experimental-strip-types enablement/verification/native-baseline/producer.ts "$RUNNER_TEMP/native-baseline"
-      - name: Attest native verification baseline
-        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: ${{ runner.temp }}/native-baseline/native-baseline.json
-      - name: Upload native verification baseline
-        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-baseline-${{ inputs.runner }}-${{ github.sha }}
-          path: ${{ runner.temp }}/native-baseline/
-          if-no-files-found: error
-          retention-days: 14
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash
@@ -639,6 +621,22 @@ jobs:
           path: ${{ runner.temp }}/mac-dev-executables/
           if-no-files-found: error
           retention-days: 7
+      - name: Seal completed native verification baseline
+        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        run: node --experimental-strip-types enablement/verification/native-baseline/producer.ts "$RUNNER_TEMP/native-baseline"
+      - name: Attest native verification baseline
+        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ runner.temp }}/native-baseline/native-baseline.json
+      - name: Upload native verification baseline
+        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-baseline-${{ inputs.runner }}-${{ github.sha }}
+          path: ${{ runner.temp }}/native-baseline/
+          if-no-files-found: error
+          retention-days: 14
 
   release-ready:
     name: ${{ inputs.revision && format('Release verification ({0})', inputs.revision) || 'Release verification' }}
