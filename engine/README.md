@@ -27,6 +27,17 @@ bundle and the required OS proof. Keep `ScreenCaptureSession` and its current
 callers/build inputs until that replacement is accepted; then remove the donor
 only after every consumer is verified.
 
+## Shutdown budget
+
+The existing Linux GStreamer finalizer has an eight-second EOS deadline. The
+SDK's compatible `launchEngine(path, runtimeDirectory, shutdownTimeoutMs)` option
+defaults to 3 seconds, so that default would send SIGTERM before the current
+native finish deadline and SIGKILL at 6 seconds. A caller integrating that
+finalizer should explicitly use `12_000` ms: EOF then gets 12 seconds before
+SIGTERM, with later bounded escalation, leaving four seconds beyond the current
+EOS deadline. This is a justified configuration, not a native shutdown proof;
+measure real finalization and keep timeout outcomes distinct from saved receipts.
+
 ## Identity and authority
 
 There are three independent identities. `captureId` is a random 32-character
