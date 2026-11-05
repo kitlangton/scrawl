@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { RecordWorkflow, type CaptureReceipt, type EngineClient, type EngineEvent, type Readiness } from "../src/backend/workflow/controller.ts";
+import { RecordWorkflow, type CaptureReceipt, type EngineClient, type EngineEvent, type Readiness } from "../dist/backend/workflow/controller.js";
 import { createWorkflowPillHost, disposeWorkflowPillHost } from "../dist/ui/workflow-host.js";
 
 class ScriptedEngine implements EngineClient {
@@ -120,4 +120,61 @@ test("authoritative events overtake a pending pill command and replacement hosts
   assert.equal(workflow.state.phase, "ready");
   disposeWorkflowPillHost(replacement);
   workflow.dispose();
+});
+
+test("reads and observers cannot mutate authoritative revisions or each other's nested actions", async () => {
+  const engine = new ScriptedEngine(); engine.ready = { ready: true };
+  const workflow = new RecordWorkflow(engine);
+  const host = createWorkflowPillHost(workflow, { createRequestId: () => "isolated-view" });
+  const original = (await host.read())!;
+  const revision = original.revision;
+  original.revision = 999; original.actions[0]!.label = "Fake success";
+  original.pocket!.title = "Fake readiness";
+  const current = (await host.read())!;
+  assert.equal(current.revision, revision);
+  assert.notEqual(current.actions[0]!.label, "Fake success");
+  assert.notEqual(current.pocket!.title, "Fake readiness");
+  await host.act(999, "record");
+  assert.equal(workflow.state.phase, "idle");
+  host.subscribe(view => { view.revision = 999; view.actions.splice(0); });
+  const seen: number[] = [];
+  host.subscribe(view => { seen.push(view.revision); if (view.label === "Recording") assert.deepEqual(view.actions.map(a => a.id), ["finish", "cancel"]); });
+  await host.act(revision, "record");
+  engine.emit({ type: "capture-changed", receipt: { captureId: "isolated-view", phase: "recording" } });
+  assert.ok(seen.length >= 3);
+  assert.ok(seen.every(value => value !== 999));
+  assert.deepEqual((await host.read())!.actions.map(a => a.id), ["finish", "cancel"]);
+  disposeWorkflowPillHost(host); workflow.dispose();
+});
+
+test("throwing clock is cosmetic and never detaches subsequent workflow updates", async () => {
+  const engine = new ScriptedEngine(); engine.ready = { ready: true };
+  const workflow = new RecordWorkflow(engine);
+  let broken = true;
+  const host = createWorkflowPillHost(workflow, { createRequestId: () => "clock-safe", clock: () => { if (broken) throw new Error("clock unavailable"); return "00:03"; } });
+  assert.equal((await host.read())!.clock, "");
+  await host.act((await host.read())!.revision, "record");
+  engine.emit({ type: "capture-changed", receipt: { captureId: "clock-safe", phase: "recording" } });
+  assert.equal((await host.read())!.phase, "recording");
+  broken = false;
+  await host.act((await host.read())!.revision, "finish");
+  assert.equal((await host.read())!.phase, "processing");
+  assert.equal((await host.read())!.clock, "00:03");
+  engine.emit({ type: "capture-changed", receipt: { captureId: "clock-safe", phase: "saved", bundlePath: "/private/clock.apparent" } });
+  assert.equal((await host.read())!.phase, "completed");
+  disposeWorkflowPillHost(host); workflow.dispose();
+});
+
+test("unavailable, checking and starting states carry visible status content", async () => {
+  const engine = new ScriptedEngine();
+  const workflow = new RecordWorkflow(engine);
+  const host = createWorkflowPillHost(workflow, { createRequestId: () => "visible-readiness" });
+  assert.equal((await host.read())!.pocket?.title, "Capture unavailable");
+  let resolve!: (readiness: Readiness) => void;
+  engine.readiness = () => new Promise(done => { resolve = done; });
+  const checking = host.act((await host.read())!.revision, "record");
+  assert.equal((await host.read())!.status, "Checking capture readiness…");
+  resolve({ ready: true }); await checking;
+  assert.equal((await host.read())!.status, "Starting capture…");
+  disposeWorkflowPillHost(host); workflow.dispose();
 });

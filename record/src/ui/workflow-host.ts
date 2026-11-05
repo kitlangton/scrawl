@@ -17,14 +17,15 @@ export function createWorkflowPillHost(workflow: RecordWorkflow, options: Workfl
   const unsubscribeWorkflow = workflow.subscribe(state => {
     if (disposed) return;
     snapshot = present(state, ++revision, options);
+    const published = snapshot;
     for (const observer of observers) {
-      try { observer(snapshot); } catch { observers.delete(observer); }
+      try { observer(structuredClone(published)); } catch { observers.delete(observer); }
     }
   });
 
   const host: PillHost = {
     manualDrag: false,
-    read: async () => snapshot,
+    read: async () => structuredClone(snapshot),
     layout: async () => {},
     beginDrag: async () => {},
     beginPaste: async () => {},
@@ -100,7 +101,12 @@ function present(state: RecordState, revision: number, options: WorkflowPillHost
     warning = state.message;
     actions.push({ id: "record", label: "Try again", enabled: true, selected: false, primary: true });
   }
-  return { revision, phase, clock: options.clock?.(state) ?? "", label, warning, notice, reducedMotion: false, draggable: false, inputLevel: null, noteCount: 0, actions };
+  const pocket: PillView["pocket"] = phase === "selecting" && warning
+    ? { tone: state.phase === "failed" ? "failure" : warning ? "warning" : "info", title: label, description: warning ?? "", actionIds: [] }
+    : undefined;
+  let clock = "";
+  try { clock = options.clock?.(state) ?? ""; } catch { /* Host decoration cannot interrupt authoritative updates. */ }
+  return { revision, phase, clock, label, status: phase === "selecting" ? label : undefined, warning, notice, pocket, reducedMotion: false, draggable: false, inputLevel: null, noteCount: 0, actions };
 }
 
 const hostDisposers = new WeakMap<PillHost, () => void>();
