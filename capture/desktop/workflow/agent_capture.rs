@@ -1,8 +1,8 @@
 //! Local, same-user control of the running GUI. Never launches an app or sends a capture.
 use apparent_capture as client;
 #[cfg(test)]
-use client::{command, new_id};
-pub use client::Action;
+use client::command;
+pub use client::{Action, execute, new_id};
 use client::{clock_ms, same_user, socket_path, valid_id, connect_until, DeadlineStream};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
