@@ -45,8 +45,7 @@ export async function admit(env:Env,userId:string) {
 export function trustedSiteOrigin(origin: string | null,env: Env): origin is string {
  if(!origin||origin==='null')return false;
  try {if(new URL(origin).origin!==origin)return false;}catch{return false;}
- const site=new URL(env.SITE_ORIGIN).origin,legacy=env.LEGACY_SITE_ORIGIN?new URL(env.LEGACY_SITE_ORIGIN).origin:null;
- return origin===site||origin===legacy;
+ return origin===env.SITE_ORIGIN||origin===env.LEGACY_SITE_ORIGIN;
 }
 export function csrf(request: Request,env: Env,s: SessionRow) {if(!trustedSiteOrigin(request.headers.get('Origin'),env) || request.headers.get('X-CSRF-Token')!==s.csrf)fail('csrf_failed',403);}
 export async function bearer(request: Request,env: Env,write=false) {
