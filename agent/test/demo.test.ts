@@ -84,6 +84,8 @@ test('demo refuses collisions, symlink parents, invalid output before creating a
     await assert.rejects(generateDemo('relative.apparent'),/canonical absolute/);
     const cli=new URL('../dist/cli.js',import.meta.url).pathname;
     const help=spawnSync(process.execPath,[cli,'demo','--help'],{encoding:'utf8'});assert.equal(help.status,0,help.stderr);assert.match(help.stdout,/Usage: apparent-agent demo/);assert.match(help.stdout,/--clipboard currently fails before writing/);
+    const topHelp=spawnSync(process.execPath,[cli,'--help'],{encoding:'utf8'});
+    assert.equal(topHelp.status,0);assert.equal((topHelp.stdout.match(/apparent-agent demo /g)??[]).length,1);assert.equal((topHelp.stdout.match(/apparent-agent zoom /g)??[]).length,1);
     const cliOut=join(parent,'cli output path.apparent');const cliDemo=spawnSync(process.execPath,[cli,'demo','--out',cliOut,'--json'],{encoding:'utf8'});assert.equal(cliDemo.status,0,cliDemo.stderr);const cliResult=JSON.parse(cliDemo.stdout);assert.match(cliResult.summary,/Synthetic demonstration only/);assert.equal(cliResult.images.length,6);assert.ok(cliResult.images.every((path:string)=>path.startsWith(cliOut+'/')));
     const clipboard=spawnSync(process.execPath,[cli,'demo','--out',join(parent,'clipboard.apparent'),'--clipboard'],{encoding:'utf8'});
     assert.equal(clipboard.status,2);assert.equal(clipboard.stdout,'');await assert.rejects(access(join(parent,'clipboard.apparent')));
