@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { zipSync } from 'fflate'
-import { consume, decodePayloadTar, trustedRun, validateArtifact, validateJobs, workflowPath } from './stream-artifact.ts'
+import { consume, consumeCurrent, decodePayloadTar, trustedRun, validateArtifact, validateJobs, workflowPath } from './stream-artifact.ts'
 
 const sha = 'a'.repeat(40), sourceDigest = 'b'.repeat(64), environmentDigest = 'c'.repeat(64), inputDigest = 'd'.repeat(64)
 const hash = (data: Uint8Array) => createHash('sha256').update(data).digest('hex')
@@ -109,6 +109,45 @@ test('default consumer binds the registered Public owner and shared source/envir
   const result = await consume(root, out, f.api, async () => f.bytes, { ancestor: () => true })
   assert.equal(result.sourceSha, head)
   assert.equal(readFileSync(join(out, 'index.html'), 'utf8'), '<main>web bytes</main>')
+}))
+
+test('same-run consumer verifies receipt identity and extracts the exact component payload', () => withRoot(async tempRoot => {
+  const root = resolve(import.meta.dirname, '../../../..'), core = await import('../../../../composition/delivery/core.ts')
+  const owner = core.catalog(root).owners.find(candidate => candidate.id === 'public')!
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
+  const env = { ...process.env, GITHUB_SHA: head, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main', PUBLIC_COMPONENT_INPUT_DIGEST: inputDigest, ImageOS: 'ubuntu24', ImageVersion: 'consumer-image-does-not-matter' }
+  const input = inputDigest
+  const source = core.sourceDigest(root, owner, head), environment = core.environmentDigest(owner, env), tarBytes = componentTar()
+  const receipt = { schema: 1, id: 'public', target: 'web', stage: 'website', sourceSha: head, inputDigest: input, sourceDigest: source, environmentDigest: environment, sha256: hash(tarBytes), size: tarBytes.length, runId: '91', runAttempt: '2' }
+  const component = join(tempRoot, 'component'); mkdirSync(component)
+  writeFileSync(join(component, 'receipt.json'), JSON.stringify(receipt)); writeFileSync(join(component, 'component.tar.gz'), tarBytes)
+  const out = join(tempRoot, 'out')
+  await consumeCurrent(root, component, out, {}, env)
+  assert.equal(readFileSync(join(out, 'index.html'), 'utf8'), '<main>web bytes</main>')
+  assert.equal(readFileSync(join(out, 'assets/site.css'), 'utf8'), 'body{color:#123}')
+  assert.deepEqual(readdirSync(out).sort(), ['assets', 'index.html'])
+}))
+
+test('same-run consumer rejects receipt path, payload hash, workflow identity and environment mismatches without touching output', () => withRoot(async tempRoot => {
+  const root = resolve(import.meta.dirname, '../../../..'), core = await import('../../../../composition/delivery/core.ts')
+  const owner = core.catalog(root).owners.find(candidate => candidate.id === 'public')!, head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
+  const env = { ...process.env, GITHUB_SHA: head, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main', PUBLIC_COMPONENT_INPUT_DIGEST: inputDigest, ImageOS: 'ubuntu24', ImageVersion: 'consumer-image-does-not-matter' }
+  const input = inputDigest, tarBytes = componentTar()
+  const base = { schema: 1, id: 'public', target: 'web', stage: 'website', sourceSha: head, inputDigest: input, sourceDigest: core.sourceDigest(root, owner, head), environmentDigest: core.environmentDigest(owner, env), sha256: hash(tarBytes), size: tarBytes.length, runId: '91', runAttempt: '2' }
+  const component = join(tempRoot, 'component'); mkdirSync(component); writeFileSync(join(component, 'component.tar.gz'), tarBytes)
+  const out = join(tempRoot, 'out'); mkdirSync(out); writeFileSync(join(out, 'keep'), 'preserve')
+  const deps = {}
+  for (const receipt of [
+    { ...base, sourceSha: 'e'.repeat(40) }, { ...base, runAttempt: '1' }, { ...base, inputDigest: 'e'.repeat(64) }, { ...base, environmentDigest: 'f'.repeat(64) }, { ...base, sha256: 'f'.repeat(64) },
+  ]) {
+    writeFileSync(join(component, 'receipt.json'), JSON.stringify(receipt))
+    await assert.rejects(consumeCurrent(root, component, out, deps, env))
+    assert.equal(readFileSync(join(out, 'keep'), 'utf8'), 'preserve')
+  }
+  await assert.rejects(consumeCurrent(root, component, join(tempRoot, 'missing-digest'), deps, { ...env, PUBLIC_COMPONENT_INPUT_DIGEST: '' }), /Invalid current Public input identity/)
+  await assert.rejects(consumeCurrent(root, component, join(tempRoot, 'wrong-digest'), deps, { ...env, PUBLIC_COMPONENT_INPUT_DIGEST: 'f'.repeat(64) }), /receipt provenance or payload digest mismatch/)
+  writeFileSync(join(component, 'receipt.json'), JSON.stringify(base)); writeFileSync(join(component, 'extra'), 'unexpected')
+  await assert.rejects(consumeCurrent(root, component, out, deps, env), /directory contents/)
 }))
 
 test('ancestor reuse is admitted only when candidate source, receipt source and environment identities match', () => withRoot(async root => {

@@ -42,22 +42,16 @@ CI is not Apple Silicon runtime proof. An image change must still pass the same
 checks before Mac publication.
 
 Linux delivery triggers only after successful `Linux verification`.
-Web delivery runs on main pushes, manual main dispatches, trusted Connect producer
-completions and common value-stream completions, independently of native application receipts.
-Public production bytes build/test/package once in `stream (public, web)`; the website
-workflow consumes current-source/config-compatible Public receipts, including verified
-unchanged ancestors. Public and shared-contract/runtime-audit jobs must succeed even
-when another component fails. No compatible Public artifact means fail-closed admission;
-there is no website-workflow source rebuild.
-Its full-delta input selector includes Public, Connect browser, shared UI/analytics/assets,
-root README and the Agent skill consumed by generated pages, publisher policy and
-web delivery inputs. It starts from a successful run with actual owner verification
-and a successful budget audit; selector-only successes never advance that baseline.
-A same-source successful Public verification can make a later Connect follower
-unnecessary. Missing, incomplete or uncertain history and unknown inputs broaden
-checks. Its terminal gate accepts
-only required/success or explicitly unnecessary/skipped verification. Manual refresh
-forces checks. Native-only changes can report web checks not applicable.
+Public delivery runs in the common workflow on main pushes, manual dispatches and
+successful Connect producer completions. A dedicated `stream (public, web)` job
+runs delivery/shared architecture contracts, then builds or reuses verified Public
+bytes. `deploy (public, web)` needs only that producer, not the other-owner matrix.
+It downloads the same-run component, validates its receipt against producer outputs,
+composes a compatible verified Connect artifact, and runs existing browser/privacy/
+movie checks before sealing and publishing under existing environment/CD/lock gates.
+Unavailable Connect bytes fail closed; successful Connect completion retries Public.
+The old website workflow now follows Connect only for its independent Worker publisher;
+it no longer deploys Pages. Whole-workflow runtime audits remain after terminal jobs.
 Connect's paired browser/Worker producer combines that input selection with existing
 authenticated artifact compatibility checks; missing compatible bytes still requires
 production. Its recipient matrix has an independent cheap selector, so web artifact
@@ -73,8 +67,7 @@ owners, including Desktop; no fixed-color allowances or global checks were remov
 Public consumes immutable independently verified Connect browser artifacts after
 trusted producer/run/digest, candidate input and current build-configuration checks.
 No compatible retained artifact means fail-closed admission, never a Connect rebuild.
-The common Public lane builds/tests/packages Public; the website consumer checks composition/browser seams;
-the website publisher consumes its revision-named sealed artifact. The separate
+The common Public lane builds/tests/packages Public; its deployment job checks composition/browser seams and publishes the sealed candidate. The separate
 Worker call invokes Connect's reusable publisher after producer completion; it does
 not depend on Public checks. Existing activation/environment gates remain.
 Pages and Worker publication have independent job locks, respectively

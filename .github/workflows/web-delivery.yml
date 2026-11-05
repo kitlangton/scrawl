@@ -1,11 +1,8 @@
-name: Website — checks & deploy
+name: Connect publication follow-up
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
   workflow_run:
-    workflows: [Connect producer, Value-stream delivery]
+    workflows: [Connect producer]
     branches: [main]
     types: [completed]
 
@@ -14,177 +11,6 @@ permissions:
   actions: read
 
 jobs:
-  admit:
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.name == 'Value-stream delivery')
-    permissions:
-      contents: read
-      actions: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    outputs:
-      sha: ${{ steps.gate.outputs.sha }}
-      required: ${{ steps.selection.outputs.required }}
-    steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
-      # Main-only event source; web verification below owns publication admission.
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.4'
-      - id: gate
-        run: node --experimental-strip-types enablement/verification/web/candidate.ts
-      - id: selection
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node --experimental-strip-types enablement/verification/web/selection.ts
-
-  verify:
-    needs: admit
-    if: needs.admit.outputs.sha != '' && needs.admit.outputs.required == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    env:
-      CONNECT_BROWSER_ARTIFACT: ${{ github.workspace }}/.build/connect-browser/dist
-      PUBLIC_POSTHOG_ENABLED: ${{ vars.PUBLIC_POSTHOG_ENABLED || 'true' }}
-      PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
-      PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
-      PUBLIC_POSTHOG_ENVIRONMENT: production
-      VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
-    steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ needs.admit.outputs.sha }}
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.4'
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: '1.3.10'
-      - name: Test publication contracts
-        run: |
-          node --experimental-strip-types --test enablement/verification/web/*.test.ts
-      - name: Install locked website dependencies and browser
-        working-directory: public/site
-        run: |
-          bun install --frozen-lockfile
-          ./node_modules/.bin/playwright-core install --with-deps chromium firefox
-          echo "CHROME_PATH=$(node --input-type=module -e 'import {chromium} from "playwright-core"; console.log(chromium.executablePath())')" >> "$GITHUB_ENV"
-      - name: Consume verified immutable Connect browser artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node --experimental-strip-types public/site/scripts/connect/artifact.ts .build/connect-browser
-      - name: Consume the verified Public value-stream artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node --experimental-strip-types public/site/scripts/cd/stream-artifact.ts .build/public-artifact
-      - name: Compose independently verified Public and Connect bytes
-        working-directory: public/site
-        run: |
-          cp -a "$GITHUB_WORKSPACE/.build/public-artifact" dist-apparent
-          node scripts/connect/compose-connect.ts
-      - name: Prepare source-built Pages artifact
-        working-directory: public/site
-        run: |
-          node --test scripts/connect/artifact*.test.ts scripts/connect/test-compose-connect.ts scripts/pages/test-pages-package.ts scripts/pages/test-pages-video.ts
-          node scripts/pages/prepare-pages.ts
-          COMPOSE_PUBLIC_INPUT="$GITHUB_WORKSPACE/.build/public-artifact" node scripts/site-build/verify-composed.ts
-          PUBLIC_THEME_ARTIFACT=public/site/dist-apparent THEME_SURFACES=public node ../../shared/ui/test/appearance.mjs
-          node scripts/pages/prepare-pages-video.ts
-          SITE_ARTIFACT=dist-apparent node --test scripts/pages/test-public-homepage.ts scripts/connect/composed-browser.test.ts
-          node scripts/cd/publish-pages.ts seal ${{ needs.admit.outputs.sha }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: website-${{ needs.admit.outputs.sha }}
-          path: .build/website/
-          if-no-files-found: error
-          # The checked public demos use .local-media; do not drop their assets.
-          include-hidden-files: true
-          retention-days: 90
-      - uses: actions/upload-artifact@v4
-        with:
-          name: website-connect-input-${{ needs.admit.outputs.sha }}
-          path: .build/connect-browser-receipt.json
-          if-no-files-found: error
-          retention-days: 90
-
-  release:
-    if: always() && needs.admit.result != 'skipped'
-    needs: [admit, verify]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Verification runtime budget and ownership
-        run: echo '10 minute whole-workflow execution budget; agent whose run hits the limit owns optimization and a successful rerun. Do not raise or bypass the limit.'
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.admit.outputs.sha || github.sha }}
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.4'
-      - name: Require verified or intentionally not applicable web checks
-        env:
-          WEB_REQUIRED: ${{ needs.admit.outputs.required }}
-          WEB_RESULT: ${{ needs.verify.result }}
-        run: node --experimental-strip-types enablement/verification/web/selection.ts gate
-
-  website:
-    concurrency:
-      group: website-production-eligible
-      cancel-in-progress: false
-    needs: [admit, verify, release]
-    if: needs.admit.outputs.required == 'true' && github.repository == 'tryapparent/apparent' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.WEBSITE_CD_ENABLED == 'true'
-    environment:
-      name: website-production
-      url: https://app.tryapparent.com
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ needs.admit.outputs.sha }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: website-${{ needs.admit.outputs.sha }}
-          path: .build/website
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.4'
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: '1.3.10'
-      - run: bun install --frozen-lockfile
-        working-directory: public/site
-      - name: Publish checked main to Cloudflare Pages (never Clanker or the Worker)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WEBSITE_PAGES_API_TOKEN: ${{ secrets.WEBSITE_PAGES_API_TOKEN }}
-        run: GITHUB_SHA="${{ needs.admit.outputs.sha }}" node public/site/scripts/cd/publish-pages.ts
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: website-deployment-receipt
-          path: website-receipt.json
-          if-no-files-found: ignore
-
   worker:
     permissions:
       contents: write
@@ -199,7 +25,7 @@ jobs:
 
   runtime-budget:
     if: always()
-    needs: [admit, verify, release, website, worker]
+    needs: [worker]
     permissions:
       contents: read
       actions: read
