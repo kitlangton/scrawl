@@ -32,6 +32,9 @@ On creation, the runtime enumerates durable Record request IDs and inspects each
 through its original private SDK mapping before admitting a new start. Active
 captures and ambiguous inspection results remain named in `startup.unresolved`
 and block fresh starts until `reconcileStartup()` observes terminal facts.
+Scanning or blocked startup never removes stop/cancel/reconcile authority from
+a capture already owned by this runtime. Commands are admitted one at a time;
+a competing start is refused before reserving its request ID.
 Terminal history remains reserved against request ID reuse. An unavailable
 native handshake on an empty store leaves startup clear but workflow readiness
 false, so the workflow cannot dispatch capture. The runtime does not resume an

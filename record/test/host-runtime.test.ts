@@ -149,3 +149,52 @@ test("concurrent reconciliation shares one scan; disposal detaches without stopp
   assert.equal((await secondScan).state, "blocked");
   assert.equal(provider.facts.size, 1, "disposal does not issue stop/cancel");
 });
+
+test("startup reconciliation cannot strand a capture started through this runtime", async t => {
+  const { provider, create } = await fixture(t);
+  provider.setReady(true);
+  const runtime = await create();
+  await runtime.dispatch({ type: "start", requestId: "owned during scan" });
+  assert.equal((await runtime.reconcileStartup()).state, "blocked");
+  assert.equal((await runtime.dispatch({ type: "stop" })).phase, "ready");
+  assert.equal((await runtime.reconcileStartup()).state, "ready");
+  assert.equal((await runtime.dispatch({ type: "start", requestId: "next capture" })).phase, "recording");
+  runtime.dispose();
+});
+
+test("live stop remains admitted while a startup inspection is pending", async t => {
+  const { provider, create } = await fixture(t);
+  provider.setReady(true);
+  const runtime = await create();
+  await runtime.dispatch({ type: "start", requestId: "pending scan owner" });
+  const original = provider.sdk.control;
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  provider.sdk.control = async (...args) => { if (args[0] === "inspect") { enter(); await gate; } return original(...args); };
+  const scan = runtime.reconcileStartup();
+  await entered;
+  const stop = runtime.dispatch({ type: "stop" });
+  assert.equal(runtime.state.phase, "stopping");
+  release(); await scan;
+  assert.equal((await stop).phase, "ready");
+  runtime.dispose();
+});
+
+test("a start refused during another command does not consume its request ID", async t => {
+  const { provider, create } = await fixture(t);
+  const runtime = await create();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = provider.sdk.handshake;
+  provider.sdk.handshake = async () => { await gate; return original(); };
+  provider.setReady(true);
+  const first = runtime.dispatch({ type: "start", requestId: "first command" });
+  await runtime.dispatch({ type: "start", requestId: "retry after busy" });
+  assert.equal(runtime.startup.knownRequestIds.includes("retry after busy"), false);
+  release(); await first;
+  await runtime.dispatch({ type: "stop" });
+  assert.equal((await runtime.dispatch({ type: "start", requestId: "retry after busy" })).phase, "recording");
+  assert.equal(runtime.startup.knownRequestIds.includes("retry after busy"), true);
+  runtime.dispose();
+});

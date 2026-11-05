@@ -42,6 +42,7 @@ export async function createRecordHostRuntime(
   let disposed = false;
   let scan: Promise<HostStartupState> | undefined;
   let revision = 0;
+  let commandState: "idle" | "dispatching" = "idle";
 
   const freezeStartup = (value: HostStartupState): HostStartupState => Object.freeze(value.state === "ready"
     ? { state: "ready", knownRequestIds: Object.freeze([...value.knownRequestIds]) }
@@ -98,19 +99,24 @@ export async function createRecordHostRuntime(
     get state() { return workflow.state; },
     subscribe: listener => workflow.subscribe(listener),
     async dispatch(command) {
-      if (disposed || scan || startup.state !== "ready") return workflow.state;
+      if (disposed || commandState !== "idle") return workflow.state;
       if (command.type === "start") {
+        if (scan || startup.state !== "ready" || !["idle", "ready", "cancelled", "failed"].includes(workflow.state.phase)) return workflow.state;
         if (startup.knownRequestIds.includes(command.requestId)) return workflow.state;
         // Reserve synchronously so concurrent commands cannot reuse an identity.
         startup = freezeStartup({ ...startup, knownRequestIds: [...startup.knownRequestIds, command.requestId].sort() });
+      }
+      // Startup gates fresh admission only. The workflow must retain stop/cancel
+      // and reconciliation authority over captures it already owns during scans.
+      commandState = "dispatching";
+      try {
         const result = await workflow.dispatch(command);
-        if (result.phase === "idle") {
+        if (command.type === "start" && result.phase === "idle") {
           const mapping = await mappings.getByRequestId(command.requestId).catch(() => undefined);
           if (!mapping) startup = freezeStartup({ ...startup, knownRequestIds: startup.knownRequestIds.filter(id => id !== command.requestId) });
         }
         return result;
-      }
-      return workflow.dispatch(command);
+      } finally { commandState = "idle"; }
     },
     reconcileStartup,
     unresolvedOwnership,
