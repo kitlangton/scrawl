@@ -63,6 +63,12 @@ test('resolves inherited path mappings from their declaring config directory', (
   'record/src/index.ts': "import '@hidden/private';",
 }, root => assert(checkArchitecture(root).some(error => error.includes('alias crosses record -> engine')))));
 
+test('baseUrl-only bare imports cannot reach another owner implementation', () => fixture({
+  'record/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '..', moduleResolution: 'NodeNext', module: 'NodeNext' } }),
+  'record/src/index.ts': "import 'engine/sdk/src/private.js';",
+  'engine/sdk/src/private.ts': 'export const privateImplementation = true;',
+}, root => assert(checkArchitecture(root).some(error => error.includes('resolved bare import crosses owner boundary')))));
+
 test('rejects private package subpaths and computed imports', () => fixture({
   'engine/sdk/package.json': engine,
   'record/src/index.ts': "import '@apparent/engine-sdk/src/private.js'; import(name);",

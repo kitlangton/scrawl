@@ -51,22 +51,22 @@ function packageRef(spec: string, packageNames: Map<string,{owner:Owner;dir:stri
   return packageOwners[name] || packageNames.has(name) ? { name, subpath: bits.length > (name.startsWith('@') ? 2 : 1) ? './' + bits.slice(name.startsWith('@') ? 2 : 1).join('/') : '.' } : undefined;
 }
 type Alias = { pattern: string; targets: string[] };
-function configAliases(root: string, source: string): Alias[] {
+function configScope(root: string, source: string): { aliases: Alias[]; options?: ts.CompilerOptions } {
   let dir = path.dirname(source);
   while (path.relative(root, dir) !== '..' && !path.relative(root, dir).startsWith(`..${path.sep}`)) {
     const config = path.join(dir, 'tsconfig.json');
     if (existsSync(config)) {
       try {
         const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} });
-        if (!parsed) return [];
+        if (!parsed) return { aliases: [] };
         const inheritedBase = parsed.options.pathsBasePath;
         const base = parsed.options.baseUrl ?? (typeof inheritedBase === 'string' ? inheritedBase : dir);
-        return Object.entries(parsed.options.paths ?? {}).map(([pattern, targets]) => ({ pattern, targets: targets.map(t => path.resolve(base, t)) }));
-      } catch { return []; }
+        return { options: parsed.options, aliases: Object.entries(parsed.options.paths ?? {}).map(([pattern, targets]) => ({ pattern, targets: targets.map(t => path.resolve(base, t)) })) };
+      } catch { return { aliases: [] }; }
     }
     const parent = path.dirname(dir); if (parent === dir) break; dir = parent;
   }
-  return [];
+  return { aliases: [] };
 }
 function aliasTargets(spec: string, aliases: Alias[]): string[] {
   const out: string[] = [];
@@ -166,9 +166,9 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
     if (!product.includes(from as typeof product[number]) && from !== 'shared' && from !== 'composition') continue;
     const text = readFileSync(file, 'utf8');
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-    const aliases = configAliases(root,file);
+    const scope = configScope(root,file);
     const inspect = (spec: string, line: number) => {
-      for (const target of aliasTargets(spec, aliases)) {
+      for (const target of aliasTargets(spec, scope.aliases)) {
         const resolved=canonical(target), relative=path.relative(root,resolved), to=ownerOf(root,resolved);
         if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) errors.push(`${path.relative(root,file)}:${line}: tsconfig alias resolves outside the repository (${spec})`);
         else if (to !== from) errors.push(`${path.relative(root,file)}:${line}: tsconfig alias crosses ${from} -> ${to} (${spec})`);
@@ -179,6 +179,18 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
         if (!allowed(from, target)) errors.push(`${path.relative(root,file)}:${line}: forbidden package dependency ${from} -> ${target} (${spec})`);
         if (!manifestExports(root, pkg.name, packageNames).has(pkg.subpath)) errors.push(`${path.relative(root,file)}:${line}: private or undeclared package subpath ${spec}`);
         return;
+      }
+      // baseUrl and package-import mappings can resolve bare names to source
+      // without a paths entry. Use TypeScript's resolver rather than guessing.
+      if (!spec.startsWith('.') && !spec.startsWith('/') && !spec.startsWith('file:') && scope.options) {
+        const resolved = ts.resolveModuleName(spec, file, scope.options, ts.sys).resolvedModule;
+        if (resolved && !resolved.isExternalLibraryImport) {
+          const target = canonical(resolved.resolvedFileName);
+          const relative = path.relative(root, target);
+          if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || ownerOf(root, target) !== from) {
+            errors.push(`${path.relative(root,file)}:${line}: resolved bare import crosses owner boundary (${spec})`);
+          }
+        }
       }
       if (spec.startsWith('.') || spec.startsWith('/') || spec.startsWith('file:')) {
         const local = resolveLocal(root,file,spec);
