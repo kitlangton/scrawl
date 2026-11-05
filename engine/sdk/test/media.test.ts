@@ -8,6 +8,8 @@ import {
   validateMediaRequest,
   validateMediaResponse,
   type DecodeRequest,
+  type InspectRequest,
+  type MediaFailure,
 } from "../src/media.ts";
 import { ReferenceMediaPeer } from "../src/media-testing.ts";
 import { spawn } from "node:child_process";
@@ -47,6 +49,39 @@ const input = (times = [1250, 0, 1250], jobId = createMediaJobId()) => ({
   requestedBundleMs: times,
   outputDirectory: "/tmp/private-job",
   limits: request().limits,
+});
+
+test("inspection sanitizes terminal errors and validates completed frames against retained input", async () => {
+  const context = request([0]);
+  const inspect: InspectRequest = { channel: "media", protocolVersion: 1, clientId: context.clientId, rpcId: context.rpcId, method: "inspect", jobId: context.jobId };
+  const failure = { jobId: context.jobId, state: "failed", error: { code: "decode_failed", message: "private /captures/customer/movie.mp4" }, completedCount: 0 };
+  const envelope = { channel: "media", protocolVersion: 1, rpcId: inspect.rpcId, result: failure };
+  const normalized = validateMediaResponse(envelope, inspect.rpcId, inspect).result as MediaFailure;
+  assert.equal(normalized.error.message, "Engine media job failed (decode_failed)");
+  assert.throws(() => validateMediaResponse({ ...envelope, result: { ...failure, error: { code: "cancelled", message: "wrong state" } } }, inspect.rpcId, inspect), /terminal/);
+
+  const peer = new ReferenceMediaPeer();
+  const client = new MediaClient(peer, { allowTestDouble: true });
+  await client.handshake();
+  const completed = await client.decode(context);
+  const completeEnvelope = { ...envelope, result: completed };
+  assert.throws(() => validateMediaResponse(completeEnvelope, inspect.rpcId, inspect), /decode context/);
+  assert.equal(validateMediaResponse(completeEnvelope, inspect.rpcId, inspect, context).result, completed);
+  assert.throws(() => validateMediaResponse(completeEnvelope, inspect.rpcId, inspect, { ...context, jobId: "9".repeat(32) }), /matching decode context/);
+  assert.throws(() => validateMediaResponse({ ...completeEnvelope, result: { ...completed, frames: [{ ...completed.frames[0], width: 4096, height: 4096 }] } }, inspect.rpcId, inspect, { ...context, limits: { ...context.limits, maxTotalPixels: 1 } }), /bounds/);
+  await client.close();
+});
+
+test("synthetic success honors low pixel budgets and impossible budgets fail without inventory", async () => {
+  const client = new MediaClient(new ReferenceMediaPeer(), { allowTestDouble: true });
+  await client.handshake();
+  const onePixel = { ...input([0]), limits: { ...request().limits, maxEdge: 1, maxTotalPixels: 1 } };
+  const result = await client.decode(onePixel);
+  assert.deepEqual(result.frames.map(f => [f.width, f.height]), [[1, 1]]);
+  const impossible = { ...input([0, 1]), limits: { ...request().limits, maxTotalPixels: 1 } };
+  await assert.rejects(client.decode(impossible), /limits_exceeded/);
+  assert.equal((await client.inspect(impossible)).state, "failed");
+  await client.close();
 });
 
 test("media marker and strict request bounds keep capture v1 separate", () => {

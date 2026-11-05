@@ -31,7 +31,7 @@ const frames = (request: Request) =>
     clampedToEnd: false,
     path: `${request.outputDirectory}/frame-${String(index + 1).padStart(3, "0")}.png`,
     width: Math.min(640, request.limits?.maxEdge ?? 640),
-    height: 480,
+    height: Math.min(480, request.limits?.maxEdge ?? 480),
     byteLength: 128,
     sha256: "a".repeat(64),
   }));

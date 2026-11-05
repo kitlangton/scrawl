@@ -340,6 +340,7 @@ export function validateMediaResponse(
   value: unknown,
   expectedRpcId: string,
   request?: MediaRequest,
+  decodeContext?: DecodeRequest,
 ): MediaResponse {
   const x = object(value);
   exactFields(
@@ -402,7 +403,16 @@ export function validateMediaResponse(
     )
       throw new Error("invalid media cancellation result");
   } else if (request?.method === "inspect") {
-    validateJobStatus(r, request.jobId);
+    const status = validateJobStatus(r, request.jobId);
+    if (status.state === "complete") {
+      if (!decodeContext || decodeContext.jobId !== request.jobId)
+        throw new Error("completed media inspection requires matching decode context");
+      const context = validateMediaRequest(decodeContext);
+      if (context.method !== "decode")
+        throw new Error("completed media inspection requires decode context");
+      validateMediaResponse(value, expectedRpcId, context);
+    }
+    return { ...x, result: status } as unknown as MediaResponse;
   } else {
     if (request?.method !== "decode")
       throw new Error("decode response has no matching request");
@@ -545,7 +555,7 @@ function validateJobStatus(value: unknown, jobId: string): MediaJobStatus {
       !MEDIA_ERRORS.has(error.code as MediaErrorCode) ||
       typeof error.message !== "string" ||
       error.message.length > 512 ||
-      (status.state === "cancelled" && error.code !== "cancelled") ||
+      (status.state === "cancelled") !== (error.code === "cancelled") ||
       status.completedCount !== 0
     )
       throw new Error("invalid terminal media job status");
@@ -716,21 +726,10 @@ export class MediaClient {
       await this.transport.request(request, timeoutMs),
       request.rpcId,
       request,
+      context,
     );
     if (response.error) throw new MediaRpcError(response.error.code);
-    const status = response.result as MediaJobStatus;
-    if (status.state === "complete")
-      validateMediaResponse(
-        {
-          channel: MEDIA_CHANNEL,
-          protocolVersion: MEDIA_PROTOCOL_VERSION,
-          rpcId: context.rpcId,
-          result: status,
-        },
-        context.rpcId,
-        context,
-      );
-    return status;
+    return response.result as MediaJobStatus;
   }
   close() {
     return this.transport.close();

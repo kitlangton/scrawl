@@ -55,14 +55,16 @@ try {
   const status = await media.inspect(input);
   if (status.state === "decoding" || status.state === "accepted") {
     await media.cancel(jobId);
-    // "cancelling" is not cleanup; inspect until a terminal state is observed.
-    const terminal = await media.inspect(input);
-    void terminal;
+    const afterCancel = await media.inspect(input);
+    // This may still be "cancelling". Do not retry or remove output until
+    // bounded observation finds a terminal result, or owned shutdown confirms exit.
+    void afterCancel;
   }
+} finally {
+  const closeOutcome = await media.close();
+  // A requested signal is not proof that the worker process has exited.
+  void closeOutcome;
 }
-const closeOutcome = await media.close();
-// A requested signal is not proof that the worker process has exited.
-void closeOutcome;
 ```
 
 `launchMediaWorker` executes only the caller-verified absolute binary, with
@@ -117,8 +119,9 @@ transport. The destination must be a fresh private directory owned by the job.
 The native provider refuses overwrite/symlink/path escape, validates each PNG,
 syncs each file and directory, then atomically publishes a complete job
 manifest. References are emitted only after that barrier. No partial success is
-returned. Failed, cancelled, timed-out or disconnected work has no completed
-inventory. Provider-owned cleanup may remove only files recorded in its own
+returned. Failed and cancelled jobs have no completed inventory. An RPC timeout
+or disconnect does not determine the job outcome; an intact worker may later
+return a complete inventory through `inspect`. Provider-owned cleanup may remove only files recorded in its own
 private job manifest; never recursively clear caller-selected paths.
 
 ## Lifecycle, exclusion and failures
@@ -192,8 +195,10 @@ remapping, which loses duplicate/order identity. The new seam preserves saturati
 ## Rust peer conformance fixture
 
 Use the exported TypeScript types and `validateMediaRequest` /
-`validateMediaResponse` as consumer fixtures, not private transport hooks. A
-conforming peer must cover these cases against the real protocol implementation:
+`validateMediaResponse` as consumer fixtures, not private transport hooks.
+A completed inspect response requires the retained `DecodeRequest` as the fourth
+validator argument; `MediaClient.inspect(input)` supplies that context itself.
+A conforming peer must cover these cases against the real protocol implementation:
 
 1. Unsupported `capture` channel and media protocol version are rejected before
    method dispatch; capture v1 remains strict and unchanged.

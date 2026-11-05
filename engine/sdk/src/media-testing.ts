@@ -219,6 +219,9 @@ export class ReferenceMediaPeer implements MediaTransport {
     if (!job.decode || job.status.state === "cancelled")
       throw new Error("media job cancelled");
     const request = job.decode;
+    const perFrame = Math.floor(request.limits.maxTotalPixels / request.requestedBundleMs.length);
+    const width = Math.min(640, request.limits.maxEdge, Math.max(1, Math.floor(Math.sqrt(perFrame))));
+    const height = Math.min(480, request.limits.maxEdge, Math.floor(perFrame / width));
     const frames = request.requestedBundleMs.map(
       (requestedBundleMs, index) => ({
         requestIndex: index + 1,
@@ -230,18 +233,20 @@ export class ReferenceMediaPeer implements MediaTransport {
         clampedToStart: requestedBundleMs < request.source.videoOffsetMs,
         clampedToEnd: false,
         path: `${request.outputDirectory}/frame-${String(index + 1).padStart(3, "0")}.png`,
-        width: Math.min(640, request.limits.maxEdge),
-        height: Math.min(480, request.limits.maxEdge),
+        width,
+        height,
         byteLength: 128,
         sha256: "a".repeat(64),
       }),
     );
-    job.status = { jobId: request.jobId, state: "complete", frames };
+    job.status = perFrame < 1
+      ? { jobId: request.jobId, state: "failed", error: { code: "limits_exceeded", message: "synthetic pixel budget exceeded" }, completedCount: 0 }
+      : { jobId: request.jobId, state: "complete", frames };
     const response = {
       channel: MEDIA_CHANNEL,
       protocolVersion: MEDIA_PROTOCOL_VERSION,
       rpcId,
-      result: job.status,
+      ...(job.status.state === "failed" ? { error: job.status.error } : { result: job.status }),
     } as MediaResponse;
     const waiter = this.waiters.get(request.rpcId);
     if (waiter) {
