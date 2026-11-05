@@ -22,6 +22,29 @@ security boundary between trusted streams. Future owners choose their supported
 persistence/credential adapter; no renderer receives Node or generic filesystem IPC.
 There is intentionally no preload bridge until a real capability requires one.
 
+`@apparent/app-contracts/host` defines the API 1 owner host seam. A compiled-in
+`ContributionFactory` declares its own dependency type; composition binds the
+expected owner once, verifies factory and module identity, and serializes
+activation/disposal. Main binds each config namespace before exposing a narrow
+owner adapter.
+`ProgressStore` matches the Onboarding `read`/`compareAndSwap` shape. Its codec
+belongs to the owner and handles initial and legacy values. The app adapter only
+delegates to a transactional backend; it has no filesystem writer or JS
+read-modify-write fallback. Production still needs the authoritative config
+transaction provider that atomically preserves unrelated keys and implements
+revisioned CAS. The current configuration writer path is
+`shared/handoff/config_store.rs` -> `connect/client/src/config/store.rs`; it must
+be extended or replaced at its owning boundary before this seam can persist
+real settings. No writer is installed here.
+
+Coaching views use bounded declarative content, placement, and owner-allowlisted
+identifiers validated against a compiled-in view list.
+The foundation host reports the coaching provider unavailable. Production
+adoption still needs an owner/native provider, boundary validation, and affected
+platform checks; this contract adds no native effect, IPC route, or renderer
+filesystem access. The compiled-in factory registry and activation call sites
+also remain to be connected by the production composition owner.
+
 Artifacts contain exactly `index.js` and `manifest.json`. The manifest pins the
 stream identity/version, shell API, React version and entry checksum. Producers
 bundle their own dependencies except the explicitly shared React runtime.
