@@ -33,3 +33,13 @@ into a clean temporary consumer, then set `APPARENT_ENGINE_SDK_CONSUMER` to that
 consumer directory while running Record tests. Adapter unit tests may use
 explicit scripted provider facts; those fixtures are not readiness or native
 capture evidence.
+
+Public receipts/events and controls use the caller's original Record request ID,
+including arbitrary strings. The SDK's generated 32-hex capture ID is private to
+the mapping/adapter, just like its owner token. The controller can therefore
+reconcile its original identity after lost Start replies. Submitted starts with
+unknown outcomes remain pollable; only actual inspection replies establish a
+phase. Poll cycles cannot overlap or accumulate a second cycle while one runs.
+Each observer receives its own event copy and cannot alter the returned receipt
+or another observer's facts. Disposal suppresses pending replies and never closes
+or cancels the host Engine.

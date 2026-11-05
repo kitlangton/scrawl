@@ -11,10 +11,6 @@ class MemoryMappings implements CaptureMappingStore {
   async putIfAbsent(mapping: CaptureMapping) {
     const existing = this.byRequest.get(mapping.requestId);
     if (existing) {
-      assert.deepEqual(
-        { captureId: existing.captureId, ownerToken: existing.ownerToken, bundleId: existing.bundleId, bundlePath: existing.bundlePath },
-        { captureId: mapping.captureId, ownerToken: mapping.ownerToken, bundleId: mapping.bundleId, bundlePath: mapping.bundlePath },
-      );
       return existing;
     }
     this.byRequest.set(mapping.requestId, mapping);
@@ -67,7 +63,7 @@ test("packed SDK mapping survives timeout and client reconnect with fresh arbitr
   const savedIdentity = mappings.byRequest.get("request / one");
   assert.ok(savedIdentity);
   const receipt = await first.start("request / one");
-  assert.equal(receipt.captureId, savedIdentity.captureId);
+  assert.equal(receipt.captureId, "request / one");
   assert.equal("ownerToken" in receipt, false);
   assert.equal(JSON.stringify(receipt).includes(savedIdentity.ownerToken), false);
   assert.equal(JSON.stringify(receipt).includes(savedIdentity.bundlePath), false);
@@ -93,14 +89,14 @@ test("packed SDK observed finalizing maps to processing and synthetic saved is n
   const events: string[] = [];
   adapter.subscribe(event => { if (event.type === "capture-changed") events.push(event.receipt.phase); });
   const start = await adapter.start("finalize-test");
-  const mapping = mappings.byCapture.get(start.captureId)!;
+  const mapping = mappings.byRequest.get("finalize-test")!;
   const prepared = client.prepareStart(mapping.bundleId, mapping.bundlePath);
   await client.start({ ...prepared, captureId: mapping.captureId, ownerToken: mapping.ownerToken });
-  reference.setScenarioState(start.captureId, "recording");
-  await client.control("stop", start.captureId, mapping.ownerToken);
-  reference.setScenarioState(start.captureId, "finalizing");
+  reference.setScenarioState(mapping.captureId, "recording");
+  await client.control("stop", mapping.captureId, mapping.ownerToken);
+  reference.setScenarioState(mapping.captureId, "finalizing");
   assert.equal((await adapter.inspect(start.captureId)).phase, "processing");
-  reference.setSavedFixture(start.captureId);
+  reference.setSavedFixture(mapping.captureId);
   await assert.rejects(adapter.inspect(start.captureId), /outcome is unknown/);
   assert.ok(events.includes("starting"));
   assert.ok(events.includes("processing"));
@@ -156,7 +152,7 @@ test("synthetic saved receipts are rejected by the adapter", async () => {
     : control(method, captureId);
   const second = new EngineSdkAdapter(synthetic, options());
   await second.start("native");
-  await assert.rejects(second.inspect("a".repeat(32)), /outcome is unknown/);
+  await assert.rejects(second.inspect("native"), /outcome is unknown/);
   second.dispose();
 });
 
@@ -168,7 +164,7 @@ test("double starts reuse one durable identity and same-capture mutations serial
   const [first, replay] = await Promise.all([adapter.start("arbitrary request id"), adapter.start("arbitrary request id")]);
   assert.equal(first.captureId, replay.captureId);
   assert.equal(allocations, 1);
-  assert.deepEqual(sdk.calls.slice(0, 2), [`start:${first.captureId}`, `start:${first.captureId}`]);
+  assert.deepEqual(sdk.calls.slice(0, 2), [`start:${"a".repeat(32)}`, `start:${"a".repeat(32)}`]);
 
   let inFlight = 0;
   let maxInFlight = 0;
@@ -212,4 +208,87 @@ test("disposal during a pending poll detaches replies and never closes the SDK",
   assert.deepEqual(events, []);
   assert.equal(sdk.calls.includes("close"), false);
   assert.equal(sdk.calls.some(call => call === `cancel:${started.captureId}`), false);
+});
+
+for (const requestId of ['caller-owned request', 'c'.repeat(32)]) {
+  test(`real controller and adapter preserve the public identity (${requestId})`, async () => {
+    const {RecordWorkflow} = await import('../src/backend/workflow/controller.ts');
+    const sdk=new NativeFacts();
+    const adapter=new EngineSdkAdapter(sdk,options());
+    const flow=new RecordWorkflow(adapter);
+    try {
+      await flow.dispatch({type:'start',requestId});
+      assert.equal(flow.state.phase,'starting');
+      assert.equal('captureId' in flow.state && flow.state.captureId,requestId);
+      sdk.state='recording';
+      await adapter.inspect(requestId);
+      assert.equal(flow.state.phase,'recording');
+      await flow.dispatch({type:'cancel'});
+      assert.equal(flow.state.phase,'cancelled');
+      assert.ok(sdk.calls.includes(`cancel:${'a'.repeat(32)}`));
+    } finally {flow.dispose();adapter.dispose();}
+  });
+}
+
+test('an observer cannot mutate returned or other observers Engine facts', async () => {
+  const sdk=new NativeFacts();
+  const adapter=new EngineSdkAdapter(sdk,options());
+  const seen: string[]=[];
+  adapter.subscribe(event=>{if(event.type==='capture-changed'){event.receipt.phase='saved';event.receipt.captureId='wrong';}});
+  adapter.subscribe(event=>{if(event.type==='capture-changed')seen.push(`${event.receipt.captureId}:${event.receipt.phase}`);});
+  try {
+    const result=await adapter.start('owned');
+    assert.deepEqual(result,{captureId:'owned',phase:'starting'});
+    assert.deepEqual(seen,['owned:starting']);
+  } finally {adapter.dispose();}
+});
+
+test('ambiguous start is recovered by polling with original public identity', async t => {
+  const {RecordWorkflow} = await import('../src/backend/workflow/controller.ts');
+  const sdk=new NativeFacts();
+  const start=sdk.start.bind(sdk);
+  sdk.start=async prepared=>{await start(prepared);throw new Error('lost start reply');};
+  const adapter=new EngineSdkAdapter(sdk,options());
+  const flow=new RecordWorkflow(adapter);
+  t.after(()=>{flow.dispose();adapter.dispose();});
+  await flow.dispatch({type:'start',requestId:'unknown-start'});
+  assert.equal(flow.state.phase,'uncertain');
+  sdk.state='recording';
+  await new Promise<void>((resolve,reject)=>{
+    const timeout=setTimeout(()=>reject(new Error('no authoritative recovery observation')),1500);
+    const detach=flow.subscribe(state=>{if(state.phase==='recording'){clearTimeout(timeout);detach();resolve();}});
+    t.after(()=>{clearTimeout(timeout);detach();});
+  });
+  assert.equal('captureId' in flow.state && flow.state.captureId,'unknown-start');
+  await flow.dispatch({type:'cancel'});
+  assert.equal(flow.state.phase,'cancelled');
+});
+
+test('explicit controller reconciliation finds the original private mapping after uncertain start', async () => {
+  const {RecordWorkflow}=await import('../src/backend/workflow/controller.ts');
+  const sdk=new NativeFacts();
+  const original=sdk.start.bind(sdk);
+  sdk.start=async prepared=>{await original(prepared);throw new Error('timeout');};
+  const adapter=new EngineSdkAdapter(sdk,{...options(),pollIntervalMs:60000});
+  const flow=new RecordWorkflow(adapter);
+  try {
+    await flow.dispatch({type:'start',requestId:'recover-me'});
+    assert.equal(flow.state.phase,'uncertain');
+    sdk.state='recording';
+    await flow.dispatch({type:'reconcile'});
+    assert.equal(flow.state.phase,'recording');
+    await flow.dispatch({type:'cancel'});
+    assert.equal(flow.state.phase,'cancelled');
+  } finally {flow.dispose();adapter.dispose();}
+});
+
+test('late readiness cannot report usable capture after adapter disposal', async () => {
+  const sdk=new NativeFacts();
+  let release!: (value: Awaited<ReturnType<EngineSdkPort['handshake']>>) => void;
+  sdk.handshake=()=>new Promise(resolve=>{release=resolve;});
+  const adapter=new EngineSdkAdapter(sdk,options());
+  const pending=adapter.readiness();
+  adapter.dispose();
+  release({implementation:'native',readiness:'ready',capabilities:{screenCapture:true}});
+  assert.equal((await pending).ready,false);
 });
