@@ -96,6 +96,7 @@ test('every PR verifies fresh owner builds read-only without main publication ca
   for (const job of ['plan', 'contracts']) {
     assert.match(section(workflow, job), /github.event_name == 'pull_request'/)
   }
+  assert.match(section(workflow, 'contracts'), /--test composition\/delivery\/\*.test.ts enablement\/verification\/web\/workflow.test.ts/)
   const pr = section(workflow, 'stream-pr')
   assert.match(pr, /github.event_name == 'pull_request'/)
   assert.match(pr, /contents: read/)
