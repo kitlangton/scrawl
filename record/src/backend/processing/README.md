@@ -6,8 +6,8 @@ warnings, selected keyframes, typed notes and app events at their capture times,
 context changes, and absolute artifact paths. Window titles remain manifest-only.
 When ordered frame annotations reproduce the complete supplied transcript, it
 keeps those words on the selected frames. Otherwise it retains the supplied
-transcript timeline, including untimed speech, rather than guess missing frame
-associations; partial annotations can therefore repeat some words. Notes retain
+transcript timeline, including untimed speech, instead of the partial frame
+annotations. This avoids guessing associations or repeating speech. Notes retain
 their pin and frame reference.
 
 The caller supplies already selected keyframes and any verified processing

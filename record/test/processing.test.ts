@@ -164,6 +164,8 @@ for (const annotated of [false, true]) test(`incomplete frame speech annotations
   assert.match(output.summaryMarkdown, /First words\./);
   assert.match(output.summaryMarkdown, /· 0:02 “Later words\.”/);
   assert.match(output.summaryMarkdown, /Typed context/);
+  assert.equal(output.summaryMarkdown.split("First words.").length - 1, 1);
+  assert.equal(output.summaryMarkdown.split("Later words.").length - 1, 1);
 });
 
 test("untimed speech survives selected frames without complete annotations", () => {

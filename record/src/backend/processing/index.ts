@@ -184,6 +184,15 @@ function targetLabel(input: ProcessingInput): string {
 
 interface TimelineItem { timeMs: number; text: string }
 
+function needsTranscriptTimeline(input: ProcessingInput): boolean {
+  if (!input.frames.length) return true;
+  const compact = (value: string) => value.split(/\s+/u).filter(Boolean).join(" ");
+  const annotated = compact(input.frames.map(frame => frame.text ?? "").join(" "));
+  const supplied = compact(input.transcript.segments.length
+    ? input.transcript.segments.map(segment => segment.text).join(" ") : input.transcript.text);
+  return supplied.length > 0 && annotated !== supplied;
+}
+
 function typedNote(note: Extract<RecordInteraction, { kind: "note" }>, marks: RecordMark[]): string {
   const frame = marks.find((mark) => mark.pin === note.pin)?.framePath;
   const label = `Typed note · pin ${note.pin}${frame ? ` · ${frame}` : ""}:`;
@@ -209,14 +218,7 @@ function legacyTimeline(input: ProcessingInput): TimelineItem[] {
     const key = contextValue(change.key);
     items.push({ timeMs: change.timeMs, text: change.value === undefined ? `${key} cleared` : `${key} → ${contextValue(change.value)}` });
   }
-  const compact = (value: string) => value.split(/\s+/u).filter(Boolean).join(" ");
-  const annotatedTranscript = compact(input.frames.map(frame => frame.text ?? "").join(" "));
-  const suppliedTranscript = compact(input.transcript.segments.length
-    ? input.transcript.segments.map(segment => segment.text).join(" ") : input.transcript.text);
-  // Frame annotations may be incomplete. Suppress the authoritative transcript
-  // only when their ordered text contains the complete supplied transcript.
-  // Otherwise retain its full timeline rather than guess missing associations.
-  if (!input.frames.length || annotatedTranscript !== suppliedTranscript) {
+  if (needsTranscriptTimeline(input)) {
     for (const segment of input.transcript.segments)
       items.push({ timeMs: segment.startMs, text: `“${segment.text}”` });
     if (!input.transcript.segments.length && input.transcript.text.trim())
@@ -314,7 +316,9 @@ export function assembleProcessingOutput(input: ProcessingInput): ProcessingOutp
       shownScreen = frame.screenName ?? shownScreen;
       const flag = frame.markId && input.marks?.some((mark) => mark.id === frame.markId && mark.shape === "flag");
       const flagMarker = flag ? " ⚑" : "";
-      const said = frame.text?.trim();
+      // Incomplete annotations use the authoritative timeline instead, keeping
+      // speech once without guessing which segment belongs to each frame.
+      const said = needsTranscriptTimeline(input) ? undefined : frame.text?.trim();
       if (said) {
         const action = flag ? " ⚑" : frame.reason === "click" ? (() => {
           const compact = (frame.event ?? "").split(" (")[0].trim();
