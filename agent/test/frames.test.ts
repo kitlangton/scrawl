@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, chmod, writeFile, readFile, rm, symlink, appendFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, chmod, writeFile, readFile, rm, symlink, appendFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -40,7 +40,7 @@ class MaterializingPeer implements MediaTransport {
 }
 
 async function fixture(t: (root: string, bundle: string, runtime: string, video: string) => Promise<void>) {
-  const root = await mkdtemp(join(tmpdir(), 'agent-frames-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'agent-frames-')));
   try {
     const bundle = join(root, 'clip.apparent'), runtime = join(root, 'runtime'), video = join(bundle, 'recording.mov');
     await mkdir(bundle); await mkdir(runtime, { mode: 0o700 }); await chmod(runtime, 0o700);
@@ -78,6 +78,28 @@ test('RPC timeout recovers complete inventory through inspect on the same connec
   const result = await decodeFrames(client,bundle,runtime,{fromMs:0,toMs:500,fps:2,requestedBundleMs:[0]},()=>false,{allowTestDouble:true});
   assert.equal(result.frames.length,1); assert.ok(peer.requests.some((r)=>r.method==='inspect'));
   await client.close();
+}));
+
+test('adapter retains SDK-validated end-clamp and actual decoder position', async () => fixture(async (_root,bundle,runtime) => {
+  const peer = new MaterializingPeer();
+  const transport: MediaTransport = {
+    async request(request, timeoutMs) {
+      const response = await peer.request(request, timeoutMs);
+      const result: any = response.result;
+      if (result?.state === 'complete') {
+        result.frames[0].clampedToEnd = true;
+        result.frames[0].actualVideoMs = 1000;
+      }
+      return response;
+    }, close: () => peer.close(),
+  };
+  const client = new MediaClient(transport, {allowTestDouble:true});
+  try {
+    const result = await decodeFrames(client,bundle,runtime,{fromMs:0,toMs:3000,fps:1,requestedBundleMs:[2500]},()=>false,{allowTestDouble:true});
+    assert.equal(result.frames[0].effectiveVideoMs, 2000);
+    assert.equal(result.frames[0].actualVideoMs, 1000);
+    assert.equal(result.frames[0].clampedToEnd, true);
+  } finally { await client.close(); }
 }));
 
 test('test double is rejected by default and explicitly accepted only in injected harness', async () => fixture(async (_root,bundle,runtime) => {
@@ -159,3 +181,23 @@ test('CLI requires explicit provider paths and never falls back to PATH or sourc
   const result = spawnSync(process.execPath,[cli,'frames','./clip.apparent','--from','0','--to','1'],{encoding:'utf8',env:{...process.env,APPARENT_ENGINE_FRAMES_EXECUTABLE:'',APPARENT_ENGINE_RUNTIME:''}});
   assert.equal(result.status,2); assert.equal(result.stdout,''); assert.match(result.stderr,/APPARENT_ENGINE_FRAMES_EXECUTABLE/);
 });
+
+test('a frame replaced with a FIFO is rejected without waiting for a writer', {timeout: 2000}, async () => fixture(async (_root,bundle,runtime) => {
+  const peer = new MaterializingPeer();
+  const transport: MediaTransport = {
+    async request(request, timeoutMs) {
+      const response = await peer.request(request, timeoutMs);
+      const result: any = response.result;
+      if (request.method === 'decode' && result?.state === 'complete') {
+        const path = result.frames[0].path;
+        await rm(path);
+        assert.equal(spawnSync('mkfifo', [path]).status, 0);
+      }
+      return response;
+    }, close: () => peer.close(),
+  };
+  const client = new MediaClient(transport, {allowTestDouble:true});
+  try {
+    await assert.rejects(() => decodeFrames(client,bundle,runtime,{fromMs:0,toMs:1,fps:1,requestedBundleMs:[0]},()=>false,{allowTestDouble:true}), /bounded returned inventory/);
+  } finally { await client.close(); }
+}));

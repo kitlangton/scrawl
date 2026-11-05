@@ -76,7 +76,7 @@ async function sourceFor(bundleInput: string) {
   const info = await lstat(videoPath).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
   if (!info) throw new Error('Bundle source video is missing (possibly removed by retention)');
   if (info.isSymbolicLink() || !info.isFile()) throw new Error('Bundle source video is not a regular no-follow file');
-  const file = await open(videoPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const file = await open(videoPath, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
   let identity;
   try {
     const stat = await file.stat({ bigint: true });
@@ -129,9 +129,9 @@ async function freshJobOutput(runtimePath: string, jobId: string) {
 function validateInventory(frames: MediaFrameRef[], request: DecodeRequest): MediaFrameRef[] {
   if (frames.length !== request.requestedBundleMs.length) throw new Error('Engine returned incomplete frame inventory');
   return frames.map((frame, index) => {
-    if (frame.requestIndex !== index + 1 || frame.requestedBundleMs !== request.requestedBundleMs[index] ||
-        frame.effectiveVideoMs !== Math.max(0, frame.requestedBundleMs - request.source.videoOffsetMs) ||
-        frame.clampedToStart !== (frame.requestedBundleMs < request.source.videoOffsetMs))
+    // MediaClient owns clock/clamp validation. Keep Agent's slot-order check
+    // independent of provider seek/clamp policy as that contract evolves.
+    if (frame.requestIndex !== index + 1 || frame.requestedBundleMs !== request.requestedBundleMs[index])
       throw new Error('Engine frame inventory does not match the requested slots');
     return frame;
   });
@@ -144,7 +144,7 @@ async function verifyFrameFiles(frames: MediaFrameRef[], outputDirectory: string
   for (const frame of frames) {
     if (dirname(frame.path) !== outputDirectory || basename(frame.path) !== `frame-${String(frame.requestIndex).padStart(3, '0')}.png`)
       throw new Error('Engine frame path escaped its job output');
-    const file = await open(frame.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const file = await open(frame.path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
     try {
       const stat = await file.stat();
       totalBytes += stat.size;
@@ -169,7 +169,7 @@ async function verifyFrameFiles(frames: MediaFrameRef[], outputDirectory: string
 
 async function verifySourceIdentity(source: { videoPath: string; identity: { device: string; inode: string; size: number; modifiedNs: string } }) {
   await assertNoSymlinkPath(source.videoPath);
-  const file = await open(source.videoPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const file = await open(source.videoPath, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
   try {
     const info = await file.stat({ bigint: true });
     if (!info.isFile() || info.dev.toString() !== source.identity.device || info.ino.toString() !== source.identity.inode ||
