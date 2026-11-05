@@ -15,9 +15,11 @@ inside the store/adapter and are excluded from receipts, events and adapter erro
 If a mapping write has an ambiguous outcome, the store must reconcile reads by
 Record request ID before another identity can be allocated. The host bundle
 allocator should resolve the same request ID idempotently.
-The repository currently has no production secure persistent mapping store or
-host bundle allocator. A host must provide both before adopting the adapter; the
-adapter deliberately adds no parallel config writer or volatile production store.
+The owner-local `@apparent/record/host` export provides a SQLite mapping store
+and private idempotent bundle reservation allocator. Hosts supply their explicit
+private roots; these utilities do not choose runtime locations or write user
+configuration. The allocator reserves an empty destination and does not create
+a bundle artifact or establish capture readiness.
 
 Readiness is true only for a native handshake reporting ready screen capture.
 The SDK's default test-double rejection and `ReferenceEngine` unavailable
