@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "files": [
     "dist",
     "src",
@@ -71,6 +73,11 @@
     "tailwind-merge": "^3.3.1",
     "esbuild": "0.25.12",
     "@tailwindcss/cli": "4.1.17",
-    "@apparent/engine-sdk": "file:../engine/sdk"
+    "@apparent/engine-sdk": "file:vendor/engine-sdk-0.3.0.tgz"
+  },
+  "peerDependenciesMeta": {
+    "@apparent/engine-sdk": {
+      "optional": true
+    }
   }
 }

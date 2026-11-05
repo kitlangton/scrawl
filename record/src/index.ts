@@ -9,5 +9,3 @@ export { associateTranscriptWithSelectedFrames } from "./backend/selection/trans
 export type { AssociatedFrame, SelectedFrameReference, TimedTranscriptUnit, TranscriptFacts } from "./backend/selection/transcript-association.js";
 export { formatLocalHandoff } from "./backend/handoff/index.js";
 export type { LocalHandoffInput, LocalHandoffOutput } from "./backend/handoff/index.js";
-export { createRecordPublicationRecovery } from "./backend/publication/recovery.js";
-export type { RecordPublicationRecovery } from "./backend/publication/index.js";

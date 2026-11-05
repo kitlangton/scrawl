@@ -34,7 +34,7 @@ function makeInput(path = "/tmp/apparent-publication-test/take.apparent") {
   const planSha256 = createHash(planBytes);
   return {
     ownerToken, captureId, leaseId: materials.manifest.leaseId, publicationId,
-    planBytes: new Uint8Array(planBytes), materials,
+    planBytes: new Uint8Array(planBytes), materials: structuredClone(materials),
     planFile: {
       stagingRoot: "/private/staging",
       planSha256,
@@ -140,6 +140,23 @@ test("concurrent workflow instances admit one publication dispatch", async () =>
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("coalesced publish callers receive independent observation objects", async () => {
+  const root = await temp();
+  let release!: (status: CaptureStatus) => void;
+  const input = makeInput(join(root, "final.apparent"));
+  const sdk = { publish() { return new Promise<CaptureStatus>(resolve => { release = resolve; }); } } as unknown as CaptureClient;
+  try {
+    const recovery = createRecordPublicationRecovery(sdk, join(root, "private"));
+    const first = recovery.publish(input);
+    const firstMutated = first.then(status => { status.captureId = "changed"; return status; });
+    const second = recovery.publish(input);
+    while (!release) await new Promise(resolve => setImmediate(resolve));
+    release(pending(captureId, publicationId, input.planFile.planSha256));
+    assert.equal((await firstMutated).captureId, "changed");
+    assert.equal((await second).captureId, captureId);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("private storage failure retains material ownership and never dispatches", async () => {
   const root = await temp();
   let dispatches = 0;
@@ -164,8 +181,33 @@ test("foreign observed bindings and stale pending replies cannot replace a termi
     };
     await store.reserve(record);
     await store.observe(record, "cancelled");
-    await store.observe(record, "publishing");
+    assert.equal(await store.observe(record, "publishing"), false);
+    assert.equal(await store.observe(record, "failed"), false);
     assert.equal((await store.get(captureId))?.state, "cancelled");
     await assert.rejects(store.observe({ ...record, manifestSha256: "2".repeat(64) }, "failed"), /storage is unavailable/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a delayed reconcile cannot return publishing after a newer terminal observation", async () => {
+  const root = await temp();
+  let first!: (status: CaptureStatus) => void;
+  let calls = 0;
+  const input = makeInput(join(root, "final.apparent"));
+  const sdk = {
+    async publish() { throw new Error("ambiguous"); },
+    inspectPublication() {
+      if (++calls === 1) return new Promise<CaptureStatus>(resolve => { first = resolve; });
+      return Promise.resolve({ ...pending(captureId, publicationId, input.planFile.planSha256), state: "cancelled" });
+    },
+  } as unknown as CaptureClient;
+  try {
+    const recovery = createRecordPublicationRecovery(sdk, join(root, "private"));
+    await assert.rejects(recovery.publish(input));
+    const older = recovery.reconcile(captureId, ownerToken);
+    while (!first) await new Promise(resolve => setImmediate(resolve));
+    assert.equal((await recovery.reconcile(captureId, ownerToken)).state, "cancelled");
+    first(pending(captureId, publicationId, input.planFile.planSha256));
+    await assert.rejects(older, /unresolved/);
+    assert.equal((await new SqlitePublicationBindingStore(join(root, "private")).get(captureId))?.state, "cancelled");
   } finally { await rm(root, { recursive: true, force: true }); }
 });

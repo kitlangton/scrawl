@@ -29,11 +29,11 @@ export function createRecordPublicationRecovery(
       const current = inflight.get(snapshot.captureId);
       if (current) {
         if (!sameBinding(current.binding, binding)) throw new Error("Record publication identity conflicts with its in-flight binding");
-        return current.promise;
+        return current.promise.then(status => structuredClone(status));
       }
       const operation = publishOnce(snapshot, binding).finally(() => inflight.delete(snapshot.captureId));
       inflight.set(snapshot.captureId, { binding, promise: operation });
-      return operation;
+      return operation.then(status => structuredClone(status));
     },
     async reconcile(captureId, ownerToken) {
       if (inflight.has(captureId)) throw new Error("Record publication command is already in flight");
@@ -48,7 +48,7 @@ export function createRecordPublicationRecovery(
           planSha256: binding.planSha256,
           expected: expectation(binding),
         });
-        await store.observe(binding, publicationState(status));
+        if (!await store.observe(binding, publicationState(status))) throw new Error("Stale publication observation");
         return structuredClone(status);
       } catch {
         throw new Error("Record publication outcome remains unresolved; inspect the same durable binding again");
@@ -75,7 +75,7 @@ export function createRecordPublicationRecovery(
           planSha256: won.planSha256,
           expected: expectation(won),
         });
-        await store.observe(won, publicationState(status));
+        if (!await store.observe(won, publicationState(status))) throw new Error("Stale publication observation");
         return structuredClone(status);
       } catch {
         throw new Error("Record publication outcome remains unresolved; reconcile the same durable binding");
@@ -86,7 +86,7 @@ export function createRecordPublicationRecovery(
     if (!await store.beginDispatch(won)) throw new Error("Record publication dispatch is already owned; reconcile the same durable binding");
     try {
       const status = await client.publish(input);
-      await store.observe(won, publicationState(status));
+      if (!await store.observe(won, publicationState(status))) throw new Error("Stale publication observation");
       return structuredClone(status);
     } catch {
       // The row deliberately stays dispatching. No timeout/error implies cancel,
@@ -108,6 +108,7 @@ async function assertDestinationAbsent(path: string): Promise<void> {
 }
 
 function bindingFrom(input: PublishInput): PublicationBinding {
+  if (!/^[0-9a-f]{64}$/u.test(input.ownerToken)) throw new Error("Record publication authority is invalid");
   if (input.leaseId !== input.materials.manifest.leaseId) throw new Error("Record publication lease does not match the supplied materials manifest");
   const bytes = Buffer.from(input.planBytes);
   const planSha256 = createHash("sha256").update(bytes).digest("hex");

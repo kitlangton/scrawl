@@ -22,6 +22,13 @@ Window titles remain manifest-only. It does not select frames, write the
 canonical bundle or perform clipboard/link handoff; those adoption steps remain
 outstanding.
 
+The publication subpath has an optional SDK peer: hosts using it supply the
+published SDK. Other Record consumers do not need to install that peer. Source
+checks use the pinned `record/vendor/engine-sdk-0.3.0.tgz` package (SHA256
+`c45708988c9631a24e8aecdeaa53d66cf37e51c9c8743e4bf83cc90bb551f90a`),
+without importing or building an adjacent Engine checkout. Publication remains
+separate from the package root.
+
 `@apparent/record/publication` exports `createRecordPublicationRecovery`, a
 headless Record-owned SQLite binding and explicit reconnect reconciliation
 wrapper for an already constructed `@apparent/engine-sdk/capture` client. The

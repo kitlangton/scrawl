@@ -74,7 +74,7 @@ export class SqlitePublicationBindingStore {
     return this.#change(binding, "reserved", "dispatching");
   }
 
-  async observe(binding: PublicationBinding, state: "publishing" | "saved" | "failed" | "cancelled"): Promise<void> {
+  async observe(binding: PublicationBinding, state: "publishing" | "saved" | "failed" | "cancelled"): Promise<boolean> {
     if (!valid(binding) || !["publishing", "saved", "failed", "cancelled"].includes(state)) throw hostError();
     const db = await this.#open();
     try {
@@ -84,13 +84,14 @@ export class SqlitePublicationBindingStore {
       const current = decode(row.binding_json);
       if (!same(current, binding)) throw hostError();
       // Late in-flight replies cannot regress an already observed terminal fact.
-      if (current.state === "saved" || ((current.state === "failed" || current.state === "cancelled") && state === "publishing")) {
+      if (["saved", "failed", "cancelled"].includes(current.state) && current.state !== state) {
         db.exec("COMMIT");
-        return;
+        return false;
       }
       const next = { ...current, state };
       db.prepare("UPDATE publication_binding SET binding_json = ? WHERE capture_id = ?").run(JSON.stringify(next), binding.captureId);
       db.exec("COMMIT");
+      return true;
     } catch { try { db.exec("ROLLBACK"); } catch { /* no transaction */ } throw hostError(); }
     finally { try { db.close(); } catch { /* preserve result */ } }
   }
