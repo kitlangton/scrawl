@@ -10,7 +10,10 @@ use std::{
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!("engine-review-{}", new_id().unwrap()));
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("engine-review-{}", new_id().unwrap()));
         fs::create_dir(&root).unwrap();
         mode(&root, 0o700);
         Self(root)
@@ -23,6 +26,20 @@ impl Drop for Fixture {
 }
 fn mode(path: &Path, value: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(value)).unwrap();
+}
+#[test]
+fn runtime_rejects_a_symlinked_ancestor_even_for_a_private_fixture() {
+    let f = Fixture::new();
+    assert_eq!(f.0, f.0.canonicalize().unwrap());
+    let real = f.0.join("real");
+    let runtime = real.join("runtime");
+    fs::create_dir(&real).unwrap();
+    fs::create_dir(&runtime).unwrap();
+    mode(&runtime, 0o700);
+    let alias = f.0.join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    assert!(Runtime::open(&alias.join("runtime")).is_err());
+    assert!(Runtime::open(&runtime).is_ok());
 }
 fn output(root: &Path, bundle: &str, padding: usize) -> (PathBuf, Vec<u8>) {
     let path = root.join("output.apparent");

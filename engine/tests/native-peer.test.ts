@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -9,7 +9,7 @@ import { EngineClient, EngineRpcError, launchEngine } from "../sdk/src/index.ts"
 const executable = process.env.APPARENT_ENGINE_BIN;
 
 async function rawExchange(input: string) {
-  const root = await mkdtemp(join(tmpdir(), "apparent-engine-wire-"));
+  const root = await mkdtemp(join(await realpath(tmpdir()), "apparent-engine-wire-"));
   const runtime = join(root, "runtime");
   await mkdir(runtime, { mode: 0o700 });
   await chmod(runtime, 0o700);
@@ -29,7 +29,7 @@ async function rawExchange(input: string) {
 }
 
 test("published SDK speaks v1 to the standalone Rust process across restart", { skip: !executable }, async () => {
-  const root = await mkdtemp(join(tmpdir(), "apparent-engine-provider-"));
+  const root = await mkdtemp(join(await realpath(tmpdir()), "apparent-engine-provider-"));
   let first: EngineClient | undefined;
   let reconnect: EngineClient | undefined;
   try {

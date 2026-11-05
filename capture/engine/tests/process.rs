@@ -10,7 +10,10 @@ const TOKEN: &str = "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("engine-{}", new_id().unwrap()));
+        let path = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("engine-{}", new_id().unwrap()));
         std::fs::create_dir(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
