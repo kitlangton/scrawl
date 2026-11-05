@@ -177,3 +177,27 @@ fn host_binds_owner_and_path_and_rejects_malformed_protocol() {
     assert!(out.is_empty());
     fs::remove_dir_all(dir).unwrap();
 }
+
+
+#[test]
+fn repeated_concurrent_first_lock_creation_keeps_one_cas_winner() {
+    let dir = temp();
+    for iteration in 0..32 {
+        let path = dir.join(format!("cold-{iteration}.json"));
+        fs::write(&path, br#"{"legacy":"synthetic"}"#).unwrap();
+        let barrier = Arc::new(Barrier::new(3));
+        let joins: Vec<_> = ["left", "right"].into_iter().map(|id| {
+            let path = path.clone(); let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                response(&host(&path, "desktop", &req(id, "compareAndSwap", ",\"expected\":0,\"value\":true")).1)
+            })
+        }).collect();
+        barrier.wait();
+        let results: Vec<_> = joins.into_iter().map(|join| join.join().unwrap()).collect();
+        assert_eq!(results.iter().filter(|result| result["status"] == "saved").count(), 1, "iteration {iteration}: {results:?}");
+        assert_eq!(results.iter().filter(|result| result["status"] == "conflict").count(), 1, "iteration {iteration}: {results:?}");
+        assert_eq!(apparent_config_native::read_stream_state_in(&path, "desktop").unwrap(), (1, json!(true)));
+    }
+    fs::remove_dir_all(dir).unwrap();
+}

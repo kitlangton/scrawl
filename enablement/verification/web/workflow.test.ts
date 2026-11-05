@@ -57,7 +57,7 @@ test('Connect completion keeps the independent Worker publisher and audit', () =
   assert.match(section(workerWorkflow, 'runtime-budget'), /needs: \[worker\]/)
   assert.doesNotMatch(section(workerWorkflow, 'worker'), /needs:|concurrency:/)
   assert(!workerWorkflow.split('jobs:')[0].includes('concurrency:'))
-  assert.match(section(workflow, 'runtime-budget'), /needs: \[plan, contracts, stream, stream-public, deploy\]/)
+  assert.match(section(workflow, 'runtime-budget'), /needs: \[plan, contracts, stream, stream-public, deploy, stream-pr\]/)
 })
 
 test('Reusable worker caller grants the complete nested contents permission closure', () => {
@@ -78,10 +78,29 @@ test('only Value-stream delivery has automatic workflow triggers', () => {
     const events = [...triggers.matchAll(/^  ([a-z_]+):/gm)].map(match => match[1])
     assert(events.length > 0, file)
     assert.deepEqual(events.filter(event => !['workflow_dispatch', 'workflow_call'].includes(event)),
-      file === 'value-stream-delivery.yml' ? ['push'] : [], file)
+      file === 'value-stream-delivery.yml' ? ['pull_request', 'push'] : [], file)
   }
 })
 
+test('every PR verifies fresh owner builds read-only without main publication capabilities', () => {
+  assert.match(workflow, /on:\n  pull_request:\n    branches: \[main\]/)
+  for (const job of ['plan', 'contracts']) {
+    assert.match(section(workflow, job), /github.event_name == 'pull_request'/)
+  }
+  assert.match(section(workflow, 'contracts'), /--test composition\/delivery\/\*.test.ts enablement\/verification\/web\/workflow.test.ts/)
+  const pr = section(workflow, 'stream-pr')
+  assert.match(pr, /github.event_name == 'pull_request'/)
+  assert.match(pr, /contents: read/)
+  assert.match(pr, /cli.ts build/)
+  assert.match(pr, /npm run test:electron/)
+  assert.match(pr, /Enforce this owner's dependency boundary/)
+  assert.match(pr, /PUBLIC_POSTHOG_TOKEN: phc_synthetic/)
+  assert.doesNotMatch(pr, /write\n|secrets\.|vars\.|GH_TOKEN|cli.ts (?:admit|seal|reuse)|attest-build-provenance|upload-artifact/)
+  for (const job of ['stream', 'stream-public', 'deploy']) {
+    assert.match(section(workflow, job).split('    steps:')[0], /github.ref == 'refs\/heads\/main'/)
+  }
+  assert.match(section(workflow, 'runtime-budget'), /needs: \[plan, contracts, stream, stream-public, deploy, stream-pr\]/)
+})
 
 test('Public production has exactly one workflow publisher', () => {
   const directory = new URL('../../../.github/workflows/', import.meta.url)

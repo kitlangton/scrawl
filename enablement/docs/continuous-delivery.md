@@ -1,6 +1,10 @@
 # Website and Connect continuous delivery
 
-Only Value-stream delivery runs automatically (on matching main pushes). All other
+Only Value-stream delivery runs automatically (on pull requests targeting main,
+matching main pushes). PRs run contracts
+and fresh builds/tests for every registered owner/target, including Public, with
+read-only permissions and synthetic analytics settings. PRs cannot seal or attest
+deployment artifacts or deploy; main verifies again before publication. All other
 standalone workflows require an explicit workflow_dispatch; push, completion and
 scheduled triggers are disabled. Reusable workflow_call entry points remain for
 manually started callers. Website publication inside Value-stream delivery retains
@@ -9,9 +13,9 @@ pipeline descriptions below.
 Existing release admission still rejects diagnostic manual verification receipts;
 manual triggering does not waive publication gates.
 
-GitHub Actions do not run automatically on PRs or feature-branch pushes. Feature
-pushes run inexpensive selector, push-hook and release-admission contracts locally;
-they do not rebuild the application.
+Feature-branch pushes without a PR retain inexpensive local selector, push-hook
+and release-admission contracts. Applicable Value-stream PR checks must pass
+before merge; standalone Linux/macOS and Connect workflows remain manual-only.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 

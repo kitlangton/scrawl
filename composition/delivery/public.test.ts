@@ -112,3 +112,14 @@ test('source identities distinguish filenames containing serialized manifest sep
     assert.notEqual(sourceDigest(f.root, f.owner()), before)
   } finally { f.clean() }
 })
+
+test('PR planning includes Public while main retains its independent producer', () => {
+  const plan = (event: string) => JSON.parse(execFileSync(process.execPath,
+    ['--experimental-strip-types', new URL('./cli.ts', import.meta.url).pathname, 'plan'], {
+      encoding: 'utf8', env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+    }))
+  const pr = plan('pull_request')
+  assert(pr.matrix.include.some((owner: { id: string }) => owner.id === 'public'))
+  assert(!plan('push').matrix.include.some((owner: { id: string }) => owner.id === 'public'))
+  assert.equal(pr.matrix.include.length, makePlan(process.cwd()).matrix.include.length)
+})

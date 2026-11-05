@@ -2,6 +2,12 @@ export type { OnboardingProgress, ProgressStore, Revision, SaveResult, Stage } f
 export { initialProgress, nextStage, normalizeProgress } from "./model.js";
 export { OnboardingController } from "./controller.js";
 export type { OnboardingDependencies } from "./controller.js";
+export { PermissionRepairController } from "./permissions/controller.js";
+export type { PermissionRepairDependencies, RepairPhase, RepairState, RepairTimer } from "./permissions/controller.js";
+export { PermissionRepairContribution, createPermissionRepairContribution } from "./permissions/react.js";
+export type { PermissionRepairContributionProps } from "./permissions/react.js";
 export { onboardingProgressCodec } from "./model.js";
 export { onboardingContributionFactory } from "./factory.js";
 export type { OnboardingFactoryDependencies } from "./factory.js";
+export { adoptOnboardingProgress } from "./adoption.js";
+export type { OnboardingAdoptionResult } from "./adoption.js";

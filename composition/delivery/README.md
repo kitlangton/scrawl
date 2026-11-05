@@ -14,6 +14,11 @@ other owner. The producer uses the installed runtime and refuses plugin-source
 overrides in CI. The catalog fingerprints `engine/`, `capture/engine/` and
 `.cargo/`; packaged-media verification remains inside the owner producer.
 
+Pull requests targeting main run contracts and fresh checks/builds for every
+registered owner/target in read-only `pr-stream` jobs, including Public. PRs do not
+reuse, seal or attest deployment artifacts, and cannot publish. Main keeps its
+existing producer/deployment lanes and runs verification again.
+
 Run with Node 22's type stripping, without installing dependencies:
 
 ```sh
