@@ -12,5 +12,5 @@
     "preserveSymlinks": true,
     "types": ["node", "react", "react-dom"]
   },
-  "include": ["src", "scripts", "tests", "fixtures"]
+  "include": ["src", "scripts", "tests", "fixtures", "../delivery/**/*.ts"]
 }
