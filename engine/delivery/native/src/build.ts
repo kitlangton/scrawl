@@ -39,13 +39,12 @@ execFileSync('cargo', ['test', ...cargoCommon, '--manifest-path', manifestPath],
 execFileSync('cargo', ['build', ...cargoCommon, '--release', '--manifest-path', manifestPath], { cwd: repositoryRoot, stdio: 'inherit' })
 const binary = resolve(cargoTargetDir, targetConfig.triple, 'release', process.platform === 'win32' ? 'apparent-engine.exe' : 'apparent-engine')
 const bytes = readFileSync(binary)
-const mode = statSync(binary).mode & 0o777
-if ((mode & 0o111) === 0) chmodSync(binary, mode | 0o755)
-writeFileSync(resolve(output, 'apparent-engine'), bytes, { flag: 'wx', mode: mode | 0o755 })
+writeFileSync(resolve(output, 'apparent-engine'), bytes, { flag: 'wx', mode: 0o755 })
+chmodSync(resolve(output, 'apparent-engine'), 0o755)
 const stagedMode = statSync(resolve(output, 'apparent-engine')).mode & 0o777
 writeFileSync(resolve(output, 'manifest.json'), `${JSON.stringify(createManifest(sourceSha, targetConfig.target, bytes, stagedMode), null, 2)}\n`, { flag: 'wx', mode: 0o644 })
 if (cleanTrackedSource() !== sourceSha) throw new Error('Tracked source changed during native build')
-validateArtifact(output, targetConfig.target)
+if (validateArtifact(output, targetConfig.target).sourceSha !== sourceSha) throw new Error('Artifact source SHA does not match the frozen build input')
 
 const result = spawnSync('node', ['--experimental-strip-types', '--test', resolve(repositoryRoot, 'engine/tests/native-peer.test.ts')], {
   cwd: repositoryRoot,

@@ -45,7 +45,7 @@ export function sha256(bytes: Buffer): string { return createHash('sha256').upda
 
 export function createManifest(sourceSha: string, target: OwnerTarget, binary: Buffer, mode: number): NativeManifest {
   if (!/^[0-9a-f]{40,64}$/.test(sourceSha)) throw new Error('Invalid full source SHA')
-  if (!Number.isInteger(mode) || (mode & 0o111) === 0) throw new Error('Native executable has no execute bit')
+  if (mode !== 0o755) throw new Error('Native executable mode must be 0755')
   const selected = targets[target]
   return {
     schema: 1,
@@ -91,7 +91,7 @@ export function validateArtifact(directory: string, expectedTarget: OwnerTarget)
   const binaryPath = resolve(root, 'apparent-engine')
   const binary = readFileSync(binaryPath)
   const mode = statSync(binaryPath).mode & 0o777
-  if ((mode & 0o111) === 0) throw new Error('Native artifact is not executable')
+  if (mode !== 0o755) throw new Error('Native artifact mode must be 0755')
   const manifest = JSON.parse(readFileSync(resolve(root, 'manifest.json'), 'utf8')) as NativeManifest
   if (manifest.schema !== 1 || manifest.target !== expectedTarget || manifest.protocolVersion !== 1 || manifest.executable.path !== 'apparent-engine' || manifest.executable.sha256 !== sha256(binary) || manifest.executable.mode !== mode || !/^[0-9a-f]{40,64}$/.test(manifest.sourceSha)) throw new Error('Native artifact manifest does not match staged bytes')
   const expected = createManifest(manifest.sourceSha, manifest.target, binary, mode)
