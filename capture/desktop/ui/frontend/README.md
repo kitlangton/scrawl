@@ -84,7 +84,7 @@ Electron main owns one persistent, same-user backend socket. Opening and
 one-second local refreshes never initiate network access. Each bounded request
 uses Electron's monotonic clock; a ten-second idle lease, EOF, renderer reload,
 crash or window close closes the lease and cancels pending authorization.
-Connect-owned TypeScript (`connect/client/typescript/src/settings-controller.cts`
+Connect-owned TypeScript (`connect/delivery/client/src/settings-controller.cts`
 and `settings-presentation.ts`) owns the asynchronous controller, consent and
 confirmation workflow, receipt ownership, activation intent and presentation.
 Rust retains local snapshots, auth/renewal, credentials, health probes and durable

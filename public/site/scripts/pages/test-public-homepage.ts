@@ -165,6 +165,11 @@ test("source homepage preserves accepted responsive layout and interactions", as
           page.on("console", message => { if (message.type() === "error" && /React|hydrat/i.test(message.text())) errors.push(message.text()) })
           await page.route("https://api.github.com/**", route => route.fulfill({ contentType: "application/json", body: "[]" }))
           await page.route("https://www.linkedin.com/**", route => route.fulfill({ contentType: "text/html", body: "<title>Synthetic LinkedIn destination</title>" }))
+          const analyticsRequests: string[] = []
+          await page.route("https://eu.i.posthog.com/**", route => {
+            analyticsRequests.push(route.request().url())
+            return route.abort()
+          })
           await page.goto(origin)
           await page.evaluate(() => document.fonts.ready)
           await page.waitForFunction(() => customElements.get("apparent-footer"))
@@ -194,6 +199,13 @@ test("source homepage preserves accepted responsive layout and interactions", as
           }
           await page.locator(".photo-story").scrollIntoViewIfNeeded()
           await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>(".cutout-person img")].every(image => image.complete && image.naturalWidth > 0))
+          // Production enables the consent notice; exercise refusal rather than
+          // bypassing an overlay or granting consent to test an unrelated footer.
+          const refuseAnalytics = page.getByRole("button", { name: "No thanks", exact: true })
+          if (await refuseAnalytics.isVisible()) {
+            await refuseAnalytics.click()
+            await page.getByRole("button", { name: "Analytics settings", exact: true }).waitFor()
+          }
           await page.locator(".footer-hi").click()
           const dialog = page.locator("dialog[data-dialog=social]")
           assert.equal(await dialog.evaluate((element: HTMLDialogElement) => element.open), true)
@@ -204,6 +216,7 @@ test("source homepage preserves accepted responsive layout and interactions", as
           assert.equal(await page.locator(".footer-hi").evaluate(element => element === document.activeElement), true)
           assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "no horizontal page overflow")
           assert.deepEqual(errors, [], "no page or hydration errors")
+          assert.deepEqual(analyticsRequests, [], "homepage interactions must not send analytics without consent")
           if (process.env.SITE_EVIDENCE) {
             await mkdir(process.env.SITE_EVIDENCE, { recursive: true })
             await page.screenshot({ path: join(process.env.SITE_EVIDENCE, `source-${engine.name()}-${width}.png`), fullPage: true })
