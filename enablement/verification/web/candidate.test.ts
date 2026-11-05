@@ -63,3 +63,18 @@ test('only canonical successful Connect producer completion may wake web deliver
     }
   } finally { rmSync(root, { recursive: true }) }
 })
+
+test('canonical common delivery completion can wake Public despite unrelated stream failure', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os'); const { join } = await import('node:path')
+  const root = mkdtempSync(join(tmpdir(), 'public-stream-event-')), path = join(root, 'event.json')
+  const run = { name: 'Value-stream delivery', path: '.github/workflows/value-stream-delivery.yml', status: 'completed', conclusion: 'failure', head_branch: 'main', head_repository: { full_name: 'tryapparent/apparent' }, event: 'push' }
+  const env = { ...valid, GITHUB_EVENT_NAME: 'workflow_run', GITHUB_EVENT_PATH: path }
+  const git = (...args: string[]) => args[0] === 'rev-parse' ? sha : ''
+  try {
+    writeFileSync(path, JSON.stringify({ workflow_run: run })); assert.equal(candidate(env, git), sha)
+    for (const change of [{ status: 'in_progress' }, { head_branch: 'feature' }, { head_repository: { full_name: 'fork/apparent' } }, { path: '.github/workflows/other.yml' }, { event: 'pull_request' }]) {
+      writeFileSync(path, JSON.stringify({ workflow_run: { ...run, ...change } })); assert.throws(() => candidate(env, git))
+    }
+  } finally { rmSync(root, { recursive: true }) }
+})

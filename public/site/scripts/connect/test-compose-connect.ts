@@ -275,3 +275,14 @@ test('labelled synthetic prerendered sign-in navigation retains its path and que
     }
   } finally { rmSync(f.root, { recursive: true, force: true }) }
 })
+
+test('composition preserves the preverified Pages worker and rejects missing worker imports', () => {
+  const f = fixture()
+  try {
+    f.put(f.pub, '_worker.js', 'export default { fetch() { return new Response("verified") } }')
+    f.run()
+    assert.equal(readFileSync(join(f.out, '_worker.js'), 'utf8'), readFileSync(join(f.pub, '_worker.js'), 'utf8'))
+    f.put(f.pub, '_worker.js', 'import "./unverified.js"; export default {}')
+    assert.throws(() => f.run(), /Missing resource/)
+  } finally { rmSync(f.root, { recursive: true, force: true }) }
+})

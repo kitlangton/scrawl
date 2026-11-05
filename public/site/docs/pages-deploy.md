@@ -14,16 +14,15 @@ repository root, with an Actions-read token and the approved Public build variab
 
 ```sh
 (cd public/site && bun install --frozen-lockfile)
+node --experimental-strip-types public/site/scripts/cd/stream-artifact.ts .build/public-artifact
 node --experimental-strip-types public/site/scripts/connect/artifact.ts .build/connect-browser
 export CONNECT_BROWSER_ARTIFACT="$PWD/.build/connect-browser/dist"
 cd public/site
-APPARENT_PUBLIC_SITE=1 npm run build
-node scripts/site-build/package-apparent.ts
+cp -a ../../.build/public-artifact dist-apparent
 node scripts/connect/compose-connect.ts
 node scripts/pages/prepare-pages.ts
-node scripts/site-build/verify-composed.ts
+COMPOSE_PUBLIC_INPUT="$PWD/../../.build/public-artifact" node scripts/site-build/verify-composed.ts
 node scripts/pages/prepare-pages-video.ts
-./node_modules/.bin/esbuild lib/pages-worker.ts --bundle --platform=browser --format=esm --outfile=dist-apparent/_worker.js
 PAGES_WORKER=dist-apparent/_worker.js node --test scripts/pages/test-pages-video-runtime.ts
 node scripts/cd/publish-pages.ts seal <full-commit-sha>
 ```
@@ -88,6 +87,29 @@ current site demo/media and their TypeScript generation tools remain available.
 Legacy generated-output exclusions stay bounded to `public/site/video-demo/output/`
 so retained renders in older checkouts are not mistaken for maintained source.
 
+## Shared value-stream CI
+
+`public/delivery.json` registers Public in `Value-stream delivery` as `stream (public, web)`.
+That lane installs locked Bun dependencies, builds/packages and tests Public once,
+including the compiled Pages Function and its real workerd transfer checks.
+It shares the common source/environment fingerprints, unchanged-artifact admission,
+checksummed receipts and provenance artifacts. Public gets one Ubuntu web target;
+it does not run a second Mac build for a platform-neutral website artifact.
+
+`Website — checks & deploy` consumes the resulting immutable raw website through
+`scripts/cd/stream-artifact.ts`. It requires successful Public, shared-contract and
+runtime-audit jobs from the exact trusted producer attempt, candidate-compatible
+source inputs and production configuration, and valid archive identities. It
+accepts unchanged verified ancestor bytes and preserves receipt provenance outside
+served content. A missing compatible artifact fails closed; no source-build fallback
+exists. Common-workflow completion retries composition, as Connect completion does.
+An unrelated failed component does not replace the required Public-specific proof.
+
+The website workflow retains Connect admission, composition/resource/privacy and
+browser checks, Pages movie transformation, exact-candidate sealing and publication.
+It never recompiles either stream. New producer run receipts are required before
+publication; a registered lane or passing local test is not a production receipt.
+
 ## Immutable Connect consumer contract
 
 The consumer helper is `node --experimental-strip-types public/site/scripts/connect/artifact.ts .build/connect-browser`
@@ -109,8 +131,8 @@ credentialed browser product verification in its producer.
 
 ## Main-branch CD
 
-The workflow starts on main pushes, manual main dispatches and successful trusted
-Connect producer completions. Candidate admission validates canonical-main event,
+The workflow starts on main pushes, manual main dispatches, trusted Connect
+producer completions and common value-stream completions. Candidate admission validates canonical-main event,
 workflow, checkout and ancestry identity. The full delta since a successful main
 web run selects Public/Connect browser, shared UI/analytics and delivery inputs,
 including deletions. Unknown history broadens verification. Unrelated native-only
@@ -118,14 +140,13 @@ changes select an explicit not-applicable gate; missing, failed or unexpectedly
 skipped required checks fail closed. Manual main refreshes force checks, including
 producer manual refreshes that change recorded build configuration.
 
-The credential-free verifier downloads a compatible successful main Connect browser
-artifact and builds Public. If the matching producer has not finished yet, admission
-fails closed; its successful completion retries the candidate. It never rebuilds
-Connect as a fallback. Shared input changes require a new producer artifact and
+The credential-free consumer downloads compatible verified Public and Connect browser
+artifacts. If a matching producer has not finished yet, admission fails closed;
+producer completion retries the candidate. It never rebuilds either stream as a fallback. Shared input changes require a new producer artifact and
 Public composition checks. `CONNECT_BROWSER_ARTIFACT` identifies the route-only
 input; producer SHA/run/artifact/digest receipts remain outside served content.
 
-Public builds, tests and seals `.build/website/` with the candidate revision,
+The composition job checks and seals `.build/website/` with the candidate revision,
 compiled Pages Function, provider config and full checksum inventory. The website
 job consumes only that run's revision-named artifact and deploys without bundling;
 `WEBSITE_CD_ENABLED` and the existing environment remain its activation controls.
@@ -142,8 +163,8 @@ No activation, provider, origin or consent settings change with this separation.
 
 The artifact-only browser smoke intercepts every external transport and exercises
 all six routes, legacy query-preserving aliases, anonymous API loading and browser
-analytics consent. Its enabled-analytics fixture builds Public into private temp
-output and reuses Connect bytes; it never replaces or uploads production output.
+analytics consent. Its production seam uses only downloaded bytes. Public's common producer separately tests an enabled-analytics fixture in private temp
+output without Connect; that fixture is never uploaded or published.
 Existing Connect credentialed/browser suites remain owned by the producer.
 `PUBLIC_BUILD_DIR` and `PUBLIC_SSR_DIR` select private build inputs;
 `PUBLIC_PACKAGE_OUTPUT` selects a disjoint package output. Defaults retain the

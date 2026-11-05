@@ -13,7 +13,12 @@ on:
       - 'onboarding/**'
       - 'agent/**'
       - 'connect/delivery.json'
-      - 'public/delivery.json'
+      - 'public/**'
+      - 'README.md'
+      - 'capture/agent/skills/apparent/SKILL.md'
+      - '.npmrc'
+      - 'bunfig.toml'
+      - '.bunfig.toml'
       - 'LICENSE'
       - '.github/workflows/value-stream-delivery.yml'
       - '.github/actions/runtime-budget/**'
@@ -84,7 +89,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.target == 'web' && 10 || 15 }}
     permissions:
       contents: read
       actions: read
@@ -93,6 +98,11 @@ jobs:
     env:
       OWNER_ID: ${{ matrix.id }}
       OWNER_TARGET: ${{ matrix.target }}
+      PUBLIC_POSTHOG_ENABLED: ${{ vars.PUBLIC_POSTHOG_ENABLED || 'true' }}
+      PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
+      PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
+      PUBLIC_POSTHOG_ENVIRONMENT: production
+      VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
     steps:
       - uses: actions/checkout@v4
         with:
@@ -139,6 +149,10 @@ jobs:
           node --experimental-strip-types composition/delivery/cli.ts reuse "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/prior-component.zip" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST" "$PRIOR_SHA" "$PRIOR_ARTIFACT" "$PRIOR_RUN" "$PRIOR_ATTEMPT"
       - uses: dtolnay/rust-toolchain@stable
         if: steps.admit.outputs.reuse != 'true' && matrix.language == 'native'
+      - uses: oven-sh/setup-bun@v2
+        if: steps.admit.outputs.reuse != 'true' && matrix.packageManager == 'bun'
+        with:
+          bun-version: '1.3.10'
       - name: Independently install, verify and build the owner artifact
         if: steps.admit.outputs.reuse != 'true'
         run: node --experimental-strip-types composition/delivery/cli.ts build "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload"

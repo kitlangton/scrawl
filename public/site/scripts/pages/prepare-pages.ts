@@ -4,7 +4,7 @@ import { resolve, join, relative } from 'node:path'
 const site = resolve(import.meta.dirname, '../..')
 const output = join(site, process.env.COMPOSE_SYNTHETIC_ORIGIN ? 'dist/synthetic-composition' : 'dist-apparent')
 export function publicPath(path: string) {
-  return /^(?:index\.html|robots\.txt|sitemap\.xml|apparent-wordmark\.svg|icon\.svg|HostGrotesk-Variable\.ttf|social-preview-v1\.png|Apparent-ghost-demo-v4-lilac(?:-poster\.jpg|\.mp4)|apparent-narration-(?:mac|iphone)\.mp3|apparent-demo-pi(?:-poster\.jpg|\.mp4))$/.test(path)
+  return /^(?:index\.html|_worker\.js|robots\.txt|sitemap\.xml|apparent-wordmark\.svg|icon\.svg|HostGrotesk-Variable\.ttf|social-preview-v1\.png|Apparent-ghost-demo-v4-lilac(?:-poster\.jpg|\.mp4)|apparent-narration-(?:mac|iphone)\.mp3|apparent-demo-pi(?:-poster\.jpg|\.mp4))$/.test(path)
     || /^(?:assets|pond|team|feature-demos)\/.+/.test(path)
     || /^connect(?:\/(?:device|shares))?\/index\.html$/.test(path)
     || /^hosted\/(?:source-pond|agent-pond|agent-reading)-v4\.png$/.test(path)

@@ -4,10 +4,10 @@ import { closeSync, openSync, cpSync, existsSync, lstatSync, mkdirSync, readlink
 import { arch, platform } from 'node:os'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 
-export type Target = 'linux-x64' | 'macos-x64'
+export type Target = 'linux-x64' | 'macos-x64' | 'web'
 export type Kind = 'npm' | 'app-shell' | 'directory'
-export type Stage = 'library' | 'contract' | 'development-app'
-export type Owner = { schema: 1; id: string; kind: Kind; package: string; inputs: string[]; verify: string[]; build: string; targets: Target[]; stage: Stage; language: 'typescript' | 'native'; artifactPath?: string }
+export type Stage = 'library' | 'contract' | 'development-app' | 'website'
+export type Owner = { schema: 1; id: string; kind: Kind; package: string; inputs: string[]; verify: string[]; build: string; targets: Target[]; stage: Stage; language: 'typescript' | 'native'; artifactPath?: string; packageManager?: 'npm' | 'bun'; files?: string[]; environment?: string[] }
 export const auditJob = 'Workflow runtime budget'
 export const contractsJob = 'Delivery contracts'
 export const workflowPath = '.github/workflows/value-stream-delivery.yml'
@@ -18,6 +18,7 @@ const roots = [
   { id: 'engine-native', source: 'engine/delivery/native', registration: 'engine/delivery/native/delivery.json' },
   { id: 'onboarding', source: 'onboarding', registration: 'onboarding/delivery.json' },
   { id: 'agent', source: 'agent', registration: 'agent/delivery.json' },
+  { id: 'public', source: 'public/site', registration: 'public/delivery.json' },
 ]
 const mandatoryInputs = ['composition/delivery/', 'composition/architecture/']
 const windows = (value: string) => /^[A-Za-z]:[\\/]/.test(value) || value.includes('\\')
@@ -29,16 +30,24 @@ function safeRepoPath(value: unknown, directory = false): string {
 }
 function readOwner(path: string): Owner {
   const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
-  if (raw.schema !== 1 || typeof raw.id !== 'string' || !/^[a-z][a-z0-9-]*$/.test(raw.id) || !['npm', 'app-shell', 'directory'].includes(String(raw.kind)) || !['library', 'contract', 'development-app'].includes(String(raw.stage)) || typeof raw.package !== 'string' || typeof raw.build !== 'string' || !Array.isArray(raw.inputs) || !Array.isArray(raw.verify) || !Array.isArray(raw.targets)) throw new Error(`Invalid delivery registration: ${path}`)
+  if (raw.schema !== 1 || typeof raw.id !== 'string' || !/^[a-z][a-z0-9-]*$/.test(raw.id) || !['npm', 'app-shell', 'directory'].includes(String(raw.kind)) || !['library', 'contract', 'development-app', 'website'].includes(String(raw.stage)) || typeof raw.package !== 'string' || typeof raw.build !== 'string' || !Array.isArray(raw.inputs) || !Array.isArray(raw.verify) || !Array.isArray(raw.targets)) throw new Error(`Invalid delivery registration: ${path}`)
   const inputs = raw.inputs.map(x => safeRepoPath(x, true))
-  const targets = raw.targets.map(x => { if (x !== 'linux-x64' && x !== 'macos-x64') throw new Error(`Unsupported target in ${path}`); return x })
+  const targets = raw.targets.map(x => { if (x !== 'linux-x64' && x !== 'macos-x64' && x !== 'web') throw new Error(`Unsupported target in ${path}`); return x })
   if (!inputs.length || new Set(inputs).size !== inputs.length || !targets.length || new Set(targets).size !== targets.length || raw.verify.some(x => typeof x !== 'string' || !/^[a-z][a-z0-9:_-]*$/.test(x))) throw new Error(`Invalid delivery registration: ${path}`)
+  if (raw.packageManager !== undefined && !['npm', 'bun'].includes(String(raw.packageManager))) throw new Error(`Invalid package manager: ${path}`)
+  if (raw.files !== undefined && (!Array.isArray(raw.files) || raw.files.some(x => typeof x !== 'string'))) throw new Error(`Invalid file inputs: ${path}`)
+  const files = ((raw.files ?? []) as string[]).map(x => safeRepoPath(x))
+  if (files.some(file => file.endsWith('/')) || new Set(files).size !== files.length) throw new Error(`Invalid file inputs: ${path}`)
+  if (raw.environment !== undefined && (!Array.isArray(raw.environment) || raw.environment.some(x => typeof x !== 'string' || !/^[A-Z][A-Z0-9_]*$/.test(x)))) throw new Error(`Invalid environment inputs: ${path}`)
+  const environment = (raw.environment ?? []) as string[]
+  if (new Set(environment).size !== environment.length) throw new Error(`Duplicate environment inputs: ${path}`)
   const pkg = safeRepoPath(raw.package)
   const language = raw.language ?? 'typescript'
   if (language !== 'typescript' && language !== 'native') throw new Error(`Invalid language in ${path}`)
   const artifactPath = raw.kind === 'directory' ? safeRepoPath(raw.artifactPath) : undefined
   if (raw.kind !== 'directory' && raw.artifactPath !== undefined) throw new Error(`artifactPath is only valid for directory registrations: ${path}`)
-  return { schema: 1, id: raw.id, kind: raw.kind as Kind, package: pkg, inputs, verify: raw.verify as string[], build: raw.build, targets, stage: raw.stage as Stage, language, artifactPath }
+  if ((targets.includes('web') || raw.stage === 'website') && (raw.kind !== 'directory' || raw.stage !== 'website' || targets.length !== 1 || targets[0] !== 'web' || language !== 'typescript')) throw new Error(`Web delivery requires a TypeScript website directory: ${path}`)
+  return { schema: 1, id: raw.id, kind: raw.kind as Kind, package: pkg, inputs, verify: raw.verify as string[], build: raw.build, targets, stage: raw.stage as Stage, language, artifactPath, packageManager: (raw.packageManager ?? 'npm') as 'npm' | 'bun', files, environment }
 }
 function git(root: string, args: string[]): string { return execFileSync('git', args, { cwd: root, encoding: 'utf8', env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, stdio: ['ignore', 'pipe', 'pipe'] }) }
 function assertNoSymlinkComponents(root: string, repoPath: string) {
@@ -68,20 +77,22 @@ export function catalog(root: string) {
       assertNoSymlinkComponents(root, owner.package)
       if (!statSync(resolve(root, owner.package)).isDirectory()) throw new Error(`Package path is not a directory: ${owner.package}`)
       for (const input of owner.inputs) { const path = input.replace(/\/$/, ''); assertNoSymlinkComponents(root, path); if (!existsSync(resolve(root, path))) throw new Error(`Input root is missing: ${input}`) }
+      for (const file of owner.files ?? []) { assertNoSymlinkComponents(root, file); if (existsSync(resolve(root, file)) && !statSync(resolve(root, file)).isFile()) throw new Error(`File input is not a regular file: ${file}`) }
       owners.push(owner)
     } catch (error) { blocked.push(`${entry.id}: ${error instanceof Error ? error.message : 'invalid registration'}`) }
   }
   return { owners, pending, blocked }
 }
 
-function trackedInputs(root: string, owner: Owner, target: Target, revision = 'HEAD'): { digest: string; entries: string[] } {
+function trackedInputs(root: string, owner: Owner, revision = 'HEAD'): { digest: string; entries: string[] } {
   const registration = roots.find(x => x.id === owner.id)?.registration
   if (!registration) throw new Error('Owner has no registered source identity')
   const inputRoots = [...new Set([...owner.inputs, ...mandatoryInputs])].sort()
-  const files = [workflowPath, '.github/actions/runtime-budget/', 'enablement/verification/workflow-budget.ts', 'LICENSE', registration]
+  const files = [...(owner.files ?? []), workflowPath, '.github/actions/runtime-budget/', 'enablement/verification/workflow-budget.ts', 'LICENSE', registration]
   const paths = new Set<string>()
   for (const pathspec of [...inputRoots, ...files]) {
     const result = git(root, ['ls-tree', '-r', '-z', '--full-tree', revision, '--', pathspec])
+    if (result.includes('\uFFFD')) throw new Error('Cannot fingerprint ambiguous non-UTF8 Git paths')
     for (const entry of result.split('\0').filter(Boolean)) {
       const tab = entry.indexOf('\t')
       if (tab < 0) throw new Error('Malformed git tree entry')
@@ -93,21 +104,23 @@ function trackedInputs(root: string, owner: Owner, target: Target, revision = 'H
     }
   }
   const entries = [...paths].sort()
-  return { digest: createHash('sha256').update(entries.map(entry => `${entry}\n`).join('')).digest('hex'), entries }
+  return { digest: createHash('sha256').update(entries.map(entry => `${entry}\0`).join('')).digest('hex'), entries }
 }
 function fingerprint(root: string, owner: Owner, target: Target, revision = 'HEAD') {
-  if (target !== 'linux-x64' && target !== 'macos-x64' || !owner.targets.includes(target)) throw new Error('Owner is not registered for this target')
-  const source = trackedInputs(root, owner, target, revision).digest
+  if (target !== 'linux-x64' && target !== 'macos-x64' && target !== 'web' || !owner.targets.includes(target)) throw new Error('Owner is not registered for this target')
+  const source = trackedInputs(root, owner, revision).digest
   const imageOS = process.env.ImageOS ?? ''
   const imageVersion = process.env.ImageVersion ?? ''
   if (!imageOS || !imageVersion) throw new Error('Runner image identity is unavailable')
-  return createHash('sha256').update(JSON.stringify({ source, node: process.version, imageOS, imageVersion, platform: platform(), arch: arch(), target })).digest('hex')
+  return createHash('sha256').update(JSON.stringify({ source, environment: environmentDigest(owner), node: process.version, imageOS, imageVersion, platform: platform(), arch: arch(), target })).digest('hex')
 }
+export function sourceDigest(root: string, owner: Owner, revision = 'HEAD'): string { return trackedInputs(root, owner, revision).digest }
+export function environmentDigest(owner: Owner, env = process.env): string { return createHash('sha256').update(JSON.stringify([...(owner.environment ?? [])].sort().map(key => [key, env[key] ?? '']))).digest('hex') }
 export function inputDigest(root: string, owner: Owner, target: Target = owner.targets[0]): string { return fingerprint(root, owner, target) }
 export function makePlan(root: string) {
   const { owners, pending, blocked } = catalog(root)
   const guardOwners: Record<string, string> = { 'app-shell': 'composition', engine: 'engine', 'engine-native': 'engine', record: 'record', agent: 'agent', onboarding: 'onboarding' }
-  const include = owners.flatMap(owner => owner.targets.map(target => ({ id: owner.id, target, runner: target === 'linux-x64' ? 'ubuntu-24.04' : 'macos-26-intel', kind: owner.kind, stage: owner.stage, package: owner.package, verify: owner.verify, build: owner.build, language: owner.language, architecture_owner: guardOwners[owner.id] ?? '' })))
+  const include = owners.flatMap(owner => owner.targets.map(target => ({ id: owner.id, target, runner: target === 'linux-x64' || target === 'web' ? 'ubuntu-24.04' : 'macos-26-intel', kind: owner.kind, stage: owner.stage, package: owner.package, verify: owner.verify, build: owner.build, language: owner.language, packageManager: owner.packageManager ?? 'npm', architecture_owner: guardOwners[owner.id] ?? '' })))
   return { matrix: { include }, has_ready: include.length > 0, pending, blocked }
 }
 
@@ -139,7 +152,8 @@ export function buildOwner(root: string, owner: Owner, target: Target, outputPat
     for (const child of ['app', 'shell', 'artifacts']) cpSync(resolve(app, child), resolve(output, child), { recursive: true, dereference: false, preserveTimestamps: true, verbatimSymlinks: true })
     return
   }
-  runNpm(root, owner.package, ['ci'])
+  if (owner.packageManager === 'bun') execFileSync('bun', ['install', '--frozen-lockfile'], { cwd: resolve(root, owner.package), stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+  else runNpm(root, owner.package, ['ci'])
   for (const script of owner.verify) runNpm(root, owner.package, ['run', script])
   runNpm(root, owner.package, ['run', owner.build])
   if (owner.kind === 'directory') {
@@ -214,7 +228,7 @@ export function assessPrior(root: string, owner: Owner, target: Target, currentS
 }
 
 export function sealPayload(root: string, owner: Owner, target: Target, inputDir: string, outputDir: string, inputDigestValue: string, env = process.env) {
-  if (!/^[0-9a-f]{64}$/.test(inputDigestValue) || (target !== 'linux-x64' && target !== 'macos-x64') || !owner.targets.includes(target)) throw new Error('Invalid input digest or target')
+  if (!/^[0-9a-f]{64}$/.test(inputDigestValue) || (target !== 'linux-x64' && target !== 'macos-x64' && target !== 'web') || !owner.targets.includes(target)) throw new Error('Invalid input digest or target')
   const source = realpathSync(inputDir)
   if (!statSync(source).isDirectory()) throw new Error('Payload input is not a directory')
   const check = (dir: string) => { for (const name of readdirSync(dir)) { const p = resolve(dir, name); const stat = lstatSync(p); if (stat.isSymbolicLink()) { const link = readlinkSync(p); if (isAbsolute(link) || windows(link)) throw new Error('Unsafe payload symlink'); const resolved = resolve(dirname(p), link); const rel = relative(source, resolved); if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('Payload symlink escapes input directory'); let actual: string; try { actual = realpathSync(p) } catch { throw new Error('Broken payload symlink') } const actualRel = relative(source, actual); if (actualRel === '..' || actualRel.startsWith(`..${sep}`) || isAbsolute(actualRel)) throw new Error('Payload symlink escapes input directory'); } else if (stat.isDirectory()) check(p); else if (!stat.isFile()) throw new Error('Unsupported payload filesystem entry') } }
@@ -226,9 +240,9 @@ export function sealPayload(root: string, owner: Owner, target: Target, inputDir
   mkdirSync(output, { recursive: true })
   requireNoSymlink(output)
   if (readdirSync(output).length) throw new Error('Seal output directory must be empty')
-  execFileSync('tar', ['-czf', resolve(output, 'component.tar.gz'), '-C', dirname(source), source.slice(dirname(source).length + 1)], { stdio: 'inherit' })
+  execFileSync('tar', [...(owner.stage === 'website' ? ['--format=ustar'] : []), '-czf', resolve(output, 'component.tar.gz'), '-C', dirname(source), source.slice(dirname(source).length + 1)], { stdio: 'inherit' })
   const archive = readFileSync(resolve(output, 'component.tar.gz'))
-  const receipt = { schema: 1, id: owner.id, target, stage: owner.stage, sourceSha: sha, inputDigest: inputDigestValue, sha256: createHash('sha256').update(archive).digest('hex'), size: archive.length, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT }
+  const receipt = { schema: 1, id: owner.id, target, stage: owner.stage, sourceSha: sha, inputDigest: inputDigestValue, sourceDigest: sourceDigest(root, owner), environmentDigest: environmentDigest(owner, env), sha256: createHash('sha256').update(archive).digest('hex'), size: archive.length, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT }
   const receiptPath = resolve(output, 'receipt.json')
   requireNoSymlink(output)
   writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
@@ -245,6 +259,7 @@ export function reusePayload(root: string, owner: Owner, target: Target, zip: st
   const original = JSON.parse(execFileSync('unzip', ['-p', zip, 'receipt.json'], { encoding: 'utf8', maxBuffer: 16384 }))
   if (!/^[1-9][0-9]*$/.test(priorRunId) || !/^[1-9][0-9]*$/.test(priorAttempt) || original.runId !== priorRunId || original.runAttempt !== priorAttempt) throw new Error('Prior receipt run does not match admission')
   if (original.schema !== 1 || original.id !== owner.id || original.target !== target || original.stage !== owner.stage || original.inputDigest !== digest || original.sourceSha !== priorSha || !/^[0-9a-f]{64}$/.test(original.sha256) || !Number.isSafeInteger(original.size) || original.size <= 0) throw new Error('Prior receipt does not match admission')
+  if (owner.stage === 'website' && (original.sourceDigest !== sourceDigest(root, owner) || original.environmentDigest !== environmentDigest(owner, env))) throw new Error('Website source or environment changed since admission')
   const output = outsideCheckout(root, outputDir)
   mkdirSync(output, { recursive: true }); requireNoSymlink(output)
   if (readdirSync(output).length) throw new Error('Reuse output directory must be empty')

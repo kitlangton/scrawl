@@ -32,7 +32,7 @@ function ownerFor(id: string): Owner {
   if (!owner) throw new Error(`Unknown or pending delivery owner: ${id}`)
   return owner
 }
-function targetArg(value: string): Target { if (value !== 'linux-x64' && value !== 'macos-x64') throw new Error('Invalid target'); return value }
+function targetArg(value: string): Target { if (value !== 'linux-x64' && value !== 'macos-x64' && value !== 'web') throw new Error('Invalid target'); return value }
 async function main(args: string[]) {
   const env = process.env
   if (args.length === 1 && args[0] === 'plan') {
