@@ -60,3 +60,16 @@ explicit artifact check may install React peers; hooks do not install dependenci
 Source builds require the repository's `shared/ui` and shared font inputs, but
 never Rust. Replacing an injected PillHost remounts its presentation session,
 clearing old revisions, pending actions and subscriptions before new interaction.
+
+`@apparent/record/ui` also exports `createWorkflowPillHost` and
+`disposeWorkflowPillHost` as an injection seam for a constructed `RecordWorkflow`.
+The adapter presents workflow snapshots to the existing `PillHost` contract with
+host-local monotonic revisions. It exposes readiness refresh, start, stop, cancel,
+reconcile and same-ID stop retry only in states where the workflow admits them;
+it does not provide paste, link, notes, selection, whiteboard, window or clipboard
+behavior. Disposal unsubscribes the presentation adapter and leaves workflow and
+capture ownership intact. This seam is not an installed route. Activation still
+requires a real native readiness/capture provider, durable host mapping and bundle
+allocation, executable/runtime composition, and affected macOS/Linux capture,
+permission, packaging and ownership proof. Until those gates pass, the installed
+fallback route remains authoritative.
