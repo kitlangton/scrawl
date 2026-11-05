@@ -3,7 +3,7 @@ import { lstat } from 'node:fs/promises';
 import { retainRequest, loadRequest } from './ownership.js';
 import { markEntries, markLine } from './inspection.js';
 import { isAbsolute, resolve } from 'node:path';
-import { resolveBundle, readManifest, readBundle, readRegular, checkImageReference } from './bundle.js';
+import { resolveBundle, readManifest, readBundle, readRegular, checkImageReference, hasMicrophoneSamples, configuredAgentContext } from './bundle.js';
 import { recordWithEngine } from './recording.js';
 import { semanticSummary } from './summary.js';
 
@@ -38,6 +38,7 @@ async function main(args: string[]) {
   }
   if (json && !['summary', 'marks'].includes(mode)) throw new Error('--json supports manifest or marks output');
   if (storedSummary && (mode !== 'summary' || json)) throw new Error('--stored-summary conflicts with other inspection output options');
+  if (storedSummary && experiments.includes('agentContext')) throw new Error('--stored-summary cannot apply --experiment agentContext');
   const path = await resolveBundle(input);
   const evidence = await lstat(`${path}/.evidence-only.json`).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== 'ENOENT') throw error;
@@ -73,7 +74,11 @@ async function main(args: string[]) {
     process.stdout.write(summary.endsWith('\n') ? summary : `${summary}\n`);
     return 0;
   }
-  process.stdout.write(semanticSummary(bundle, path, experiments.includes('agentContext'), evidence?.isFile() === true));
+  const agentContext = experiments.includes('agentContext') || await configuredAgentContext();
+  const hasAudio = bundle.source !== 'iphone' && bundle.context?.microphoneCapture !== 'off'
+    ? await hasMicrophoneSamples(path, bundle.audio)
+    : false;
+  process.stdout.write(semanticSummary(bundle, path, agentContext, evidence?.isFile() === true, hasAudio));
   return 0;
 }
 async function recover(args: string[]) {

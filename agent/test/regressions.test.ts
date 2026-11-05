@@ -66,7 +66,7 @@ test('semantic inspect retains Unicode, timed events, optional warnings, and con
     data.imageQualityWarning='Low-resolution source frame';
     data.autocrop={label:'Editor',fullFrames:'frames-full',fullContactSheet:'contact-sheet-full.png',crops:[]};
     data.events=[{kind:'click',t:3000,x:0.5,y:0.5,role:'button',label:'Save'}];
-    data.marks=[{id:'m1',strokes:[0],t0:1800,t1:1900,shape:'circle',description:'circle',on:'保存',frame:'frames/one.png'}];
+    data.marks=[{id:'m1',strokes:[0],t0:1800,t1:1900,boxNorm:[0.1,0.1,0.4,0.4],shape:'circle',description:'circle',on:'保存',frame:'frames/one.png'}];
     await writeFile(join(bundle,'apparent.json'),JSON.stringify(data));
     await writeFile(join(bundle,'.evidence-only.json'),'{}');
     const result=spawnSync(process.execPath,[cli,'inspect',bundle,'--experiment','agentContext'],{encoding:'utf8',env:{...process.env,APPARENT_ENGINE_EXECUTABLE:'/missing',APPARENT_ENGINE_RUNTIME:'/missing'}});
@@ -75,7 +75,7 @@ test('semantic inspect retains Unicode, timed events, optional warnings, and con
     assert.match(result.stdout,/repository: \/work\/synthetic/);
     assert.match(result.stdout,/Note: Review the résumé/);
     assert.match(result.stdout,/0:01 “Résumé naïve”/);
-    assert.match(result.stdout,/#- ✎ 0:01 circled “保存” · m1/);
+    assert.doesNotMatch(result.stdout,/circled “保存”/);
     assert.match(result.stdout,/0:02 branch → feature\/inspect/);
     assert.match(result.stdout,/Image quality: Low-resolution source frame/);
     assert.match(result.stdout,/Cropped to: Editor/);
@@ -146,7 +146,8 @@ test('existing Rust inspection fixtures preserve current/legacy raw JSON, summar
       if(name==='current') {
         const rich=run(['--experiment','agentContext']);assert.equal(rich.status,0,rich.stderr);
         assert.match(rich.stdout,/repository: \/work\/synthetic/);
-        assert.match(rich.stdout,/#1 ✎ 0:01 circled button “Save”/);
+        const expected=(await readFile(fixture('current.agent.md'),'utf8')).replace('@BUNDLE@',bundle);
+        assert.equal(rich.stdout,expected);
         assert.match(rich.stdout,/0:03 clicked button “Save”/);
         assert.match(rich.stdout,/Note: Keep semantic text\./);
         const marks=run(['--marks','--json']);assert.equal(marks.status,0,marks.stderr);
@@ -154,4 +155,21 @@ test('existing Rust inspection fixtures preserve current/legacy raw JSON, summar
       }
     }
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('producer-shaped semantic fixture matches Rust base and agentContext goldens',async()=>{
+  const {readFile,copyFile}=await import('node:fs/promises');
+  const root=await mkdtemp(join(tmpdir(),'agent-semantic-golden-'));
+  try {
+    const bundle=join(root,'semantic.apparent');await mkdir(bundle);
+    await copyFile(new URL('./fixtures/semantic.json',import.meta.url),join(bundle,'apparent.json'));
+    const wav=Buffer.alloc(46);wav.write('RIFF',0);wav.writeUInt32LE(38,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(16000,24);wav.writeUInt32LE(32000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(2,40);wav.writeInt16LE(0,44);
+    await writeFile(join(bundle,'audio.wav'),wav);
+    const cli=new URL('../dist/cli.js',import.meta.url).pathname;
+    const run=(...args:string[])=>spawnSync(process.execPath,[cli,'inspect',bundle,...args],{encoding:'utf8',env:{...process.env,HOME:root}});
+    const expected=(name:string)=>readFile(new URL(`./fixtures/${name}`,import.meta.url),'utf8').then(text=>text.replaceAll('@BUNDLE@',bundle));
+    const base=run();assert.equal(base.status,0,base.stderr);assert.equal(base.stdout,await expected('semantic.md'));
+    const rich=run('--experiment','agentContext');assert.equal(rich.status,0,rich.stderr);assert.equal(rich.stdout,await expected('semantic.agent.md'));
+    assert.equal(run('--stored-summary','--experiment','agentContext').status,2);
+  } finally { await rm(root,{recursive:true,force:true}); }
 });

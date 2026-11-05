@@ -12,7 +12,7 @@ test('local bundle commands preserve raw JSON, summary, transcript, marks, and r
   const root = await mkdtemp(join(tmpdir(), 'apparent-agent-'));
   try {
     const bundle = join(root, 'fixture.apparent'); await mkdir(bundle);
-    const raw = JSON.stringify({version:1,id:'fixture',createdAtMs:10,durationMs:3,target,transcript:{text:'héllo',segments:[],words:[]},strokes:[],marks:[{id:'m1',strokes:[0],t0:1,t1:2,shape:'circle',description:'mark'}],events:[],keyframes:[{index:1,t:0,reason:'mark',event:'marked',said:'héllo',markId:'m1',file:'frames/001.png'}],contactSheet:'contact-sheet.png'});
+    const raw = JSON.stringify({version:1,id:'fixture',createdAtMs:10,durationMs:3,target,transcript:{text:'héllo',segments:[],words:[]},strokes:[],marks:[{id:'m1',strokes:[0],t0:1,t1:2,boxNorm:[0,0,1,1],shape:'circle',description:'mark'}],events:[],keyframes:[{index:1,t:0,reason:'mark',event:'marked',said:'héllo',markId:'m1',file:'frames/001.png'}],contactSheet:'contact-sheet.png'});
     await writeFile(join(bundle, 'apparent.json'), raw); await writeFile(join(bundle, 'summary.md'), '# Stored\n');
     const cli = new URL('../dist/cli.js', import.meta.url).pathname;
     const run = (...args: string[]) => spawnSync(process.execPath, [cli, 'inspect', ...args], { encoding: 'utf8' });

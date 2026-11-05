@@ -1,4 +1,4 @@
-import { markEntries, markLine } from './inspection.js';
+import { keyframeTexts } from './semantic/context.js';
 
 type Data = Record<string, any>;
 const clock = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
@@ -17,8 +17,8 @@ function targetName(bundle: Data): string {
   if (target.windowTitle && target.windowTitle !== target.app) name += ` ${quote(target.windowTitle)}`;
   const device = bundle.device;
   if (device) {
-    name = clean(device.name) || 'Device';
-    if (device.app) name += ` · ${clean(device.app)}`;
+    name = clean(device.name);
+    if (device.app !== undefined && device.app !== null) name += ` · ${clean(device.app)}`;
     const short = clean(device.appShortVersion), build = clean(device.appVersion);
     if (short && build && short !== build) name += ` ${short} (${build})`;
     else if (short) name += ` ${short}`;
@@ -36,33 +36,36 @@ function eventText(event: Data): string {
     case 'point': return label ? `pointed at ${quote(label)}` : 'pointed';
     case 'key': return `pressed ${clean(event.shortcut)}`;
     case 'note': return `Typed note · pin ${event.pin ?? 1}:\n${String(event.text ?? '').split(/\r?\n/u).map((line: string) => `    ${line}`).join('\n')}`;
-    case 'appEvent': return `app: ${clean(event.label)}`;
-    case 'appChange': return `switched to ${clean(event.app)}${event.windowTitle ? ` — ${quote(clean(event.windowTitle))}` : ''}`;
+    case 'app_event': return `app: ${clean(event.label)}`;
+    case 'app_change': return `switched to ${clean(event.app)}`;
     default: return label ? `${clean(event.kind)}: ${label}` : clean(event.kind);
   }
 }
+function typedNoteText(bundle: Data, event: Data): string {
+  const frame = bundle.marks.find((mark: Data) => mark.pin === event.pin)?.frame;
+  const body = String(event.text ?? '').split(/\r?\n/u).map((line: string) => `    ${line}`).join('\n');
+  return `Typed note · pin ${event.pin ?? 1}${frame ? ` · ${frame}` : ''}:\n${body}`;
+}
 
-function semanticEvents(bundle: Data, agentContext: boolean): Array<{ t: number; text: string; rank: number }> {
-  const out: Array<{ t: number; text: string; rank: number }> = [];
-  if (!bundle.keyframes.length) for (const segment of bundle.transcript.segments) out.push({ t: segment.t0, text: `“${segment.text}”`, rank: 0 });
-  if (!bundle.keyframes.length && bundle.transcript.segments.length === 0 && clean(bundle.transcript.text))
-    out.push({ t: 0, text: `“${clean(bundle.transcript.text)}”`, rank: 0 });
-  if (agentContext) for (const mark of markEntries(bundle)) out.push({ t: mark.t0, text: markLine(mark), rank: 1 });
+function semanticEvents(bundle: Data): Array<{ t: number; text: string }> {
+  const out: Array<{ t: number; text: string }> = [];
   for (const event of bundle.events) {
-    if (!agentContext && !['note', 'appEvent'].includes(event.kind)) continue;
-    out.push({ t: event.t ?? 0, text: eventText(event), rank: 2 });
+    if (!['note', 'app_event'].includes(event.kind)) continue;
+    out.push({ t: event.t ?? 0, text: event.kind === 'note' ? typedNoteText(bundle, event) : eventText(event) });
   }
   for (const change of bundle.contextChanges ?? []) out.push({
-    t: change.t, text: `${value(change.key)} ${change.value == null ? 'cleared' : `→ ${value(change.value)}`}`, rank: 3,
+    t: change.t, text: `${value(change.key)} ${change.value == null ? 'cleared' : `→ ${value(change.value)}`}`,
   });
-  out.sort((a, b) => a.t - b.t || a.rank - b.rank);
-  if (!agentContext) return out;
-  // In the interleaved mode each event remains adjacent to its timestamped speech/action.
+  if (!bundle.keyframes.length) {
+    for (const segment of bundle.transcript.segments) out.push({t:segment.t0,text:`“${segment.text}”`});
+    if (!bundle.transcript.segments.length && clean(bundle.transcript.text)) out.push({t:0,text:`“${clean(bundle.transcript.text)}”`});
+  }
+  out.sort((a, b) => a.t - b.t);
   return out;
 }
 
 /** Generate inspect text from the manifest only. No media is opened or decoded. */
-export function semanticSummary(bundle: Data, bundleDir: string, agentContext = false, evidenceOnly = false): string {
+export function semanticSummary(bundle: Data, bundleDir: string, agentContext = false, evidenceOnly = false, hasAudio = false): string {
   const lines = [`[apparent ${clock(bundle.durationMs)} · ${targetName(bundle)} · ${bundleDir}]`];
   if (bundle.destination) {
     const destination = bundle.destination;
@@ -74,7 +77,7 @@ export function semanticSummary(bundle: Data, bundleDir: string, agentContext = 
   const context: string[] = [];
   const startScreen = screenAt(bundle, 0);
   if (startScreen) context.push(`Screen: ${value(startScreen)}`);
-  for (const [key, item] of Object.entries(bundle.context ?? {})) context.push(`${value(key)}: ${value(item)}`);
+  for (const [key, item] of Object.entries(bundle.context ?? {}).sort(([a],[b])=>a<b?-1:a>b?1:0)) context.push(`${value(key)}: ${value(item)}`);
   if (context.length) lines.push(context.join(' · '));
   if (clean(bundle.note)) lines.push(`Note: ${String(bundle.note).trim()}`);
   if (bundle.interactionTelemetry === 'videoOnly') lines.push('Interaction context: timed CLI video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes. Use the app\'s recording shortcut for interaction context.');
@@ -82,7 +85,7 @@ export function semanticSummary(bundle: Data, bundleDir: string, agentContext = 
   if (bundle.autocrop) lines.push(`Cropped to: ${clean(bundle.autocrop.label)} (full frames in ${clean(bundle.autocrop.fullFrames)}/)`);
   if (bundle.source !== 'iphone' && bundle.context?.microphoneCapture !== 'off') {
     const deferredAudio = !!bundle.audio && evidenceOnly;
-    if (!bundle.audio && !deferredAudio) lines.push('No microphone audio was saved. Check the microphone and try again.');
+    if (!hasAudio && !deferredAudio) lines.push('No microphone audio was saved. Check the microphone and try again.');
     else if (!clean(bundle.transcript.text) && bundle.transcript.missing)
       lines.push(`No transcript: ${clean(bundle.transcript.missing.reason)}`);
     else if (!clean(bundle.transcript.text) && bundle.transcript.source === 'none')
@@ -91,9 +94,10 @@ export function semanticSummary(bundle: Data, bundleDir: string, agentContext = 
   }
 
   if (bundle.keyframes.length) {
-    const timeline = semanticEvents(bundle, agentContext);
+    const richFrames = agentContext ? keyframeTexts(bundle) : undefined;
+    const timeline = semanticEvents(bundle);
     let shownScreen = startScreen;
-    for (const item of timeline.filter((event) => event.t < (bundle.keyframes[0].t ?? 0)))
+    if (!agentContext) for (const item of timeline.filter((event) => event.t < (bundle.keyframes[0].t ?? 0)))
       lines.push(`  · ${clock(item.t)} ${item.text}`);
     for (let i = 0; i < bundle.keyframes.length; i++) {
       const frame = bundle.keyframes[i];
@@ -103,14 +107,20 @@ export function semanticSummary(bundle: Data, bundleDir: string, agentContext = 
       const screen = screenAt(bundle, t);
       const screenMarker = screen && screen !== shownScreen ? ` ⟨${value(screen)}⟩` : '';
       shownScreen = screen;
-      const actionMarker = isFlag ? ' ⚑' : !agentContext && frame.reason === 'click' ? ` [${clean(frame.event).split(' (')[0]}]` : '';
-      lines.push(`- #${index} (${clock(t)})${screenMarker}${actionMarker}${said ? ` “${said}”` : ` ${clean(frame.event)}`}`);
-      const next = bundle.keyframes[i + 1]?.t ?? Number.POSITIVE_INFINITY;
-      for (const item of timeline.filter((event) => event.t >= t && event.t < next))
-        lines.push(`  · ${clock(item.t)} ${item.text}`);
+      const actionMarker = isFlag ? ' ⚑' : !agentContext && said && frame.reason === 'click' ? ` [${clean(frame.event).split(' (')[0]}]` : '';
+      if (agentContext && richFrames) {
+        const rich = richFrames[i];
+        lines.push(`- #${index} (${clock(t)})${screenMarker}${actionMarker}${rich.head ? ` ${rich.head}` : ''}`);
+        for (const line of rich.lines) lines.push(`  ${line}`);
+      } else lines.push(`- #${index} (${clock(t)})${screenMarker}${actionMarker}${said ? ` “${said}”` : ` ${clean(frame.event)}`}`);
+      if (!agentContext) {
+        const next = bundle.keyframes[i + 1]?.t ?? Number.POSITIVE_INFINITY;
+        for (const item of timeline.filter((event) => event.t >= t && event.t < next))
+          lines.push(`  · ${clock(item.t)} ${item.text}`);
+      }
     }
   } else {
-    const timeline = semanticEvents(bundle, agentContext);
+    const timeline = semanticEvents(bundle);
     if (!timeline.length && clean(bundle.transcript.text)) lines.push(`“${clean(bundle.transcript.text)}”`);
     else for (const item of timeline) lines.push(`· ${clock(item.t)} ${item.text}`);
   }
