@@ -140,7 +140,7 @@ ONBOARDING_PACKAGE_INPUTS = {
         "src/assets/frog.png", "src/permissions/controller.ts", "src/permissions/react.tsx",
         "test/onboarding.test.ts", "test/permissions.test.ts", "test/consumer.test.ts",
         "vendor/record-0.1.0-afd73fb.tgz",
-        "vendor/apparent-app-contracts-0.1.0.tgz", "src/factory.ts",
+        "vendor/apparent-app-contracts-0.1.0.tgz", "src/factory.ts", "src/adoption.ts", "test/adoption.test.ts",
     )
 }
 # These can change the toolchain, assembly or transitive source closure. Keep
