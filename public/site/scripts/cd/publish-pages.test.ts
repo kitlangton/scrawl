@@ -123,8 +123,8 @@ test('publisher stages exact bytes, writes success receipt, skips superseded can
   const artifact = fixture(root)
   const movieBytes = readFileSync(join(root, 'public/site/public/assets/media/Apparent-ghost-demo-v4-lilac.mp4'))
   rmSync(join(root, 'public/site'), { recursive: true })
-  const oldEnv = { sha: process.env.GITHUB_SHA, ref: process.env.GITHUB_REF, token: process.env.WEBSITE_PAGES_API_TOKEN, repo: process.env.GITHUB_REPOSITORY }
-  process.env.GITHUB_SHA = sha; process.env.GITHUB_REF = 'refs/heads/main'; process.env.WEBSITE_PAGES_API_TOKEN = 'synthetic'; process.env.GITHUB_REPOSITORY = 'example/project'
+  const oldEnv = { sha: process.env.GITHUB_SHA, ref: process.env.GITHUB_REF, token: process.env.WEBSITE_PAGES_API_TOKEN, repo: process.env.GITHUB_REPOSITORY, workflow: process.env.GITHUB_WORKFLOW_REF, job: process.env.GITHUB_JOB }
+  process.env.GITHUB_SHA = sha; process.env.GITHUB_REF = 'refs/heads/main'; process.env.WEBSITE_PAGES_API_TOKEN = 'synthetic'; process.env.GITHUB_REPOSITORY = 'tryapparent/apparent'; process.env.GITHUB_WORKFLOW_REF = 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main'; process.env.GITHUB_JOB = 'deploy'
   try {
     const staged: string[] = [], packagePath = join(artifact, 'dist-apparent')
     let apiCalls = 0
@@ -144,6 +144,13 @@ test('publisher stages exact bytes, writes success receipt, skips superseded can
         return new Response(readFileSync(join(packagePath, paths[url.pathname])), { headers })
       },
     }
+    for (const [key, invalid] of [['GITHUB_REPOSITORY', 'fork/apparent'], ['GITHUB_WORKFLOW_REF', 'tryapparent/apparent/.github/workflows/web-delivery.yml@refs/heads/main'], ['GITHUB_WORKFLOW_REF', undefined], ['GITHUB_JOB', 'website']]) {
+      const original = process.env[key!]
+      if (invalid === undefined) delete process.env[key!]; else process.env[key!] = invalid
+      await assert.rejects(main(deps), /canonical value-stream deploy job/)
+      if (original === undefined) delete process.env[key!]; else process.env[key!] = original
+    }
+    assert.equal(staged.length, 0, 'Other workflow contexts must fail before publication')
     await main(deps)
     const receipt = JSON.parse(readFileSync(join(root, 'website-receipt.json'), 'utf8'))
     assert.equal(receipt.revision, sha)
@@ -165,7 +172,7 @@ test('publisher stages exact bytes, writes success receipt, skips superseded can
     writeFileSync(join(artifact, 'dist-apparent/index.html'), 'changed after verification')
     await assert.rejects(main(deps), /checksum/)
   } finally {
-    for (const [key, value] of Object.entries({ GITHUB_SHA: oldEnv.sha, GITHUB_REF: oldEnv.ref, WEBSITE_PAGES_API_TOKEN: oldEnv.token, GITHUB_REPOSITORY: oldEnv.repo })) {
+    for (const [key, value] of Object.entries({ GITHUB_SHA: oldEnv.sha, GITHUB_REF: oldEnv.ref, WEBSITE_PAGES_API_TOKEN: oldEnv.token, GITHUB_REPOSITORY: oldEnv.repo, GITHUB_WORKFLOW_REF: oldEnv.workflow, GITHUB_JOB: oldEnv.job })) {
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
     }

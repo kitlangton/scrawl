@@ -1,4 +1,4 @@
-// Run AFTER package-apparent, BEFORE `wrangler pages deploy dist-apparent`
+// Prepare media before sealing the candidate for value-stream CI deployment.
 // from public/site/. Functions remain source code outside the uploaded static tree.
 import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { createHash } from "node:crypto"

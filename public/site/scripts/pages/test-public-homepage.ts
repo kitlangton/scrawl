@@ -194,6 +194,13 @@ test("source homepage preserves accepted responsive layout and interactions", as
           }
           await page.locator(".photo-story").scrollIntoViewIfNeeded()
           await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>(".cutout-person img")].every(image => image.complete && image.naturalWidth > 0))
+          // Enabled analytics presents a consent panel over the mobile footer.
+          // Make the visitor's refusal through the real control before testing it.
+          const analyticsNotice = page.getByRole("region", { name: "Optional website analytics" })
+          if (await analyticsNotice.isVisible()) {
+            await analyticsNotice.getByRole("button", { name: "No thanks", exact: true }).click()
+            assert.equal(await analyticsNotice.isVisible(), false, "refusing analytics dismisses the consent panel")
+          }
           await page.locator(".footer-hi").click()
           const dialog = page.locator("dialog[data-dialog=social]")
           assert.equal(await dialog.evaluate((element: HTMLDialogElement) => element.open), true)
