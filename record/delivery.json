@@ -3,9 +3,19 @@
   "id": "record",
   "kind": "npm",
   "package": "record",
-  "inputs": ["record/"],
-  "verify": ["typecheck", "test"],
+  "inputs": [
+    "record/",
+    "shared/ui/",
+    "shared/assets/fonts/"
+  ],
+  "verify": [
+    "typecheck",
+    "test",
+    "test:package"
+  ],
   "build": "build",
-  "targets": ["linux-x64"],
+  "targets": [
+    "linux-x64"
+  ],
   "stage": "library"
 }
