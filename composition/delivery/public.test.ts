@@ -14,7 +14,7 @@ const registration = { schema: 1, id: 'public', kind: 'directory', package: 'pub
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'public-delivery-core-'))
   const put = (path: string, value: string) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), value) }
-  for (const [path, value] of Object.entries({ 'public/delivery.json': JSON.stringify(registration), 'public/site/source.ts': 'source', 'shared/ui/token.css': 'tokens', 'README.md': 'readme', 'composition/delivery/core.ts': 'delivery', 'composition/architecture/check.ts': 'guard', 'enablement/verification/web/baseline.ts': 'baseline verifier', [workflowPathFor('public')]: 'workflow', '.github/workflows/value-stream-delivery.yml': 'reusable workflow' })) put(path, value)
+  for (const [path, value] of Object.entries({ 'public/delivery.json': JSON.stringify(registration), 'public/site/source.ts': 'source', 'shared/ui/token.css': 'tokens', 'README.md': 'readme', 'composition/delivery/core.ts': 'delivery', 'composition/architecture/check.ts': 'guard', 'enablement/verification/web/baseline.ts': 'baseline verifier', [workflowPathFor('public')]: 'workflow', '.github/actions/delivery-component/action.yml': 'component steps', '.github/actions/delivery-contracts/action.yml': 'contract steps' })) put(path, value)
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
   git('init'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid')
   const commit = () => { git('add', '-A'); git('commit', '-m', 'fixture') }
