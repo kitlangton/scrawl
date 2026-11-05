@@ -231,7 +231,11 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
     for (const item of captures.values()) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
     if (live) {
       const output = merged.get(live.captureId);
-      merged.set(live.captureId, output ? mergeCapture(live, output) : live);
+      const combined = output ? mergeCapture(live, output) : live;
+      // Only stopped native materials can be completed by assembled output.
+      // Retained output must never hide live or unresolved runtime ownership.
+      if (options.runtime.state.phase !== "ready") combined.phase = live.phase;
+      merged.set(live.captureId, combined);
     }
     const ready = engineReady();
     return {
@@ -255,13 +259,15 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
   const refresh = async (): Promise<void> => {
     const sequence = ++nativeReadSequence;
     const [native, output, configuredPen] = await Promise.all([
-      options.native ? options.native.readFacts().then(value => validNativeFacts(value) ? acceptNativeSnapshot(value) : undefined).catch(() => undefined) : Promise.resolve(undefined),
-      options.captureFacts ? options.captureFacts.readFacts().then(value => validRecordCaptureFacts(value) ? acceptOutputSnapshot(value) : undefined).catch(() => undefined) : Promise.resolve(undefined),
+      options.native ? options.native.readFacts().catch(() => undefined) : Promise.resolve(undefined),
+      options.captureFacts ? options.captureFacts.readFacts().catch(() => undefined) : Promise.resolve(undefined),
       readPenPreference(options.penConfig),
     ]);
     if (detached || sequence !== nativeReadSequence) return;
-    nativeFacts = native ? clone(native) : unavailableNative();
-    outputFacts = output ? clone(output) : unavailableCaptureFacts();
+    const acceptedNative = validNativeFacts(native) ? acceptNativeSnapshot(native) : undefined;
+    const acceptedOutput = validRecordCaptureFacts(output) ? acceptOutputSnapshot(output) : undefined;
+    nativeFacts = acceptedNative ? clone(acceptedNative) : unavailableNative();
+    outputFacts = acceptedOutput ? clone(acceptedOutput) : unavailableCaptureFacts();
     pen = clone(configuredPen);
     for (const capture of outputFacts.captures) captures.set(capture.captureId, mergeCapture(captures.get(capture.captureId), capture));
     publish();

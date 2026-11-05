@@ -251,3 +251,61 @@ test("provider composes the real host runtime and authoritative pen config write
   assert.equal(client.current().captures[0].outcomes.some(outcome => outcome.kind === "save" && outcome.ok), false);
   client.detach();
 });
+
+
+test("superseded reads cannot retire current native or output producer epochs", async () => {
+  const { runtime } = runtimeFixture();
+  let resolveNative!: (facts: RecordNativeFacts) => void;
+  let resolveOutput!: (facts: RecordCaptureFacts) => void;
+  let nativeReads = 0;
+  let outputReads = 0;
+  let notify!: () => void;
+  const newerNative = { ...nativeFacts(), providerEpoch: "native-new", shortcut: { ...nativeFacts().shortcut, effective: "Alt+R" } };
+  const newerOutput = { ...outputFacts(), providerEpoch: "output-new", nextShortcutAdmission: { state: "idle" as const } };
+  const client = createRecordCapabilityProvider({
+    runtime, providerEpoch: "overlapping-reads",
+    native: {
+      readFacts: () => ++nativeReads === 1 ? new Promise(resolve => { resolveNative = resolve; }) : Promise.resolve(newerNative),
+      observe: listener => { notify = listener; return () => undefined; },
+    },
+    captureFacts: { readFacts: () => ++outputReads === 1 ? new Promise(resolve => { resolveOutput = resolve; }) : Promise.resolve(newerOutput) },
+  });
+  notify();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(client.current().shortcut.effective, "Alt+R");
+  assert.equal(client.current().nextShortcutAdmission.state, "idle");
+  resolveNative(nativeFacts());
+  resolveOutput(outputFacts());
+  await new Promise(resolve => setImmediate(resolve));
+  notify();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(client.current().shortcut.effective, "Alt+R");
+  assert.equal(client.current().nextShortcutAdmission.state, "idle");
+  client.detach();
+});
+
+test("cached saved output cannot override a live capture or admit copy and open", async () => {
+  const { runtime } = runtimeFixture();
+  await runtime.dispatch({ type: "start", requestId: "overlapping-capture" });
+  let dispatched = 0;
+  const client = createRecordCapabilityProvider({
+    runtime, providerEpoch: "live-lifecycle",
+    native: { readFacts: async () => nativeFacts(), dispatch: async () => { dispatched++; return "accepted"; } },
+    captureFacts: { readFacts: async () => ({ ...outputFacts(), captures: [{
+      captureId: "overlapping-capture", delivery: "unknown", phase: "saved", artifactId: "prior-artifact",
+      outcomes: [{ kind: "save", at: "2026-11-05T12:00:00Z", ok: true }],
+    }] }) },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(client.current().captures[0].phase, "recording");
+  for (const type of ["copy-local", "open-capture"] as const) {
+    const snapshot = client.current();
+    const result = await client.execute({ type, captureId: "overlapping-capture", requestId: type,
+      expected: { providerEpoch: snapshot.providerEpoch, revision: snapshot.revision } });
+    assert.equal(result.status, "refused");
+  }
+  assert.equal(dispatched, 0);
+  await runtime.dispatch({ type: "stop" });
+  assert.equal(client.current().captures[0].phase, "saved", "assembled output may complete stopped materials");
+  client.detach();
+});
