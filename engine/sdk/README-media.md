@@ -97,10 +97,15 @@ are safe nonnegative integers and may repeat or be out of order. The SDK
 preserves both. For each request, `effectiveVideoMs = max(0, requestedBundleMs -
 videoOffsetMs)`; pre-offset timestamps retain their requested time and set
 `clampedToStart`. This preserves legacy saturating subtraction.
-The native peer may clamp a post-duration request to the last decodable frame,
-and reports `clampedToEnd`, `effectiveVideoMs` and optional decoder-reported
-`actualVideoMs` separately. There is no promise of exact frame position when a
-decoder seeks approximately. Results carry 1-based `requestIndex` plus the
+`effectiveVideoMs` always remains this offset-mapped requested seek, including
+when it exceeds the movie duration. A native peer may decode the last available
+frame for a post-duration request and set `clampedToEnd: true`; it must not replace
+`effectiveVideoMs` with that clamped position. `actualVideoMs`, when supplied,
+reports the decoder position separately. For example, a bundle request at
+5250 ms with a 250 ms offset has `effectiveVideoMs: 5000`; an end-clamped decode
+may report `actualVideoMs: 1999` and `clampedToEnd: true` for a two-second movie.
+There is no promise of exact frame position when a decoder seeks approximately.
+Results carry 1-based `requestIndex` plus the
 original requested timestamp; no nearest-time remapping or deduplication is
 allowed. A decoder must return one result per request or fail the whole job.
 

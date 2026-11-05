@@ -12,7 +12,7 @@ test('build entrypoints scope the color guard to their declared consumers; repos
  assert.match(verifier,/\["python3", "shared\/ui\/scripts\/check-theme.py"\]/)
 })
 test('actual owner, generated Public content and reverse shared consumers select their lanes',()=>{
-  for(const path of ['public/site/src/Home.tsx','README.md','capture/agent/skills/apparent/SKILL.md'])assert(relevant('public',path),path)
+  for(const path of ['public/site/src/Home.tsx','public/delivery.json','composition/delivery/core.ts','.github/workflows/value-stream-delivery.yml','README.md','capture/agent/skills/apparent/SKILL.md'])assert(relevant('public',path),path)
   assert(!relevant('connect','README.md'));assert(!relevant('recipient','public/site/src/Home.tsx'))
   assert(relevant('connect','connect/service/src/worker.ts'));assert(!relevant('public','connect/service/src/worker.ts'))
   for(const owner of ['public','connect'] as Owner[])for(const path of ['connect/web/package.json','shared/ui/token.css','shared/analytics/config.ts','shared/assets/brand/logo.svg','enablement/release_gate.py'])assert(relevant(owner,path),`${owner}: ${path}`)

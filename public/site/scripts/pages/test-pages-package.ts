@@ -13,6 +13,7 @@ function fixture() {
   cpSync(join(site, 'scripts/pages/prepare-pages.ts'), join(root, 'scripts/pages/prepare-pages.ts'))
   writeFileSync(join(root, 'dist-apparent/index.html'), '<html>fresh source homepage</html>')
   writeFileSync(join(root, 'dist-apparent/assets/source.js'), 'fresh source JS')
+  writeFileSync(join(root, 'dist-apparent/_worker.js'), 'verified compiled worker')
   return { root, cleanup: () => rmSync(outer, { recursive: true, force: true }) }
 }
 const run = (root: string) => spawnSync(process.execPath, [join(root, 'scripts/pages/prepare-pages.ts')], { encoding: 'utf8' })
@@ -32,6 +33,7 @@ test('Pages preserves source-built homepage, assets and all fresh Connect routes
     assert.equal(readFileSync(join(root, 'dist-apparent/index.html'), 'utf8'), '<html>fresh source homepage</html>')
     assert.equal(readFileSync(join(root, 'dist-apparent/assets/source.js'), 'utf8'), 'fresh source JS')
     for (const route of routes) assert.equal(readFileSync(join(root, 'dist-apparent', route, 'index.html'), 'utf8'), `fresh ${route}`)
+    assert.equal(readFileSync(join(root, 'dist-apparent/_worker.js'), 'utf8'), 'verified compiled worker')
     assert(existsSync(join(root, 'dist-apparent/404.html')))
     const redirects = readFileSync(join(root, 'dist-apparent/_redirects'), 'utf8')
     for (const route of ['', '/device', '/shares']) for (const suffix of ['', '/']) assert(redirects.includes(`/hosted${route}${suffix} /connect${route} 302`))
