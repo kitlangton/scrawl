@@ -139,6 +139,7 @@ ONBOARDING_PACKAGE_INPUTS = {
         "src/model.ts", "src/react.tsx", "src/styles.css", "src/assets.d.ts",
         "src/assets/frog.png", "test/onboarding.test.ts",
         "vendor/record-0.1.0-afd73fb.tgz",
+        "vendor/apparent-app-contracts-0.1.0.tgz", "src/factory.ts",
     )
 }
 # These can change the toolchain, assembly or transitive source closure. Keep
@@ -147,6 +148,7 @@ ONBOARDING_PACKAGE_BUILD_INPUTS = {
     ONBOARDING_PACKAGE_ROOT + name for name in (
         "package.json", "package-lock.json", "delivery.json", "tsconfig.json",
         "tsconfig.test.json", "vendor/record-0.1.0-afd73fb.tgz",
+        "vendor/apparent-app-contracts-0.1.0.tgz",
     )
 }
 

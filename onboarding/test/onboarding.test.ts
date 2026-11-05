@@ -10,6 +10,8 @@ import { hasConfirmedArtifactOpen, type ArtifactOpenOutcome, type CaptureFact, t
 import { OnboardingController } from "../dist/controller.js";
 import { initialProgress, normalizeProgress, type OnboardingProgress, type ProgressStore, type SaveResult } from "../dist/model.js";
 import { OnboardingContribution } from "../dist/react.js";
+import { onboardingContributionFactory } from "../dist/factory.js";
+import { onboardingProgressCodec } from "../dist/model.js";
 
 class Store implements ProgressStore {
   revision = 1; value = initialProgress(); conflict = false; unknown = false;
@@ -40,6 +42,34 @@ test("normalizes legacy aliases and keeps defer distinct from completion", async
   const f = fixture(); await f.controller.load(); await f.controller.dispatch("defer"); assert.equal(f.controller.state.progress.status, "deferred"); f.controller.dispose();
   const resumed = fixture(); resumed.progress.value = { ...initialProgress(), status: "deferred", stage: "screen-ink", attemptId: "unfinished", manualPasteConfirmed: true }; await resumed.controller.load(); await resumed.controller.dispatch("reopen"); assert.equal(resumed.controller.state.progress.stage, "screen-ink"); assert.equal(resumed.controller.state.progress.attemptId, "unfinished"); resumed.controller.dispose();
   const replay = fixture(); replay.progress.value = { ...initialProgress(), status: "completed", stage: "complete", attemptId: "old", manualPasteConfirmed: true }; await replay.controller.load(); await replay.controller.dispatch("reopen"); assert.equal(replay.controller.state.progress.stage, "welcome"); assert.equal(replay.controller.state.progress.attemptId, null); assert.equal(replay.controller.state.progress.manualPasteConfirmed, false); replay.controller.dispose();
+});
+
+test("host progress codec preserves owner metadata and rejects future schema", () => {
+  const legacy = onboardingProgressCodec.decode({ seen: false, deferred: true, resume: "TryIt", tutorial: "practiced", relaunchedAt: 1700000000000, reopenFix: false, shortcutChosen: true, firstCaptureCompleted: true });
+  assert.equal(legacy.status, "deferred"); assert.equal(legacy.stage, "practice-start");
+  assert.equal(legacy.legacy.tutorial, "practiced"); assert.equal(legacy.legacy.relaunchedAt, 1700000000000); assert.equal(legacy.legacy.shortcutChosen, true); assert.equal(legacy.legacy.firstCaptureCompleted, true);
+  const encoded = onboardingProgressCodec.encode(legacy); assert.notEqual(encoded, legacy);
+  assert.throws(() => onboardingProgressCodec.decode({ schema: 2, status: "completed" }), /Unsupported onboarding progress schema/);
+  const accessor = { ...initialProgress() }; Object.defineProperty(accessor, "stage", { enumerable: true, get() { throw new Error("getter executed"); } });
+  assert.throws(() => onboardingProgressCodec.encode(accessor), /accessors/);
+});
+
+test("host factory loads before rendering and applies first-launch versus explicit resume policy", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "deferred", stage: "screen-ink", attemptId: "unfinished" };
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => "factory-id", Button: TestButton, close() {} });
+  await hosted.activation.activate({ reason: "firstLaunch" });
+  assert.equal(f.progress.value.stage, "screen-ink"); assert.equal(f.progress.value.status, "deferred");
+  const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => { root.render(createElement(hosted.module.Screen)); await Promise.resolve(); });
+  assert.equal(dom.window.document.querySelector("main.onboarding-shell"), null);
+  await hosted.activation.activate({ reason: "resume" });
+  assert.equal(f.progress.value.stage, "screen-ink"); assert.equal(f.progress.value.status, "in-progress");
+  await act(async () => { await Promise.resolve(); });
+  assert.equal(dom.window.document.querySelector("main.onboarding-shell")?.getAttribute("data-stage"), "screen-ink");
+  await act(async () => { root.unmount(); }); dom.window.close();
+  await hosted.activation.dispose(); await assert.rejects(hosted.activation.activate({ reason: "resume" }), /cannot be activated/);
 });
 
 test("renders the actual React contribution with accessible controls and packed Record fixture pen choices", async () => {
