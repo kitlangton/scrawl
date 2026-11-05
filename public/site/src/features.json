@@ -982,6 +982,18 @@
       "docs": ["README.md#settings", "capture/desktop/docs/onboarding-and-settings.md"]
     },
     {
+      "id": "owner-settings-storage",
+      "added": "2026-11-05",
+      "group": "settings",
+      "name": "Owner-scoped settings storage foundation",
+      "says": "A development helper updates one stream's stored state atomically while preserving other preferences and secrets. Installed Settings and onboarding keep their existing storage until their replacement is adopted.",
+      "status": "main",
+      "platforms": ["mac", "linux"],
+      "config": [{ "key": "streamState", "value": "{owner: {revision, value}}", "does": "Versioned state used only by explicitly composed new-shell consumers" }],
+      "note": "No installed route or new Settings control is enabled. Owner schemas remain separate. Native artifacts require successful verification for their own platform before admission; packaged-app adoption requires its affected native checks.",
+      "docs": ["shared/config-native/README.md", "composition/config/README.md"]
+    },
+    {
       "id": "about-build-identity",
       "group": "settings",
       "name": "Running build identity",

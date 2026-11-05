@@ -88,9 +88,10 @@ Every envelope has the literal `channel: "media"`, `protocolVersion: 1`,
 `bundleId`, absolute bundle and video paths, nonnegative `videoOffsetMs`, and
 caller-supplied video file identity (`device`, `inode`, `size`, nanosecond
 modification time). The identity metadata is a consistency key, not
-authorization to access arbitrary paths. The native worker is not implemented;
-descriptor pinning, before/after identity checks, bundle validation and path
-swap rejection remain native conformance gates.
+authorization to access arbitrary paths. Native implementation status and
+platform acceptance are recorded in the [Engine native worker documentation](https://github.com/tryapparent/apparent/blob/main/engine/README-media.md).
+Descriptor pinning, before/after identity checks, bundle validation and path
+swap rejection are native conformance gates, independent of SDK validation.
 
 `requestedBundleMs` is an ordered array of 1–48 request slots. Values
 are safe nonnegative integers and may repeat or be out of order. The SDK
@@ -120,7 +121,11 @@ verified native provider filesystem publication can establish that.
 
 Successful decode returns only PNG references: request index/times, absolute
 PNG path, dimensions, byte length and SHA-256. No image bytes cross the JSON
-transport. The destination must be a fresh private directory owned by the job.
+transport. The destination must be a fresh private directory owned by the job:
+either an absent path or a caller-provisioned empty mode-0700 directory under an
+existing private mode-0700 parent. The native provider claims it exclusively
+before writing; existing entries or a stale job claim are refused. Callers do not
+precreate PNGs or a completed manifest.
 The native provider refuses overwrite/symlink/path escape, validates each PNG,
 syncs each file and directory, then atomically publishes a complete job
 manifest. References are emitted only after that barrier. No partial success is
@@ -222,6 +227,6 @@ A conforming peer must cover these cases against the real protocol implementatio
    directory; file+directory durability precedes atomic manifest publication
    and response. Test synthetic refs never pass as native evidence.
 
-The separate `apparent-engine-frames` Rust executable and its native decoder,
-provider manifest/inventory, platform distribution and real decode proofs are
-not implemented by this SDK contract checkpoint.
+The SDK itself supplies no native decoder, provider inventory or platform
+distribution. See the Engine-owned native worker documentation above for its
+implementation, measured proof and remaining delivery/platform gates.

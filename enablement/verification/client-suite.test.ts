@@ -70,7 +70,7 @@ test('client stream includes API, build, verifier and unknown inputs across canc
   }
   git('init', '-q')
   git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid')
-  const paths = ['connect/client/src/lib.rs', 'connect/client/test/fixture', 'connect/client/Cargo.lock',
+  const paths = ['connect/client/src/lib.rs', 'connect/client/test/fixture', 'connect/client/Cargo.lock', 'shared/config-native/src/lib.rs', 'shared/config-native/Cargo.lock',
     'connect/service/src/worker.ts', 'connect/hosted/provider.rs', '.cargo/config.toml',
     'Cargo.toml', 'Cargo.lock', 'build.rs', 'rust-toolchain.toml',
     '.github/workflows/verification-platform.yml', 'enablement/verification/client-suite.ts',
