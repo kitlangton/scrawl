@@ -34,3 +34,14 @@ without Cargo. The helper is unsigned/unnotarized; it does not install a shell
 bridge, activate a route, implement permission/shortcut effects or establish
 Record/Engine readiness. First platform artifact admission and installed native
 adoption remain separate gates.
+
+
+The persistent sidecar is created with `O_CREAT|O_EXCL`, or opened without
+`O_CREAT` when creation reports `EEXIST`. This avoids the concurrent Darwin
+create-or-open failure observed before locking. Both paths retain no-follow,
+private-file ownership/link checks, flock and the post-wait inode check. A
+missing existing sidecar is an error, never a reason to create a replacement
+inode beneath a holder. Tests inject ENOENT at the combined create/open boundary, cover failure after
+observing an existing lock, and run 32 independent competing first-writer pairs.
+The injected fault does not establish a Darwin kernel cause; the affected macOS
+producer must run the real repeated-contention regression before readiness.

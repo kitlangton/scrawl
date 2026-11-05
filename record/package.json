@@ -40,7 +40,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node --experimental-strip-types scripts/build-ui.ts && tailwindcss -i src/ui/style.css -o dist/ui/style.css && node --experimental-strip-types scripts/copy-ui-assets.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts test/*/*.test.ts",
     "prepare": "npm run build",
     "prepack": "npm run build",
     "test:package": "node --experimental-strip-types test/package-smoke.ts"

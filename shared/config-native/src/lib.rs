@@ -261,6 +261,16 @@ struct ConfigWriter {
     name: std::ffi::CString,
 }
 
+fn open_lock_with(mut open: impl FnMut(i32) -> std::io::Result<fs::File>) -> std::io::Result<fs::File> {
+    // Mac CI observed ENOENT during concurrent first creation in the combined
+    // O_CREAT path. Create exclusively, or open the persistent existing inode.
+    // If that inode disappears, fail closed: never create a replacement lock.
+    match open(libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NONBLOCK) {
+        Err(error) if error.raw_os_error() == Some(libc::EEXIST) => open(libc::O_RDWR | libc::O_NONBLOCK),
+        result => result,
+    }
+}
+
 impl ConfigWriter {
     fn acquire(path: &Path, allowed: Option<&dyn Fn() -> bool>) -> Result<Self> {
         use std::os::fd::AsRawFd;
@@ -302,11 +312,8 @@ impl ConfigWriter {
         let name = path.file_name().context("Config has no filename")?;
         let name = std::ffi::CString::new(name.as_bytes())?;
         let lock_name = std::ffi::CString::new([name.as_bytes(), b".lock"].concat())?;
-        let lock = Self::open_at(
-            &directory,
-            &lock_name,
-            libc::O_RDWR | libc::O_CREAT | libc::O_NONBLOCK,
-        ).context("config-lock-open")?;
+        let lock = open_lock_with(|flags| Self::open_at(&directory, &lock_name, flags))
+            .context("config-lock-open")?;
         let meta = lock.metadata().context("config-lock-stat")?;
         ensure!(
             meta.is_file()
@@ -404,6 +411,38 @@ fn config_write_hook(point: &str, path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lock_creation_avoids_observed_combined_create_or_open_failure() {
+        let mut calls = Vec::new();
+        let lock = open_lock_with(|flags| {
+            calls.push(flags);
+            // Inject the ENOENT observed at the combined create/open boundary.
+            // Exclusive create instead reports the peer's existing inode.
+            if flags & libc::O_CREAT != 0 {
+                let code = if flags & libc::O_EXCL == 0 { libc::ENOENT } else { libc::EEXIST };
+                return Err(std::io::Error::from_raw_os_error(code));
+            }
+            fs::File::open("/dev/null")
+        });
+        assert!(lock.is_ok(), "{lock:?}");
+        assert_eq!(calls, [libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NONBLOCK, libc::O_RDWR | libc::O_NONBLOCK]);
+    }
+
+    #[test]
+    fn lock_removal_and_other_creation_errors_never_trigger_recreation() {
+        let mut calls = 0;
+        let error = open_lock_with(|_| {
+            calls += 1;
+            Err(std::io::Error::from_raw_os_error(if calls == 1 { libc::EEXIST } else { libc::ENOENT }))
+        }).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ENOENT));
+        assert_eq!(calls, 2, "never recreate a missing inode after observing an existing lock");
+        calls = 0;
+        let error = open_lock_with(|_| { calls += 1; Err(std::io::Error::from_raw_os_error(libc::EACCES)) }).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EACCES));
+        assert_eq!(calls, 1);
+    }
 
     #[test]
     fn uncertain_publication_is_not_reported_as_saved_and_retry_observes_revision() {

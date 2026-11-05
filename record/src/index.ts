@@ -5,3 +5,5 @@ export type { RecordCommand, RecordState } from "./backend/workflow/controller.j
 export { RecordWorkflow } from "./backend/workflow/controller.js";
 export { assembleProcessingOutput, decodeSelectedFrames } from "./backend/processing/index.js";
 export type { DecodeSelection, ProcessingInput, ProcessingOutput, PublishedMediaClient, SelectedFrame, TranscriptSegment } from "./backend/processing/index.js";
+export { formatLocalHandoff } from "./backend/handoff/index.js";
+export type { LocalHandoffInput, LocalHandoffOutput } from "./backend/handoff/index.js";

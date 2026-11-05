@@ -37,11 +37,11 @@ async function main(args: string[]) {
   const env = process.env
   if (args.length === 1 && args[0] === 'plan') {
     const plan = makePlan(root)
-    // Public has a dedicated producer job so its deployment never waits on the matrix.
-    const matrix = { include: plan.matrix.include.filter(owner => owner.id !== 'public') }
+    // Main gives Public a dedicated producer; PRs verify every registered owner without deploying.
+    const matrix = { include: plan.matrix.include.filter(owner => env.GITHUB_EVENT_NAME === 'pull_request' || owner.id !== 'public') }
     output({ matrix: JSON.stringify(matrix), has_ready: matrix.include.length > 0, pending: JSON.stringify(plan.pending), blocked: JSON.stringify(plan.blocked) })
     console.log(JSON.stringify({ ...plan, matrix, has_ready: matrix.include.length > 0 }, null, 2))
-    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `## Delivery plan\n\nMatrix targets: ${matrix.include.length}; Public uses its dedicated producer/deploy jobs.\n\nPending owners: ${plan.pending.join(', ') || 'none'}\n\nBlocked registrations: ${plan.blocked.join('; ') || 'none'}\n`)
+    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `## Delivery plan\n\nMatrix targets: ${matrix.include.length}; Public uses its dedicated producer/deploy jobs on main.\n\nPending owners: ${plan.pending.join(', ') || 'none'}\n\nBlocked registrations: ${plan.blocked.join('; ') || 'none'}\n`)
     return
   }
   if (args.length === 3 && args[0] === 'admit') {

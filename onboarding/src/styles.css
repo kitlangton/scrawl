@@ -21,6 +21,8 @@
 .onboarding-pond-frog { position:absolute; left:0; top:15px; width:90px; height:80px; object-fit:contain; }
 .onboarding-pond[data-hop=true] .onboarding-pond-frog { animation:onboarding-pen-hop .9s linear forwards; }
 .onboarding-later { align-self:flex-start; margin:0 16px 8px; }
+.permission-repair-row { display:grid; grid-template-columns:minmax(140px,1fr) minmax(120px,auto) auto; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--apparent-border); }
+.permission-repair-row span { color:var(--apparent-muted-foreground); }
 .onboarding-shell button { min-height:44px; border-radius:0; font:inherit; }
 .onboarding-shell button:focus-visible { outline:2px solid var(--apparent-signal); outline-offset:3px; }
 @keyframes onboarding-pen-hop { 0%{transform:translate(0,0)} 45%{transform:translate(85px,-60px) rotate(8deg)} 70%{transform:translate(165px,35px) scale(1.1,.8)} 100%{transform:translate(165px,50px)} }

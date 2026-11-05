@@ -1485,7 +1485,7 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
                         expected = '2'
                     elif workflow.name == 'value-stream-delivery.yml':
                         expected = '2' if '    outputs:\n' in job else ('5' if '    name: Delivery contracts\n' in job else '15')
-                        if '    name: stream (' in job:
+                        if '    name: stream (' in job or '    name: pr-stream (' in job:
                             expected = "${{ matrix.target == 'web' && 10 || 15 }}"
                         if '    name: deploy (public, web)' in job:
                             expected = '10'
