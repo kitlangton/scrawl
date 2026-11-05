@@ -62,6 +62,8 @@ export interface SdkReceipt {
  * getByRequestId must reconcile it before another identity can be created.
  */
 export interface CaptureMappingStore {
+  /** Lists public Record identities only; SDK IDs and owner tokens stay private. */
+  listRequestIds(): Promise<string[]>;
   getByRequestId(requestId: string): Promise<CaptureMapping | undefined>;
   getByCaptureId(captureId: string): Promise<CaptureMapping | undefined>;
   putIfAbsent(mapping: CaptureMapping): Promise<CaptureMapping>;

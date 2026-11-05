@@ -22,6 +22,22 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
     this.#databasePath = join(privateRoot, "capture-mappings.sqlite");
   }
 
+  async listRequestIds(): Promise<string[]> {
+    const db = await this.#open();
+    try {
+      return db.prepare("SELECT request_id FROM capture_mapping ORDER BY request_id").all()
+        .map(row => {
+          const requestId = row.request_id;
+          if (typeof requestId !== "string" || !requestId.length || Buffer.byteLength(requestId) > 4096) throw hostError();
+          return requestId;
+        });
+    } catch {
+      throw hostError();
+    } finally {
+      try { db.close(); } catch { /* preserve a sanitized store error */ }
+    }
+  }
+
   async getByRequestId(requestId: string): Promise<CaptureMapping | undefined> {
     return this.#read("request_id", requestId);
   }
