@@ -1,6 +1,6 @@
 # Record package
 
-`@apparent/record` is an independently installable TypeScript workflow package. It owns explicit local recording states and consumes an injected `EngineClient`; it does not create a recording itself and ships no fake or default production Engine adapter.
+`@apparent/record` is an independently installable TypeScript workflow package. It owns explicit local recording states and consumes an injected `EngineClient`. `EngineSdkAdapter` is an injected host composition adapter for the packed `@apparent/engine-sdk`; it does not choose an executable, runtime directory, bundle allocator, or durable private mapping store.
 
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 
@@ -12,7 +12,7 @@ Run `npm ci`, `npm run typecheck`, `npm test`, and `npm run build` in this direc
 
 ## Adoption limits
 
-The repository's `apparent capture` CLI already implements GUI start/stop/cancel/inspect control over a same-user Unix socket on macOS/Linux. A separate readiness query is not currently exposed. This package does not yet provide that process transport, Electron main/preload wiring, or an adopted React surface. Electron needs a host-owned adapter that invokes the existing Rust GUI control path, obtains native readiness from an accepted Engine capability, and maps JSON receipts/events into `EngineClient`. The Engine's native readiness and capture lifecycle remain authoritative. Until that adapter and platform seam proof land, this package is a tested workflow prerequisite and makes no production recording-availability claim.
+The `EngineSdkAdapter` consumes an already constructed SDK client. The host still owns explicit executable/runtime selection, private durable mapping storage, bundle allocation, Electron main/preload wiring, and any adopted React surface. The current SDK contract has no native executable, so it cannot provide production readiness or native capture evidence. The adapter is not an installed route.
 
 ## Asynchronous ownership
 
