@@ -137,7 +137,8 @@ ONBOARDING_PACKAGE_INPUTS = {
         ".gitignore", "README.md", "delivery.json", "package.json", "package-lock.json",
         "tsconfig.json", "tsconfig.test.json", "src/index.ts", "src/controller.ts",
         "src/model.ts", "src/react.tsx", "src/styles.css", "src/assets.d.ts",
-        "src/assets/frog.png", "test/onboarding.test.ts", "test/consumer.test.ts",
+        "src/assets/frog.png", "src/permissions/controller.ts", "src/permissions/react.tsx",
+        "test/onboarding.test.ts", "test/permissions.test.ts", "test/consumer.test.ts",
         "vendor/record-0.1.0-afd73fb.tgz",
         "vendor/apparent-app-contracts-0.1.0.tgz", "src/factory.ts",
     )
