@@ -1,12 +1,12 @@
 import { constants } from 'node:fs';
-import { open, readdir, readFile, stat } from 'node:fs/promises';
+import { open, readdir, stat, lstat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 export const MAX_MANIFEST = 64 * 1024 * 1024;
 const defaultCaptures = () => process.platform === 'darwin'
   ? join(homedir(), 'Library', 'Application Support', 'apparent', 'captures')
-  : join(homedir(), '.local', 'share', 'apparent', 'captures');
+  : join(process.env.XDG_DATA_HOME && isAbsolute(process.env.XDG_DATA_HOME) ? process.env.XDG_DATA_HOME : join(homedir(), '.local', 'share'), 'apparent', 'captures');
 const expandHome = (value: string) => value === '~' ? homedir() : value.startsWith('~/') ? join(homedir(), value.slice(2)) : value;
 
 export async function resolveCaptures(): Promise<string> {
@@ -15,41 +15,50 @@ export async function resolveCaptures(): Promise<string> {
   else {
     const configPath = join(homedir(), '.config', 'apparent', 'config.json');
     try {
-      const config = JSON.parse(await readFile(configPath, 'utf8'));
+      const config = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(await readRegular(configPath, 1024 * 1024)));
       configured = config?.capturesDir;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error(`Cannot read Apparent config at ${configPath}`);
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') process.stderr.write('Ignoring unreadable or invalid Apparent config; using default capture storage.\n');
     }
   }
   if (configured === undefined) return resolve(defaultCaptures());
-  if (typeof configured !== 'string' || !configured.trim()) throw new Error('capturesDir must be a non-empty path');
-  return resolve(expandHome(configured));
+  if (typeof configured !== 'string' || !configured.trim()) {
+    if (process.env.APPARENT_CAPTURES_DIR !== undefined) throw new Error('APPARENT_CAPTURES_DIR must be a non-empty path');
+    return resolve(defaultCaptures());
+  }
+  const selected = expandHome(configured.trim());
+  if (process.env.APPARENT_CAPTURES_DIR === undefined && !isAbsolute(selected)) return resolve(defaultCaptures());
+  return resolve(selected);
+}
+
+/** Bounded descriptor read; symlink files and non-regular files are refused. */
+export async function readRegular(path: string, limit: number): Promise<Buffer> {
+  const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+  try {
+    const info = await file.stat();
+    if (!info.isFile()) throw new Error('Expected a regular file');
+    if (info.size > limit) throw new Error('File exceeds ' + limit + '-byte safety limit');
+    const chunks: Buffer[] = []; let total = 0;
+    while (total <= limit) {
+      const chunk = Buffer.allocUnsafe(Math.min(65536, limit + 1 - total));
+      const { bytesRead } = await file.read(chunk, 0, chunk.length, null);
+      if (!bytesRead) return Buffer.concat(chunks, total);
+      total += bytesRead; chunks.push(chunk.subarray(0, bytesRead));
+    }
+    throw new Error('File exceeds ' + limit + '-byte safety limit');
+  } finally { await file.close(); }
 }
 
 export async function readManifest(path: string): Promise<{ raw: Buffer; value: Record<string, any> }> {
-  const manifestPath = join(path, 'apparent.json');
-  let file;
-  try { file = await open(manifestPath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)); } catch { throw new Error(`Cannot open apparent.json in ${path}`); }
-  try {
-    const info = await file.stat();
-    if (!info.isFile()) throw new Error(`apparent.json is not a regular file in ${path}`);
-    if (info.size > MAX_MANIFEST) throw new Error('apparent.json exceeds 64 MiB safety limit');
-    const bytes = Buffer.allocUnsafe(MAX_MANIFEST + 1);
-    let offset = 0;
-    while (offset < bytes.length) {
-      const { bytesRead } = await file.read(bytes, offset, bytes.length - offset, offset);
-      if (bytesRead === 0) break;
-      offset += bytesRead;
-    }
-    if (offset > MAX_MANIFEST) throw new Error('apparent.json exceeds 64 MiB safety limit');
-    const raw = bytes.subarray(0, offset);
-    let text: string;
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { throw new Error('apparent.json is not valid UTF-8'); }
-    let value: any;
-    try { value = JSON.parse(text); } catch { throw new Error('apparent.json is not valid JSON'); }
-    validateManifest(value);
-    return { raw, value };
-  } finally { await file.close(); }
+  let raw: Buffer;
+  try { raw = await readRegular(join(path, 'apparent.json'), MAX_MANIFEST); }
+  catch { throw new Error('Cannot read regular apparent.json within 64 MiB safety limit in ' + path); }
+  let text: string;
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { throw new Error('apparent.json is not valid UTF-8'); }
+  let value: any;
+  try { value = JSON.parse(text); } catch { throw new Error('apparent.json is not valid JSON'); }
+  validateManifest(value);
+  return { raw, value };
 }
 
 function validateManifest(value: any): asserts value is Record<string, any> {
@@ -73,8 +82,19 @@ function validateManifest(value: any): asserts value is Record<string, any> {
   if (!value.events.every((e: any) => object(e))) throw new Error('Invalid bundle: malformed event entries');
 }
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
-const safeReference = (v: unknown): v is string => typeof v === 'string' && !!v && !v.includes('\\') && !v.includes('\0') &&
+export const safeReference = (v: unknown): v is string => typeof v === 'string' && !!v && !v.includes('\\') && !v.includes('\0') &&
   !v.startsWith('/') && !/^[a-z][a-z\d+.-]*:/i.test(v) && !v.split('/').includes('..');
+
+export async function checkImageReference(bundle: string, reference: string): Promise<void> {
+  if (!safeReference(reference)) throw new Error('Bundle contains an unsafe image reference');
+  let path = bundle;
+  for (const part of reference.split('/')) {
+    path = join(path, part);
+    const info = await lstat(path).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error; });
+    if (!info) break; // References can describe unavailable media without reading it.
+    if (info.isSymbolicLink()) throw new Error('Bundle image reference follows a symlink');
+  }
+}
 
 export async function resolveBundle(input = 'latest', captures?: string): Promise<string> {
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(input)) throw new Error('URLs are not accepted; provide a local bundle path');
@@ -89,7 +109,7 @@ export async function resolveBundle(input = 'latest', captures?: string): Promis
         if (!(await stat(path)).isDirectory()) continue;
         const { value } = await readManifest(path);
         // The producer publishes apparent.json last, after summary and image artifacts.
-        const summaryFile = await open(join(path, 'summary.md'), constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+        const summaryFile = await open(join(path, 'summary.md'), constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
         try {
           if (!(await summaryFile.stat()).isFile()) throw new Error('incomplete summary');
           await summaryFile.read(Buffer.alloc(1), 0, 1, 0);
@@ -98,7 +118,7 @@ export async function resolveBundle(input = 'latest', captures?: string): Promis
           ...(value.autocrop ? [value.autocrop.fullContactSheet, ...value.keyframes.map((k: any) => k.file.startsWith('frames/')
             ? `${value.autocrop.fullFrames}/${k.file.slice('frames/'.length)}` : undefined)] : [])].filter((v) => v !== undefined);
         if (!references.every(safeReference)) continue;
-        for (const reference of references) if (!(await stat(join(path, reference))).isFile()) throw new Error('incomplete image artifacts');
+        for (const reference of references) { await checkImageReference(path, reference); if (!(await stat(join(path, reference))).isFile()) throw new Error('incomplete image artifacts'); }
         candidates.push({ path, created: value.createdAtMs });
       } catch { /* malformed or incomplete candidates do not shadow a completed bundle */ }
     }

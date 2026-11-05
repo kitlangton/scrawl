@@ -1183,7 +1183,7 @@
       "id": "agent-local-inspection-cli",
       "group": "cli",
       "name": "Local TypeScript bundle inspection CLI",
-      "says": "The independently installable apparent-agent command inspects local .apparent manifests and provides foreground screen recording through a separately installed native Engine runtime. Inspection has no Desktop, Cargo, network, or Connect dependency.",
+      "says": "The independently installable apparent-agent command inspects local .apparent manifests and includes a foreground recording adapter for Engine contract v1; a production native recorder remains required and unverified. Inspection has no Desktop, Cargo, network, or Connect dependency.",
       "status": "main",
       "added": "2026-11-05",
       "platforms": ["mac", "linux"],

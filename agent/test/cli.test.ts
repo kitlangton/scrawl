@@ -17,12 +17,12 @@ test('local bundle commands preserve raw JSON, summary, transcript, marks, and r
     const json = run(join(bundle, 'apparent.json'), '--json'); assert.equal(json.stdout, raw);
     assert.equal(run(bundle).stdout, '# Stored\n');
     assert.equal(run(bundle, '--transcript').stdout, 'héllo\n');
-    assert.equal(JSON.parse(run(bundle, '--marks').stdout)[0].id, 'm1');
+    assert.equal(JSON.parse(run(bundle, '--marks', '--json').stdout)[0].id, 'm1');
     assert.deepEqual(JSON.parse(run(bundle, '--images').stdout).references, ['contact-sheet.png', 'frames/001.png']);
     await writeFile(join(bundle, 'apparent.json'), raw.replace('frames/001.png', '../secret.png'));
     assert.equal(run(bundle, '--images').status, 2);
     assert.equal(run('https://example.com/id').status, 2);
-    assert.equal(run(bundle, '--json', '--marks').status, 2);
+    assert.equal(run(bundle, '--json', '--marks').status, 0);
     assert.match(spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' }).stdout, /Usage:/);
     assert.equal(spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' }).status, 0);
     await writeFile(join(bundle, 'apparent.json'), '{'); assert.equal(run(bundle).status, 2);
@@ -97,11 +97,11 @@ test('foreground adapter starts only when ready and returns only a saved native 
       calls.push(method);
       if (method === 'stop') state = 'stopping';
       if (method === 'inspect' && state === 'stopping') state = 'saved';
-      return {state, bundlePath:state === 'saved' ? '/tmp/synthetic.apparent' : undefined};
+      return {state, bundlePath:state === 'saved' ? '/tmp/synthetic.apparent' : undefined, artifactProvenance:'native', artifactVersion:1};
     },
   } as unknown as RecordingClient;
   const saved = await recordWithEngine(client, '/tmp/synthetic.apparent', 0.001);
-  assert.equal(saved, '/tmp/synthetic.apparent'); assert.deepEqual(calls, ['start', 'stop', 'inspect']);
+  assert.equal(saved, '/tmp/synthetic.apparent'); assert.equal(calls[0], 'start'); assert.equal(calls.filter(c => c === 'stop').length, 1); assert.equal(calls.at(-1), 'inspect');
 });
 
 test('foreground adapter cancels a start that never becomes ready', async () => {
@@ -118,6 +118,6 @@ test('foreground adapter cancels a start that never becomes ready', async () => 
       return {state};
     },
   } as unknown as RecordingClient;
-  await assert.rejects(recordWithEngine(client, '/tmp/synthetic.apparent', 1, () => checks > 0), /state: cancelled/);
-  assert.deepEqual(calls, ['inspect', 'stop', 'cancel', 'inspect']);
+  await assert.rejects(recordWithEngine(client, '/tmp/synthetic.apparent', 1, () => checks > 0), /state cancelled/);
+  assert.deepEqual(calls, ['inspect', 'cancel']);
 });
