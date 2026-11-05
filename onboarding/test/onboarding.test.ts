@@ -356,3 +356,72 @@ test("a late progress read after dispose cannot publish stale setup state", asyn
   finish({ revision: 9, value: { ...initialProgress(), status: "in-progress", stage: "locate", manualPasteConfirmed: true } });
   await loading; assert.equal(f.controller.state.progress.stage, "welcome"); assert.equal(f.controller.state.progress.status, "new");
 });
+
+test("accepted arm retains association until delayed armed and consumed snapshots", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" };
+  const s = f.driver.current(); f.driver.publish({ ...s, revision: s.revision + 1, nextShortcutAdmission: { state: "idle" } });
+  await f.controller.load(); await f.controller.dispatch("continue");
+  const admissionId = f.controller.state.progress.admissionId!;
+  assert.ok(admissionId); assert.equal(f.controller.state.progress.stage, "practice-start");
+  assert.equal(f.driver.current().nextShortcutAdmission.state, "idle", "accepted dispatch alone is not armed");
+  let current = f.driver.current(); f.driver.publish({ ...current, revision: current.revision + 1, nextShortcutAdmission: { state: "armed", admissionId, delivery: "local-only", expiresAt: new Date(Date.now() + 10000).toISOString() } });
+  current = f.driver.current(); f.driver.publish({ ...current, revision: current.revision + 1, nextShortcutAdmission: { state: "consumed", admissionId, captureId: "delayed" }, captures: [capture("delayed", "starting", [outcome("shortcut")], undefined, "local-only", admissionId)] });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(f.controller.state.progress.attemptId, "delayed"); assert.equal(f.controller.state.progress.stage, "screen");
+  f.controller.dispose();
+});
+
+test("deferral cannot hide a pending accepted reservation without terminal readback", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" };
+  const s = f.driver.current(); f.driver.publish({ ...s, revision: s.revision + 1, nextShortcutAdmission: { state: "idle" } });
+  await f.controller.load(); await f.controller.dispatch("continue");
+  const admissionId = f.controller.state.progress.admissionId!;
+  await f.controller.dispatch("defer"); assert.notEqual(f.controller.state.progress.status, "deferred");
+  assert.match(f.controller.state.error ?? "", /could not be released/);
+  const current = f.driver.current(); f.driver.publish({ ...current, revision: current.revision + 1, nextShortcutAdmission: { state: "cancelled", admissionId } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await f.controller.dispatch("defer"); assert.equal(f.controller.state.progress.status, "deferred");
+  f.controller.dispose();
+});
+
+test("refused reservation clears intent and permits another attempt", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" };
+  const s = f.driver.current(); f.driver.publish({ ...s, revision: s.revision + 1, nextShortcutAdmission: { state: "idle" } });
+  f.driver.setNextResult("refused"); await f.controller.load(); await f.controller.dispatch("continue");
+  assert.equal(f.controller.state.progress.admissionId, null);
+  await f.controller.dispatch("continue"); assert.ok(f.controller.state.progress.admissionId);
+  f.controller.dispose();
+});
+
+test("disposal cancels a reservation armed after its accepted command", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" };
+  let s = f.driver.current(); f.driver.publish({ ...s, revision: s.revision + 1, nextShortcutAdmission: { state: "idle" } });
+  await f.controller.load(); await f.controller.dispatch("continue");
+  const admissionId = f.controller.state.progress.admissionId!;
+  f.controller.dispose(); s = f.driver.current();
+  f.driver.publish({ ...s, revision: s.revision + 1, nextShortcutAdmission: { state: "armed", admissionId, delivery: "local-only", expiresAt: new Date(Date.now() + 10000).toISOString() } });
+  await Promise.resolve(); assert.equal(f.driver.commands().at(-1)?.type, "cancel-next-shortcut");
+  assert.ok(!f.driver.commands().some(c => c.type === "cancel-capture" || c.type === "stop-capture"));
+  s = f.driver.current(); f.driver.publish({ ...s, revision: s.revision + 1, nextShortcutAdmission: { state: "cancelled", admissionId } });
+});
+
+test("an accepted pen choice waits for subsequent authoritative color readback", async () => {
+  const f = fixture(); await f.controller.load(); await f.controller.dispatch("continue");
+  assert.equal(await f.controller.selectPen("purple"), false);
+  assert.equal(f.controller.penSelectionConfirmed("purple"), false);
+  const s = f.driver.current(); f.driver.publish({ ...s, revision: s.revision + 1, pen: { ...s.pen, effective: "purple" } });
+  assert.equal(f.controller.penSelectionConfirmed("purple"), true);
+  await f.controller.completePenSelection(); assert.equal(f.controller.state.progress.stage, "permissions");
+  f.controller.dispose();
+});
+
+test("mounted deferred setup exposes Resume without resetting its saved step", async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  f.progress.value = { ...initialProgress(), status: "deferred", stage: "permissions" };
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); });
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Resume setup")!.click(); });
+  assert.equal(f.controller.state.progress.status, "in-progress"); assert.equal(f.controller.state.progress.stage, "permissions");
+  await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
+});

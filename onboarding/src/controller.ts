@@ -1,4 +1,4 @@
-import type { CapabilitySnapshot, PenColor, RecordClient, RecordCommand, CommandResult } from "@apparent/record/capabilities";
+import { hasConfirmedArtifactOpen, type CapabilitySnapshot, type PenColor, type RecordClient, type RecordCommand, type CommandResult } from "@apparent/record/capabilities";
 import { initialProgress, normalizeProgress, nextStage, type OnboardingProgress, type ProgressStore, type Revision, type SaveResult, type Stage } from "./model.js";
 
 export type ControllerState = { progress: OnboardingProgress; revision: Revision; snapshot: CapabilitySnapshot | null; error: string | null; saving: boolean; publication: "confirmed" | "unknown"; command: "idle" | "accepted" | "applied" | "unknown" | "refused" };
@@ -23,9 +23,8 @@ export class OnboardingController {
   #listeners = new Set<(state: ControllerState) => void>(); #unsubscribe: () => void; #disposed = false; #op = 0; #lastEpoch: string | null = null;
   #loaded = false;
   #confirmedPen: string | null = null;
+  #penIntent: { color: PenColor; epoch: string; revision: number } | null = null;
   #reserving = false;
-  #checkingOpen = false;
-  #openCheckEpoch = 0;
   constructor(private readonly deps: OnboardingDependencies) {
     this.#unsubscribe = deps.record.observe(snapshot => this.observe(snapshot));
   }
@@ -49,10 +48,29 @@ export class OnboardingController {
   }
   dispose(): void {
     const p = this.#state.progress, snapshot = this.#state.snapshot;
-    if (p.admissionId && snapshot?.nextShortcutAdmission.state === "armed" && snapshot.nextShortcutAdmission.admissionId === p.admissionId && !this.#disposed) {
-      void this.execute({ type: "cancel-next-shortcut", admissionId: p.admissionId });
-    }
+    if (this.#disposed) return;
+    if (p.admissionId && snapshot) this.releaseOnDispose(p.admissionId, snapshot.providerEpoch);
     this.#disposed = true; this.#op++; this.#unsubscribe(); this.#listeners.clear();
+  }
+  /** Retain only reservation cleanup when an accepted arm outlives this view. */
+  private releaseOnDispose(admissionId: string, epoch: string): void {
+    let done = false, sent = false;
+    let unsubscribe: (() => void) | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => { done = true; unsubscribe?.(); if (timer) clearTimeout(timer); };
+    unsubscribe = this.deps.record.observe(snapshot => {
+      const fact = snapshot.nextShortcutAdmission;
+      if (snapshot.providerEpoch !== epoch) { finish(); return; }
+      if (!("admissionId" in fact) || fact.admissionId !== admissionId) return;
+      if (["consumed", "cancelled", "expired"].includes(fact.state)) { finish(); return; }
+      if (snapshot.connection !== "connected" || fact.state !== "armed" || sent) return;
+      sent = true;
+      void this.deps.record.execute({ type: "cancel-next-shortcut", admissionId, requestId: this.deps.id(), expected: { providerEpoch: snapshot.providerEpoch, revision: snapshot.revision } }).then(result => {
+        if (result.status === "refused" || result.status === "outcome-unknown") sent = false;
+      }).catch(() => { sent = false; });
+    });
+    if (done) unsubscribe();
+    else { timer = setTimeout(finish, 5 * 60_000); timer.unref?.(); }
   }
   async refresh(): Promise<CommandResult | null> { return this.execute({ type: "refresh" }); }
   async repair(type: "request-permission" | "open-system-settings", requirementId: string): Promise<CommandResult | null> { return this.execute({ type, requirementId }); }
@@ -74,21 +92,34 @@ export class OnboardingController {
       }
       if (snapshot!.nextShortcutAdmission.state !== "idle") return this.fail("A local-only shortcut reservation is not available. Refresh setup and try again.");
       const admissionId = this.deps.id(), expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+      // Persist the association before dispatch: acceptance can arrive before
+      // the armed fact, or the person can press the shortcut immediately.
+      await this.persist({ ...this.#state.progress, status: "in-progress", stage: "practice-start", admissionId, attemptId: null, practiceBaselineIds: snapshot!.captures.map(c => c.captureId) });
+      if (this.#state.publication !== "confirmed" || this.#state.progress.admissionId !== admissionId) return this.#state;
       const result = await this.execute({ type: "arm-next-shortcut", admissionId, delivery: "local-only", expiresAt });
       const fact = this.#state.snapshot?.nextShortcutAdmission;
+      if (result?.status === "accepted") return this.#state;
+      if (result?.status === "refused" || result?.status === "cancelled") {
+        await this.persist({ ...this.#state.progress, admissionId: null });
+        return this.fail("The practice shortcut could not be prepared. Try again.");
+      }
       if (!result || !["accepted", "applied"].includes(result.status) || fact?.state !== "armed" || fact.admissionId !== admissionId || fact.delivery !== "local-only") return this.fail("Apparent did not confirm a local-only shortcut reservation. Refresh before trying again.");
-      return this.persist({ ...this.#state.progress, status: "in-progress", stage: "practice-start", admissionId, attemptId: null, practiceBaselineIds: snapshot!.captures.map(c => c.captureId) });
+      return this.#state;
     } finally { this.#reserving = false; }
   }
   async retryPracticeCopy(): Promise<CommandResult | null> { const captureId = this.#state.progress.attemptId; if (!captureId || this.#state.progress.stage !== "preparing") return null; const fact = this.#state.snapshot?.captures.find(c => c.captureId === captureId); if (fact?.phase !== "saved") return null; return this.execute({ type: "copy-local", captureId }); }
   async selectPen(value: PenColor): Promise<boolean> {
     this.#confirmedPen = null;
+    const before = this.#state.snapshot;
+    this.#penIntent = before ? { color: value, epoch: before.providerEpoch, revision: before.revision } : null;
     const result = await this.execute({ type: "select-pen", value });
+    if (result?.status === "accepted") return this.penSelectionConfirmed(value);
     if (result?.status !== "applied" || result.snapshot.pen.effective !== value) { this.fail(result?.status === "outcome-unknown" ? "Your pen choice may not have been saved. Check the current choice before trying again." : result?.status === "refused" ? result.reason : "Your pen choice could not be confirmed. Try again."); return false; }
     if (this.#disposed || this.#state.snapshot?.pen.effective !== value) return false;
     this.#confirmedPen = value;
     return true;
   }
+  penSelectionConfirmed(value: PenColor): boolean { return this.#confirmedPen === value && this.#state.snapshot?.connection === "connected" && this.#state.snapshot.pen.effective === value; }
   async completePenSelection(): Promise<ControllerState> {
     if (this.#disposed || this.#state.saving || this.#state.publication !== "confirmed" || this.#state.command === "unknown" || this.#state.progress.status === "deferred" || this.#state.progress.stage !== "pen" || !this.#confirmedPen || this.#state.snapshot?.connection !== "connected" || this.#state.snapshot.pen.effective !== this.#confirmedPen) return this.#state;
     return this.persist({ ...this.#state.progress, status: "in-progress", stage: "permissions" });
@@ -100,12 +131,15 @@ export class OnboardingController {
     const p = this.#state.progress, snapshot = this.#state.snapshot;
     if (command === "refresh") { await this.refresh(); return this.#state; }
     if (command === "defer") {
-      if (p.admissionId && snapshot?.nextShortcutAdmission.state === "armed" && snapshot.nextShortcutAdmission.admissionId === p.admissionId) {
+      if (this.#reserving) return this.fail("Finishing your practice setup. Try closing it again in a moment.");
+      const admission = snapshot?.nextShortcutAdmission;
+      const terminal = admission && "admissionId" in admission && admission.admissionId === p.admissionId && ["consumed", "cancelled", "expired"].includes(admission.state);
+      if (p.admissionId && !terminal) {
         const result = await this.execute({ type: "cancel-next-shortcut", admissionId: p.admissionId });
         const fact = this.#state.snapshot?.nextShortcutAdmission;
-        if (!result || !["accepted", "applied", "cancelled"].includes(result.status) || fact?.state !== "cancelled" || fact.admissionId !== p.admissionId) return this.fail("The pending shortcut reservation could not be released. Setup remains open; refresh and try again.");
+        if (!result || !fact || !("admissionId" in fact) || fact.admissionId !== p.admissionId || !["cancelled", "expired", "consumed"].includes(fact.state)) return this.fail("The pending shortcut reservation could not be released. Setup remains open; refresh and try again.");
       }
-      return this.persist({ ...p, status: "deferred" });
+      return this.persist({ ...this.#state.progress, status: "deferred" });
     }
     if (command === "reopen") return this.persist({ ...p, status: "in-progress", stage: p.status === "completed" ? "welcome" : p.stage, attemptId: p.status === "completed" ? null : p.attemptId, practiceBaselineIds: p.status === "completed" ? [] : p.practiceBaselineIds, manualPasteConfirmed: p.status === "completed" ? false : p.manualPasteConfirmed });
     if (p.status === "deferred" || p.status === "completed") return this.#state;
@@ -128,7 +162,7 @@ export class OnboardingController {
     if (p.stage === "copied" && !successful(snapshot, p.attemptId, "copy")) return this.fail("Your capture is saved, but the copy did not finish. Retry from the capture controls.");
     if (p.stage === "locate") {
       if (!p.manualPasteConfirmed) return this.fail("Confirm the paste yourself before locating the practice capture.");
-      if (snapshot && p.attemptId && await this.hasConfirmedOpen(snapshot, p.attemptId)) return this.persist({ ...p, status: "completed", stage: "complete" });
+      if (snapshot?.connection === "connected" && p.attemptId && hasConfirmedArtifactOpen(snapshot, p.attemptId)) return this.persist({ ...p, status: "completed", stage: "complete" });
       return this.fail("Open the saved capture from the Apparent menu to finish this step.");
     }
     if (p.stage === "complete") return this.#state;
@@ -142,7 +176,10 @@ export class OnboardingController {
   private shortcutConfirmed(snapshot: CapabilitySnapshot | null): boolean { return snapshot?.connection === "connected" && !!snapshot.shortcut.effective && !snapshot.shortcut.draft && ["registered", "externally-managed"].includes(snapshot.shortcut.registration); }
   private observe(snapshot: CapabilitySnapshot): void {
     if (this.#disposed) return;
+    const intent = this.#penIntent;
+    if (intent && snapshot.providerEpoch === intent.epoch && snapshot.revision > intent.revision && snapshot.pen.effective === intent.color && !snapshot.pen.error) this.#confirmedPen = intent.color;
     if (this.#lastEpoch && snapshot.providerEpoch !== this.#lastEpoch) {
+      this.#penIntent = null; this.#confirmedPen = null;
       const p = this.#state.progress;
       const retained = !p.attemptId || snapshot.captures.some(c => c.captureId === p.attemptId);
       const resetPractice = !retained && stages.indexOf(p.stage) >= stages.indexOf("screen") && stages.indexOf(p.stage) < stages.indexOf("complete");
@@ -165,6 +202,11 @@ export class OnboardingController {
     }
     let stage = p.stage;
     if (stage === "practice-start") {
+      const admission = snapshot.nextShortcutAdmission;
+      if (p.admissionId && "admissionId" in admission && admission.admissionId === p.admissionId && ["expired", "cancelled"].includes(admission.state)) {
+        void this.persist({ ...p, admissionId: null });
+        return;
+      }
       const admitted = admissionCapture(snapshot, p);
       if (admitted) {
         this.set({ ...this.#state, progress: { ...p, attemptId: admitted.captureId }, error: null });
@@ -184,16 +226,8 @@ export class OnboardingController {
     if (stage === "screen-ink" && screenStroke) stage = "stop";
     const associatedId = this.#state.progress.attemptId;
     const associated = associatedId ? snapshot.captures.find(c => c.captureId === associatedId) : undefined;
-    if (stage === "locate" && this.#state.progress.manualPasteConfirmed && associatedId && !this.#checkingOpen) {
-      this.#checkingOpen = true;
-      const checkEpoch = ++this.#openCheckEpoch;
-      void import("@apparent/record/capabilities").then(({ hasConfirmedArtifactOpen }) => {
-        if (this.#disposed || checkEpoch !== this.#openCheckEpoch) return;
-        const latest = this.#state, current = latest.snapshot;
-        if (latest.progress.stage === "locate" && latest.progress.status === "in-progress" && latest.progress.manualPasteConfirmed && latest.progress.attemptId && current && hasConfirmedArtifactOpen(current, latest.progress.attemptId)) {
-          void this.persist({ ...latest.progress, status: "completed", stage: "complete" });
-        }
-      }).catch(() => { /* Missing Record runtime cannot prove artifact open. */ }).finally(() => { if (checkEpoch === this.#openCheckEpoch) this.#checkingOpen = false; });
+    if (stage === "locate" && p.manualPasteConfirmed && associatedId && hasConfirmedArtifactOpen(snapshot, associatedId)) {
+      void this.persist({ ...p, status: "completed", stage: "complete" });
       return;
     }
     if (stage === "stop" && successful(snapshot, associatedId, "processing") && ["processing", "saved"].includes(associated?.phase ?? "")) stage = "preparing";
@@ -232,9 +266,5 @@ export class OnboardingController {
     return this.#state;
   }
   private fail(error: string): ControllerState { this.set({ ...this.#state, error }); return this.#state; }
-  private async hasConfirmedOpen(snapshot: CapabilitySnapshot, captureId: string): Promise<boolean> {
-    try { return (await import("@apparent/record/capabilities")).hasConfirmedArtifactOpen(snapshot, captureId); }
-    catch { return false; }
-  }
   private set(state: ControllerState): void { if (this.#disposed) return; this.#state = Object.freeze({ ...state, progress: Object.freeze({ ...state.progress }) }); for (const fn of this.#listeners) { try { fn(this.#state); } catch { this.#listeners.delete(fn); } } }
 }
