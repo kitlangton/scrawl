@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -111,6 +111,14 @@ test("private staging prepares SDK-validated plan without touching destination o
       artifactBytes: Object.fromEntries(input.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
     });
     assert.equal(replay.input.planFile.planSha256, prepared.input.planFile.planSha256, "an exact replay resumes the same staged plan");
+    const planPath = join(root, "private", "b".repeat(32), "publication-plan.json");
+    await writeFile(planPath, "partial plan", { mode: 0o600 });
+    await assert.rejects(prepareRecordPublication({
+      ownerToken: "c".repeat(64), publicationId: "b".repeat(32), stagingRoot: join(root, "private"), destinationPath,
+      materialsManifest: input.manifest, materialsPayloadBytes: input.payloadBytes, assembly,
+      artifactBytes: Object.fromEntries(input.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
+    }), /replay conflicts/u);
+    assert.equal(await readFile(planPath, "utf8"), "partial plan", "ambiguous partial state is retained");
     const foreign = join(root, "private", "b".repeat(32), "foreign.txt");
     await writeFile(foreign, "preserve me", { mode: 0o600 });
     await assert.rejects(prepareRecordPublication({
@@ -119,6 +127,29 @@ test("private staging prepares SDK-validated plan without touching destination o
       artifactBytes: Object.fromEntries(input.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
     }), /unrelated state/u);
     assert.equal(await readFile(foreign, "utf8"), "preserve me", "conflicting staged state is never cleaned up implicitly");
+    await symlink(join(root, "private"), join(root, "root-alias"));
+    await assert.rejects(prepareRecordPublication({
+      ownerToken: "c".repeat(64), publicationId: "d".repeat(32), stagingRoot: join(root, "root-alias"), destinationPath,
+      materialsManifest: input.manifest, materialsPayloadBytes: input.payloadBytes, assembly,
+      artifactBytes: Object.fromEntries(input.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
+    }), /alias/u);
+    const escaped = structuredClone(assembly);
+    escaped.inventory.entries[0]!.path = "../outside.json";
+    await assert.rejects(prepareRecordPublication({
+      ownerToken: "c".repeat(64), publicationId: "e".repeat(32), stagingRoot: join(root, "escape-private"), destinationPath,
+      materialsManifest: input.manifest, materialsPayloadBytes: input.payloadBytes, assembly: escaped,
+      artifactBytes: Object.fromEntries(input.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
+    }), /invalid relative path/u);
+    const concurrent = {
+      ownerToken: "c".repeat(64), publicationId: "f".repeat(32), stagingRoot: join(root, "concurrent-private"), destinationPath,
+      materialsManifest: input.manifest, materialsPayloadBytes: input.payloadBytes, assembly,
+      artifactBytes: Object.fromEntries(input.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
+    };
+    const winner = prepareRecordPublication(concurrent);
+    const conflicting = prepareRecordPublication({ ...concurrent, artifactBytes: { ...concurrent.artifactBytes, "frames/frame-01.png": new Uint8Array([1, 2, 3]) } });
+    const losing = assert.rejects(conflicting, /in-flight staging binding/u);
+    await winner;
+    await losing;
     const summary = new TextDecoder().decode(assembly.summaryMd);
     assert.match(summary, /hello there/u);
     assert.match(new TextDecoder().decode(assembly.apparentJson), /contact-sheet\.png/u);
