@@ -1191,6 +1191,17 @@
       "docs": ["agent/README.md", "agent/docs/cli-parity.md"]
     },
     {
+      "id": "agent-standalone-skill",
+      "group": "cli",
+      "name": "Standalone apparent-agent skill guide",
+      "says": "apparent-agent skill prints the package's bundled capture-reading guide to stdout for agents using the standalone local inspection CLI.",
+      "status": "main",
+      "added": "2026-11-05",
+      "platforms": ["mac", "linux"],
+      "note": "The command reads only package-relative guide text, takes no operands, and does not start Engine, read settings, access bundles, or use the network. It documents local inspection only and makes no recording, media, or Connect capability claim. Legacy apparent skill and routing remain unchanged.",
+      "docs": ["agent/skills/apparent/SKILL.md", "agent/docs/cli-parity.md"]
+    },
+    {
       "id": "cli-read",
       "group": "cli",
       "name": "inspect and frames",
