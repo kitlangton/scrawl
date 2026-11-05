@@ -11,15 +11,15 @@ const run=promisify(execFile);
 const scratch=await mkdtemp(path.join(tmpdir(),'record-packed-'));
 const hostOnly=await mkdtemp(path.join(tmpdir(),'record-host-only-'));
 const root=fileURLToPath(new URL('../',import.meta.url));
-const sdkArtifact=process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root,'vendor/engine-sdk-0.3.0.tgz');
-const sdkSha256='c45708988c9631a24e8aecdeaa53d66cf37e51c9c8743e4bf83cc90bb551f90a';
+const sdkArtifact=process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root,'vendor/engine-sdk-0.3.1.tgz');
+const sdkSha256='1b605f06273f9c1a134b68b0ed233605b120813214914ca70ed0c8c5f0346f04';
 try {
   const bytes=await readFile(sdkArtifact);
-  assert.equal(createHash('sha256').update(bytes).digest('hex'),sdkSha256,'packed SDK artifact must be the approved immutable SDK0.3');
-  await copyFile(sdkArtifact,path.join(scratch,'apparent-engine-sdk-0.3.0.tgz'));
+  assert.equal(createHash('sha256').update(bytes).digest('hex'),sdkSha256,'packed SDK artifact must be the approved immutable SDK0.3.1');
+  await copyFile(sdkArtifact,path.join(scratch,'apparent-engine-sdk-0.3.1.tgz'));
   await run('npm',['pack','--pack-destination',scratch],{cwd:root});
   await writeFile(path.join(scratch,'package.json'),JSON.stringify({private:true,type:'module'}));
-  await run('npm',['install','--ignore-scripts','--no-audit','--no-fund','--package-lock=false',path.join(scratch,'apparent-engine-sdk-0.3.0.tgz'),path.join(scratch,'apparent-record-0.1.0.tgz')],{cwd:scratch});
+  await run('npm',['install','--ignore-scripts','--no-audit','--no-fund','--package-lock=false',path.join(scratch,'apparent-engine-sdk-0.3.1.tgz'),path.join(scratch,'apparent-record-0.1.0.tgz')],{cwd:scratch});
   const installed=path.join(scratch,'node_modules/@apparent/record');
   const manifest=JSON.parse(await readFile(path.join(installed,'package.json'),'utf8'));
   for(const value of Object.values(manifest.dependencies??{})) assert.ok(!String(value).startsWith('file:'));
@@ -71,16 +71,18 @@ try {
     console.log('headless host subpath loads without React or Electron');
   `],{cwd:hostOnly});
   process.stdout.write(headless.stdout);
-  await run('npm',['install','--omit=peer','--ignore-scripts','--no-audit','--no-fund','--package-lock=false',path.join(scratch,'apparent-engine-sdk-0.3.0.tgz')],{cwd:hostOnly});
+  await run('npm',['install','--omit=peer','--ignore-scripts','--no-audit','--no-fund','--package-lock=false',path.join(scratch,'apparent-engine-sdk-0.3.1.tgz')],{cwd:hostOnly});
   await writeFile(path.join(hostOnly,'consumer.ts'),`
-    import type { CaptureClient } from '@apparent/engine-sdk/capture';
+    import { preflightCapturePublication, type CaptureClient } from '@apparent/engine-sdk/capture';
+    import { createRecordPublicationRecovery } from '@apparent/record/publication';
     import type { RecordPublicationRecovery } from '@apparent/record/publication';
     declare const client: CaptureClient;
     declare const recovery: RecordPublicationRecovery;
     const accepted: ReturnType<typeof recovery.publish> = recovery.publish({} as Parameters<CaptureClient['publish']>[0]);
-    void client; void accepted;
+    const bound = createRecordPublicationRecovery(client, '/tmp/typed-private-control', preflightCapturePublication);
+    void bound; void accepted;
   `);
   await writeFile(path.join(hostOnly,'tsconfig.json'),JSON.stringify({compilerOptions:{target:'ES2022',module:'NodeNext',moduleResolution:'NodeNext',strict:true,noEmit:true,skipLibCheck:true},include:['consumer.ts']}));
   const typecheck=await run(path.join(root,'node_modules/.bin/tsc'),['-p',path.join(hostOnly,'tsconfig.json')],{cwd:hostOnly});
-  process.stdout.write(typecheck.stdout || 'packed SDK0.3 and Record publication declaration consumer typecheck passed\n');
+  process.stdout.write(typecheck.stdout || 'packed SDK0.3.1 and Record publication declaration consumer typecheck passed\n');
 } finally { await Promise.all([rm(scratch,{recursive:true,force:true}),rm(hostOnly,{recursive:true,force:true})]); }

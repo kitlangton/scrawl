@@ -4,43 +4,51 @@ import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { CaptureClient, CaptureStatus } from "@apparent/engine-sdk/capture";
-import { createRecordPublicationRecovery } from "../../dist/backend/publication/recovery.js";
+import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, validateMaterialsDocument, type CapturePublishInput, type CaptureStatus } from "@apparent/engine-sdk/capture";
+import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
+import { createRecordPublicationRecovery as createRecovery } from "../../dist/backend/publication/recovery.js";
 import { SqlitePublicationBindingStore } from "../../dist/backend/publication/store.js";
 
 const captureId = "a".repeat(32);
 const publicationId = "b".repeat(32);
 const ownerToken = "c".repeat(64);
-const materials = {
-  manifest: {
-    schema: "apparent.capture-materials/1" as const,
-    key: { captureId, materialsId: "d".repeat(32), revision: "e".repeat(64) },
-    root: "/private/materials",
-    leaseId: "f".repeat(32),
-    payloadFile: { relativePath: "materials.json", identity: { device: "1", inode: "2", size: 1, modifiedNs: "3" }, sha256: "e".repeat(64) },
-  },
-  payload: { schema: "apparent.capture-materials-payload/1", bundleId: "take.apparent" },
+// Controlled schema fixtures and method-port fakes are not native artifacts or proof.
+function sealed(relativePath: string, sha256 = "1".repeat(64), size = 1) {
+  return { relativePath, identity: { device: "1", inode: "2", size, modifiedNs: "3" }, sha256 };
+}
+const payload = {
+  schema: "apparent.capture-materials-payload/1", identity: { captureId, materialsId: "d".repeat(32) },
+  bundleId: "take.apparent", root: "/private/materials", leaseId: "f".repeat(32),
+  clock: { epoch: "capture-admission-monotonic", units: "integer-milliseconds", durationMs: 1000, videoOffsetMs: 0 },
+  confirmedSource: { id: "display-1", generation: "1".repeat(32), confirmedAtMs: 0, kind: "display", displayId: 1,
+    rectangle: { x: 0, y: 0, width: 1280, height: 720, scale: 1 }, confirmation: { kind: "explicit-display", id: "2".repeat(32) } },
+  invocation: { kind: "explicit", invocationId: "3".repeat(32), observedAtMs: 0 },
+  files: [sealed("video.mp4")], video: { file: "video.mp4", width: 1280, height: 720, durationMs: 1000 }, facts: {},
+  collection: { context: "unavailable", interactions: "unavailable", candidates: "unavailable", transcript: "unavailable", acceptedStrokes: "unavailable" },
+  warnings: [], safety: { nativeRemoteDelivery: "forbidden", safeForProcessing: true },
 };
+const originalPayloadBytes = Buffer.from(JSON.stringify(payload));
+const revision = createHash(originalPayloadBytes);
+const materials = validateMaterialsDocument({ schema: "apparent.capture-materials/1", key: { ...payload.identity, revision },
+  root: payload.root, leaseId: payload.leaseId, payloadFile: sealed("materials.json", revision, originalPayloadBytes.byteLength) }, originalPayloadBytes);
 
-function makeInput(path = "/tmp/apparent-publication-test/take.apparent") {
-  const planBytes = Buffer.from(JSON.stringify({
-    schema: "apparent.bundle-publication/1",
-    publicationId,
-    materials: materials.manifest.key,
-    bundleId: materials.payload.bundleId,
-    destination: { path, mode: "absent" },
-    entries: [{ relativePath: "apparent.json", sha256: "1".repeat(64) }],
-  }));
+function makeInput(path = "/tmp/apparent-publication-test/take.apparent"): CapturePublishInput {
+  const entries = [["apparent.json", "manifest"], ["summary.md", "summary"], ["frames/frame-001.png", "frame"], ["contact-sheet.png", "contact-sheet"]].map(([relativePath, role], i) => {
+    const sha256 = String(i + 1).repeat(64);
+    return { relativePath, role, sha256, byteLength: 1, input: { kind: "assembled", file: sealed(relativePath, sha256) } };
+  });
+  const planBytes = Buffer.from(JSON.stringify({ schema: "apparent.bundle-publication/1", publicationId,
+    materials: materials.manifest.key, bundleId: materials.payload.bundleId, stagingRoot: "/private/staging",
+    destination: { path, mode: "absent" }, artifactVersion: 1, profile: "apparent-bundle/1", manifestPath: "apparent.json", summaryPath: "summary.md", entries }));
   const planSha256 = createHash(planBytes);
-  return {
-    ownerToken, captureId, leaseId: materials.manifest.leaseId, publicationId,
+  return { ownerToken, captureId, leaseId: materials.manifest.leaseId, publicationId,
     planBytes: new Uint8Array(planBytes), materials: structuredClone(materials),
-    planFile: {
-      stagingRoot: "/private/staging",
-      planSha256,
-      planFile: { relativePath: "plan.json", identity: { device: "1", inode: "4", size: planBytes.length, modifiedNs: "5" }, sha256: planSha256 },
-    },
-  } as unknown as Parameters<CaptureClient["publish"]>[0];
+    planFile: { stagingRoot: "/private/staging", planSha256, planFile: sealed("plan.json", planSha256, planBytes.length) } };
+}
+
+function createRecordPublicationRecovery(client: CaptureClient, root: string) {
+  const port = Object.assign({ async handshake() { return { implementation: "native", capabilities: { publication: true } }; } }, client) as CaptureClient;
+  return createRecovery(port, root, preflightCapturePublication);
 }
 
 function createHash(bytes: Uint8Array): string {
@@ -53,6 +61,37 @@ function pending(capture: string, pub: string, sha: string): CaptureStatus {
 }
 
 async function temp() { return mkdtemp(join(tmpdir(), "record-pub-recovery-")); }
+
+test("SDK preflight rejects an incomplete inventory before reserving its identity", async () => {
+  const root = await temp();
+  let dispatches = 0;
+  const sdk = { async publish() { dispatches++; throw new Error("ambiguous"); } } as unknown as CaptureClient;
+  try {
+    const recovery = createRecordPublicationRecovery(sdk, join(root, "private"));
+    const invalid = makeInput(join(root, "final.apparent"));
+    const plan = JSON.parse(Buffer.from(invalid.planBytes).toString("utf8"));
+    plan.entries = plan.entries.filter((entry: { role: string }) => entry.role !== "summary");
+    invalid.planBytes = Buffer.from(JSON.stringify(plan));
+    invalid.planFile.planSha256 = createHash(invalid.planBytes);
+    invalid.planFile.planFile = sealed("plan.json", invalid.planFile.planSha256, invalid.planBytes.byteLength);
+    await assert.rejects(recovery.publish(invalid), error => error instanceof CapturePublicationPreflightError && error.dispatched === false);
+    assert.equal(await new SqlitePublicationBindingStore(join(root, "private")).get(captureId), undefined);
+    assert.equal(dispatches, 0);
+    await assert.rejects(recovery.publish(makeInput(join(root, "final.apparent"))), /outcome is unknown/);
+    assert.equal(dispatches, 1, "the rejected plan must not poison the publication identity");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("the real packed SDK test peer remains unavailable and never reserves a publication", async () => {
+  const root = await temp();
+  const client = new CaptureClient(new ReferenceCapturePeer(), { allowTestDouble: true });
+  try {
+    const recovery = createRecovery(client, join(root, "private"), preflightCapturePublication);
+    await assert.rejects(recovery.publish(makeInput(join(root, "final.apparent"))), error => error instanceof Error && (error as Error & { dispatched?: boolean }).dispatched === false);
+    assert.equal(await new SqlitePublicationBindingStore(join(root, "private")).get(captureId), undefined);
+    await assert.rejects(lstat(join(root, "final.apparent")), { code: "ENOENT" });
+  } finally { await client.close(); await rm(root, { recursive: true, force: true }); }
+});
 
 test("lost publish reply survives reopen and reconciliation uses the durable original binding", async () => {
   const root = await temp();
@@ -112,7 +151,7 @@ test("mutated or foreign publication binding is refused without redispatch", asy
     const changedLease = makeInput(join(root, "one.apparent"));
     changedLease.leaseId = "0".repeat(32);
     changedLease.materials.manifest.leaseId = "0".repeat(32);
-    await assert.rejects(recovery.publish(changedLease), /conflicts with its durable binding/);
+    await assert.rejects(recovery.publish(changedLease), CapturePublicationPreflightError);
     assert.equal(dispatches, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -131,7 +170,7 @@ test("concurrent workflow instances admit one publication dispatch", async () =>
     const input = makeInput(join(root, "final.apparent"));
     const a = one.publish(input);
     while (!release) await new Promise(resolve => setImmediate(resolve));
-    assert.throws(() => one.publish(makeInput(join(root, "foreign.apparent"))), /conflicts with its in-flight binding/);
+    await assert.rejects(one.publish(makeInput(join(root, "foreign.apparent"))), /conflicts with its in-flight binding/);
     const b = await two.publish(input);
     assert.equal(b.state, "publishing");
     assert.equal(dispatches, 1);

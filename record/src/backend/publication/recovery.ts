@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
-import type { CaptureClient, CaptureStatus, PublicationExpectation } from "@apparent/engine-sdk/capture";
+import type { CaptureClient, CaptureStatus, PublicationExpectation, CapturePublishInput, CapturePublicationPreflight } from "@apparent/engine-sdk/capture";
 import { SqlitePublicationBindingStore, type PublicationBinding } from "./store.js";
 
-type PublishInput = Parameters<CaptureClient["publish"]>[0];
+type PublishInput = CapturePublishInput;
+export type PublicationPreflight = (input: PublishInput, timeoutMs?: number) => CapturePublicationPreflight;
+const publishTimeoutMs = 10000;
 
 export interface RecordPublicationRecovery {
   publish(input: PublishInput): Promise<CaptureStatus>;
@@ -18,14 +18,17 @@ export interface RecordPublicationRecovery {
 export function createRecordPublicationRecovery(
   client: CaptureClient,
   privateRoot: string,
+  preflight: PublicationPreflight,
 ): RecordPublicationRecovery {
+  if (typeof preflight !== "function") throw new TypeError("Record requires the public SDK publication preflight");
   const store = new SqlitePublicationBindingStore(privateRoot);
   const inflight = new Map<string, { binding: PublicationBinding; promise: Promise<CaptureStatus> }>();
 
   return {
-    publish(input) {
+    async publish(input) {
       const snapshot = structuredClone(input);
-      const binding = bindingFrom(snapshot);
+      const prepared = preflight(snapshot, publishTimeoutMs);
+      const binding = bindingFrom(snapshot, prepared.expected);
       const current = inflight.get(snapshot.captureId);
       if (current) {
         if (!sameBinding(current.binding, binding)) throw new Error("Record publication identity conflicts with its in-flight binding");
@@ -41,6 +44,7 @@ export function createRecordPublicationRecovery(
       if (!binding) throw new Error("Record publication binding is unavailable");
       if (!/^[0-9a-f]{64}$/u.test(ownerToken)) throw new Error("Record publication authority is invalid");
       try {
+        await client.handshake();
         const status = await client.inspectPublication({
           ownerToken,
           captureId: binding.captureId,
@@ -59,6 +63,11 @@ export function createRecordPublicationRecovery(
   async function publishOnce(input: PublishInput, binding: PublicationBinding): Promise<CaptureStatus> {
     const prior = await store.get(binding.captureId);
     if (prior && !sameBinding(prior, binding)) throw new Error("Record publication identity conflicts with its durable binding");
+    if (!prior || prior.state === "reserved") {
+      const hello = await client.handshake();
+      if (hello.implementation !== "native" || !hello.capabilities.publication)
+        throw Object.assign(new Error("Record publication is unavailable; no request was dispatched"), { dispatched: false });
+    }
     if (!prior) await assertDestinationAbsent(binding.bundlePath);
     const won = await store.reserve(binding);
     if (!sameBinding(won, binding)) throw new Error("Record publication identity conflicts with its durable binding");
@@ -68,6 +77,7 @@ export function createRecordPublicationRecovery(
     if (won.state !== "reserved") {
       if (!/^[0-9a-f]{64}$/u.test(input.ownerToken)) throw new Error("Record publication authority is invalid");
       try {
+        await client.handshake();
         const status = await client.inspectPublication({
           ownerToken: input.ownerToken,
           captureId: won.captureId,
@@ -85,7 +95,7 @@ export function createRecordPublicationRecovery(
     await assertDestinationAbsent(binding.bundlePath);
     if (!await store.beginDispatch(won)) throw new Error("Record publication dispatch is already owned; reconcile the same durable binding");
     try {
-      const status = await client.publish(input);
+      const status = await client.publish(input, publishTimeoutMs);
       if (!await store.observe(won, publicationState(status))) throw new Error("Stale publication observation");
       return structuredClone(status);
     } catch {
@@ -107,42 +117,16 @@ async function assertDestinationAbsent(path: string): Promise<void> {
   throw new Error("Record publication destination already exists");
 }
 
-function bindingFrom(input: PublishInput): PublicationBinding {
-  if (!/^[0-9a-f]{64}$/u.test(input.ownerToken)) throw new Error("Record publication authority is invalid");
-  if (input.leaseId !== input.materials.manifest.leaseId) throw new Error("Record publication lease does not match the supplied materials manifest");
-  const bytes = Buffer.from(input.planBytes);
-  const planSha256 = createHash("sha256").update(bytes).digest("hex");
-  const envelope = input.planFile;
-  if (envelope.planSha256 !== planSha256 || envelope.planFile.sha256 !== planSha256 || envelope.planFile.identity.size !== bytes.byteLength)
-    throw new Error("Record publication plan bytes do not match the sealed plan binding");
-  let plan: unknown;
-  try { plan = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
-  catch { throw new Error("Record publication plan binding is invalid"); }
-  if (!plan || typeof plan !== "object" || Array.isArray(plan)) throw new Error("Record publication plan binding is invalid");
-  const p = plan as Record<string, unknown>;
-  const destination = p.destination as Record<string, unknown> | undefined;
-  const materials = p.materials as Record<string, unknown> | undefined;
-  const key = input.materials.manifest.key;
-  const entries = p.entries;
-  const manifest = Array.isArray(entries) ? entries.find((entry) => entry && typeof entry === "object" && (entry as Record<string, unknown>).relativePath === "apparent.json") as Record<string, unknown> | undefined : undefined;
-  const manifestSha256 = manifest?.sha256;
-  if (p.schema !== "apparent.bundle-publication/1" || p.publicationId !== input.publicationId ||
-      p.bundleId !== input.materials.payload.bundleId || destination?.mode !== "absent" ||
-      typeof destination.path !== "string" || !materials || materials.captureId !== key.captureId ||
-      materials.materialsId !== key.materialsId || materials.revision !== key.revision ||
-      typeof manifestSha256 !== "string" || !/^[0-9a-f]{64}$/u.test(manifestSha256))
-    throw new Error("Record publication plan does not match the supplied immutable materials binding");
-  const path = destination.path;
-  if (!isAbsolute(path) || resolve(path) !== path || path.includes("\0") || path.length > 4096) throw new Error("Record publication destination is invalid");
+function bindingFrom(input: PublishInput, expected: PublicationExpectation): PublicationBinding {
   return {
     captureId: input.captureId,
     publicationId: input.publicationId,
-    planSha256,
-    materials: structuredClone(key),
+    planSha256: input.planFile.planSha256,
+    materials: structuredClone(expected.materials),
     leaseId: input.leaseId,
-    bundleId: p.bundleId as string,
-    bundlePath: path,
-    manifestSha256,
+    bundleId: expected.bundleId,
+    bundlePath: expected.bundlePath,
+    manifestSha256: expected.manifestSha256,
     state: "reserved",
   };
 }

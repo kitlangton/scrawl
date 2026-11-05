@@ -24,8 +24,8 @@ outstanding.
 
 The publication subpath has an optional SDK peer: hosts using it supply the
 published SDK. Other Record consumers do not need to install that peer. Source
-checks use the pinned `record/vendor/engine-sdk-0.3.0.tgz` package (SHA256
-`c45708988c9631a24e8aecdeaa53d66cf37e51c9c8743e4bf83cc90bb551f90a`),
+checks use the pinned `record/vendor/engine-sdk-0.3.1.tgz` package (SHA256
+`1b605f06273f9c1a134b68b0ed233605b120813214914ca70ed0c8c5f0346f04`),
 without importing or building an adjacent Engine checkout. Publication remains
 separate from the package root.
 
@@ -35,13 +35,26 @@ wrapper for an already constructed `@apparent/engine-sdk/capture` client. The
 host supplies the original capture authority and validated immutable materials,
 plan bytes and derivative receipts. Record durably binds capture/publication IDs,
 exact plan SHA256, materials key and lease ID, bundle ID/path and `apparent.json` SHA256 before
-calling SDK publish. It stores control metadata privately and never creates or
+calling SDK publish. Hosts inject `preflightCapturePublication` from the same SDK
+as the client; Record runs it before reserving the dispatch and checks native
+publication availability before creating a binding. Hosts first validate the
+materials with `validateMaterialsDocument(manifest, originalPayloadBytes)`. The
+preflight validates inventory and byte bindings, not native authority or filesystem
+contents. Record stores control metadata privately and never creates or
 replaces the final bundle path. After an ambiguous reply, `reconcile` restores
 its expected receipt from that original binding and calls `inspectPublication`;
 changed bindings fail closed and a repeated command does not allocate new IDs.
 The API does not assemble canonical bundles, release retained materials, or
 claim native capture/publication availability. SDK0.3's testing peer remains a
 test double and cannot produce native Saved.
+
+```ts
+import { preflightCapturePublication } from "@apparent/engine-sdk/capture";
+import { createRecordPublicationRecovery } from "@apparent/record/publication";
+const recovery = createRecordPublicationRecovery(client, privateControlRoot, preflightCapturePublication);
+await recovery.publish(validatedPublicationInput);
+await recovery.reconcile(captureId, ownerToken);
+```
 
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 
