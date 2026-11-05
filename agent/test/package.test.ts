@@ -11,7 +11,7 @@ test('packed CLI installs offline outside checkout and prints its standalone ski
   try {
     const npm=process.env.npm_execpath!; assert(npm);
     const env={...process.env,HOME:root,XDG_DATA_HOME:join(root,'data')};
-    delete env.APPARENT_ENGINE_EXECUTABLE; delete env.APPARENT_ENGINE_RUNTIME; delete env.APPARENT_CAPTURES_DIR;
+    delete env.APPARENT_ENGINE_EXECUTABLE; delete env.APPARENT_ENGINE_FRAMES_EXECUTABLE; delete env.APPARENT_ENGINE_RUNTIME; delete env.APPARENT_CAPTURES_DIR;
     const runRaw=(args:string[],cwd=root)=>spawnSync(process.execPath,args,{cwd,encoding:'utf8',timeout:30000,env});
     const run=(args:string[],cwd=root)=>{
       const result=runRaw(args,cwd);
@@ -23,7 +23,10 @@ test('packed CLI installs offline outside checkout and prints its standalone ski
     const cli=resolve(root,'node_modules/@apparent/agent/dist/cli.js');
     assert.equal(run(['--input-type=module','-e',"await import('@apparent/agent')"]),'');
     assert.match(run([cli,'--help']),/Local Apparent/);assert.equal(run([cli,'--version']),'0.1.0\n');
-    for (const command of ['inspect', 'record', 'capture']) assert.match(run([cli,command,'--help']),/Usage: apparent-agent/);
+    for (const command of ['inspect', 'record', 'capture', 'frames']) assert.match(run([cli,command,'--help']),/Usage: apparent-agent/);
+    const unavailable = runRaw([cli,'frames','./clip.apparent','--from','0','--to','1']);
+    assert.equal(unavailable.status,2); assert.equal(unavailable.stdout,'');
+    assert.match(unavailable.stderr,/APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME/);
     const sourceGuide=await readFile(resolve(source,'skills/apparent/SKILL.md'));
     assert.deepEqual(Buffer.from(run([cli,'skill'])),sourceGuide);
     for(const operand of ['unexpected','--help','--unknown']){

@@ -147,3 +147,13 @@ apparent export <bundle> [--out demo.mp4] [--no-zoom] [--crop auto|full|x,y,w,h]
 - `apparent <command> --help` lists every flag, and `apparent skill` prints this guide as the installed version knows it.
 
 The optional `make-it-apparent` workflow for a change demo, unresolved-problem demonstration or conceptual technical explainer is a **separate** skill. A finished implementation is not required; explicit live-app proof still requires real footage. The default capture-reading skill install does not guarantee it is present; install it explicitly in the agent's environment with `bunx skills add https://github.com/tryapparent/apparent/tree/main/capture/agent/skills/make-it-apparent`. Installing a skill does not install the desktop app or grant recording permissions.
+
+## Standalone Agent package frame command
+
+The separate `apparent-agent` npm package has a local `frames` consumer command:
+
+```sh
+apparent-agent frames <bundle> --from 0:04 --to 0:06 --fps 4 [--json]
+```
+
+It selects bundle-clock timestamps and asks the published Engine media SDK to decode them into a fresh private job directory under `APPARENT_ENGINE_RUNTIME`. It requires explicit absolute `APPARENT_ENGINE_FRAMES_EXECUTABLE` and `APPARENT_ENGINE_RUNTIME` paths. It never searches PATH, builds Engine, writes into the source bundle, opens frames or sends them elsewhere. The SDK's media contract is published, but its native decoder provider is not implemented yet; current installed providers therefore report media unavailable. This consumer code and its synthetic contract tests do not establish real PNG decode or native platform proof. The installed `apparent` command above remains a separate legacy route and keeps its own behavior.
