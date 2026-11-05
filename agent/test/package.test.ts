@@ -23,6 +23,7 @@ test('packed CLI installs offline outside checkout and prints its standalone ski
     const cli=resolve(root,'node_modules/@apparent/agent/dist/cli.js');
     assert.equal(run(['--input-type=module','-e',"await import('@apparent/agent')"]),'');
     assert.match(run([cli,'--help']),/Local Apparent/);assert.equal(run([cli,'--version']),'0.1.0\n');
+    for (const command of ['inspect', 'record', 'capture']) assert.match(run([cli,command,'--help']),/Usage: apparent-agent/);
     const sourceGuide=await readFile(resolve(source,'skills/apparent/SKILL.md'));
     assert.deepEqual(Buffer.from(run([cli,'skill'])),sourceGuide);
     for(const operand of ['unexpected','--help','--unknown']){
