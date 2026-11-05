@@ -92,6 +92,7 @@ function trackedInputs(root: string, owner: Owner, revision = 'HEAD'): { digest:
   const paths = new Set<string>()
   for (const pathspec of [...inputRoots, ...files]) {
     const result = git(root, ['ls-tree', '-r', '-z', '--full-tree', revision, '--', pathspec])
+    if (result.includes('\uFFFD')) throw new Error('Cannot fingerprint ambiguous non-UTF8 Git paths')
     for (const entry of result.split('\0').filter(Boolean)) {
       const tab = entry.indexOf('\t')
       if (tab < 0) throw new Error('Malformed git tree entry')
@@ -103,7 +104,7 @@ function trackedInputs(root: string, owner: Owner, revision = 'HEAD'): { digest:
     }
   }
   const entries = [...paths].sort()
-  return { digest: createHash('sha256').update(entries.map(entry => `${entry}\n`).join('')).digest('hex'), entries }
+  return { digest: createHash('sha256').update(entries.map(entry => `${entry}\0`).join('')).digest('hex'), entries }
 }
 function fingerprint(root: string, owner: Owner, target: Target, revision = 'HEAD') {
   if (target !== 'linux-x64' && target !== 'macos-x64' && target !== 'web' || !owner.targets.includes(target)) throw new Error('Owner is not registered for this target')

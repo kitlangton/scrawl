@@ -101,3 +101,14 @@ test('web reuse admits unchanged Public bytes after native-only changes and reje
     f.clean()
   }
 })
+
+test('source identities distinguish filenames containing serialized manifest separators', () => {
+  const f = fixture()
+  try {
+    f.put('public/site/a.ts', 'first'); f.put('public/site/b.ts', 'second'); f.commit()
+    const before = sourceDigest(f.root, f.owner()), firstBlob = f.git('rev-parse', 'HEAD:public/site/a.ts')
+    rmSync(join(f.root, 'public/site/a.ts')); rmSync(join(f.root, 'public/site/b.ts'))
+    f.put(`public/site/a.ts ${firstBlob}\n100644 public/site/b.ts`, 'second'); f.commit()
+    assert.notEqual(sourceDigest(f.root, f.owner()), before)
+  } finally { f.clean() }
+})
