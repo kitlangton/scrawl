@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, realpath } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { link, lstat, mkdir, open, readFile, readdir, realpath, unlink } from "node:fs/promises";
 import { isAbsolute, join, parse, resolve } from "node:path";
 
 const privateMode = 0o700;
@@ -36,8 +37,17 @@ export async function ensurePrivateFile(path: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw hostError();
   }
-  const info = await lstat(path).catch(() => { throw hostError(); });
-  if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) throw hostError();
+  await validatePrivateFile(path);
+}
+
+/** Existing SQLite sidecars must meet the same ownership and aliasing rules. */
+export async function validatePrivateFile(path: string, optional = false): Promise<void> {
+  const info = await lstat(path).catch(error => {
+    if (optional && (error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw hostError();
+  });
+  if (!info) return;
+  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) throw hostError();
 }
 
 export async function privateMarker(path: string): Promise<string> {
@@ -55,25 +65,28 @@ export async function ensurePrivateReservation(path: string, root: string, reque
   if (!name || name.includes("/") || name.includes("\\")) throw hostError();
   try {
     await mkdir(path, { mode: privateMode });
-    const marker = reservationMarker(root, name);
-    const handle = await open(marker, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), 0o600);
-    try { await handle.writeFile(requestId, "utf8"); } finally { await handle.close(); }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw hostError();
-    const info = await lstat(path).catch(() => { throw hostError(); });
-    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) throw hostError();
-    if ((await readdir(path).catch(() => { throw hostError(); })).some(entry => entry !== ".record-reservation")) throw hostError();
-    const marker = reservationMarker(root, name);
-    let matched = false;
-    for (let attempt = 0; attempt < 100; attempt++) {
-      try {
-        if (await privateMarker(marker) === requestId) { matched = true; break; }
-      } catch { /* another process may still be writing the reservation marker */ }
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-    if (!matched) throw hostError();
   }
   const reservation = await lstat(path).catch(() => { throw hostError(); });
   if (!reservation.isDirectory() || reservation.isSymbolicLink() || reservation.uid !== process.getuid?.() || (reservation.mode & 0o077) !== 0) throw hostError();
+  if ((await readdir(path).catch(() => { throw hostError(); })).some(entry => entry !== ".record-reservation")) throw hostError();
+  // A crashed creator can leave an empty reserved directory. Publish a complete,
+  // synced marker atomically; never overwrite a winner or a mismatching marker.
+  const temporary = join(root, `.record-marker-${randomUUID()}`);
+  try {
+    const handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), 0o600);
+    try { await handle.writeFile(requestId, "utf8"); await handle.sync(); } finally { await handle.close(); }
+    try { await link(temporary, reservationMarker(root, name)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw hostError(); }
+    await syncDirectory(path);
+    await syncDirectory(root);
+  } catch { throw hostError(); }
+  finally { await unlink(temporary).catch(() => {}); }
   if (await privateMarker(reservationMarker(root, name)) !== requestId) throw hostError();
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const handle = await open(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  try { await handle.sync(); } finally { await handle.close(); }
 }

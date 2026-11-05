@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { SqliteCaptureMappingStore } from "../dist/backend/host/capture-mapping-store.js";
 import { PrivateBundleAllocator } from "../dist/backend/host/bundle-allocator.js";
+import { EngineSdkAdapter, type EngineSdkPort, type PreparedStart } from "../dist/backend/engine/sdk-adapter.js";
 
 const mapping = (requestId: string, captureId = "a".repeat(32), ownerToken = "b".repeat(64)) => ({
   requestId, captureId, ownerToken, bundleId: `bundle-${captureId}`, bundlePath: `/private/${captureId}`,
@@ -110,4 +111,98 @@ test("bundle allocator refuses a colliding user directory and preserves it", asy
   await writeFile(join(collision, "user-data"), "keep", { mode: 0o600 });
   await assert.rejects(allocator.allocate("occupied"), /storage is unavailable/);
   assert.equal(await readFile(join(collision, "user-data"), "utf8"), "keep");
+});
+
+test("database hard links are refused without changing the outside SQLite file", async t => {
+  const parent = await temporary(t);
+  const outside = join(parent, "outside.sqlite");
+  const db = new DatabaseSync(outside);
+  db.exec("CREATE TABLE private_data (value TEXT); INSERT INTO private_data VALUES ('preserve')");
+  db.close(); await chmod(outside, 0o600);
+  const original = await readFile(outside);
+  const root = join(parent, "mapping"); await mkdir(root, { mode: 0o700 });
+  await link(outside, join(root, "capture-mappings.sqlite"));
+  const store = new SqliteCaptureMappingStore(root);
+  await assert.rejects(store.putIfAbsent(mapping("hardlink")), /storage is unavailable/);
+  await assert.rejects(store.getByRequestId("hardlink"), /storage is unavailable/);
+  assert.deepEqual(await readFile(outside), original);
+});
+
+test("allocator recovers an empty interrupted reservation and preserves mismatching markers", async t => {
+  const root = join(await temporary(t), "bundles");
+  const requestId = "interrupted creator";
+  const hash = (await import("node:crypto")).createHash("sha256").update(requestId).digest("hex");
+  const abandoned = join(root, `reservation-${hash}`);
+  // Filesystem state after a process exits between mkdir and marker publication.
+  await mkdir(abandoned, { recursive: true, mode: 0o700 });
+  const allocator = new PrivateBundleAllocator(root);
+  const winners = await Promise.all([allocator.allocate(requestId), allocator.allocate(requestId)]);
+  assert.deepEqual(winners[0], winners[1]);
+  assert.equal(winners[0]!.bundlePath, abandoned);
+  assert.equal(await readFile(join(abandoned, ".record-reservation"), "utf8"), requestId);
+  await writeFile(join(abandoned, ".record-reservation"), "another owner", { mode: 0o600 });
+  await assert.rejects(allocator.allocate(requestId), /storage is unavailable/);
+  assert.equal(await readFile(join(abandoned, ".record-reservation"), "utf8"), "another owner");
+});
+
+test("SQLite sidecars remain private and pre-existing sidecar aliases are refused", async t => {
+  const parent = await temporary(t);
+  const root = join(parent, "live");
+  const store = new SqliteCaptureMappingStore(root);
+  await store.putIfAbsent(mapping("private sidecars"));
+  const db = new DatabaseSync(join(root, "capture-mappings.sqlite"));
+  try {
+    db.exec("PRAGMA journal_mode=WAL; BEGIN IMMEDIATE; UPDATE capture_mapping SET request_id=request_id; COMMIT");
+    await store.getByRequestId("private sidecars");
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const info = await lstat(join(root, `capture-mappings.sqlite${suffix}`));
+      assert.equal(info.mode & 0o077, 0);
+      assert.equal(info.uid, process.getuid?.());
+      assert.equal(info.nlink, 1);
+    }
+  } finally { db.close(); }
+  for (const suffix of ["-wal", "-shm", "-journal"]) {
+    const unsafe = join(parent, `unsafe${suffix}`); await mkdir(unsafe, { mode: 0o700 });
+    const outside = join(parent, `outside${suffix}`); await writeFile(outside, "preserve", { mode: 0o600 });
+    await symlink(outside, join(unsafe, `capture-mappings.sqlite${suffix}`));
+    await assert.rejects(new SqliteCaptureMappingStore(unsafe).getByRequestId("x"), /storage is unavailable/);
+    assert.equal(await readFile(outside, "utf8"), "preserve");
+  }
+});
+
+test("real adapter recovers persisted identity after an ambiguous start and host recreation", async t => {
+  const parent = await temporary(t);
+  const allocator = new PrivateBundleAllocator(join(parent, "bundles"));
+  const mappings = () => new SqliteCaptureMappingStore(join(parent, "mapping"));
+  const started: PreparedStart[] = [];
+  let preparations = 0;
+  const sdk: EngineSdkPort = {
+    clientId: "c".repeat(32),
+    handshake: async () => ({ implementation: "native", capabilities: { screenCapture: false }, readiness: "unavailable" }),
+    prepareStart: (bundleId, bundlePath) => {
+      preparations++;
+      return { protocolVersion: 1, clientId: "c".repeat(32), rpcId: "d".repeat(32), method: "start", captureId: "a".repeat(32), ownerToken: "b".repeat(64), bundleId, bundlePath, options: { screen: true } };
+    },
+    start: async prepared => { started.push(prepared); if (started.length === 1) throw new Error("lost reply"); return { captureId: prepared.captureId, ownerToken: prepared.ownerToken, receipt: { captureId: prepared.captureId, state: "starting" } }; },
+    control: async (_method, captureId, token) => { assert.equal(token, "b".repeat(64)); return { captureId, state: "recording" }; },
+    close: async () => { throw new Error("adapter must not close the shared SDK"); },
+  };
+  const first = new EngineSdkAdapter(sdk, { mappings: mappings(), allocateBundle: id => allocator.allocate(id) });
+  const id = "arbitrary public request / restart";
+  await assert.rejects(first.start(id), /outcome is unknown/);
+  first.dispose();
+  // Simulate native contents arriving before the host reconnects. Existing identity
+  // must win without asking the allocator to claim this populated destination.
+  await writeFile(join(started[0]!.bundlePath, "native-pending"), "controlled fixture");
+  const second = new EngineSdkAdapter(sdk, { mappings: mappings(), allocateBundle: async () => { throw new Error("must reuse stored allocation"); } });
+  try {
+    assert.equal((await second.inspect(id)).captureId, id);
+    const result = await second.start(id);
+    assert.equal(result.captureId, id);
+    assert.equal(result.phase, "recording", "observed phase cannot regress on a replay receipt");
+    assert.equal(preparations, 1);
+    assert.equal(started[1]!.bundlePath, started[0]!.bundlePath);
+    assert.equal(started[1]!.captureId, started[0]!.captureId);
+    assert.equal(JSON.stringify(result).includes("b".repeat(64)), false);
+  } finally { second.dispose(); }
 });

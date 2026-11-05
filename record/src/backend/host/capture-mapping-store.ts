@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { isAbsolute, join, resolve } from "node:path";
 import type { CaptureMapping, CaptureMappingStore } from "../engine/sdk-adapter.js";
-import { ensurePrivateFile, ensurePrivateRoot, hostError } from "./private-path.js";
+import { ensurePrivateFile, ensurePrivateRoot, hostError, validatePrivateFile } from "./private-path.js";
 
 const schemaVersion = 1;
 const valid = (mapping: CaptureMapping) =>
@@ -72,6 +72,7 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
   async #open(): Promise<DatabaseSync> {
     await ensurePrivateRoot(this.#root);
     await ensurePrivateFile(this.#databasePath);
+    for (const suffix of ["-wal", "-shm", "-journal"]) await validatePrivateFile(this.#databasePath + suffix, true);
     let db: DatabaseSync | undefined;
     try {
       db = new DatabaseSync(this.#databasePath);
