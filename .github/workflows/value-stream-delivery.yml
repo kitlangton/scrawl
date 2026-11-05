@@ -1,74 +1,38 @@
 name: Value-stream delivery
 
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
-    paths:
-      - 'composition/app/**'
-      - 'composition/config/**'
-      - 'composition/delivery/**'
-      - 'composition/architecture/**'
-      - 'shared/**'
-      - 'record/**'
-      - 'connect/delivery/client/**'
-      - 'connect/delivery.json'
-      - 'connect/tooling/hosting/**'
-      - 'connect/web/**'
-      - 'engine/**'
-      - 'capture/engine/**'
-      - '.cargo/**'
-      - 'onboarding/**'
-      - 'agent/**'
-      - 'public/**'
-      - 'README.md'
-      - 'capture/agent/skills/apparent/SKILL.md'
-      - '.npmrc'
-      - 'bunfig.toml'
-      - '.bunfig.toml'
-      - 'LICENSE'
-      - '.github/workflows/value-stream-delivery.yml'
-      - '.github/actions/runtime-budget/**'
-      - 'enablement/verification/workflow-budget.ts'
-  workflow_dispatch:
-  workflow_run:
-    workflows: [Connect producer]
-    branches: [main]
-    types: [completed]
+  workflow_call:
+    inputs:
+      owner_id:
+        required: true
+        type: string
+      targets:
+        required: true
+        type: string
+      workflow_path:
+        required: true
+        type: string
+    secrets:
+      WEBSITE_PAGES_API_TOKEN:
+        required: false
 
-permissions:
-  contents: read
-  actions: read
+# Inherit the caller's ceiling: read-only for PRs, provenance writes for main.
+env:
+  APPARENT_DELIVERY_WORKFLOW_PATH: ${{ inputs.workflow_path }}
 
 # Complete running work and retain only the latest pending main candidate.
 concurrency:
-  group: value-stream-delivery-${{ github.event_name == 'push' && 'main' || github.run_id }}
+  group: value-stream-${{ inputs.owner_id }}-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
   cancel-in-progress: false
 
 jobs:
-  plan:
-    # The agent whose run hits the limit owns optimization; never raise it.
-    if: github.event_name != 'workflow_run' && github.repository == 'tryapparent/apparent' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    outputs:
-      matrix: ${{ steps.plan.outputs.matrix }}
-      has_ready: ${{ steps.plan.outputs.has_ready }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.4'
-      - id: plan
-        run: node --experimental-strip-types composition/delivery/cli.ts plan
-
   contracts:
     # The agent whose run hits the limit owns optimization; never raise it.
     name: Delivery contracts
-    if: github.event_name != 'workflow_run' && github.repository == 'tryapparent/apparent' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
+    if: github.repository == 'tryapparent/apparent' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -87,26 +51,21 @@ jobs:
           npm --prefix composition/architecture run typecheck
           npm --prefix composition/architecture test
           npm --prefix composition/architecture run check -- --owner shared --owner composition
-      - name: Validate the independent workflow
+      - name: Validate the independent workflows
         uses: docker://rhysd/actionlint:1.7.12
         with:
-          args: -shellcheck= -pyflakes= .github/workflows/value-stream-delivery.yml
+          args: -shellcheck= -pyflakes= .github/workflows/value-stream-delivery.yml .github/workflows/stream-agent.yml .github/workflows/stream-app-shell.yml .github/workflows/stream-connect-client.yml .github/workflows/stream-connect-browser.yml .github/workflows/stream-engine-media-native.yml .github/workflows/stream-engine-native.yml .github/workflows/stream-engine.yml .github/workflows/stream-onboarding.yml .github/workflows/stream-platform-config.yml .github/workflows/stream-public.yml .github/workflows/stream-record.yml .github/workflows/connect-delivery.yml .github/workflows/web-delivery.yml
 
   stream:
     # The agent whose run hits the limit owns optimization; never raise it.
     name: stream (${{ matrix.id }}, ${{ matrix.target }})
-    needs: plan
-    if: needs.plan.outputs.has_ready == 'true' && github.ref == 'refs/heads/main'
+    needs: contracts
+    if: inputs.owner_id != 'public' && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+      matrix: ${{ fromJSON(inputs.targets) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.target == 'web' && 10 || 15 }}
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      attestations: write
     env:
       OWNER_ID: ${{ matrix.id }}
       OWNER_TARGET: ${{ matrix.target }}
@@ -136,17 +95,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node --experimental-strip-types composition/delivery/cli.ts admit "$OWNER_ID" "$OWNER_TARGET"
-      - name: Guard TypeScript owners against native source compilation
-        if: steps.admit.outputs.reuse != 'true' && matrix.language != 'native'
-        shell: bash
-        run: |
-          mkdir "$RUNNER_TEMP/value-stream-no-rust"
-          for tool in cargo rustc; do
-            printf '#!/bin/sh\necho "Rust compilation is outside this owner contract" >&2\nexit 97\n' > "$RUNNER_TEMP/value-stream-no-rust/$tool"
-            chmod 755 "$RUNNER_TEMP/value-stream-no-rust/$tool"
-          done
-          printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
       - name: Retrieve and verify the admitted component
+        id: reuse
+        continue-on-error: true
         if: steps.admit.outputs.reuse == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -157,12 +108,29 @@ jobs:
           INPUT_DIGEST: ${{ steps.admit.outputs.input_digest }}
         shell: bash
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$PRIOR_ARTIFACT/zip" > "$RUNNER_TEMP/prior-component.zip"
-          node --experimental-strip-types composition/delivery/cli.ts reuse "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/prior-component.zip" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST" "$PRIOR_SHA" "$PRIOR_ARTIFACT" "$PRIOR_RUN" "$PRIOR_ATTEMPT"
+          if ! gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$PRIOR_ARTIFACT/zip" > "$RUNNER_TEMP/prior-component.zip"; then
+            rm -f "$RUNNER_TEMP/prior-component.zip"
+            rm -rf "$RUNNER_TEMP/stream-output"
+            exit 1
+          fi
+          if ! node --experimental-strip-types composition/delivery/cli.ts reuse "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/prior-component.zip" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST" "$PRIOR_SHA" "$PRIOR_ARTIFACT" "$PRIOR_RUN" "$PRIOR_ATTEMPT"; then
+            rm -rf "$RUNNER_TEMP/stream-output"
+            exit 1
+          fi
+      - name: Guard TypeScript owners against native source compilation
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.language != 'native'
+        shell: bash
+        run: |
+          mkdir "$RUNNER_TEMP/value-stream-no-rust"
+          for tool in cargo rustc; do
+            printf '#!/bin/sh\necho "Rust compilation is outside this owner contract" >&2\nexit 97\n' > "$RUNNER_TEMP/value-stream-no-rust/$tool"
+            chmod 755 "$RUNNER_TEMP/value-stream-no-rust/$tool"
+          done
+          printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.admit.outputs.reuse != 'true' && matrix.language == 'native'
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.language == 'native'
       - name: Install Engine media runtime and fixture dependencies
-        if: steps.admit.outputs.reuse != 'true' && matrix.id == 'engine-media-native'
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.id == 'engine-media-native'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
@@ -174,35 +142,35 @@ jobs:
             gstreamer1.0-plugins-good \
             gstreamer1.0-libav
       - uses: oven-sh/setup-bun@v2
-        if: steps.admit.outputs.reuse != 'true' && (matrix.packageManager == 'bun' || matrix.id == 'connect-browser')
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && (matrix.packageManager == 'bun' || matrix.id == 'connect-browser')
         with:
           bun-version: '1.3.10'
       - name: Independently install, verify and build the owner artifact
-        if: steps.admit.outputs.reuse != 'true'
+        if: steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success'
         run: node --experimental-strip-types composition/delivery/cli.ts build "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload"
       - name: Prepare the pinned Electron runtime
-        if: steps.admit.outputs.reuse != 'true' && matrix.kind == 'app-shell'
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.kind == 'app-shell'
         working-directory: composition/app
         run: npm run prepare:electron
       - name: Linux Electron dependencies
-        if: steps.admit.outputs.reuse != 'true' && matrix.kind == 'app-shell' && runner.os == 'Linux'
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.kind == 'app-shell' && runner.os == 'Linux'
         working-directory: composition/app
         run: npx --no-install playwright install-deps chromium
       - name: Prepare the pinned Electron sandbox helper
-        if: steps.admit.outputs.reuse != 'true' && matrix.kind == 'app-shell' && runner.os == 'Linux'
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.kind == 'app-shell' && runner.os == 'Linux'
         working-directory: composition/app
         run: |
           sudo install -o root -g root -m 4755 node_modules/electron/dist/chrome-sandbox \
             "$RUNNER_TEMP/apparent-foundation-chrome-sandbox"
       - name: Bundle the prebuilt App Shell payload
-        if: steps.admit.outputs.reuse != 'true' && matrix.kind == 'app-shell'
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.kind == 'app-shell'
         working-directory: composition/app
         shell: bash
         run: |
           bundle=$(node scripts/package.ts "$RUNNER_TEMP/stream-payload/app" "$RUNNER_TEMP/stream-payload/bundle")
           printf 'APPARENT_FOUNDATION_PACKAGE=%s\n' "$bundle" >> "$GITHUB_ENV"
       - name: Test the exact bundled application
-        if: steps.admit.outputs.reuse != 'true' && matrix.kind == 'app-shell'
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.kind == 'app-shell'
         working-directory: composition/app
         shell: bash
         run: |
@@ -212,7 +180,7 @@ jobs:
             npm run test:electron
           fi
       - name: Seal the verified component for downstream assembly
-        if: steps.admit.outputs.reuse != 'true'
+        if: steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success'
         env:
           INPUT_DIGEST: ${{ steps.admit.outputs.input_digest }}
         run: node --experimental-strip-types composition/delivery/cli.ts seal "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST"
@@ -236,7 +204,8 @@ jobs:
   stream-public:
     # The agent whose run hits the limit owns optimization; never raise it.
     name: stream (${{ matrix.id }}, ${{ matrix.target }})
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    needs: contracts
+    if: inputs.owner_id == 'public' && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       matrix:
@@ -254,11 +223,6 @@ jobs:
     outputs:
       artifact-name: stream-public-web-${{ steps.admit.outputs.input_digest }}
       input-digest: ${{ steps.admit.outputs.input_digest }}
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      attestations: write
     env:
       OWNER_ID: ${{ matrix.id }}
       OWNER_TARGET: ${{ matrix.target }}
@@ -289,17 +253,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node --experimental-strip-types composition/delivery/cli.ts admit "$OWNER_ID" "$OWNER_TARGET"
-      - name: Guard TypeScript owners against native source compilation
-        if: steps.admit.outputs.reuse != 'true' && matrix.language != 'native'
-        shell: bash
-        run: |
-          mkdir "$RUNNER_TEMP/value-stream-no-rust"
-          for tool in cargo rustc; do
-            printf '#!/bin/sh\necho "Rust compilation is outside this owner contract" >&2\nexit 97\n' > "$RUNNER_TEMP/value-stream-no-rust/$tool"
-            chmod 755 "$RUNNER_TEMP/value-stream-no-rust/$tool"
-          done
-          printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
       - name: Retrieve and verify the admitted component
+        id: reuse
+        continue-on-error: true
         if: steps.admit.outputs.reuse == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -310,17 +266,34 @@ jobs:
           INPUT_DIGEST: ${{ steps.admit.outputs.input_digest }}
         shell: bash
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$PRIOR_ARTIFACT/zip" > "$RUNNER_TEMP/prior-component.zip"
-          node --experimental-strip-types composition/delivery/cli.ts reuse "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/prior-component.zip" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST" "$PRIOR_SHA" "$PRIOR_ARTIFACT" "$PRIOR_RUN" "$PRIOR_ATTEMPT"
+          if ! gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$PRIOR_ARTIFACT/zip" > "$RUNNER_TEMP/prior-component.zip"; then
+            rm -f "$RUNNER_TEMP/prior-component.zip"
+            rm -rf "$RUNNER_TEMP/stream-output"
+            exit 1
+          fi
+          if ! node --experimental-strip-types composition/delivery/cli.ts reuse "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/prior-component.zip" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST" "$PRIOR_SHA" "$PRIOR_ARTIFACT" "$PRIOR_RUN" "$PRIOR_ATTEMPT"; then
+            rm -rf "$RUNNER_TEMP/stream-output"
+            exit 1
+          fi
+      - name: Guard TypeScript owners against native source compilation
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.language != 'native'
+        shell: bash
+        run: |
+          mkdir "$RUNNER_TEMP/value-stream-no-rust"
+          for tool in cargo rustc; do
+            printf '#!/bin/sh\necho "Rust compilation is outside this owner contract" >&2\nexit 97\n' > "$RUNNER_TEMP/value-stream-no-rust/$tool"
+            chmod 755 "$RUNNER_TEMP/value-stream-no-rust/$tool"
+          done
+          printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
       - uses: oven-sh/setup-bun@v2
-        if: steps.admit.outputs.reuse != 'true' && matrix.packageManager == 'bun'
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.packageManager == 'bun'
         with:
           bun-version: '1.3.10'
       - name: Independently install, verify and build the owner artifact
-        if: steps.admit.outputs.reuse != 'true'
+        if: steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success'
         run: node --experimental-strip-types composition/delivery/cli.ts build "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload"
       - name: Seal the verified component for downstream assembly
-        if: steps.admit.outputs.reuse != 'true'
+        if: steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success'
         env:
           INPUT_DIGEST: ${{ steps.admit.outputs.input_digest }}
         run: node --experimental-strip-types composition/delivery/cli.ts seal "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST"
@@ -337,7 +310,7 @@ jobs:
   deploy:
     name: deploy (public, web)
     needs: stream-public
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && vars.WEBSITE_CD_ENABLED == 'true'
+    if: inputs.owner_id == 'public' && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && vars.WEBSITE_CD_ENABLED == 'true'
     concurrency:
       group: website-production-eligible
       cancel-in-progress: false
@@ -434,11 +407,11 @@ jobs:
   stream-pr:
     # The agent whose run hits the limit owns optimization; never raise it.
     name: pr-stream (${{ matrix.id }}, ${{ matrix.target }})
-    needs: plan
-    if: needs.plan.outputs.has_ready == 'true' && github.event_name == 'pull_request'
+    needs: contracts
+    if: github.repository == 'tryapparent/apparent' && github.event_name == 'pull_request'
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+      matrix: ${{ fromJSON(inputs.targets) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.target == 'web' && 10 || 15 }}
     permissions:
@@ -541,7 +514,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, contracts, stream, stream-public, deploy, stream-pr]
+    needs: [contracts, stream, stream-public, deploy, stream-pr]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -552,4 +525,4 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/runtime-budget
         with:
-          platform: linux
+          platform: ${{ inputs.owner_id == 'public' && 'web' || 'linux' }}

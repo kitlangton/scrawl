@@ -8,7 +8,7 @@ export function candidate(env: NodeJS.ProcessEnv, git = (...args: string[]) =>
   if (env.GITHUB_REPOSITORY !== 'tryapparent/apparent' ||
       env.GITHUB_REF !== 'refs/heads/main' ||
       !['push', 'workflow_dispatch', 'workflow_run'].includes(env.GITHUB_EVENT_NAME ?? '') ||
-      env.GITHUB_WORKFLOW_REF !== 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main')
+      env.GITHUB_WORKFLOW_REF !== 'tryapparent/apparent/.github/workflows/stream-public.yml@refs/heads/main')
     throw new Error('Public delivery requires the canonical main workflow')
   if (env.GITHUB_EVENT_NAME === 'workflow_run') {
     const run = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH!, 'utf8')).workflow_run

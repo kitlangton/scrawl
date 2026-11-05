@@ -124,7 +124,7 @@ test('publisher stages exact bytes, writes success receipt, skips superseded can
   const movieBytes = readFileSync(join(root, 'public/site/public/assets/media/Apparent-ghost-demo-v4-lilac.mp4'))
   rmSync(join(root, 'public/site'), { recursive: true })
   const oldEnv = { sha: process.env.GITHUB_SHA, ref: process.env.GITHUB_REF, token: process.env.WEBSITE_PAGES_API_TOKEN, repo: process.env.GITHUB_REPOSITORY, workflow: process.env.GITHUB_WORKFLOW_REF, job: process.env.GITHUB_JOB }
-  process.env.GITHUB_SHA = sha; process.env.GITHUB_REF = 'refs/heads/main'; process.env.WEBSITE_PAGES_API_TOKEN = 'synthetic'; process.env.GITHUB_REPOSITORY = 'tryapparent/apparent'; process.env.GITHUB_WORKFLOW_REF = 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main'; process.env.GITHUB_JOB = 'deploy'
+  process.env.GITHUB_SHA = sha; process.env.GITHUB_REF = 'refs/heads/main'; process.env.WEBSITE_PAGES_API_TOKEN = 'synthetic'; process.env.GITHUB_REPOSITORY = 'tryapparent/apparent'; process.env.GITHUB_WORKFLOW_REF = 'tryapparent/apparent/.github/workflows/stream-public.yml@refs/heads/main'; process.env.GITHUB_JOB = 'deploy'
   try {
     const staged: string[] = [], packagePath = join(artifact, 'dist-apparent')
     let apiCalls = 0

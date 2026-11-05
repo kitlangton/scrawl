@@ -37,6 +37,7 @@ function makeRepo(name: string) {
   writeFileSync(resolve(root, 'connect/delivery/client/client.ts'), 'client\n')
   writeFileSync(resolve(root, 'composition/delivery/core.ts'), 'delivery\n')
   writeFileSync(resolve(root, 'composition/architecture/guard.ts'), 'architecture\n')
+  writeFileSync(resolve(root, '.github/workflows/stream-connect-browser.yml'), readFileSync(resolve(repoRoot, '.github/workflows/stream-connect-browser.yml')))
   writeFileSync(resolve(root, '.github/workflows/value-stream-delivery.yml'), readFileSync(resolve(repoRoot, '.github/workflows/value-stream-delivery.yml')))
   writeFileSync(resolve(root, 'enablement/verification/workflow-budget.ts'), 'budget\n')
   writeFileSync(resolve(root, 'LICENSE'), 'license\n')
@@ -67,7 +68,7 @@ test('Connect browser digest covers its declared source, assets, and build envir
   }
   change('connect/delivery/client/client.ts', 'unrelated client')
   assert.equal(inputDigest(root, owner), initial, 'client-only changes do not invalidate browser artifact reuse')
-  for (const path of ['connect/tooling/hosting/src/worker.ts', 'connect/web/browser.ts', 'shared/ui/button.ts', 'shared/analytics/client.ts', ...files]) {
+  for (const path of ['.github/workflows/stream-connect-browser.yml', 'connect/tooling/hosting/src/worker.ts', 'connect/web/browser.ts', 'shared/ui/button.ts', 'shared/analytics/client.ts', ...files]) {
     change(path, path)
     assert.notEqual(inputDigest(root, owner), initial, `${path} must invalidate reuse`)
   }

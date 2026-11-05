@@ -1,0 +1,66 @@
+name: Connect browser delivery
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'connect/tooling/hosting/**'
+      - 'connect/web/**'
+      - 'shared/ui/**'
+      - 'shared/analytics/**'
+      - 'public/site/public/assets/hosted/source-pond-v4.png'
+      - 'public/site/public/assets/hosted/agent-pond-v4.png'
+      - 'public/site/public/assets/hosted/agent-reading-v4.png'
+      - 'public/site/public/assets/fonts/HostGrotesk-Variable.ttf'
+      - 'public/site/public/assets/brand/apparent-wordmark.svg'
+      - '.github/workflows/stream-connect-browser.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
+  push:
+    branches: [main]
+    paths:
+      - 'connect/tooling/hosting/**'
+      - 'connect/web/**'
+      - 'shared/ui/**'
+      - 'shared/analytics/**'
+      - 'public/site/public/assets/hosted/source-pond-v4.png'
+      - 'public/site/public/assets/hosted/agent-pond-v4.png'
+      - 'public/site/public/assets/hosted/agent-reading-v4.png'
+      - 'public/site/public/assets/fonts/HostGrotesk-Variable.ttf'
+      - 'public/site/public/assets/brand/apparent-wordmark.svg'
+      - '.github/workflows/stream-connect-browser.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
+permissions:
+  contents: read
+jobs:
+  deliver:
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'connect-browser'
+      targets: '{"include":[{"id":"connect-browser","target":"web","runner":"ubuntu-24.04","kind":"directory","stage":"website","package":"connect/tooling/hosting","verify":[],"build":"verify:artifact","language":"typescript","packageManager":"npm","architecture_owner":"connect"}]}'
+      workflow_path: '.github/workflows/stream-connect-browser.yml'
+
+  verify-pr:
+    if: github.repository == 'tryapparent/apparent' && github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'connect-browser'
+      targets: '{"include":[{"id":"connect-browser","target":"web","runner":"ubuntu-24.04","kind":"directory","stage":"website","package":"connect/tooling/hosting","verify":[],"build":"verify:artifact","language":"typescript","packageManager":"npm","architecture_owner":"connect"}]}'
+      workflow_path: '.github/workflows/stream-connect-browser.yml'
