@@ -102,6 +102,29 @@ test('owner-scoped CI does not make an unrelated stream fail', () => fixture({
   assert(checkArchitecture(root, ['agent']).some(error => error.includes('computed dynamic import')));
 }));
 
+test('bounded packed SDK fixture imports must match declared public export targets', () => {
+  const source = [
+    "import { pathToFileURL } from 'node:url';",
+    'async function packedSdk() {',
+    'const root = process.env.APPARENT_ENGINE_SDK_CONSUMER;',
+    'const clientPath = `${root}/node_modules/@apparent/engine-sdk/dist/index.js`;',
+    'return import(pathToFileURL(clientPath).href);',
+    '}',
+  ].join('\n');
+  const policy = JSON.stringify({ schema: 1, fixtureImports: [{ file: 'test/sdk-adapter.test.ts', function: 'packedSdk', env: 'APPARENT_ENGINE_SDK_CONSUMER', package: '@apparent/engine-sdk', exports: ['.'] }] });
+  fixture({ 'engine/sdk/package.json': engine, 'record/package.json': record, 'record/architecture.json': policy, 'record/test/sdk-adapter.test.ts': source }, root => {
+    assert.deepEqual(checkArchitecture(root, ['record']), []);
+    writeFileSync(path.join(root, 'record/test/sdk-adapter.test.ts'), source.replace('dist/index.js', 'src/private.ts'));
+    assert(checkArchitecture(root, ['record']).some(error => error.includes('computed dynamic import')));
+    writeFileSync(path.join(root, 'record/test/sdk-adapter.test.ts'), source.replace('APPARENT_ENGINE_SDK_CONSUMER', 'UNBOUNDED_ROOT'));
+    assert(checkArchitecture(root, ['record']).some(error => error.includes('computed dynamic import')));
+    writeFileSync(path.join(root, 'record/test/other.test.ts'), source);
+    assert(checkArchitecture(root, ['record']).some(error => error.includes('other.test.ts')));
+    writeFileSync(path.join(root, 'record/architecture.json'), policy.replace('test/sdk-adapter.test.ts', 'src/index.ts'));
+    assert(checkArchitecture(root, ['record']).some(error => error.includes('invalid bounded fixture-import policy')));
+  });
+});
+
 test('checks nested package manifests and validates local package targets', () => fixture({
   'record/package.json': JSON.stringify({name:'@apparent/record',dependencies:{'@apparent/engine-sdk':'file:../agent'}}),
   'engine/sdk/package.json': engine,
