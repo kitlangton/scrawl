@@ -146,7 +146,7 @@ test("mounted shortcut action reaches Record and cancellation returns practice t
   await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Change shortcut")!.click(); await Promise.resolve(); });
   assert.equal(f.driver.commands().at(-1)?.type, "shortcut-begin-edit");
   f.progress.value = { ...f.progress.value, stage: "screen-ink", attemptId: "cancelled-practice" };
-  await f.controller.load(); publish(f.driver, [capture("cancelled-practice", "cancelled", [])]); await new Promise(resolve => setTimeout(resolve, 0));
+  await act(async () => { await f.controller.load(); publish(f.driver, [capture("cancelled-practice", "cancelled", [])]); await new Promise(resolve => setTimeout(resolve, 0)); });
   assert.equal(f.controller.state.progress.stage, "practice-start"); assert.equal(f.controller.state.progress.attemptId, null);
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
 });
