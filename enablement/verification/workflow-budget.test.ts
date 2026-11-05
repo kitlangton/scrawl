@@ -165,8 +165,13 @@ test('every supported root workflow waits for all payload jobs before auditing',
   const folder = new URL('../../.github/workflows/', import.meta.url)
   for (const name of readdirSync(folder)) {
     const text = readFileSync(new URL(name, folder), 'utf8')
+    if (name === 'stream-admission.yml') {
+      assert.match(text, /timeout-minutes: 5/)
+      assert.doesNotMatch(text, /delivery-component|publish-pages|attest-build-provenance/)
+      continue // Control-only status receipt; owner workloads retain their own audits.
+    }
     if (name === 'release-windows.yml' || name === 'runtime-budget.yml') continue
-    if (text.includes('uses: ./.github/workflows/value-stream-delivery.yml')) continue
+    if (name.startsWith('stream-')) continue
     // Only root workflows: callable platform verification is covered by caller.
     if (!/^  (push|workflow_dispatch|workflow_run|schedule):/m.test(text)) continue
     const jobs = [...text.split('jobs:\n')[1].matchAll(/^  ([\w-]+):$/gm)].map(m => m[1])
@@ -339,30 +344,25 @@ printf '${name}:%s\\n' "$*" >> "$CALLS"
 })
 
 test('PR and fresh main media builds share the bounded runtime dependency installer', () => {
-  const workflow = readFileSync(new URL('../../.github/workflows/value-stream-delivery.yml', import.meta.url), 'utf8')
-  const main = workflow.split('  stream:\n')[1].split('  stream-public:\n')[0]
-  const pr = workflow.split('  stream-pr:\n')[1]
-  const setup = (job: string) => job.match(/- name: Install Engine media runtime and fixture dependencies[\s\S]*?(?=\n      - uses: oven-sh)/)?.[0]
-  const mainSetup = setup(main), prSetup = setup(pr)
-  assert.ok(mainSetup); assert.ok(prSetup)
-  assert.match(mainSetup, /if: \(steps\.admit\.outputs\.reuse != 'true' \|\| steps\.reuse\.outcome != 'success'\) && matrix\.id == 'engine-media-native'/)
-  const condition = mainSetup.match(/if: (.+)/)![1]
-  for (const [reuse, outcome, id, expected] of [
-    ['false', 'skipped', 'engine-media-native', true],
-    ['true', 'failure', 'engine-media-native', true],
-    ['true', 'cancelled', 'engine-media-native', true],
-    ['true', 'success', 'engine-media-native', false],
-    ['false', 'skipped', 'engine', false],
-    ['true', 'failure', 'agent', false],
+  const action = readFileSync(new URL('../../.github/actions/delivery-component/action.yml', import.meta.url), 'utf8')
+  const setup = action.match(/- name: Install Engine media runtime and fixture dependencies[\s\S]*?(?=\n    - uses: oven-sh)/)?.[0]
+  assert.ok(setup)
+  const condition = setup.match(/if: (.+)/)![1]
+  for (const [publish, reuse, outcome, id, expected] of [
+    ['true', 'false', 'skipped', 'engine-media-native', true],
+    ['true', 'true', 'failure', 'engine-media-native', true],
+    ['true', 'true', 'cancelled', 'engine-media-native', true],
+    ['true', 'true', 'success', 'engine-media-native', false],
+    ['true', 'false', 'skipped', 'engine', false],
+    ['true', 'true', 'failure', 'agent', false],
+    ['false', '', '', 'engine-media-native', true],
+    ['false', '', '', 'engine', false],
   ] as const) {
     const expression = condition.replaceAll('steps.admit.outputs.reuse', JSON.stringify(reuse))
-      .replaceAll('steps.reuse.outcome', JSON.stringify(outcome)).replaceAll('matrix.id', JSON.stringify(id))
+      .replaceAll('steps.reuse.outcome', JSON.stringify(outcome)).replaceAll('inputs.id', JSON.stringify(id))
+      .replaceAll('inputs.publish', JSON.stringify(publish))
     assert.equal(Function(`return (${expression})`)(), expected)
   }
-  assert.match(prSetup, /if: matrix\.id == 'engine-media-native'/)
-  for (const block of [mainSetup, prSetup]) {
-    assert.match(block, /timeout-minutes: 5/)
-    assert.match(block, /run: node --experimental-strip-types composition\/delivery\/media-dependencies\.ts/)
-    assert.doesNotMatch(block, /apt-get|APPARENT_GST_PLUGIN_SOURCE/)
-  }
+  assert.match(setup, /run: node --experimental-strip-types composition\/delivery\/media-dependencies\.ts/)
+  assert.doesNotMatch(setup, /apt-get|APPARENT_GST_PLUGIN_SOURCE/)
 })
