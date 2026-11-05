@@ -84,6 +84,9 @@ test('issue body-file preserves exact UTF-8 text and refuses FIFO inputs promptl
     const path = join(root, 'body draft.md'); await writeFile(path, body);
     const preview = spawnSync(process.execPath, [cli, 'issue', '--title', title, '--body-file', path], { encoding: 'utf8', env: f.env });
     assert.equal(preview.status, 0); assert.equal(JSON.parse(preview.stdout).body, body);
+    await writeFile(path, `\uFEFF${body}`);
+    const withBom = spawnSync(process.execPath, [cli, 'issue', '--title', title, '--body-file', path], { encoding: 'utf8', env: f.env });
+    assert.equal(withBom.status, 0); assert.equal(JSON.parse(withBom.stdout).body, `\uFEFF${body}`);
     const fifo = join(root, 'no-writer.fifo');
     const created = spawnSync('mkfifo', [fifo]); assert.equal(created.status, 0);
     const started = Date.now();

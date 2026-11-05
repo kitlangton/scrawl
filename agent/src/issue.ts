@@ -68,7 +68,7 @@ async function readBody(path: string): Promise<string> {
         bytesRead += read.bytesRead;
       }
       if (bytesRead > MAX_BODY) execution('--body-file exceeds 60000 UTF-8 bytes (nothing sent).');
-      try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, bytesRead)); }
+      try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, bytesRead)); }
       catch { execution('--body-file must contain valid UTF-8 (nothing sent).'); }
     } catch (error) {
       if (error instanceof IssueCliError) throw error;
