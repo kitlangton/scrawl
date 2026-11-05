@@ -2,11 +2,14 @@ export type PocketView = {tone:'info'|'warning'|'failure';title:string;descripti
 export type PillView = {
   revision:number; phase:'hidden'|'selecting'|'recording'|'processing'|'completed';
   clock:string; label:string; warning:string|null;notice:string|null; reducedMotion:boolean; draggable:boolean;inputLevel:number|null;
+  /** Visible status for selecting-phase hosts that have no target-picker controls. */
+  status?:string;
   pocket?:PocketView|null;
   noteCount:number;
   actions:{id:string;label:string;enabled:boolean;selected:boolean;primary:boolean}[];
 };
-declare global { interface Window { apparentPill?: {
+/** Existing Desktop host capability consumed by the pill presentation. */
+export type PillHost = {
   read:()=>Promise<PillView|null>;
   layout:(revision:number)=>Promise<void>;
   manualDrag:boolean;
@@ -15,4 +18,4 @@ declare global { interface Window { apparentPill?: {
   cancelPaste:()=>Promise<void>;
   act:(revision:number,action:string,drop?:boolean)=>Promise<void>;
   subscribe:(callback:(state:PillView)=>void)=>()=>void;
-}; } }
+};

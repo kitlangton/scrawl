@@ -1,6 +1,8 @@
 # Record package
 
-`@apparent/record` is an independently installable TypeScript workflow package. It owns explicit local recording states and consumes an injected `EngineClient`; it does not create a recording itself and ships no fake or default production Engine adapter.
+`@apparent/record` is an independently installable TypeScript workflow and presentation package. Its local recording controller consumes an injected `EngineClient`; its reusable React pill consumes an injected typed `PillHost`. Neither creates a recording or ships a fake/default production capture adapter.
+
+`EngineSdkAdapter` is a host composition adapter for an already constructed, packed `@apparent/engine-sdk` client. It does not choose or launch an executable, select a runtime directory, allocate bundles, or provide a durable private mapping store. The reusable pill is adopted through the existing legacy host; it does not install a replacement Electron main/preload route.
 
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 
@@ -12,7 +14,7 @@ Run `npm ci`, `npm run typecheck`, `npm test`, and `npm run build` in this direc
 
 ## Adoption limits
 
-The repository's `apparent capture` CLI already implements GUI start/stop/cancel/inspect control over a same-user Unix socket on macOS/Linux. A separate readiness query is not currently exposed. This package does not yet provide that process transport, Electron main/preload wiring, or an adopted React surface. Electron needs a host-owned adapter that invokes the existing Rust GUI control path, obtains native readiness from an accepted Engine capability, and maps JSON receipts/events into `EngineClient`. The Engine's native readiness and capture lifecycle remain authoritative. Until that adapter and platform seam proof land, this package is a tested workflow prerequisite and makes no production recording-availability claim.
+The repository's `apparent capture` CLI already implements GUI start/stop/cancel/inspect control over a same-user Unix socket on macOS/Linux; a separate readiness query is not currently exposed. The native delivery package now builds and stages an explicit `apparent-engine` executable wrapper, but its provider reports `screenCapture: false` and `readiness: "unavailable"`, and cannot perform real capture. Thus the wrapper is not production readiness or native capture evidence. A host still needs to select and launch the executable with a private runtime directory, provide durable private mapping storage and bundle allocation, wire an accepted readiness/capture capability into `EngineClient`, and complete affected platform seam proof before adopting this adapter as a route. The adapter is not an installed route, and this package makes no production recording-availability claim.
 
 ## Asynchronous ownership
 
@@ -41,3 +43,37 @@ throws is detached; remaining subscribers still receive the state. Its exception
 cannot abort Engine event processing or strand command ownership. Hosts should
 handle presentation errors within their own observer and may resubscribe after
 repair. No capture is cancelled as a side effect of an observer failure.
+
+## Pill presentation adoption
+
+`src/ui` owns the existing Desktop recording pill presentation and CSS. The `@apparent/record/ui` export exposes `RecordingPill`, `PillView`, `PocketView` and the injected `PillHost` API; it has no window globals or app mount assumptions. The Record build places the CSS and Host Grotesk font beside the emitted component. The Desktop renderer imports the built package through its file dependency. Its thin `src/pill` legacy adapter injects the existing privileged Electron preload API, mounts the component, and applies the transparent window reset.
+
+The existing Electron `electron/pill` host and Rust `ui/electron_pill` lifecycle/transport remain authoritative. Installed routing stays on its existing fallback-aware path; this adoption does not enable or switch a native route, add config, or claim capture capability. Rollback restores the previous frontend package dependency and pill component mount. Remove that adapter and its legacy consumers only when a separately accepted host migration retires the current runtime, and remove the old native pill only after the recorded native acceptance gates in `capture/desktop/ui/frontend/README.md` pass.
+
+The public UI artifact bundles shared controls and icons; only React/React DOM
+remain host peers. Import `@apparent/record/ui/style.css` with `RecordingPill`.
+Its stylesheet is precompiled and ships its font: packed consumers need neither
+shared source nor Tailwind tooling. Shared UI is a development/build input only.
+`npm run test:package` installs a tarball in an isolated temporary consumer and
+exercises root, capabilities, fixtures and server-rendered UI imports. This
+explicit artifact check may install React peers; hooks do not install dependencies.
+Source builds require the repository's `shared/ui` and shared font inputs, but
+never Rust. Replacing an injected PillHost remounts its presentation session,
+clearing old revisions, pending actions and subscriptions before new interaction.
+
+`@apparent/record/ui` also exports `createWorkflowPillHost` and
+`disposeWorkflowPillHost` as an injection seam for a constructed `RecordWorkflow`.
+The adapter presents workflow snapshots to the existing `PillHost` contract with
+host-local monotonic revisions.
+Each read and observer receives an isolated view; host clock failures use an empty
+clock and cannot detach authoritative updates. Optional selecting-phase `status`
+text makes readiness/checking/starting states visible without target controls.
+It exposes readiness refresh, start, stop, cancel, reconcile and same-ID stop retry
+only in states where the workflow admits them;
+it does not provide paste, link, notes, selection, whiteboard, window or clipboard
+behavior. Disposal unsubscribes the presentation adapter and leaves workflow and
+capture ownership intact. This seam is not an installed route. Activation still
+requires a real native readiness/capture provider, durable host mapping and bundle
+allocation, executable/runtime composition, and affected macOS/Linux capture,
+permission, packaging and ownership proof. Until those gates pass, the installed
+fallback route remains authoritative.

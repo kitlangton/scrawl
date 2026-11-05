@@ -957,7 +957,7 @@
       "says": "Pick iPhone with a phone plugged in: a mirror opens, the phone's own video records with your narration, and ink works over the mirror.",
       "status": "stable@0.3.4",
       "platforms": ["mac"],
-      "note": "Needs AVFoundation's screen capture devices.",
+      "note": "Deferred; no current maintenance or rebuild-adoption commitment. The version records historical availability. Legacy implementation needs AVFoundation's screen capture devices.",
       "shortcuts": [{ "keys": "M", "does": "Flag a moment (iPhone mirror focused)" }],
       "docs": ["README.md#iphone", "capture/engine/docs/iphone-and-routing.md"]
     },
@@ -1071,7 +1071,7 @@
       "says": "A minute after a cabled capture, its video is re-encoded to HEVC at 1600 px (750 MB to 72 MB in one test).",
       "status": "stable@0.3.4",
       "platforms": ["mac"],
-      "note": "The iPhone path is Mac only.",
+      "note": "iPhone support, including phone-specific shrinking, is deferred and need not be maintained or adopted in the current rebuild. The version records historical availability; the legacy path is Mac only.",
       "docs": ["README.md#keeping-captures-small"]
     },
     {
@@ -1187,8 +1187,19 @@
       "status": "main",
       "added": "2026-11-05",
       "platforms": ["mac", "linux"],
-      "note": "latest honors APPARENT_CAPTURES_DIR and read-only capturesDir config, with bounded validated manifest reads. Stored summaries are producer authored; image mode lists references but does not inspect images. Recording requires explicit Engine runtime paths and native SDK v1 readiness. No media API, frames, zoom, Connect, authentication, or standalone Engine runtime archive. Existing apparent routing is unchanged.",
-      "docs": ["agent/README.md"]
+      "note": "latest honors APPARENT_CAPTURES_DIR and read-only capturesDir config, with bounded validated manifest reads. Default inspect text is regenerated from manifest semantics when summary.md is missing or stale; --stored-summary selects producer text, --experiment agentContext enriches the local timeline, and --json preserves raw manifest bytes. Image mode lists safe references without inspecting pixels. Recording requires explicit Engine runtime paths and native SDK v1 readiness. No frames, zoom, Connect, authentication, or standalone Engine runtime archive. Existing apparent routing is unchanged.",
+      "docs": ["agent/README.md", "agent/docs/cli-parity.md"]
+    },
+    {
+      "id": "agent-standalone-skill",
+      "group": "cli",
+      "name": "Standalone apparent-agent skill guide",
+      "says": "apparent-agent skill prints the package's bundled capture-reading guide to stdout for agents using the standalone local inspection CLI.",
+      "status": "main",
+      "added": "2026-11-05",
+      "platforms": ["mac", "linux"],
+      "note": "The command reads only package-relative guide text, takes no operands, and does not start Engine, read settings, access bundles, or use the network. It documents local inspection only and makes no recording, media, or Connect capability claim. Legacy apparent skill and routing remain unchanged.",
+      "docs": ["agent/skills/apparent/SKILL.md", "agent/docs/cli-parity.md"]
     },
     {
       "id": "cli-read",
