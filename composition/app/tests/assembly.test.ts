@@ -11,7 +11,7 @@ import { verifyPackagedApplication } from '../scripts/package.ts';
 
 test('CI explicitly installs Electron before provisioning its sandbox helper', async () => {
   const workflow = await readFile(join(root, '../../.github/workflows/value-stream-delivery.yml'), 'utf8');
-  const job = workflow.split('\n  stream:\n')[1]?.split('\n  runtime-budget:\n')[0];
+  const job = workflow.split('\n  stream:\n')[1]?.split(/\n  [a-z-]+:\n/)[0];
   assert(job, 'Independent stream producer job must exist');
   const build = job.indexOf('composition/delivery/cli.ts build');
   const install = job.indexOf('run: npm run prepare:electron');
@@ -24,8 +24,10 @@ test('CI explicitly installs Electron before provisioning its sandbox helper', a
   assert.equal(metadata.scripts.prestart, 'npm run prepare:electron');
   const legacy = await readFile(join(root, '../../.github/workflows/verification-platform.yml'), 'utf8');
   assert(!legacy.includes('\n  app-shell-foundation:'), 'Legacy verification must not run App Shell again');
-  assert(!workflow.includes('needs: select') && !workflow.includes('workflow_run:'),
+  assert(!job.includes('needs: select') && !job.includes('workflow_run'),
     'Independent delivery must not wait for legacy verification');
+  assert(!workflow.includes('workflows: [Linux verification') && !workflow.includes('workflows: [Mac verification'),
+    'Native verification completion must not trigger independent delivery');
 });
 
 test('independent stream rebuild and compiler-free assembly preserve unchanged artifacts', async t => {

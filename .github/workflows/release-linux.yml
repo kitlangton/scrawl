@@ -1,12 +1,6 @@
 name: Release (Linux)
 
 on:
-  workflow_run:
-    workflows: [Linux verification]
-    branches: [main]
-    types: [completed]
-  schedule:
-    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       candidate_sha:

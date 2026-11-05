@@ -1,10 +1,6 @@
 name: Mac verification
 
 on:
-  workflow_run:
-    workflows: [Linux verification]
-    branches: [main]
-    types: [completed]
   workflow_dispatch:
     inputs:
       connect_worker_proof:

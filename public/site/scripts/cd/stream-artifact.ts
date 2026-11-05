@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { gunzipSync } from 'node:zlib'
-import { lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { unzipSync } from 'fflate'
@@ -246,10 +246,74 @@ export async function consume(root: string, out: string, api: (path: string) => 
   }
   throw new Error('No successful trusted main Public artifact matches current source and production configuration')
 }
+
+/** Consume the component directory downloaded from the current workflow run. */
+export async function consumeCurrent(root: string, componentDir: string, out: string, deps: Deps = {}, env: NodeJS.ProcessEnv = process.env) {
+  root = resolve(root); componentDir = resolve(componentDir); out = resolve(out)
+  const ownerCore: any = await defaultCore()
+  const owner = deps.owner ?? checkedOwner(ownerCore, root)
+  const sourceSha = env.GITHUB_SHA ?? ''
+  const runId = env.GITHUB_RUN_ID ?? '', runAttempt = env.GITHUB_RUN_ATTEMPT ?? ''
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
+  if (!/^[a-f0-9]{40}$/.test(sourceSha) || head !== sourceSha || !/^[1-9]\d*$/.test(runId) || !/^[1-9]\d*$/.test(runAttempt) ||
+      env.GITHUB_REPOSITORY !== repository || env.GITHUB_REF !== 'refs/heads/main' ||
+      env.GITHUB_WORKFLOW_REF !== `${repository}/${workflowPath}@refs/heads/main` ||
+      owner.id !== ownerId || owner.kind !== 'directory' || owner.package !== 'public/site' || owner.artifactPath !== 'dist-apparent' || owner.stage !== 'website' || !owner.targets.includes(target)) {
+    throw new Error('Current Public workflow identity or owner registration is invalid')
+  }
+  const source = (deps.sourceDigest ?? ownerCore.sourceDigest)(root, owner, sourceSha)
+  const environment = (deps.environmentDigest ?? ownerCore.environmentDigest)(owner, env)
+  const input = env.PUBLIC_COMPONENT_INPUT_DIGEST ?? ''
+  if (![source, environment, input].every((value: string) => /^[a-f0-9]{64}$/.test(value))) throw new Error('Invalid current Public input identity')
+  const componentStat = lstatSync(componentDir)
+  if (!componentStat.isDirectory() || componentStat.isSymbolicLink()) throw new Error('Current Public artifact path must be a real directory')
+  const receiptPath = join(componentDir, 'receipt.json'), tarPath = join(componentDir, 'component.tar.gz')
+  if (readdirSync(componentDir).sort().join(',') !== 'component.tar.gz,receipt.json') throw new Error('Unexpected current Public artifact directory contents')
+  for (const path of [receiptPath, tarPath]) {
+    const stat = lstatSync(path)
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Current Public artifact entries must be regular files')
+    if (stat.size > (path === receiptPath ? 1024 * 1024 : maxZipBytes)) throw new Error('Current Public artifact size limit')
+  }
+  const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'))
+  const bytes = readFileSync(tarPath)
+  if (receipt.schema !== 1 || receipt.id !== owner.id || receipt.target !== target || receipt.stage !== owner.stage ||
+      receipt.sourceSha !== sourceSha || receipt.runId !== runId || receipt.runAttempt !== runAttempt ||
+      receipt.sourceDigest !== source || receipt.environmentDigest !== environment || receipt.inputDigest !== input ||
+      !/^[a-f0-9]{64}$/.test(receipt.sha256) || !Number.isSafeInteger(receipt.size) || receipt.size <= 0 ||
+      bytes.length !== receipt.size || sha256(bytes) !== receipt.sha256) throw new Error('Current Public receipt provenance or payload digest mismatch')
+  const entries = decodePayloadTar(bytes)
+  const outReceipt = `${out}-receipt.json`
+  if (exists(out) || exists(outReceipt)) throw new Error('Public artifact output and provenance receipt must not already exist')
+  const parent = dirname(out); mkdirSync(parent, { recursive: true })
+  const stage = mkdtempSync(join(parent, `.${out.split(sep).pop()}.stage-`)), receiptTemp = join(stage, 'receipt.json')
+  let committed = false
+  try {
+    const payloadRoot = join(stage, 'payload'); mkdirSync(payloadRoot)
+    for (const entry of entries) {
+      if (entry.path === 'stream-payload' || entry.path === 'stream-payload/payload') continue
+      const rel = entry.path.slice('stream-payload/payload/'.length)
+      if (!rel || rel.split('/').some(part => !part || part === '.' || part === '..')) throw new Error('Unsafe Public payload relative path')
+      const destination = resolve(payloadRoot, rel), containment = relative(payloadRoot, destination)
+      if (!containment || containment === '..' || containment.startsWith(`..${sep}`) || isAbsolute(containment)) throw new Error('Public payload path escapes extraction root')
+      if (entry.kind === 'directory') mkdirSync(destination, { recursive: true })
+      else { mkdirSync(dirname(destination), { recursive: true }); writeFileSync(destination, entry.data!, { flag: 'wx', mode: entry.mode & 0o111 ? 0o755 : 0o644 }) }
+    }
+    writeFileSync(receiptTemp, JSON.stringify({ ...receipt, sourceSha }, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
+    renameSync(payloadRoot, out)
+    try { renameSync(receiptTemp, outReceipt); committed = true }
+    catch (error) { rmSync(out, { recursive: true, force: true }); throw error }
+    return { sourceSha, runId: Number(runId), runAttempt: Number(runAttempt), receipt: outReceipt }
+  } finally { rmSync(stage, { recursive: true, force: true }); if (!committed) rmSync(receiptTemp, { force: true }) }
+}
 function exists(path: string) { try { lstatSync(path); return true } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error } }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const root = resolve(import.meta.dirname, '../../../..'), out = resolve(process.argv[2] ?? '.build/public-artifact')
+  const root = resolve(import.meta.dirname, '../../../..')
+  if (process.argv[2] === '--current') {
+    const componentDir = resolve(process.argv[3] ?? '.build/public-component'), out = resolve(process.argv[4] ?? '.build/public-artifact')
+    console.log(JSON.stringify(await consumeCurrent(root, componentDir, out)))
+  } else {
+  const out = resolve(process.argv[2] ?? '.build/public-artifact')
   const token = process.env.GH_TOKEN
   if (!token) throw new Error('Missing Actions read token')
   const request = async (path: string) => {
@@ -279,4 +343,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   }
   const result = await consume(root, out, async path => (await request(path)).json(), download)
   console.log(JSON.stringify(result))
+  }
 }

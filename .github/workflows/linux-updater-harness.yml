@@ -1,17 +1,7 @@
 name: Linux updater harness
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/linux-updater-harness.yml'
-      - 'capture/desktop/scripts/linux/gui/**'
-      - 'enablement/native/linux/**'
-      - 'capture/desktop/scripts/linux/updater/**'
-      - 'capture/desktop/scripts/linux/updater/updater-fixture.py'
-      - 'capture/desktop/linux/update.rs'
-      - 'capture/desktop/settings/settings.rs'
-      - 'capture/desktop/settings/settings_window.rs'
+  workflow_dispatch:
 
 permissions:
   contents: read
