@@ -45,7 +45,7 @@ and existing Electron routing selects its existing surfaces. No legacy native
 renderer is removed by theme adoption.
 
 Every frontend build and repository PR verification runs
-`python3 shared/ui/scripts/check-theme.py`. The per-file legacy color inventory
+`node shared/ui/scripts/check-theme.ts` (the legacy Python entrypoint forwards to the same implementation). The per-file legacy color inventory
 reserves existing demo/artwork and unmigrated literals; new files have no
 allowance. Reduce it when migrating an old surface. New exceptions require a
 reviewed explanation; it is a ratchet, not proof of visual correctness.

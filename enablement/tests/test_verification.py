@@ -232,7 +232,7 @@ class SelectionTests(unittest.TestCase):
             "public/site/public/assets/brand/icon.svg",
             "public/site/index.html", "public/site/package.json", "public/site/bun.lock",
             "public/site/tsconfig.json", "public/site/vite.config.ts",
-            "public/site/lib/public-assets.mjs",
+            "public/site/lib/public-assets.ts",
             "public/site/scripts/site-build/agent-files.ts",
             "public/site/scripts/site-build/feature-audit.ts",
             "public/site/scripts/site-build/prerender.ts",
@@ -248,9 +248,9 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(verification.public_site_build_selected([path]))
         for path in (
             "public/site/docs/pages-deploy.md",
-            "public/site/scripts/cd/publish_pages.py",
-            "public/site/scripts/site-build/verify.mjs",
-            "public/site/functions/Apparent-ghost-demo-v4-lilac.mp4.js",
+            "public/site/scripts/cd/publish-pages.ts",
+            "public/site/scripts/site-build/verify.ts",
+            "public/site/functions/Apparent-ghost-demo-v4-lilac.mp4.ts",
             "public/site/video-demo/Cargo.toml",
             "connect/client/typescript/src/index.ts", "connect/web/src/Hosted.tsx",
             "connect/service/src/worker.ts", "capture/desktop/native/linux.rs",
@@ -914,7 +914,7 @@ class SelectionTests(unittest.TestCase):
         selected = verification.select(["public/site/package.json"])
         self.assertEqual((selected["root"], selected["engine"], selected["public_site"]),
                          (False, False, True))
-        for path in ("public/site/scripts/cd/publish_pages.py", "public/site/functions/worker.ts",
+        for path in ("public/site/scripts/cd/publish-pages.ts", "public/site/functions/worker.ts",
                      "public/site/video-demo/Cargo.toml"):
             with self.subTest(path=path):
                 self.assertTrue(verification.select([path])["root"])
@@ -975,7 +975,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual((selected["root"], selected["engine"], selected["browser"]),
                          (False, False, True))
         for path in ["connect/web/src/Other.tsx", "connect/web/src/sharedlinks.tsx",
-                     "public/site/scripts/cd/publish_pages.py",
+                     "public/site/scripts/cd/publish-pages.ts",
                      "public/site/public/assets/hosted/source-pond-v4.png",
                      "public/site/public/assets/hosted/agent-pond-v4.png",
                      "public/site/public/assets/hosted/agent-reading-v4.png",
@@ -1194,7 +1194,7 @@ class SelectionTests(unittest.TestCase):
                                 changed = commit()
                                 broad(base, changed)
                     for path in ["Cargo.lock", "build.rs", "src/unknown.rs",
-                                 "enablement/tests/test_verification.py", "public/site/scripts/cd/publish_pages.py"]:
+                                 "enablement/tests/test_verification.py", "public/site/scripts/cd/publish-pages.ts"]:
                         git("read-tree", head)
                         oid = git("hash-object", "-w", "--stdin", input="mixed input\n")
                         git("update-index", "--add", "--cacheinfo", "100644", oid, path)

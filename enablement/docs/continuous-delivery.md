@@ -197,7 +197,7 @@ fail; a superseded Pages candidate reports an intentional successful skip.
 ## Website activation: Cloudflare Pages
 
 The active website job now publishes only the sealed source-built `dist-apparent` to the isolated
-`apparent-capture` Pages project, using `public/site/scripts/cd/publish_pages.py` and
+`apparent-capture` Pages project, using `public/site/scripts/cd/publish-pages.ts` and
 `public/site/wrangler.pages.jsonc`. It does not execute `public/site/wrangler.jsonc`, deploy the
 hosted Worker, or connect to Clanker. See
 [`../../public/site/docs/pages-deploy.md`](../../public/site/docs/pages-deploy.md) for the current build,
