@@ -64,11 +64,12 @@ clearing old revisions, pending actions and subscriptions before new interaction
 `@apparent/record/ui` also exports `createWorkflowPillHost` and
 `disposeWorkflowPillHost` as an injection seam for a constructed `RecordWorkflow`.
 The adapter presents workflow snapshots to the existing `PillHost` contract with
-host-local monotonic revisions. It exposes readiness refresh, start, stop, cancel,
+host-local monotonic revisions.
 Each read and observer receives an isolated view; host clock failures use an empty
 clock and cannot detach authoritative updates. Optional selecting-phase `status`
 text makes readiness/checking/starting states visible without target controls.
-reconcile and same-ID stop retry only in states where the workflow admits them;
+It exposes readiness refresh, start, stop, cancel, reconcile and same-ID stop retry
+only in states where the workflow admits them;
 it does not provide paste, link, notes, selection, whiteboard, window or clipboard
 behavior. Disposal unsubscribes the presentation adapter and leaves workflow and
 capture ownership intact. This seam is not an installed route. Activation still
