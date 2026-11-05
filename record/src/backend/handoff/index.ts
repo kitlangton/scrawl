@@ -1,4 +1,3 @@
-import { isAbsolute, resolve } from "node:path";
 import { assembleProcessingOutput, type ProcessingInput } from "../processing/index.js";
 
 const CLI_INSTALL = "Once per agent session, install or update to the latest Apparent CLI: https://github.com/tryapparent/apparent#agents";
@@ -34,9 +33,7 @@ function validate(input: LocalHandoffInput): void {
  */
 export function formatLocalHandoff(input: LocalHandoffInput): LocalHandoffOutput {
   validate(input);
-  const { target: _target, destination: _destination, device: _device, screenAtStart: _screen,
-    context: _context, contextChanges: _contextChanges, ...processing } = input.processing;
-  const semantic = assembleProcessingOutput(processing).summaryMarkdown;
+  const semantic = assembleProcessingOutput(input.processing, "local-clipboard").summaryMarkdown;
   const lines = [
     `apparent inspect ${shellQuote(input.processing.bundlePath)}`,
     "",

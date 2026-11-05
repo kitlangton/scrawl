@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatLocalHandoff, type LocalHandoffInput } from "../dist/index.js";
+import { formatLocalHandoff, type LocalHandoffInput } from "../../dist/index.js";
 
 const base: LocalHandoffInput = {
   savedBundle: { status: "saved", bundlePath: "/captures/a user's take.apparent" },
@@ -13,7 +13,9 @@ const base: LocalHandoffInput = {
     ] },
     target: { app: "Editor", windowTitle: "PRIVATE WINDOW TITLE" },
     destination: { session: "private-session", title: "PRIVATE TOKEN abc123", url: "https://private.test/?token=abc123" },
-    context: { auth: "PRIVATE TOKEN xyz789" },
+    screenAtStart: "Editor",
+    context: { project: "Synthetic project" },
+    contextChanges: [{ timeMs: 2_000, key: "selection", value: "Save button" }],
     frames: [{ index: 1, timeMs: 1_000, absolutePath: "/captures/a user's take.apparent/frames/frame-01.png", text: "Please change this control" }],
     notes: [{ timeMs: 4_000, text: "Keep this note" }],
     warnings: [{ kind: "imageQuality", message: "Image quality is reduced." }],
@@ -33,8 +35,10 @@ test("formats the legacy local handoff order and quotes paths safely", () => {
   assert.match(text, /Uncropped images are in \/captures\/a user's take\.apparent\/frames-full\//);
   assert.match(text, /· 0:01 “Please change this control”/);
   assert.match(text, /· 0:04 Typed note: Keep this note/);
-  assert.match(text, /Video: \/captures\/a user's take\.apparent\/recording\.mp4/);
-  assert.match(text, /Bundle: \/captures\/a user's take\.apparent/);
+  assert.doesNotMatch(text, /Video:|Bundle:|Cropped to:|Open contact-sheet/);
+  assert.ok(text.endsWith("  · 0:04 Typed note: Keep this note\n"));
+  assert.match(text, /Screen: Editor · project: Synthetic project/);
+  assert.match(text, /selection → Save button/);
   assert.equal(text.split("Please change this control").length - 1, 1);
   assert.ok(!text.includes("make-it-apparent"));
   assert.ok(!text.includes("PRIVATE WINDOW TITLE") && !text.includes("PRIVATE TOKEN") && !text.includes("abc123") && !text.includes("xyz789"));
