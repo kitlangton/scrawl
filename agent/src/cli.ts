@@ -17,7 +17,7 @@ async function main(args: string[]) {
     process.stdout.write('Usage: apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n');
     return 0;
   }
-  if (args[0] !== 'skill' && args[0] !== 'issue' && (args.length === 0 || args.includes('--help') || args.includes('-h'))) { help(); return 0; }
+  if (args[0] !== 'skill' && args[0] !== 'issue' && (args.length === 0 || args.includes('--help') || args.includes('-h'))) { help(); process.stdout.write('       apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n'); return 0; }
   if (args.length === 1 && ['--version', '-V'].includes(args[0])) { console.log(VERSION); return 0; }
   if (args[0] === 'skill') {
     if (args.length !== 1) throw new Error('skill takes no operands or options');
