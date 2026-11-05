@@ -15,6 +15,8 @@ export const optimization = 'Optimize the tests. The agent whose run exceeded th
 export type Job = { name: string; status: string; conclusion: string | null; started_at: string | null; completed_at: string | null;
   runner_id?: number | null; runner_name?: string | null; steps?: unknown[]; labels?: string[] }
 
+// Retirement compatibility only: main still emits this check while the removal
+// PR is verified. Remove after the collector is deleted from main.
 function isAdmissionReceipt(job: Job): boolean {
   // The Checks API receipt also appears in Actions' Jobs API. It waits for
   // owner audits and executes no workload. Require its exact observed shape;
