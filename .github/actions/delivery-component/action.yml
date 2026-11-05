@@ -1,0 +1,156 @@
+name: Verify and stage a component
+description: Shared execution steps; callers own jobs, permissions and publication.
+inputs:
+  id:
+    description: id
+    required: true
+  target:
+    description: target
+    required: true
+  kind:
+    description: kind
+    required: true
+  language:
+    description: language
+    required: true
+  packageManager:
+    description: packageManager
+    required: true
+  architecture_owner:
+    description: architecture_owner
+    required: true
+  publish:
+    description: publish
+    required: true
+outputs:
+  input-digest:
+    description: Verified component input digest
+    value: ${{ steps.admit.outputs.input_digest }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22.23.4'
+    - name: Install the owner architecture checker
+      if: inputs.architecture_owner != ''
+      shell: bash
+      run: npm --prefix composition/architecture ci --ignore-scripts
+    - name: Enforce this owner's dependency boundary
+      if: inputs.architecture_owner != ''
+      env:
+        ARCHITECTURE_OWNER: ${{ inputs.architecture_owner }}
+      shell: bash
+      run: npm --prefix composition/architecture run check -- --owner "$ARCHITECTURE_OWNER"
+    - name: Admit an unchanged verified component or request a fresh build
+      if: inputs.publish == 'true'
+      id: admit
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: node --experimental-strip-types composition/delivery/cli.ts admit "$OWNER_ID" "$OWNER_TARGET"
+    - name: Retrieve and verify the admitted component
+      id: reuse
+      continue-on-error: true
+      if: inputs.publish == 'true' && steps.admit.outputs.reuse == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PRIOR_ARTIFACT: ${{ steps.admit.outputs.prior_artifact_id }}
+        PRIOR_SHA: ${{ steps.admit.outputs.prior_source_sha }}
+        PRIOR_RUN: ${{ steps.admit.outputs.prior_run_id }}
+        PRIOR_ATTEMPT: ${{ steps.admit.outputs.prior_run_attempt }}
+        INPUT_DIGEST: ${{ steps.admit.outputs.input_digest }}
+      shell: bash
+      run: |
+        if ! gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$PRIOR_ARTIFACT/zip" > "$RUNNER_TEMP/prior-component.zip"; then
+          rm -f "$RUNNER_TEMP/prior-component.zip"
+          rm -rf "$RUNNER_TEMP/stream-output"
+          exit 1
+        fi
+        if ! node --experimental-strip-types composition/delivery/cli.ts reuse "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/prior-component.zip" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST" "$PRIOR_SHA" "$PRIOR_ARTIFACT" "$PRIOR_RUN" "$PRIOR_ATTEMPT"; then
+          rm -rf "$RUNNER_TEMP/stream-output"
+          exit 1
+        fi
+    - name: Guard TypeScript owners against native source compilation
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.language != 'native'
+      shell: bash
+      run: |
+        mkdir "$RUNNER_TEMP/value-stream-no-rust"
+        for tool in cargo rustc; do
+          printf '#!/bin/sh\necho "Rust compilation is outside this owner contract" >&2\nexit 97\n' > "$RUNNER_TEMP/value-stream-no-rust/$tool"
+          chmod 755 "$RUNNER_TEMP/value-stream-no-rust/$tool"
+        done
+        printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
+    - uses: dtolnay/rust-toolchain@stable
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.language == 'native'
+    - name: Install Engine media runtime and fixture dependencies
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.id == 'engine-media-native'
+      shell: bash
+      # The installer bounds update/install process groups to 60/180 seconds.
+      run: node --experimental-strip-types composition/delivery/media-dependencies.ts
+    - uses: oven-sh/setup-bun@v2
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.packageManager == 'bun'
+      with:
+        bun-version: '1.3.10'
+    - name: Independently install, verify and build the owner artifact
+      if: inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success'
+      shell: bash
+      run: node --experimental-strip-types composition/delivery/cli.ts build "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload"
+    - name: Prepare the pinned Electron runtime
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.kind == 'app-shell'
+      working-directory: composition/app
+      shell: bash
+      run: npm run prepare:electron
+    - name: Linux Electron dependencies
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.kind == 'app-shell' && runner.os == 'Linux'
+      working-directory: composition/app
+      shell: bash
+      run: npx --no-install playwright install-deps chromium
+    - name: Prepare the pinned Electron sandbox helper
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.kind == 'app-shell' && runner.os == 'Linux'
+      working-directory: composition/app
+      shell: bash
+      run: |
+        sudo install -o root -g root -m 4755 node_modules/electron/dist/chrome-sandbox \
+          "$RUNNER_TEMP/apparent-foundation-chrome-sandbox"
+    - name: Bundle the prebuilt App Shell payload
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.kind == 'app-shell'
+      working-directory: composition/app
+      shell: bash
+      run: |
+        bundle=$(node scripts/package.ts "$RUNNER_TEMP/stream-payload/app" "$RUNNER_TEMP/stream-payload/bundle")
+        printf 'APPARENT_FOUNDATION_PACKAGE=%s\n' "$bundle" >> "$GITHUB_ENV"
+    - name: Test the exact bundled application
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.kind == 'app-shell'
+      working-directory: composition/app
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" = Linux ]; then
+          APPARENT_FOUNDATION_SANDBOX_HELPER="$RUNNER_TEMP/apparent-foundation-chrome-sandbox" xvfb-run -a npm run test:electron
+        else
+          npm run test:electron
+        fi
+    - name: Seal the verified component for downstream assembly
+      if: inputs.publish == 'true' && (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success')
+      env:
+        INPUT_DIGEST: ${{ steps.admit.outputs.input_digest }}
+      shell: bash
+      run: node --experimental-strip-types composition/delivery/cli.ts seal "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST"
+    - uses: actions/attest-build-provenance@v2
+      if: inputs.publish == 'true'
+      with:
+        subject-path: ${{ runner.temp }}/stream-output/component.tar.gz
+    - uses: actions/upload-artifact@v4
+      if: inputs.publish == 'true'
+      with:
+        name: stream-${{ inputs.id }}-${{ inputs.target }}-${{ steps.admit.outputs.input_digest }}
+        path: ${{ runner.temp }}/stream-output/
+        if-no-files-found: error
+        retention-days: 90
+    - name: Remove the disposable sandbox helper
+      if: always() && inputs.kind == 'app-shell' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        if [ -e "$RUNNER_TEMP/apparent-foundation-chrome-sandbox" ]; then
+          sudo unlink "$RUNNER_TEMP/apparent-foundation-chrome-sandbox"
+        fi
