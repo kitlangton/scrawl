@@ -1,13 +1,13 @@
-interface Env {
-  ASSETS: Fetcher
-}
+import service from '../../../service/src/worker.ts'
+import type { Env as ServiceEnv } from '../../../service/src/types.ts'
+
+interface Env extends ServiceEnv { ASSETS: Fetcher }
 
 const routeDocuments = new Set([
   "/connect", "/connect/", "/connect/device", "/connect/device/", "/connect/shares", "/connect/shares/",
-  "/hosted", "/hosted/", "/hosted/device", "/hosted/device/", "/hosted/shares", "/hosted/shares/",
 ])
 const art = new Set([
-  "/hosted/source-pond-v4.png", "/hosted/agent-pond-v4.png", "/hosted/agent-reading-v4.png",
+  "/connect/hosted/source-pond-v4.png", "/connect/hosted/agent-pond-v4.png", "/connect/hosted/agent-reading-v4.png",
 ])
 const notFoundHeaders = {
   "Cache-Control": "no-store",
@@ -19,16 +19,24 @@ const notFoundHeaders = {
 function routeAssetPath(path: string): string | undefined {
   if (routeDocuments.has(path)) return `${path.replace(/\/$/, "")}/index.html`.replace(/^\/\//, "/")
   if (art.has(path)) return path
-  if (/^\/connect\/assets\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(path)
+  if (/^\/connect\/(?:assets|hosted)\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(path)
     && !/\.(?:map|json)$/i.test(path)
     && !/(?:^|\/)(?:node_modules|functions|backend)(?:\/|$)/i.test(path)) return path
   return undefined
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, context?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url)
     const path = url.pathname
+    // All API, OAuth, capability and recipient asset behavior is owned by the
+    // existing service handler. Its API_ORIGIN is configured with /connect.
+    if (path.startsWith('/connect/v1/') || path === '/connect/v1'
+      || path.startsWith('/connect/auth/') || path === '/connect/auth'
+      || path.startsWith('/connect/s/')
+      || ['/connect/share-view.js', '/connect/share-view.css', '/connect/share-wordmark.svg', '/connect/share-font.ttf'].includes(path)) {
+      return service.fetch(request, env, context)
+    }
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response(null, { status: 405, headers: { ...notFoundHeaders, Allow: "GET, HEAD" } })
     }

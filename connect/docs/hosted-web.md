@@ -67,18 +67,12 @@ V4 art and `rgb(2, 1, 2)` text remain unchanged. Public imports no sibling Conne
 source; `public/site/connect.html`, Connect-specific Public Vite rewrites/input and Public
 `renderHosted`/prerender generation are retired together with those donors.
 
-Connect's own dev/preview middleware retains exact canonical/legacy account,
-device and shares paths, query bytes and slash variants. The production composer
-accepts only six HTML documents, their emitted JS/CSS resource closure and five
-approved assets. It rejects differing collisions and private, malformed,
-symlink/nonregular, missing-resource or synthetic-origin inputs before changing
-the destination. The source-built homepage survives composition byte-for-byte; final graph
-verification checks both independently built owners. Public's homepage graph has no
-Connect/API code; Connect has no marketing/demo/font-service graph. Pages metadata
-provides no-store/noindex and legacy redirects; `404.html` prevents unknown/private
-paths from acquiring a general SPA fallback. The same existing workflow and
-`public/site/scripts/cd/publish-pages.ts` remain the sole publisher; no second deployment or
-Worker change is introduced. See `public/site/docs/pages-deploy.md` for composition.
+Connect's own dev/preview middleware and Public composition retain canonical and
+legacy account, device and shares paths. The dedicated Worker package takes
+only the three canonical pages and their emitted JS/CSS resource closure; it
+does not include `/hosted` aliases or become the Public Pages publisher. Its
+route-free template is a build artifact only. The existing legacy producer and
+deployment path remain unchanged until compatibility is adopted separately.
 
 ## Verification
 
@@ -153,7 +147,7 @@ Baseline before Connect: public build/typecheck/package, hosted browser fixtures
 
 ## Release prerequisites
 
-The capture frontend publishes from main to Cloudflare Pages; see `public/site/docs/pages-deploy.md` for rollback. The old Clanker origin is retired and must not be reactivated. Preserve all six canonical/legacy Connect account/device/share-management documents, the three exact `/hosted/*-v4.png` art paths, hashed `/assets/` modules, original font/wordmark, accepted homepage and retained public assets without broadening the public boundary. Legacy redirects preserve query strings, including device codes; source rendering aliases remain packaged. Keep hosted API/auth and the registered Google callback unchanged. Anonymous capability recipients, including media, manifest, preview, `/share-view.js` and `/share-view.css`, remain on the capability-serving Worker origin, not Pages. Parent owns Worker integration, independent auth review, Google OAuth/private D1/R2 configuration and live deployment. Verify real capability access and revocation, sign-in, cookie/CORS, slot admission, quota, expiry, device approval and logout separately; synthetic browser checks are not live OAuth or full native UI proof, and packaged files do not prove the host serves them. Keep these routes unlinked from the public homepage until beta deployment is verified. No deployment, database migration, provisioning or credential rotation is part of this reconciliation.
+The existing capture frontend remains on Cloudflare Pages until its compatibility cutover; see `public/site/docs/pages-deploy.md` for that publisher's rollback. Preserve all six canonical/legacy Connect account/device/share-management documents, the three exact `/hosted/*-v4.png` art paths, hashed `/assets/` modules, original font/wordmark, accepted homepage and retained public assets without broadening the legacy public boundary. Legacy redirects preserve query strings, including device codes; source rendering aliases remain packaged. This hosting slice instead builds the same-origin Worker artifact described below, where anonymous capability recipients and account/API routes reach the existing service handler under `/connect`. No routes, bindings or deployment are activated. Synthetic local checks are not live OAuth or live-cookie proof, and packaged files do not prove that a host serves them. Keep these routes unlinked from the public homepage until beta deployment is verified. No database migration, provisioning or credential rotation is part of this work.
 
 ## React recipient verification
 
@@ -161,32 +155,31 @@ From `connect/service`, run `npm ci`, `npm run build`, then the affected backend
 
 For actual local Worker + D1/R2 browser checks, run `npm run test:recipient` with installed Chromium (`CHROME_PATH`) and FFmpeg. Set an existing private `RECIPIENT_EVIDENCE` directory or let the check create one under the OS temp directory. It generates synthetic four-second media, uploads it through the actual service, exercises pending→ready, native playback, transcript seek, actual clipboard and refusal fallback, no-JS evidence, responsive layout and revocation. No real account or cloud service is contacted. Screenshots and receipts remain outside git; these do not establish deployed hosting, ChatGPT-web retrieval or native Desktop acceptance.
 
-## Independent static browser hosting source
+## Same-origin Connect hosting source
 
-`connect/tooling/hosting` is the source package for the dedicated
-`apparent-connect-web` Cloudflare Worker. It owns only the existing six
-account/device/share-management documents, their emitted browser graph, and the
-three `/hosted/*.png` illustrations. It does not include the API Worker,
-recipient/capability viewer, account data, or a Pages deployment. Its
-`wrangler.template.jsonc` has no route, workers.dev or preview exposure configured
-and disables Worker observability; an
-operator must configure the intended `app.tryapparent.com/connect*` and
-`app.tryapparent.com/hosted*` zone routes as a separate activation step.
+`connect/tooling/hosting` builds one `apparent-connect-web` Worker. It serves
+the canonical `/connect`, `/connect/device` and `/connect/shares` documents,
+then dispatches `/connect/v1/*`, `/connect/auth/*`, `/connect/s/*` and recipient
+viewer assets to the existing `connect/service/src/worker.ts` module. This
+preserves the service's authorization, D1/R2 access, OAuth cookies, CSRF/CORS
+and privacy headers. There is no generic proxy or SPA fallback: only exact
+browser routes and packaged `/connect/assets/*` and `/connect/hosted/*` files
+reach ASSETS, with credentials stripped first. The service's existing
+scheduled handler remains the single cleanup implementation. The Wrangler
+template has no routes, preview exposure, provider resource IDs or credentials;
+operator configuration and activation remain separate.
 
-The current `connect/web/dist` remains the intermediate browser artifact used by
-Public composition and its existing delivery schema. The hosting packager reads
-that six-document artifact and writes `connect/tooling/hosting/.output/dist`; only the
-dedicated Worker output rewrites `/assets/*`, the wordmark, and font references
-to `/connect/assets/*`. The three existing art URLs remain `/hosted/*.png`.
-This keeps Public's current composition/admission usable until its owner cuts
-over safely, while making every Worker resource physically present within the
-Worker's owned route space. The packager rejects unexpected inputs and missing
-HTML resource edges before replacing its generated output.
+The web package retains its canonical and legacy documents for Public
+composition. The hosting packager includes only the three canonical documents,
+rewrites browser assets and illustrations under `/connect`, and rejects
+unexpected inputs and missing resource edges before replacing generated output.
+Its build profile uses `VITE_HOSTED_API_ORIGIN` and `API_ORIGIN` set to
+`https://app.tryapparent.com/connect`, with `SITE_ORIGIN` set to
+`https://app.tryapparent.com`. Public's legacy producer profile is unchanged
+until cutover.
 
-Hosting source inputs are `connect/tooling/hosting/{.gitignore,package.json,
-package-lock.json,tsconfig.json,wrangler.template.jsonc,src/index.ts,
-scripts/package.ts,scripts/test-runtime.ts,test/worker.test.ts}` and the full
-browser build closure: `connect/web/{package.json,bun.lock,tsconfig.json,
+Hosting source inputs include `connect/tooling/hosting/`, `connect/service/`
+and the full browser build closure: `connect/web/{package.json,bun.lock,tsconfig.json,
 index.html,vite.config.ts,src/**,scripts/**}`, `shared/ui/{src/**,
 scripts/check-theme.py}`, `shared/analytics/{config.ts,browser.ts}`, and the five
 approved files `public/site/public/assets/{hosted/{source-pond-v4,agent-pond-v4,
@@ -200,23 +193,25 @@ from this publishable graph by disabling analytics there; production main keeps
 its configured, fingerprinted analytics values and rejects fixture contamination.
 Install Connect web with
 `bun install --frozen-lockfile` from `connect/web` first. Build output is
-`connect/tooling/hosting/.output/dist`: six `index.html` documents, one hashed
+`connect/tooling/hosting/.output/dist`: three `index.html` documents, one hashed
 JS/CSS pair under `connect/assets/`, the font and wordmark under that same
-namespace, and the three preserved `/hosted/*.png` images (13 files total).
-Wrangler's static asset binding consumes this directory. `.output/worker.js` is
-the bundled runtime and `.output/wrangler.json` is its route-free deployment config;
+namespace, and three `/connect/hosted/*.png` images (10 files total).
+Wrangler's static asset binding consumes this directory. `.output/worker.js` bundles
+the locked Connect service implementation and `.output/wrangler.json` is its route-free deployment config;
 publication consumes these verified bytes with `--no-bundle` rather than building
 source. Rewritten assets revalidate rather than using their pre-rewrite filenames
 as immutable content identities. This package does not change delivery artifact schema, route
 inventory, or producer names and does not require Cargo or rustc.
 
 `npm test` starts Wrangler's local Workers runtime against the packaged static
-asset directory and exercises all twelve route/slash forms, query preservation,
-resource fetches, HEAD/GET, method denial, unknown and encoded paths, and the
-privacy/security headers. A handler boundary test checks sensitive request headers and device-code queries
+asset directory and exercises the six canonical route/slash forms, query
+preservation, resource fetches, service-owned API/viewer dispatch, HEAD/GET,
+method denial, unknown and encoded paths, and privacy/security headers. A
+handler boundary test checks sensitive request headers and device-code queries
 are removed before the static asset binding; the browser-visible query is retained.
-The runtime test hydrates the rewritten package in Chromium with all nonlocal
-requests intercepted, checking sign-in destinations and device-code preservation. Run the existing browser
+The runtime test hydrates the rewritten package in Chromium with the synthetic
+session endpoint intercepted, checking same-origin sign-in destinations and
+device-code preservation. Run the existing browser
 suite separately from `connect/web` with a private evidence directory, for
 example `CONNECT_EVIDENCE=/tmp/connect-web-hosting-evidence npm test`; it covers
 synthetic account/device/share states, analytics, no-JS loading HTML and

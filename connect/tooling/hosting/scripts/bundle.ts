@@ -3,12 +3,17 @@ import { readFile, writeFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
-const runtime = resolve(root, '.output/runtime')
-const build = spawnSync(resolve(root, 'node_modules/.bin/wrangler'), ['deploy', '--dry-run', '--outdir', runtime, '--config', 'wrangler.template.jsonc'], { cwd: root, stdio: 'inherit', env: { ...process.env, WRANGLER_SEND_METRICS: 'false' } })
+const service = resolve(root, '../../service')
+const install = spawnSync('npm', ['ci'], { cwd: service, stdio: 'inherit' })
+if (install.error) throw install.error
+if (install.status !== 0) throw new Error('Connect service dependency install failed')
+const serviceBuild = spawnSync('npm', ['run', 'build'], { cwd: service, stdio: 'inherit' })
+if (serviceBuild.error) throw serviceBuild.error
+if (serviceBuild.status !== 0) throw new Error('Connect service build failed')
+const output = resolve(root, '.output')
+const build = spawnSync(resolve(service, 'node_modules/.bin/esbuild'), ['src/worker.ts', '--bundle', '--format=esm', '--platform=browser', '--conditions=workerd', '--external:node:*', `--outfile=${resolve(output, 'worker.js')}`], { cwd: service, stdio: 'inherit' })
 if (build.error) throw build.error
-if (build.status !== 0) throw new Error('Static Worker bundle failed')
-await writeFile(resolve(root, '.output/worker.js'), await readFile(resolve(runtime, 'index.js')))
-await rm(runtime, { recursive: true, force: true })
+if (build.status !== 0) throw new Error('Connect service Worker bundle failed')
 const template = JSON.parse(await readFile(resolve(root, 'wrangler.template.jsonc'), 'utf8'))
 delete template.$schema
 template.main = 'worker.js'

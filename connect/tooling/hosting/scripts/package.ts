@@ -4,7 +4,8 @@ import { join, relative, resolve } from "node:path"
 const packageRoot = resolve(import.meta.dirname, "..")
 const source = resolve(packageRoot, "../../web/dist")
 const output = resolve(packageRoot, ".output/dist")
-const browserRoutes = ["connect", "connect/device", "connect/shares", "hosted", "hosted/device", "hosted/shares"]
+const browserRoutes = ["connect", "connect/device", "connect/shares"]
+const legacyRoutes = ["hosted", "hosted/device", "hosted/shares"]
 const publicArt = ["hosted/source-pond-v4.png", "hosted/agent-pond-v4.png", "hosted/agent-reading-v4.png"]
 const browserAssets = ["HostGrotesk-Variable.ttf", "apparent-wordmark.svg"]
 const routeDocuments = new Set(browserRoutes.map(route => `${route}/index.html`))
@@ -27,6 +28,7 @@ async function inventory(root: string): Promise<Map<string, Buffer>> {
 function target(path: string): string {
   if (path.startsWith("assets/")) return `connect/${path}`
   if (browserAssets.includes(path)) return `connect/assets/${path}`
+  if (path.startsWith("hosted/")) return `connect/${path}`
   return path
 }
 
@@ -34,20 +36,23 @@ const inputs = await inventory(source)
 for (const route of browserRoutes) if (!inputs.has(`${route}/index.html`)) throw new Error(`missing route document: ${route}`)
 for (const asset of [...publicArt, ...browserAssets]) if (!inputs.has(asset)) throw new Error(`missing approved browser asset: ${asset}`)
 for (const path of inputs.keys()) {
+  if (legacyRoutes.some(route => path === `${route}/index.html`)) continue
   if (!(routeDocuments.has(path) || publicArt.includes(path) || browserAssets.includes(path) || /^assets\/[^/]+-[\w-]+\.(?:js|css)$/.test(path))) throw new Error(`unexpected browser artifact input: ${path}`)
 }
 
 const packaged = new Map<string, Buffer>()
 for (const [path, original] of inputs) {
+  if (legacyRoutes.some(route => path === `${route}/index.html`)) continue
   let bytes = original
   if (/\.(?:html|js|css)$/.test(path)) {
     let text = original.toString("utf8")
     // This packaging profile preserves Public's accepted browser artifact while
     // rewriting the dedicated Worker graph to paths owned by /connect*.
     text = text.replaceAll("/assets/", "/connect/assets/")
+      .replaceAll("/hosted/", "/connect/hosted/")
       .replaceAll("/HostGrotesk-Variable.ttf", "/connect/assets/HostGrotesk-Variable.ttf")
       .replaceAll("/apparent-wordmark.svg", "/connect/assets/apparent-wordmark.svg")
-    if (/['"`]\/assets\//.test(text)) throw new Error(`root browser asset URL remains: ${path}`)
+    if (/['"`]\/(?:assets|hosted)\//.test(text)) throw new Error(`root browser asset URL remains: ${path}`)
     bytes = Buffer.from(text)
   }
   const served = target(path)
@@ -79,7 +84,7 @@ while (pending.length) {
     : path.endsWith(".css")
       ? [...text.matchAll(/url\(["']?([^\s)"']+)/g)].map(match => match[1])
       : path.endsWith(".js")
-        ? [...text.matchAll(/["'`](\/(?:connect\/assets|hosted)\/[^"'`]+)["'`]/g)].map(match => match[1])
+        ? [...text.matchAll(/["'`](\/(?:connect\/(?:assets|hosted))\/[^"'`]+)["'`]/g)].map(match => match[1])
         : []
   for (const reference of references) {
     if (reference === "/" || /^(?:https?:|data:|#)/.test(reference)) continue

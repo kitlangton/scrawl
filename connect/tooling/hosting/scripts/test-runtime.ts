@@ -24,7 +24,7 @@ try {
     try { ready = (await fetch(`${origin}/connect`)).status === 200 } catch { await delay(250) }
   }
   assert(ready, "Workers local runtime did not become ready")
-  for (const route of ["connect", "connect/device", "connect/shares", "hosted", "hosted/device", "hosted/shares"]) for (const slash of ["", "/"]) {
+  for (const route of ["connect", "connect/device", "connect/shares"]) for (const slash of ["", "/"]) {
     const url = `${origin}/${route}${slash}?code=RUNTIME-CODE&source=synthetic`
     const response = await fetch(url)
     assert.equal(response.status, 200, url)
@@ -41,7 +41,7 @@ try {
   assert.equal(head.status, 200)
   assert.equal(await head.text(), "")
   assert.equal((await fetch(`${origin}/connect`, { method: "POST" })).status, 405)
-  for (const path of ["/", "/unknown", "/connect/other", "/hosted/device/extra", "/connectivity", "/connect%2Fdevice", "/connect/assets/%2e%2e%2findex.js", "/connect/assets/.env", "/connect/assets/manifest.json", "/hosted/private.json", "/connect/assets/missing.js"]) {
+  for (const path of ["/", "/unknown", "/connect/other", "/hosted", "/connectivity", "/connect%2Fdevice", "/connect/assets/%2e%2e%2findex.js", "/connect/assets/.env", "/connect/assets/manifest.json", "/connect/hosted/private.json", "/connect/assets/missing.js", "/connect/private/secret"]) {
     const response = await fetch(`${origin}${path}`)
     assert.equal(response.status, 404, path)
     assert.equal(response.headers.get("cache-control"), "no-store")
@@ -50,7 +50,7 @@ try {
   const script = browserAssets.find(name => name.endsWith(".js"))
   const stylesheet = browserAssets.find(name => name.endsWith(".css"))
   assert(script && stylesheet, "packaged JS and CSS exist under the owned asset namespace")
-  for (const [path, mediaType, cacheDirective] of [["/connect/assets/apparent-wordmark.svg", "image/svg+xml", "no-cache"], ["/connect/assets/HostGrotesk-Variable.ttf", "font/ttf", "no-cache"], ["/hosted/source-pond-v4.png", "image/png", "no-cache"], [`/connect/assets/${script}`, "text/javascript", "no-cache"], [`/connect/assets/${stylesheet}`, "text/css", "no-cache"]]) {
+  for (const [path, mediaType, cacheDirective] of [["/connect/assets/apparent-wordmark.svg", "image/svg+xml", "no-cache"], ["/connect/assets/HostGrotesk-Variable.ttf", "font/ttf", "no-cache"], ["/connect/hosted/source-pond-v4.png", "image/png", "no-cache"], [`/connect/assets/${script}`, "text/javascript", "no-cache"], [`/connect/assets/${stylesheet}`, "text/css", "no-cache"]]) {
     const response = await fetch(`${origin}${path}`)
     assert.equal(response.status, 200, path)
     assert.match(response.headers.get("content-type") ?? "", new RegExp(mediaType.replace("+", "\\+")), path)
@@ -59,6 +59,13 @@ try {
   const noCookieEffect = await fetch(`${origin}/connect`, { headers: { Cookie: "synthetic=private", Authorization: "Bearer synthetic" } })
   assert.equal(noCookieEffect.status, 200)
   assert.equal(noCookieEffect.headers.has("set-cookie"), false)
+  const serviceNotFound = await fetch(`${origin}/connect/v1/private-unknown`)
+  assert.equal(serviceNotFound.status, 404)
+  assert.deepEqual(await serviceNotFound.json(), { error: { code: "not_found", message: "not found" } })
+  const viewerAsset = await fetch(`${origin}/connect/share-view.js`, { headers: { Cookie: "synthetic=private" } })
+  assert.equal(viewerAsset.status, 200)
+  assert.match(viewerAsset.headers.get("content-type") ?? "", /text\/javascript/)
+  assert.equal(viewerAsset.headers.has("set-cookie"), false)
   // Exercise hydration against the rewritten package through the real asset binding.
   // Every nonlocal request is intercepted; no live account or telemetry is used.
   const { chromium } = createRequire(resolve(packageRoot, "../../web/package.json"))("playwright-core")
@@ -70,19 +77,19 @@ try {
     await page.route("**/*", async (route: any) => {
       const url = new URL(route.request().url())
       if (url.origin === origin) return route.continue()
-      if (url.origin === "https://hosted.tryapparent.com" && url.pathname === "/v1/session") {
+      if (url.origin === "https://app.tryapparent.com" && url.pathname === "/connect/v1/session") {
         return route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true" }, body: JSON.stringify({ authenticated: false }) })
       }
       unexpected.push(url.origin + url.pathname)
       return route.abort()
     })
-    for (const route of ["connect", "connect/device", "connect/shares", "hosted", "hosted/device", "hosted/shares"]) {
+    for (const route of ["connect", "connect/device", "connect/shares"]) {
       await page.goto(origin + "/" + route + "?code=RUNTIME-CODE")
-      if (!route.includes("/")) await page.getByRole("button", { name: "Connect", exact: true }).click()
+      if (route === "connect") await page.getByRole("button", { name: "Connect", exact: true }).click()
       const signIn = page.getByRole("link", { name: "Continue with Google", exact: true })
       await signIn.waitFor()
       const target = new URL(await signIn.getAttribute("href"))
-      assert.equal(target.origin, "https://hosted.tryapparent.com")
+      assert.equal(target.origin, "https://app.tryapparent.com")
       assert.equal(target.searchParams.get("returnTo"), route.endsWith("/device") ? "/connect/device?code=RUNTIME-CODE" : "/connect")
       assert.equal(await page.locator("body").evaluate((body: HTMLElement) => body.scrollWidth > innerWidth), false)
     }

@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npm --prefix ../../service ci && npm --prefix ../../service run build:recipient && tsc --noEmit",
     "build": "npm --prefix ../../web run build && node scripts/package.ts && node scripts/bundle.ts",
     "test": "npm run typecheck && npm run build && node --test test/worker.test.ts && node scripts/test-runtime.ts",
     "test:runtime": "node scripts/test-runtime.ts",

@@ -19,5 +19,5 @@ function run(command: string, args: string[], cwd = root, extra: Record<string, 
 run('bun', ['install', '--frozen-lockfile'], web, { NODE_ENV: 'development' })
 run(process.execPath, ['--experimental-strip-types', 'scripts/playwright-runtime.ts'], web)
 run('npm', ['test'], web, artifactEnvironment)
-run('npm', ['test'], root, artifactEnvironment)
+run('npm', ['test'], root, { ...artifactEnvironment, VITE_HOSTED_API_ORIGIN: 'https://app.tryapparent.com/connect', API_ORIGIN: 'https://app.tryapparent.com/connect', SITE_ORIGIN: 'https://app.tryapparent.com' })
 console.log(`Synthetic browser evidence retained privately: ${evidence}`)

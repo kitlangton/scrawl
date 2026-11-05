@@ -5,6 +5,7 @@
   "package": "connect/tooling/hosting",
   "inputs": [
     "connect/tooling/hosting/",
+    "connect/service/",
     "connect/web/",
     "shared/ui/",
     "shared/analytics/"
@@ -28,6 +29,8 @@
     "PUBLIC_POSTHOG_TOKEN",
     "PUBLIC_POSTHOG_HOST",
     "PUBLIC_POSTHOG_ENVIRONMENT",
-    "VITE_HOSTED_API_ORIGIN"
+    "VITE_HOSTED_API_ORIGIN",
+    "API_ORIGIN",
+    "SITE_ORIGIN"
   ]
 }
