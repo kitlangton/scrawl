@@ -43,6 +43,8 @@ export function pack(executable: string, source: string, target: string, destina
   const payload = join(out, 'payload'); mkdirSync(payload, { mode: 0o700 });
   writeFileSync(join(payload, manifest.executable), bytes, { mode: 0o755, flag: 'wx' });
   writeFileSync(join(payload, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', { mode: 0o644, flag: 'wx' });
+  chmodSync(join(payload, manifest.executable), 0o755);
+  chmodSync(join(payload, 'manifest.json'), 0o644);
   const archive = join(out, `apparent-capture-${source}-${target}.tar.gz`);
   run('tar', ['-czf', archive, '-C', payload, manifest.executable, 'manifest.json']);
   const digest = sha256(readFileSync(archive));
@@ -90,6 +92,8 @@ export function stage(archive: string, expectedDigest: string, expectedSource: s
     mkdirSync(candidate, { mode: 0o700 });
     writeFileSync(join(candidate, 'apparent-capture'), executable, { mode: 0o755, flag: 'wx' });
     writeFileSync(join(candidate, 'manifest.json'), manifestBytes, { mode: 0o644, flag: 'wx' });
+    chmodSync(join(candidate, 'apparent-capture'), 0o755);
+    chmodSync(join(candidate, 'manifest.json'), 0o644);
     publishValidatedDirectory(candidate, output);
     assert.deepEqual(readdirSync(output).sort(), ['apparent-capture', 'manifest.json']);
     return manifest;

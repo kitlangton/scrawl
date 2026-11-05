@@ -21,6 +21,7 @@ test('real standalone artifact roundtrip and fail-closed staging', () => {
   const source = head.stdout.trim();
   const target = `${process.arch === 'x64' ? 'x86_64' : 'aarch64'}-${process.platform === 'darwin' ? 'apple-darwin' : 'unknown-linux-gnu'}`;
   const root = mkdtempSync(join(tmpdir(), 'capture-client-proof-'));
+  const previousMask = process.umask(0o077);
   try {
     chmodSync(root, 0o700);
     const produced = pack(executable, source, target, join(root, 'producer'));
@@ -61,7 +62,10 @@ test('real standalone artifact roundtrip and fail-closed staging', () => {
     const linkedArchive = join(root, 'linked.tar.gz');
     run('tar', ['-czf', linkedArchive, '-C', linked, 'apparent-capture', 'manifest.json']);
     assert.throws(() => stage(linkedArchive, hash(readFileSync(linkedArchive)), source, target, join(root, 'bad-link')), /regular files/);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    process.umask(previousMask);
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function requireNames(path: string) {
