@@ -35,3 +35,9 @@ The adapter must translate provider facts: `failed`/`rejected` are terminal only
 when the Engine confirms that this request owns no live capture. Transport errors
 must reject the call rather than manufacture terminal receipts. The current
 consumer interface is not a newly published Engine protocol or native proof.
+
+State subscribers are observers, not lifecycle participants. A subscriber that
+throws is detached; remaining subscribers still receive the state. Its exception
+cannot abort Engine event processing or strand command ownership. Hosts should
+handle presentation errors within their own observer and may resubscribe after
+repair. No capture is cancelled as a side effect of an observer failure.

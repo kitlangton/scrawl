@@ -199,3 +199,28 @@ test("ambiguous start retains ownership; disposal ignores pending replies", asyn
   await stop;
   assert.equal(flow.state, before);
 });
+
+for (const failingPhase of ["checking", "recording"] as const) {
+  test(`throwing observer on ${failingPhase} cannot interrupt Engine ownership or other observers`, async () => {
+    const engine = new FakeEngine();
+    const flow = new RecordWorkflow(engine);
+    let failures = 0;
+    const observed: string[] = [];
+    flow.subscribe(state => {
+      if (state.phase === failingPhase) { failures++; throw new Error("broken UI observer"); }
+    });
+    flow.subscribe(state => observed.push(state.phase));
+    await flow.dispatch({ type: "start", requestId: "capture-a" });
+    engine.emit({ type: "capture-changed", receipt: { captureId: "capture-a", phase: "recording" } });
+    assert.equal(flow.state.phase, "recording");
+    await flow.dispatch({ type: "stop" });
+    assert.equal(flow.state.phase, "processing");
+    engine.emit({ type: "capture-changed", receipt: { captureId: "capture-a", phase: "saved", bundlePath: "/captures/a.apparent" } });
+    await flow.dispatch({ type: "start", requestId: "capture-b" });
+    assert.equal(flow.state.phase, "starting");
+    assert.equal(failures, 1);
+    assert.ok(observed.includes(failingPhase));
+    assert.ok(observed.includes("processing"));
+    flow.dispose();
+  });
+}

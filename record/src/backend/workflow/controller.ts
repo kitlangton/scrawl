@@ -140,7 +140,10 @@ export class RecordWorkflow {
   private set(state: RecordState): void {
     if (this.#disposed) return;
     this.#state = Object.freeze({ ...state, readiness: Object.freeze({ ...state.readiness }) });
-    for (const listener of this.#listeners) listener(this.#state);
+    for (const listener of this.#listeners) {
+      try { listener(this.#state); }
+      catch { this.#listeners.delete(listener); }
+    }
   }
 }
 
