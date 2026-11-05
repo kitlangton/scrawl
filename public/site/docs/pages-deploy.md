@@ -1,7 +1,8 @@
 # Capture website delivery on Cloudflare Pages
 
 The canonical repository is `https://github.com/tryapparent/apparent`, branch
-`main`. `.github/workflows/value-stream-delivery.yml` is the sole production publisher for
+`main`. `.github/workflows/stream-public.yml` selects the Public producer and the reusable
+`.github/workflows/value-stream-delivery.yml` contains its single production publisher for
 `app.tryapparent.com`. It publishes the isolated **apparent-capture** Pages project
 in account `a54dcebead3b8ad688f891da0ab54d1f`. It does not publish the document-product
 project `tryapparent-website`, the hosted API Worker, or `public/site/wrangler.jsonc`.
@@ -89,7 +90,7 @@ so retained renders in older checkouts are not mistaken for maintained source.
 
 ## Shared value-stream CI
 
-`public/delivery.json` registers Public in `Value-stream delivery` as `stream (public, web)`.
+`public/delivery.json` registers Public in the independently triggered `Public delivery` workflow as `stream (public, web)`.
 That lane installs locked Bun dependencies, builds/packages and tests Public once,
 including the compiled Pages Function and its real workerd transfer checks.
 It shares the common source/environment fingerprints, unchanged-artifact admission,
