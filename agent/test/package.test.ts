@@ -18,6 +18,7 @@ test('packed CLI installs offline outside checkout and inspects without loading 
     const metadata=JSON.parse(run([npm,'pack','--ignore-scripts','--json','--pack-destination',root],source));
     run([npm,'install','--offline','--ignore-scripts','--no-audit','--no-fund','--prefix',root,join(root,metadata[0].filename)]);
     const cli=resolve(root,'node_modules/@apparent/agent/dist/cli.js');
+    assert.equal(run(['--input-type=module','-e',"await import('@apparent/agent')"]),'');
     assert.match(run([cli,'--help']),/Local Apparent/);assert.equal(run([cli,'--version']),'0.1.0\n');
     const bundle=join(root,'fixture.apparent');await mkdir(bundle);
     const raw=JSON.stringify({version:1,id:'fixture',createdAtMs:1,durationMs:1,target:{},transcript:{text:'hello',segments:[]},strokes:[],marks:[],events:[],keyframes:[],contactSheet:'sheet.png'});

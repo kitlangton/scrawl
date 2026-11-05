@@ -13,7 +13,8 @@
   "scripts": {
     "build": "tsc -p ../engine/sdk/tsconfig.json --typeRoots ./node_modules/@types && tsc -p tsconfig.json",
     "test": "npm run build && node --experimental-strip-types --test test/*.test.ts",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "typecheck": "tsc -p ../engine/sdk/tsconfig.json --typeRoots ./node_modules/@types && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@apparent/engine-sdk": "file:../engine/sdk"
@@ -28,5 +29,11 @@
     "@types/node": "22.19.0",
     "typescript": "5.9.3"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  }
 }

@@ -65,7 +65,7 @@ async function recover(args: string[]) {
   if (!executable || !runtime || !isAbsolute(executable) || !isAbsolute(runtime)) throw new Error('Set explicit absolute Engine executable and runtime paths');
   const request = await loadRequest(runtime, captureId);
   const sdk = await import('@apparent/engine-sdk');
-  const client = new sdk.EngineClient(sdk.launchEngine(executable, runtime));
+  const client = new sdk.EngineClient(sdk.launchEngine(executable, runtime, 12_000));
   try {
     const handshake = await client.handshake();
     if (handshake.implementation !== 'native') throw new Error('Recovery requires a native Engine');
@@ -92,7 +92,7 @@ async function record(args: string[]) {
     throw new Error('Set APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME to explicit absolute paths');
   if (await lstat(out!).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; return null; })) throw new Error('--out must not already exist');
   const sdk = await import('@apparent/engine-sdk');
-  const transport = sdk.launchEngine(resolve(executable), resolve(runtime));
+  const transport = sdk.launchEngine(resolve(executable), resolve(runtime), 12_000);
   let signalRequested = false;
   const client = new sdk.EngineClient(transport);
   const onSignal = () => { signalRequested = true; };
