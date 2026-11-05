@@ -18,16 +18,19 @@
     "typecheck": "tsc -p ../engine/sdk/tsconfig.json --typeRoots ./node_modules/@types && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@apparent/engine-sdk": "file:../engine/sdk"
+    "@apparent/engine-sdk": "file:../engine/sdk",
+    "pngjs": "^7.0.0"
   },
   "bundledDependencies": [
-    "@apparent/engine-sdk"
+    "@apparent/engine-sdk",
+    "pngjs"
   ],
   "engines": {
     "node": ">=22.6"
   },
   "devDependencies": {
     "@types/node": "22.19.0",
+    "@types/pngjs": "^6.0.5",
     "typescript": "5.9.3"
   },
   "license": "MIT",
@@ -36,5 +39,9 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
-  }
+  },
+  "bundleDependencies": [
+    "@apparent/engine-sdk",
+    "pngjs"
+  ]
 }

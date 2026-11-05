@@ -1173,7 +1173,7 @@
       "id": "cli-zoom",
       "group": "cli",
       "name": "apparent zoom",
-      "says": "A dense sheet of frames around a time, a phrase that was said, or a numbered mark.",
+      "says": "apparent-agent zoom builds a visual PNG sheet around a time, spoken phrase or numbered mark, with semantic timing in companion JSON.",
       "status": "main",
       "added": "2026-10-28",
       "platforms": ["mac", "linux"],
@@ -1187,7 +1187,7 @@
       "status": "main",
       "added": "2026-11-05",
       "platforms": ["mac", "linux"],
-      "note": "latest honors APPARENT_CAPTURES_DIR and read-only capturesDir config, with bounded validated manifest reads. Default inspect text is regenerated from manifest semantics when summary.md is missing or stale; --stored-summary selects producer text, --experiment agentContext enriches the local timeline, and --json preserves raw manifest bytes. Image mode lists safe references without inspecting pixels. Recording requires explicit Engine runtime paths and native SDK v1 readiness. Frames selection uses the media SDK when a decoder is available and can select retained PNG-signature keyframes without decoding when the provider is absent; saved images are clearly tagged and are not pixel-decoding proof. Zoom, Connect, authentication, and standalone Engine runtime archives are not included. Existing apparent routing is unchanged.",
+      "note": "latest honors APPARENT_CAPTURES_DIR and read-only capturesDir config, with bounded validated manifest reads. Default inspect text is regenerated from manifest semantics when summary.md is missing or stale; --stored-summary selects producer text, --experiment agentContext enriches the local timeline, and --json preserves raw manifest bytes. Image mode lists safe references without inspecting pixels. Recording requires explicit Engine runtime paths and native SDK v1 readiness. Frames and zoom use the media SDK when a decoder is available; without that capability they may select retained PNG keyframes, clearly labeled with bundle-manifest source and original timestamps. Zoom writes a fresh private PNG sheet and semantic timing/mark context; this does not claim video decoding or native proof. Connect, authentication, and standalone Engine runtime archives are not included. Existing apparent routing is unchanged.",
       "docs": ["agent/README.md", "agent/docs/cli-parity.md"]
     },
     {
