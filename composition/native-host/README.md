@@ -35,8 +35,9 @@ Current operation limits:
   settings write or registration effect.
 - `saveRecordShortcut` requires a fresh epoch/revision, an idle capture lifecycle,
   and proven live registration. It delegates registration to the existing
-  runtime setter, persists through `save_shortcut_in`, reads the runtime value
-  back, and rolls registration back on persistence/refusal where possible.
+  runtime setter, compares persisted state inside the existing config writer
+  transaction, reads the runtime value back, and rolls registration back on
+  refusal where possible.
 
 This client does not implement safe relaunch, capture readiness, pen settings,
 pickers, strokes, clipboard, or capture admission. It is not injected into an
