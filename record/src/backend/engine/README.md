@@ -41,6 +41,10 @@ false, so the workflow cannot dispatch capture. The runtime does not resume an
 active capture into the controller or stop one during disposal. Hosts must
 inspect `unresolvedOwnership()` before their own shutdown decision; disposal
 only detaches observation and never closes the caller-owned SDK.
+Ownership reports distinguish `complete`, `pending`, and `interrupted`
+reconciliation. An empty ID list is not a clearance when reconciliation is
+incomplete. Scans retain command reservations and publish discovered IDs before
+inspection; disposal preserves those IDs conservatively as unknown.
 
 Readiness is true only for a native handshake reporting ready screen capture.
 The SDK's default test-double rejection and `ReferenceEngine` unavailable

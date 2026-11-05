@@ -18,15 +18,21 @@ export type HostStartupState =
   | { state: "ready"; knownRequestIds: readonly string[] }
   | { state: "blocked"; knownRequestIds: readonly string[]; unresolved: readonly StartupIssue[]; storageUnavailable?: true };
 
+export interface OwnershipReport {
+  requestIds: readonly string[];
+  storageUnavailable: boolean;
+  reconciliation: "complete" | "pending" | "interrupted";
+}
+
 export interface RecordHostRuntime {
   readonly startup: HostStartupState;
   readonly state: RecordState;
   subscribe(listener: (state: RecordState) => void): () => void;
   dispatch(command: RecordCommand): Promise<RecordState>;
   reconcileStartup(): Promise<HostStartupState>;
-  unresolvedOwnership(): { requestIds: readonly string[]; storageUnavailable: boolean };
+  unresolvedOwnership(): OwnershipReport;
   /** Detaches observation only; does not stop captures or close the shared SDK. */
-  dispose(): { requestIds: readonly string[]; storageUnavailable: boolean };
+  dispose(): OwnershipReport;
 }
 
 /** Composes Record host storage around an SDK client constructed and owned by its caller. */
@@ -43,6 +49,7 @@ export async function createRecordHostRuntime(
   let scan: Promise<HostStartupState> | undefined;
   let revision = 0;
   let commandState: "idle" | "dispatching" = "idle";
+  let reconciliation: OwnershipReport["reconciliation"] = "complete";
 
   const freezeStartup = (value: HostStartupState): HostStartupState => Object.freeze(value.state === "ready"
     ? { state: "ready", knownRequestIds: Object.freeze([...value.knownRequestIds]) }
@@ -55,6 +62,7 @@ export async function createRecordHostRuntime(
     if (disposed) return Promise.resolve(startup);
     if (scan) return scan;
     const scanRevision = ++revision;
+    reconciliation = "pending";
     const work = (async (): Promise<HostStartupState> => {
       let requestIds: string[];
       try { requestIds = await mappings.listRequestIds(); }
@@ -63,6 +71,10 @@ export async function createRecordHostRuntime(
         if (!disposed && scanRevision === revision) startup = blocked;
         return blocked;
       }
+      if (disposed || scanRevision !== revision) return startup;
+      // Publish discovered identities before awaiting inspection, and retain any
+      // command reservation created since the database enumeration began.
+      startup = freezeStartup({ ...startup, knownRequestIds: [...new Set([...startup.knownRequestIds, ...requestIds])].sort() });
       const unresolved: StartupIssue[] = [];
       for (const requestId of requestIds) {
         if (disposed || scanRevision !== revision) break;
@@ -74,24 +86,29 @@ export async function createRecordHostRuntime(
           unresolved.push({ requestId, state: "unknown" });
         }
       }
+      if (disposed || scanRevision !== revision) return startup;
+      const knownRequestIds = [...new Set([...startup.knownRequestIds, ...requestIds])].sort();
       const result = freezeStartup(unresolved.length
-        ? { state: "blocked", knownRequestIds: [...requestIds], unresolved }
-        : { state: "ready", knownRequestIds: [...requestIds] });
+        ? { state: "blocked", knownRequestIds, unresolved }
+        : { state: "ready", knownRequestIds });
       if (!disposed && scanRevision === revision) startup = result;
       return result;
     })();
     scan = work;
-    void work.finally(() => { if (scan === work) scan = undefined; }).catch(() => undefined);
+    void work.finally(() => {
+      if (scan === work) { scan = undefined; reconciliation = disposed ? "interrupted" : "complete"; }
+    }).catch(() => undefined);
     return work;
   };
 
   await reconcileStartup();
 
-  const unresolvedOwnership = (): { requestIds: readonly string[]; storageUnavailable: boolean } => {
+  const unresolvedOwnership = (): OwnershipReport => {
     const ids = new Set(startup.state === "blocked" ? startup.unresolved.map(item => item.requestId) : []);
+    if (reconciliation !== "complete") for (const id of startup.knownRequestIds) ids.add(id);
     const state = workflow.state;
     if ("captureId" in state && !["ready", "cancelled", "failed"].includes(state.phase)) ids.add(state.captureId);
-    return Object.freeze({ requestIds: Object.freeze([...ids]), storageUnavailable: startup.state === "blocked" && startup.storageUnavailable === true });
+    return Object.freeze({ requestIds: Object.freeze([...ids]), storageUnavailable: startup.state === "blocked" && startup.storageUnavailable === true, reconciliation });
   };
 
   return {
@@ -122,6 +139,12 @@ export async function createRecordHostRuntime(
     unresolvedOwnership,
     dispose() {
       if (!disposed) {
+        if (reconciliation === "pending") {
+          reconciliation = "interrupted";
+          startup = freezeStartup({ state: "blocked", knownRequestIds: startup.knownRequestIds,
+            unresolved: startup.knownRequestIds.map(requestId => ({ requestId, state: "unknown" })),
+            ...(startup.state === "blocked" && startup.storageUnavailable ? { storageUnavailable: true } : {}) });
+        }
         disposed = true;
         ++revision;
         workflow.dispose();

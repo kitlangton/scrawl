@@ -73,7 +73,7 @@ test("clean boot admits no capture while native readiness is unavailable", async
   });
   assert.equal(runtime.startup.knownRequestIds.length, 0);
   assert.equal(provider.facts.size, 0);
-  assert.deepEqual(runtime.dispose(), { requestIds: [], storageUnavailable: false });
+  assert.deepEqual(runtime.dispose(), { requestIds: [], storageUnavailable: false, reconciliation: "complete" });
 });
 
 test("restart keeps active and lost-reply ownership blocked until terminal inspection", async t => {
@@ -84,7 +84,7 @@ test("restart keeps active and lost-reply ownership blocked until terminal inspe
   const id = "restart request / public identity";
   const afterLostReply = await first.dispatch({ type: "start", requestId: id });
   assert.equal(afterLostReply.phase, "uncertain");
-  assert.deepEqual(first.dispose(), { requestIds: [id], storageUnavailable: false });
+  assert.deepEqual(first.dispose(), { requestIds: [id], storageUnavailable: false, reconciliation: "complete" });
 
   const restarted = await create();
   assert.deepEqual(restarted.startup, { state: "blocked", knownRequestIds: [id], unresolved: [{ requestId: id, state: "active", phase: "recording" }] });
@@ -96,7 +96,7 @@ test("restart keeps active and lost-reply ownership blocked until terminal inspe
   assert.deepEqual(await restarted.reconcileStartup(), { state: "ready", knownRequestIds: [id] });
   assert.equal((await restarted.dispatch({ type: "start", requestId: id })).phase, "idle", "terminal history cannot reuse its request identity");
   assert.equal(JSON.stringify(restarted.startup).includes(token), false);
-  assert.deepEqual(restarted.dispose(), { requestIds: [], storageUnavailable: false });
+  assert.deepEqual(restarted.dispose(), { requestIds: [], storageUnavailable: false, reconciliation: "complete" });
 });
 
 test("ambiguous inspection and multiple active mappings block every fresh start", async t => {
@@ -143,7 +143,7 @@ test("concurrent reconciliation shares one scan; disposal detaches without stopp
   const secondScan = restarted.reconcileStartup();
   await enteredPromise;
   assert.equal((await restarted.dispatch({ type: "start", requestId: "race" })).phase, "idle");
-  assert.deepEqual(restarted.dispose(), { requestIds: ["live"], storageUnavailable: false });
+  assert.deepEqual(restarted.dispose(), { requestIds: ["live"], storageUnavailable: false, reconciliation: "interrupted" });
   release();
   assert.equal((await scan).state, "blocked");
   assert.equal((await secondScan).state, "blocked");
@@ -197,4 +197,43 @@ test("a start refused during another command does not consume its request ID", a
   assert.equal((await runtime.dispatch({ type: "start", requestId: "retry after busy" })).phase, "recording");
   assert.equal(runtime.startup.knownRequestIds.includes("retry after busy"), true);
   runtime.dispose();
+});
+
+test("a scan cannot erase a start reservation before its mapping is persisted", async t => {
+  const { provider, create } = await fixture(t);
+  const runtime = await create();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = provider.sdk.handshake;
+  provider.sdk.handshake = async () => { await gate; return original(); };
+  provider.setReady(true);
+  const pending = runtime.dispatch({ type: "start", requestId: "reserved before mapping" });
+  await runtime.reconcileStartup();
+  assert.equal(runtime.startup.knownRequestIds.includes("reserved before mapping"), true);
+  release(); await pending;
+  await runtime.dispatch({ type: "stop" });
+  await runtime.dispatch({ type: "start", requestId: "reserved before mapping" });
+  assert.equal(provider.facts.size, 1);
+  assert.equal(runtime.state.phase, "ready");
+  runtime.dispose();
+});
+
+test("disposing a scan preserves newly discovered identities and reports incomplete reconciliation", async t => {
+  const { provider, roots, create } = await fixture(t);
+  const runtime = await create();
+  const mapping = { requestId: "discovered after boot", captureId: "4".repeat(32), ownerToken: token, bundleId: "newly-discovered", bundlePath: join(roots.bundleRoot, "newly-discovered") };
+  await new SqliteCaptureMappingStore(roots.mappingRoot).putIfAbsent(mapping);
+  provider.facts.set(mapping.captureId, { captureId: mapping.captureId, state: "recording" });
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const control = provider.sdk.control;
+  provider.sdk.control = async (...args) => { enter(); await gate; return control(...args); };
+  const scan = runtime.reconcileStartup();
+  await entered;
+  assert.deepEqual(runtime.unresolvedOwnership(), { requestIds: [mapping.requestId], storageUnavailable: false, reconciliation: "pending" });
+  assert.deepEqual(runtime.dispose(), { requestIds: [mapping.requestId], storageUnavailable: false, reconciliation: "interrupted" });
+  release();
+  assert.equal((await scan).state, "blocked");
+  assert.equal(runtime.unresolvedOwnership().reconciliation, "interrupted");
 });
