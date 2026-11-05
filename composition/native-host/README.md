@@ -26,10 +26,13 @@ Current operation limits:
 - `readSnapshot` reports cached permission facts and the configured/effective
   shortcut projection. Uninitialized, paused, external, or unverified shortcut
   registration is reported as unknown/external and cannot be saved.
-- `requestPermission` dispatches only while the existing permissions onboarding
-  Session owns its helper. Dispatch acceptance does not grant permission.
-- `openSystemSettings` uses that existing Session on macOS and the existing
-  Linux privacy settings route. Other unavailable cases are refused.
+- `requestPermission` uses the app-owned permissions-only helper on macOS,
+  independently of a legacy onboarding Session. An active legacy Session or
+  busy helper refuses admission. Linux has no direct permission-request action.
+  Dispatch acceptance does not grant permission.
+- `openSystemSettings` uses that same helper on macOS. Linux supports only the
+  Accessibility instructions route when a supported URL opener is available;
+  other permission settings actions are unavailable.
 - `validateRecordShortcut` uses the platform key-layout mapping, Desktop's
   reserved/taken checks, and the macOS native reservation query. It has no
   settings write or registration effect.
@@ -37,7 +40,8 @@ Current operation limits:
   and proven live registration. It delegates registration to the existing
   runtime setter, compares persisted state inside the existing config writer
   transaction, reads the runtime value back, and rolls registration back on
-  refusal where possible.
+  refusal where possible. Config compensation compares the value written by
+  this request before restoring it, preserving a concurrent external edit.
 
 This client does not implement safe relaunch, capture readiness, pen settings,
 pickers, strokes, clipboard, or capture admission. It is not injected into an
