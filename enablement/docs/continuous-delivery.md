@@ -1,17 +1,22 @@
 # Website and Connect continuous delivery
 
-Each value stream has an independent native GitHub paths-filtered main workflow.
-Owner entrypoints live in `.github/workflows/stream-<owner>.yml`; the shared
-`value-stream-delivery.yml` is reusable execution only and receives one fixed
-owner/target matrix, so unrelated owners are neither planned nor scheduled.
-Public follows successful trusted Connect producer completions. The independent
-Worker publisher remains manual, preserving its existing activation contract.
+Each value stream has an independent native GitHub paths-filtered workflow.
+Owner entrypoints live in `.github/workflows/stream-<owner>.yml`; their PR and main
+push filters use the same paths, and each passes one fixed owner/target matrix to
+`value-stream-delivery.yml`. The reusable executor has no shared planner, so an
+unrelated owner is neither planned nor scheduled. Changed owners run fresh PR
+checks/builds with read-only permissions and synthetic analytics settings. PR jobs
+do not reuse, seal, attest or publish deployment artifacts; main verifies again
+before publication. Public follows successful trusted Connect producer
+completions. The independent Worker publisher remains manual under its existing
+activation contract. Other standalone workflows remain manual-only.
+This trigger policy supersedes other automatic pipeline descriptions below.
 Existing release admission still rejects diagnostic manual verification receipts;
 manual triggering does not waive publication gates.
 
-GitHub Actions do not run automatically on PRs or feature-branch pushes. Feature
-pushes run inexpensive selector, push-hook and release-admission contracts locally;
-they do not rebuild the application.
+Feature-branch pushes without a PR retain inexpensive local selector, push-hook
+and release-admission contracts. Applicable Value-stream PR checks must pass
+before merge; standalone Linux/macOS and Connect workflows remain manual-only.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 

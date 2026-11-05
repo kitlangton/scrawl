@@ -19,6 +19,13 @@ overrides in CI. The catalog fingerprints `engine/`, `capture/engine/` and
 Connect browser/Worker producer, which retains separate manual/reusable
 invocation, transfer lifecycle and artifact identities.
 
+Pull requests targeting main run contracts and fresh checks/builds only for each
+changed registered owner/target. The owner entrypoints carry the same path filters
+for PRs and main pushes, then pass their fixed target matrix to the reusable
+executor. PR jobs are read-only, use synthetic analytics settings, and do not
+reuse, seal, attest or publish artifacts. Main keeps its existing producer and
+deployment lanes.
+
 Run with Node 22's type stripping, without installing dependencies:
 
 ```sh

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { assessPrior, buildOwner, catalog, environmentDigest, inputDigest, makePlan, sourceDigest, workflowPathFor } from './core.ts'
+import { assertBuildWorkflowIdentity } from './cli.ts'
 
 // Hooks must not redirect synthetic Git repositories into the caller's index.
 for (const name of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete process.env[name]
@@ -121,4 +122,13 @@ test('source identities distinguish filenames containing serialized manifest sep
     f.put(`public/site/a.ts ${firstBlob}\n100644 public/site/b.ts`, 'second'); f.commit()
     assert.notEqual(sourceDigest(f.root, f.owner()), before)
   } finally { f.clean() }
+})
+
+test('canonical PR workflow identity is accepted for builds only', () => {
+  const valid = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/pull/732/merge', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-public.yml@refs/pull/732/merge', APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-public.yml' }
+  assert.doesNotThrow(() => assertBuildWorkflowIdentity(valid, 'public'))
+  assert.throws(() => assertBuildWorkflowIdentity({ ...valid, GITHUB_REPOSITORY: 'fork/apparent' }, 'public'), /canonical owner workflow/)
+  assert.throws(() => assertBuildWorkflowIdentity({ ...valid, GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/pull/732/merge' }, 'public'), /canonical owner workflow/)
+  assert.throws(() => assertBuildWorkflowIdentity({ ...valid, GITHUB_REF: 'refs/heads/main' }, 'public'), /canonical owner workflow/)
+  assert.doesNotThrow(() => assertBuildWorkflowIdentity({ GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main' }, 'public'))
 })

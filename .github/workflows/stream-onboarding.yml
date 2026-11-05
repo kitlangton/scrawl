@@ -1,5 +1,16 @@
 name: onboarding delivery
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'onboarding/**'
+      - '.github/workflows/stream-onboarding.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
   push:
     branches: [main]
     paths:
@@ -21,6 +32,17 @@ jobs:
       actions: read
       id-token: write
       attestations: write
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'onboarding'
+      targets: '{"include":[{"id":"onboarding","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"library","package":"onboarding","verify":["typecheck","test"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"onboarding"},{"id":"onboarding","target":"macos-x64","runner":"macos-26-intel","kind":"npm","stage":"library","package":"onboarding","verify":["typecheck","test"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"onboarding"}]}'
+      workflow_path: '.github/workflows/stream-onboarding.yml'
+
+  verify-pr:
+    if: github.repository == 'tryapparent/apparent' && github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/value-stream-delivery.yml
     with:
       owner_id: 'onboarding'

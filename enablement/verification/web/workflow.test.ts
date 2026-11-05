@@ -8,6 +8,10 @@ const workerCaller = readFileSync(new URL('web-delivery.yml', root), 'utf8')
 const publicEntry = readFileSync(new URL('stream-public.yml', root), 'utf8')
 const entry = (name: string) => readFileSync(new URL(`stream-${name}.yml`, root), 'utf8')
 const paths = (source: string) => source.split(/\n\s+paths:\n/)[1]?.split(/\n\s{2,}[a-z_]+:/)[0]?.match(/^\s+- '([^']+)'/gm)?.map(value => value.trim().slice(3, -1)) ?? []
+const eventPaths = (source: string, event: string) => {
+  const section = source.split(`\n  ${event}:\n`)[1]?.split(/\n  [a-z_]+:\n|\npermissions:/)[0] ?? ''
+  return section.match(/^      - '([^']+)'/gm)?.map(value => value.match(/'([^']+)'/)![1]) ?? []
+}
 const section = (source: string, name: string) => source.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z-]+:\n/)[0] ?? ''
 const registrations: Record<string, string> = {
   'app-shell': 'composition/app/delivery.json', record: 'record/delivery.json',
@@ -88,4 +92,42 @@ test('Connect browser/Worker producer retains explicit invocation and client pat
   assert.doesNotMatch(workerCaller, /workflow_run:/)
   const streamWorkflows = readdirSync(new URL('../../../.github/workflows/', import.meta.url)).filter(name => name.endsWith('.yml') && name.startsWith('stream-'))
   assert.deepEqual(streamWorkflows.sort(), ['stream-agent.yml', 'stream-app-shell.yml', 'stream-connect-client.yml', 'stream-engine-media-native.yml', 'stream-engine-native.yml', 'stream-engine.yml', 'stream-onboarding.yml', 'stream-platform-config.yml', 'stream-public.yml', 'stream-record.yml'])
+})
+
+test('PR and main entrypoints share owner paths and fixed target matrices', () => {
+  for (const name of ['app-shell', 'record', 'connect-client', 'engine', 'engine-native', 'engine-media-native', 'platform-config', 'onboarding', 'agent', 'public']) {
+    const source = entry(name)
+    assert(eventPaths(source, 'pull_request').length > 0, `${name} has PR paths`)
+    assert.deepEqual(eventPaths(source, 'pull_request'), eventPaths(source, 'push'), `${name} PR paths match main paths`)
+    assert.match(source, /verify-pr:\n    if: .*github\.event_name == 'pull_request'/)
+    assert.match(source, /verify-pr:[\s\S]*?permissions:\n      contents: read\n      actions: read\n[\s\S]*?uses: \.\/\.github\/workflows\/value-stream-delivery\.yml/)
+    assert.doesNotMatch(source.split('  verify-pr:')[1], /id-token: write|attestations: write|secrets: inherit/)
+  }
+})
+
+test('PR execution is fixed-owner, fresh, synthetic and read-only', () => {
+  assert.match(reusable, /on:\n  workflow_call:/)
+  assert.doesNotMatch(reusable.split('\njobs:')[0], /pull_request:|push:|workflow_dispatch:|workflow_run:/)
+  const pr = section(reusable, 'stream-pr')
+  assert.match(pr, /needs: contracts/)
+  assert.match(pr, /matrix: \$\{\{ fromJSON\(inputs\.targets\) \}\}/)
+  assert.match(pr, /contents: read/)
+  assert.match(pr, /cli\.ts build/)
+  assert.match(pr, /phc_synthetic/)
+  assert.match(pr, /npm run test:electron/)
+  assert.doesNotMatch(pr, /GH_TOKEN|secrets\.|vars\.|cli\.ts (?:admit|seal|reuse)|attest-build-provenance|upload-artifact|id-token: write|attestations: write/)
+  for (const job of ['stream', 'stream-public', 'deploy']) assert.match(section(reusable, job), /github\.ref == 'refs\/heads\/main'/)
+  assert.match(section(reusable, 'runtime-budget'), /needs: \[contracts, stream, stream-public, deploy, stream-pr\]/)
+})
+
+test('all standalone workflows remain manual or reusable, and Public has one publisher', () => {
+  const directory = new URL('../../../.github/workflows/', import.meta.url)
+  for (const file of readdirSync(directory).filter(name => /\.ya?ml$/.test(name) && !name.startsWith('stream-'))) {
+    const source = readFileSync(new URL(file, directory), 'utf8')
+    const triggers = source.split('\non:\n')[1]?.split(/\n[^\s#]/)[0] ?? ''
+    const events = [...triggers.matchAll(/^  ([a-z_]+):/gm)].map(match => match[1])
+    assert(events.every(event => ['workflow_dispatch', 'workflow_call'].includes(event)), `${file} has no automatic event`)
+  }
+  const publishers = readdirSync(directory).filter(name => /\.ya?ml$/.test(name)).filter(name => readFileSync(new URL(name, directory), 'utf8').includes('publish-pages.ts'))
+  assert.deepEqual(publishers, ['value-stream-delivery.yml'])
 })

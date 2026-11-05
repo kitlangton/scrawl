@@ -33,11 +33,21 @@ function ownerFor(id: string): Owner {
   return owner
 }
 function targetArg(value: string): Target { if (value !== 'linux-x64' && value !== 'macos-x64' && value !== 'web') throw new Error('Invalid target'); return value }
+export function assertBuildWorkflowIdentity(env: NodeJS.ProcessEnv, ownerId: string) {
+  if (env.GITHUB_EVENT_NAME !== 'pull_request') return
+  const pullRef = /^refs\/pull\/([1-9][0-9]*)\/merge$/.exec(env.GITHUB_REF ?? '')
+  const expectedPath = `.github/workflows/stream-${ownerId}.yml`
+  if (env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || !pullRef ||
+      env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${expectedPath}@${pullRef[0]}` ||
+      (env.APPARENT_DELIVERY_WORKFLOW_PATH && env.APPARENT_DELIVERY_WORKFLOW_PATH !== expectedPath)) {
+    throw new Error('PR builds require canonical owner workflow identity')
+  }
+}
 async function main(args: string[]) {
   const env = process.env
   if (args.length === 1 && args[0] === 'plan') {
     const plan = makePlan(root)
-    // Public has a dedicated producer job so its deployment never waits on the matrix.
+    // Public has a dedicated producer and deployment job outside the shared diagnostic matrix.
     const matrix = { include: plan.matrix.include.filter(owner => owner.id !== 'public') }
     output({ matrix: JSON.stringify(matrix), has_ready: matrix.include.length > 0, pending: JSON.stringify(plan.pending), blocked: JSON.stringify(plan.blocked) })
     console.log(JSON.stringify({ ...plan, matrix, has_ready: matrix.include.length > 0 }, null, 2))
@@ -66,6 +76,7 @@ async function main(args: string[]) {
   }
   if (args.length === 4 && args[0] === 'build') {
     const owner = ownerFor(args[1]); const target = targetArg(args[2])
+    assertBuildWorkflowIdentity(env, owner.id)
     buildOwner(root, owner, target, args[3])
     return
   }

@@ -1,5 +1,19 @@
 name: platform-config delivery
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'composition/config/**'
+      - 'shared/config-native/**'
+      - 'shared/contracts/**'
+      - '.cargo/**'
+      - '.github/workflows/stream-platform-config.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
   push:
     branches: [main]
     paths:
@@ -24,6 +38,17 @@ jobs:
       actions: read
       id-token: write
       attestations: write
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'platform-config'
+      targets: '{"include":[{"id":"platform-config","target":"linux-x64","runner":"ubuntu-24.04","kind":"directory","stage":"library","package":"composition/config/native","verify":["verify"],"build":"build","language":"native","packageManager":"npm","architecture_owner":"composition"},{"id":"platform-config","target":"macos-x64","runner":"macos-26-intel","kind":"directory","stage":"library","package":"composition/config/native","verify":["verify"],"build":"build","language":"native","packageManager":"npm","architecture_owner":"composition"}]}'
+      workflow_path: '.github/workflows/stream-platform-config.yml'
+
+  verify-pr:
+    if: github.repository == 'tryapparent/apparent' && github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/value-stream-delivery.yml
     with:
       owner_id: 'platform-config'

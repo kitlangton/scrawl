@@ -1,5 +1,18 @@
 name: engine-media-native delivery
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'engine/**'
+      - 'capture/engine/**'
+      - '.cargo/**'
+      - '.github/workflows/stream-engine-media-native.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
   push:
     branches: [main]
     paths:
@@ -23,6 +36,17 @@ jobs:
       actions: read
       id-token: write
       attestations: write
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'engine-media-native'
+      targets: '{"include":[{"id":"engine-media-native","target":"linux-x64","runner":"ubuntu-24.04","kind":"directory","stage":"library","package":"engine/delivery/media","verify":["verify"],"build":"build","language":"native","packageManager":"npm","architecture_owner":"engine"}]}'
+      workflow_path: '.github/workflows/stream-engine-media-native.yml'
+
+  verify-pr:
+    if: github.repository == 'tryapparent/apparent' && github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/value-stream-delivery.yml
     with:
       owner_id: 'engine-media-native'

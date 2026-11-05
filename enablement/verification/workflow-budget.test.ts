@@ -345,4 +345,9 @@ test('media runtime packages install only for a fresh native media producer buil
   assert.match(setup, /if: \(steps\.admit\.outputs\.reuse != 'true' \|\| steps\.reuse\.outcome != 'success'\) && matrix\.id == 'engine-media-native'/)
   for (const packageName of ['ffmpeg', 'pkg-config', 'libgstreamer1.0-dev', 'libgstreamer-plugins-base1.0-dev', 'gstreamer1.0-plugins-base', 'gstreamer1.0-plugins-good', 'gstreamer1.0-libav']) assert.match(setup, new RegExp(`\\b${packageName.replaceAll('.', '\\.')}\\b`))
   assert.doesNotMatch(setup, /APPARENT_GST_PLUGIN_SOURCE/)
+  const pr = workflow.split('  stream-pr:\n')[1]
+  const prSetup = pr.match(/- name: Install Engine media runtime and fixture dependencies[\s\S]*?(?=\n      - uses: oven-sh)/)?.[0]
+  assert.ok(prSetup, 'PR media checks need the same native dependencies')
+  assert.match(prSetup, /if: matrix\.id == 'engine-media-native'/)
+  assert.equal(prSetup.split('        run:')[1], setup.split('        run:')[1].split('\n      - uses: oven-sh')[0])
 })
