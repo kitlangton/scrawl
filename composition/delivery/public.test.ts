@@ -4,7 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSyn
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
-import { assessPrior, buildOwner, catalog, environmentDigest, inputDigest, makePlan, sourceDigest } from './core.ts'
+import { assessPrior, buildOwner, catalog, environmentDigest, inputDigest, makePlan, sourceDigest, workflowPathFor } from './core.ts'
+import { assertBuildWorkflowIdentity } from './cli.ts'
 
 // Hooks must not redirect synthetic Git repositories into the caller's index.
 for (const name of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete process.env[name]
@@ -13,7 +14,7 @@ const registration = { schema: 1, id: 'public', kind: 'directory', package: 'pub
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'public-delivery-core-'))
   const put = (path: string, value: string) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), value) }
-  for (const [path, value] of Object.entries({ 'public/delivery.json': JSON.stringify(registration), 'public/site/source.ts': 'source', 'shared/ui/token.css': 'tokens', 'README.md': 'readme', 'composition/delivery/core.ts': 'delivery', 'composition/architecture/check.ts': 'guard', '.github/workflows/value-stream-delivery.yml': 'workflow' })) put(path, value)
+  for (const [path, value] of Object.entries({ 'public/delivery.json': JSON.stringify(registration), 'public/site/source.ts': 'source', 'shared/ui/token.css': 'tokens', 'README.md': 'readme', 'composition/delivery/core.ts': 'delivery', 'composition/architecture/check.ts': 'guard', 'enablement/verification/web/baseline.ts': 'baseline verifier', [workflowPathFor('public')]: 'workflow', '.github/workflows/value-stream-delivery.yml': 'reusable workflow' })) put(path, value)
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
   git('init'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid')
   const commit = () => { git('add', '-A'); git('commit', '-m', 'fixture') }
@@ -48,6 +49,16 @@ test('explicit content/config files and their deletion invalidate reuse; unrelat
     f.put('capture/engine/native.rs', 'native'); f.commit(); assert.equal(sourceDigest(f.root, f.owner()), next)
     symlinkSync(join(f.root, 'README.md'), join(f.root, '.npmrc'))
     assert.match(catalog(f.root).blocked.join(' '), /Symlink/)
+  } finally { f.clean() }
+})
+
+test('Public verifier closure participates in its fingerprint', () => {
+  const f = fixture()
+  try {
+    const before = sourceDigest(f.root, f.owner())
+    f.put('enablement/verification/web/baseline.ts', 'changed baseline verifier')
+    f.commit()
+    assert.notEqual(sourceDigest(f.root, f.owner()), before)
   } finally { f.clean() }
 })
 test('production build configuration changes the common reuse identity without exposing values', () => {
@@ -89,8 +100,8 @@ test('web reuse admits unchanged Public bytes after native-only changes and reje
     const previous = f.git('rev-parse', 'HEAD')
     f.put('capture/engine/native.rs', 'unrelated native source'); f.commit()
     const current = f.git('rev-parse', 'HEAD'), owner = f.owner(), digest = inputDigest(f.root, owner, 'web')
-    const run = { id: 12, run_attempt: 1, head_sha: previous, head_branch: 'main', event: 'push', conclusion: 'success', path: '.github/workflows/value-stream-delivery.yml' }
-    const jobs = ['stream (public, web)', 'Delivery contracts', 'Workflow runtime budget'].map(name => ({ name, status: 'completed', conclusion: 'success' }))
+    const run = { id: 12, run_attempt: 1, head_sha: previous, head_branch: 'main', event: 'push', conclusion: 'success', path: workflowPathFor('public') }
+    const jobs = ['deliver / stream (public, web)', 'deliver / Delivery contracts', 'deliver / Workflow runtime budget'].map(name => ({ name, status: 'completed', conclusion: 'success' }))
     const artifacts = [{ id: 13, name: `stream-public-web-${digest}`, expired: false }]
     const admit = () => assessPrior(f.root, owner, 'web', current, 'tryapparent/apparent', [run], () => jobs, () => artifacts)
     assert.equal(admit().reuse, true)
@@ -113,13 +124,11 @@ test('source identities distinguish filenames containing serialized manifest sep
   } finally { f.clean() }
 })
 
-test('PR planning includes Public while main retains its independent producer', () => {
-  const plan = (event: string) => JSON.parse(execFileSync(process.execPath,
-    ['--experimental-strip-types', new URL('./cli.ts', import.meta.url).pathname, 'plan'], {
-      encoding: 'utf8', env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
-    }))
-  const pr = plan('pull_request')
-  assert(pr.matrix.include.some((owner: { id: string }) => owner.id === 'public'))
-  assert(!plan('push').matrix.include.some((owner: { id: string }) => owner.id === 'public'))
-  assert.equal(pr.matrix.include.length, makePlan(process.cwd()).matrix.include.length)
+test('canonical PR workflow identity is accepted for builds only', () => {
+  const valid = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/pull/732/merge', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-public.yml@refs/pull/732/merge', APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-public.yml' }
+  assert.doesNotThrow(() => assertBuildWorkflowIdentity(valid, 'public'))
+  assert.throws(() => assertBuildWorkflowIdentity({ ...valid, GITHUB_REPOSITORY: 'fork/apparent' }, 'public'), /canonical owner workflow/)
+  assert.throws(() => assertBuildWorkflowIdentity({ ...valid, GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/pull/732/merge' }, 'public'), /canonical owner workflow/)
+  assert.throws(() => assertBuildWorkflowIdentity({ ...valid, GITHUB_REF: 'refs/heads/main' }, 'public'), /canonical owner workflow/)
+  assert.doesNotThrow(() => assertBuildWorkflowIdentity({ GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main' }, 'public'))
 })

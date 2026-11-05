@@ -166,6 +166,7 @@ test('every supported root workflow waits for all payload jobs before auditing',
   for (const name of readdirSync(folder)) {
     const text = readFileSync(new URL(name, folder), 'utf8')
     if (name === 'release-windows.yml' || name === 'runtime-budget.yml') continue
+    if (text.includes('uses: ./.github/workflows/value-stream-delivery.yml')) continue
     // Only root workflows: callable platform verification is covered by caller.
     if (!/^  (push|workflow_dispatch|workflow_run|schedule):/m.test(text)) continue
     const jobs = [...text.split('jobs:\n')[1].matchAll(/^  ([\w-]+):$/gm)].map(m => m[1])
@@ -344,7 +345,20 @@ test('PR and fresh main media builds share the bounded runtime dependency instal
   const setup = (job: string) => job.match(/- name: Install Engine media runtime and fixture dependencies[\s\S]*?(?=\n      - uses: oven-sh)/)?.[0]
   const mainSetup = setup(main), prSetup = setup(pr)
   assert.ok(mainSetup); assert.ok(prSetup)
-  assert.match(mainSetup, /if: steps\.admit\.outputs\.reuse != 'true' && matrix\.id == 'engine-media-native'/)
+  assert.match(mainSetup, /if: \(steps\.admit\.outputs\.reuse != 'true' \|\| steps\.reuse\.outcome != 'success'\) && matrix\.id == 'engine-media-native'/)
+  const condition = mainSetup.match(/if: (.+)/)![1]
+  for (const [reuse, outcome, id, expected] of [
+    ['false', 'skipped', 'engine-media-native', true],
+    ['true', 'failure', 'engine-media-native', true],
+    ['true', 'cancelled', 'engine-media-native', true],
+    ['true', 'success', 'engine-media-native', false],
+    ['false', 'skipped', 'engine', false],
+    ['true', 'failure', 'agent', false],
+  ] as const) {
+    const expression = condition.replaceAll('steps.admit.outputs.reuse', JSON.stringify(reuse))
+      .replaceAll('steps.reuse.outcome', JSON.stringify(outcome)).replaceAll('matrix.id', JSON.stringify(id))
+    assert.equal(Function(`return (${expression})`)(), expected)
+  }
   assert.match(prSetup, /if: matrix\.id == 'engine-media-native'/)
   for (const block of [mainSetup, prSetup]) {
     assert.match(block, /timeout-minutes: 5/)

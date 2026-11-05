@@ -1,0 +1,50 @@
+name: engine delivery
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'engine/**'
+      - '.github/workflows/stream-engine.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
+  push:
+    branches: [main]
+    paths:
+      - 'engine/**'
+      - '.github/workflows/stream-engine.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
+permissions:
+  contents: read
+jobs:
+  deliver:
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'engine'
+      targets: '{"include":[{"id":"engine","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"contract","package":"engine/sdk","verify":["typecheck","test"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"engine"}]}'
+      workflow_path: '.github/workflows/stream-engine.yml'
+
+  verify-pr:
+    if: github.repository == 'tryapparent/apparent' && github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'engine'
+      targets: '{"include":[{"id":"engine","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"contract","package":"engine/sdk","verify":["typecheck","test"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"engine"}]}'
+      workflow_path: '.github/workflows/stream-engine.yml'
