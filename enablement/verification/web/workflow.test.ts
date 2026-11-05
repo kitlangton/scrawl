@@ -106,6 +106,11 @@ test('PR and main entrypoints share owner paths and fixed target matrices', () =
 })
 
 test('PR execution is fixed-owner, fresh, synthetic and read-only', () => {
+  // A skipped prerequisite silently skips the required PR builds too.
+  assert.match(section(reusable, 'contracts'), /if: .*github\.event_name == 'pull_request'/)
+  // All jobs in a called workflow must fit the read-only PR caller's ceiling,
+  // even when publication jobs are excluded by their runtime condition.
+  assert.doesNotMatch(reusable, /^permissions:|^      (?:id-token|attestations): write/m)
   assert.match(reusable, /on:\n  workflow_call:/)
   assert.doesNotMatch(reusable.split('\njobs:')[0], /pull_request:|push:|workflow_dispatch:|workflow_run:/)
   const pr = section(reusable, 'stream-pr')

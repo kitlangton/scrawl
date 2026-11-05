@@ -16,9 +16,7 @@ on:
       WEBSITE_PAGES_API_TOKEN:
         required: false
 
-permissions:
-  contents: read
-  actions: read
+# Inherit the caller's ceiling: read-only for PRs, provenance writes for main.
 env:
   APPARENT_DELIVERY_WORKFLOW_PATH: ${{ inputs.workflow_path }}
 
@@ -31,7 +29,10 @@ jobs:
   contracts:
     # The agent whose run hits the limit owns optimization; never raise it.
     name: Delivery contracts
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    if: github.repository == 'tryapparent/apparent' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -65,11 +66,6 @@ jobs:
       matrix: ${{ fromJSON(inputs.targets) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.target == 'web' && 10 || 15 }}
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      attestations: write
     env:
       OWNER_ID: ${{ matrix.id }}
       OWNER_TARGET: ${{ matrix.target }}
@@ -226,11 +222,6 @@ jobs:
     outputs:
       artifact-name: stream-public-web-${{ steps.admit.outputs.input_digest }}
       input-digest: ${{ steps.admit.outputs.input_digest }}
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      attestations: write
     env:
       OWNER_ID: ${{ matrix.id }}
       OWNER_TARGET: ${{ matrix.target }}
