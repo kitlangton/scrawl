@@ -120,6 +120,23 @@ test('native media enforces aggregate pixel limits and reaps deadline/cancelled 
   } finally { await f.close(); }
 });
 
+test('native media exclusively claims a caller-provisioned empty private output directory', { skip: !binary }, async () => {
+  const f = await fixture();
+  try {
+    await mkdir(f.input.outputDirectory, { mode: 0o700 });
+    const result = await f.client.decode(f.input);
+    assert.equal(result.state, 'complete');
+    assert.deepEqual((await readdir(f.input.outputDirectory)).sort(), ['frame-001.png', 'frame-002.png', 'frame-003.png', 'frame-004.png', 'manifest.json']);
+    const another = { ...f.input, jobId: createMediaJobId() };
+    await assert.rejects(f.client.decode(another), code('invalid_output'));
+    const stale = join(f.root, 'stale');
+    await mkdir(stale, { mode: 0o700 });
+    await writeFile(join(stale, '.engine-media-job'), 'foreign claim', { mode: 0o600 });
+    await assert.rejects(f.client.decode({ ...f.input, jobId: createMediaJobId(), outputDirectory: stale }), code('invalid_output'));
+    assert.equal(await readFile(join(stale, '.engine-media-job'), 'utf8'), 'foreign claim');
+  } finally { await f.close(); }
+});
+
 test('native media survives RPC timeout and pins against a source pathname replacement', { skip: !binary }, async () => {
   const f = await fixture();
   try {
@@ -189,7 +206,7 @@ test('forced supervisor death stops its pinned decoder and leaves only private u
     const exitDeadline = Date.now() + 3000;
     while (!stopped && Date.now() < exitDeadline) {
       try { stopped = (await readFile(`/proc/${decoderPid}/stat`, 'utf8')).split(') ')[1].startsWith('Z'); }
-      catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') stopped = true; else throw e; }
+      catch (e) { if (['ENOENT', 'ESRCH'].includes((e as NodeJS.ErrnoException).code ?? '')) stopped = true; else throw e; }
       if (!stopped) await pause(10);
     }
     assert.equal(stopped, true, 'decoder remains a live writer after supervisor death');
@@ -198,7 +215,7 @@ test('forced supervisor death stops its pinned decoder and leaves only private u
     assert.equal(remaining.includes('manifest.json'), false);
     assert.equal((await stat(input.outputDirectory)).mode & 0o777, 0o700);
     for (const name of remaining) {
-      assert.match(name, /^frame-\d{3}\.png$/);
+      assert.match(name, /^(?:frame-\d{3}\.png|\.engine-media-job)$/);
       assert.equal((await stat(join(input.outputDirectory, name))).mode & 0o777, 0o600);
     }
   } finally {

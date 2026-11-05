@@ -37,6 +37,56 @@ pub struct Directory {
     pub path: PathBuf,
 }
 impl Directory {
+    fn has_only(&self, allowed: &[&str]) -> Result<bool> {
+        // A new directory description avoids sharing a consumed readdir offset.
+        let fd = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                c".".as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err("invalid_output");
+        }
+        let stream = unsafe { libc::fdopendir(fd) };
+        if stream.is_null() {
+            unsafe {
+                libc::close(fd);
+            }
+            return Err("invalid_output");
+        }
+        struct Entries(*mut libc::DIR);
+        impl Drop for Entries {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::closedir(self.0);
+                }
+            }
+        }
+        let stream = Entries(stream);
+        loop {
+            #[cfg(target_os = "linux")]
+            let errno = unsafe { libc::__errno_location() };
+            #[cfg(target_os = "macos")]
+            let errno = unsafe { libc::__error() };
+            unsafe {
+                *errno = 0;
+            }
+            let entry = unsafe { libc::readdir(stream.0) };
+            if entry.is_null() {
+                return if unsafe { *errno } == 0 {
+                    Ok(true)
+                } else {
+                    Err("invalid_output")
+                };
+            }
+            let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if name != b"." && name != b".." && !allowed.iter().any(|n| n.as_bytes() == name) {
+                return Ok(false);
+            }
+        }
+    }
     pub fn open(path: &Path, private: bool) -> Result<Self> {
         if !path.is_absolute() {
             return Err("source_mismatch");
@@ -133,18 +183,27 @@ impl Directory {
     pub fn sync(&self) -> Result<()> {
         self.file.sync_all().map_err(|_| "invalid_output")
     }
-    pub fn unlink_owned(&self, n: &str, original: &File) {
-        if let Ok(current) = self.read(n) {
+    pub fn unlink_owned(&self, n: &str, original: &File) -> bool {
+        let Ok(n) = name(n) else {
+            return false;
+        };
+        // Atomic publication temporarily gives our manifest two hard links.
+        // Deletion checks the retained inode, not the source-reader link policy.
+        let current = owned(unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                n.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        });
+        if let Ok(current) = current {
             if let (Ok(a), Ok(b)) = (current.metadata(), original.metadata()) {
                 if same(&a, &b) {
-                    if let Ok(n) = name(n) {
-                        unsafe {
-                            libc::unlinkat(self.file.as_raw_fd(), n.as_ptr(), 0);
-                        }
-                    }
+                    return unsafe { libc::unlinkat(self.file.as_raw_fd(), n.as_ptr(), 0) } == 0;
                 }
             }
         }
+        false
     }
 }
 pub struct SourcePin {
@@ -257,6 +316,7 @@ impl SourcePin {
 pub struct Output {
     pub dir: Directory,
     pub files: Vec<File>,
+    claim: File,
 }
 impl Output {
     pub fn create(d: &Decode) -> Result<Self> {
@@ -268,13 +328,31 @@ impl Output {
                 .and_then(|n| n.to_str())
                 .ok_or("invalid_output")?,
         )?;
-        if unsafe { libc::mkdirat(parent.file.as_raw_fd(), leaf.as_ptr(), 0o700) } != 0 {
+        if unsafe { libc::mkdirat(parent.file.as_raw_fd(), leaf.as_ptr(), 0o700) } != 0
+            && std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists
+        {
             return Err("invalid_output");
         }
         let dir = Directory::open(p, true).map_err(|_| "invalid_output")?;
         parent.check().map_err(|_| "invalid_output")?;
-        let mut out = Self { dir, files: vec![] };
+        if !dir.has_only(&[])? {
+            return Err("invalid_output");
+        }
+        // Racing providers cannot both claim a caller-provisioned empty directory.
+        let claim = dir.create(".engine-media-job")?;
+        let mut out = Self {
+            dir,
+            files: vec![],
+            claim,
+        };
         let prepared = (|| {
+            out.claim
+                .write_all(d.job_id.as_bytes())
+                .map_err(|_| "invalid_output")?;
+            out.claim.sync_all().map_err(|_| "invalid_output")?;
+            if !out.dir.has_only(&[".engine-media-job"])? {
+                return Err("invalid_output");
+            }
             for i in 1..=d.requested_bundle_ms.len() {
                 out.files
                     .push(out.dir.create(&format!("frame-{i:03}.png"))?);
@@ -292,10 +370,20 @@ impl Output {
         for (i, f) in self.files.iter().enumerate() {
             self.dir.unlink_owned(&format!("frame-{:03}.png", i + 1), f);
         }
+        self.dir.unlink_owned(".engine-media-job", &self.claim);
         let _ = self.dir.sync();
     }
     pub fn publish(&self, value: &serde_json::Value) -> Result<()> {
         self.dir.check().map_err(|_| "invalid_output")?;
+        let claim = self
+            .dir
+            .read(".engine-media-job")
+            .map_err(|_| "invalid_output")?;
+        if identity(&claim.metadata().map_err(|_| "invalid_output")?)
+            != identity(&self.claim.metadata().map_err(|_| "invalid_output")?)
+        {
+            return Err("invalid_output");
+        }
         let mut f = self.dir.create(".manifest.tmp")?;
         let result = (|| {
             let bytes = serde_json::to_vec(value).map_err(|_| "internal")?;
@@ -315,7 +403,11 @@ impl Output {
             {
                 return Err("invalid_output");
             }
-            self.dir.unlink_owned(".manifest.tmp", &f);
+            if !self.dir.unlink_owned(".manifest.tmp", &f)
+                || !self.dir.unlink_owned(".engine-media-job", &self.claim)
+            {
+                return Err("invalid_output");
+            }
             self.dir.sync()
         })();
         if result.is_err() {

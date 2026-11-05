@@ -121,7 +121,11 @@ verified native provider filesystem publication can establish that.
 
 Successful decode returns only PNG references: request index/times, absolute
 PNG path, dimensions, byte length and SHA-256. No image bytes cross the JSON
-transport. The destination must be a fresh private directory owned by the job.
+transport. The destination must be a fresh private directory owned by the job:
+either an absent path or a caller-provisioned empty mode-0700 directory under an
+existing private mode-0700 parent. The native provider claims it exclusively
+before writing; existing entries or a stale job claim are refused. Callers do not
+precreate PNGs or a completed manifest.
 The native provider refuses overwrite/symlink/path escape, validates each PNG,
 syncs each file and directory, then atomically publishes a complete job
 manifest. References are emitted only after that barrier. No partial success is

@@ -39,8 +39,13 @@ live-capture slot. Legacy retention still uses its old process-local claim;
 neither this lease nor a successful decode implies legacy retention exclusion.
 Only final, stable bundles should be supplied.
 
-The output must not exist and must have an existing mode-0700 parent outside
-the source bundle. The worker creates a private output directory and reserves
+The output must be absent or a caller-provisioned empty mode-0700 directory,
+with an existing mode-0700 parent outside the source bundle. The worker opens
+it without symlinks, checks emptiness through its pinned directory descriptor,
+and exclusively creates `.engine-media-job` before reserving files. Concurrent
+providers cannot both claim it; a stale claim or any existing entry is refused.
+The claim contains only the job ID and is removed on normal completion/cleanup.
+The worker reserves
 each exact `frame-NNN.png` with an exclusive mode-0600 create, retaining its inode.
 The decoder writes only these reserved files. The supervisor validates every
 PNG, dimensions, hash, ordered timestamp mapping and retained inode, syncs files,
