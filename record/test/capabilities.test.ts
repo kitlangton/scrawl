@@ -127,3 +127,25 @@ test("ambiguous control preserves identity; unsubscribing/detaching never stops 
   assert.equal(driver.commands().length, 1);
   assert.equal((await client.execute(command(driver.current(), { type: "cancel-capture", captureId: "capture-active" }))).status, "refused");
 });
+
+test("artifact open confirmation requires exact capture and saved artifact; dispatch is insufficient", async () => {
+  const { hasConfirmedArtifactOpen } = await import('../src/capabilities/index.ts');
+  const { client, driver } = createRecordFixture('reconnect-with-saved-history');
+  const before = driver.current();
+  driver.publish({ ...before, revision: 2, captures: [{ ...before.captures[0], artifactId: 'artifact-1', outcomes: [...before.captures[0].outcomes, {kind:'open-dispatch', at:'2025-01-01T00:00:02Z', ok:true}] }] });
+  const snapshot = driver.current();
+  assert.equal((await client.execute(command(snapshot, {type:'open-capture', captureId:'capture-saved'}))).status, 'accepted');
+  assert.equal(hasConfirmedArtifactOpen(driver.current(), 'capture-saved'), false);
+  driver.publish({...snapshot, revision:3, captures:[{...snapshot.captures[0], outcomes:[...snapshot.captures[0].outcomes, {kind:'artifact-open', artifactId:'artifact-1', at:'2025-01-01T00:00:03Z', ok:false, reason:'refused'}]}]});
+  assert.equal(hasConfirmedArtifactOpen(driver.current(), 'capture-saved'), false);
+  const refused = driver.current();
+  driver.publish({...refused, revision:4, captures:[{...refused.captures[0], outcomes:[...refused.captures[0].outcomes, {kind:'artifact-open', artifactId:'old-artifact', at:'2025-01-01T00:00:04Z', ok:true, evidence:'viewer-ack'}]}]});
+  assert.equal(hasConfirmedArtifactOpen(driver.current(), 'capture-saved'), false);
+  const oldArtifact = driver.current();
+  driver.publish({...oldArtifact, revision:5, captures:[{...oldArtifact.captures[0], outcomes:[...oldArtifact.captures[0].outcomes, {kind:'artifact-open', artifactId:'artifact-1', at:'2025-01-01T00:00:05Z', ok:true, evidence:'viewer-ack'}]}]});
+  assert.equal(hasConfirmedArtifactOpen(driver.current(), 'capture-saved'), true);
+  assert.equal(hasConfirmedArtifactOpen(driver.current(), 'another-capture'), false);
+  driver.disconnect();
+  driver.reconnect();
+  assert.equal(hasConfirmedArtifactOpen(driver.current(), 'capture-saved'), true);
+});

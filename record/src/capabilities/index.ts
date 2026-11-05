@@ -24,12 +24,32 @@ export interface PenPreference {
 export type CaptureOutcomeKind =
   | "shortcut" | "picker" | "first-frame-start" | "whiteboard" | "accepted-stroke"
   | "processing" | "save" | "copy" | "open-dispatch";
-export interface CaptureOutcome { kind: CaptureOutcomeKind; at: string; ok: boolean; detail?: string }
+export type ArtifactOpenOutcome = {
+  kind: "artifact-open";
+  at: string;
+  artifactId: string;
+} & (
+  | { ok: true; evidence: "viewer-ack" | "os-observation" }
+  | { ok: false; reason: "refused" | "failed" }
+);
+export type CaptureOutcome =
+  | { kind: CaptureOutcomeKind; at: string; ok: boolean; detail?: string }
+  | ArtifactOpenOutcome;
 export interface CaptureFact {
   captureId: string;
   invocationId?: string;
+  /** Opaque immutable identity of the saved artifact; never its private path. */
+  artifactId?: string;
   phase: "starting" | "recording" | "processing" | "saved" | "cancelled" | "failed" | "unknown";
   outcomes: CaptureOutcome[];
+}
+
+/** Confirmation for the exact capture AND current saved artifact, never dispatch/watch proof. */
+export function hasConfirmedArtifactOpen(snapshot: CapabilitySnapshot, captureId: string): boolean {
+  const capture = snapshot.captures.find(value => value.captureId === captureId);
+  return capture?.phase === "saved" && !!capture.artifactId && capture.outcomes.some(outcome =>
+    outcome.kind === "artifact-open" && outcome.ok && outcome.artifactId === capture.artifactId
+  );
 }
 export interface CapabilitySnapshot {
   version: 1;

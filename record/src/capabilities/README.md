@@ -63,3 +63,28 @@ own associations, coaching, progress and manual paste confirmation. Production
 still needs native permission/shortcut/pen mappings, the existing transactional
 config writer, Engine SDK adaptation, bounded RPCs and affected platform proof.
 The shell/config owner must provide those adapters without a second config writer.
+
+## Artifact-open confirmation
+
+`open-dispatch` records only a dispatch attempt. `accepted`, an OS launcher exit
+code, process startup, focus changes and file-access guesses are insufficient to
+establish that the matching artifact opened. The optional `CaptureFact.artifactId`
+is an opaque identity bound to the exact saved artifact, stable across reconnect
+and path renames. Replacing/reprocessing the artifact requires a new identity.
+An `artifact-open` outcome names that identity and is either `ok: false` with
+`reason: 'refused'|'failed'`, or `ok: true` with `evidence: 'viewer-ack'|'os-observation'`.
+Only an authorized provider may publish confirmation after a trusted receiving
+viewer acknowledgement or a supported OS observation proves the same artifact
+opened. An SDK/native adapter without that evidence must leave it unknown.
+No timeout or dispatch result may manufacture confirmation. The public helper
+`hasConfirmedArtifactOpen(snapshot, captureId)` requires saved state, matching
+capture and current artifact identity. It proves neither playback nor watching.
+
+Current legacy `shared::handoff::open_path` uses macOS `open` success or Linux
+launcher spawning; neither implements this confirmation seam. The Engine SDK
+also has no artifact-opening API. The precise remaining production prerequisite
+is a trusted receiving-viewer/OS observation mapped to the saved artifact identity
+by the Record host adapter. This change defines the fact and controlled fixture
+coverage only; no private app monitoring, new viewer or native route is added.
+Until a verified producer exists, consumers cannot complete a confirmation-based
+stage from actual production facts. Their policy stays outside Record.
