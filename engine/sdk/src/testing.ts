@@ -1,27 +1,163 @@
-import type { Handshake, Receipt, Request, Response, State, Transport } from './index.ts';
-import { encodeRequest } from './index.ts';
+import type {
+  CloseOutcome,
+  Handshake,
+  Receipt,
+  Request,
+  Response,
+  State,
+  Transport,
+} from "./index.ts";
+import { encodeRequest } from "./index.ts";
 
-/** Protocol-only fake. Never creates media or claims production readiness. */
+/** TEST ONLY protocol peer. It cannot claim readiness or produce artifacts. */
 export class ReferenceEngine implements Transport {
-  readonly handshake: Handshake={protocolVersion:1,implementation:'test-double',capabilities:{screenCapture:false,audioCapture:false,windowCapture:false},readiness:'unavailable'};
-  private receipts=new Map<string,Receipt>(); private owners=new Map<string,string>(); private closed=false;
-  async request(request:Request):Promise<Response>{
-    encodeRequest(request);
-    if(this.closed)throw new Error('test reference peer closed');
-    if(request.method==='handshake')return {protocolVersion:1,requestId:request.requestId,result:this.handshake};
-    if(request.method==='start'){
-      const old=this.receipts.get(request.requestId); if(old){if(old.bundleId!==request.bundleId)return this.error(request.requestId,'identity_conflict','request identity reused');return {protocolVersion:1,requestId:request.requestId,result:old};}
-      const ownerToken=request.ownerToken;this.owners.set(request.requestId,ownerToken);
-      const receipt:Receipt={protocolVersion:1,requestId:request.requestId,bundleId:request.bundleId,state:'rejected',error:{code:'unavailable',message:'test reference peer does not record media'}};this.receipts.set(request.requestId,receipt);
-      return {protocolVersion:1,requestId:request.requestId,result:receipt};
+  readonly handshake: Handshake = {
+    protocolVersion: 1,
+    implementation: "test-double",
+    capabilities: {
+      screenCapture: false,
+      audioCapture: false,
+      windowCapture: false,
+    },
+    readiness: "unavailable",
+  };
+  private readonly records = new Map<
+    string,
+    {
+      owner: string;
+      bundleId: string;
+      path: string;
+      options: string;
+      receipt: Receipt;
     }
-    const receipt=this.receipts.get(request.requestId);if(!receipt)return this.error(request.requestId,'not_found','unknown request');
-    if(this.owners.get(request.requestId)!==request.ownerToken)return this.error(request.requestId,'permission_denied','owner authority rejected');
-    if(request.method==='cancel' && ['starting','recording','stopping','finalizing'].includes(receipt.state)){receipt.state='cancelled';}
-    return {protocolVersion:1,requestId:request.requestId,result:receipt};
+  >();
+  private closed = false;
+  async request(request: Request): Promise<Response> {
+    encodeRequest(request);
+    if (this.closed) throw new Error("test reference peer closed");
+    if (request.method === "handshake")
+      return {
+        protocolVersion: 1,
+        rpcId: request.rpcId,
+        result: this.handshake,
+      };
+    const old = this.records.get(request.captureId);
+    if (request.method === "start") {
+      if (old) {
+        if (old.owner !== request.ownerToken)
+          return this.error(
+            request.rpcId,
+            "permission_denied",
+            "owner authority rejected",
+          );
+        if (
+          old.bundleId !== request.bundleId ||
+          old.path !== request.bundlePath ||
+          old.options !== JSON.stringify(request.options)
+        )
+          return this.error(
+            request.rpcId,
+            "identity_conflict",
+            "capture identity conflicts with original request",
+          );
+        return {
+          protocolVersion: 1,
+          rpcId: request.rpcId,
+          result: { ...old.receipt, rpcId: request.rpcId },
+        };
+      }
+      const receipt: Receipt = {
+        protocolVersion: 1,
+        rpcId: request.rpcId,
+        captureId: request.captureId,
+        state: "starting",
+      };
+      this.records.set(request.captureId, {
+        owner: request.ownerToken,
+        bundleId: request.bundleId,
+        path: request.bundlePath,
+        options: JSON.stringify(request.options),
+        receipt,
+      });
+      return { protocolVersion: 1, rpcId: request.rpcId, result: receipt };
+    }
+    if (!old) return this.error(request.rpcId, "not_found", "unknown capture");
+    if (old.owner !== request.ownerToken)
+      return this.error(
+        request.rpcId,
+        "permission_denied",
+        "owner authority rejected",
+      );
+    const prior = old.receipt.state;
+    if (request.method === "stop") {
+      if (prior === "starting")
+        return this.error(
+          request.rpcId,
+          "not_ready",
+          "capture has not reached recording",
+        );
+      if (prior === "recording")
+        old.receipt = { ...old.receipt, state: "stopping" };
+    } else if (
+      request.method === "cancel" &&
+      ["starting", "recording", "stopping", "finalizing"].includes(prior)
+    )
+      old.receipt = { ...old.receipt, state: "cancelled" };
+    const receipt = { ...old.receipt, rpcId: request.rpcId };
+    return { protocolVersion: 1, rpcId: request.rpcId, result: receipt };
   }
-  async close(){this.closed=true;}
-  private error(requestId:string,code:Response['error'] extends infer T ? T extends {code:infer C}?C:never:never,message:string):Response{return {protocolVersion:1,requestId,error:{code,message}};}
-  /** Test-only scenario control; not an Engine RPC and cannot assert saved media. */
-  scenarioState(requestId:string,state:Extract<State,'starting'|'recording'|'stopping'|'finalizing'|'failed'|'cancelled'>){const receipt=this.receipts.get(requestId);if(!receipt)throw new Error('missing scenario receipt');receipt.state=state;}
+  async close(): Promise<CloseOutcome> {
+    this.closed = true;
+    return "already-exited";
+  }
+  private error(
+    rpcId: string,
+    code: NonNullable<Response["error"]>["code"],
+    message: string,
+  ): Response {
+    return { protocolVersion: 1, rpcId, error: { code, message } };
+  }
+  /** Test setup control; excluded from the shared protocol scenario API. */
+  setScenarioState(
+    captureId: string,
+    state: Extract<
+      State,
+      "recording" | "stopping" | "finalizing" | "failed" | "cancelled"
+    >,
+  ) {
+    const record = this.records.get(captureId);
+    if (!record) throw new Error("missing scenario capture");
+    const current = record.receipt.state;
+    const next: Record<string, string[]> = {
+      starting: ["recording", "cancelled", "failed"],
+      recording: ["stopping", "cancelled", "failed"],
+      stopping: ["finalizing", "cancelled", "failed"],
+      finalizing: ["cancelled", "failed"],
+    };
+    if (current === state && ["cancelled", "failed"].includes(state)) return;
+    if (!next[current]?.includes(state))
+      throw new Error(`invalid test transition ${current} -> ${state}`);
+    const { error: _error, ...base } = record.receipt;
+    record.receipt = {
+      ...base,
+      state,
+      ...(state === "failed"
+        ? { error: { code: "unavailable", message: "simulated test failure" } }
+        : {}),
+    };
+  }
+  /** Explicit test fixture only; no media is written or claimed as native. */
+  setSavedFixture(captureId: string) {
+    const record = this.records.get(captureId);
+    if (!record) throw new Error("missing scenario capture");
+    if (record.receipt.state !== "finalizing")
+      throw new Error("synthetic saved fixture requires finalizing state");
+    record.receipt = {
+      ...record.receipt,
+      state: "saved",
+      bundlePath: record.path,
+      artifactVersion: 1,
+      artifactProvenance: "test-synthetic",
+    };
+  }
 }
