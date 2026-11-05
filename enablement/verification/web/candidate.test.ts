@@ -5,7 +5,7 @@ import { candidate } from './candidate.ts'
 const sha = 'a'.repeat(40)
 const valid = { GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/heads/main',
   GITHUB_EVENT_NAME: 'push', GITHUB_SHA: sha,
-  GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main' }
+  GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-public.yml@refs/heads/main' }
 
 test('main Public candidate admission needs no native workflow or network receipt', () => {
   for (const event of ['push', 'workflow_dispatch']) {

@@ -248,7 +248,10 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(workflow["root"])
         delivery_workflow = verification.select([".github/workflows/value-stream-delivery.yml"])
         self.assertTrue(delivery_workflow["app_shell"])
-        self.assertTrue(delivery_workflow["root"])
+        self.assertFalse(delivery_workflow["root"])
+        entry_workflow = verification.select([".github/workflows/stream-app-shell.yml"])
+        self.assertTrue(entry_workflow["app_shell"])
+        self.assertFalse(entry_workflow["root"])
         self.assertFalse(verification.select(["composition/cli.rs"])["app_shell"])
 
     def test_delivery_sources_select_app_shell_and_dependency_free_node_contracts_only(self):
@@ -1485,7 +1488,7 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
                         expected = '2'
                     elif workflow.name == 'value-stream-delivery.yml':
                         expected = '2' if '    outputs:\n' in job else ('5' if '    name: Delivery contracts\n' in job else '15')
-                        if '    name: stream (' in job:
+                        if '    name: stream (' in job or '    name: pr-stream (' in job:
                             expected = "${{ matrix.target == 'web' && 10 || 15 }}"
                         if '    name: deploy (public, web)' in job:
                             expected = '10'
