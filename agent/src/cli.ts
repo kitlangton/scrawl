@@ -8,11 +8,16 @@ import { recordWithEngine } from './recording.js';
 import { semanticSummary } from './summary.js';
 import { issueCommand, issueHelp, IssueCliError } from './issue.js';
 import { decodeFrames, hasSourceVideo, savedKeyframes, selectFrameTimes, verifyFramesExecutable, verifyPrivateRuntime } from './frames.js';
+import { runZoom } from './zoom/zoom.js';
 
 const VERSION = '0.1.0';
 function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection and Engine foreground recording/frame selection.\n\nUsage: apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent inspect [BUNDLE|latest] [--experiment agentContext] [--stored-summary]\n       apparent-agent frames BUNDLE --from TIME --to TIME [--fps 4] [--json]\n       apparent-agent skill\n       apparent-agent record --duration <seconds> --out <absolute.apparent-path>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent issue --title <TEXT> (--body <TEXT> | --body-file <PATH>) [--submit]\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\nDefault inspect output is generated from the manifest; --stored-summary prints producer text.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nFrames require APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nIssue previews are offline by default; --submit publishes approved text to tryapparent/apparent.\n`); }
 async function main(args: string[]) {
-  if (args[0] !== 'skill' && args[0] !== 'issue' && (args.length === 0 || args.includes('--help') || args.includes('-h'))) { help(); return 0; }
+  if (args[0] === 'zoom' && args.length === 2 && ['--help','-h'].includes(args[1])) {
+    process.stdout.write('Usage: apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n');
+    return 0;
+  }
+  if (args[0] !== 'skill' && args[0] !== 'issue' && (args.length === 0 || args.includes('--help') || args.includes('-h'))) { help(); process.stdout.write('       apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n'); return 0; }
   if (args.length === 1 && ['--version', '-V'].includes(args[0])) { console.log(VERSION); return 0; }
   if (args[0] === 'skill') {
     if (args.length !== 1) throw new Error('skill takes no operands or options');
@@ -30,6 +35,7 @@ async function main(args: string[]) {
   if (args[0] === 'capture') return recover(args.slice(1));
   if (args[0] === 'record') return record(args.slice(1));
   if (args[0] === 'frames') return frames(args.slice(1));
+  if (args[0] === 'zoom') return zoom(args.slice(1));
   if (args[0] !== 'inspect') throw new Error(`Unknown command: ${args[0]}`);
   let input = 'latest'; let mode = 'summary'; let seenInput = false; let json = false; let storedSummary = false;
   const experiments: string[] = [];
@@ -97,6 +103,35 @@ async function main(args: string[]) {
   process.stdout.write(semanticSummary(bundle, path, agentContext, evidence?.isFile() === true, hasAudio));
   return 0;
 }
+async function zoom(args: string[]) {
+  let bundle='latest', seenBundle=false, at: string|undefined, mark: string|undefined, frame: number|undefined;
+  let span=2, frames=12, full=false, out: string|undefined, json=false, seenSpan=false, seenFrames=false;
+  for(let i=0;i<args.length;i++) {
+    const arg=args[i];
+    if(arg==='--at'&&at===undefined) { at=args[++i]; if(!at||at.startsWith('--')) throw new Error('--at requires a time or narration phrase'); }
+    else if(arg==='--mark'&&mark===undefined) { mark=args[++i]; if(!mark||mark.startsWith('--')) throw new Error('--mark requires a mark number or id'); }
+    else if(arg==='--frame'&&frame===undefined) { const value=args[++i]; if(value===undefined||!/^\d+$/.test(value)) throw new Error('--frame requires a positive integer keyframe number'); frame=Number(value); }
+    else if(arg==='--span'&&!seenSpan) { seenSpan=true; const value=args[++i]; if(value===undefined) throw new Error('--span requires seconds'); span=Number(value); }
+    else if(arg==='--frames'&&!seenFrames) { seenFrames=true; const value=args[++i]; if(value===undefined||!/^\d+$/.test(value)) throw new Error('--frames requires a nonnegative integer'); frames=Number(value); if(!Number.isSafeInteger(frames)) throw new Error('--frames exceeds the safe integer range'); }
+    else if(arg==='--full'&&!full) full=true;
+    else if(arg==='--out'&&out===undefined) { out=args[++i]; if(!out||out.startsWith('--')) throw new Error('--out requires an absolute fresh directory'); }
+    else if(arg==='--json'&&!json) json=true;
+    else if(arg==='--'&&!seenBundle&&i+2===args.length) { bundle=args[++i]; seenBundle=true; }
+    else if(arg.startsWith('-')) throw new Error(`Unknown or duplicate zoom option: ${arg}`);
+    else if(!seenBundle) { bundle=arg; seenBundle=true; }
+    else throw new Error('zoom accepts one bundle path');
+  }
+  const result=await runZoom({bundle,at,mark,frame,span,frames,full,out,json});
+  if(json) process.stdout.write(`${JSON.stringify(result,null,2)}\n`);
+  else {
+    process.stdout.write(`${result.sheet}\n${result.window.from} → ${result.window.to}, ${result.cells.length} frames (${result.sourceKind})\n`);
+    for(const cell of result.cells) process.stdout.write(`  ${cell.index}. ${cell.time} → ${cell.framePath}\n`);
+    if(result.said) process.stdout.write(`Said: “${result.said}”\n`);
+    process.stdout.write(`Details: ${result.sheet.replace(/zoom\.png$/,'zoom.json')}\n`);
+  }
+  return 0;
+}
+
 async function recover(args: string[]) {
   const [method, captureId] = args;
   if (args.length !== 2 || !['inspect', 'stop', 'cancel'].includes(method)) throw new Error('capture requires inspect, stop or cancel and a capture ID');
