@@ -78,6 +78,10 @@ export function enforcePublicationReservation(jobs: Job[], publisherName: string
       !Array.isArray(expectedJobNames) || !expectedJobNames.length || expectedJobNames.some(name => typeof name !== 'string' || !name) ||
       new Set(expectedJobNames).size !== expectedJobNames.length)
     throw new Error('Invalid publication reservation')
+  // The final audit needs this publisher to finish, so GitHub does not expose that
+  // downstream job in the live inventory yet. If it appears early, fail closed.
+  if (jobs.some(job => job.name === auditName || job.name.endsWith(` / ${auditName}`)))
+    throw new Error('Runtime audit job appeared before publication was terminal')
   const actualNames = jobs.map(job => job.name).sort()
   const expectedNames = [...expectedJobNames].sort()
   if (actualNames.length !== expectedNames.length || actualNames.some((name, index) => name !== expectedNames[index]))
@@ -89,11 +93,7 @@ export function enforcePublicationReservation(jobs: Job[], publisherName: string
       !Number.isFinite(Date.parse(publisher.started_at ?? '')) || publisher.completed_at !== null)
     throw new Error('Publication job is not the active job in this workflow attempt')
 
-  const audits = jobs.filter(job => job.name === auditName || job.name.endsWith(` / ${auditName}`))
-  if (audits.length !== 1 || !['queued', 'pending'].includes(audits[0].status) || audits[0].conclusion !== null)
-    throw new Error('Runtime audit job is missing, ambiguous, or not pending')
-
-  const completed = jobs.filter(job => job !== publisher && job !== audits[0])
+  const completed = jobs.filter(job => job !== publisher)
   const observedSeconds = executionSeconds(completed)
   const reservedTotal = observedSeconds + reservedSeconds
   const report = `Publication reservation: ${observedSeconds.toFixed(1)}s completed + ${reservedSeconds}s reserved = ${reservedTotal.toFixed(1)}s / ${budgetSeconds}s (parallel jobs counted once; audit and runner-only waiting excluded).`

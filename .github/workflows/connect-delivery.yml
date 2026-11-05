@@ -293,7 +293,7 @@ jobs:
           WORKFLOW_BUDGET_PLATFORM: web
           WORKFLOW_BUDGET_PUBLISHER_NAME: Recipient target release and aggregate
           WORKFLOW_BUDGET_RESERVE_SECONDS: '120'
-          WORKFLOW_BUDGET_EXPECTED_JOB_NAMES: '["select","produce","publish","recipient-select","recipient (ubuntu-24.04, x86_64-unknown-linux-gnu)","recipient (ubuntu-24.04-arm, aarch64-unknown-linux-gnu)","recipient (macos-15, aarch64-apple-darwin)","recipient (macos-15-intel, x86_64-apple-darwin)","Recipient target release and aggregate","Workflow runtime budget"]'
+          WORKFLOW_BUDGET_EXPECTED_JOB_NAMES: '["select","produce","publish","recipient-select","recipient (ubuntu-24.04, x86_64-unknown-linux-gnu)","recipient (ubuntu-24.04-arm, aarch64-unknown-linux-gnu)","recipient (macos-15, aarch64-apple-darwin)","recipient (macos-15-intel, x86_64-apple-darwin)","Recipient target release and aggregate"]'
         run: node --experimental-strip-types enablement/verification/workflow-budget.ts --publication-preflight
       - uses: actions/download-artifact@v4
         with:

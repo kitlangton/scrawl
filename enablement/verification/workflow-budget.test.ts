@@ -15,7 +15,7 @@ const pendingAudit: Job = { name: auditName, status: 'queued', conclusion: null,
 const publicationNames = ['completed payload', 'select', 'produce', 'publish', 'recipient-select',
   'recipient (ubuntu-24.04, x86_64-unknown-linux-gnu)', 'recipient (ubuntu-24.04-arm, aarch64-unknown-linux-gnu)',
   'recipient (macos-15, aarch64-apple-darwin)', 'recipient (macos-15-intel, x86_64-apple-darwin)',
-  'Recipient target release and aggregate', auditName]
+  'Recipient target release and aggregate']
 
 test('union counts parallel execution once and excludes queue gaps', () => {
   assert.equal(executionSeconds([job(0, 100), job(30, 80), job(90, 200), job(500, 650)]), 350)
@@ -28,34 +28,56 @@ test('sequential reusable jobs share one workflow budget', () => {
 })
 test('publication must reserve its whole timeout before mutation and the final audit still counts actual time', () => {
   const publisher = publicationJob()
-  const inventory = [job(0, 480, 'completed payload'), ...publicationNames.filter(name => !['completed payload', publisher.name, auditName].includes(name)).map(name => job(0, 0, name)), publisher, pendingAudit]
+  const inventory = [job(0, 480, 'completed payload'), ...publicationNames.filter(name => !['completed payload', publisher.name].includes(name)).map(name => job(0, 0, name)), publisher]
   assert.match(enforcePublicationReservation(inventory, publisher.name, 120, publicationNames, 'web'), /480.0s completed \+ 120s reserved = 600.0s \/ 600s/)
   const releaseCalls: string[] = []
   assert.throws(() => {
-    enforcePublicationReservation([job(0, 481, 'completed payload'), ...inventory.slice(1, -2), publisher, pendingAudit], publisher.name, 120, publicationNames, 'web')
+    enforcePublicationReservation([job(0, 481, 'completed payload'), ...inventory.slice(1, -1), publisher], publisher.name, 120, publicationNames, 'web')
     releaseCalls.push('gh release create')
   }, /601.0s \/ 600s/)
   assert.deepEqual(releaseCalls, [], 'over-budget preflight must reject before the release mutator is reached')
   assert.equal(executionSeconds([job(0, 480, 'completed payload'), job(480, 510, publisher.name), pendingAudit]), 510,
     'the terminal audit counts the publisher’s actual job interval')
-  assert.throws(() => enforcePublicationReservation([job(0, 480, 'completed payload'), ...inventory.slice(1, -2), publisher], publisher.name, 120, publicationNames, 'web'), /Workflow job inventory/)
-  assert.throws(() => enforcePublicationReservation([...inventory, pendingAudit], publisher.name, 120, publicationNames, 'web'), /Workflow job inventory/)
+  assert.throws(() => enforcePublicationReservation([...inventory, pendingAudit], publisher.name, 120, publicationNames, 'web'), /Runtime audit job appeared before publication was terminal/)
   assert.throws(() => enforcePublicationReservation(inventory, publisher.name, 0, publicationNames, 'web'), /Invalid publication reservation/)
 })
 test('publication preflight fails closed for a nonterminal payload or stale-attempt publisher', () => {
   const publisher = publicationJob()
-  const inventory = [job(0, 400, 'completed payload'), ...publicationNames.filter(name => !['completed payload', publisher.name, auditName].includes(name)).map(name => job(0, 0, name)), publisher, pendingAudit]
+  const inventory = [job(0, 400, 'completed payload'), ...publicationNames.filter(name => !['completed payload', publisher.name].includes(name)).map(name => job(0, 0, name)), publisher]
   assert.throws(() => enforcePublicationReservation([{ ...job(0, 400, 'completed payload'), status: 'queued' }, ...inventory.slice(1)], publisher.name, 120, publicationNames, 'web'), /not terminal/)
-  assert.throws(() => enforcePublicationReservation([...inventory.slice(0,-2), publicationJob('completed'), pendingAudit], publisher.name, 120, publicationNames, 'web'), /not the active job in this workflow attempt/)
-  assert.throws(() => enforcePublicationReservation([...inventory.slice(0,-2), { ...publisher, name: 'other publisher' }, pendingAudit], publisher.name, 120, publicationNames, 'web'), /Workflow job inventory/)
+  assert.throws(() => enforcePublicationReservation([...inventory.slice(0,-1), publicationJob('completed')], publisher.name, 120, publicationNames, 'web'), /not the active job in this workflow attempt/)
+  assert.throws(() => enforcePublicationReservation([...inventory.slice(0,-1), { ...publisher, name: 'other publisher' }], publisher.name, 120, publicationNames, 'web'), /Workflow job inventory/)
   assert.throws(() => enforcePublicationReservation(inventory.filter(entry => entry.name !== 'select'), publisher.name, 120, publicationNames, 'web'), /Workflow job inventory/)
   assert.throws(() => enforcePublicationReservation([...inventory, job(0, 1, 'unlisted producer job')], publisher.name, 120, publicationNames, 'web'), /Workflow job inventory/)
   assert.throws(() => enforcePublicationReservation(inventory.slice(0,-1), publisher.name, 120, publicationNames, 'web'), /Workflow job inventory/)
-  assert.throws(() => enforcePublicationReservation([...inventory.slice(0,-1), { ...pendingAudit, status: 'completed', conclusion: 'success' }], publisher.name, 120, publicationNames, 'web'), /Runtime audit job is missing/)
+})
+test('replays Connect run 41964357234 live-phase inventory without its not-yet-created downstream audit', () => {
+  const at = (name: string, start: number, end: number, conclusion = 'success'): Job => ({
+    name, status: 'completed', conclusion,
+    started_at: new Date(Date.parse('2026-11-05T03:53:20Z') + start * 1000).toISOString(),
+    completed_at: new Date(Date.parse('2026-11-05T03:53:20Z') + end * 1000).toISOString(),
+  })
+  // Captured from exact run attempt 1's terminal Jobs API response. The audit
+  // started at 03:59:12Z, two seconds after the publisher failed at 03:59:10Z.
+  const jobs = [
+    at('select', 0, 14), at('recipient-select', 1, 16), at('publish', 0, 0, 'skipped'),
+    at('produce', 16, 269),
+    at('recipient (macos-15-intel, x86_64-apple-darwin)', 20, 338),
+    at('recipient (ubuntu-24.04, x86_64-unknown-linux-gnu)', 19, 143),
+    at('recipient (macos-15, aarch64-apple-darwin)', 20, 203),
+    at('recipient (ubuntu-24.04-arm, aarch64-unknown-linux-gnu)', 21, 124),
+    { ...publicationJob(), started_at: new Date(Date.parse('2026-11-05T03:59:00Z')).toISOString() },
+  ]
+  const expected = publicationNames.filter(name => name !== 'completed payload')
+  assert.deepEqual(jobs.map(entry => entry.name).sort(), [...expected].sort())
+  assert.match(enforcePublicationReservation(jobs, publicationJob().name, 120, expected, 'web'),
+    /338.0s completed \+ 120s reserved = 458.0s \/ 600s/)
+  assert.throws(() => enforcePublicationReservation([...jobs, pendingAudit], publicationJob().name, 120, expected, 'web'),
+    /Runtime audit job appeared before publication was terminal/)
 })
 test('publication CLI binds the canonical publisher to the exact active run attempt', () => {
   const script = fileURLToPath(new URL('./workflow-budget.ts', import.meta.url))
-  const inventory = [job(0, 480, 'completed payload'), ...publicationNames.filter(name => !['completed payload', publicationJob().name, auditName].includes(name)).map(name => job(0, 0, name)), publicationJob(), pendingAudit]
+  const inventory = [job(0, 480, 'completed payload'), ...publicationNames.filter(name => !['completed payload', publicationJob().name].includes(name)).map(name => job(0, 0, name)), publicationJob()]
   const run = (attempt: string, jobs: Job[], overrides: Record<string, string> = {}) => {
     const bootstrap = `const expectedAttempt = ${JSON.stringify(attempt)};
       const jobs = ${JSON.stringify(jobs)};
@@ -77,10 +99,10 @@ test('publication CLI binds the canonical publisher to the exact active run atte
   const valid = run('3', inventory)
   assert.equal(valid.status, 0, valid.stderr)
   assert.match(valid.stdout, /480.0s completed \+ 120s reserved = 600.0s/)
-  const stale = run('2', [...inventory.slice(0, -2), publicationJob('completed'), pendingAudit])
+  const stale = run('2', [...inventory.slice(0, -1), publicationJob('completed')])
   assert.equal(stale.status, 1)
   assert.match(stale.stderr, /not the active job in this workflow attempt/)
-  const overBudget = run('3', [job(0, 481, 'completed payload'), ...inventory.slice(1,-2), publicationJob(), pendingAudit])
+  const overBudget = run('3', [job(0, 481, 'completed payload'), ...inventory.slice(1,-1), publicationJob()])
   assert.equal(overBudget.status, 1)
   assert.match(overBudget.stderr, /601.0s \/ 600s/)
   const wrongWorkflow = run('3', inventory, { GITHUB_WORKFLOW: 'Other workflow' })
