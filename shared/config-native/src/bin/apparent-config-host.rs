@@ -80,7 +80,22 @@ fn operation_failure(error: &anyhow::Error) -> Value {
             return unknown(&format!("operation failed: {category}"));
         }
     }
+    const PHASES: &[&str] = &[
+        "config-parent-create", "config-parent-resolve", "config-root-open",
+        "config-ancestor-open", "config-ancestor-stat", "config-directory-stat",
+        "config-lock-open", "config-lock-stat", "config-lock-acquire",
+        "config-lock-reopen", "config-lock-restat", "config-snapshot-open",
+        "config-snapshot-stat", "config-snapshot-read", "config-random-open",
+        "config-random-read", "config-temp-open", "config-temp-write",
+        "config-temp-sync", "config-rename", "config-directory-sync",
+    ];
+    let phase = error.chain().find_map(|cause| {
+        PHASES.iter().copied().find(|phase| cause.to_string() == *phase)
+    });
     if let Some(error) = error.downcast_ref::<io::Error>() {
+        if let Some(phase) = phase {
+            return unknown(&format!("operation failed: {phase}:io-{}", error.raw_os_error().unwrap_or(0)));
+        }
         return unknown(&format!("operation failed: io-{}", error.raw_os_error().unwrap_or(0)));
     }
     unknown("operation failed: unclassified")
@@ -102,6 +117,7 @@ mod tests {
             (anyhow::Error::new(io::Error::other(private)), "io-0"),
             (anyhow::anyhow!("Config lock changed while waiting").context(private), "lock-replaced"),
             (anyhow::Error::new(io::Error::from_raw_os_error(libc::EACCES)).context(private), "io-13"),
+            (anyhow::Error::new(io::Error::from_raw_os_error(libc::EIO)).context(private).context("config-directory-sync"), "config-directory-sync:io-5"),
             (anyhow::Error::new(ConfigPublicationUncertain).context(private), "publication-unconfirmed"),
         ];
         for (error, category) in cases {

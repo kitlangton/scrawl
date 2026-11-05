@@ -67,15 +67,18 @@ fn update_config_checked_in(
     body.push(b'\n');
     let mut published = false;
     let result = (|| -> Result<()> {
-        let mut file = writer.open(&tmp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
-        file.write_all(&body)?;
-        file.sync_all()?;
+        let mut file = writer.open(&tmp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)
+            .context("config-temp-open")?;
+        file.write_all(&body).context("config-temp-write")?;
+        file.sync_all().context("config-temp-sync")?;
         #[cfg(any(test, feature = "test-support"))]
         config_write_hook("before_publish", path);
         ensure!(allowed.is_none_or(|check| check()), "cancelled");
         let fd = writer.directory.as_raw_fd();
         if unsafe { libc::renameat(fd, tmp.as_ptr(), fd, writer.name.as_ptr()) } != 0 {
-            return Err(std::io::Error::last_os_error()).context("Could not publish config");
+            return Err(std::io::Error::last_os_error())
+                .context("config-rename")
+                .context("Could not publish config");
         }
         published = true;
         #[cfg(any(test, feature = "test-support"))]
@@ -88,7 +91,9 @@ fn update_config_checked_in(
         }
         // A revocation intent may be removed only after this directory entry is
         // durable, not merely after the new JSON file is visible to this process.
-        writer.directory.sync_all().context("Could not persist config directory")?;
+        writer.directory.sync_all()
+            .context("config-directory-sync")
+            .context("Could not persist config directory")?;
         Ok(())
     })();
     if result.is_err() {
@@ -164,7 +169,8 @@ fn parse_stream_entry(value: &serde_json::Value) -> Result<StreamEntry> {
 fn random_id() -> Result<String> {
     use std::io::Read;
     let mut bytes = [0u8; 16];
-    fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    fs::File::open("/dev/urandom").context("config-random-open")?
+        .read_exact(&mut bytes).context("config-random-read")?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
@@ -172,16 +178,18 @@ fn read_snapshot(writer: &ConfigWriter, path: &Path) -> Result<serde_json::Value
     use std::io::Read;
     match writer.open(&writer.name, libc::O_RDONLY | libc::O_NONBLOCK) {
         Ok(mut file) => {
-            ensure!(file.metadata()?.is_file(), "Config must be a regular file");
+            ensure!(file.metadata().context("config-snapshot-stat")?.is_file(), "Config must be a regular file");
             let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)?;
+            file.read_to_end(&mut bytes).context("config-snapshot-read")?;
             let parsed: serde_json::Value = serde_json::from_slice(&bytes)
                 .with_context(|| format!("Invalid config at {}", path.display()))?;
             ensure!(parsed.is_object(), "Config at {} must be an object", path.display());
             Ok(parsed)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::json!({})),
-        Err(error) => Err(error).with_context(|| format!("Could not read {}", path.display())),
+        Err(error) => Err(error)
+            .context("config-snapshot-open")
+            .with_context(|| format!("Could not read {}", path.display())),
     }
 }
 
@@ -204,17 +212,17 @@ impl ConfigWriter {
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
-            .create(parent)?;
-        let parent = parent.canonicalize()?;
+            .create(parent).context("config-parent-create")?;
+        let parent = parent.canonicalize().context("config-parent-resolve")?;
         let mut directory = fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open("/")?;
+            .open("/").context("config-root-open")?;
         let mut private_ancestor = false;
         for component in parent.components().skip(1) {
             let name = std::ffi::CString::new(component.as_os_str().as_bytes())?;
-            directory = Self::open_at(&directory, &name, libc::O_RDONLY | libc::O_DIRECTORY)?;
-            let meta = directory.metadata()?;
+            directory = Self::open_at(&directory, &name, libc::O_RDONLY | libc::O_DIRECTORY).context("config-ancestor-open")?;
+            let meta = directory.metadata().context("config-ancestor-stat")?;
             ensure!(
                 (meta.uid() == 0 || meta.uid() == unsafe { libc::geteuid() })
                     && (meta.mode() & 0o022 == 0
@@ -224,7 +232,7 @@ impl ConfigWriter {
             );
             private_ancestor |= meta.mode() & 0o077 == 0;
         }
-        let meta = directory.metadata()?;
+        let meta = directory.metadata().context("config-directory-stat")?;
         ensure!(
             meta.uid() == unsafe { libc::geteuid() }
                 && (meta.mode() & 0o022 == 0 || private_ancestor),
@@ -237,8 +245,8 @@ impl ConfigWriter {
             &directory,
             &lock_name,
             libc::O_RDWR | libc::O_CREAT | libc::O_NONBLOCK,
-        )?;
-        let meta = lock.metadata()?;
+        ).context("config-lock-open")?;
+        let meta = lock.metadata().context("config-lock-stat")?;
         ensure!(
             meta.is_file()
                 && meta.uid() == unsafe { libc::geteuid() }
@@ -260,15 +268,15 @@ impl ConfigWriter {
                 continue;
             }
             if error.kind() != std::io::ErrorKind::Interrupted {
-                return Err(error.into());
+                return Err(error).context("config-lock-acquire");
             }
         }
-        let current =
-            Self::open_at(&directory, &lock_name, libc::O_RDONLY | libc::O_NONBLOCK)?.metadata()?;
+        let current = Self::open_at(&directory, &lock_name, libc::O_RDONLY | libc::O_NONBLOCK)
+            .context("config-lock-reopen")?.metadata().context("config-lock-restat")?;
         ensure!(
             current.dev() == meta.dev()
                 && current.ino() == meta.ino()
-                && lock.metadata()?.nlink() == 1,
+                && lock.metadata().context("config-lock-restat")?.nlink() == 1,
             "Config lock changed while waiting"
         );
         Ok(Self {
