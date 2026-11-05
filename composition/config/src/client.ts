@@ -4,7 +4,7 @@ import { chmod, lstat, mkdtemp, open, realpath, rm, writeFile } from 'node:fs/pr
 import { constants } from 'node:fs';
 import { isAbsolute, join, normalize } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { JsonValue, Revision, TransactionalConfigBackend } from '@apparent/app-contracts/host';
+import type { ConfigAdoptionSnapshot, JsonValue, LegacyAdoptionBackend, LegacyConfigValue, Revision } from '@apparent/app-contracts/host';
 
 const LIMIT = 64 * 1024;
 const unavailable = () => new Error('Configuration host unavailable');
@@ -35,6 +35,21 @@ function json(value: unknown, depth = 0, ancestors = new Set<object>()): JsonVal
   return result;
 }
 
+function legacyValue(value: unknown): LegacyConfigValue {
+  if (!exact(value, ['present', 'value']) || typeof value.present !== 'boolean'
+    || (!value.present && value.value !== null)) throw new TypeError('Invalid legacy snapshot');
+  return { present: value.present, value: json(value.value) };
+}
+function adoptionSnapshot(value: unknown): ConfigAdoptionSnapshot {
+  if (!exact(value, ['owner', 'legacy']) || !exact(value.owner, ['present', 'revision', 'value'])
+    || typeof value.owner.present !== 'boolean' || !validRevision(value.owner.revision)
+    || (!value.owner.present && (value.owner.revision !== 0 || value.owner.value !== null))) {
+    throw new TypeError('Invalid adoption snapshot');
+  }
+  return { owner: { present: value.owner.present, revision: value.owner.revision, value: json(value.owner.value) },
+    legacy: legacyValue(value.legacy) };
+}
+
 export interface ConfigHostOptions {
   /** Explicit admitted artifact: never a PATH lookup, source builder or package manager. */
   executable: string;
@@ -43,7 +58,7 @@ export interface ConfigHostOptions {
   ownerId: string;
   timeoutMs?: number;
 }
-export interface ConfigBackend extends TransactionalConfigBackend { close(): Promise<void> }
+export interface ConfigBackend extends LegacyAdoptionBackend { close(): Promise<void> }
 
 /** Privileged composition only. Renderers receive a separately bound owner facade. */
 export async function createConfigBackend(options: ConfigHostOptions): Promise<ConfigBackend> {
@@ -140,6 +155,24 @@ export async function createConfigBackend(options: ConfigHostOptions): Promise<C
       if (!exact(result, ['revision', 'value']) || !validRevision(result.revision)) { fail(); throw unavailable(); }
       try { return { revision: result.revision, value: json(result.value) }; }
       catch { fail(); throw unavailable(); }
+    },
+    async readForAdoption(id) {
+      owner(id);
+      try { return adoptionSnapshot(await request('readForAdoption')); }
+      catch { fail(); throw unavailable(); }
+    },
+    async adoptLegacy(id, expectedLegacy, value) {
+      owner(id);
+      const expected = legacyValue(expectedLegacy);
+      const input = json(value);
+      try {
+        const result = await request('adoptLegacy', { expectedLegacy: expected, value: input });
+        if (exact(result, ['status', 'revision']) && result.status === 'saved' && result.revision === 1) return { status: 'saved' as const, revision: 1 };
+        if (exact(result, ['status', 'snapshot']) && result.status === 'conflict') return { status: 'conflict' as const, snapshot: adoptionSnapshot(result.snapshot) };
+        if (exact(result, ['status', 'message']) && result.status === 'unknown' && typeof result.message === 'string') return unknown();
+        fail();
+        return unknown();
+      } catch { fail(); return unknown(); }
     },
     async compareAndSwap(id: string, expected: Revision, value: JsonValue) {
       owner(id);

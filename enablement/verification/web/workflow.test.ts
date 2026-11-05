@@ -90,3 +90,15 @@ test('only Value-stream delivery has automatic workflow triggers', () => {
       file === 'value-stream-delivery.yml' ? ['push', 'workflow_run'] : [], file)
   }
 })
+
+
+test('Public production has exactly one workflow publisher', () => {
+  const directory = new URL('../../../.github/workflows/', import.meta.url)
+  const publishers = readdirSync(directory).filter(name => /\.ya?ml$/.test(name)).filter(name => {
+    const text = readFileSync(new URL(name, directory), 'utf8')
+    assert.doesNotMatch(text, /wrangler[^\n]*pages\s+deploy/, name + ': direct Pages deployment bypasses the verified publisher')
+    return text.includes('publish-pages.ts')
+  })
+  assert.deepEqual(publishers, ['value-stream-delivery.yml'])
+  assert.equal([...workflow.matchAll(/publish-pages\.ts\b(?!\s+seal\b)/g)].length, 1)
+})

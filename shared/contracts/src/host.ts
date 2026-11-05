@@ -14,7 +14,7 @@ export interface ProgressStore<T> {
   compareAndSwap(expected: Revision, value: T): Promise<SaveResult<T>>;
 }
 export interface ProgressCodec<T> {
-  /** Owner handles absent and legacy values here; the host has no schema policy. */
+  /** Owner handles its stored value here; legacy adoption uses the separate snapshot API. */
   decode(value: JsonValue | null): T;
   encode(value: T): JsonValue;
 }
@@ -87,4 +87,22 @@ export interface TransactionalConfigBackend {
     | { status: 'conflict'; revision: Revision; current: JsonValue | null }
     | { status: 'unknown'; message: string }
   >;
+}
+
+/** Absent and stored null must remain distinguishable during one-time adoption. */
+export interface LegacyConfigValue { present: boolean; value: JsonValue }
+export interface ConfigAdoptionSnapshot {
+  owner: { present: boolean; revision: number; value: JsonValue };
+  legacy: LegacyConfigValue;
+}
+export type ConfigAdoptionResult =
+  | { status: 'saved'; revision: number }
+  | { status: 'conflict'; snapshot: ConfigAdoptionSnapshot }
+  | { status: 'unknown'; message: string };
+
+/** Legacy key is bound to ownerId; interpretation and installed cutover remain owner-owned. */
+export interface LegacyAdoptionBackend extends TransactionalConfigBackend {
+  readForAdoption(ownerId: string): Promise<ConfigAdoptionSnapshot>;
+  /** Only creates an absent owner entry if the legacy presence/value still match. */
+  adoptLegacy(ownerId: string, expectedLegacy: LegacyConfigValue, value: JsonValue): Promise<ConfigAdoptionResult>;
 }

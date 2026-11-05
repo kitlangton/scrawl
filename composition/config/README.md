@@ -28,3 +28,33 @@ executable and runs `npm run test:native`. A passing transport fixture is not
 native durability or installed-app evidence. This package does not install a
 preload bridge, select an installed route, implement coaching windows or provide
 Record/Engine capabilities.
+
+
+For first adoption, `backend.readForAdoption(ownerId)` atomically returns
+`{owner:{present,revision,value},legacy:{present,value}}`. The legacy key is
+exactly the bound owner ID (for example top-level `onboarding`), not an arbitrary
+renderer-selected key. Presence distinguishes a missing value from stored null.
+The owner interprets that legacy snapshot and encodes its own schema, then calls
+`backend.adoptLegacy(ownerId, snapshot.legacy, encodedValue)`. The same native
+writer lock checks that the owner entry is still absent and legacy presence/value
+are unchanged before creating revision 1. Otherwise it returns
+`{status:'conflict',snapshot}` without rewriting. Existing legacy keys, secrets
+and other owners remain intact. An uncertain result requires a fresh read.
+
+Example privileged assembly (owner policy functions are supplied by Onboarding):
+
+```ts
+const snapshot = await backend.readForAdoption('onboarding');
+if (!snapshot.owner.present) {
+  const progress = decodeLegacy(snapshot.legacy); // owner schema/policy
+  const result = await backend.adoptLegacy('onboarding', snapshot.legacy, codec.encode(progress));
+  // Owner resolves conflict/unknown using a fresh snapshot; never assume adoption.
+}
+const store = bindOwnerProgress(backend, 'onboarding', codec);
+```
+
+This comparison protects legacy changes before the adoption transaction. Installed
+cutover must first retire/quiesce the old journey writer; that writer must not
+continue changing legacy progress after adoption. This API does not switch an
+installed route or silently migrate at read time. Legacy bytes remain for an
+explicit rollback/migration window; removal is a separate owner-approved step.

@@ -9,15 +9,17 @@ import { semanticSummary } from './summary.js';
 import { issueCommand, issueHelp, IssueCliError } from './issue.js';
 import { decodeFrames, hasSourceVideo, savedKeyframes, selectFrameTimes, verifyFramesExecutable, verifyPrivateRuntime } from './frames.js';
 import { runZoom } from './zoom/zoom.js';
+import { generateDemo } from './demo/generate.js';
 
 const VERSION = '0.1.0';
-function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection and Engine foreground recording/frame selection.\n\nUsage: apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent inspect [BUNDLE|latest] [--experiment agentContext] [--stored-summary]\n       apparent-agent frames BUNDLE --from TIME --to TIME [--fps 4] [--json]\n       apparent-agent skill\n       apparent-agent record --duration <seconds> --out <absolute.apparent-path>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent issue --title <TEXT> (--body <TEXT> | --body-file <PATH>) [--submit]\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\nDefault inspect output is generated from the manifest; --stored-summary prints producer text.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nFrames require APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nIssue previews are offline by default; --submit publishes approved text to tryapparent/apparent.\n`); }
+function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection, synthetic demo generation, and Engine foreground recording/frame selection.\n\nUsage: apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent inspect [BUNDLE|latest] [--experiment agentContext] [--stored-summary]\n       apparent-agent demo [--out FRESH.apparent] [--json]\n       apparent-agent frames BUNDLE --from TIME --to TIME [--fps 4] [--json]\n       apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n       apparent-agent skill\n       apparent-agent record --duration <seconds> --out <absolute.apparent-path>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent issue --title <TEXT> (--body <TEXT> | --body-file <PATH>) [--submit]\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\nDefault inspect output is generated from the manifest; --stored-summary prints producer text.\nDemo creates illustrative synthetic local data only; it does not record a screen or audio.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nFrames require APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nIssue previews are offline by default; --submit publishes approved text to tryapparent/apparent.\n`); }
 async function main(args: string[]) {
+  if(args[0]==='demo'&&args.length===2&&['--help','-h'].includes(args[1])) { process.stdout.write('Usage: apparent-agent demo [--out FRESH.apparent] [--json] [--clipboard]\nGenerate a local illustrative synthetic bundle; no capture, Engine, Desktop, provider, or network is used. --clipboard currently fails before writing until a native clipboard route is published.\n'); return 0; }
   if (args[0] === 'zoom' && args.length === 2 && ['--help','-h'].includes(args[1])) {
     process.stdout.write('Usage: apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n');
     return 0;
   }
-  if (args[0] !== 'skill' && args[0] !== 'issue' && (args.length === 0 || args.includes('--help') || args.includes('-h'))) { help(); process.stdout.write('       apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n'); return 0; }
+  if (args[0] !== 'demo' && args[0] !== 'skill' && args[0] !== 'issue' && (args.length === 0 || args.includes('--help') || args.includes('-h'))) { help(); return 0; }
   if (args.length === 1 && ['--version', '-V'].includes(args[0])) { console.log(VERSION); return 0; }
   if (args[0] === 'skill') {
     if (args.length !== 1) throw new Error('skill takes no operands or options');
@@ -33,6 +35,7 @@ async function main(args: string[]) {
     return 0;
   }
   if (args[0] === 'capture') return recover(args.slice(1));
+  if (args[0] === 'demo') return demo(args.slice(1));
   if (args[0] === 'record') return record(args.slice(1));
   if (args[0] === 'frames') return frames(args.slice(1));
   if (args[0] === 'zoom') return zoom(args.slice(1));
@@ -101,6 +104,22 @@ async function main(args: string[]) {
     ? await hasMicrophoneSamples(path, bundle.audio)
     : false;
   process.stdout.write(semanticSummary(bundle, path, agentContext, evidence?.isFile() === true, hasAudio));
+  return 0;
+}
+
+async function demo(args:string[]) {
+  let out:string|undefined,json=false,clipboard=false;
+  for(let i=0;i<args.length;i++){
+    const arg=args[i];
+    if(arg==='--out'&&out===undefined){out=args[++i];if(!out||out.startsWith('--')||!out.endsWith('.apparent'))throw new Error('--out requires a fresh absolute .apparent directory');}
+    else if(arg==='--json'&&!json)json=true;
+    else if(arg==='--clipboard'&&!clipboard)clipboard=true;
+    else throw new Error(`Unknown or duplicate demo option: ${arg}`);
+  }
+  if(clipboard)throw new Error('demo --clipboard is unavailable: no published native clipboard route');
+  const result=await generateDemo(out);
+  if(json)process.stdout.write(`${JSON.stringify(result,null,2)}\n`);
+  else {process.stdout.write(`${result.summary}\nSynthetic demo bundle: ${result.path}\nImages:\n${result.images.map(image=>`  ${image}`).join('\n')}\n`);}
   return 0;
 }
 async function zoom(args: string[]) {

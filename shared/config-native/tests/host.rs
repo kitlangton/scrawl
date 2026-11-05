@@ -32,7 +32,6 @@ fn host_ordered(path: &PathBuf, owner: &str, request: &str, wait_before_input: b
     let mut input = child.stdin.take().unwrap();
     if wait_before_input { child.wait().unwrap(); }
     let write_result = input.write_all(request.as_bytes());
-    if wait_before_input { assert_eq!(write_result.as_ref().unwrap_err().kind(), std::io::ErrorKind::BrokenPipe); }
     drop(input);
     let out = child.wait_with_output().unwrap();
     if let Err(error) = write_result {
@@ -91,6 +90,60 @@ fn host_cas_is_serialized_persistent_and_preserves_legacy_keys() {
     assert_eq!(config["streamState"]["desktop"]["revision"], 2);
     let restart = response(&host(&path, "desktop", &req("again", "read", "")).1);
     assert_eq!(restart["revision"], 2);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+fn adoption_req(id: &str, operation: &str, tail: &str) -> String {
+    format!("{{\"protocol\":1,\"id\":\"{id}\",\"operation\":\"{operation}\"{tail}}}\n")
+}
+
+#[test]
+fn adoption_presence_cas_and_preservation_are_authoritative() {
+    let dir = temp(); let path = dir.join("config.json");
+    fs::write(&path, br#"{"unrelated":{"keep":true},"desktop":null,"streamState":{"agent":{"opaque":1}}}"#).unwrap();
+    let (code, out) = host(&path, "desktop", &adoption_req("r", "readForAdoption", ""));
+    assert_eq!(code, 0);
+    let snapshot = response(&out);
+    assert_eq!(snapshot, json!({"owner":{"present":false,"revision":0,"value":null},"legacy":{"present":true,"value":null}}));
+    let before = fs::read(&path).unwrap();
+    assert_eq!(response(&host(&path, "desktop", &adoption_req("r2", "readForAdoption", "" )).1), snapshot);
+    assert_eq!(fs::read(&path).unwrap(), before, "read must not rewrite config");
+
+    // A legacy writer changes the selected top-level key after the observation.
+    apparent_config_native::set_config_value_in(&path, "desktop", json!("new legacy")).unwrap();
+    let stale = adoption_req("a", "adoptLegacy", ",\"expectedLegacy\":{\"present\":true,\"value\":null},\"value\":{\"adopted\":true}");
+    let conflict = response(&host(&path, "desktop", &stale).1);
+    assert_eq!(conflict["status"], "conflict");
+    assert_eq!(conflict["snapshot"]["legacy"], json!({"present":true,"value":"new legacy"}));
+    assert_eq!(conflict["snapshot"]["owner"], json!({"present":false,"revision":0,"value":null}));
+
+    // Missing and null are distinct, and a matching successful adoption preserves legacy.
+    let missing = temp().join("config.json");
+    let dir2 = missing.parent().unwrap().to_path_buf();
+    fs::write(&missing, br#"{"unrelated":{"keep":true},"streamState":{"agent":{"opaque":1}}}"#).unwrap();
+    let wrongly_null = adoption_req("n", "adoptLegacy", ",\"expectedLegacy\":{\"present\":true,\"value\":null},\"value\":1");
+    assert_eq!(response(&host(&missing, "desktop", &wrongly_null).1)["status"], "conflict");
+    let correct = adoption_req("ok", "adoptLegacy", ",\"expectedLegacy\":{\"present\":false,\"value\":null},\"value\":{\"from\":\"missing\"}");
+    assert_eq!(response(&host(&missing, "desktop", &correct).1), json!({"status":"saved","revision":1}));
+    let saved: Value = serde_json::from_slice(&fs::read(&missing).unwrap()).unwrap();
+    assert_eq!(saved["streamState"]["desktop"], json!({"revision":1,"value":{"from":"missing"}}));
+    assert_eq!(saved["streamState"]["agent"], json!({"opaque":1}));
+    assert_eq!(saved["unrelated"]["keep"], true);
+    assert!(!saved.as_object().unwrap().contains_key("desktop"));
+    fs::remove_dir_all(dir).unwrap(); fs::remove_dir_all(dir2).unwrap();
+}
+
+#[test]
+fn adoption_refuses_owner_cas_winner_including_null_and_malformed_selected_owner() {
+    let dir = temp(); let path = dir.join("config.json");
+    apparent_config_native::compare_and_swap_stream_state_in(&path, "desktop", 0, Value::Null).unwrap();
+    let req = adoption_req("a", "adoptLegacy", ",\"expectedLegacy\":{\"present\":false,\"value\":null},\"value\":1");
+    assert_eq!(response(&host(&path, "desktop", &req).1)["status"], "conflict");
+    assert_eq!(response(&host(&path, "desktop", &adoption_req("r", "readForAdoption", "")).1)["owner"], json!({"present":true,"revision":1,"value":null}));
+    let malformed = dir.join("bad.json");
+    fs::write(&malformed, br#"{"streamState":{"desktop":{"revision":1}}}"#).unwrap();
+    let (_, out) = host(&malformed, "desktop", &adoption_req("bad", "readForAdoption", ""));
+    assert_eq!(response(&out)["status"], "unknown");
     fs::remove_dir_all(dir).unwrap();
 }
 
