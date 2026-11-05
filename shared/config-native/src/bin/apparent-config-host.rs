@@ -1,4 +1,4 @@
-use apparent_config_native::{compare_and_swap_stream_state_in, read_stream_state_in, CasResult};
+use apparent_config_native::{compare_and_swap_stream_state_in, read_stream_state_in, CasResult, ConfigPublicationUncertain};
 use serde_json::{json, Value};
 use std::{io::{self, BufRead, Read, Write}, path::PathBuf};
 const LIMIT: usize = 64 * 1024;
@@ -51,8 +51,63 @@ fn dispatch(req: &Value, path: &PathBuf, owner: &str) -> (String, Value) {
         }
         _ => return (id, unknown("invalid request")),
     };
-    (id, match result { Ok(result) => result, Err(_) => unknown("operation failed") })
+    (id, match result { Ok(result) => result, Err(error) => operation_failure(&error) })
+}
+
+// Only fixed categories and numeric errno values cross this boundary. Never
+// expose error Display text: it may contain paths, settings or credentials.
+fn operation_failure(error: &anyhow::Error) -> Value {
+    if error.downcast_ref::<ConfigPublicationUncertain>().is_some() {
+        return unknown("operation failed: publication-unconfirmed");
+    }
+    if error.downcast_ref::<serde_json::Error>().is_some() {
+        return unknown("operation failed: stored-json-invalid");
+    }
+    const INVARIANTS: &[(&str, &str)] = &[
+        ("Config ancestry must be trusted or sticky", "unsafe-ancestry"),
+        ("Config directory must be owned and not writable by other users", "unsafe-directory"),
+        ("Config lock must be an owned private regular file", "unsafe-lock"),
+        ("Config lock changed while waiting", "lock-replaced"),
+        ("Config must be a regular file", "config-not-regular"),
+        ("streamState must be an object", "invalid-owner-map"),
+        ("Invalid streamState entry", "invalid-owner-entry"),
+        ("Invalid streamState revision", "invalid-owner-revision"),
+        ("revision limit reached", "revision-limit"),
+    ];
+    for cause in error.chain() {
+        let text = cause.to_string();
+        if let Some((_, category)) = INVARIANTS.iter().find(|(message, _)| text == *message) {
+            return unknown(&format!("operation failed: {category}"));
+        }
+    }
+    if let Some(error) = error.downcast_ref::<io::Error>() {
+        return unknown(&format!("operation failed: io-{}", error.raw_os_error().unwrap_or(0)));
+    }
+    unknown("operation failed: unclassified")
 }
 
 fn unknown(message: &str) -> Value { json!({"status":"unknown","message":message}) }
 fn valid_owner(s: &str) -> bool { !s.is_empty() && s.len() <= 64 && s.as_bytes()[0].is_ascii_lowercase() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_diagnostics_never_expose_error_context() {
+        let private = "synthetic-secret /private/synthetic-config.json";
+        let cases = [
+            (anyhow::anyhow!(private), "unclassified"),
+            (anyhow::Error::new(serde_json::from_str::<Value>("synthetic-secret").unwrap_err()).context(private), "stored-json-invalid"),
+            (anyhow::Error::new(io::Error::other(private)), "io-0"),
+            (anyhow::anyhow!("Config lock changed while waiting").context(private), "lock-replaced"),
+            (anyhow::Error::new(io::Error::from_raw_os_error(libc::EACCES)).context(private), "io-13"),
+            (anyhow::Error::new(ConfigPublicationUncertain).context(private), "publication-unconfirmed"),
+        ];
+        for (error, category) in cases {
+            let response = operation_failure(&error);
+            assert_eq!(response, unknown(&format!("operation failed: {category}")));
+            assert!(!response.to_string().contains(private));
+        }
+    }
+}
