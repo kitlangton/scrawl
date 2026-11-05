@@ -1,8 +1,7 @@
 @import 'tailwindcss';
 @import '@apparent/ui/theme.css';
-@source '../../node_modules/@apparent/ui/src';
-@font-face { font-family:'Host Grotesk';font-style:normal;font-weight:300 800;font-display:swap;src:url('../../../../../../shared/assets/fonts/HostGrotesk-Variable.ttf') format('truetype'); }
-html,body,#root { margin:0;width:max-content;background:transparent;overflow:hidden; }
+@source '../../../../@apparent/ui/src';
+@font-face { font-family:'Host Grotesk';font-style:normal;font-weight:300 800;font-display:swap;src:url('./HostGrotesk-Variable.ttf') format('truetype'); }
 body { font-family:'Host Grotesk',system-ui,sans-serif; }
 .pill { width:max-content;max-width:var(--pill-limit,1200px);color:var(--apparent-foreground); }
 /* Preserve the native row footprint and four-point notification gap. */

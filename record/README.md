@@ -1,6 +1,6 @@
 # Record package
 
-`@apparent/record` is an independently installable TypeScript workflow package. It owns explicit local recording states and consumes an injected `EngineClient`; it does not create a recording itself and ships no fake or default production Engine adapter.
+`@apparent/record` is an independently installable TypeScript workflow and presentation package. Its local recording controller consumes an injected `EngineClient`; its reusable React pill consumes an injected typed `PillHost`. Neither creates a recording or ships a fake/default production capture adapter.
 
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 
@@ -41,3 +41,9 @@ throws is detached; remaining subscribers still receive the state. Its exception
 cannot abort Engine event processing or strand command ownership. Hosts should
 handle presentation errors within their own observer and may resubscribe after
 repair. No capture is cancelled as a side effect of an observer failure.
+
+## Pill presentation adoption
+
+`src/ui` owns the existing Desktop recording pill presentation and CSS. The `@apparent/record/ui` export exposes `RecordingPill`, `PillView`, `PocketView` and the injected `PillHost` API; it has no window globals or app mount assumptions. The Record build places the CSS and Host Grotesk font beside the emitted component. The Desktop renderer imports the built package through its file dependency. Its thin `src/pill` legacy adapter injects the existing privileged Electron preload API, mounts the component, and applies the transparent window reset.
+
+The existing Electron `electron/pill` host and Rust `ui/electron_pill` lifecycle/transport remain authoritative. Installed routing stays on its existing fallback-aware path; this adoption does not enable or switch a native route, add config, or claim capture capability. Rollback restores the previous frontend package dependency and pill component mount. Remove that adapter and its legacy consumers only when a separately accepted host migration retires the current runtime, and remove the old native pill only after the recorded native acceptance gates in `capture/desktop/ui/frontend/README.md` pass.

@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@apparent/ui": "file:../../../../shared/ui",
+    "@apparent/record": "file:../../../../record",
     "lucide-react": "^1.67.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"

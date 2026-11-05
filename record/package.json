@@ -16,17 +16,34 @@
     "./fixtures": {
       "types": "./dist/capabilities/fixtures.d.ts",
       "import": "./dist/capabilities/fixtures.js"
+    },
+    "./ui": {
+      "types": "./dist/ui/index.d.ts",
+      "import": "./dist/ui/index.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node --experimental-strip-types scripts/copy-ui-assets.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "prepare": "npm run build",
     "prepack": "npm run build"
   },
+  "dependencies": {
+    "@apparent/ui": "file:../shared/ui",
+    "@radix-ui/react-collapsible": "^1.1.12",
+    "@radix-ui/react-slot": "^1.2.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "1.67.0",
+    "tailwind-merge": "^3.3.1"
+  },
+  "peerDependencies": {
+    "react": "^19.2.0"
+  },
   "devDependencies": {
     "@types/node": "22.19.0",
+    "@types/react": "19.2.0",
     "typescript": "5.9.3"
   }
 }

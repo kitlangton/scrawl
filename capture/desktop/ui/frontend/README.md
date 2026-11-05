@@ -618,10 +618,11 @@ fixtures alone are not proof of native effects.
 
 ## Recording pill replacement candidate
 
-`pill/index.html`, `src/pill`, `electron/pill` and `../electron_pill` implement the
-shared pill presentation and parent-owned Rust transport. This candidate is
-not evidence of accepted installed/native behavior. Do not remove the old
-pill or treat the synthetic tests as native capture proof.
+`pill/index.html` and the thin `src/pill` legacy mount consume the reusable
+presentation from `record/src/ui`; `electron/pill` and `../electron_pill` retain
+the parent-owned Rust transport and lifecycle. Moving the presentation does not
+change installed/native behavior. Do not remove the old pill or treat the
+synthetic tests as native capture proof.
 
 Rust launches the packaged pill alongside the existing Settings runtime; no
 new config key or off-by-default product feature is introduced. Missing assets,
