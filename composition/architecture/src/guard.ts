@@ -10,12 +10,13 @@ const packageRoots: Record<string, string> = {
   '@apparent/engine-sdk': 'engine/sdk', '@apparent/record': 'record',
   '@apparent/agent': 'agent', '@apparent/onboarding': 'onboarding',
   '@apparent/connect-client': 'connect/delivery/client',
+  '@apparent/connect-static-hosting': 'connect/tooling/hosting',
   '@apparent/app-contracts': 'shared/contracts', '@apparent/ui': 'shared/ui',
 };
 const packageOwners: Record<string, Owner> = {
   '@apparent/engine-sdk': 'engine', '@apparent/record': 'record', '@apparent/agent': 'agent',
   '@apparent/onboarding': 'onboarding', '@apparent/app-contracts': 'shared', '@apparent/ui': 'shared',
-  '@apparent/connect-client': 'connect',
+  '@apparent/connect-client': 'connect', '@apparent/connect-static-hosting': 'connect',
 };
 const publicEdges: Record<Owner, Owner[]> = {
   engine: ['shared'], record: ['engine', 'shared'], agent: ['engine', 'shared'], onboarding: ['record', 'shared'],
@@ -31,7 +32,7 @@ function ownerOf(root: string, file: string): Owner {
   if (rel[0] === 'record') return 'record';
   if (rel[0] === 'agent') return 'agent';
   if (rel[0] === 'onboarding') return 'onboarding';
-  if (rel[0] === 'connect' && rel[1] === 'delivery' && rel[2] === 'client') return 'connect';
+  if (rel[0] === 'connect' && ((rel[1] === 'delivery' && rel[2] === 'client') || (rel[1] === 'tooling' && rel[2] === 'hosting'))) return 'connect';
   if (rel[0] === 'shared') return 'shared';
   if (rel[0] === 'composition') return 'composition';
   if (rel[0] === 'capture') return 'legacy';

@@ -41,17 +41,21 @@ export default {
 
     const assetUrl = new URL(request.url)
     assetUrl.pathname = assetPath
-    const headers = new Headers(request.headers)
-    for (const name of ["cookie", "authorization", "proxy-authorization", "proxy-authenticate"]) headers.delete(name)
+    assetUrl.search = ""
+    const headers = new Headers()
+    for (const name of ["accept", "accept-encoding", "if-none-match", "if-modified-since", "range", "if-range"]) {
+      const value = request.headers.get(name)
+      if (value !== null) headers.set(name, value)
+    }
     const assetRequest = new Request(assetUrl, { method: request.method, headers })
     const response = await env.ASSETS.fetch(assetRequest)
     if (response.status === 404) return new Response(null, { status: 404, headers: notFoundHeaders })
     const outputHeaders = new Headers(response.headers)
+    outputHeaders.set("X-Apparent-Publisher", "connect-worker")
     outputHeaders.set("X-Content-Type-Options", "nosniff")
     outputHeaders.set("Referrer-Policy", "no-referrer")
     outputHeaders.set("X-Robots-Tag", "noindex, nofollow, noarchive")
     if (assetPath.endsWith("/index.html")) outputHeaders.set("Cache-Control", "no-store")
-    else if (/^\/connect\/assets\/[^/]+-[\w-]{8,}\.(?:js|css)$/.test(assetPath)) outputHeaders.set("Cache-Control", "public, max-age=31536000, immutable")
     else outputHeaders.set("Cache-Control", "no-cache, no-transform")
     outputHeaders.delete("Set-Cookie")
     return new Response(request.method === "HEAD" ? null : response.body, { status: response.status, headers: outputHeaders })

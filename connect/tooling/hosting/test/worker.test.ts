@@ -18,7 +18,7 @@ test("only the six browser management routes and owned static files reach assets
     assert.equal(response.headers.get("Referrer-Policy"), "no-referrer")
     assert.equal(response.headers.get("X-Robots-Tag"), "noindex, nofollow, noarchive")
     const forwarded = seen.at(-1)!
-    assert.equal(new URL(forwarded.url).search, "?code=USERCODE&keep=1")
+    assert.equal(new URL(forwarded.url).search, "", "device codes must not reach the static binding")
     assert.equal(forwarded.headers.has("cookie"), false)
     assert.equal(forwarded.headers.has("authorization"), false)
   }
