@@ -1,9 +1,12 @@
 Connect producer prerequisite
 
-connect-delivery.yml builds and verifies browser and Worker outputs on main push
-or manual main dispatch, without native CI. It uploads separate immutable Actions
+connect-delivery.yml builds and verifies browser and Worker outputs on manual main
+dispatch or its supported reusable call, without native CI. It uploads separate immutable Actions
 artifacts named connect-browser-<full SHA> and connect-worker-<full SHA>, each
-containing manifest.json and dist/. The reusable publisher accepts required string
+containing manifest.json and dist/. Browser/Worker input inventories exclude only
+the independent native recipient tooling and local TypeScript client subtrees;
+neighbouring delivery admission code remains included. Historical broader
+manifests are rejected rather than reinterpreted. The reusable publisher accepts required string
 input `producer-run`; an empty input selects the producer, a nonempty input selects
 publication. Public invokes it independently with `secrets: inherit`.
 
@@ -43,7 +46,7 @@ compatible owner change. Runtime controls, resources and migrations are unchange
 Selection enumerates authenticated successful main workflow runs in pages of 100
 until an empty page, checking direct browser and Worker artifacts against complete
 current inputs and production environment. Receipt-only runs do not truncate the
-search. Manual dispatch forces a fresh producer run.
+search. Manual dispatch forces a fresh producer run. For a browser/Worker artifact refresh without native recipient builds or releases, dispatch main with `web-only=true` (`gh workflow run connect-delivery.yml --ref main -f web-only=true`). The default remains false for existing full producer dispatches. Web-only keeps the same browser/Worker validation, manifests, source/config admission and whole-workflow budget; it does not invoke the Worker publisher.
 
 The callable requires string input `producer-run`: empty runs selection/production;
 nonempty publishes that successful run. Each completed invocation uploads

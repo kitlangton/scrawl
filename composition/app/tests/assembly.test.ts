@@ -5,18 +5,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { assemble, verifyAssembly } from '../scripts/assemble.ts';
-import { buildShell, buildStream, root } from '../scripts/build.ts';
+import { buildApp, buildShell, root } from '../scripts/build.ts';
 import { digest } from '../scripts/artifacts.ts';
 import { verifyPackagedApplication } from '../scripts/package.ts';
+import { buildSyntheticStream } from './synthetic-stream.ts';
 
 test('CI explicitly installs Electron before provisioning its sandbox helper', async () => {
-  const workflow = await readFile(join(root, '../../.github/workflows/value-stream-delivery.yml'), 'utf8');
+  const workflow = await readFile(join(root, '../../.github/workflows/stream-app-shell.yml'), 'utf8');
   const job = workflow.split('\n  stream:\n')[1]?.split(/\n  [a-z-]+:\n/)[0];
   assert(job, 'Independent stream producer job must exist');
-  const build = job.indexOf('composition/delivery/cli.ts build');
-  const install = job.indexOf('run: npm run prepare:electron');
-  const sandbox = job.indexOf('sudo install -o root -g root -m 4755 node_modules/electron/dist/chrome-sandbox');
-  const smoke = job.indexOf('xvfb-run -a npm run test:electron');
+  assert(job.includes('uses: ./.github/actions/delivery-component'));
+  const component = await readFile(join(root, '../../.github/actions/delivery-component/action.yml'), 'utf8');
+  const build = component.indexOf('composition/delivery/cli.ts build');
+  const install = component.indexOf('run: npm run prepare:electron');
+  const sandbox = component.indexOf('sudo install -o root -g root -m 4755 node_modules/electron/dist/chrome-sandbox');
+  const smoke = component.indexOf('xvfb-run -a npm run test:electron');
   assert(build >= 0 && install > build && sandbox > install && smoke > sandbox,
     'Package installation must precede runtime installation, helper provisioning and Electron execution');
   const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
@@ -36,9 +39,14 @@ test('independent stream rebuild and compiler-free assembly preserve unchanged a
   const shell = join(directory, 'shell');
   const alpha = join(directory, 'alpha');
   const beta = join(directory, 'beta');
+  const sourceAlpha = join(directory, 'source-alpha');
+  const sourceBeta = join(directory, 'source-beta');
   await buildShell(shell);
-  await buildStream(join(root, 'fixtures/alpha'), alpha);
-  await buildStream(join(root, 'fixtures/beta'), beta);
+  await buildSyntheticStream(sourceAlpha, alpha, { id: 'alpha', label: 'Alpha',
+    description: 'Synthetic Alpha workflow.', setting: { kind: 'checkbox', label: 'Alpha preference' } });
+  await buildSyntheticStream(sourceBeta, beta, { id: 'beta', label: 'Beta',
+    description: 'Synthetic Beta workflow.', setting: { kind: 'select', label: 'Beta detail',
+      initial: 'brief', options: ['brief', 'full'] } });
   const betaBytes = await readFile(join(beta, 'index.js'));
   const betaManifest = await readFile(join(beta, 'manifest.json'));
   const betaTime = (await stat(join(beta, 'index.js'))).mtimeMs;
@@ -46,18 +54,15 @@ test('independent stream rebuild and compiler-free assembly preserve unchanged a
   const first = await assemble(shell, [alpha, beta], join(directory, 'first'));
 
   // Simulate only Alpha's source changing. Beta and shell sources are not built again.
-  const updated = join(directory, 'source-alpha');
-  await cp(join(root, 'fixtures/alpha'), updated, { recursive: true });
-  const source = await readFile(join(updated, 'index.tsx'), 'utf8');
-  await writeFile(join(updated, 'index.tsx'), source.replace('Synthetic Alpha workflow.', 'Updated Alpha workflow.'));
-  await buildStream(updated, alpha);
+  await buildSyntheticStream(sourceAlpha, alpha, { id: 'alpha', label: 'Alpha',
+    description: 'Updated Alpha workflow.', setting: { kind: 'checkbox', label: 'Alpha preference' } });
   assert.notEqual(digest(await readFile(join(first, 'streams/alpha/index.js'))), digest(await readFile(join(alpha, 'index.js'))));
   assert.deepEqual(await readFile(join(beta, 'index.js')), betaBytes);
   assert.deepEqual(await readFile(join(beta, 'manifest.json')), betaManifest);
   assert.equal((await stat(join(beta, 'index.js'))).mtimeMs, betaTime);
 
   // Remove the updated producer source; invoke assembly with compilers deliberately denied.
-  await rm(updated, { recursive: true });
+  await rm(sourceAlpha, { recursive: true });
   const deny = join(directory, 'deny');
   await mkdir(deny);
   const marker = join(directory, 'compiler-used');
@@ -86,6 +91,21 @@ test('independent stream rebuild and compiler-free assembly preserve unchanged a
   await assert.rejects(verifyPackagedApplication(distribution, 'darwin'), /checksum/);
 });
 
+test('default build can assemble a usable shell without installed streams', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'app-empty-shell-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const artifacts = join(directory, 'artifacts');
+  const independentArtifact = join(artifacts, 'owner-stream', 'index.js');
+  await mkdir(join(artifacts, 'owner-stream'), { recursive: true });
+  await writeFile(independentArtifact, 'independently built stream artifact');
+  await buildApp(directory);
+  const output = join(directory, 'app');
+  await assemble(join(directory, 'shell'), [], output);
+  await verifyAssembly(output);
+  assert.match(await readFile(join(output, 'registry.js'), 'utf8'), /\[\]/);
+  assert.equal(await readFile(independentArtifact, 'utf8'), 'independently built stream artifact');
+});
+
 test('assembly rejects incompatible, duplicate, tampered and unsafe inputs before publication', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'app-rejection-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -93,7 +113,8 @@ test('assembly rejects incompatible, duplicate, tampered and unsafe inputs befor
   const alpha = join(directory, 'alpha');
   const output = join(directory, 'output');
   await buildShell(shell);
-  await buildStream(join(root, 'fixtures/alpha'), alpha);
+  await buildSyntheticStream(join(directory, 'source-alpha'), alpha, { id: 'alpha', label: 'Alpha',
+    description: 'Synthetic Alpha workflow.', setting: { kind: 'checkbox', label: 'Alpha preference' } });
   await assert.rejects(assemble(shell, [alpha, alpha], output), /Duplicate/);
   const manifest = await readFile(join(alpha, 'manifest.json'), 'utf8');
   await writeFile(join(alpha, 'manifest.json'), JSON.stringify({ ...JSON.parse(manifest), shellApi: 2 }));

@@ -129,7 +129,7 @@ test("ambiguous control preserves identity; unsubscribing/detaching never stops 
 });
 
 test("artifact open confirmation requires exact capture and saved artifact; dispatch is insufficient", async () => {
-  const { hasConfirmedArtifactOpen } = await import('../src/capabilities/index.ts');
+  const { hasConfirmedArtifactOpen } = await import('../src/capabilities/helpers.ts');
   const { client, driver } = createRecordFixture('reconnect-with-saved-history');
   const before = driver.current();
   driver.publish({ ...before, revision: 2, captures: [{ ...before.captures[0], artifactId: 'artifact-1', outcomes: [...before.captures[0].outcomes, {kind:'open-dispatch', at:'2025-01-01T00:00:02Z', ok:true}] }] });
@@ -236,7 +236,7 @@ test("cancelling a shortcut reservation does not cancel an already recording cap
 });
 
 test('pen colors match named writer values and change only after effective readback', async () => {
-  const {PEN_COLOR_RGB}=await import('../src/capabilities/index.ts');
+  const {PEN_COLOR_RGB}=await import('../src/capabilities/helpers.ts');
   assert.deepEqual(PEN_COLOR_RGB,{coral:[217,76,68],purple:[122,88,199],blue:[59,121,189],green:[57,123,97]});
   const {client,driver}=createRecordFixture('reconnect-with-saved-history');
   const supported=['coral','purple','blue','green'] as const;

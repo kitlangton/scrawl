@@ -10,6 +10,12 @@ for await (const line of createInterface({ input: process.stdin })) {
   const id = config.endsWith('wrong-id.json') ? 'wrong' : request.id;
   const result = config.endsWith('unknown.json') && request.operation !== 'read'
     ? { status: 'unknown', message: 'Native publication unconfirmed' }
+    : request.operation === 'readForAdoption'
+    ? { owner: { present: false, revision: 0, value: null }, legacy: { present: true, value: { seen: true } } }
+    : request.operation === 'adoptLegacy' && config.endsWith('conflict.json')
+    ? { status: 'conflict', snapshot: { owner: { present: true, revision: 2, value: null }, legacy: { present: false, value: null } } }
+    : request.operation === 'adoptLegacy' && config.endsWith('invalid-adoption.json')
+    ? { status: 'saved', revision: 2 }
     : request.operation === 'read'
     ? { revision: 0, value: config.endsWith('identity.json') ? process.argv[1] : null }
     : { status: 'saved', revision: 1 };

@@ -2,3 +2,4 @@ node_modules/
 dist/
 *.tgz
 !vendor/record-0.1.0-afd73fb.tgz
+!vendor/apparent-app-contracts-0.1.0.tgz

@@ -1,0 +1,24 @@
+name: Delivery contracts
+description: Verify delivery, architecture and workflow contracts for an owner.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22.23.4'
+    - name: Selection, artifact admission and workflow contracts
+      shell: bash
+      run: node --experimental-strip-types --test composition/delivery/*.test.ts enablement/verification/web/workflow.test.ts
+    - name: Install the isolated architecture checker
+      shell: bash
+      run: npm --prefix composition/architecture ci --ignore-scripts
+    - name: Enforce declared value-stream dependencies
+      shell: bash
+      run: |
+        npm --prefix composition/architecture run typecheck
+        npm --prefix composition/architecture test
+        npm --prefix composition/architecture run check -- --owner shared --owner composition
+    - name: Validate the independent workflows
+      uses: docker://rhysd/actionlint:1.7.12
+      with:
+        args: -shellcheck= -pyflakes= .github/workflows/stream-agent.yml .github/workflows/stream-app-shell.yml .github/workflows/stream-connect-browser.yml .github/workflows/stream-connect-client.yml .github/workflows/stream-engine-media-native.yml .github/workflows/stream-engine-native.yml .github/workflows/stream-engine.yml .github/workflows/stream-onboarding.yml .github/workflows/stream-platform-config.yml .github/workflows/stream-public.yml .github/workflows/stream-record.yml .github/workflows/connect-delivery.yml .github/workflows/web-delivery.yml

@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "files": [
     "dist",
     "src",
@@ -31,23 +33,47 @@
       "types": "./dist/backend/processing/index.d.ts",
       "import": "./dist/backend/processing/index.js"
     },
+    "./processing/media-consumer": {
+      "types": "./dist/backend/processing/media-consumer.d.ts",
+      "import": "./dist/backend/processing/media-consumer.js"
+    },
+    "./publication": {
+      "types": "./dist/backend/publication/index.d.ts",
+      "import": "./dist/backend/publication/index.js"
+    },
     "./ui": {
       "types": "./dist/ui/index.d.ts",
       "import": "./dist/ui/index.js"
     },
-    "./ui/style.css": "./dist/ui/style.css"
+    "./ui/style.css": "./dist/ui/style.css",
+    "./processing/bundle": {
+      "types": "./dist/backend/processing/bundle/index.d.ts",
+      "import": "./dist/backend/processing/bundle/index.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node --experimental-strip-types scripts/build-ui.ts && tailwindcss -i src/ui/style.css -o dist/ui/style.css && node --experimental-strip-types scripts/copy-ui-assets.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts test/*/*.test.ts",
     "prepare": "npm run build",
     "prepack": "npm run build",
     "test:package": "node --experimental-strip-types test/package-smoke.ts"
   },
   "peerDependencies": {
+    "@apparent/engine-sdk": "^0.3.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@apparent/engine-sdk": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "22.19.0",
@@ -61,6 +87,7 @@
     "lucide-react": "1.67.0",
     "tailwind-merge": "^3.3.1",
     "esbuild": "0.25.12",
-    "@tailwindcss/cli": "4.1.17"
+    "@tailwindcss/cli": "4.1.17",
+    "@apparent/engine-sdk": "file:vendor/engine-sdk-0.3.1.tgz"
   }
 }

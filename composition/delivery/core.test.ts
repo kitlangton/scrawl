@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
-import { assessPrior, catalog, inputDigest, makePlan, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPath } from './core.ts'
+import { assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
 // accidentally use the hook caller's index, object database or worktree.
@@ -18,6 +18,17 @@ const repo = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: '
 const temp = mkdtempSync(resolve(tmpdir(), 'delivery-core-'))
 after(() => rmSync(temp, { recursive: true, force: true }))
 const owner: Owner = { schema: 1, id: 'record', kind: 'npm', package: 'record', inputs: ['record/', 'shared/ui/'], verify: ['typecheck', 'test'], build: 'build', targets: ['linux-x64'], stage: 'library', language: 'typescript' }
+test('canonical producer identity belongs to the owner regardless of the running stream', () => {
+  const previous = process.env.APPARENT_DELIVERY_WORKFLOW_PATH
+  try {
+    process.env.APPARENT_DELIVERY_WORKFLOW_PATH = '.github/workflows/stream-agent.yml'
+    assert.equal(workflowPathFor('record'), '.github/workflows/stream-record.yml')
+    assert.equal(workflowPathFor('public'), '.github/workflows/stream-public.yml')
+  } finally {
+    if (previous === undefined) delete process.env.APPARENT_DELIVERY_WORKFLOW_PATH
+    else process.env.APPARENT_DELIVERY_WORKFLOW_PATH = previous
+  }
+})
 function git(cwd: string, ...args: string[]) { execFileSync('git', args, { cwd, stdio: 'ignore' }) }
 function newRepo(path: string) {
   mkdirSync(path, { recursive: true }); git(path, 'init', '-q'); git(path, 'config', 'user.email', 'delivery-test@example.invalid'); git(path, 'config', 'user.name', 'delivery test')
@@ -26,7 +37,7 @@ function newRepo(path: string) {
   writeFileSync(resolve(path, 'shared/ui/theme.ts'), 'theme\n')
   writeFileSync(resolve(path, 'composition/delivery/core.ts'), 'core\n'); writeFileSync(resolve(path, 'LICENSE'), 'license\n')
   writeFileSync(resolve(path, 'composition/architecture/guard.ts'), 'guard\n')
-  writeFileSync(resolve(path, workflowPath), 'workflow\n'); writeFileSync(resolve(path, 'enablement/verification/workflow-budget.ts'), 'budget\n')
+  writeFileSync(resolve(path, workflowPathFor(owner.id)), 'workflow\n'); writeFileSync(resolve(path, 'enablement/verification/workflow-budget.ts'), 'budget\n')
   git(path, 'add', '.'); git(path, 'commit', '-qm', 'initial'); return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path, encoding: 'utf8' }).trim()
 }
 
@@ -35,7 +46,7 @@ test('catalog reports absent owners pending and blocks present owners without re
   mkdirSync(resolve(path, 'composition/app'), { recursive: true })
   const missing = catalog(path)
   assert.deepEqual(missing.blocked, ['app-shell: source exists without delivery registration'])
-  assert.deepEqual(missing.pending, ['record', 'engine', 'engine-native', 'platform-config', 'onboarding', 'agent', 'public'])
+  assert.deepEqual(missing.pending, ['record', 'connect-client', 'connect-browser', 'engine', 'engine-native', 'engine-media-native', 'platform-config', 'onboarding', 'agent', 'public'])
   mkdirSync(resolve(path, 'record')); mkdirSync(resolve(path, 'shared/ui'), { recursive: true })
   writeFileSync(resolve(path, 'record/delivery.json'), JSON.stringify({ ...owner, inputs: ['shared/ui/'] }))
   assert.match(catalog(path).blocked.join(';'), /Package source must be covered/)
@@ -67,6 +78,27 @@ test('native Engine and SDK are independent lanes with the same architectural ow
   assert.equal(native.length, 2); assert(native.every(row => row.language === 'native' && row.architecture_owner === 'engine'))
 })
 
+test('native Engine media is a Linux-only lane with a complete owner input closure', () => {
+  const path = resolve(temp, 'engine-media-plan')
+  for (const dir of ['engine/delivery/media', 'engine/sdk', 'capture/engine', '.cargo']) mkdirSync(resolve(path, dir), { recursive: true })
+  writeFileSync(resolve(path, 'engine/delivery.json'), JSON.stringify({ ...owner, id: 'engine', package: 'engine/sdk', inputs: ['engine/'] }))
+  writeFileSync(resolve(path, 'engine/delivery/media/delivery.json'), JSON.stringify({ ...owner, id: 'engine-media-native', kind: 'directory', language: 'native', package: 'engine/delivery/media', artifactPath: 'dist', verify: ['verify'], inputs: ['engine/', 'capture/engine/', '.cargo/'], targets: ['linux-x64'] }))
+  const plan = makePlan(path)
+  assert.deepEqual(plan.blocked, [])
+  const media = plan.matrix.include.filter(row => row.id === 'engine-media-native')
+  assert.equal(media.length, 1)
+  assert.equal(media[0].target, 'linux-x64')
+  assert.equal(media[0].runner, 'ubuntu-24.04')
+  assert.equal(media[0].language, 'native')
+  assert.equal(media[0].kind, 'directory')
+  assert.equal(media[0].architecture_owner, 'engine')
+  assert.equal(media[0].package, 'engine/delivery/media')
+  assert.deepEqual(media[0].verify, ['verify'])
+  assert.equal(media[0].build, 'build')
+  assert.deepEqual(catalog(path).owners.find(item => item.id === 'engine-media-native')?.inputs, ['engine/', 'capture/engine/', '.cargo/'])
+})
+
+
 test('packed consumer imports code but verifies stylesheet exports as contained assets', () => {
   const consumer = resolve(temp, 'asset-consumer')
   const pkg = resolve(consumer, 'node_modules/@apparent/asset-fixture')
@@ -86,9 +118,39 @@ test('packed consumer imports code but verifies stylesheet exports as contained 
   assert.throws(verify) // Asset handling must not skip runtime code checks.
 })
 
+test('all-exports verification provisions declared optional host peers without making them required', () => {
+  const manifest = { peerDependencies: { react: '^19.2.0', 'react-dom': '^19.2.0', required: '^1' }, peerDependenciesMeta: { react: { optional: true }, 'react-dom': { optional: true } } }
+  assert.deepEqual(optionalVerificationPeers(manifest), ['react@^19.2.0', 'react-dom@^19.2.0'])
+  assert.deepEqual(optionalVerificationPeers({ peerDependencies: { required: '^1' } }), [])
+  for (const [name, version] of [['--prefix', 'outside'], ['peer', ''], ['peer', 1], ['peer', '1\0']])
+    assert.throws(() => optionalVerificationPeers({ peerDependencies: { [String(name)]: version }, peerDependenciesMeta: { [String(name)]: { optional: true } } }), /Invalid optional/)
+
+  const owner = resolve(temp, 'local-peer-owner'); mkdirSync(owner);
+  const packedPeer = resolve(owner, 'peer.tgz'); writeFileSync(packedPeer, 'fixture');
+  const local = { peerDependencies: { '@apparent/private': '0.1.0' }, peerDependenciesMeta: { '@apparent/private': { optional: true } }, devDependencies: { '@apparent/private': 'file:peer.tgz' } };
+  assert.deepEqual(optionalVerificationPeers(local, owner), [packedPeer]);
+  assert.throws(() => optionalVerificationPeers(local), /package root/);
+  const outside = resolve(temp, 'outside-peer.tgz'); writeFileSync(outside, 'fixture');
+  assert.throws(() => optionalVerificationPeers({ ...local, devDependencies: { '@apparent/private': 'file:../outside-peer.tgz' } }, owner), /contained/);
+
+  const consumer = resolve(temp, 'optional-host-peer')
+  const pkg = resolve(consumer, 'node_modules/optional-ui')
+  mkdirSync(pkg, { recursive: true })
+  writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name: 'optional-ui', type: 'module', exports: { '.': './index.js', './ui': './ui.js' }, peerDependencies: { 'host-peer': '^1' }, peerDependenciesMeta: { 'host-peer': { optional: true } } }))
+  writeFileSync(resolve(pkg, 'index.js'), stripTypeScriptTypes('export const headless: boolean = true;'))
+  writeFileSync(resolve(pkg, 'ui.js'), stripTypeScriptTypes('export { supplied } from "host-peer";'))
+  verifyPublicExports(consumer, 'optional-ui', ['.'])
+  assert.throws(() => verifyPublicExports(consumer, 'optional-ui', ['.', './ui']))
+  const peer = resolve(consumer, 'node_modules/host-peer'); mkdirSync(peer)
+  writeFileSync(resolve(peer, 'package.json'), JSON.stringify({ name: 'host-peer', type: 'module', exports: './index.js' }))
+  writeFileSync(resolve(peer, 'index.js'), stripTypeScriptTypes('export const supplied: boolean = true;'))
+  verifyPublicExports(consumer, 'optional-ui', ['.', './ui'])
+  assert.equal(JSON.parse(readFileSync(resolve(pkg, 'package.json'), 'utf8')).peerDependenciesMeta['host-peer'].optional, true)
+})
+
 test('reuse reissues the exact admitted bytes and rejects tampering and wrong receipts', () => {
   const input = resolve(temp, 'reuse-input'); mkdirSync(input); writeFileSync(resolve(input, 'package.tgz'), 'verified content')
-  const env = { GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: `tryapparent/apparent/${workflowPath}@refs/heads/main`, GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1' }
+  const env = { GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: `tryapparent/apparent/${workflowPathFor(owner.id)}@refs/heads/main`, GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1' }
   const priorDir = resolve(temp, 'reuse-prior')
   const receipt = sealPayload(repo, owner, 'linux-x64', input, priorDir, 'b'.repeat(64), env)
   const zip = resolve(temp, 'prior.zip')
@@ -110,9 +172,11 @@ test('full input closure changes for owner source, delivery core, workflow, budg
   const initial = inputDigest(path, owner)
   const dualTargetOwner: Owner = { ...owner, targets: ['linux-x64', 'macos-x64'] }
   assert.notEqual(inputDigest(path, dualTargetOwner, 'linux-x64'), inputDigest(path, dualTargetOwner, 'macos-x64'))
-  for (const [name, content] of [['composition/delivery/core.ts', 'changed core'], ['composition/architecture/guard.ts', 'changed architecture guard'], [workflowPath, 'changed workflow'], ['enablement/verification/workflow-budget.ts', 'changed budget'], ['LICENSE', 'changed license'], ['record/native.rs', 'native'], ['record/config.json', '{"value":2}'], ['shared/ui/theme.ts', 'changed theme']]) {
-    writeFileSync(resolve(path, name), content); git(path, 'add', '-A'); git(path, 'commit', '-qm', `change ${name}`)
-    assert.notEqual(inputDigest(path, owner), initial, `${name} must invalidate reuse`)
+  let previousDigest = initial
+  for (const [name, content] of [['.github/actions/delivery-component/action.yml', 'changed component steps'], ['.github/actions/delivery-contracts/action.yml', 'changed delivery contracts'], ['composition/delivery/core.ts', 'changed core'], ['composition/architecture/guard.ts', 'changed architecture guard'], [workflowPathFor(owner.id), 'changed workflow'], ['enablement/verification/workflow-budget.ts', 'changed budget'], ['LICENSE', 'changed license'], ['record/native.rs', 'native'], ['record/config.json', '{"value":2}'], ['shared/ui/theme.ts', 'changed theme']]) {
+    mkdirSync(resolve(path, name, '..'), { recursive: true }); writeFileSync(resolve(path, name), content); git(path, 'add', '-A'); git(path, 'commit', '-qm', `change ${name}`)
+    assert.notEqual(inputDigest(path, owner), previousDigest, `${name} must invalidate reuse`)
+    previousDigest = inputDigest(path, owner)
   }
   git(path, 'mv', 'record/index.ts', 'record/renamed.ts'); git(path, 'commit', '-qm', 'rename')
   assert.notEqual(inputDigest(path, owner), initial)
@@ -123,8 +187,8 @@ test('admission requires canonical repo, exact workflow, owner job, audit and un
   const path = resolve(temp, 'admit-repo'); const sha = newRepo(path)
   git(path, 'commit', '--allow-empty', '-qm', 'later'); let current = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path, encoding: 'utf8' }).trim()
   const digest = inputDigest(path, owner)
-  const run = { id: 10, run_attempt: 1, head_sha: sha, head_branch: 'main', event: 'push', conclusion: 'failure', path: workflowPath }
-  const goodJobs = [{ name: 'stream (record, linux-x64)', status: 'completed', conclusion: 'success' }, { name: 'Delivery contracts', status: 'completed', conclusion: 'success' }, { name: 'Workflow runtime budget', status: 'completed', conclusion: 'success' }]
+  const run = { id: 10, run_attempt: 1, head_sha: sha, head_branch: 'main', event: 'push', conclusion: 'failure', path: workflowPathFor(owner.id) }
+  const goodJobs = [{ name: 'deliver / stream (record, linux-x64)', status: 'completed', conclusion: 'success' }, { name: 'deliver / Delivery contracts', status: 'completed', conclusion: 'success' }, { name: 'deliver / Workflow runtime budget', status: 'completed', conclusion: 'success' }]
   const artifact = [{ id: 9, name: `stream-record-linux-x64-${digest}`, expired: false }]
   const assess = (r = run, j = goodJobs, a = artifact, repository = 'tryapparent/apparent') => assessPrior(path, owner, 'linux-x64', current, repository, [r], () => j, () => a)
   assert.equal(assess().reuse, true)
@@ -147,12 +211,13 @@ test('admission requires canonical repo, exact workflow, owner job, audit and un
 test('sealing only archives contained payloads under canonical main identity', () => {
   const input = resolve(temp, 'payload'); const output = resolve(temp, 'sealed')
   mkdirSync(input); writeFileSync(resolve(input, 'package.tgz'), 'bundle')
-  const env = { GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main', GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1' }
+  const env = { GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: `tryapparent/apparent/${workflowPathFor(owner.id)}@refs/heads/main`, GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1' }
   const receipt = sealPayload(repo, owner, 'linux-x64', input, output, 'a'.repeat(64), env)
   assert.equal(receipt.id, owner.id)
   assert.equal(receipt.size > 0, true)
   assert.equal(existsSync(resolve(output, 'component.tar.gz')), true)
   assert.equal(receipt.sha256, createHash('sha256').update(readFileSync(resolve(output, 'component.tar.gz'))).digest('hex'))
+  assert.throws(() => sealPayload(repo, owner, 'linux-x64', input, resolve(temp, 'wrong-workflow'), 'a'.repeat(64), { ...env, GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main' }), /canonical main workflow identity/)
   assert.throws(() => sealPayload(repo, owner, 'macos-x64', input, resolve(temp, 'wrong-target'), 'a'.repeat(64), env), /target/)
   const unsafe = resolve(temp, 'unsafe-payload'); mkdirSync(unsafe)
   symlinkSync('/etc/passwd', resolve(unsafe, 'escape'))
@@ -184,9 +249,9 @@ test('admit invokes gh api with canonical GH_REPO and no unsupported flags', () 
     '#!/bin/sh',
     '[ "$1" = api ] && [ "$GH_REPO" = tryapparent/apparent ] || exit 90',
     'case "$2" in',
-    '  */actions/workflows/value-stream-delivery.yml) printf "%s\\n" \'{"id":4,"path":".github/workflows/value-stream-delivery.yml"}\' ;;',
-    '  */actions/workflows/4/runs?*) printf "%s\\n" \'{"workflow_runs":[{"id":88,"run_attempt":1,"head_sha":"' + ancestor + '","head_branch":"main","event":"push","conclusion":"failure"}]}\' ;;',
-    '  */actions/runs/88/attempts/1/jobs?*) printf "%s\\n" \'{"total_count":3,"jobs":[{"name":"stream (record, linux-x64)","status":"completed","conclusion":"success"},{"name":"Delivery contracts","status":"completed","conclusion":"success"},{"name":"Workflow runtime budget","status":"completed","conclusion":"success"}]}\' ;;',
+    '  */actions/workflows/stream-record.yml) printf "%s\\n" \'{"id":4,"path":"' + workflowPathFor(owner.id) + '"}\' ;;',
+    '  */actions/workflows/4/runs?*) printf "%s\\n" \'{"workflow_runs":[{"id":88,"run_attempt":1,"head_sha":"' + ancestor + '","head_branch":"main","path":"' + workflowPathFor(owner.id) + '","event":"push","conclusion":"success"}]}\' ;;',
+    '  */actions/runs/88/attempts/1/jobs?*) printf "%s\\n" \'{"total_count":3,"jobs":[{"name":"deliver / stream (record, linux-x64)","status":"completed","conclusion":"success"},{"name":"deliver / Delivery contracts","status":"completed","conclusion":"success"},{"name":"deliver / Workflow runtime budget","status":"completed","conclusion":"success"}]}\' ;;',
     '  */actions/runs/88/artifacts?*) printf "%s\\n" \'{"total_count":1,"artifacts":[{"id":91,"name":"stream-record-linux-x64-' + digest + '","expired":false}]}\' ;;',
     '  *) exit 91 ;;',
     'esac',

@@ -30,7 +30,14 @@ test('automatic main producers share one noncanceling pending lane; explicit can
 });
 test('producer verifies before sealing and never publishes',async()=>{
  const workflow=await readFile(new URL('../../.github/workflows/connect-delivery.yml',import.meta.url),'utf8');
- for(const requirement of ["branches: [main]","node-version: '22.23.0'","bun-version: '1.3.10'",'npm ci --include=dev','bun install --frozen-lockfile','scripts/playwright-runtime.ts','shared/analytics/config.test.ts','platform: web','connect-browser-${{ github.sha }}','connect-worker-${{ github.sha }}'])assert.ok(workflow.includes(requirement),requirement);
+ for(const requirement of ["node-version: '22.23.0'","bun-version: '1.3.10'",'npm ci --include=dev','bun install --frozen-lockfile','scripts/playwright-runtime.ts','shared/analytics/config.test.ts','platform: web','connect-browser-${{ github.sha }}','connect-worker-${{ github.sha }}'])assert.ok(workflow.includes(requirement),requirement);
+ const triggers=workflow.split('\nconcurrency:')[0];
+ assert.match(triggers,/^  workflow_dispatch:/m);
+ assert.match(triggers,/^  workflow_call:/m);
+ assert.doesNotMatch(triggers,/^  (?:push|pull_request):/m);
+ const produce=workflow.split('\n  produce:\n')[1].split('\n  publish:')[0];
+ assert.match(produce,/github.repository == 'tryapparent\/apparent'/);
+ assert.match(produce,/github.ref == 'refs\/heads\/main'/);
  assert.doesNotMatch(workflow,/playwright-core install --with-deps/);
  assert.ok(workflow.indexOf('Verify browser and analytics')<workflow.indexOf('Seal verified'));
  const producer=workflow.split('  publish:')[0];
@@ -109,4 +116,24 @@ test('recipient selection is independent of web production and a skip cannot pub
  assert.match(recipient,/needs.recipient-select.outputs.required == 'true'/);
  assert.match(selection,/inputs.producer-run == ''/);
  const release=workflow.split('  recipient-release:')[1];assert.match(release,/needs: \[[^\]]*recipient\]/);
+});
+
+test('explicit web-only dispatch retains trusted web production and cannot select, build or release recipients', async () => {
+ const workflow=await readFile(new URL('../../.github/workflows/connect-delivery.yml',import.meta.url),'utf8');
+ assert.match(workflow,/workflow_dispatch:\n    inputs:\n      web-only:[\s\S]*?type: boolean\n        required: false\n        default: false/);
+ for(const job of ['recipient-select','recipient','recipient-release']) {
+  const condition=workflow.split('\n  '+job+':\n')[1].match(/^    if: (.+)$/m)![1];
+  assert.ok(condition.endsWith(' && inputs.web-only != true'),`${job} must fail closed for a web-only dispatch`);
+  // Conditions retain their original gates as well as the explicit mode guard.
+  assert.match(condition,/github.repository == 'tryapparent\/apparent'/);
+  assert.match(condition,/github.ref == 'refs\/heads\/main'/);
+  assert.match(condition,/inputs.producer-run == ''/);
+ }
+ const produce=workflow.split('\n  produce:\n')[1].split('\n  publish:')[0];
+ assert.doesNotMatch(produce,/web-only/);
+ assert.match(produce,/connect\/delivery\/artifacts.ts validate/);
+ assert.match(produce,/name: connect-browser-\$\{\{ github.sha \}\}/);
+ const publish=workflow.split('\n  publish:\n')[1].split('\n  runtime-budget:')[0];
+ assert.match(publish,/inputs.producer-run != ''/);
+ assert.doesNotMatch(publish,/web-only/);
 });

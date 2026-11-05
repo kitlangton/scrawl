@@ -1,5 +1,5 @@
 import type {Env} from './types.ts';
-import {ApiError,fail,trustedSiteOrigin} from './common.ts';
+import {ApiError,fail,trustedSiteOrigin,apiBasePath} from './common.ts';
 import {authRoutes} from './auth.ts';
 import {captureRoutes,cleanup} from './captures.ts';
 import {shareRoutes} from './shares.ts';
@@ -11,7 +11,9 @@ export default {
  async fetch(request: Request,env: Env,context?:ExecutionContext) {
   let response;
   try {
-   const url=new URL(request.url);
+   const url=new URL(request.url),mount=apiBasePath(env);
+   if(mount&&url.pathname!==mount&&!url.pathname.startsWith(mount+'/'))fail('not_found',404);
+   if(mount)url.pathname=url.pathname.slice(mount.length)||'/';
    if(['/share-view.js','/share-view.css','/share-wordmark.svg','/share-font.ttf'].includes(url.pathname)&&['GET','HEAD'].includes(request.method)) {
     let body: BodyInit, type: string;
     if(url.pathname==='/share-view.js'){body=shareViewScript;type='text/javascript; charset=utf-8';}

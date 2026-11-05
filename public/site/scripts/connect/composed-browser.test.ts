@@ -35,6 +35,9 @@ test('composed routes, queries and analytics work without rebuilding Connect', a
       const request = route.request(), url = new URL(request.url())
       if (url.origin === publicOrigin) {
         const response = await route.fetch({ url: local + url.pathname + url.search, maxRedirects: 0 })
+        // Playwright routes only the first request in a redirect chain. Never
+        // let an artifact test follow a redirect onto the deployed public host.
+        assert(response.status() < 300 || response.status() >= 400, 'check redirects locally before browser navigation')
         await route.fulfill({ response }); return
       }
       if (url.origin === apiOrigin && ['/v1/session', '/v1/analytics/consent'].includes(url.pathname)) {
@@ -62,7 +65,17 @@ test('composed routes, queries and analytics work without rebuilding Connect', a
       await assert.doesNotReject(async () => { await page.waitForFunction(() => localStorage.getItem('apparent.product-analytics.v1') !== null) })
     }
     for (const route of routes) {
-      const response = await page.goto(`${publicOrigin}/${route}?userCode=NEVER-SEND`)
+      let path = `/${route}?userCode=NEVER-SEND`
+      const redirect = redirects.find(([source]) => source === `/${route}`)
+      if (redirect) {
+        // Verify the actual local HTTP redirect and query preservation, then
+        // start a separately intercepted browser navigation to its destination.
+        const response = await fetch(local + path, { redirect: 'manual' })
+        assert.equal(response.status, Number(redirect[2]))
+        assert.equal(response.headers.get('location'), redirect[1] + '?userCode=NEVER-SEND')
+        path = response.headers.get('location')!
+      }
+      const response = await page.goto(publicOrigin + path)
       assert.equal(response?.status(), 200)
       await page.locator('.hosted-page').waitFor()
       await page.getByText('Checking your account', { exact: false }).waitFor({ state: 'hidden' })

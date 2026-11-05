@@ -27,6 +27,15 @@ test('allows public APIs and owner-local internals', () => fixture({
   'record/src/local.ts': 'export const y = 1;',
 }, root => assert.deepEqual(checkArchitecture(root), [])));
 
+test('Connect client cannot import Record private implementation', () => fixture({
+  'connect/delivery/client/package.json': JSON.stringify({ name: '@apparent/connect-client', exports: { '.': './dist/index.js' } }),
+  'connect/delivery/client/src/index.ts': "import '../../../../record/src/private.js';",
+  'record/src/private.ts': 'export const internal = true;',
+}, root => {
+  const errors = checkArchitecture(root, ['connect']);
+  assert(errors.some(error => error.includes('cross-owner path connect -> record')));
+}));
+
 test('shared cannot hide product imports behind a computed loader or forged package name', () => fixture({
   'shared/contracts/src/index.ts': 'import(destination); require(destination);',
   'shared/forged/package.json': JSON.stringify({ name: '@apparent/record', exports: { '.': './index.ts' } }),
@@ -150,3 +159,14 @@ test('discovers .mts files and filenames containing newlines', () => fixture({
   'record/src/line\nbreak.mts': "import '../../agent/src/private.js';",
   'agent/src/private.ts': 'export const x = 1;',
 }, root => assert(checkArchitecture(root).some(x=>x.includes('cross-owner path')))));
+
+test('Connect gateway and service share one owner while service imports cannot cross product boundaries',()=>{
+ fixture({
+  'connect/tooling/hosting/src/index.ts': "import service from '../../../service/src/worker.ts';",
+  'connect/service/src/worker.ts': 'export default {};',
+ },root=>assert.deepEqual(checkArchitecture(root,['connect']),[]));
+ fixture({
+  'connect/service/src/worker.ts': "import '../../../record/src/private.ts';",
+  'record/src/private.ts': 'export const internal = true;',
+ },root=>assert.ok(checkArchitecture(root,['connect']).some(error=>error.includes('connect -> record'))));
+});

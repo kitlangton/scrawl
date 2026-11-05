@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "apparent-connect-web",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-05",
+  "workers_dev": false,
+  "assets": {
+    "directory": ".output/dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "none"
+  },
+  "vars": {
+    "API_ORIGIN": "https://app.tryapparent.com/connect",
+    "SITE_ORIGIN": "https://app.tryapparent.com"
+  },
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+}

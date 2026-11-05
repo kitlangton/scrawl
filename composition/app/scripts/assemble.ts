@@ -10,7 +10,6 @@ export async function assemble(shell: string, streams: string[], destination: st
   const manifests = await Promise.all(streams.map(readStream));
   const ids = manifests.map(manifest => manifest.id);
   assert.equal(new Set(ids).size, ids.length, 'Duplicate stream identity');
-  assert(streams.length > 0, 'Assembly requires at least one stream');
   const output = resolve(destination);
   // Fresh output only. Never overwrite installed apps or a previous assembly.
   await mkdir(dirname(output), { recursive: true });
@@ -60,6 +59,6 @@ export async function verifyAssembly(directory: string) {
 }
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const [shell, destination, ...streams] = process.argv.slice(2);
-  assert(shell && destination && streams.length, 'Usage: assemble.ts <shell-artifact> <new-output> <stream-artifact>...');
+  assert(shell && destination, 'Usage: assemble.ts <shell-artifact> <new-output> [stream-artifact ...]');
   await assemble(resolve(shell), streams.map(path => resolve(path)), resolve(destination));
 }

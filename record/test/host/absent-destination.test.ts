@@ -1,0 +1,156 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { test } from "node:test";
+import { AbsentDestinationAllocator, type AbsentDestinationBinding } from "../../dist/backend/host/index.js";
+
+async function temporary(t: { after(fn: () => void | Promise<void>): void }): Promise<string> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "record-capture2-allocator-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  return root;
+}
+
+function child(control: string, output: string, requestId: string, loseReply = false): Promise<{ stdout: string; code: number | null }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(process.execPath, ["--experimental-strip-types", new URL("./absent-destination-child.ts", import.meta.url).pathname, control, output, requestId], {
+      stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...(loseReply ? { RECORD_ALLOCATOR_LOSE_REPLY: "1" } : {}) },
+    });
+    let stdout = "", stderr = "";
+    proc.stdout.setEncoding("utf8").on("data", chunk => stdout += chunk);
+    proc.stderr.setEncoding("utf8").on("data", chunk => stderr += chunk);
+    proc.on("error", reject);
+    proc.on("close", code => code === 0 ? resolve({ stdout, code }) : reject(new Error(`allocator child failed: ${stderr}`)));
+  });
+}
+
+function roots(parent: string) { return [join(parent, "control"), join(parent, "bundles")] as const; }
+
+async function assertAbsent(path: string) {
+  await assert.rejects(lstat(path), error => (error as NodeJS.ErrnoException).code === "ENOENT");
+}
+
+test("concurrent processes choose one durable binding; restart and lost reply replay it", async t => {
+  const parent = await temporary(t), [control, output] = roots(parent), request = " arbitrary/request id with private text ";
+  const [a, b] = await Promise.all([child(control, output, request), child(control, output, request)]);
+  const binding: AbsentDestinationBinding = JSON.parse(a.stdout);
+  assert.deepEqual(binding, JSON.parse(b.stdout));
+  assert.match(binding.bundleId, /^record-[0-9a-f]{64}\.apparent$/u);
+  assert.equal(binding.bundlePath, join(output, binding.bundleId));
+  assert.equal(binding.bundlePath.includes(request), false);
+  await assertAbsent(binding.bundlePath);
+  const lost = await child(control, output, "lost reply request", true);
+  assert.equal(lost.stdout, "");
+  const replay = await new AbsentDestinationAllocator(control, output).allocate("lost reply request");
+  assert.equal(replay.bundlePath, join(output, replay.bundleId));
+  await assertAbsent(replay.bundlePath);
+  const dbInfo = await lstat(join(control, "capture2-destination-bindings.sqlite"));
+  assert.equal(dbInfo.mode & 0o077, 0);
+});
+
+test("first reservation refuses an existing final path and preserves it; known replay tolerates later population", async t => {
+  const parent = await temporary(t), [control, output] = roots(parent), request = "occupied";
+  const digest = (await import("node:crypto")).createHash("sha256").update(request).digest("hex");
+  const collision = join(output, `record-${digest}.apparent`);
+  await mkdir(collision, { recursive: true, mode: 0o700 });
+  await writeFile(join(collision, "keep"), "user", { mode: 0o600 });
+  const allocator = new AbsentDestinationAllocator(control, output);
+  await assert.rejects(allocator.allocate(request), /storage is unavailable/);
+  assert.equal(await readFile(join(collision, "keep"), "utf8"), "user");
+  const db = new DatabaseSync(join(control, "capture2-destination-bindings.sqlite"));
+  try { assert.equal(Number(db.prepare("SELECT count(*) AS count FROM destination_binding").get()?.count), 0); }
+  finally { db.close(); }
+
+  const first = await allocator.allocate("known");
+  await mkdir(first.bundlePath, { mode: 0o700 });
+  await writeFile(join(first.bundlePath, "native-published"), "synthetic", { mode: 0o600 });
+  assert.deepEqual(await allocator.allocate("known"), first);
+  assert.equal(await readFile(join(first.bundlePath, "native-published"), "utf8"), "synthetic");
+});
+
+test("same request cannot change roots; output/control roots must be safely separate", async t => {
+  const parent = await temporary(t), [control, output] = roots(parent);
+  const first = await new AbsentDestinationAllocator(control, output).allocate("fixed");
+  await assert.rejects(new AbsentDestinationAllocator(control, join(parent, "other-output")).allocate("fixed"), /storage is unavailable/);
+  await assert.rejects(new AbsentDestinationAllocator(join(parent, "nested"), join(parent, "nested", "output")).allocate("x"), /storage is unavailable/);
+  await assertAbsent(first.bundlePath);
+});
+
+test("symlink, hard-linked and permissive store paths are rejected without touching aliases", async t => {
+  const parent = await temporary(t), [control, output] = roots(parent);
+  const good = new AbsentDestinationAllocator(control, output);
+  const binding = await good.allocate("base");
+  await assertAbsent(binding.bundlePath);
+
+  const target = join(parent, "target"); await mkdir(target, { mode: 0o700 });
+  const linkRoot = join(parent, "link-root"); await symlink(target, linkRoot);
+  await assert.rejects(new AbsentDestinationAllocator(linkRoot, join(parent, "other")).allocate("symlink"), /storage is unavailable/);
+  await assert.rejects(new AbsentDestinationAllocator(join(parent, "control-symlink"), linkRoot).allocate("output-symlink"), /storage is unavailable/);
+
+  const permissive = join(parent, "permissive"); await mkdir(permissive, { mode: 0o700 }); await chmod(permissive, 0o755);
+  await assert.rejects(new AbsentDestinationAllocator(permissive, join(parent, "out-permissive")).allocate("permissive"), /storage is unavailable/);
+
+  const dbPath = join(control, "capture2-destination-bindings.sqlite"), alias = join(parent, "database-alias");
+  await link(dbPath, alias);
+  await assert.rejects(good.allocate("hardlink"), /storage is unavailable/);
+  assert.equal(await lstat(alias).then(info => info.nlink), 2);
+  await assertAbsent(join(output, `record-${(await import("node:crypto")).createHash("sha256").update("hardlink").digest("hex")}.apparent`));
+  assert.equal(dirname(binding.bundlePath), output);
+});
+
+test("same-process concurrent allocations resolve to durable bindings and leave every final path absent", async t => {
+  const parent = await temporary(t), [control, output] = roots(parent);
+  const allocator = new AbsentDestinationAllocator(control, output);
+  const requests = ["same request", "other request", "same request", "third request", "other request", "unicode λ 🐸"];
+  const bindings = await Promise.all(requests.map(request => allocator.allocate(request)));
+  const byRequest = new Map<string, AbsentDestinationBinding>();
+  for (let index = 0; index < requests.length; index++) {
+    const request = requests[index]!, binding = bindings[index]!;
+    const prior = byRequest.get(request);
+    if (prior) assert.deepEqual(binding, prior);
+    else byRequest.set(request, binding);
+    assert.equal(binding.bundlePath, join(output, binding.bundleId));
+    await assertAbsent(binding.bundlePath);
+  }
+  assert.equal(new Set([...byRequest.values()].map(binding => binding.bundleId)).size, byRequest.size);
+  for (const [request, binding] of byRequest) assert.deepEqual(await allocator.allocate(request), binding);
+});
+
+test("tampered durable bundle identity is rejected without following or modifying its path", async t => {
+  const parent = await temporary(t), [control, output] = roots(parent);
+  const allocator = new AbsentDestinationAllocator(control, output);
+  const dbPath = join(control, "capture2-destination-bindings.sqlite");
+  const foreign = join(parent, "foreign-destination");
+  await mkdir(foreign, { mode: 0o700 });
+  await writeFile(join(foreign, "keep"), "synthetic", { mode: 0o600 });
+
+  for (const [request, column, value] of [
+    ["tampered id", "bundle_id", "foreign.apparent"],
+    ["tampered path", "bundle_path", foreign],
+  ] as const) {
+    const binding = await allocator.allocate(request);
+    const digest = (await import("node:crypto")).createHash("sha256").update(request).digest("hex");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare(`UPDATE destination_binding SET ${column} = ? WHERE request_digest = ?`).run(value, digest);
+    } finally { db.close(); }
+
+    await assert.rejects(allocator.allocate(request), error => {
+      assert.equal((error as Error).message, "Record host storage is unavailable or invalid");
+      assert.equal((error as Error).message.includes(foreign), false);
+      return true;
+    });
+    await assertAbsent(binding.bundlePath);
+    assert.equal(await readFile(join(foreign, "keep"), "utf8"), "synthetic");
+  }
+});
+
+test("ill-formed UTF-16 request IDs are rejected before creating allocator metadata", async t => {
+  const parent = await temporary(t), [control, output] = roots(parent);
+  const allocator = new AbsentDestinationAllocator(control, output);
+  await assert.rejects(allocator.allocate("invalid-\ud800-id"), /storage is unavailable/u);
+  await assertAbsent(join(control, "capture2-destination-bindings.sqlite"));
+  await assertAbsent(output);
+});

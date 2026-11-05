@@ -42,7 +42,7 @@ const server=createServer(async(req,res)=>{
  res.writeHead(404);res.end()
 })
 await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));origin=`http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`
-const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/home/simon/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome',headless:true,args:['--no-sandbox','--mute-audio']})
+const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||chromium.executablePath(),headless:true,args:['--no-sandbox','--mute-audio']})
 const passed:string[]=[]
 type Event={event:string;uuid:string;timestamp:string;properties:Record<string,unknown>}
 async function scenario(name:string,body:(page:Page,sent:Event[],context:BrowserContext)=>Promise<void>,init?:()=>void){

@@ -10,12 +10,17 @@ export type Stage = 'library' | 'contract' | 'development-app' | 'website'
 export type Owner = { schema: 1; id: string; kind: Kind; package: string; inputs: string[]; verify: string[]; build: string; targets: Target[]; stage: Stage; language: 'typescript' | 'native'; artifactPath?: string; packageManager?: 'npm' | 'bun'; files?: string[]; environment?: string[] }
 export const auditJob = 'Workflow runtime budget'
 export const contractsJob = 'Delivery contracts'
-export const workflowPath = '.github/workflows/value-stream-delivery.yml'
+export function workflowPathFor(ownerId: string): string {
+  return `.github/workflows/stream-${ownerId}.yml`
+}
 const roots = [
   { id: 'app-shell', source: 'composition/app', registration: 'composition/app/delivery.json' },
   { id: 'record', source: 'record', registration: 'record/delivery.json' },
+  { id: 'connect-client', source: 'connect/delivery/client', registration: 'connect/delivery.json' },
+  { id: 'connect-browser', source: 'connect/tooling/hosting', registration: 'connect/tooling/hosting/delivery.json' },
   { id: 'engine', source: 'engine/sdk', registration: 'engine/delivery.json' },
   { id: 'engine-native', source: 'engine/delivery/native', registration: 'engine/delivery/native/delivery.json' },
+  { id: 'engine-media-native', source: 'engine/delivery/media', registration: 'engine/delivery/media/delivery.json' },
   { id: 'platform-config', source: 'composition/config/native', registration: 'composition/config/native/delivery.json' },
   { id: 'onboarding', source: 'onboarding', registration: 'onboarding/delivery.json' },
   { id: 'agent', source: 'agent', registration: 'agent/delivery.json' },
@@ -88,8 +93,8 @@ export function catalog(root: string) {
 function trackedInputs(root: string, owner: Owner, revision = 'HEAD'): { digest: string; entries: string[] } {
   const registration = roots.find(x => x.id === owner.id)?.registration
   if (!registration) throw new Error('Owner has no registered source identity')
-  const inputRoots = [...new Set([...owner.inputs, ...mandatoryInputs])].sort()
-  const files = [...(owner.files ?? []), workflowPath, '.github/actions/runtime-budget/', 'enablement/verification/workflow-budget.ts', 'LICENSE', registration]
+  const inputRoots = [...new Set([...owner.inputs, ...mandatoryInputs, ...(owner.id === 'public' ? ['enablement/verification/web/'] : [])])].sort()
+  const files = [...(owner.files ?? []), workflowPathFor(owner.id), '.github/actions/delivery-contracts/', '.github/actions/delivery-component/', '.github/actions/runtime-budget/', 'enablement/verification/workflow-budget.ts', 'LICENSE', registration]
   const paths = new Set<string>()
   for (const pathspec of [...inputRoots, ...files]) {
     const result = git(root, ['ls-tree', '-r', '-z', '--full-tree', revision, '--', pathspec])
@@ -120,7 +125,7 @@ export function environmentDigest(owner: Owner, env = process.env): string { ret
 export function inputDigest(root: string, owner: Owner, target: Target = owner.targets[0]): string { return fingerprint(root, owner, target) }
 export function makePlan(root: string) {
   const { owners, pending, blocked } = catalog(root)
-  const guardOwners: Record<string, string> = { 'app-shell': 'composition', engine: 'engine', 'engine-native': 'engine', 'platform-config': 'composition', record: 'record', agent: 'agent', onboarding: 'onboarding' }
+  const guardOwners: Record<string, string> = { 'app-shell': 'composition', engine: 'engine', 'engine-native': 'engine', 'engine-media-native': 'engine', 'platform-config': 'composition', record: 'record', 'connect-client': 'connect', 'connect-browser': 'connect', agent: 'agent', onboarding: 'onboarding' }
   const include = owners.flatMap(owner => owner.targets.map(target => ({ id: owner.id, target, runner: target === 'linux-x64' || target === 'web' ? 'ubuntu-24.04' : 'macos-26-intel', kind: owner.kind, stage: owner.stage, package: owner.package, verify: owner.verify, build: owner.build, language: owner.language, packageManager: owner.packageManager ?? 'npm', architecture_owner: guardOwners[owner.id] ?? '' })))
   return { matrix: { include }, has_ready: include.length > 0, pending, blocked }
 }
@@ -167,7 +172,7 @@ export function buildOwner(root: string, owner: Owner, target: Target, outputPat
     cpSync(actual, resolve(output, 'payload'), { recursive: true, dereference: false, verbatimSymlinks: true })
     return
   }
-  const manifest = JSON.parse(readFileSync(resolve(root, owner.package, 'package.json'), 'utf8')) as { name?: string; exports?: Record<string, unknown> }
+  const manifest = JSON.parse(readFileSync(resolve(root, owner.package, 'package.json'), 'utf8')) as { name?: string; exports?: Record<string, unknown>; peerDependencies?: Record<string, unknown>; peerDependenciesMeta?: Record<string, { optional?: boolean }>; devDependencies?: Record<string, unknown> }
   if (!manifest.name || !/^@?[a-z0-9][a-z0-9._/-]*$/.test(manifest.name)) throw new Error('Invalid npm package name')
   const packed = execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', output], { cwd: resolve(root, owner.package), encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, CI: 'true' } })
   const result = JSON.parse(packed) as Array<{ filename?: string }>
@@ -176,11 +181,32 @@ export function buildOwner(root: string, owner: Owner, target: Target, outputPat
   const consumer = resolve(output, '.consumer')
   mkdirSync(consumer)
   try {
-    execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', consumer, tarball], { cwd: consumer, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+    // This consumer exercises every export, including optional UI entrypoints.
+    // Install their declared host peers here, never in the staged library artifact.
+    execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', consumer, tarball, ...optionalVerificationPeers(manifest, resolve(root, owner.package))], { cwd: consumer, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
     const publicPaths = Object.keys(manifest.exports ?? {}).filter(key => key === '.' || key.startsWith('./'))
     if (publicPaths.some(key => key.includes('*'))) throw new Error('Wildcard exports require an explicit consumer verification contract')
     verifyPublicExports(consumer, manifest.name, publicPaths.length ? publicPaths : ['.'])
   } finally { rmSync(consumer, { recursive: true, force: true }) }
+}
+
+/** Host peers required by the all-exports verifier, not by headless consumers. */
+export function optionalVerificationPeers(manifest: { peerDependencies?: Record<string, unknown>; peerDependenciesMeta?: Record<string, { optional?: boolean }>; devDependencies?: Record<string, unknown> }, packageRoot?: string): string[] {
+  return Object.entries(manifest.peerDependencies ?? {}).sort(([a], [b]) => a.localeCompare(b)).flatMap(([name, version]) => {
+    if (manifest.peerDependenciesMeta?.[name]?.optional !== true) return [];
+    if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(name) || typeof version !== 'string' || !version.trim() || version.includes('\0'))
+      throw new Error('Invalid optional verification peer');
+    const supplied = manifest.devDependencies?.[name];
+    if (typeof supplied === 'string' && supplied.startsWith('file:')) {
+      if (!packageRoot) throw new Error('Local verification peer requires its package root');
+      const path = resolve(packageRoot, supplied.slice(5));
+      const rel = relative(realpathSync(packageRoot), realpathSync(path));
+      if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) || !path.endsWith('.tgz') || !lstatSync(path).isFile())
+        throw new Error('Local verification peer must be a contained package tarball');
+      return [path];
+    }
+    return [`${name}@${version}`];
+  })
 }
 
 /** Exercise packed JS exports and inspect declared stylesheet assets as files. */
@@ -213,14 +239,14 @@ export function assessPrior(root: string, owner: Owner, target: Target, currentS
   if (!owner.targets.includes(target)) return rebuild('owner is not registered for this target')
   if (repository !== 'tryapparent/apparent') return rebuild('repository identity is not canonical')
   for (const run of [...runs].sort((a, b) => b.id - a.id)) {
-    if (!Number.isSafeInteger(run.id) || run.id <= 0 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt <= 0 || !/^[0-9a-f]{40,64}$/.test(run.head_sha) || run.event !== 'push' || run.head_branch !== 'main' || run.path !== workflowPath || run.head_sha === currentSha) continue
+    if (!Number.isSafeInteger(run.id) || run.id <= 0 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt <= 0 || !/^[0-9a-f]{40,64}$/.test(run.head_sha) || run.event !== 'push' || run.head_branch !== 'main' || run.path !== workflowPathFor(owner.id) || run.head_sha === currentSha) continue
     try { execFileSync('git', ['merge-base', '--is-ancestor', run.head_sha, currentSha], { cwd: root, stdio: 'ignore' }) } catch { continue }
     if (fingerprint(root, owner, target, run.head_sha) !== digest) continue
-    const jobName = `stream (${owner.id}, ${target})`
+    const jobName = `deliver / stream (${owner.id}, ${target})`
     const jobs = jobsFor(run)
     if (jobs.filter(j => j.name === jobName && j.status === 'completed' && j.conclusion === 'success').length !== 1 ||
-        jobs.filter(j => j.name === contractsJob && j.status === 'completed' && j.conclusion === 'success').length !== 1 ||
-        jobs.filter(j => j.name === auditJob && j.status === 'completed' && j.conclusion === 'success').length !== 1) continue
+        jobs.filter(j => j.name === `deliver / ${contractsJob}` && j.status === 'completed' && j.conclusion === 'success').length !== 1 ||
+        jobs.filter(j => j.name === `deliver / ${auditJob}` && j.status === 'completed' && j.conclusion === 'success').length !== 1) continue
     const wanted = `stream-${owner.id}-${target}-${digest}`
     const artifact = artifactsFor(run).find(a => Number.isSafeInteger(a.id) && a.id > 0 && a.name === wanted && !a.expired)
     if (artifact) return { reuse: true, reason: 'same workflow owner, successful audit, ancestor source and matching unexpired artifact', input_digest: digest, prior_artifact_id: artifact.id, prior_source_sha: run.head_sha, prior_run_id: run.id, prior_run_attempt: run.run_attempt }
@@ -234,7 +260,7 @@ export function sealPayload(root: string, owner: Owner, target: Target, inputDir
   if (!statSync(source).isDirectory()) throw new Error('Payload input is not a directory')
   const check = (dir: string) => { for (const name of readdirSync(dir)) { const p = resolve(dir, name); const stat = lstatSync(p); if (stat.isSymbolicLink()) { const link = readlinkSync(p); if (isAbsolute(link) || windows(link)) throw new Error('Unsafe payload symlink'); const resolved = resolve(dirname(p), link); const rel = relative(source, resolved); if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('Payload symlink escapes input directory'); let actual: string; try { actual = realpathSync(p) } catch { throw new Error('Broken payload symlink') } const actualRel = relative(source, actual); if (actualRel === '..' || actualRel.startsWith(`..${sep}`) || isAbsolute(actualRel)) throw new Error('Payload symlink escapes input directory'); } else if (stat.isDirectory()) check(p); else if (!stat.isFile()) throw new Error('Unsupported payload filesystem entry') } }
   check(source)
-  if (env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${workflowPath}@refs/heads/main` || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID ?? '') || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT ?? '')) throw new Error('Sealing requires canonical main workflow identity')
+  if (env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${workflowPathFor(owner.id)}@refs/heads/main` || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID ?? '') || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT ?? '')) throw new Error('Sealing requires canonical main workflow identity')
   const output = outsideCheckout(root, outputDir)
   if (output === source || output.startsWith(`${source}${sep}`) || source.startsWith(`${output}${sep}`)) throw new Error('Output directory overlaps payload input')
   const sha = git(root, ['rev-parse', 'HEAD']).trim()
@@ -254,7 +280,7 @@ function requireNoSymlink(path: string) { if (lstatSync(path).isSymbolicLink()) 
 /** Reissue an admitted, byte-verified archive; never extract its application payload. */
 export function reusePayload(root: string, owner: Owner, target: Target, zip: string, outputDir: string, digest: string, priorSha: string, artifactId: string, priorRunId: string, priorAttempt: string, env = process.env) {
   if (!owner.targets.includes(target) || !/^[0-9a-f]{64}$/.test(digest) || !/^[0-9a-f]{40,64}$/.test(priorSha) || !/^[1-9][0-9]*$/.test(artifactId)) throw new Error('Invalid reuse identity')
-  if (env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${workflowPath}@refs/heads/main` || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID ?? '') || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT ?? '')) throw new Error('Reuse requires canonical main workflow identity')
+  if (env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${workflowPathFor(owner.id)}@refs/heads/main` || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID ?? '') || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT ?? '')) throw new Error('Reuse requires canonical main workflow identity')
   const entries = execFileSync('unzip', ['-Z1', zip], { encoding: 'utf8', maxBuffer: 4096 }).trim().split('\n').sort()
   if (JSON.stringify(entries) !== JSON.stringify(['component.tar.gz', 'receipt.json'])) throw new Error('Unexpected artifact ZIP inventory')
   const original = JSON.parse(execFileSync('unzip', ['-p', zip, 'receipt.json'], { encoding: 'utf8', maxBuffer: 16384 }))

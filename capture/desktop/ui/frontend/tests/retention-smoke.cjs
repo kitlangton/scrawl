@@ -170,7 +170,7 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   const denied = await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents;
     const event = { sender, senderFrame: sender.mainFrame };
-    const allowed = new Set(['build-identity', 'settings-mounted', 'read-capture-location', 'change-capture-location', 'reset-capture-location',
+    const allowed = new Set(['build-identity', 'settings-mounted', 'settings-frame-ready', 'read-capture-location', 'change-capture-location', 'reset-capture-location',
       'read-retention', 'save-retention', 'reset-retention', 'read-capture-usage', 'navigate-settings', 'show-capture-folder']);
     const rejected = [];
     for (const [channel, handler] of ipcMain._invokeHandlers) {

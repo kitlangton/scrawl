@@ -1,38 +1,44 @@
 # Website and Connect continuous delivery
 
-Only Value-stream delivery runs automatically (on matching main pushes and trusted
-Connect producer completions). All other
-standalone workflows require an explicit workflow_dispatch; push, completion and
-scheduled triggers are disabled. Reusable workflow_call entry points remain for
-manually started callers. Website publication inside Value-stream delivery retains
-its existing automatic behavior. This trigger policy supersedes other automatic
-pipeline descriptions below.
+Each value stream has an independent native GitHub paths-filtered workflow.
+Owner entrypoints in `.github/workflows/stream-<owner>.yml` own their PR and main
+jobs, permissions, fixed owner/target matrix and runtime audit. Small composite
+actions under `.github/actions/delivery-contracts` and `delivery-component` share
+repeatable steps while leaving job ownership and receipt identity in each workflow.
+An owner workflow schedules only its registered targets. Changed owners run fresh
+PR checks/builds with read-only permissions and synthetic analytics settings. PR
+jobs do not reuse, seal, attest or publish deployment artifacts; main producer jobs
+may admit verified unchanged artifacts and then seal, attest and upload. Public
+follows successful trusted Connect producer completions and owns the only Pages
+publisher. The independent Worker publisher remains manual under its existing
+activation contract. Other standalone workflows remain manual-only.
+This trigger policy supersedes other automatic pipeline descriptions below.
 Existing release admission still rejects diagnostic manual verification receipts;
 manual triggering does not waive publication gates.
 
-GitHub Actions do not run automatically on PRs or feature-branch pushes. Feature
-pushes run inexpensive selector, push-hook and release-admission contracts locally;
-they do not rebuild the application.
+Feature-branch pushes without a PR retain inexpensive local selector, push-hook
+and release-admission contracts. Applicable Value-stream PR checks must pass
+before merge; standalone Linux/macOS and Connect workflows remain manual-only.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
-`.github/workflows/value-stream-delivery.yml` is the independent main shipping
-workflow for registered components, including Public's Bun-built web artifact and
-native Engine providers. The registry records each owner's supported targets and
-artifact stage; missing registrations remain explicitly pending or blocked. A
-component artifact does not certify installed capture routing or native readiness.
-Public's website pipeline consumes its verified component for composition and
-publication. Connect retains its separate producer. Feature-push selection runs the App Shell installed
+`.github/workflows/stream-*.yml` are the independent main producer workflows for
+registered components, including Public's Bun-built web artifact and native Engine
+providers. Each paths filter includes its owner source, shared consumed inputs,
+registration/build contracts and its own workflow. The registry records each
+owner's supported targets and artifact stage; missing registrations remain
+explicitly pending or blocked. A component artifact does not certify installed
+capture routing or native readiness. Public's website pipeline consumes its
+verified component for composition and publication. Connect retains its separate
+browser/Worker producer with explicit manual/reusable invocation; the registered
+Connect client package has its own path-filtered component workflow. Feature-push selection runs the App Shell installed
 check for its package inputs. Changes under `composition/delivery/` run that
 check plus the dependency-free Node delivery contracts. Neither hook path
 installs packages.
 
-`Linux verification` runs on main pushes. Running verification finishes; only
-pending work is replaced. `Mac verification` follows successful Linux runs and
-checks their exact SHA, so every automatic Mac candidate retains matching Linux
-proof even while main advances. Mac's running work also finishes and its pending
-candidates coalesce; slow Mac capacity never blocks Linux. Manual main dispatches
-remain diagnostic and cannot substitute for automatic release receipts.
+`Linux verification` and `Mac verification` are manual diagnostic entrypoints.
+The retained verification and release contracts below do not enable automatic
+platform verification or publication.
 Both use `verification-platform.yml` and retain full Rust, Engine/client, browser,
 Electron and applicable native checks against the entire selected tree. Cancelled
 pending runs cannot hide changes. Full verification is main-only; feature branches
@@ -52,8 +58,8 @@ CI is not Apple Silicon runtime proof. An image change must still pass the same
 checks before Mac publication.
 
 Linux delivery triggers only after successful `Linux verification`.
-Public delivery runs in the common workflow on main pushes, manual dispatches and
-successful Connect producer completions. A dedicated `stream (public, web)` job
+Public delivery runs in `stream-public.yml` on its main paths and successful
+Connect producer completions. A dedicated `stream (public, web)` job
 runs delivery/shared architecture contracts, then builds or reuses verified Public
 bytes. `deploy (public, web)` needs only that producer, not the other-owner matrix.
 It downloads the same-run component, validates its receipt against producer outputs,
@@ -204,7 +210,9 @@ fail; a superseded Pages candidate reports an intentional successful skip.
 
 ## Website activation: Cloudflare Pages
 
-The active website job now publishes only the sealed source-built `dist-apparent` to the isolated
+The `deploy (public, web)` job in the reusable Public delivery execution is the only Public
+production entrypoint. The publisher rejects other workflows and job identities.
+It publishes only the sealed source-built `dist-apparent` to the isolated
 `apparent-capture` Pages project, using `public/site/scripts/cd/publish-pages.ts` and
 `public/site/wrangler.pages.jsonc`. It does not execute `public/site/wrangler.jsonc`, deploy the
 hosted Worker, or connect to Clanker. See
@@ -583,7 +591,7 @@ improvement or an increase to the separate NoMac spending/session limits.
 ### Connect client TypeScript feedback before feature pushes
 
 Feature pre-push runs the existing `npm test` command in
-`connect/client/typescript` when the full merge-base delta changes its
+`connect/delivery/client` when the full merge-base delta changes its
 `package.json`, `package-lock.json`, `tsconfig.json`, `src/**`, or direct
 `test/*.test.ts` inputs. The command's declared `pretest` builds the package
 before running its Node tests. Node and the locked npm dependencies must already

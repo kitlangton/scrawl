@@ -17,11 +17,14 @@ apparent-agent inspect /path/to/capture.apparent --images
 apparent-agent inspect /path/to/capture.apparent --json
 apparent-agent zoom /path/to/capture.apparent --at 'width changes'
 apparent-agent zoom /path/to/capture.apparent --mark m2 --frame 2 --full
+apparent-agent demo --out '/tmp/synthetic demo.apparent'
 ```
 
 Quote paths containing spaces. `inspect` accepts a local bundle directory, its `apparent.json` manifest, or `latest`. It does not accept URLs. Use `--json` to print the original manifest bytes, `--marks` for semantic mark lines (`--marks --json` for structured mark fields), `--transcript` for transcript text, and `--images` to list validated relative image references. `--images` does not open or inspect pixels; open the referenced files yourself. `zoom` creates a contact sheet PNG and semantic `zoom.json` companion in a fresh private output directory. It accepts a clock time or narration phrase with `--at`, or a mark number/id with `--mark`; use `--frame` when a number is shared by multiple keyframes. `--full` requests uncropped retained frames when available, and `--out` names a fresh absolute directory. The default is a new folder under `~/.cache/apparent/agent/zoom`.
 
 `apparent-agent frames BUNDLE --from 0:04 --to 0:06 --fps 4` returns saved keyframe paths without a decoder when no provider is configured or source video is missing. Equal start/end times select a nearby saved frame. Saved mode preserves manifest timestamps, never changes the bundle, and identifies itself on stderr and in `--json`; those images are existing keyframes, not newly decoded samples. Open them with your image viewer. No matching saved images produces an error.
+
+`apparent-agent demo [--out FRESH.apparent] [--json]` writes a private synthetic example bundle locally, with an annotated contact sheet/keyframes, clicks, circle/arrow/pin marks and timed illustrative transcript. Its interface, context and content are explicitly synthetic; it does not read or record the screen, window, session or microphone. Default output is a fresh directory under capture storage; `--out` must be an absolute fresh `.apparent` path. `--clipboard` fails before side effects until a native route is published. Use `inspect`, `frames`, and `zoom` on the result as with a local bundle. No audio, video or native artifact is generated.
 
 Video decoding instead requires canonical absolute `APPARENT_ENGINE_FRAMES_EXECUTABLE` and owner-only `APPARENT_ENGINE_RUNTIME` paths. It selects up to 48 bundle-clock timestamps and writes to a fresh private job directory under that runtime. `--json` identifies decoded mode and includes request times and clamp flags. The SDK currently has no native decoder: do not claim real decoding or PNG proof from synthetic contract tests. Provider errors remain errors. A timeout does not establish cancellation; retain the reported job/output diagnostics, and never retry or delete ambiguous output blindly.
 

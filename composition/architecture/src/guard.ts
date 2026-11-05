@@ -4,20 +4,23 @@ import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export type Owner = 'engine' | 'record' | 'agent' | 'onboarding' | 'shared' | 'composition' | 'legacy' | 'other';
+export type Owner = 'engine' | 'record' | 'agent' | 'onboarding' | 'connect' | 'shared' | 'composition' | 'legacy' | 'other';
 const product = ['engine', 'record', 'agent', 'onboarding'] as const;
 const packageRoots: Record<string, string> = {
   '@apparent/engine-sdk': 'engine/sdk', '@apparent/record': 'record',
   '@apparent/agent': 'agent', '@apparent/onboarding': 'onboarding',
+  '@apparent/connect-client': 'connect/delivery/client',
+  '@apparent/connect-static-hosting': 'connect/tooling/hosting',
   '@apparent/app-contracts': 'shared/contracts', '@apparent/ui': 'shared/ui',
 };
 const packageOwners: Record<string, Owner> = {
   '@apparent/engine-sdk': 'engine', '@apparent/record': 'record', '@apparent/agent': 'agent',
   '@apparent/onboarding': 'onboarding', '@apparent/app-contracts': 'shared', '@apparent/ui': 'shared',
+  '@apparent/connect-client': 'connect', '@apparent/connect-static-hosting': 'connect',
 };
 const publicEdges: Record<Owner, Owner[]> = {
   engine: ['shared'], record: ['engine', 'shared'], agent: ['engine', 'shared'], onboarding: ['record', 'shared'],
-  shared: [], composition: ['engine', 'record', 'agent', 'onboarding', 'shared'], legacy: [], other: [],
+  connect: ['shared'], shared: [], composition: ['engine', 'record', 'agent', 'onboarding', 'shared'], legacy: [], other: [],
 };
 const sourceExt = new Set(['.ts', '.tsx', '.cts', '.mts']);
 const ignoredParts = new Set(['node_modules', 'dist', 'target', '.git']);
@@ -29,6 +32,7 @@ function ownerOf(root: string, file: string): Owner {
   if (rel[0] === 'record') return 'record';
   if (rel[0] === 'agent') return 'agent';
   if (rel[0] === 'onboarding') return 'onboarding';
+  if (rel[0] === 'connect' && (rel[1] === 'service' || (rel[1] === 'delivery' && rel[2] === 'client') || (rel[1] === 'tooling' && rel[2] === 'hosting'))) return 'connect';
   if (rel[0] === 'shared') return 'shared';
   if (rel[0] === 'composition') return 'composition';
   if (rel[0] === 'capture') return 'legacy';
@@ -170,7 +174,7 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
   for (const mf of manifests) {
     const manifestOwner=ownerOf(root,path.dirname(mf));
     if (!selected(manifestOwner)) continue;
-    if (!['engine','record','agent','onboarding','shared','composition'].includes(manifestOwner)) continue;
+    if (!['engine','record','agent','onboarding','connect','shared','composition'].includes(manifestOwner)) continue;
     const policyPath = path.join(path.dirname(mf), 'architecture.json');
     if (existsSync(policyPath)) {
       try {
@@ -236,7 +240,7 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
   for (const file of files) {
     const from = fileOwner.get(file)!;
     if (!selected(from)) continue;
-    if (!product.includes(from as typeof product[number]) && from !== 'shared' && from !== 'composition') continue;
+    if (!product.includes(from as typeof product[number]) && from !== 'connect' && from !== 'shared' && from !== 'composition') continue;
     const text = readFileSync(file, 'utf8');
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
     const scope = configScope(root,file);

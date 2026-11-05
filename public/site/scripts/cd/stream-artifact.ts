@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url'
 import { unzipSync } from 'fflate'
 
 const repository = 'tryapparent/apparent'
-export const workflowPath = '.github/workflows/value-stream-delivery.yml'
+export const workflowPath = '.github/workflows/stream-public.yml'
 export const ownerId = 'public'
 export const target = 'web'
 const maxZipBytes = 512 * 1024 * 1024
@@ -34,7 +34,7 @@ export function trustedRun(run: Run, ancestor: (sha: string) => boolean): boolea
 }
 
 export function validateJobs(jobs: any[], run: Run): void {
-  const required = ['stream (public, web)', 'Delivery contracts', 'Workflow runtime budget']
+  const required = ['deliver / stream (public, web)', 'deliver / Delivery contracts', 'deliver / Workflow runtime budget']
   for (const name of required) {
     const matches = jobs.filter(job => job.name === name)
     if (matches.length !== 1 || matches[0].status !== 'completed' || matches[0].conclusion !== 'success' ||
@@ -180,7 +180,7 @@ export async function consume(root: string, out: string, api: (path: string) => 
   const currentEnvironment = (deps.environmentDigest ?? ownerCore.environmentDigest)(owner, process.env)
   if (!/^[a-f0-9]{64}$/.test(currentSource) || !/^[a-f0-9]{64}$/.test(currentEnvironment)) throw new Error('Invalid current Public input identity')
   const ancestor = deps.ancestor ?? ((sha: string) => gitAncestor(root, sha))
-  const response = await api('/actions/workflows/value-stream-delivery.yml/runs?branch=main&status=completed&per_page=100')
+  const response = await api('/actions/workflows/stream-public.yml/runs?branch=main&status=completed&per_page=100')
   const runs: Run[] = response.workflow_runs ?? []
   for (const run of runs) {
     if (!trustedRun(run, ancestor)) continue

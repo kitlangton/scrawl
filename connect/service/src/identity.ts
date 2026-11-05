@@ -3,7 +3,7 @@ import {genericOAuth} from 'better-auth/plugins';
 import {decodeJwt} from 'jose';
 import {oauthProvider,oauthDeviceAuthorization,DEVICE_CODE_GRANT_TYPE} from '@better-auth/oauth-provider';
 import type {Env} from './types.ts';
-import {admit,fail,hash,random} from './common.ts';
+import {admit,fail,hash,random,apiBase,apiBasePath} from './common.ts';
 
 // Workers keys environment lifetime by object identity (fetch handler parameters):
 // https://developers.cloudflare.com/workers/runtime-apis/handlers/fetch/#parameters
@@ -26,7 +26,7 @@ export function identity(env:Env) {
 function createIdentity(env: Env) {
  if(typeof env.BETTER_AUTH_SECRET!=='string'||env.BETTER_AUTH_SECRET.length<32)fail('auth_unavailable',503);
  return betterAuth({
-  appName:'Apparent Connect',baseURL:env.API_ORIGIN,basePath:'/auth',secret:env.BETTER_AUTH_SECRET,
+  appName:'Apparent Connect',baseURL:apiBase(env),basePath:apiBasePath(env)+'/auth',secret:env.BETTER_AUTH_SECRET,
   database:env.DB,
   logger:{disabled:true},
   onAPIError:{throw:true},
@@ -43,7 +43,7 @@ function createIdentity(env: Env) {
   advanced:{useSecureCookies:true,cookiePrefix:'apparent',defaultCookieAttributes:{httpOnly:true,secure:true,sameSite:'lax',path:'/'}},
   plugins:[genericOAuth({config:[{providerId:'google',clientId:env.GOOGLE_CLIENT_ID,clientSecret:env.GOOGLE_CLIENT_SECRET,
    discoveryUrl:env.OAUTH_DISCOVERY_URL||'https://accounts.google.com/.well-known/openid-configuration',
-   redirectURI:env.API_ORIGIN+'/auth/google/callback',scopes:['openid','email','profile'],pkce:true,requireIdTokenVerification:true,
+   redirectURI:apiBase(env)+'/auth/google/callback',scopes:['openid','email','profile'],pkce:true,requireIdTokenVerification:true,
    async getUserInfo(tokens) {
     // In 1.7.15 genericOAuth verifies a present ID token (including nonce)
     // BEFORE this hook, but otherwise falls back to UserInfo. Require the token

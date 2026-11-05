@@ -53,6 +53,37 @@ test('publication admission checks main ancestry and deployed revision ordering'
   await assert.rejects(publicationNeeded('example/project', sha, 'b'.repeat(40), async () => ({ status: ++divergeCall === 1 ? 'identical' : 'diverged' })), /diverge/)
 })
 
+test('real comparison command projects status before buffering a large GitHub response', () => temp(async root => {
+  const tool = join(root, 'gh'), calls = join(root, 'gh-calls')
+  writeFileSync(tool, `#!/bin/sh
+printf '%s\\n' "$*" >> "$COMPARISON_CALLS"
+if [ "$COMPARISON_FAIL" = true ]; then exit 1; fi
+case "$*" in
+  *'--jq .status'*) printf '%s\\n' "\${COMPARISON_STATUS:-ahead}" ;;
+  *) printf '{"status":"ahead","files":[{"patch":"'; head -c 1200000 /dev/zero | tr '\\000' x; printf '"}]}' ;;
+esac
+`, { mode: 0o700 })
+  const prior = { PATH: process.env.PATH, COMPARISON_CALLS: process.env.COMPARISON_CALLS,
+    COMPARISON_FAIL: process.env.COMPARISON_FAIL, COMPARISON_STATUS: process.env.COMPARISON_STATUS }
+  Object.assign(process.env, { PATH: root + ':' + process.env.PATH, COMPARISON_CALLS: calls })
+  delete process.env.COMPARISON_FAIL; delete process.env.COMPARISON_STATUS
+  try {
+    // The same unprojected CLI response exceeds spawnSync's default 1 MiB.
+    const unprojected = spawnSync(tool, ['api', 'repos/example/project/compare/base...head'], { encoding: 'utf8' })
+    assert.equal((unprojected.error as NodeJS.ErrnoException)?.code, 'ENOBUFS')
+    assert.equal(await publicationNeeded('example/project', sha, 'b'.repeat(40)), true)
+    assert.equal(readFileSync(calls, 'utf8').split('\n').filter(line => line.includes('--jq .status')).length, 2)
+    process.env.COMPARISON_STATUS = 'behind'
+    await assert.rejects(publicationNeeded('example/project', sha, null), /no longer on main/)
+    process.env.COMPARISON_STATUS = 'unexpected'
+    await assert.rejects(publicationNeeded('example/project', sha, null))
+    process.env.COMPARISON_FAIL = 'true'
+    await assert.rejects(publicationNeeded('example/project', sha, null), /GitHub comparison failed/)
+  } finally {
+    for (const [key, value] of Object.entries(prior)) if (value === undefined) delete process.env[key]; else process.env[key] = value
+  }
+}))
+
 test('sealed artifact rejects revision changes, content edits, extra inputs, symlinks and reuse', () => temp(root => {
   const artifact = fixture(root)
   assert.equal(verifyArtifact(sha, artifact).revision, sha)
@@ -123,8 +154,8 @@ test('publisher stages exact bytes, writes success receipt, skips superseded can
   const artifact = fixture(root)
   const movieBytes = readFileSync(join(root, 'public/site/public/assets/media/Apparent-ghost-demo-v4-lilac.mp4'))
   rmSync(join(root, 'public/site'), { recursive: true })
-  const oldEnv = { sha: process.env.GITHUB_SHA, ref: process.env.GITHUB_REF, token: process.env.WEBSITE_PAGES_API_TOKEN, repo: process.env.GITHUB_REPOSITORY }
-  process.env.GITHUB_SHA = sha; process.env.GITHUB_REF = 'refs/heads/main'; process.env.WEBSITE_PAGES_API_TOKEN = 'synthetic'; process.env.GITHUB_REPOSITORY = 'example/project'
+  const oldEnv = { sha: process.env.GITHUB_SHA, ref: process.env.GITHUB_REF, token: process.env.WEBSITE_PAGES_API_TOKEN, repo: process.env.GITHUB_REPOSITORY, workflow: process.env.GITHUB_WORKFLOW_REF, job: process.env.GITHUB_JOB }
+  process.env.GITHUB_SHA = sha; process.env.GITHUB_REF = 'refs/heads/main'; process.env.WEBSITE_PAGES_API_TOKEN = 'synthetic'; process.env.GITHUB_REPOSITORY = 'tryapparent/apparent'; process.env.GITHUB_WORKFLOW_REF = 'tryapparent/apparent/.github/workflows/stream-public.yml@refs/heads/main'; process.env.GITHUB_JOB = 'deploy'
   try {
     const staged: string[] = [], packagePath = join(artifact, 'dist-apparent')
     let apiCalls = 0
@@ -144,6 +175,13 @@ test('publisher stages exact bytes, writes success receipt, skips superseded can
         return new Response(readFileSync(join(packagePath, paths[url.pathname])), { headers })
       },
     }
+    for (const [key, invalid] of [['GITHUB_REPOSITORY', 'fork/apparent'], ['GITHUB_WORKFLOW_REF', 'tryapparent/apparent/.github/workflows/web-delivery.yml@refs/heads/main'], ['GITHUB_WORKFLOW_REF', undefined], ['GITHUB_JOB', 'website']]) {
+      const original = process.env[key!]
+      if (invalid === undefined) delete process.env[key!]; else process.env[key!] = invalid
+      await assert.rejects(main(deps), /canonical value-stream deploy job/)
+      if (original === undefined) delete process.env[key!]; else process.env[key!] = original
+    }
+    assert.equal(staged.length, 0, 'Other workflow contexts must fail before publication')
     await main(deps)
     const receipt = JSON.parse(readFileSync(join(root, 'website-receipt.json'), 'utf8'))
     assert.equal(receipt.revision, sha)
@@ -165,7 +203,7 @@ test('publisher stages exact bytes, writes success receipt, skips superseded can
     writeFileSync(join(artifact, 'dist-apparent/index.html'), 'changed after verification')
     await assert.rejects(main(deps), /checksum/)
   } finally {
-    for (const [key, value] of Object.entries({ GITHUB_SHA: oldEnv.sha, GITHUB_REF: oldEnv.ref, WEBSITE_PAGES_API_TOKEN: oldEnv.token, GITHUB_REPOSITORY: oldEnv.repo })) {
+    for (const [key, value] of Object.entries({ GITHUB_SHA: oldEnv.sha, GITHUB_REF: oldEnv.ref, WEBSITE_PAGES_API_TOKEN: oldEnv.token, GITHUB_REPOSITORY: oldEnv.repo, GITHUB_WORKFLOW_REF: oldEnv.workflow, GITHUB_JOB: oldEnv.job })) {
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
     }

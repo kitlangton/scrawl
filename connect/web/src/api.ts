@@ -13,8 +13,9 @@ export function apiOrigin(config = import.meta.env.VITE_HOSTED_API_ORIGIN as str
   if (!config) return ""
   const url = new URL(config)
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-  if ((url.protocol !== "https:" && !(local && url.protocol === "http:")) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) throw new Error("Invalid Connect API origin configuration.")
-  return url.origin
+  const base = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "")
+  if ((url.protocol !== "https:" && !(local && url.protocol === "http:")) || url.username || url.password || !["", "/connect"].includes(base) || url.search || url.hash) throw new Error("Invalid Connect API base URL configuration.")
+  return url.origin + base
 }
 export function signInUrl(device: boolean, userCode: string): string {
   // Only fixed local destinations; never forward a URL supplied by the visitor.

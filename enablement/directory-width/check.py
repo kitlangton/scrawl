@@ -11,15 +11,20 @@ LIMIT = 10
 # Dot-prefixed immediate root directories are configuration/tooling areas and
 # are excluded from the ordinary owner-directory count. Their contents remain
 # eligible and checked at their own levels.
-# GitHub Actions requires one workflow file per independently scheduled stream.
-# This exact inventory is the sole nested width exception; unknown entries fail.
+# GitHub Actions requires each workflow entrypoint to be an immediate file.
+# This exact inventory is the sole file-count exception; unknown entries fail.
 WORKFLOW_DIRECTORY = b".github/workflows"
 WORKFLOW_FILES = {
     b"connect-delivery.yml", b"linux-updater-harness.yml", b"native-proof-mac.yml",
     b"release-linux.yml", b"release-mac-preview.yml", b"release-windows.yml",
-    b"value-stream-delivery.yml", b"verification-mac.yml",
+    b"verification-mac.yml",
     b"verification-platform.yml", b"verification.yml", b"web-delivery.yml",
+    b"stream-agent.yml", b"stream-app-shell.yml", b"stream-connect-client.yml", b"stream-connect-browser.yml",
+    b"stream-engine-media-native.yml", b"stream-engine-native.yml", b"stream-engine.yml",
+    b"stream-onboarding.yml", b"stream-platform-config.yml", b"stream-public.yml",
+    b"stream-record.yml",
 }
+WORKFLOW_DIRECTORIES: set[bytes] = set()
 # Eligibility is by tracked first-party tree scope, not filename suffix. Every
 # non-excluded blob is repo-owned content for width purposes (including files
 # with extensionless or uncommon source names). Keep generated/dependency
@@ -165,9 +170,9 @@ def inspect(root: Path) -> list[tuple[bytes, int, int]]:
             width_exceeded = files > LIMIT or dirs > LIMIT
         unknown_workflow_entries = (
             directory == WORKFLOW_DIRECTORY
-            and bool(set(direct) - WORKFLOW_FILES)
+            and bool(set(direct) - WORKFLOW_FILES - WORKFLOW_DIRECTORIES)
         )
-        workflow_file_overflow = directory == WORKFLOW_DIRECTORY and files > 11
+        workflow_file_overflow = directory == WORKFLOW_DIRECTORY and files > len(WORKFLOW_FILES)
         if width_exceeded or unknown_workflow_entries or workflow_file_overflow:
             violations.append((directory, files, dirs))
     return violations

@@ -37,10 +37,14 @@ const regularTree = (root: string): Inventory => {
   return Object.fromEntries(Object.entries(result).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
 }
 
-function ghCompare(path: string): Promise<any> {
-  const result = spawnSync('gh', ['api', path], { encoding: 'utf8' })
-  if (result.status !== 0) throw new Error(result.stderr || 'GitHub comparison failed')
-  return JSON.parse(result.stdout)
+async function ghCompare(path: string): Promise<{ status: string }> {
+  // Comparison patches can exceed the subprocess buffer; ordering needs only
+  // the status. Project it inside gh rather than buffering the full diff here.
+  const result = spawnSync('gh', ['api', path, '--jq', '.status'], { encoding: 'utf8' })
+  if (result.status !== 0) throw new Error(result.stderr || result.error?.message || 'GitHub comparison failed')
+  const status = result.stdout.trim()
+  if (!['ahead', 'identical', 'behind', 'diverged'].includes(status)) throw new Error('Invalid GitHub comparison status')
+  return { status }
 }
 export async function publicationNeeded(repo: string, sha: string, published: string | null, compare = ghCompare): Promise<boolean> {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error('Invalid repository')
@@ -190,6 +194,9 @@ export async function verifyReady(sha: string, packagePath: string, deps: Publis
 export async function main(deps: PublisherDeps = {}) {
   const root = deps.root ?? ROOT, sha = process.env.GITHUB_SHA ?? ''
   if (!/^[0-9a-f]{40}$/.test(sha) || process.env.GITHUB_REF !== 'refs/heads/main') throw new Error('Only exact main revisions may publish')
+  if (process.env.GITHUB_REPOSITORY !== 'tryapparent/apparent' ||
+      process.env.GITHUB_WORKFLOW_REF !== 'tryapparent/apparent/.github/workflows/stream-public.yml@refs/heads/main' ||
+      process.env.GITHUB_JOB !== 'deploy') throw new Error('Public publication requires the canonical value-stream deploy job')
   const artifact = join(root, '.build/website'), manifest = verifyArtifact(sha, artifact), packagePath = join(artifact, 'dist-apparent')
   if (!existsSync(join(packagePath, '404.html')) || !existsSync(join(packagePath, '_routes.json'))) throw new Error('Missing privacy/routing preparation')
   if (lstatSync(packagePath).isSymbolicLink() || Object.entries(inventory(packagePath)).some(([name]) => statSync(join(packagePath, name)).size > MAX_ASSET)) throw new Error('Package has a symlink or oversized asset')

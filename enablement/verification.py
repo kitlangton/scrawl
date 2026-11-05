@@ -113,7 +113,7 @@ def directory_width_contract_selected(paths):
                for path in paths)
 
 
-CONNECT_CLIENT_TYPESCRIPT = "connect/client/typescript/"
+CONNECT_CLIENT_TYPESCRIPT = "connect/delivery/client/"
 CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
     CONNECT_CLIENT_TYPESCRIPT + name
     for name in ("package.json", "package-lock.json", "tsconfig.json")
@@ -124,8 +124,9 @@ CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
 # shared UI components; these paths do not feed the Rust application build.
 APP_SHELL_ROOT = "composition/app/"
 APP_SHELL_DELIVERY_ROOT = "composition/delivery/"
-APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/", "shared/ui/")
-APP_SHELL_WORKFLOW = ".github/workflows/value-stream-delivery.yml"
+APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/", "shared/ui/",
+                    ".github/actions/delivery-contracts/", ".github/actions/delivery-component/")
+APP_SHELL_WORKFLOW = ".github/workflows/stream-app-shell.yml"
 
 RECORD_PACKAGE_ROOT = "record/"
 RECORD_FRONTEND_ROOT = "capture/desktop/ui/frontend/"
@@ -137,8 +138,10 @@ ONBOARDING_PACKAGE_INPUTS = {
         ".gitignore", "README.md", "delivery.json", "package.json", "package-lock.json",
         "tsconfig.json", "tsconfig.test.json", "src/index.ts", "src/controller.ts",
         "src/model.ts", "src/react.tsx", "src/styles.css", "src/assets.d.ts",
-        "src/assets/frog.png", "test/onboarding.test.ts",
+        "src/assets/frog.png", "src/permissions/controller.ts", "src/permissions/react.tsx",
+        "test/onboarding.test.ts", "test/permissions.test.ts", "test/consumer.test.ts",
         "vendor/record-0.1.0-afd73fb.tgz",
+        "vendor/apparent-app-contracts-0.1.0.tgz", "src/factory.ts", "src/adoption.ts", "test/adoption.test.ts",
     )
 }
 # These can change the toolchain, assembly or transitive source closure. Keep
@@ -147,6 +150,7 @@ ONBOARDING_PACKAGE_BUILD_INPUTS = {
     ONBOARDING_PACKAGE_ROOT + name for name in (
         "package.json", "package-lock.json", "delivery.json", "tsconfig.json",
         "tsconfig.test.json", "vendor/record-0.1.0-afd73fb.tgz",
+        "vendor/apparent-app-contracts-0.1.0.tgz",
     )
 }
 
@@ -297,6 +301,8 @@ def select(paths, history_known=True):
             continue
         if path.startswith(APP_SHELL_INPUTS) or path == APP_SHELL_WORKFLOW:
             app_shell = True
+            if path == APP_SHELL_WORKFLOW or path.startswith((".github/actions/delivery-contracts/", ".github/actions/delivery-component/")):
+                continue
             # Shared UI also feeds existing consumers, so continue through
             # the ordinary selector for those paths.
             if path.startswith(APP_SHELL_ROOT) or path.startswith(APP_SHELL_DELIVERY_ROOT) or path.startswith("shared/contracts/"):
@@ -568,7 +574,7 @@ def run_delivery_tests():
 
 
 def run_connect_client_typescript_tests():
-    package = ROOT / "connect/client/typescript"
+    package = ROOT / "connect/delivery/client"
     controls = ("package.json", "package-lock.json", "tsconfig.json")
     missing_controls = [name for name in controls if not (package / name).is_file()]
     if missing_controls:
@@ -587,7 +593,7 @@ def run_connect_client_typescript_tests():
     if missing_dependencies:
         raise RuntimeError(
             "Connect client TypeScript feedback needs installed locked dependencies; "
-            "run `npm ci --no-audit --no-fund` in connect/client/typescript, then retry. "
+            "run `npm ci --no-audit --no-fund` in connect/delivery/client, then retry. "
             "The pre-push hook never installs dependencies. Missing: "
             + ", ".join(missing_dependencies)
         )

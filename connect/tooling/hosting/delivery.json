@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "id": "connect-browser",
+  "kind": "directory",
+  "package": "connect/tooling/hosting",
+  "inputs": [
+    "connect/tooling/hosting/",
+    "connect/service/",
+    "connect/web/",
+    "shared/ui/",
+    "shared/analytics/"
+  ],
+  "verify": [],
+  "build": "verify:artifact",
+  "targets": ["web"],
+  "stage": "website",
+  "language": "typescript",
+  "artifactPath": ".output",
+  "packageManager": "npm",
+  "files": [
+    "public/site/public/assets/hosted/source-pond-v4.png",
+    "public/site/public/assets/hosted/agent-pond-v4.png",
+    "public/site/public/assets/hosted/agent-reading-v4.png",
+    "public/site/public/assets/fonts/HostGrotesk-Variable.ttf",
+    "public/site/public/assets/brand/apparent-wordmark.svg"
+  ],
+  "environment": [
+    "PUBLIC_POSTHOG_ENABLED",
+    "PUBLIC_POSTHOG_TOKEN",
+    "PUBLIC_POSTHOG_HOST",
+    "PUBLIC_POSTHOG_ENVIRONMENT",
+    "VITE_HOSTED_API_ORIGIN",
+    "API_ORIGIN",
+    "SITE_ORIGIN"
+  ]
+}

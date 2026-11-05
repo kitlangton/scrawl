@@ -1,0 +1,146 @@
+name: record delivery
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'record/**'
+      - 'shared/ui/**'
+      - 'shared/assets/fonts/**'
+      - '.github/workflows/stream-record.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/actions/delivery-contracts/**'
+      - '.github/actions/delivery-component/**'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
+  push:
+    branches: [main]
+    paths:
+      - 'record/**'
+      - 'shared/ui/**'
+      - 'shared/assets/fonts/**'
+      - '.github/workflows/stream-record.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/actions/delivery-contracts/**'
+      - '.github/actions/delivery-component/**'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
+permissions:
+  contents: read
+env:
+  APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-record.yml'
+concurrency:
+  group: value-stream-record-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
+  cancel-in-progress: false
+jobs:
+  contracts:
+    # The agent whose run hits the limit owns optimization; never raise it.
+    name: deliver / Delivery contracts
+    if: github.repository == 'tryapparent/apparent'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/delivery-contracts
+
+  stream:
+    # The agent whose run hits the limit owns optimization; never raise it.
+    name: deliver / stream (${{ matrix.id }}, ${{ matrix.target }})
+    needs: contracts
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix: {"include":[{"id":"record","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"library","package":"record","verify":["typecheck","test","test:package"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"record"}]}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.target == 'web' && 10 || 15 }}
+    env:
+      OWNER_ID: ${{ matrix.id }}
+      OWNER_TARGET: ${{ matrix.target }}
+      PUBLIC_POSTHOG_ENABLED: ${{ vars.PUBLIC_POSTHOG_ENABLED || 'true' }}
+      PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
+      PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
+      PUBLIC_POSTHOG_ENVIRONMENT: production
+      VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/delivery-component
+        id: component
+        with:
+          id: ${{ matrix.id }}
+          target: ${{ matrix.target }}
+          kind: ${{ matrix.kind }}
+          language: ${{ matrix.language }}
+          packageManager: ${{ matrix.packageManager }}
+          architecture_owner: ${{ matrix.architecture_owner }}
+          publish: 'true'
+
+  verify-pr:
+    # The agent whose run hits the limit owns optimization; never raise it.
+    name: verify-pr / pr-stream (${{ matrix.id }}, ${{ matrix.target }})
+    needs: contracts
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix: {"include":[{"id":"record","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"library","package":"record","verify":["typecheck","test","test:package"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"record"}]}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.target == 'web' && 10 || 15 }}
+    env:
+      OWNER_ID: ${{ matrix.id }}
+      OWNER_TARGET: ${{ matrix.target }}
+      PUBLIC_POSTHOG_ENABLED: 'true'
+      PUBLIC_POSTHOG_TOKEN: phc_synthetic
+      PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
+      PUBLIC_POSTHOG_ENVIRONMENT: synthetic
+      VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/delivery-component
+        id: component
+        with:
+          id: ${{ matrix.id }}
+          target: ${{ matrix.target }}
+          kind: ${{ matrix.kind }}
+          language: ${{ matrix.language }}
+          packageManager: ${{ matrix.packageManager }}
+          architecture_owner: ${{ matrix.architecture_owner }}
+          publish: 'false'
+
+  runtime-budget:
+    name: deliver / Workflow runtime budget
+    permissions:
+      contents: read
+      actions: read
+    needs: [contracts, stream, verify-pr]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/runtime-budget
+        with:
+          platform: linux

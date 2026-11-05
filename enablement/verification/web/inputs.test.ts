@@ -6,13 +6,15 @@ const owners:Owner[]=['public','connect','recipient']
 test('build entrypoints scope the color guard to their declared consumers; repository guard remains global',()=>{
  for(const [path,owner] of [['public/site','public'],['connect/web','connect'],['connect/service','connect']]) {
   const manifest=JSON.parse(readFileSync(new URL(`../../../${path}/package.json`,import.meta.url),'utf8'))
-  assert.ok(manifest.scripts.build.includes(`check-theme.${owner === 'public' ? 'ts' : 'py'} --owner ${owner} &&`),path)
+  assert.ok(manifest.scripts.build.includes(`check-theme.${path === 'connect/service' ? 'py' : 'ts'} --owner ${owner} &&`),path)
  }
  const verifier=readFileSync(new URL('../../verification.py',import.meta.url),'utf8')
  assert.match(verifier,/\["python3", "shared\/ui\/scripts\/check-theme.py"\]/)
 })
 test('actual owner, generated Public content and reverse shared consumers select their lanes',()=>{
-  for(const path of ['public/site/src/Home.tsx','public/delivery.json','composition/delivery/core.ts','.github/workflows/value-stream-delivery.yml','README.md','capture/agent/skills/apparent/SKILL.md'])assert(relevant('public',path),path)
+  for(const path of ['public/site/src/Home.tsx','public/delivery.json','composition/delivery/core.ts','.github/actions/delivery-component/action.yml','README.md','capture/agent/skills/apparent/SKILL.md'])assert(relevant('public',path),path)
+  assert(relevant('public','enablement/verification/web/baseline.ts'))
+  assert(relevant('public','public/site/scripts/cd/stream-artifact.ts'))
   assert(!relevant('connect','README.md'));assert(!relevant('recipient','public/site/src/Home.tsx'))
   assert(relevant('connect','connect/service/src/worker.ts'));assert(!relevant('public','connect/service/src/worker.ts'))
   for(const owner of ['public','connect'] as Owner[])for(const path of ['connect/web/package.json','shared/ui/token.css','shared/analytics/config.ts','shared/assets/brand/logo.svg','enablement/release_gate.py'])assert(relevant(owner,path),`${owner}: ${path}`)

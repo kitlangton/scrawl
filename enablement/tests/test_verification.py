@@ -246,9 +246,13 @@ class SelectionTests(unittest.TestCase):
         workflow = verification.select([".github/workflows/verification-platform.yml"])
         self.assertFalse(workflow["app_shell"])
         self.assertTrue(workflow["root"])
-        delivery_workflow = verification.select([".github/workflows/value-stream-delivery.yml"])
-        self.assertTrue(delivery_workflow["app_shell"])
-        self.assertTrue(delivery_workflow["root"])
+        for action in (".github/actions/delivery-contracts/action.yml", ".github/actions/delivery-component/action.yml"):
+            delivery_action = verification.select([action])
+            self.assertTrue(delivery_action["app_shell"])
+            self.assertFalse(delivery_action["root"])
+        entry_workflow = verification.select([".github/workflows/stream-app-shell.yml"])
+        self.assertTrue(entry_workflow["app_shell"])
+        self.assertFalse(entry_workflow["root"])
         self.assertFalse(verification.select(["composition/cli.rs"])["app_shell"])
 
     def test_delivery_sources_select_app_shell_and_dependency_free_node_contracts_only(self):
@@ -315,7 +319,7 @@ class SelectionTests(unittest.TestCase):
                 run.assert_not_called()
 
     def test_connect_client_typescript_inputs_select_package_tests_without_narrowing_rust(self):
-        prefix = "connect/client/typescript/"
+        prefix = "connect/delivery/client/"
         selected = (
             "package.json", "package-lock.json", "tsconfig.json",
             "src/settings-controller.cts", "src/device-flow.cts",
@@ -341,7 +345,7 @@ class SelectionTests(unittest.TestCase):
     def test_connect_client_check_uses_declared_npm_test_from_owner_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            package = root / "connect/client/typescript"
+            package = root / "connect/delivery/client"
             for name in ("package.json", "package-lock.json", "tsconfig.json",
                          "node_modules/typescript/bin/tsc",
                          "node_modules/@types/node/package.json",
@@ -353,7 +357,7 @@ class SelectionTests(unittest.TestCase):
             with patch.object(verification, "ROOT", root), patch.object(
                     verification.subprocess, "run") as run:
                 verification.run_pr_checks({"paths": [
-                    "connect/client/typescript/src/settings-controller.cts"]})
+                    "connect/delivery/client/src/settings-controller.cts"]})
             command = ["npm", "test"]
             calls = [call for call in run.call_args_list if call.args[0] == command]
             self.assertEqual(len(calls), 1)
@@ -369,7 +373,7 @@ class SelectionTests(unittest.TestCase):
     def test_connect_client_missing_locked_dependencies_fails_without_install(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            package = root / "connect/client/typescript"
+            package = root / "connect/delivery/client"
             package.mkdir(parents=True)
             for name in ("package.json", "package-lock.json", "tsconfig.json"):
                 (package / name).touch()
@@ -406,7 +410,7 @@ class SelectionTests(unittest.TestCase):
             "public/site/scripts/site-build/verify.ts",
             "public/site/functions/Apparent-ghost-demo-v4-lilac.mp4.ts",
             "public/site/video-demo/Cargo.toml",
-            "connect/client/typescript/src/index.ts", "connect/web/src/Hosted.tsx",
+            "connect/delivery/client/src/index.ts", "connect/web/src/Hosted.tsx",
             "connect/service/src/worker.ts", "capture/desktop/native/linux.rs",
         ):
             with self.subTest(path=path):
@@ -1483,19 +1487,21 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
                         expected = '60'
                     elif bounded_publication:
                         expected = '2'
-                    elif workflow.name == 'value-stream-delivery.yml':
-                        expected = '2' if '    outputs:\n' in job else ('5' if '    name: Delivery contracts\n' in job else '15')
-                        if '    name: stream (' in job:
+                    elif workflow.name.startswith('stream-'):
+                        expected = '5' if '    name: deliver / Delivery contracts\n' in job else '15'
+                        if '    name: deliver / stream (' in job or '    name: verify-pr / pr-stream (' in job:
                             expected = "${{ matrix.target == 'web' && 10 || 15 }}"
                         if '    name: deploy (public, web)' in job:
                             expected = '10'
+                        if '    name: Workflow runtime budget\n' in job:
+                            expected = '15'
                     self.assertIn(f'    timeout-minutes: {expected}\n', job, str(workflow))
                     if bounded_publication:
                         self.assertIn("WORKFLOW_BUDGET_RESERVE_SECONDS: '120'", job)
                         self.assertIn('2 minute execution budget', job)
                     if temporary_mac or temporary_platform:
                         self.assertIn('Simon-authorized Mac release', job)
-                    elif '    name: Workflow runtime budget\n' not in job:
+                    elif 'Workflow runtime budget\n' not in job:
                         self.assertIn('agent whose run hits the limit owns optimization', job)
 
 
