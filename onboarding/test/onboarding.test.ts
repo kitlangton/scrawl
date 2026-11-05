@@ -571,6 +571,7 @@ test("repair activation retargets, identical activation is idempotent, ready clo
   await act(async () => root.render(createElement(hosted.module.Screen)));
   await act(async () => hosted.activation.permissionRepair.activate(["camera"]));
   await act(async () => hosted.activation.permissionRepair.activate(["camera"]));
+  await act(async () => hosted.activation.permissionRepair.activate(["camera", "camera"]));
   assert.equal(timer.entries.size, 0);
   await act(async () => hosted.activation.permissionRepair.activate(["microphone"]));
   const current = f.driver.current();

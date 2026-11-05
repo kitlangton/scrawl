@@ -121,14 +121,15 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
         },
         permissionRepair: {
           async activate(requestedIds: readonly string[]) {
+            const ids = [...new Set(requestedIds)];
             return serialize(async () => {
               if (phase !== "ready") throw new Error("Disposed onboarding contribution cannot be activated");
               await waitForProgress();
               const returnTo = surface.kind === "repair" ? surface.returnTo : surface.kind;
               const same = surface.kind === "repair" && permissionRepair.state.phase !== "closed"
-                && requestedIds.length === permissionRepair.state.requestedIds.length && requestedIds.every(id => permissionRepair.state.requestedIds.includes(id));
+                && ids.length === permissionRepair.state.requestedIds.length && ids.every(id => permissionRepair.state.requestedIds.includes(id));
               const session = same && surface.kind === "repair" ? surface.session : ++repairSession;
-              permissionRepair.activate(requestedIds);
+              permissionRepair.activate(ids);
               surface = { kind: "repair", returnTo, session }; closeError = null; notify();
             });
           },
