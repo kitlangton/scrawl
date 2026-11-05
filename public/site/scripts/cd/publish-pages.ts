@@ -38,10 +38,14 @@ const regularTree = (root: string): Inventory => {
   return Object.fromEntries(Object.entries(result).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
 }
 
-function ghCompare(path: string): Promise<any> {
-  const result = spawnSync('gh', ['api', path], { encoding: 'utf8' })
-  if (result.status !== 0) throw new Error(result.stderr || 'GitHub comparison failed')
-  return JSON.parse(result.stdout)
+async function ghCompare(path: string): Promise<{ status: string }> {
+  // Comparison patches can exceed the subprocess buffer; ordering needs only
+  // the status. Project it inside gh rather than buffering the full diff here.
+  const result = spawnSync('gh', ['api', path, '--jq', '.status'], { encoding: 'utf8' })
+  if (result.status !== 0) throw new Error(result.stderr || result.error?.message || 'GitHub comparison failed')
+  const status = result.stdout.trim()
+  if (!['ahead', 'identical', 'behind', 'diverged'].includes(status)) throw new Error('Invalid GitHub comparison status')
+  return { status }
 }
 export async function publicationNeeded(repo: string, sha: string, published: string | null, compare = ghCompare): Promise<boolean> {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error('Invalid repository')
