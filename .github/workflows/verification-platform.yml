@@ -230,6 +230,29 @@ jobs:
           node-version: '22'
           cache: ${{ needs.select.outputs.root == 'true' && 'npm' || '' }}
           cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
+      - name: Build and test the standalone capture-control client
+        if: needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        shell: bash
+        run: |
+          cargo test --locked --offline --manifest-path capture/agent/control-client/Cargo.toml
+          cargo build --locked --offline --manifest-path capture/agent/control-client/Cargo.toml --bin apparent-capture
+          target=$(rustc -vV | sed -n 's/^host: //p')
+          node --experimental-strip-types capture/agent/control-client/delivery/package.ts pack \
+            capture/agent/control-client/target/debug/apparent-capture "$GITHUB_SHA" "$target" \
+            "$RUNNER_TEMP/capture-client-producer"
+      - uses: actions/attest-build-provenance@v2
+        if: needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        with:
+          subject-path: ${{ runner.temp }}/capture-client-producer/*.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        with:
+          name: capture-client-${{ inputs.runner }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/capture-client-producer/*.tar.gz
+            ${{ runner.temp }}/capture-client-producer/*.sha256
+          if-no-files-found: error
+          retention-days: 14
       - name: Linux application dependencies
         if: runner.os == 'Linux' && needs.select.outputs.root == 'true'
         run: ./capture/desktop/scripts/linux/appimage/dependencies.sh

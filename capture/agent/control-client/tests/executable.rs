@@ -1,3 +1,5 @@
+#![cfg(feature = "client")]
+
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::{fs::PermissionsExt, net::UnixListener};
 use std::process::Command;
