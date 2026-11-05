@@ -10,12 +10,12 @@ import { recordWithEngine, type RecordingClient } from '../src/recording.ts';
 import type { StartRequest } from '@apparent/engine-sdk';
 
 const manifest = () => ({version:1,id:'fixture',createdAtMs:1,durationMs:2000,
-  target:{mode:'screen',app:null,bundleId:null,windowTitle:null,windowId:null,displayId:1,frame:{x:0,y:0,width:800,height:600,scale:1}},
+  target:{mode:'display',app:null,bundleId:null,windowTitle:null,windowId:null,displayId:1,frame:{x:0,y:0,width:800,height:600,scale:1}},
   transcript:{source:'local',text:'Inspect this control.',segments:[{t0:0,t1:2000,text:'Inspect this control.'}]},
   strokes:[],marks:[],events:[],keyframes:[],contactSheet:'contact-sheet.png'});
 const cli = new URL('../dist/cli.js', import.meta.url).pathname;
 
-test('legacy optional omissions and producer summary work; symlink/oversized summaries are refused', async () => {
+test('legacy optional omissions regenerate semantic output; explicit producer-summary reads reject symlinks and oversized files', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-producer-'));
   try {
     const bundle = join(root,'fixture.apparent'); await mkdir(bundle);
@@ -23,17 +23,19 @@ test('legacy optional omissions and producer summary work; symlink/oversized sum
     await writeFile(join(bundle,'apparent.json'),raw);
     await writeFile(join(root,'outside'),'private outside content');
     await symlink(join(root,'outside'),join(bundle,'summary.md'));
-    let result=spawnSync(process.execPath,[cli,'inspect',bundle],{encoding:'utf8'});
+    let result=spawnSync(process.execPath,[cli,'inspect',bundle,'--stored-summary'],{encoding:'utf8'});
     assert.notEqual(result.status,0); assert.equal(result.stdout,''); assert(!result.stderr.includes('private outside content'));
     await rm(join(bundle,'summary.md'));
     const summary='[apparent 0:02 · Screen · '+bundle+']\nOpen contact-sheet.png and frames/.\n';
     await writeFile(join(bundle,'summary.md'),summary);
     result=spawnSync(process.execPath,[cli,'inspect',bundle],{encoding:'utf8'});
+    assert.equal(result.status,0); assert.match(result.stdout,/apparent 0:02/);
+    result=spawnSync(process.execPath,[cli,'inspect',bundle,'--stored-summary'],{encoding:'utf8'});
     assert.equal(result.status,0); assert.equal(result.stdout,summary);
     result=spawnSync(process.execPath,[cli,'inspect',join(bundle,'apparent.json'),'--json'],{encoding:'utf8'});
     assert.equal(result.status,0); assert.equal(result.stdout,raw);
     await truncate(join(bundle,'summary.md'),64*1024*1024+1);
-    result=spawnSync(process.execPath,[cli,'inspect',bundle],{encoding:'utf8'});
+    result=spawnSync(process.execPath,[cli,'inspect',bundle,'--stored-summary'],{encoding:'utf8'});
     assert.notEqual(result.status,0); assert.equal(result.stdout,'');
     await symlink(join(root,'outside'),join(bundle,'contact-sheet.png'));
     result=spawnSync(process.execPath,[cli,'inspect',bundle,'--images'],{encoding:'utf8'});
@@ -51,6 +53,37 @@ test('mark entries match Rust shape/label/chronological and shared-frame numberi
   assert.equal(markLine(entries[1]),'#1 ✎② 0:00 drew an arrow pointing to “Button” (2 strokes) · arrow');
 });
 
+test('semantic inspect retains Unicode, timed events, optional warnings, and context without media access', async()=>{
+  const root=await mkdtemp(join(tmpdir(),'agent-semantic-'));
+  try {
+    const bundle=join(root,'semantic.apparent');await mkdir(bundle);
+    const data=manifest();
+    data.target.app='Editor';data.target.windowTitle='Editor — 新しい';
+    data.source='screen';data.audio='audio.wav';data.note='Review the résumé';
+    data.transcript={source:'local',text:'Résumé naïve',segments:[{t0:1250,t1:2200,text:'Résumé naïve'}]};
+    data.context={repository:'/work/synthetic'};
+    data.contextChanges=[{t:2500,key:'branch',value:'feature/inspect'}];
+    data.imageQualityWarning='Low-resolution source frame';
+    data.autocrop={label:'Editor',fullFrames:'frames-full',fullContactSheet:'contact-sheet-full.png',crops:[]};
+    data.events=[{kind:'click',t:3000,x:0.5,y:0.5,role:'button',label:'Save'}];
+    data.marks=[{id:'m1',strokes:[0],t0:1800,t1:1900,shape:'circle',description:'circle',on:'保存',frame:'frames/one.png'}];
+    await writeFile(join(bundle,'apparent.json'),JSON.stringify(data));
+    await writeFile(join(bundle,'.evidence-only.json'),'{}');
+    const result=spawnSync(process.execPath,[cli,'inspect',bundle,'--experiment','agentContext'],{encoding:'utf8',env:{...process.env,APPARENT_ENGINE_EXECUTABLE:'/missing',APPARENT_ENGINE_RUNTIME:'/missing'}});
+    assert.equal(result.status,0,result.stderr);
+    assert.match(result.stdout,/Editor “Editor — 新しい”/);
+    assert.match(result.stdout,/repository: \/work\/synthetic/);
+    assert.match(result.stdout,/Note: Review the résumé/);
+    assert.match(result.stdout,/0:01 “Résumé naïve”/);
+    assert.match(result.stdout,/#- ✎ 0:01 circled “保存” · m1/);
+    assert.match(result.stdout,/0:02 branch → feature\/inspect/);
+    assert.match(result.stdout,/Image quality: Low-resolution source frame/);
+    assert.match(result.stdout,/Cropped to: Editor/);
+    assert.match(result.stderr,/video\/audio not downloaded/);
+    assert.match(result.stdout,/full frames in frames-full\//);
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
 test('relative config is skipped; Linux XDG default is respected without changing storage', async () => {
   const root=await mkdtemp(join(tmpdir(),'agent-storage-'));
   try {
@@ -61,7 +94,7 @@ test('relative config is skipped; Linux XDG default is respected without changin
     await writeFile(join(bundle,'contact-sheet.png'),'synthetic image');
     const env={...process.env,HOME:root,XDG_DATA_HOME:data}; delete env.APPARENT_CAPTURES_DIR;
     if(process.platform==='linux') {
-      const result=spawnSync(process.execPath,[cli,'inspect','latest'],{env,encoding:'utf8',cwd:root});
+      const result=spawnSync(process.execPath,[cli,'inspect','latest','--stored-summary'],{env,encoding:'utf8',cwd:root});
       assert.equal(result.status,0,result.stderr); assert.equal(result.stdout,'default\n');
     }
   } finally {await rm(root,{recursive:true,force:true});}
@@ -107,8 +140,15 @@ test('existing Rust inspection fixtures preserve current/legacy raw JSON, summar
       await copyFile(fixture(`${name}.md`),join(bundle,'summary.md'));
       const run=(args:string[])=>spawnSync(process.execPath,[cli,'inspect',bundle,...args],{encoding:'utf8'});
       const raw=run(['--json']);assert.equal(raw.status,0,raw.stderr);assert.equal(raw.stdout,await readFile(fixture(`${name}.json`),'utf8'));
-      const text=run([]);assert.equal(text.status,0,text.stderr);assert.equal(text.stdout,await readFile(fixture(`${name}.md`),'utf8'));
+      const text=run([]);assert.equal(text.status,0,text.stderr);
+      assert.equal(text.stdout,(await readFile(fixture(`${name}.md`),'utf8')).replace('@BUNDLE@',bundle));
+      assert.equal(run(['--stored-summary']).stdout,await readFile(fixture(`${name}.md`),'utf8'));
       if(name==='current') {
+        const rich=run(['--experiment','agentContext']);assert.equal(rich.status,0,rich.stderr);
+        assert.match(rich.stdout,/repository: \/work\/synthetic/);
+        assert.match(rich.stdout,/#1 ✎ 0:01 circled button “Save”/);
+        assert.match(rich.stdout,/0:03 clicked button “Save”/);
+        assert.match(rich.stdout,/Note: Keep semantic text\./);
         const marks=run(['--marks','--json']);assert.equal(marks.status,0,marks.stderr);
         assert.deepEqual(JSON.parse(marks.stdout),JSON.parse(await readFile(fixture('current.marks.json'),'utf8')));
       }

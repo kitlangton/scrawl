@@ -5,29 +5,46 @@ import { markEntries, markLine } from './inspection.js';
 import { isAbsolute, resolve } from 'node:path';
 import { resolveBundle, readManifest, readBundle, readRegular, checkImageReference } from './bundle.js';
 import { recordWithEngine } from './recording.js';
+import { semanticSummary } from './summary.js';
 
 const VERSION = '0.1.0';
-function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection and Engine foreground recording.\n\nUsage: apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent record --duration <seconds> --out <absolute.apparent-path>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\n`); }
+function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection and Engine foreground recording.\n\nUsage: apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent inspect [BUNDLE|latest] [--experiment agentContext] [--stored-summary]\n       apparent-agent record --duration <seconds> --out <absolute.apparent-path>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\nDefault inspect output is generated from the manifest; --stored-summary prints producer text.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\n`); }
 async function main(args: string[]) {
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) { help(); return 0; }
   if (args.length === 1 && ['--version', '-V'].includes(args[0])) { console.log(VERSION); return 0; }
   if (args[0] === 'capture') return recover(args.slice(1));
   if (args[0] === 'record') return record(args.slice(1));
   if (args[0] !== 'inspect') throw new Error(`Unknown command: ${args[0]}`);
-  let input = 'latest'; let mode = 'summary'; let seenInput = false; let json = false;
-  for (const arg of args.slice(1)) {
+  let input = 'latest'; let mode = 'summary'; let seenInput = false; let json = false; let storedSummary = false;
+  const experiments: string[] = [];
+  const rest = args.slice(1);
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
     if (arg === '--json') { if (json) throw new Error('Duplicate --json'); json = true; }
     else if (['--marks', '--transcript', '--images'].includes(arg)) {
       if (mode !== 'summary') throw new Error('Inspection output options conflict');
       mode = arg.slice(2);
     }
-    else if (arg === '--') { const rest = args.slice(args.indexOf(arg) + 1); if (rest.length !== 1 || seenInput) throw new Error('Only one bundle path is allowed'); input = rest[0]; seenInput = true; break; }
+    else if (arg === '--experiment') {
+      const name = rest[++i];
+      if (!name || name.startsWith('-')) throw new Error('--experiment requires a name');
+      experiments.push(name);
+    }
+    else if (arg === '--stored-summary') { if (storedSummary) throw new Error('Duplicate --stored-summary'); storedSummary = true; }
+    else if (arg === '--') { const operand = rest.slice(i + 1); if (operand.length !== 1 || seenInput) throw new Error('Only one bundle path is allowed'); input = operand[0]; seenInput = true; break; }
     else if (arg.startsWith('-')) throw new Error(`Unknown option: ${arg}`);
     else if (!seenInput) { input = arg; seenInput = true; }
     else throw new Error('Only one bundle path is allowed');
   }
   if (json && !['summary', 'marks'].includes(mode)) throw new Error('--json supports manifest or marks output');
+  if (storedSummary && (mode !== 'summary' || json)) throw new Error('--stored-summary conflicts with other inspection output options');
   const path = await resolveBundle(input);
+  const evidence = await lstat(`${path}/.evidence-only.json`).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
+  });
+  if (evidence?.isFile() && !evidence.isSymbolicLink())
+    process.stderr.write('Evidence snapshot: video/audio not downloaded. This local inspection does not fetch media.\n');
   if (json && mode === 'summary') {
     const { raw } = await readManifest(path);
     process.stdout.write(raw);
@@ -51,11 +68,12 @@ async function main(args: string[]) {
     process.stdout.write(`${JSON.stringify({ bundle: path, references: [...new Set(refs)] }, null, 2)}\n`);
     return 0;
   }
-  // summary.md is the producer-authored semantic handoff. Do not regenerate it here.
-  let summary: string;
-  try { summary = new TextDecoder('utf-8', {fatal:true}).decode(await readRegular(`${path}/summary.md`, 64 * 1024 * 1024)); }
-  catch { throw new Error(`Stored summary.md is missing or unreadable in ${path}; use --transcript or --json for available manifest data`); }
-  process.stdout.write(summary.endsWith('\n') ? summary : `${summary}\n`);
+  if (storedSummary) {
+    const summary = new TextDecoder('utf-8', {fatal:true}).decode(await readRegular(`${path}/summary.md`, 64 * 1024 * 1024));
+    process.stdout.write(summary.endsWith('\n') ? summary : `${summary}\n`);
+    return 0;
+  }
+  process.stdout.write(semanticSummary(bundle, path, experiments.includes('agentContext'), evidence?.isFile() === true));
   return 0;
 }
 async function recover(args: string[]) {
