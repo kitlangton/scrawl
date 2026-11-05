@@ -335,24 +335,26 @@ test('test-double handshake and uncertain worker shutdown never publish success 
   }
 }));
 
-test('reviewed SDK 0.3 media consumer installs and records its actual SDK version', async () => withTemp(async (directory) => {
-  const { input, prefix } = await fixtureInputs(directory);
-  const dependencies = fixtureDependencies({
-    installNpm(snapshot, root, home) {
-      fixtureDependencies().installNpm(snapshot, root, home);
-      const path = join(root, 'node_modules/@apparent/agent/node_modules/@apparent/engine-sdk/package.json');
-      const pkg = JSON.parse(readFileSync(path, 'utf8'));
-      pkg.version = '0.3.0';
-      writeFileSync(path, JSON.stringify(pkg));
-    },
-  });
-  await installLocal(input, dependencies);
-  const receipt = JSON.parse(await readFile(join(prefix, 'install-receipt.json'), 'utf8'));
-  assert.equal(receipt.sdkVersion, '0.3.0');
+test('stable patch releases in reviewed SDK lines install and record the actual SDK version', async () => withTemp(async (directory) => {
+  for (const version of ['0.2.1', '0.3.0', '0.3.1', '0.3.17']) {
+    const { input, prefix } = await fixtureInputs(directory, `sdk-${version}`);
+    const dependencies = fixtureDependencies({
+      installNpm(snapshot, root, home) {
+        fixtureDependencies().installNpm(snapshot, root, home);
+        const path = join(root, 'node_modules/@apparent/agent/node_modules/@apparent/engine-sdk/package.json');
+        const pkg = JSON.parse(readFileSync(path, 'utf8'));
+        pkg.version = version;
+        writeFileSync(path, JSON.stringify(pkg));
+      },
+    });
+    await installLocal(input, dependencies);
+    const receipt = JSON.parse(await readFile(join(prefix, 'install-receipt.json'), 'utf8'));
+    assert.equal(receipt.sdkVersion, version);
+  }
 }));
 
 test('unreviewed SDK versions still fail without a success receipt', async () => withTemp(async (directory) => {
-  for (const version of ['0.4.0', '0.3.0-next']) {
+  for (const version of ['0.4.0', '0.1.9', '1.0.0', '0.3.0-next', '0.3.1+unreviewed', '0.3.01', '0.3.9007199254740992']) {
     const { input, prefix } = await fixtureInputs(directory, `sdk-${version}`);
     const dependencies = fixtureDependencies({
       installNpm(snapshot, root, home) {

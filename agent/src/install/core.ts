@@ -8,8 +8,13 @@ import type { InstallerDependencies, InstallerInput, InventoryLimits } from './t
 import { DEFAULT_LIMITS, MAX_AGENT_ARCHIVE_BYTES, MAX_MANIFEST_BYTES } from './types.js';
 
 const AGENT_VERSION = '0.1.0';
-// SDK 0.3 adds capture/2 exports; its media/1 implementation is unchanged.
-const MEDIA_SDK_VERSIONS = new Set(['0.2.0', '0.3.0']);
+// Capture-only patch releases must not invalidate the independent media/1 consumer.
+// New minor lines and prereleases require a separate compatibility assessment.
+function supportedMediaSdkVersion(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const match = /^0\.(?:2|3)\.(0|[1-9][0-9]*)$/.exec(value);
+  return match !== null && Number.isSafeInteger(Number(match[1]));
+}
 const SHA256 = /^[a-f0-9]{64}$/;
 const PRIVATE_MODE = 0o700;
 
@@ -31,7 +36,7 @@ function validatePackageMetadata(agent: unknown, sdk: unknown) {
   if (!sdk || typeof sdk !== 'object' || Array.isArray(sdk)) fail('installed Engine SDK package metadata is invalid');
   const sdkPackage = sdk as Record<string, any>;
   const mediaExport = sdkPackage.exports?.['./media'];
-  if (sdkPackage.name !== '@apparent/engine-sdk' || !MEDIA_SDK_VERSIONS.has(sdkPackage.version) ||
+  if (sdkPackage.name !== '@apparent/engine-sdk' || !supportedMediaSdkVersion(sdkPackage.version) ||
       !mediaExport || mediaExport.import !== './dist/src/media.js' || mediaExport.types !== './dist/src/media.d.ts') {
     fail('installed SDK media export/version mismatch');
   }
