@@ -197,6 +197,9 @@ jobs:
 
   runtime-budget:
     name: Workflow runtime budget
+    permissions:
+      contents: read
+      actions: read
     needs: [plan, contracts, stream]
     if: always()
     runs-on: ubuntu-24.04
