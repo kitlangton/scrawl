@@ -35,7 +35,7 @@ test('catalog reports absent owners pending and blocks present owners without re
   mkdirSync(resolve(path, 'composition/app'), { recursive: true })
   const missing = catalog(path)
   assert.deepEqual(missing.blocked, ['app-shell: source exists without delivery registration'])
-  assert.deepEqual(missing.pending, ['record', 'engine', 'engine-native', 'platform-config', 'onboarding', 'agent', 'public'])
+  assert.deepEqual(missing.pending, ['record', 'engine', 'engine-native', 'engine-media-native', 'platform-config', 'onboarding', 'agent', 'public'])
   mkdirSync(resolve(path, 'record')); mkdirSync(resolve(path, 'shared/ui'), { recursive: true })
   writeFileSync(resolve(path, 'record/delivery.json'), JSON.stringify({ ...owner, inputs: ['shared/ui/'] }))
   assert.match(catalog(path).blocked.join(';'), /Package source must be covered/)
@@ -65,6 +65,35 @@ test('native Engine and SDK are independent lanes with the same architectural ow
   const native = plan.matrix.include.filter(row => row.id === 'engine-native')
   assert.equal(sdk.length, 1); assert.equal(sdk[0].language, 'typescript')
   assert.equal(native.length, 2); assert(native.every(row => row.language === 'native' && row.architecture_owner === 'engine'))
+})
+
+test('native Engine media is a Linux-only lane with a complete owner input closure', () => {
+  const path = resolve(temp, 'engine-media-plan')
+  for (const dir of ['engine/delivery/media', 'engine/sdk', 'capture/engine', '.cargo']) mkdirSync(resolve(path, dir), { recursive: true })
+  writeFileSync(resolve(path, 'engine/delivery.json'), JSON.stringify({ ...owner, id: 'engine', package: 'engine/sdk', inputs: ['engine/'] }))
+  writeFileSync(resolve(path, 'engine/delivery/media/delivery.json'), JSON.stringify({ ...owner, id: 'engine-media-native', kind: 'directory', language: 'native', package: 'engine/delivery/media', artifactPath: 'dist', verify: ['verify'], inputs: ['engine/', 'capture/engine/', '.cargo/'], targets: ['linux-x64'] }))
+  const plan = makePlan(path)
+  assert.deepEqual(plan.blocked, [])
+  const media = plan.matrix.include.filter(row => row.id === 'engine-media-native')
+  assert.equal(media.length, 1)
+  assert.equal(media[0].target, 'linux-x64')
+  assert.equal(media[0].runner, 'ubuntu-24.04')
+  assert.equal(media[0].language, 'native')
+  assert.equal(media[0].kind, 'directory')
+  assert.equal(media[0].architecture_owner, 'engine')
+  assert.equal(media[0].package, 'engine/delivery/media')
+  assert.deepEqual(media[0].verify, ['verify'])
+  assert.equal(media[0].build, 'build')
+  assert.deepEqual(catalog(path).owners.find(item => item.id === 'engine-media-native')?.inputs, ['engine/', 'capture/engine/', '.cargo/'])
+})
+
+test('media runtime packages install only for a fresh native media producer build', () => {
+  const workflow = readFileSync(resolve(repo, workflowPath), 'utf8')
+  const setup = workflow.match(/- name: Install Engine media runtime and fixture dependencies[\s\S]*?(?=\n      - name: Independently install, verify and build the owner artifact)/)?.[0]
+  assert.ok(setup, 'media dependency setup must precede the owner build')
+  assert.match(setup, /if: steps\.admit\.outputs\.reuse != 'true' && matrix\.id == 'engine-media-native'/)
+  for (const packageName of ['ffmpeg', 'pkg-config', 'libgstreamer1.0-dev', 'libgstreamer-plugins-base1.0-dev', 'gstreamer1.0-plugins-base', 'gstreamer1.0-plugins-good', 'gstreamer1.0-libav']) assert.match(setup, new RegExp(`\\b${packageName.replaceAll('.', '\\.')}\\b`))
+  assert.doesNotMatch(setup, /APPARENT_GST_PLUGIN_SOURCE/)
 })
 
 test('packed consumer imports code but verifies stylesheet exports as contained assets', () => {
