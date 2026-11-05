@@ -1,6 +1,7 @@
 /** Verify the packed artifact in consumers that cannot see repository siblings. */
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,7 @@ const scratch = await mkdtemp(path.join(tmpdir(), 'record-packed-'));
 const headless = path.join(scratch, 'headless');
 const ui = path.join(scratch, 'ui');
 const bundle = path.join(scratch, 'bundle');
+const publication = path.join(scratch, 'publication');
 const root = fileURLToPath(new URL('../', import.meta.url));
 const tarball = path.join(scratch, 'apparent-record-0.1.0.tgz');
 
@@ -24,7 +26,7 @@ try {
   // The caller builds once before the smoke. Packing the resulting artifact does
   // not rerun its build; tarball installs below use normal lifecycle and peers.
   await run('npm', ['pack', '--ignore-scripts', '--pack-destination', scratch], { cwd: root });
-  await Promise.all([initConsumer(headless), initConsumer(ui), initConsumer(bundle)]);
+  await Promise.all([initConsumer(headless), initConsumer(ui), initConsumer(bundle), initConsumer(publication)]);
 
   await run('npm', ['install', '--no-audit', '--no-fund', tarball], { cwd: headless });
   const headlessInstalled = path.join(headless, 'node_modules/@apparent/record');
@@ -106,6 +108,37 @@ try {
     console.log('React UI packed consumer passed');
   `], { cwd: ui });
   process.stdout.write(uiResult.stdout);
+  // The publication profile explicitly supplies the published SDK; it is not
+  // installed for the other headless or UI consumers.
+  const sdkArtifact = process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root, 'vendor/engine-sdk-0.3.1.tgz');
+  const sdkBytes = await readFile(sdkArtifact);
+  assert.equal(createHash('sha256').update(sdkBytes).digest('hex'), '1b605f06273f9c1a134b68b0ed233605b120813214914ca70ed0c8c5f0346f04');
+  const sdkTarball = path.join(scratch, 'engine-sdk-0.3.1.tgz'); await copyFile(sdkArtifact, sdkTarball);
+  await run('npm', ['install', '--no-audit', '--no-fund', sdkTarball, tarball], { cwd: publication });
+  const publicationResult = await run(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import {createRequire} from 'node:module';
+    import {CaptureClient, preflightCapturePublication} from '@apparent/engine-sdk/capture';
+    import {ReferenceCapturePeer} from '@apparent/engine-sdk/capture/testing';
+    import {createRecordPublicationRecovery} from '@apparent/record/publication';
+    const client = new CaptureClient(new ReferenceCapturePeer(), {allowTestDouble:true});
+    const recovery = createRecordPublicationRecovery(client, process.cwd() + '/unused-private-root', preflightCapturePublication);
+    assert.equal(typeof recovery.publish, 'function');
+    for (const name of ['react','react-dom','electron','@apparent/ui']) assert.throws(()=>createRequire(import.meta.url).resolve(name));
+    await client.close();
+    console.log('packed publication profile passed without UI peers');
+  `], { cwd: publication });
+  process.stdout.write(publicationResult.stdout);
+  const sdkDeclarations = path.join(publication, 'consumer.ts');
+  await writeFile(sdkDeclarations, `
+    import {preflightCapturePublication, type CaptureClient} from '@apparent/engine-sdk/capture';
+    import {createRecordPublicationRecovery} from '@apparent/record/publication';
+    declare const client: CaptureClient;
+    const recovery = createRecordPublicationRecovery(client, '/private/control', preflightCapturePublication);
+    const result: ReturnType<CaptureClient['publish']> = recovery.publish({} as Parameters<CaptureClient['publish']>[0]);
+    void result;
+  `);
+  await run(process.execPath, [tsc, '--noEmit', '--strict', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', sdkDeclarations], { cwd: publication });
 } finally {
   await rm(scratch, { recursive: true, force: true });
 }
