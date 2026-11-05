@@ -306,16 +306,17 @@ printf '${name}:%s\\n' "$*" >> "$CALLS"
         env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CALLS: calls, BUILD_STATUS: status, HOME: root, RUNNER_OS: os, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', HELPER_STAT: '0:0:4755' } })
       assert.equal(result.status, Number(status), result.stderr)
       const lines = readFileSync(calls, 'utf8').trim().split('\n')
-      assert.equal(lines[0], 'npm:--prefix capture/desktop/ui/frontend ci --no-audit --no-fund')
-      assert.equal(lines[1], 'npm:--prefix capture/desktop/ui/frontend run build')
+      assert.equal(lines[0], 'npm:--prefix record ci --no-audit --no-fund')
+      assert.equal(lines[1], 'npm:--prefix capture/desktop/ui/frontend ci --no-audit --no-fund')
+      assert.equal(lines[2], 'npm:--prefix capture/desktop/ui/frontend run build')
       if (status === '0') {
-        assert.match(lines[2], /^node:-e /)
-        assert.deepEqual(lines.slice(3), os === 'Linux' ? [
+        assert.match(lines[3], /^node:-e /)
+        assert.deepEqual(lines.slice(4), os === 'Linux' ? [
           `sudo:chown root:root -- ${sandbox}`, `sudo:chmod 4755 -- ${sandbox}`,
           'xvfb:-a cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture --test-threads=1',
           'cargo:test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture --test-threads=1',
         ] : ['cargo:test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture --test-threads=1'])
-      } else assert.equal(lines.length, 2, 'build failure must stop before Electron or Cargo')
+      } else assert.equal(lines.length, 3, 'build failure must stop before Electron or Cargo')
     }
     for (const scenario of ['not-hosted', 'wrong-mode', 'sudo-failure', 'symlink', 'missing']) {
       writeFileSync(calls, '')
