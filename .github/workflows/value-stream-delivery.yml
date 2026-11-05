@@ -1,0 +1,196 @@
+name: Value-stream delivery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'composition/app/**'
+      - 'composition/delivery/**'
+      - 'shared/contracts/**'
+      - 'shared/ui/**'
+      - 'record/**'
+      - 'engine/**'
+      - 'onboarding/**'
+      - 'agent/**'
+      - 'connect/delivery.json'
+      - 'public/delivery.json'
+      - 'LICENSE'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+# Complete running work and retain only the latest pending main candidate.
+concurrency:
+  group: value-stream-delivery-${{ github.event_name == 'push' && 'main' || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    # The agent whose run hits the limit owns optimization; never raise it.
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_ready: ${{ steps.plan.outputs.has_ready }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+      - id: plan
+        run: node --experimental-strip-types composition/delivery/cli.ts plan
+
+  contracts:
+    # The agent whose run hits the limit owns optimization; never raise it.
+    name: Delivery contracts
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+      - name: Selection, artifact admission and workflow contracts
+        run: node --experimental-strip-types --test composition/delivery/*.test.ts
+      - name: Validate the independent workflow
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -shellcheck= -pyflakes= .github/workflows/value-stream-delivery.yml
+
+  stream:
+    # The agent whose run hits the limit owns optimization; never raise it.
+    name: stream (${{ matrix.id }}, ${{ matrix.target }})
+    needs: plan
+    if: needs.plan.outputs.has_ready == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    env:
+      OWNER_ID: ${{ matrix.id }}
+      OWNER_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+      - name: Admit an unchanged verified component or request a fresh build
+        id: admit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types composition/delivery/cli.ts admit "$OWNER_ID" "$OWNER_TARGET"
+      - name: Guard TypeScript owners against native source compilation
+        if: steps.admit.outputs.reuse != 'true' && matrix.language != 'native'
+        shell: bash
+        run: |
+          mkdir "$RUNNER_TEMP/value-stream-no-rust"
+          for tool in cargo rustc; do
+            printf '#!/bin/sh\necho "Rust compilation is outside this owner contract" >&2\nexit 97\n' > "$RUNNER_TEMP/value-stream-no-rust/$tool"
+            chmod 755 "$RUNNER_TEMP/value-stream-no-rust/$tool"
+          done
+          printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
+      - name: Retrieve and verify the admitted component
+        if: steps.admit.outputs.reuse == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRIOR_ARTIFACT: ${{ steps.admit.outputs.prior_artifact_id }}
+          PRIOR_SHA: ${{ steps.admit.outputs.prior_source_sha }}
+          PRIOR_RUN: ${{ steps.admit.outputs.prior_run_id }}
+          PRIOR_ATTEMPT: ${{ steps.admit.outputs.prior_run_attempt }}
+          INPUT_DIGEST: ${{ steps.admit.outputs.input_digest }}
+        shell: bash
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$PRIOR_ARTIFACT/zip" > "$RUNNER_TEMP/prior-component.zip"
+          node --experimental-strip-types composition/delivery/cli.ts reuse "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/prior-component.zip" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST" "$PRIOR_SHA" "$PRIOR_ARTIFACT" "$PRIOR_RUN" "$PRIOR_ATTEMPT"
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.admit.outputs.reuse != 'true' && matrix.language == 'native'
+      - name: Independently install, verify and build the owner artifact
+        if: steps.admit.outputs.reuse != 'true'
+        run: node --experimental-strip-types composition/delivery/cli.ts build "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload"
+      - name: Prepare the pinned Electron runtime
+        if: steps.admit.outputs.reuse != 'true' && matrix.kind == 'app-shell'
+        working-directory: composition/app
+        run: npm run prepare:electron
+      - name: Linux Electron dependencies
+        if: steps.admit.outputs.reuse != 'true' && matrix.kind == 'app-shell' && runner.os == 'Linux'
+        working-directory: composition/app
+        run: npx --no-install playwright install-deps chromium
+      - name: Prepare the pinned Electron sandbox helper
+        if: steps.admit.outputs.reuse != 'true' && matrix.kind == 'app-shell' && runner.os == 'Linux'
+        working-directory: composition/app
+        run: |
+          sudo install -o root -g root -m 4755 node_modules/electron/dist/chrome-sandbox \
+            "$RUNNER_TEMP/apparent-foundation-chrome-sandbox"
+      - name: Bundle the prebuilt App Shell payload
+        if: steps.admit.outputs.reuse != 'true' && matrix.kind == 'app-shell'
+        working-directory: composition/app
+        shell: bash
+        run: |
+          bundle=$(node scripts/package.ts "$RUNNER_TEMP/stream-payload/app" "$RUNNER_TEMP/stream-payload/bundle")
+          printf 'APPARENT_FOUNDATION_PACKAGE=%s\n' "$bundle" >> "$GITHUB_ENV"
+      - name: Test the exact bundled application
+        if: steps.admit.outputs.reuse != 'true' && matrix.kind == 'app-shell'
+        working-directory: composition/app
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            APPARENT_FOUNDATION_SANDBOX_HELPER="$RUNNER_TEMP/apparent-foundation-chrome-sandbox" xvfb-run -a npm run test:electron
+          else
+            npm run test:electron
+          fi
+      - name: Seal the verified component for downstream assembly
+        if: steps.admit.outputs.reuse != 'true'
+        env:
+          INPUT_DIGEST: ${{ steps.admit.outputs.input_digest }}
+        run: node --experimental-strip-types composition/delivery/cli.ts seal "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ runner.temp }}/stream-output/component.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stream-${{ matrix.id }}-${{ matrix.target }}-${{ steps.admit.outputs.input_digest }}
+          path: ${{ runner.temp }}/stream-output/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Remove the disposable sandbox helper
+        if: always() && matrix.kind == 'app-shell' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          if [ -e "$RUNNER_TEMP/apparent-foundation-chrome-sandbox" ]; then
+            sudo unlink "$RUNNER_TEMP/apparent-foundation-chrome-sandbox"
+          fi
+
+  runtime-budget:
+    name: Workflow runtime budget
+    needs: [plan, contracts, stream]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/runtime-budget
+        with:
+          platform: linux

@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "id": "engine",
+  "kind": "npm",
+  "package": "engine/sdk",
+  "inputs": ["engine/"],
+  "verify": ["typecheck", "test"],
+  "build": "build",
+  "targets": ["linux-x64"],
+  "stage": "contract"
+}

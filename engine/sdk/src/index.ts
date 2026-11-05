@@ -132,7 +132,7 @@ function bundleId(v: unknown): v is string {
     Buffer.byteLength(v, "utf8") <= 255 &&
     v !== "." &&
     v !== ".." &&
-    !/[\\/\x00-\x1f\x7f]/u.test(v)
+    !/[\\/\p{Cc}]/u.test(v)
   );
 }
 function hex(v: unknown, n: number): v is string {

@@ -1,28 +1,43 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, rm, stat, symlink } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, stat, symlink, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron, expect } from '@playwright/test';
 import { buildShell, buildStream, root } from '../scripts/build.ts';
-import { assemble } from '../scripts/assemble.ts';
+import { assemble, verifyAssembly } from '../scripts/assemble.ts';
 import { packageApplication } from '../scripts/package.ts';
 
 test('packaged Electron composes screens and owner settings, preserves preferences and isolates renderer', { timeout: 120_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-electron-'));
   let application: Awaited<ReturnType<typeof electron.launch>> | undefined;
+  let sandbox: { path: string; bytes: Buffer; mode: number } | undefined;
   t.after(async () => {
-    await application?.close();
-    await rm(directory, { recursive: true, force: true });
+    try { await application?.close(); }
+    finally {
+      // The CI test may consume the exact bundle that will be shipped. Restore
+      // the original sandbox binary rather than shipping a runner-local symlink.
+      if (sandbox) {
+        await rm(sandbox.path);
+        await writeFile(sandbox.path, sandbox.bytes, { mode: sandbox.mode });
+        await chmod(sandbox.path, sandbox.mode);
+      }
+      await rm(directory, { recursive: true, force: true });
+    }
   });
   const shell = join(directory, 'shell');
   const alpha = join(directory, 'alpha');
   const beta = join(directory, 'beta');
-  await buildShell(shell);
-  await buildStream(join(root, 'fixtures/alpha'), alpha);
-  await buildStream(join(root, 'fixtures/beta'), beta);
-  const output = await assemble(shell, [alpha, beta], join(directory, 'app'));
-  const bundle = await packageApplication(output, join(directory, 'packages'));
+  let bundle = process.env.APPARENT_FOUNDATION_PACKAGE;
+  if (!bundle) {
+    await buildShell(shell);
+    await buildStream(join(root, 'fixtures/alpha'), alpha);
+    await buildStream(join(root, 'fixtures/beta'), beta);
+    const output = await assemble(shell, [alpha, beta], join(directory, 'app'));
+    bundle = await packageApplication(output, join(directory, 'packages'));
+  }
+  await verifyAssembly(process.platform === 'darwin'
+    ? join(bundle, 'Contents/Resources/app') : join(bundle, 'resources/app'));
   // Restricted hosts may supply an already-installed, root-owned SUID helper.
   // Never disable Chromium sandboxing or change system permissions for a test.
   const helper = process.env.APPARENT_FOUNDATION_SANDBOX_HELPER;
@@ -30,8 +45,10 @@ test('packaged Electron composes screens and owner settings, preserves preferenc
     const metadata = await stat(helper);
     assert(metadata.isFile() && metadata.uid === 0 && (metadata.mode & 0o4000) && !(metadata.mode & 0o022),
       'Sandbox helper must be root-owned, setuid and not writable by other users');
-    await rm(join(bundle, 'chrome-sandbox'));
-    await symlink(helper, join(bundle, 'chrome-sandbox'));
+    const path = join(bundle, 'chrome-sandbox');
+    sandbox = { path, bytes: await readFile(path), mode: (await stat(path)).mode & 0o777 };
+    await rm(path);
+    await symlink(helper, path);
   }
   const executablePath = process.platform === 'darwin'
     ? join(bundle, 'Contents/MacOS/apparent-foundation') : join(bundle, 'apparent-foundation');

@@ -6,6 +6,7 @@ use std::io;
 pub enum Status {
     Starting,
     Recording,
+    Stopping,
     Processing,
     Saved,
     Cancelled,
@@ -14,7 +15,10 @@ pub enum Status {
 }
 impl Status {
     pub(crate) fn active(&self) -> bool {
-        matches!(self, Self::Starting | Self::Recording | Self::Processing)
+        matches!(
+            self,
+            Self::Starting | Self::Recording | Self::Stopping | Self::Processing
+        )
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +37,8 @@ pub(crate) struct Record {
     pub receipt: Receipt,
     pub token: String,
     pub control: Option<crate::Control>,
+    #[serde(default)]
+    pub binding: Option<crate::Binding>,
 }
 impl Record {
     pub fn read(store: &Store, id: &str) -> io::Result<Option<Self>> {
