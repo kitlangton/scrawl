@@ -85,11 +85,13 @@ class TempPreflightTests(unittest.TestCase):
 
     def test_pr_contracts_include_preflight_tests_without_environment_admission(self):
         with patch.dict(os.environ, TMPDIR='/missing-preflight-fixture'), patch.object(verification.subprocess, 'run') as run, patch.object(
-                verification, 'run_public_site_build') as public_build:
+                verification, 'run_public_site_build') as public_build, patch.object(
+                verification, 'run_connect_client_typescript_tests') as client_tests:
             verification.run_pr_checks()
         public_build.assert_called_once_with()  # Unknown history includes Public feedback.
+        client_tests.assert_called_once_with()  # Keep owner checks selected without live dependency setup.
         patterns = [call.args[0][-1] for call in run.call_args_list]
-        self.assertEqual(patterns, ['enablement/file-length/check.test.ts', 'shared/ui/scripts/check-theme.py', 'test', 'test_*.py',
+        self.assertEqual(patterns, ['enablement/file-length/check.test.ts', 'shared/ui/scripts/check-theme.py', 'test_*.py',
                                     'test_*push*.py', 'test_verification.py', 'test_release_gate.py',
                                     'test_temp_preflight.py', 'test_owner_lanes.py'])
         self.assertTrue(all(call.kwargs['check'] for call in run.call_args_list))
