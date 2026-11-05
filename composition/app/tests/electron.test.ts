@@ -4,20 +4,22 @@ import { chmod, mkdtemp, rm, stat, symlink, readFile, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron, expect } from '@playwright/test';
-import { buildShell, buildStream, root } from '../scripts/build.ts';
+import { buildShell, root } from '../scripts/build.ts';
 import { assemble, verifyAssembly } from '../scripts/assemble.ts';
 import { packageApplication } from '../scripts/package.ts';
+import { buildSyntheticStream } from './synthetic-stream.ts';
 
 test('packaged Electron composes screens and owner settings, preserves preferences and isolates renderer', { timeout: 120_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-electron-'));
   let application: Awaited<ReturnType<typeof electron.launch>> | undefined;
-  let sandbox: { path: string; bytes: Buffer; mode: number } | undefined;
+  const sandboxes: Array<{ path: string; bytes: Buffer; mode: number }> = [];
+  const sandboxedBundles = new Set<string>();
   t.after(async () => {
     try { await application?.close(); }
     finally {
       // The CI test may consume the exact bundle that will be shipped. Restore
       // the original sandbox binary rather than shipping a runner-local symlink.
-      if (sandbox) {
+      for (const sandbox of sandboxes) {
         await rm(sandbox.path);
         await writeFile(sandbox.path, sandbox.bytes, { mode: sandbox.mode });
         await chmod(sandbox.path, sandbox.mode);
@@ -26,35 +28,50 @@ test('packaged Electron composes screens and owner settings, preserves preferenc
     }
   });
   const shell = join(directory, 'shell');
-  const alpha = join(directory, 'alpha');
-  const beta = join(directory, 'beta');
-  let bundle = process.env.APPARENT_FOUNDATION_PACKAGE;
-  if (!bundle) {
-    await buildShell(shell);
-    await buildStream(join(root, 'fixtures/alpha'), alpha);
-    await buildStream(join(root, 'fixtures/beta'), beta);
-    const output = await assemble(shell, [alpha, beta], join(directory, 'app'));
-    bundle = await packageApplication(output, join(directory, 'packages'));
-  }
-  await verifyAssembly(process.platform === 'darwin'
-    ? join(bundle, 'Contents/Resources/app') : join(bundle, 'resources/app'));
+  await buildShell(shell);
   // Restricted hosts may supply an already-installed, root-owned SUID helper.
   // Never disable Chromium sandboxing or change system permissions for a test.
   const helper = process.env.APPARENT_FOUNDATION_SANDBOX_HELPER;
-  if (helper && process.platform === 'linux') {
+  const prepareSandboxHelper = async (bundle: string) => {
+    if (!helper || process.platform !== 'linux' || sandboxedBundles.has(bundle)) return;
     const metadata = await stat(helper);
     assert(metadata.isFile() && metadata.uid === 0 && (metadata.mode & 0o4000) && !(metadata.mode & 0o022),
       'Sandbox helper must be root-owned, setuid and not writable by other users');
     const path = join(bundle, 'chrome-sandbox');
-    sandbox = { path, bytes: await readFile(path), mode: (await stat(path)).mode & 0o777 };
+    sandboxes.push({ path, bytes: await readFile(path), mode: (await stat(path)).mode & 0o777 });
     await rm(path);
     await symlink(helper, path);
+    sandboxedBundles.add(bundle);
+  };
+  const launch = async (bundle: string, profile: string) => {
+    await prepareSandboxHelper(bundle);
+    await verifyAssembly(process.platform === 'darwin'
+      ? join(bundle, 'Contents/Resources/app') : join(bundle, 'resources/app'));
+    const executablePath = process.platform === 'darwin'
+      ? join(bundle, 'Contents/MacOS/apparent-foundation') : join(bundle, 'apparent-foundation');
+    return electron.launch({ executablePath, args: [], env: { ...process.env,
+      APPARENT_FOUNDATION_PROFILE: profile } });
+  };
+  const exactBundle = process.env.APPARENT_FOUNDATION_PACKAGE;
+  if (exactBundle) {
+    application = await launch(exactBundle, join(directory, 'empty-profile'));
+    const page = await application.firstWindow();
+    await expect(page.getByText('No streams installed.')).toBeVisible();
+    await application.close();
+    application = undefined;
   }
-  const executablePath = process.platform === 'darwin'
-    ? join(bundle, 'Contents/MacOS/apparent-foundation') : join(bundle, 'apparent-foundation');
-  const launch = () => electron.launch({ executablePath, args: [], env: { ...process.env,
-    APPARENT_FOUNDATION_PROFILE: join(directory, 'profile') } });
-  application = await launch();
+  const alpha = join(directory, 'alpha');
+  const beta = join(directory, 'beta');
+  const alphaSource = join(directory, 'source-alpha');
+  const betaSource = join(directory, 'source-beta');
+  await buildSyntheticStream(alphaSource, alpha, { id: 'alpha', label: 'Alpha',
+    description: 'Synthetic Alpha workflow.', setting: { kind: 'checkbox', label: 'Alpha preference' } });
+  await buildSyntheticStream(betaSource, beta, { id: 'beta', label: 'Beta',
+    description: 'Synthetic Beta workflow.', setting: { kind: 'select', label: 'Beta detail',
+      initial: 'brief', options: ['brief', 'full'] } });
+  const output = await assemble(shell, [alpha, beta], join(directory, 'app'));
+  const bundle = await packageApplication(output, join(directory, 'packages'));
+  application = await launch(bundle, join(directory, 'profile'));
   let page = await application.firstWindow();
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -81,7 +98,7 @@ test('packaged Electron composes screens and owner settings, preserves preferenc
   }), true);
   assert.deepEqual(errors, []);
   await application.close();
-  application = await launch();
+  application = await launch(bundle, join(directory, 'profile'));
   page = await application.firstWindow();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(page.getByRole('checkbox', { name: 'Alpha preference' })).toBeChecked();

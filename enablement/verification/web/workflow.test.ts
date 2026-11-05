@@ -101,7 +101,7 @@ test('Connect producer and client retain separate invocation and path ownership'
   assert(paths(entry('connect-client')).includes('connect/delivery/client/**'))
   assert(paths(entry('connect-client')).includes('connect/delivery.json'))
   assert(!paths(entry('connect-client')).includes('connect/web/**'))
-  const streamWorkflows = readdirSync(root).filter(name => name.endsWith('.yml') && name.startsWith('stream-') && name !== 'stream-admission.yml')
+  const streamWorkflows = readdirSync(root).filter(name => name.endsWith('.yml') && name.startsWith('stream-'))
   assert.deepEqual(streamWorkflows.sort(), owners.map(name => `stream-${name}.yml`).sort())
 })
 
@@ -136,43 +136,8 @@ test('owner component checks are fresh on PRs; only main producer jobs admit, at
   }
 })
 
-test('admission allocates runners only for PR updates, completions and rerun starts', () => {
-  const source = entry('admission'), job = section(source, 'admission')
-  const condition = job.match(/    if: ([\s\S]*?)(?=\n    [a-z][\w-]*:)/)![1]
-    .replace(/^>-\s*/, '').replace(/^\s*#.*$/gm, '').trim()
-  const eligible = (eventName: string, event: string, action: string, attempt = 1, repository = 'tryapparent/apparent', upstream = repository) =>
-    Function('github', `return (${condition})`)({ repository, event_name: eventName,
-      event: { action, workflow_run: { event, run_attempt: attempt, repository: { full_name: upstream } } } })
-  for (const action of ['in_progress', 'completed']) {
-    assert.equal(eligible('workflow_run', 'push', action), false, 'main builds have no PR receipt to update')
-    assert.equal(eligible('workflow_run', 'workflow_dispatch', action, 2), false)
-    assert.equal(eligible('workflow_run', 'pull_request', action, 2, 'other/repo'), false)
-    assert.equal(eligible('workflow_run', 'pull_request', action, 2, 'tryapparent/apparent', 'other/repo'), false)
-  }
-  assert.equal(eligible('workflow_run', 'pull_request', 'in_progress'), false, 'PR event already seeds the initial receipt')
-  assert.equal(eligible('workflow_run', 'pull_request', 'in_progress', 2), true, 'reruns must invalidate an earlier green result')
-  assert.equal(eligible('workflow_run', 'pull_request', 'completed'), true)
-  assert.equal(eligible('workflow_run', 'pull_request', 'completed', 2), true)
-  assert.equal(eligible('workflow_run', 'pull_request', 'unknown', 2), false)
-  for (const action of ['opened', 'synchronize', 'reopened', 'ready_for_review'])
-    assert.equal(eligible('pull_request_target', '', action), true)
-  assert.equal(eligible('workflow_dispatch', '', ''), false)
-  // A filtered event must not replace a useful pending update in the concurrency queue.
-  assert.doesNotMatch(source.split('\njobs:\n')[0], /\nconcurrency:/)
-  assert.match(job, /    concurrency:\n      group: admission-/)
-})
-
-test('admission is event-driven and other non-stream workflows remain manual or reusable', () => {
+test('non-stream workflows remain manual or reusable', () => {
   const files = readdirSync(root).filter(name => /\.ya?ml$/.test(name))
-  if (files.includes('stream-admission.yml')) {
-    const admission = readFileSync(new URL('stream-admission.yml', root), 'utf8')
-    assert.match(admission, /pull_request_target:/)
-    assert.match(admission, /workflow_run:/)
-    assert.match(admission, /checks: write/)
-    assert.match(admission, /ref: \$\{\{ github.event.repository.default_branch \}\}/)
-    assert.doesNotMatch(admission, /ref: .*pull_request.head|ref: .*workflow_run.head_sha/)
-    assert.doesNotMatch(admission, /id-token: write|attestations: write|secrets: inherit/)
-  }
   for (const file of files.filter(name => !name.startsWith('stream-'))) {
     const source = readFileSync(new URL(file, root), 'utf8')
     const triggers = source.split('\non:\n')[1]?.split(/\n[^\s#]/)[0] ?? ''
