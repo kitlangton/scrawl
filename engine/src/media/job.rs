@@ -1,0 +1,408 @@
+use super::{
+    files::{self, Directory, Output, SourcePin},
+    protocol::{Decode, Frame, Identity, Result},
+};
+use apparent_capture_engine::{BundleLease, LeaseKind, Runtime};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::{fs::MetadataExt, net::UnixStream, process::CommandExt};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::time::Instant;
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Internal {
+    decode: Decode,
+    runtime: String,
+    reserved: Vec<Identity>,
+}
+pub struct Active {
+    pub child: Child,
+    pub started: Instant,
+    pub input: Decode,
+    pub rpc: String,
+    pub cancelled: bool,
+    source: SourcePin,
+    output: Output,
+    _lease: BundleLease,
+    _lifetime: UnixStream,
+}
+impl Active {
+    pub fn start(
+        input: Decode,
+        rpc: String,
+        runtime_path: &Path,
+        runtime: &Runtime,
+    ) -> Result<Self> {
+        let lease = runtime
+            .lease(&input.source.bundle_id, LeaseKind::Read)
+            .map_err(|_| "source_mismatch")?
+            .ok_or("busy")?;
+        let source = SourcePin::open(&input)?;
+        let output = Output::create(&input)?;
+        let result = Self::spawn(input, rpc, runtime_path, source, output, lease);
+        result
+    }
+    fn spawn(
+        input: Decode,
+        rpc: String,
+        runtime_path: &Path,
+        source: SourcePin,
+        output: Output,
+        lease: BundleLease,
+    ) -> Result<Self> {
+        let setup = || -> Result<(Child, UnixStream)> {
+            let internal = Internal {
+                decode: input.clone(),
+                runtime: runtime_path.to_str().ok_or("internal")?.into(),
+                reserved: output
+                    .files
+                    .iter()
+                    .map(|f| f.metadata().map(|m| files::identity(&m)))
+                    .collect::<std::io::Result<_>>()
+                    .map_err(|_| "invalid_output")?,
+            };
+            let (lifetime, monitor) = UnixStream::pair().map_err(|_| "internal")?;
+            // Move source descriptors above the fixed child ABI to avoid dup2 aliasing.
+            let copy = |fd| {
+                let fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 10) };
+                if fd < 0 {
+                    Err("internal")
+                } else {
+                    Ok(unsafe { File::from_raw_fd(fd) })
+                }
+            };
+            let src = copy(source.video.as_raw_fd())?;
+            let dst = copy(output.dir.file.as_raw_fd())?;
+            let life = copy(monitor.as_raw_fd())?;
+            let mut cmd = Command::new(std::env::current_exe().map_err(|_| "internal")?);
+            cmd.arg("--decode-pinned-job")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .env_clear();
+            cmd.env("GST_REGISTRY", "/dev/null")
+                .env("GST_REGISTRY_FORK", "no");
+            // Preserve the launcher's native runtime closure in the re-exec.
+            // These are process launch inputs, never JSON-controlled settings.
+            // A packaged producer must inventory/verify its libraries/plugins.
+            for key in [
+                "LD_LIBRARY_PATH",
+                "GST_PLUGIN_PATH",
+                "GST_PLUGIN_PATH_1_0",
+                "GST_PLUGIN_SYSTEM_PATH",
+                "GST_PLUGIN_SYSTEM_PATH_1_0",
+            ] {
+                if let Some(value) = std::env::var_os(key) {
+                    cmd.env(key, value);
+                }
+            }
+            let parent_pid = std::process::id();
+            unsafe {
+                cmd.pre_exec(move || {
+                    #[cfg(target_os = "linux")]
+                    {
+                        if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0
+                            || libc::getppid() as u32 != parent_pid
+                        {
+                            return Err(std::io::Error::other("parent unavailable"));
+                        }
+                    }
+                    for (from, to) in [
+                        (src.as_raw_fd(), 3),
+                        (dst.as_raw_fd(), 4),
+                        (life.as_raw_fd(), 5),
+                    ] {
+                        if libc::dup2(from, to) < 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    for (resource, limit) in [
+                        (libc::RLIMIT_AS, 1536 * 1024 * 1024),
+                        (libc::RLIMIT_CPU, 65),
+                        (libc::RLIMIT_FSIZE, 256 * 1024 * 1024),
+                        (libc::RLIMIT_NOFILE, 128),
+                    ] {
+                        let lim = libc::rlimit {
+                            rlim_cur: limit,
+                            rlim_max: limit,
+                        };
+                        if libc::setrlimit(resource, &lim) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = cmd.spawn().map_err(|_| "internal")?;
+            let write = child.stdin.take().ok_or("internal").and_then(|mut stdin| {
+                let bytes = serde_json::to_vec(&internal).map_err(|_| "internal")?;
+                stdin.write_all(&bytes).map_err(|_| "internal")
+            });
+            if let Err(e) = write {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+            Ok((child, lifetime))
+        };
+        match setup() {
+            Ok((child, lifetime)) => Ok(Self {
+                child,
+                started: Instant::now(),
+                input,
+                rpc,
+                cancelled: false,
+                source,
+                output,
+                _lease: lease,
+                _lifetime: lifetime,
+            }),
+            Err(e) => {
+                output.cleanup();
+                Err(e)
+            }
+        }
+    }
+    pub fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+    pub fn finish(&mut self, success: bool) -> Result<Value> {
+        if !success {
+            self.output.cleanup();
+            return Err("decode_failed");
+        }
+        let result = (|| {
+            let mut bytes = Vec::new();
+            self.child
+                .stdout
+                .take()
+                .ok_or("internal")?
+                .take(65537)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "internal")?;
+            if bytes.len() > 65536 {
+                return Err("internal");
+            }
+            let raw: Value = serde_json::from_slice(&bytes).map_err(|_| "decode_failed")?;
+            if let Some(code) = raw.get("error").and_then(Value::as_str) {
+                return Err(match code {
+                    "limits_exceeded" => "limits_exceeded",
+                    "source_incomplete" => "source_incomplete",
+                    _ => "decode_failed",
+                });
+            }
+            let frames: Vec<Frame> = serde_json::from_value(raw).map_err(|_| "decode_failed")?;
+            if frames.len() != self.input.requested_bundle_ms.len() {
+                return Err("decode_failed");
+            }
+            self.source.check()?;
+            let mut pixels = 0u64;
+            for (i, frame) in frames.iter().enumerate() {
+                let name = format!("frame-{:03}.png", i + 1);
+                let mut f = self.output.dir.read(&name).map_err(|_| "invalid_output")?;
+                let actual = f.metadata().map_err(|_| "invalid_output")?;
+                let original = self.output.files[i]
+                    .metadata()
+                    .map_err(|_| "invalid_output")?;
+                if !files::same(&original, &actual)
+                    || actual.len() > 256 * 1024 * 1024
+                    || frame.byte_length != actual.len()
+                    || frame.request_index != i + 1
+                    || frame.requested_bundle_ms != self.input.requested_bundle_ms[i]
+                    || frame.effective_video_ms
+                        != frame
+                            .requested_bundle_ms
+                            .saturating_sub(self.input.source.video_offset_ms)
+                    || frame.clamped_to_start
+                        != (frame.requested_bundle_ms < self.input.source.video_offset_ms)
+                    || frame.path
+                        != Path::new(&self.input.output_directory)
+                            .join(&name)
+                            .to_string_lossy()
+                    || frame.width == 0
+                    || frame.height == 0
+                    || frame.width.max(frame.height) > self.input.limits.max_edge
+                {
+                    return Err("invalid_output");
+                }
+                pixels += u64::from(frame.width) * u64::from(frame.height);
+                if pixels > self.input.limits.max_total_pixels {
+                    return Err("limits_exceeded");
+                }
+                validate_png(&mut f, frame)?;
+                f.sync_all().map_err(|_| "invalid_output")?;
+            }
+            self.source.check()?;
+            let result = json!({"jobId":self.input.job_id,"state":"complete","frames":frames});
+            self.output.publish(&result)?;
+            Ok(result)
+        })();
+        if result.is_err() {
+            self.output.cleanup();
+        }
+        result
+    }
+    pub fn cleanup(&self) {
+        self.output.cleanup();
+    }
+}
+impl Drop for Active {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn validate_png(f: &mut File, frame: &Frame) -> Result<()> {
+    let mut hash = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = f.read(&mut buf).map_err(|_| "invalid_output")?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+    }
+    if format!("{:x}", hash.finalize()) != frame.sha256 {
+        return Err("invalid_output");
+    }
+    f.seek(SeekFrom::Start(0)).map_err(|_| "invalid_output")?;
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(f));
+    decoder.set_limits(png::Limits {
+        bytes: 256 * 1024 * 1024,
+    });
+    let mut reader = decoder.read_info().map_err(|_| "invalid_output")?;
+    if reader.info().width != frame.width || reader.info().height != frame.height {
+        return Err("invalid_output");
+    }
+    let mut data = vec![0; reader.output_buffer_size().ok_or("invalid_output")?];
+    reader.next_frame(&mut data).map_err(|_| "invalid_output")?;
+    Ok(())
+}
+
+pub fn child() -> Result<()> {
+    // A private inherited pipe provides a portable parent-death fallback; Linux
+    // additionally binds SIGKILL in pre_exec before the decoder can start.
+    let mut life = unsafe { File::from_raw_fd(5) };
+    std::thread::spawn(move || {
+        let mut b = [0];
+        let _ = life.read(&mut b);
+        std::process::exit(1);
+    });
+    let internal: Internal =
+        serde_json::from_reader(std::io::stdin().take(65537)).map_err(|_| "malformed_request")?;
+    internal.decode.validate()?;
+    let runtime = Runtime::open(Path::new(&internal.runtime)).map_err(|_| "source_mismatch")?;
+    let _lease = runtime
+        .lease(&internal.decode.source.bundle_id, LeaseKind::Read)
+        .map_err(|_| "source_mismatch")?
+        .ok_or("busy")?;
+    let source = unsafe { File::from_raw_fd(3) };
+    if files::identity(&source.metadata().map_err(|_| "source_mismatch")?)
+        != internal.decode.source.identity
+    {
+        return Err("source_mismatch");
+    }
+    let dir = Directory {
+        file: unsafe { File::from_raw_fd(4) },
+        path: Path::new(&internal.decode.output_directory).to_owned(),
+    };
+    let decoded = decode_child(&internal, &source, &dir);
+    let value = match decoded {
+        Ok(frames) => json!(frames),
+        Err(e) => json!({"error":e}),
+    };
+    serde_json::to_writer(std::io::stdout(), &value).map_err(|_| "internal")?;
+    Ok(())
+}
+fn decode_child(internal: &Internal, source: &File, dir: &Directory) -> Result<Vec<Frame>> {
+    let d = &internal.decode;
+    let times: Vec<u64> = d
+        .requested_bundle_ms
+        .iter()
+        .map(|t| t.saturating_sub(d.source.video_offset_ms))
+        .collect();
+    let mut frames = Vec::new();
+    #[cfg(target_os = "linux")]
+    super::linux::decode(
+        source,
+        &times,
+        d.limits.max_edge,
+        d.limits.max_total_pixels,
+        |frame| {
+            let i = frames.len();
+            let name = format!("frame-{:03}.png", i + 1);
+            let c = std::ffi::CString::new(name.as_str()).map_err(|_| "invalid_output")?;
+            let fd = unsafe {
+                libc::openat(
+                    dir.file.as_raw_fd(),
+                    c.as_ptr(),
+                    libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+                )
+            };
+            if fd < 0 {
+                return Err("invalid_output");
+            }
+            let mut file = unsafe { File::from_raw_fd(fd) };
+            let m = file.metadata().map_err(|_| "invalid_output")?;
+            if !m.is_file()
+                || m.uid() != unsafe { libc::geteuid() }
+                || m.mode() & 0o777 != 0o600
+                || m.nlink() != 1
+                || internal.reserved.get(i) != Some(&files::identity(&m))
+            {
+                return Err("invalid_output");
+            }
+            {
+                let mut encoder = png::Encoder::new(&mut file, frame.width, frame.height);
+                encoder.set_color(png::ColorType::Rgba);
+                encoder.set_depth(png::BitDepth::Eight);
+                let mut writer = encoder.write_header().map_err(|_| "decode_failed")?;
+                writer
+                    .write_image_data(&frame.rgba)
+                    .map_err(|_| "decode_failed")?;
+                writer.finish().map_err(|_| "decode_failed")?;
+            }
+            file.sync_all().map_err(|_| "invalid_output")?;
+            let mut read = dir.read(&name).map_err(|_| "invalid_output")?;
+            let mut hasher = Sha256::new();
+            let mut buf = [0u8; 65536];
+            loop {
+                let n = read.read(&mut buf).map_err(|_| "invalid_output")?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+            }
+            frames.push(Frame {
+                request_index: i + 1,
+                requested_bundle_ms: d.requested_bundle_ms[i],
+                effective_video_ms: times[i],
+                actual_video_ms: frame.actual_ms,
+                clamped_to_start: d.requested_bundle_ms[i] < d.source.video_offset_ms,
+                clamped_to_end: frame.clamped_to_end,
+                path: Path::new(&d.output_directory)
+                    .join(name)
+                    .to_string_lossy()
+                    .into_owned(),
+                width: frame.width,
+                height: frame.height,
+                byte_length: file.metadata().map_err(|_| "invalid_output")?.len(),
+                sha256: format!("{:x}", hasher.finalize()),
+            });
+            Ok(())
+        },
+    )?;
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (source, times, dir);
+        return Err("decode_failed");
+    }
+    Ok(frames)
+}
