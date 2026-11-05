@@ -253,8 +253,15 @@ jobs:
         env:
           MACOSX_DEPLOYMENT_TARGET: '15.0'
         run: |
-          cargo test --locked --target '${{ matrix.target }}' -j 3
-          cargo build --locked --release --bin apparent-connect-recipient --target '${{ matrix.target }}' -j 3
+          build_jobs=3
+          if [ '${{ matrix.runner }}' = 'macos-15-intel' ]; then
+            # GitHub's standard Intel macOS runner has four CPUs; use its full
+            # allocation for this target's test and release builds.
+            build_jobs="$(sysctl -n hw.ncpu)"
+            test "$build_jobs" -eq 4
+          fi
+          cargo test --locked --target '${{ matrix.target }}' -j "$build_jobs"
+          cargo build --locked --release --bin apparent-connect-recipient --target '${{ matrix.target }}' -j "$build_jobs"
           cp 'target/${{ matrix.target }}/release/apparent-connect-recipient' "$RUNNER_TEMP/recipient-output/"
       - name: Seal executable bytes
         env:
