@@ -7,7 +7,7 @@ const routeDocuments = new Set([
   "/connect", "/connect/", "/connect/device", "/connect/device/", "/connect/shares", "/connect/shares/",
 ])
 const art = new Set([
-  "/connect/hosted/source-pond-v4.png", "/connect/hosted/agent-pond-v4.png", "/connect/hosted/agent-reading-v4.png",
+  "/connect/assets/source-pond-v4.png", "/connect/assets/agent-pond-v4.png", "/connect/assets/agent-reading-v4.png",
 ])
 const notFoundHeaders = {
   "Cache-Control": "no-store",
@@ -19,7 +19,7 @@ const notFoundHeaders = {
 function routeAssetPath(path: string): string | undefined {
   if (routeDocuments.has(path)) return `${path.replace(/\/$/, "")}/index.html`.replace(/^\/\//, "/")
   if (art.has(path)) return path
-  if (/^\/connect\/(?:assets|hosted)\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(path)
+  if (/^\/connect\/assets\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(path)
     && !/\.(?:map|json)$/i.test(path)
     && !/(?:^|\/)(?:node_modules|functions|backend)(?:\/|$)/i.test(path)) return path
   return undefined

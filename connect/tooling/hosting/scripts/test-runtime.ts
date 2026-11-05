@@ -15,7 +15,7 @@ const address = socket.address()
 if (!address || typeof address === "string") throw new Error("could not reserve local test port")
 const port = address.port
 await new Promise<void>((resolveClose, reject) => socket.close(error => error ? reject(error) : resolveClose()))
-const child = spawn(resolve(packageRoot, "node_modules/.bin/wrangler"), ["dev", "--config", "wrangler.template.jsonc", "--local", "--ip", "127.0.0.1", "--port", String(port)], { cwd: packageRoot, stdio: "ignore", env: { ...process.env, NO_COLOR: "1" } })
+const child = spawn(resolve(packageRoot, "node_modules/.bin/wrangler"), ["dev", "--config", ".output/wrangler.json", "--no-bundle", "--local", "--ip", "127.0.0.1", "--port", String(port)], { cwd: packageRoot, stdio: "ignore", env: { ...process.env, NO_COLOR: "1" } })
 const origin = `http://127.0.0.1:${port}`
 try {
   let ready = false
@@ -41,7 +41,7 @@ try {
   assert.equal(head.status, 200)
   assert.equal(await head.text(), "")
   assert.equal((await fetch(`${origin}/connect`, { method: "POST" })).status, 405)
-  for (const path of ["/", "/unknown", "/connect/other", "/hosted", "/connectivity", "/connect%2Fdevice", "/connect/assets/%2e%2e%2findex.js", "/connect/assets/.env", "/connect/assets/manifest.json", "/connect/hosted/private.json", "/connect/assets/missing.js", "/connect/private/secret"]) {
+  for (const path of ["/", "/unknown", "/connect/other", "/hosted", "/connectivity", "/connect%2Fdevice", "/connect/assets/%2e%2e%2findex.js", "/connect/assets/.env", "/connect/assets/manifest.json", "/connect/assets/private.json", "/connect/assets/missing.js", "/connect/private/secret"]) {
     const response = await fetch(`${origin}${path}`)
     assert.equal(response.status, 404, path)
     assert.equal(response.headers.get("cache-control"), "no-store")
@@ -50,7 +50,7 @@ try {
   const script = browserAssets.find(name => name.endsWith(".js"))
   const stylesheet = browserAssets.find(name => name.endsWith(".css"))
   assert(script && stylesheet, "packaged JS and CSS exist under the owned asset namespace")
-  for (const [path, mediaType, cacheDirective] of [["/connect/assets/apparent-wordmark.svg", "image/svg+xml", "no-cache"], ["/connect/assets/HostGrotesk-Variable.ttf", "font/ttf", "no-cache"], ["/connect/hosted/source-pond-v4.png", "image/png", "no-cache"], [`/connect/assets/${script}`, "text/javascript", "no-cache"], [`/connect/assets/${stylesheet}`, "text/css", "no-cache"]]) {
+  for (const [path, mediaType, cacheDirective] of [["/connect/assets/apparent-wordmark.svg", "image/svg+xml", "no-cache"], ["/connect/assets/HostGrotesk-Variable.ttf", "font/ttf", "no-cache"], ["/connect/assets/source-pond-v4.png", "image/png", "no-cache"], [`/connect/assets/${script}`, "text/javascript", "no-cache"], [`/connect/assets/${stylesheet}`, "text/css", "no-cache"]]) {
     const response = await fetch(`${origin}${path}`)
     assert.equal(response.status, 200, path)
     assert.match(response.headers.get("content-type") ?? "", new RegExp(mediaType.replace("+", "\\+")), path)

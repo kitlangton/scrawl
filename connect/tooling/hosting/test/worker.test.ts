@@ -26,11 +26,11 @@ test("only canonical browser routes and owned static files reach assets", async 
     assert.equal(forwarded.headers.has("cookie"), false)
     assert.equal(forwarded.headers.has("authorization"), false)
   }
-  for (const path of ["/", "/unknown", "/connect/other", "/hosted", "/connectivity", "/connect%2Fdevice", "/connect/assets/main.js.map", "/connect/assets/.env", "/connect/assets/manifest.json", "/connect/hosted/private.json", "/connect/private/secret"]) {
+  for (const path of ["/", "/unknown", "/connect/other", "/hosted", "/connectivity", "/connect%2Fdevice", "/connect/assets/main.js.map", "/connect/assets/.env", "/connect/assets/manifest.json", "/connect/assets/private.json", "/connect/private/secret"]) {
     const response = await worker.fetch(new Request(`https://app.tryapparent.com${path}`), { ASSETS: assets } as never)
     assert.equal(response.status, 404, path)
   }
-  for (const path of ["/connect/hosted/source-pond-v4.png", "/connect/hosted/agent-pond-v4.png", "/connect/hosted/agent-reading-v4.png", "/connect/assets/main-a1b2.js"]) {
+  for (const path of ["/connect/assets/source-pond-v4.png", "/connect/assets/agent-pond-v4.png", "/connect/assets/agent-reading-v4.png", "/connect/assets/main-a1b2.js"]) {
     const response = await worker.fetch(new Request(`https://app.tryapparent.com${path}`), { ASSETS: assets } as never)
     assert.equal(response.status, 200)
   }
@@ -80,6 +80,10 @@ test("bundled hosting worker uses synthetic D1/R2 service bindings and canonical
     })
   } finally { process.chdir(previous) }
   try {
+    const ui = await f.mf.dispatchFetch("https://app.tryapparent.com/connect?code=SYNTHETIC")
+    assert.equal(ui.status, 200, "the exact deployable bundle must include the UI gateway")
+    assert.equal(ui.headers.get("x-apparent-publisher"), "connect-worker")
+    assert.match(await ui.text(), /Checking your account/)
     const session = await f.call("/v1/session")
     assert.equal(session.status, 200)
     assert.deepEqual(await session.json(), { authenticated: false, csrfToken: null, account: null, slots: { used: 0, limit: 20, remaining: 20 } })

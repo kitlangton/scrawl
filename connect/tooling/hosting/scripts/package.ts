@@ -28,7 +28,7 @@ async function inventory(root: string): Promise<Map<string, Buffer>> {
 function target(path: string): string {
   if (path.startsWith("assets/")) return `connect/${path}`
   if (browserAssets.includes(path)) return `connect/assets/${path}`
-  if (path.startsWith("hosted/")) return `connect/${path}`
+  if (path.startsWith("hosted/")) return `connect/assets/${path.slice("hosted/".length)}`
   return path
 }
 
@@ -49,7 +49,7 @@ for (const [path, original] of inputs) {
     // This packaging profile preserves Public's accepted browser artifact while
     // rewriting the dedicated Worker graph to paths owned by /connect*.
     text = text.replaceAll("/assets/", "/connect/assets/")
-      .replaceAll("/hosted/", "/connect/hosted/")
+      .replaceAll("/hosted/", "/connect/assets/")
       .replaceAll("/HostGrotesk-Variable.ttf", "/connect/assets/HostGrotesk-Variable.ttf")
       .replaceAll("/apparent-wordmark.svg", "/connect/assets/apparent-wordmark.svg")
     if (/['"`]\/(?:assets|hosted)\//.test(text)) throw new Error(`root browser asset URL remains: ${path}`)
