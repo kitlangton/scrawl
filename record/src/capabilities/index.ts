@@ -17,6 +17,13 @@ export interface ShortcutBinding {
   draft: null | { sessionId: string; value: string; error?: string };
 }
 export type PenColor = "coral" | "purple" | "blue" | "green";
+/** Approved named palette, matching the donor writer; these are not CSS color keywords. */
+export const PEN_COLOR_RGB: Readonly<Record<PenColor, readonly [number, number, number]>> = Object.freeze({
+  coral: Object.freeze([217, 76, 68] as const),
+  purple: Object.freeze([122, 88, 199] as const),
+  blue: Object.freeze([59, 121, 189] as const),
+  green: Object.freeze([57, 123, 97] as const),
+});
 /** Named penColor preference; drawing tool modes are a separate capability. */
 export interface PenPreference {
   effective: PenColor | null;

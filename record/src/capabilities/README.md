@@ -136,3 +136,5 @@ The eventual Record host must delegate to the authoritative writer and publish
 only effective readback. Dispatch acceptance never selects a color; write
 failure preserves the last confirmed effective color. Production mapping is
 still unavailable, while the fixture supports all four explicit readbacks.
+`PEN_COLOR_RGB` exports the donor's exact approved RGB triples for swatches;
+these names must not be interpreted as CSS named colors or replacement branding.

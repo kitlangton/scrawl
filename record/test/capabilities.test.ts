@@ -236,6 +236,8 @@ test("cancelling a shortcut reservation does not cancel an already recording cap
 });
 
 test('pen colors match named writer values and change only after effective readback', async () => {
+  const {PEN_COLOR_RGB}=await import('../src/capabilities/index.ts');
+  assert.deepEqual(PEN_COLOR_RGB,{coral:[217,76,68],purple:[122,88,199],blue:[59,121,189],green:[57,123,97]});
   const {client,driver}=createRecordFixture('reconnect-with-saved-history');
   const supported=['coral','purple','blue','green'] as const;
   assert.deepEqual(driver.current().pen.supported,supported);
