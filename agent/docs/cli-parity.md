@@ -20,7 +20,7 @@ This inventory is based on the active parser and handlers in `composition/cli.rs
 | `update status|channel|check` | Desktop Linux AppImage updater. | Not implemented. Desktop/Linux updater owner routed. |
 | `hex status` | Engine transcription provider readiness. | Not implemented. Provider-owned; requires a published status capability. |
 | `connect` (`cloud` alias): `login`, `status`, `logout`, `disable`, `retry`, `upload`, `shares list`, `shares revoke`; `fetch` | Connect authentication, upload queue, hosted retrieval and consent. | **Deferred by user.** No Agent network, auth or hosted-fetch work in this campaign slice. |
-| `issue` | Composition/GitHub feedback submission. | Not implemented. Keep separate from capture inspection and require its existing explicit submission policy. |
+| `issue` | Composition/GitHub feedback submission. | **Implemented:** offline JSON preview by default; explicit `--submit` invokes noninteractive `gh` pinned to github.com and `tryapparent/apparent`, then verifies exact readback. Only caller-supplied title/body are used. See the bundled standalone `skills/apparent-issue/SKILL.md` for the human approval workflow. |
 | `demo` | Desktop/Engine synthetic bundle generation and optional clipboard. | Not implemented. Depends on a supported synthetic bundle producer; no capture implementation in this slice. |
 | `skill` | Agent skill content. | **Implemented:** `apparent-agent skill` prints the standalone capture-reading guide bundled in the npm package. It has no arguments, starts no Engine, and does not change legacy `apparent skill` routing. |
 | `autocrop` | Engine crop policy plus Desktop/browser playground. | Not implemented. Engine owns crop semantics; interactive playground remains UI/provider routed. |

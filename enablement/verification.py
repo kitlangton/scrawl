@@ -6,6 +6,8 @@ Explicit local --run retains conservative changed-tree checks.
 Both sides of renames/deletions are included. Missing history broadens checks.
 """
 import argparse
+import base64
+import hashlib
 import json
 import os
 import re
@@ -127,6 +129,32 @@ APP_SHELL_WORKFLOW = ".github/workflows/value-stream-delivery.yml"
 
 RECORD_PACKAGE_ROOT = "record/"
 RECORD_FRONTEND_ROOT = "capture/desktop/ui/frontend/"
+# The standalone fixture consumer has no native/legacy source dependency.
+# Unknown additions remain broad until their dependency closure is reviewed.
+ONBOARDING_PACKAGE_ROOT = "onboarding/"
+ONBOARDING_PACKAGE_INPUTS = {
+    ONBOARDING_PACKAGE_ROOT + name for name in (
+        ".gitignore", "README.md", "delivery.json", "package.json", "package-lock.json",
+        "tsconfig.json", "tsconfig.test.json", "src/index.ts", "src/controller.ts",
+        "src/model.ts", "src/react.tsx", "src/styles.css", "src/assets.d.ts",
+        "src/assets/frog.png", "test/onboarding.test.ts",
+        "vendor/record-0.1.0-afd73fb.tgz",
+    )
+}
+# These can change the toolchain, assembly or transitive source closure. Keep
+# broad integration checks when they change, while still running owner checks.
+ONBOARDING_PACKAGE_BUILD_INPUTS = {
+    ONBOARDING_PACKAGE_ROOT + name for name in (
+        "package.json", "package-lock.json", "delivery.json", "tsconfig.json",
+        "tsconfig.test.json", "vendor/record-0.1.0-afd73fb.tgz",
+    )
+}
+
+
+def onboarding_package_selected(paths):
+    return not paths or any(path.startswith(ONBOARDING_PACKAGE_ROOT) for path in paths)
+
+
 RECORD_UI_INPUTS = {
     RECORD_FRONTEND_ROOT + "pill/index.html",
 }
@@ -256,8 +284,11 @@ def select(paths, history_known=True):
     record = not history_known or record_typescript_selected(paths)
     delivery = False
     agent = agent_tests_selected(paths)
+    onboarding_package = not history_known or onboarding_package_selected(paths)
     reasons = []
     for path in paths:
+        if path in ONBOARDING_PACKAGE_INPUTS - ONBOARDING_PACKAGE_BUILD_INPUTS:
+            continue
         if isolated_agent_input(path):
             continue
         if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
@@ -306,6 +337,7 @@ def select(paths, history_known=True):
     return {"root": broad, "engine": broad or engine, "browser": browser, "agent": agent,
             "app_shell": app_shell or not history_known or not paths,
             "record": record,
+            "onboarding_package": onboarding_package,
             "delivery": delivery or not history_known or not paths,
             "public_site": public_site or not history_known or not paths,
             "focused": [], "paths": paths,
@@ -402,6 +434,8 @@ def run_pr_checks(selection=None):
         run_app_shell_check()
     if (selection or {}).get("record", record_typescript_selected(paths)):
         run_record_typescript_check()
+    if (selection or {}).get("onboarding_package", onboarding_package_selected(paths)):
+        run_onboarding_package_check()
     if (selection or {}).get("delivery", delivery_tests_selected(paths)):
         run_delivery_tests()
     if connect_client_typescript_selected(paths):
@@ -457,6 +491,52 @@ def run_app_shell_check():
     if absent:
         raise RuntimeError("App Shell check needs installed dependencies: run npm ci in composition/app; the hook never installs dependencies")
     subprocess.run(["npm", "run", "check"], cwd=package, check=True)
+
+
+def run_onboarding_package_check():
+    """Verify the standalone owner; never build the legacy frontend or install."""
+    package = ROOT / ONBOARDING_PACKAGE_ROOT
+    required = ONBOARDING_PACKAGE_INPUTS - {"onboarding/.gitignore", "onboarding/README.md"}
+    missing = sorted(path for path in required if not (ROOT / path).is_file())
+    if missing:
+        raise RuntimeError("Onboarding package inputs missing or deleted: " + ", ".join(missing))
+    try:
+        manifest = json.loads((package / "package.json").read_text())
+        lock = json.loads((package / "package-lock.json").read_text())
+        locked = lock["packages"][""]
+        for section in ("dependencies", "devDependencies"):
+            if manifest.get(section, {}) != locked.get(section, {}):
+                raise ValueError("manifest/lock mismatch")
+        dependencies = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
+        if not dependencies or not all(manifest.get("scripts", {}).get(key) for key in ("typecheck", "test", "build")):
+            raise ValueError("missing owner checks/dependencies")
+    except (OSError, KeyError, TypeError, ValueError, AttributeError) as error:
+        raise RuntimeError("Onboarding manifest/lock/checks are invalid; repair onboarding/package.json and package-lock.json") from error
+    missing_dependencies = [name for name in dependencies if not (package / "node_modules" / name / "package.json").is_file()]
+    if missing_dependencies:
+        raise RuntimeError("Onboarding package checks need installed locked dependencies: run npm ci in onboarding; the hook never installs dependencies. Missing: " + ", ".join(sorted(missing_dependencies)))
+    try:
+        installed = json.loads((package / "node_modules/.package-lock.json").read_text())["packages"]
+        for name in dependencies:
+            key = "node_modules/" + name
+            expected, actual = lock["packages"][key], installed[key]
+            if expected.get("resolved", "").startswith("file:"):
+                artifact = (package / expected["resolved"][5:]).resolve()
+                if not artifact.is_relative_to((package / "vendor").resolve()) or not artifact.is_file():
+                    raise ValueError("local dependency is not a contained vendor artifact")
+                integrity = "sha512-" + base64.b64encode(hashlib.sha512(artifact.read_bytes()).digest()).decode("ascii")
+                if integrity != expected.get("integrity"):
+                    raise ValueError("local dependency integrity mismatch")
+            if any(expected.get(field) != actual.get(field) for field in ("version", "resolved", "integrity")):
+                raise ValueError("stale installed dependency: " + name)
+            version = json.loads((package / key / "package.json").read_text())["version"]
+            if version != expected["version"]:
+                raise ValueError("stale installed package: " + name)
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("Onboarding installed lock/dependencies are stale or missing; run npm ci in onboarding before pushing (the hook never installs)") from error
+    subprocess.run(["npm", "run", "typecheck"], cwd=package, check=True)
+    # test builds the distributable before exercising controller and mounted UI.
+    subprocess.run(["npm", "test"], cwd=package, check=True)
 
 
 def delivery_tests_selected(paths):
@@ -798,6 +878,8 @@ def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=
 
 
 def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_root_build=False):
+    if selection.get("onboarding_package"):
+        run_onboarding_package_check()
     if selection.get("record"):
         run_record_typescript_check()
     if selection.get("agent"):
@@ -930,9 +1012,9 @@ def main():
         return
     selection = plan(args.base, args.head)
     if args.suite == 'rust':
-        selection.update(root=True, engine=True, browser=False, app_shell=False, agent=False, record=False, focused=[])
+        selection.update(root=True, engine=True, browser=False, app_shell=False, agent=False, record=False, onboarding_package=False, focused=[])
     elif args.suite == 'browser':
-        selection.update(root=False, engine=False, browser=True, app_shell=False, agent=False, record=False, focused=[])
+        selection.update(root=False, engine=False, browser=True, app_shell=False, agent=False, record=False, onboarding_package=False, focused=[])
     print(json.dumps(selection, sort_keys=True), flush=True)
     if args.github_output:
         with args.github_output.open("a") as output:
