@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
+import {PNG} from 'pngjs';
 
 test('packed CLI installs offline outside checkout and prints its standalone skill without config, storage, or Engine',async()=>{
   const root=await mkdtemp(join(tmpdir(),'agent-package-'));
@@ -23,7 +24,10 @@ test('packed CLI installs offline outside checkout and prints its standalone ski
     const cli=resolve(root,'node_modules/@apparent/agent/dist/cli.js');
     assert.equal(run(['--input-type=module','-e',"await import('@apparent/agent')"]),'');
     assert.match(run([cli,'--help']),/Local Apparent/);assert.equal(run([cli,'--version']),'0.1.0\n');
-    for (const command of ['inspect', 'record', 'capture', 'frames']) assert.match(run([cli,command,'--help']),/Usage: apparent-agent/);
+    for (const command of ['inspect', 'record', 'capture', 'frames', 'zoom']) assert.match(run([cli,command,'--help']),/Usage: apparent-agent/);
+    for(const args of [['--at','1','--mark','m1'],['--at','1','--frame','2'],['--mark','m1','--frames','-1']]) {
+      const invalid=runRaw([cli,'zoom',...args]); assert.equal(invalid.status,2); assert.equal(invalid.stdout,'');
+    }
     const unavailable = runRaw([cli,'frames','./clip.apparent','--from','0','--to','1']);
     assert.equal(unavailable.status,2); assert.equal(unavailable.stdout,'');
     assert.match(unavailable.stderr,/Local bundle directory not found/);
@@ -52,5 +56,16 @@ test('packed CLI installs offline outside checkout and prints its standalone ski
     await writeFile(join(bundle,'apparent.json'),raw);await writeFile(join(bundle,'summary.md'),'hello\n');
     assert.match(run([cli,'inspect',bundle]),/“hello”/);assert.equal(run([cli,'inspect',bundle,'--stored-summary']),'hello\n');assert.equal(run([cli,'inspect',bundle,'--json']),raw);
     assert.equal(await readFile(join(bundle,'apparent.json'),'utf8'),raw);
+    const zoomBundle=join(root,'zoom.apparent');await mkdir(join(zoomBundle,'frames'),{recursive:true});
+    const image=new PNG({width:12,height:8}); for(let p=0;p<image.data.length;p+=4) image.data.set([40,160,220,255],p);
+    await writeFile(join(zoomBundle,'frames/frame-01.png'),PNG.sync.write(image,{colorType:6}));
+    const zoomManifest={version:1,id:'packed-zoom',createdAtMs:1,durationMs:3000,target:{mode:'display',app:null,bundleId:null,windowTitle:null,windowId:null,displayId:0,frame:{x:0,y:0,width:12,height:8,scale:1}},transcript:{text:'look here',segments:[{t0:900,t1:1100,text:'look here'}],words:[{t0:900,t1:1000,text:'look'},{t0:1000,t1:1100,text:'here'}]},strokes:[],marks:[],events:[],keyframes:[{index:1,t:1000,file:'frames/frame-01.png'}],contactSheet:'missing.png'};
+    const zoomRaw=JSON.stringify(zoomManifest); await writeFile(join(zoomBundle,'apparent.json'),zoomRaw);
+    const zoomOutput=join(root,'packed-zoom-output');
+    const zoomResult=JSON.parse(run([cli,'zoom',zoomBundle,'--at','look here','--frames','1','--out',zoomOutput,'--json']));
+    assert.equal(zoomResult.sourceKind,'saved-keyframes');assert.equal(zoomResult.cells[0].timestampMs,1000);
+    assert.ok((await readFile(zoomResult.sheet)).length>24);assert.equal(await readFile(join(zoomBundle,'apparent.json'),'utf8'),zoomRaw);
+    const defaultZoom=JSON.parse(run([cli,'zoom',zoomBundle,'--at','look here','--frames','1','--json']));
+    assert.ok(defaultZoom.sheet.startsWith(join(root,'.cache','apparent','agent','zoom')));
   }finally{await rm(root,{recursive:true,force:true});}
 });
