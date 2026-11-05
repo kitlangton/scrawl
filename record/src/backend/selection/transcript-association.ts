@@ -41,8 +41,12 @@ function endsClause(text: string, words: number): boolean {
 }
 
 function wordCount(text: string): number {
-  return Math.max(1, text.split(/\s+/u).filter((word) => /[\p{L}\p{N}]/u.test(word)).length);
+  return Math.max(1, text.split(/\p{White_Space}+/u).filter((word) => /[\p{Alphabetic}\p{N}]/u.test(word)).length);
 }
+
+// Match Rust's Unicode White_Space trimming, which differs from JS trim for
+// NEL and BOM. Alphabetic also includes marks outside the Letter category.
+const trimTranscript = (text: string) => text.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
 
 function isAttachedPunctuation(text: string): boolean {
   return /^[,.!?;:'’\)\]”]/u.test(text);
@@ -77,7 +81,7 @@ export function associateTranscriptWithSelectedFrames(
 
   const words = transcript.words ?? [];
   const source = words.length ? words : transcript.segments;
-  const units = source.filter((unit) => unit.text.trim()).map((unit) => {
+  const units = source.filter((unit) => trimTranscript(unit.text)).map((unit) => {
     if (!validTime(unit.startMs) || !validTime(unit.endMs) || unit.endMs < unit.startMs)
       throw new RangeError("transcript unit timestamps must be ordered non-negative safe integers");
     return unit;
@@ -118,7 +122,7 @@ export function associateTranscriptWithSelectedFrames(
   const result: AssociatedFrame[] = frames.map((frame) => ({ ...frame }));
   const said = Array.from({ length: frames.length }, () => "");
   for (const unit of units) {
-    const text = unit.text.trim();
+    const text = trimTranscript(unit.text);
     let index = 0;
     for (let i = 0; i < starts.length; i++) if (starts[i]! <= unit.startMs + 50) index = i;
     if (isAttachedPunctuation(text) && !said[index] && index > 0) index--;
@@ -126,6 +130,6 @@ export function associateTranscriptWithSelectedFrames(
     if (said[index] && !isAttachedPunctuation(text) && !open) said[index] += " ";
     said[index] += text;
   }
-  if (said.every((text) => !text) && transcript.text?.trim()) said[0] = transcript.text.trim();
+  if (said.every((text) => !text) && transcript.text && trimTranscript(transcript.text)) said[0] = trimTranscript(transcript.text);
   return result.map((frame, index) => ({ ...frame, ...(said[index] ? { said: said[index] } : {}) }));
 }

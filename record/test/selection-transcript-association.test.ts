@@ -64,3 +64,27 @@ test("untimed transcript is attached once to the first selected frame", () => {
   });
   assert.deepEqual(output.map(({ said }) => said), ["spoken words without timing", undefined]);
 });
+
+test("zero-time tolerance and punctuation tokenization match the Rust source", () => {
+  const selected = [40, 50].map((timeMs, index) => ({ id: `f-${index}`, timeMs, absolutePath: "/frame.png" }));
+  assert.deepEqual(associateTranscriptWithSelectedFrames(selected, {
+    words: [{ startMs: 0, endMs: 0, text: "word" }], segments: [],
+  }).map(frame => frame.said), [undefined, "word"]);
+});
+
+for (const [text, expected] of [
+  ["one\u0085two", ["one\u0085two,", "next"]],
+  ["one\ufefftwo", ["one\ufefftwo, next", undefined]],
+  ["x \u0345", ["x \u0345,", "next"]],
+  ["hello,world", ["hello,world, next", undefined]],
+] as const) test(`Rust Unicode word boundaries: ${JSON.stringify(text)}`, () => {
+  const output = associateTranscriptWithSelectedFrames([
+    { id: "f-1", timeMs: 0, absolutePath: "/one.png" },
+    { id: "f-2", timeMs: 280, absolutePath: "/two.png" },
+  ], { segments: [], words: [
+    { startMs: 0, endMs: 100, text },
+    { startMs: 100, endMs: 200, text: "," },
+    { startMs: 200, endMs: 300, text: "next" },
+  ] });
+  assert.deepEqual(output.map(frame => frame.said), expected);
+});
