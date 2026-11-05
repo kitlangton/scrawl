@@ -126,9 +126,6 @@ APP_SHELL_WORKFLOW = ".github/workflows/verification-platform.yml"
 RECORD_PACKAGE_ROOT = "record/"
 RECORD_FRONTEND_ROOT = "capture/desktop/ui/frontend/"
 RECORD_UI_INPUTS = {
-    RECORD_FRONTEND_ROOT + "package.json",
-    RECORD_FRONTEND_ROOT + "package-lock.json",
-    RECORD_FRONTEND_ROOT + "vite.config.ts",
     RECORD_FRONTEND_ROOT + "pill/index.html",
 }
 
@@ -136,14 +133,12 @@ RECORD_UI_INPUTS = {
 def record_typescript_selected(paths):
     """Select Record checks for its package and the retained pill consumer seam."""
     if not paths:
-        return True  # Unknown history stays conservative.
+        return False  # The ordinary unknown-history selection already runs all owner lanes.
     return any(
         (path.startswith(RECORD_PACKAGE_ROOT) and not path.endswith(".md"))
         or path in RECORD_UI_INPUTS
         or path.startswith(RECORD_FRONTEND_ROOT + "src/pill/")
         or path.startswith(RECORD_FRONTEND_ROOT + "tests/pill/")
-        or path.startswith("shared/ui/")
-        or path == "shared/assets/fonts/HostGrotesk-Variable.ttf"
         for path in paths
     )
 

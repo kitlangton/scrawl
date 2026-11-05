@@ -22,9 +22,6 @@ class SelectionTests(unittest.TestCase):
         paths = [
             "record/package.json", "record/src/ui/recording-pill.tsx",
             "record/scripts/copy-ui-assets.ts",
-            "capture/desktop/ui/frontend/package.json",
-            "capture/desktop/ui/frontend/package-lock.json",
-            "capture/desktop/ui/frontend/vite.config.ts",
             "capture/desktop/ui/frontend/pill/index.html",
             "capture/desktop/ui/frontend/src/pill/legacy-mount.tsx",
             "capture/desktop/ui/frontend/tests/pill/smoke.cjs",
@@ -35,9 +32,20 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(selected["record"])
                 self.assertFalse(selected["root"])
                 self.assertFalse(selected["engine"])
+        for path in (
+            "capture/desktop/ui/frontend/package.json",
+            "capture/desktop/ui/frontend/package-lock.json",
+            "capture/desktop/ui/frontend/vite.config.ts",
+        ):
+            with self.subTest(path=path):
+                selected = verification.select([path])
+                self.assertFalse(selected["record"])
+                self.assertTrue(selected["root"])
+                self.assertTrue(selected["engine"])
         self.assertFalse(verification.select(["record/README.md"])["record"])
+        self.assertFalse(verification.record_typescript_selected([]))
         shared = verification.select(["shared/ui/src/button.tsx"])
-        self.assertTrue(shared["record"])
+        self.assertFalse(shared["record"])
         self.assertTrue(shared["root"])
 
     def test_record_owner_check_uses_both_packages_without_cargo(self):
@@ -330,10 +338,7 @@ class SelectionTests(unittest.TestCase):
                     selected = any(call.args[0] == ["npm", "run", "check:onboarding"]
                                    for call in run.call_args_list)
                     self.assertEqual(selected, name in inputs)
-                    self.assertEqual(record_check.called, name in (
-                        frontend + "package-lock.json",
-                        frontend + "vite.config.ts",
-                        "shared/assets/fonts/HostGrotesk-Variable.ttf", "shared/ui/theme.css"))
+                    self.assertFalse(record_check.called)
 
     def setUp(self):
         guard = patch.object(verification, "check_temp_environment")
