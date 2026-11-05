@@ -41,6 +41,31 @@ The local inspection slice is accepted when the Agent owner suite, packed consum
 
 The legacy Rust command remains until every supported installed/package-manager consumer has moved and each command family's owner has accepted its replacement. Agent package publication, app command routing and donor deletion are separate campaign gates; a parity entry in this table is not evidence that those gates passed.
 
+## Explicit offline native media installation
+
+The standalone npm package includes `apparent-agent-install-local`, which
+accepts a local Agent tarball, its trusted expected SHA-256, a complete native
+media root, its trusted manifest SHA-256, and a fresh absolute prefix. It
+supports Linux x64 only and requires Node 22.6+ plus existing npm. It verifies
+the Agent archive before invoking `npm --offline --ignore-scripts`, checks the
+installed Agent/SDK versions and media export, verifies every regular file,
+mode and hash in the native inventory before and after copying, then requires
+a media/1 handshake and confirmed worker close before writing a success
+receipt. The full root (entry, worker, libraries, plugins and manifest) is
+retained. The generated launcher sets the explicit media executable and a
+private runtime path; it does not configure capture-v1 recording or global
+`apparent` routing. Input archives and roots are never modified. Existing or
+symlinked prefix paths are refused; failed installs leave a private partial
+prefix without a success receipt. Same-UID processes share the trust boundary.
+Manifest integrity is not provenance: callers must obtain both digests from a
+trusted upstream admission/receipt. The documented 463 artifact pair is an
+example and does not override current-tree admission/reuse requirements.
+
+This install path does not add Connect, Mac media, capture, export, inference,
+or maintenance support and makes no codec claim from its handshake. The
+consumer continues to use the SDK for media frames/zoom; ordinary standalone
+Node CLI inspection stays portable without an installed provider.
+
 ## Local synthetic demo
 
 Demo generation is owner-local TypeScript and uses bundled pure-JS PNG encoding plus the Agent's shared annotation rasterizer. It writes only into a new owner-private directory, with mode-0600 assets and the manifest completion marker last; failure cleanup only unlinks paths created by that invocation. Default location follows the read-only capture-directory resolution; explicit output must be a fresh absolute `.apparent` path. Output includes a visible synthetic provenance marker and synthetic target labels. This is illustrative content, not evidence of recording or native media. `inspect`, saved-keyframe `frames`, and `zoom` consume the result locally without Engine, Desktop, provider, UI or network. `--clipboard` is a recognized truthful failure before output. Native clipboard parity remains blocked on a published native handoff route and platform proof.

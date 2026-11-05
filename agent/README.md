@@ -44,3 +44,37 @@ With an explicitly configured native Engine media provider, zoom requests the ex
 `delivery.json` registers Agent with the independent value-stream producer. Its inputs include Agent and the Engine SDK, not Engine Rust/native implementation or Desktop. The Linux producer builds/tests/packs and verifies a fresh public API import. This stages a reusable npm artifact; it does not publish to npm or switch the installed app CLI. The package root exports application helpers without running a CLI. Engine shutdown allows 12 seconds before escalation, matching the provider’s documented native-finalizer integration budget.
 
 Agent-only TypeScript, JSON, Markdown and package-control changes run the installed owner suite without legacy Rust compilation. Engine SDK changes also run Agent tests but retain conservative native selection; unknown/native Agent file types, mixed shared changes and unknown history remain conservative. Hooks never install dependencies.
+# Offline local installation with native Linux media
+
+`apparent-agent-install-local` installs an already-built Agent npm tarball and
+an already-built complete Engine media root into a fresh private Linux x64
+prefix. It performs no download, authentication, build, global npm install or
+OS routing change. The two SHA-256 values must come from a trusted upstream
+admission or receipt; a native manifest hash proves integrity only, not who
+produced it. The installer checks the package hash before npm, validates the
+entire native inventory against its manifest before and after copying, and
+requires the installed Agent 0.1.0 and SDK 0.2.0 media export. Node 22.6+ and
+an existing npm are required.
+
+```sh
+node /absolute/path/to/apparent-agent-install-local.js \
+  --agent /absolute/path/apparent-agent-0.1.0.tgz \
+  --agent-sha256 c9e87015dee2ff2c35dcd72bc4627733e21b427e468318888ed29beafca4f3aa \
+  --native-root /absolute/path/to/native-payload \
+  --manifest-sha256 98ef787ed53c430e074484de806bd4de4b08893aba21fb1c34ab36f238a6da20 \
+  --prefix /absolute/fresh/private-prefix
+/absolute/fresh/private-prefix/apparent-agent --version
+/absolute/fresh/private-prefix/apparent-agent frames /absolute/capture.apparent --from 0 --to 2
+```
+
+The example digests identify the locally retained 463f0053908 artifact pair;
+they do not bypass the normal current-tree admission/reuse gate. The launcher
+keeps both native entry and worker in the copied tree, supplies only the
+explicit media executable and private runtime paths, and invokes the installed
+Agent CLI. Install success requires a native media/1 handshake and confirmed
+worker exit. This is not codec proof. Native media decode is available here
+only for Linux x64; Mac media, capture, export and inference remain unavailable.
+Connect is deferred. Standalone Node CLI inspection remains portable without
+the native tree. A failure retains a clearly named private partial prefix and
+never emits a success receipt. Paths are private to cooperating same-UID
+processes; this installer does not promise same-UID isolation.
