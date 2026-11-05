@@ -1,0 +1,152 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { checkArchitecture } from '../src/guard.ts';
+const gitEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+
+function fixture(files: Record<string,string>, run: (root: string) => void): void {
+  const root = mkdtempSync(path.join(tmpdir(), 'apparent-arch-'));
+  try {
+    for (const [name, value] of Object.entries(files)) {
+      const file = path.join(root,name); mkdirSync(path.dirname(file),{recursive:true}); writeFileSync(file,value);
+    }
+    execFileSync('git',['init','-q',root], { env: gitEnvironment }); execFileSync('git',['-C',root,'add','.'], { env: gitEnvironment });
+    run(root);
+  } finally { rmSync(root,{recursive:true,force:true}); }
+}
+const engine = JSON.stringify({name:'@apparent/engine-sdk',exports:{'.':'./dist/index.js','./testing':'./dist/testing.js'}});
+const record = JSON.stringify({name:'@apparent/record',exports:{'.':'./dist/index.js','./fixtures':'./dist/fixtures.js'}});
+
+test('allows public APIs and owner-local internals', () => fixture({
+  'engine/sdk/package.json': engine, 'record/package.json': record,
+  'shared/ui/package.json': JSON.stringify({ name: '@apparent/ui', exports: { './button': './src/button.tsx' } }),
+  'record/src/index.ts': "import { x } from '@apparent/engine-sdk'; import { y } from './local.js'; import '@apparent/ui/button'; export { y };",
+  'record/src/local.ts': 'export const y = 1;',
+}, root => assert.deepEqual(checkArchitecture(root), [])));
+
+test('shared cannot hide product imports behind a computed loader or forged package name', () => fixture({
+  'shared/contracts/src/index.ts': 'import(destination); require(destination);',
+  'shared/forged/package.json': JSON.stringify({ name: '@apparent/record', exports: { '.': './index.ts' } }),
+}, root => {
+  const errors = checkArchitecture(root);
+  assert(errors.some(error => error.includes('computed dynamic import')));
+  assert(errors.some(error => error.includes('computed require')));
+  assert(errors.some(error => error.includes('public package identity')));
+}));
+
+test('rejects relative cross-owner import and re-export', () => fixture({
+  'engine/sdk/package.json': engine,
+  'record/src/index.ts': "import '../../engine/sdk/src/index.js';\nexport { x } from '../../engine/sdk/src/index.js';",
+}, root => { const errors=checkArchitecture(root); assert(errors.some(x=>x.includes('cross-owner path'))); assert(errors.length >= 2); }));
+
+test('rejects aliases that escape an owner', () => fixture({
+  'engine/sdk/package.json': engine, 'record/tsconfig.json': JSON.stringify({compilerOptions:{baseUrl:'..',paths:{'@engine/*':['engine/sdk/src/*']}}}),
+  'record/src/index.ts': "import '@engine/index.js';",
+}, root => assert(checkArchitecture(root).some(x=>x.includes('tsconfig alias')))));
+
+test('checks a package-looking alias before accepting its public export', () => fixture({
+  'record/tsconfig.json': JSON.stringify({compilerOptions:{baseUrl:'..',paths:{'@apparent/engine-sdk':['agent/src/index.ts']}}}),
+  'record/src/index.ts': "import '@apparent/engine-sdk';",
+}, root => assert(checkArchitecture(root).some(x=>x.includes('tsconfig alias crosses record -> agent')))));
+
+test('does not apply unrelated aliases globally', () => fixture({
+  'engine/tsconfig.json': JSON.stringify({compilerOptions:{baseUrl:'..',paths:{'@private/*':['agent/src/*']}}}),
+  'record/src/index.ts': "import '@private/hidden';",
+}, root => assert.deepEqual(checkArchitecture(root), [])));
+
+test('resolves inherited path mappings from their declaring config directory', () => fixture({
+  'tsconfig.base.json': JSON.stringify({ compilerOptions: { paths: { '@hidden/*': ['engine/sdk/src/*'] } } }),
+  'record/tsconfig.json': JSON.stringify({ extends: '../tsconfig.base.json' }),
+  'record/src/index.ts': "import '@hidden/private';",
+}, root => assert(checkArchitecture(root).some(error => error.includes('alias crosses record -> engine')))));
+
+test('baseUrl-only bare imports cannot reach another owner implementation', () => fixture({
+  'record/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '..', moduleResolution: 'NodeNext', module: 'NodeNext' } }),
+  'record/src/index.ts': "import 'engine/sdk/src/private.js';",
+  'engine/sdk/src/private.ts': 'export const privateImplementation = true;',
+  'record/faux/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '../../engine/sdk/src', moduleResolution: 'NodeNext', module: 'NodeNext' } }),
+  'record/faux/index.ts': "import '@apparent/engine-sdk';",
+  'engine/sdk/package.json': engine,
+  'engine/sdk/src/@apparent/engine-sdk.ts': 'export const hiddenByPackageName = true;',
+}, root => assert.equal(checkArchitecture(root).filter(error => error.includes('resolved bare import crosses owner boundary')).length, 2)));
+
+test('rejects private package subpaths and computed imports', () => fixture({
+  'engine/sdk/package.json': engine,
+  'record/src/index.ts': "import '@apparent/engine-sdk/src/private.js'; import(name);",
+}, root => { const errors=checkArchitecture(root); assert(errors.some(x=>x.includes('private or undeclared'))); assert(errors.some(x=>x.includes('computed dynamic import'))); }));
+
+test('rejects reversed dependencies and cyclic owner edge', () => fixture({
+  'engine/sdk/package.json': engine, 'engine/package.json': JSON.stringify({name:'@apparent/engine',dependencies:{'@apparent/record':'1.0.0'}}),
+  'engine/sdk/src/index.ts': "import '@apparent/record';",
+}, root => { const errors=checkArchitecture(root); assert(errors.some(x=>x.includes('dependency @apparent/record'))); assert(errors.some(x=>x.includes('forbidden package dependency'))); }));
+
+test('peer dependencies and npm aliases cannot hide a reversed product edge', () => fixture({
+  'engine/sdk/package.json': JSON.stringify({ name: '@apparent/engine-sdk',
+    peerDependencies: { '@apparent/record': '0.1.0' },
+    dependencies: { hidden: 'npm:@apparent/record@0.1.0' } }),
+  'record/package.json': record,
+}, root => {
+  const errors = checkArchitecture(root);
+  assert(errors.some(error => error.includes('dependency @apparent/record violates engine -> record')));
+  assert(errors.some(error => error.includes('canonical public name')));
+}));
+
+test('owner-scoped CI does not make an unrelated stream fail', () => fixture({
+  'agent/src/index.ts': "const destination = '../record/src/index.js'; import(destination);",
+  'record/src/index.ts': 'export const ready = true;',
+}, root => {
+  assert.deepEqual(checkArchitecture(root, ['record']), []);
+  assert(checkArchitecture(root, ['agent']).some(error => error.includes('computed dynamic import')));
+}));
+
+test('bounded packed SDK fixture imports must match declared public export targets', () => {
+  const source = [
+    "import { pathToFileURL } from 'node:url';",
+    'async function packedSdk() {',
+    'const root = process.env.APPARENT_ENGINE_SDK_CONSUMER;',
+    'const clientPath = `${root}/node_modules/@apparent/engine-sdk/dist/index.js`;',
+    'return import(pathToFileURL(clientPath).href);',
+    '}',
+  ].join('\n');
+  const policy = JSON.stringify({ schema: 1, fixtureImports: [{ file: 'test/sdk-adapter.test.ts', function: 'packedSdk', env: 'APPARENT_ENGINE_SDK_CONSUMER', package: '@apparent/engine-sdk', exports: ['.'] }] });
+  fixture({ 'engine/sdk/package.json': engine, 'record/package.json': record, 'record/architecture.json': policy, 'record/test/sdk-adapter.test.ts': source }, root => {
+    assert.deepEqual(checkArchitecture(root, ['record']), []);
+    writeFileSync(path.join(root, 'record/test/sdk-adapter.test.ts'), source.replace('dist/index.js', 'src/private.ts'));
+    assert(checkArchitecture(root, ['record']).some(error => error.includes('computed dynamic import')));
+    writeFileSync(path.join(root, 'record/test/sdk-adapter.test.ts'), source.replace('APPARENT_ENGINE_SDK_CONSUMER', 'UNBOUNDED_ROOT'));
+    assert(checkArchitecture(root, ['record']).some(error => error.includes('computed dynamic import')));
+    writeFileSync(path.join(root, 'record/test/other.test.ts'), source);
+    assert(checkArchitecture(root, ['record']).some(error => error.includes('other.test.ts')));
+    writeFileSync(path.join(root, 'record/architecture.json'), policy.replace('test/sdk-adapter.test.ts', 'src/index.ts'));
+    assert(checkArchitecture(root, ['record']).some(error => error.includes('invalid bounded fixture-import policy')));
+  });
+});
+
+test('checks nested package manifests and validates local package targets', () => fixture({
+  'record/package.json': JSON.stringify({name:'@apparent/record',dependencies:{'@apparent/engine-sdk':'file:../agent'}}),
+  'engine/sdk/package.json': engine,
+  'agent/package.json': JSON.stringify({name:'@apparent/agent'}),
+}, root => {
+  const errors=checkArchitecture(root);
+  assert(errors.some(x=>x.includes('dependency @apparent/engine-sdk violates record -> agent')));
+  assert(errors.some(x=>x.includes('targets package @apparent/agent')));
+}));
+
+test('rejects escaping paths and symlinks that cross owners', () => fixture({
+  'record/src/index.ts': "import '../../../outside.ts'; import './linked.ts';",
+  'record/src/owned.ts': 'export const owned = true;',
+  'agent/src/private.ts': 'export const privateValue = true;',
+}, root => {
+  symlinkSync(path.join(root,'agent/src/private.ts'),path.join(root,'record/src/linked.ts'));
+  const errors=checkArchitecture(root);
+  assert(errors.some(x=>x.includes('outside the repository')));
+  assert(errors.some(x=>x.includes('cross-owner path record -> agent')));
+}));
+
+test('discovers .mts files and filenames containing newlines', () => fixture({
+  'record/src/line\nbreak.mts': "import '../../agent/src/private.js';",
+  'agent/src/private.ts': 'export const x = 1;',
+}, root => assert(checkArchitecture(root).some(x=>x.includes('cross-owner path')))));

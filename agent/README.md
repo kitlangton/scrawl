@@ -1,6 +1,6 @@
 # Apparent Agent CLI
 
-This owner-local TypeScript CLI inspects local `.apparent` bundles. Inspection has no Desktop, Cargo, network, or Connect dependency. The package includes the published Engine SDK v1 for an optional foreground screen-recording command; recording still requires a separately installed native Engine runtime. See [CLI parity inventory](docs/cli-parity.md) for command ownership, status and dependencies.
+This owner-local TypeScript CLI inspects local `.apparent` bundles and selects video frames through the published Engine media SDK. Inspection has no Desktop, Cargo, network, or Connect dependency. Recording and frame decoding require separately installed native Engine providers. See [CLI parity inventory](docs/cli-parity.md) for command ownership, status and dependencies.
 
 ```sh
 npm ci
@@ -8,9 +8,14 @@ npm run build
 node dist/cli.js inspect /path/to/capture.apparent
 node dist/cli.js inspect /path/to/capture.apparent/apparent.json --json
 node dist/cli.js inspect /path/to/capture.apparent --marks
+node dist/cli.js frames /path/to/capture.apparent --from 0:04 --to 0:06 --fps 4
 node dist/cli.js skill
 node dist/cli.js record --duration 30 --out /absolute/path/demo.apparent
+node dist/cli.js issue --title 'Short title' --body 'Exact Markdown description'
+node dist/cli.js issue --title 'Short title' --body-file './description.md' --submit
 ```
+
+`issue` prints the exact repository, title and body as JSON without contacting GitHub by default. `--submit` is the only network path and uses the installed `gh` login, pinned to `github.com` and `tryapparent/apparent`; it reads the new issue back and checks its identity and text before returning success. Search existing issues and show the full preview to the human for approval before adding `--submit`. It collects no captures, attachments, config or diagnostics. Submission is not idempotent: inspect the known issue URL/repository before retrying after an ambiguous failure. The standalone approval skill is bundled at `skills/apparent-issue/SKILL.md`.
 
 `apparent-agent skill` prints the exact standalone capture-reading guide bundled with the package. The guide documents only this package's local inspection behavior; it does not route or replace the legacy `apparent skill` command.
 
@@ -21,6 +26,8 @@ node dist/cli.js record --duration 30 --out /absolute/path/demo.apparent
 Install the packed package locally with `npm install -g ./apparent-agent-0.1.0.tgz`; it provides `apparent-agent`, leaving the existing `apparent` command unchanged. Build requires Node 22.6+ and TypeScript dev dependencies. Recording reads explicit `APPARENT_ENGINE_EXECUTABLE` and `APPARENT_ENGINE_RUNTIME` absolute paths, requires a native screen-capable ready peer, then starts, polls and stops in the foreground. The requested duration starts after observed recording readiness; startup has its own 30-second deadline. It ignores stdin, handles SIGINT/SIGTERM by stopping or cancelling the owned request, and waits up to 60 seconds for finalization; a timeout does not imply cancellation. Before Start, Agent durably saves the request and private control token in mode-0600 files under the private Engine runtime’s agent-requests directory. Never share those files. After an ambiguous failure, reuse the same runtime and run `apparent-agent capture inspect <capture-id>` (or `stop` / `cancel`) to reconcile that owned operation. These commands emit the actual Engine receipt as JSON; stop acceptance is not saved completion. Retained records are not automatically deleted; keep one until recovery is resolved, then remove that known record if no longer needed. It never opts into the SDK test double. The native recorder and media capabilities are not implemented in the merged Engine foundation, so real recording remains unverified; Connect, authentication, network access, and standalone Engine runtime archives are out of scope. No native recording success is implied without that installed runtime.
 
 The legacy Rust implementation can be removed only after all supported installed/package-manager consumers use this CLI and its inspection compatibility is accepted. Recording requires a production Engine executable and a complete native recorder/media artifact API; the current native protocol provider truthfully reports that recording is unavailable.
+
+`frames BUNDLE --from TIME --to TIME [--fps 4] [--json]` selects at most 48 integer bundle-clock timestamps (1–240 fps) and sends them to `@apparent/engine-sdk/media`. Ranges use the legacy half-open `[from,to)` sampling shape; video time is `max(0, bundleTime - videoOffsetMs)`, so old bundles with an offset now use the SDK's reconciled bundle clock. Output is always a fresh job-owned directory below the owner-only `APPARENT_ENGINE_RUNTIME`; it never modifies the bundle or accepts a caller output path. Set `APPARENT_ENGINE_FRAMES_EXECUTABLE` and `APPARENT_ENGINE_RUNTIME` to canonical absolute paths. The package does not search PATH, build Engine, decode media itself, open images, or send/network anything. The merged SDK contract has no native decoder provider yet, so ordinary installations report media unavailable; synthetic test references are not PNG proof. On RPC ambiguity, the adapter inspects the same live connection and retains the job identity and output for diagnosis. Connection loss ends protocol recovery because job history is connection-local.
 
 `delivery.json` registers Agent with the independent value-stream producer. Its inputs include Agent and the Engine SDK, not Engine Rust/native implementation or Desktop. The Linux producer builds/tests/packs and verifies a fresh public API import. This stages a reusable npm artifact; it does not publish to npm or switch the installed app CLI. The package root exports application helpers without running a CLI. Engine shutdown allows 12 seconds before escalation, matching the provider’s documented native-finalizer integration budget.
 

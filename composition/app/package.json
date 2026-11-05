@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/assembly.test.ts",
+    "test": "node --experimental-strip-types --test tests/assembly.test.ts tests/host.test.ts",
     "check": "npm --prefix ../../shared/contracts run build && npm --prefix ../../shared/contracts run typecheck && npm --prefix ../../shared/contracts test && node scripts/check-installed.ts && npm run typecheck && npm test",
     "build:shell": "node scripts/build.ts shell",
     "build:alpha": "node scripts/build.ts alpha",
