@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { lstat, mkdir, open, realpath, readFile, readdir } from "node:fs/promises";
+import { constants, type BigIntStats } from "node:fs";
+import { lstat, mkdir, open, realpath, readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { preflightCapturePublication, type CapturePublishInput } from "@apparent/engine-sdk/capture";
 import type { BundleAssembly } from "../processing/bundle/index.js";
 import type { MaterialsDocument, PublicationPlan, PublishEnvelope } from "@apparent/engine-sdk/capture";
@@ -16,6 +17,7 @@ export interface PreparePublicationInput {
   artifactBytes: Readonly<Record<string, Uint8Array>>;
   derivatives?: readonly DerivativeDocumentInput[];
 }
+/** inventory retains assembly/source metadata; actual staging identities are in plan.entries. */
 export interface PreparedRecordPublication { input: CapturePublishInput; plan: PublicationPlan; inventory: BundleAssembly["inventory"] }
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const id = /^[0-9a-f]{32}$/u;
@@ -25,37 +27,53 @@ const privateMode = 0o700;
 const pending = new Map<string, { fingerprint: string; promise: Promise<PreparedRecordPublication> }>();
 
 /** Persist a private SDK publication plan for review/consumption. This never dispatches publication. */
-export function prepareRecordPublication(input: PreparePublicationInput): Promise<PreparedRecordPublication> {
+export async function prepareRecordPublication(input: PreparePublicationInput): Promise<PreparedRecordPublication> {
+  input = structuredClone(input);
   const fingerprint = hash(new TextEncoder().encode(JSON.stringify({ captureId: input.assembly.materials.manifest.key.captureId,
     materials: input.assembly.materials.manifest.key, leaseId: input.assembly.materials.payload.leaseId, destinationPath: input.destinationPath, ownerToken: hash(new TextEncoder().encode(input.ownerToken)),
-    stagingRoot: input.stagingRoot, inventory: input.assembly.inventory, artifacts: Object.entries(input.artifactBytes).map(([path, bytes]) => [path, hash(bytes)]).sort(),
-    derivatives: input.derivatives?.map(d => hash(d.bytes)) ?? [] })));
+    stagingRoot: input.stagingRoot, inventory: input.assembly.inventory, bundlePath:input.assembly.bundlePath, assemblyMaterials:input.assembly.materials,
+    materialsManifest:input.materialsManifest, materialsPayloadSha256:hash(input.materialsPayloadBytes),
+    apparentJsonSha256:hash(input.assembly.apparentJson), summarySha256:hash(input.assembly.summaryMd),
+    artifacts: Object.entries(input.artifactBytes).map(([path, bytes]) => [path, hash(bytes)]).sort(),
+    derivatives: input.derivatives?.map(d => ({envelope:d.envelope,bytesSha256:hash(d.bytes),requestedBundleMs:d.requestedBundleMs})) ?? [] })));
   const active = pending.get(input.publicationId);
-  if (active) return active.fingerprint === fingerprint ? active.promise : Promise.reject(new Error("Record publication identity conflicts with its in-flight staging binding"));
+  if (active) return active.fingerprint === fingerprint ? active.promise.then(result=>structuredClone(result)) : Promise.reject(new Error("Record publication identity conflicts with its in-flight staging binding"));
   const operation = prepare(input).finally(() => pending.delete(input.publicationId));
   pending.set(input.publicationId, { fingerprint, promise: operation });
-  return operation;
+  return operation.then(result=>structuredClone(result));
 }
 
 async function prepare(input: PreparePublicationInput): Promise<PreparedRecordPublication> {
   const materials = validateMaterialsDocument(input.materialsManifest, input.materialsPayloadBytes);
-  if (!id.test(input.publicationId) || !digest.test(input.ownerToken) || input.assembly.materials.manifest.key.revision !== materials.manifest.key.revision ||
-      input.assembly.materials.payload.leaseId !== materials.payload.leaseId) throw new Error("Record staging identity differs from validated materials");
+  if (!id.test(input.publicationId) || !digest.test(input.ownerToken) || !isDeepStrictEqual(input.assembly.materials,materials) ||
+      !isDeepStrictEqual(input.assembly.inventory.materials,materials.manifest.key)) throw new Error("Record staging identity differs from validated materials");
   const root = input.stagingRoot;
   const destination = input.destinationPath;
   if (!isAbsolute(root) || resolve(root) !== root || !isAbsolute(destination) || resolve(destination) !== destination || root === destination) throw new Error("Record staging and destination paths must be absolute and normalized");
-  await ensurePrivateDirectory(root);
+  if (root.startsWith(`${destination}/`) || destination.startsWith(`${root}/`)) throw new Error("Record staging and destination paths overlap");
+  if (input.assembly.bundlePath !== destination) throw new Error("Record staging destination differs from assembled bundle paths");
+  await assertDestinationParents(destination);
   try { await lstat(destination); throw new Error("Record publication destination already exists"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  await ensurePrivateDirectory(root);
   const work = join(root, input.publicationId);
   try { await mkdir(work, { mode: privateMode }); await syncDirectory(root); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw new Error("Record staging namespace is unavailable"); }
   const stat = await lstat(work);
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) throw new Error("Record staging namespace is not private");
+  await syncDirectory(root);
   const marker = join(work, ".record-publication");
+  try { await lstat(marker); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((await readdir(work)).length) throw new Error("Record staging namespace has unrelated unbound state; preserving it for reconciliation");
+  }
   const markerBinding = { publicationId: input.publicationId, materials: materials.manifest.key, leaseId: materials.payload.leaseId, destination,
+    materialsManifestSha256:hash(new TextEncoder().encode(JSON.stringify(materials.manifest))),
     ownerTokenSha256: hash(new TextEncoder().encode(input.ownerToken)), inventorySha256: hash(new TextEncoder().encode(JSON.stringify(input.assembly.inventory))),
-    artifactsSha256: hash(new TextEncoder().encode(JSON.stringify(Object.entries(input.artifactBytes).map(([path, bytes]) => [path, hash(bytes)]).sort()))) };
+    artifactsSha256: hash(new TextEncoder().encode(JSON.stringify(Object.entries(input.artifactBytes).map(([path, bytes]) => [path, hash(bytes)]).sort()))),
+    apparentJsonSha256:hash(input.assembly.apparentJson), summarySha256:hash(input.assembly.summaryMd),
+    derivativesSha256:hash(new TextEncoder().encode(JSON.stringify(input.derivatives??[]))) };
   const markerBytes = new TextEncoder().encode(JSON.stringify({ schema: "apparent.record-staging/1", ...markerBinding }));
   await writeExclusiveOrMatch(marker, markerBytes);
   const entries: PublicationEntry[] = [];
@@ -102,6 +120,16 @@ async function ensurePrivateDirectory(path: string): Promise<void> {
     if (current === path && (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)) throw new Error("Record staging root is not private"); }
   if (await realpath(path) !== path) throw new Error("Record staging root is aliased");
 }
+async function assertDestinationParents(destination:string):Promise<void> {
+  let current="/";
+  for(const part of dirname(destination).slice(1).split("/").filter(Boolean)) {
+    current=join(current,part);
+    let info;
+    try {info=await lstat(current);}
+    catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return;throw error;}
+    if(!info.isDirectory()||info.isSymbolicLink())throw new Error("Record destination ancestor is not a directory or contains an alias");
+  }
+}
 async function ensurePrivateDirectoryPath(path: string, root: string): Promise<void> {
   if (path !== root && !path.startsWith(`${root}/`)) throw new Error("Record staging path escapes its namespace");
   const parts = path.slice(root.length + 1).split("/"); let current = root;
@@ -126,14 +154,24 @@ async function assertKnownStagingContents(root: string, files: ReadonlySet<strin
 async function writeExclusiveOrMatch(path: string, bytes: Uint8Array): Promise<void> {
   try { const handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), 0o600); try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); } await syncDirectory(dirname(path)); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw new Error("Record staging write is incomplete; preserve the namespace for reconciliation");
-    const info = await lstat(path); if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) throw new Error("Record staging file is not privately owned");
-    const existing = await readFile(path); if (!existing.equals(Buffer.from(bytes))) throw new Error("Record staging replay conflicts with existing bytes"); }
+    const existing = await readPrivateFile(path,true); if (!existing.bytes.equals(Buffer.from(bytes))) throw new Error("Record staging replay conflicts with existing bytes"); await syncDirectory(dirname(path)); }
 }
 async function sealedFile(path: string, root: string, bytes: Uint8Array): Promise<SealedFile> {
-  const info = await lstat(path); if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0 || info.size !== bytes.byteLength) throw new Error("Record staging file seal is invalid");
-  const precise = await lstat(path, { bigint: true });
-  const actual = await readFile(path); if (!actual.equals(Buffer.from(bytes))) throw new Error("Record staging bytes changed before sealing");
-  return { relativePath: path.slice(root.length + 1), identity: { device: String(precise.dev), inode: String(precise.ino), size: Number(precise.size), modifiedNs: String(precise.mtimeNs) }, sha256: hash(actual) };
+  const {info,bytes:actual}=await readPrivateFile(path);
+  if (!actual.equals(Buffer.from(bytes))) throw new Error("Record staging bytes changed before sealing");
+  return { relativePath: path.slice(root.length + 1), identity: { device: String(info.dev), inode: String(info.ino), size: Number(info.size), modifiedNs: String(info.mtimeNs) }, sha256: hash(actual) };
+}
+async function readPrivateFile(path:string,sync=false):Promise<{info:BigIntStats;bytes:Buffer}> {
+  const handle=await open(path,(sync?constants.O_RDWR:constants.O_RDONLY)|(constants.O_NOFOLLOW??0));
+  try {
+    const before=await handle.stat({bigint:true});
+    if(!before.isFile()||before.nlink!==1n||Number(before.uid)!==process.getuid?.()||(before.mode&0o077n)!==0n)throw new Error("Record staging file is not privately owned");
+    const bytes=await handle.readFile();
+    const after=await handle.stat({bigint:true}),named=await lstat(path,{bigint:true});
+    if(after.nlink!==1n||after.size!==BigInt(bytes.length)||before.size!==after.size||before.mtimeNs!==after.mtimeNs||before.ctimeNs!==after.ctimeNs||named.isSymbolicLink()||named.dev!==after.dev||named.ino!==after.ino)throw new Error("Record staging file changed while sealing");
+    if(sync)await handle.sync();
+    return {info:after,bytes};
+  } finally {await handle.close();}
 }
 async function syncDirectory(path: string): Promise<void> {
   const handle = await open(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));

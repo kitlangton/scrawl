@@ -101,7 +101,12 @@ for generated files, and runs the packed SDK preflight before returning a
 images stay `assembled` inputs and are not native derivative receipts. This
 operation never calls `recovery.publish`, creates the final destination, or
 claims Saved. Replays require byte-identical files in the same publication
-namespace; conflicting or partial files are retained for reconciliation and
+namespace. The assembly reports its admitted `bundlePath`; staging requires
+that exact destination so summary paths stay correct. Staging and destination
+roots must not overlap; existing destination ancestors must not be aliases.
+Inputs are snapshotted, and coalesced callers receive
+independent results. Unmarked populated namespaces are refused without adding
+ownership metadata; conflicting or partial files are retained for reconciliation and
 never removed implicitly. The returned input remains fixture/packed-consumer
 support: it does not establish native authority, filesystem/profile acceptance,
 or production capture availability.

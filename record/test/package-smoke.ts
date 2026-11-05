@@ -120,10 +120,11 @@ try {
     import {createRequire} from 'node:module';
     import {CaptureClient, preflightCapturePublication} from '@apparent/engine-sdk/capture';
     import {ReferenceCapturePeer} from '@apparent/engine-sdk/capture/testing';
-    import {createRecordPublicationRecovery} from '@apparent/record/publication';
+    import {createRecordPublicationRecovery, prepareRecordPublication} from '@apparent/record/publication';
     const client = new CaptureClient(new ReferenceCapturePeer(), {allowTestDouble:true});
     const recovery = createRecordPublicationRecovery(client, process.cwd() + '/unused-private-root', preflightCapturePublication);
     assert.equal(typeof recovery.publish, 'function');
+    assert.equal(typeof prepareRecordPublication, 'function');
     for (const name of ['react','react-dom','electron','@apparent/ui']) assert.throws(()=>createRequire(import.meta.url).resolve(name));
     await client.close();
     console.log('packed publication profile passed without UI peers');
@@ -132,11 +133,12 @@ try {
   const sdkDeclarations = path.join(publication, 'consumer.ts');
   await writeFile(sdkDeclarations, `
     import {preflightCapturePublication, type CaptureClient} from '@apparent/engine-sdk/capture';
-    import {createRecordPublicationRecovery} from '@apparent/record/publication';
+    import {createRecordPublicationRecovery, prepareRecordPublication} from '@apparent/record/publication';
     declare const client: CaptureClient;
     const recovery = createRecordPublicationRecovery(client, '/private/control', preflightCapturePublication);
     const result: ReturnType<CaptureClient['publish']> = recovery.publish({} as Parameters<CaptureClient['publish']>[0]);
-    void result;
+    const stage: (input: Parameters<typeof prepareRecordPublication>[0]) => Promise<import('@apparent/record/publication').PreparedRecordPublication> = prepareRecordPublication;
+    void result; void stage;
   `);
   await run(process.execPath, [tsc, '--noEmit', '--strict', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', sdkDeclarations], { cwd: publication });
 } finally {
