@@ -126,6 +126,19 @@ APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/"
 APP_SHELL_WORKFLOW = ".github/workflows/value-stream-delivery.yml"
 
 
+# This new owner has no legacy Rust/build consumer. SDK changes remain broad,
+# while also exercising its Agent consumer. Unknown/native Agent files stay broad.
+def agent_tests_selected(paths):
+    return any(path.startswith(("agent/", "engine/sdk/")) for path in paths)
+
+
+def isolated_agent_input(path):
+    return path.startswith("agent/") and (
+        path in {"agent/.gitignore", "agent/LICENSE"}
+        or Path(path).suffix in {".ts", ".json", ".md"}
+    )
+
+
 def app_shell_selected(paths):
     """Select the App Shell check for package, contract, UI or workflow inputs."""
     if not paths:
@@ -154,7 +167,7 @@ PUBLIC_SITE_BUILD_INPUTS = {
     )
 }
 PUBLIC_SITE_TOOLING_INPUTS = {
-    PUBLIC_SITE_ROOT + "lib/public-assets.mjs",
+    PUBLIC_SITE_ROOT + "lib/public-assets.ts",
     PUBLIC_SITE_ROOT + "scripts/site-build/agent-files.ts",
     PUBLIC_SITE_ROOT + "scripts/site-build/feature-audit.ts",
     PUBLIC_SITE_ROOT + "scripts/site-build/prerender.ts",
@@ -162,6 +175,7 @@ PUBLIC_SITE_TOOLING_INPUTS = {
     "shared/analytics/browser.ts",
     "shared/ui/src/tokens.css",
     "shared/ui/scripts/check-theme.py",
+    "shared/ui/scripts/check-theme.ts",
     "shared/ui/scripts/legacy-colors.json",
 }
 PUBLIC_CONNECT_SHARED_ASSETS = {
@@ -197,8 +211,11 @@ def select(paths, history_known=True):
     public_site = False
     app_shell = False
     delivery = False
+    agent = agent_tests_selected(paths)
     reasons = []
     for path in paths:
+        if isolated_agent_input(path):
+            continue
         if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
             continue
         if path.startswith(APP_SHELL_INPUTS) or path == APP_SHELL_WORKFLOW:
@@ -240,13 +257,13 @@ def select(paths, history_known=True):
         else:
             broad = True
             reasons.append(path)
-    return {"root": broad, "engine": broad or engine, "browser": browser,
+    return {"root": broad, "engine": broad or engine, "browser": browser, "agent": agent,
             "app_shell": app_shell or not history_known or not paths,
             "delivery": delivery or not history_known or not paths,
             "public_site": public_site or not history_known or not paths,
             "focused": [], "paths": paths,
             "reason": "unknown history or empty delta" if not history_known or not paths
-            else "broad inputs: " + ", ".join(reasons) if broad else "document/package-test-only delta"}
+            else "broad inputs: " + ", ".join(reasons) if broad else "owner-local Agent delta" if agent else "document/package-test-only delta"}
 
 
 def changed_paths(base, head):
@@ -332,6 +349,8 @@ def run_pr_checks(selection=None):
     subprocess.run(["node", "--experimental-strip-types", "--test", "enablement/file-length/check.test.ts"], cwd=ROOT, check=True)
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
     paths = selection["paths"] if selection else []
+    if (selection or {}).get("agent", agent_tests_selected(paths)):
+        run_agent_tests()
     if (selection or {}).get("app_shell", app_shell_selected(paths)):
         run_app_shell_check()
     if (selection or {}).get("delivery", delivery_tests_selected(paths)):
@@ -396,6 +415,18 @@ def delivery_tests_selected(paths):
     if not paths:
         return True  # Unknown history stays conservative.
     return any(path.startswith(APP_SHELL_DELIVERY_ROOT) for path in paths)
+
+
+def run_agent_tests():
+    """Run the installed TypeScript owner suite; never install or invoke Cargo."""
+    package = ROOT / "agent"
+    controls = ("package.json", "package-lock.json", "tsconfig.json")
+    if any(not (package / name).is_file() for name in controls):
+        raise RuntimeError("Agent check inputs are missing or deleted; restore the owner package")
+    dependencies = ("typescript/bin/tsc", "@types/node/package.json", "@apparent/engine-sdk/package.json")
+    if any(not (package / "node_modules" / name).is_file() for name in dependencies):
+        raise RuntimeError("Agent checks need installed locked dependencies: run npm ci in agent; the hook never installs dependencies")
+    subprocess.run(["npm", "test"], cwd=package, check=True)
 
 
 def run_delivery_tests():
@@ -678,6 +709,8 @@ def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=
 
 
 def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_root_build=False):
+    if selection.get("agent"):
+        run_agent_tests()
     if selection.get("app_shell"):
         run_app_shell_check()
     if selection.get("delivery"):
@@ -806,9 +839,9 @@ def main():
         return
     selection = plan(args.base, args.head)
     if args.suite == 'rust':
-        selection.update(root=True, engine=True, browser=False, app_shell=False, focused=[])
+        selection.update(root=True, engine=True, browser=False, app_shell=False, agent=False, focused=[])
     elif args.suite == 'browser':
-        selection.update(root=False, engine=False, browser=True, app_shell=False, focused=[])
+        selection.update(root=False, engine=False, browser=True, app_shell=False, agent=False, focused=[])
     print(json.dumps(selection, sort_keys=True), flush=True)
     if args.github_output:
         with args.github_output.open("a") as output:

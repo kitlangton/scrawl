@@ -17,7 +17,7 @@ Opening the app requires an updated installed app with native URL-handler suppor
 ## Verification and publication
 
 Build with `APPARENT_PUBLIC_SITE=1 npm run build`, package with
-`node scripts/site-build/package-apparent.mjs`, then run
+`node scripts/site-build/package-apparent.ts`, then run
 `node --test scripts/pages/test-public-homepage.ts` for desktop/mobile appearance,
 frog interactions, feature frames and social dialog focus/reset. Screenshots stay
 outside served content through `SITE_EVIDENCE`.

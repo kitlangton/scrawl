@@ -1,0 +1,10 @@
+{
+  "version": 1, "id": "legacy", "createdAtMs": 100, "durationMs": 20000,
+  "target": {"mode": "device", "app": "Synthetic", "bundleId": "test.synthetic", "displayId": 0,
+    "frame": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0, "scale": 1.0}},
+  "transcript": {"source": "test", "text": "Read this.", "segments": []},
+  "strokes": [], "marks": [], "events": [], "keyframes": [], "contactSheet": "contact-sheet.png",
+  "source": "iphone",
+  "device": {"name": "Synthetic phone", "capture": "apparentkit", "width": 100, "height": 100,
+    "app": "Synthetic", "appVersion": "1"}
+}
