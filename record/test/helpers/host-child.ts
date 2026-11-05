@@ -1,4 +1,4 @@
-import { SqliteCaptureMappingStore } from "../dist/backend/host/capture-mapping-store.js";
+import { SqliteCaptureMappingStore } from "../../dist/backend/host/capture-mapping-store.js";
 
 const [root, requestId, captureId, ownerToken] = process.argv.slice(2);
 if (!root || !requestId || !captureId || !ownerToken) throw new Error("missing child arguments");
