@@ -10,6 +10,31 @@ inventory inputs. Publication preflight requires the original detached bytes
 and requested timestamps for each referenced derivative receipt. Decoder PTS is
 independent of requested seek time, including start/end clamps.
 
+SDK 0.3.1 publishes `preflightCapturePublication(input, timeoutMs?)` on
+`@apparent/engine-sdk/capture`, shared with `CaptureClient.publish`. It is
+synchronous and offline. It validates the supplied authority/lease/capture
+bindings, exact plan bytes/hash, required inventory roles, input provenance
+declarations, detached derivative receipts and ordered requests, and the bounded
+wire request. It returns `{ plan, expected }`; persist the original `expected`
+with publication ID and plan SHA **before** dispatch. Pass the same immutable
+input and timeout to `publish`. `materials` must first come from public
+`validateMaterialsDocument(manifest, originalPayloadBytes)`. The preflight checks
+its envelope/payload bindings but does not reread or rehash original material
+payload bytes. The lower-level `validatePublicationPlan` is also public on
+`/capture`; it returns the plan and does not check outer owner/lease authority.
+
+A `CapturePublicationPreflightError` has `dispatched === false`: validation
+failed locally before any transport request. Its message is intentionally
+generic to avoid leaking private input; lower-level document validators can
+diagnose inventory errors offline. Handshake and advertised publication support
+are separate client admission checks. Transport/process readiness, queue
+capacity, native ownership/lease admission, current filesystem contents, complete
+bundle/media validity, commit and durability remain runtime checks. A successful
+preflight reserves nothing and cannot prove those checks will pass. After a
+possible dispatch, timeout/transport/invalid-reply errors remain ambiguous;
+reconcile the persisted original binding rather than rebinding it or allocating
+again. This adds no native publication capability or wire-version change.
+
 These checks do not authenticate a producer, read filesystem contents, establish
 native ownership or prove durability. Native publication still must validate the
 complete existing ApparentBundle version-1 schema and all referenced/retained
