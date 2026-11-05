@@ -149,6 +149,10 @@ checks, seals the exact candidate, and publishes under `WEBSITE_CD_ENABLED`, the
 `website-production` environment and `website-production-eligible` lock. The
 publisher retains source ordering and immutable/canonical readback verification.
 The former website workflow no longer publishes Pages, preventing duplicate writers.
+The publisher refuses calls outside the canonical value-stream workflow’s `deploy`
+job on main. Local sealing and validation remain available; production publication
+has one entrypoint. A repository-wide workflow regression rejects additional
+Pages publisher references or direct Wrangler deployment commands.
 
 The independent Worker call uses Connect's reusable workflow and controls, triggered
 by a successful producer completion and `HOSTED_CD_ENABLED`. It has no dependency
