@@ -9,6 +9,17 @@ import { installUbuntuDependencies } from '../../../../composition/delivery/runt
 const environment = { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Linux', ImageOS: 'ubuntu24' }
 const osRelease = 'ID=ubuntu\nVERSION_CODENAME=noble\n'
 
+test('Pages deployment uses the same bounded browser installer as the Public producer', () => {
+  const workflow = readFileSync(new URL('../../../../.github/workflows/stream-public.yml', import.meta.url), 'utf8')
+  const deploy = workflow.split('\n  deploy:\n')[1].split('\n  runtime-budget:\n')[0]
+  const setup = deploy.split('- name: Install locked website dependencies and browser\n')[1].split('\n      - name:')[0]
+  assert.match(setup, /bun install --frozen-lockfile/)
+  assert.match(setup, /node --experimental-strip-types scripts\/browser-setup\/install\.ts/)
+  assert.doesNotMatch(setup, /playwright-core install --with-deps/)
+  const producer = readFileSync(new URL('../site-build/verify.ts', import.meta.url), 'utf8')
+  assert.match(producer, /await installPublicBrowsers\(/)
+})
+
 test('CI runs Playwright complete Chromium/Firefox dependency closure under bounded signed HTTPS apt', async t => {
   for (const root of [true, false]) {
     const directory = mkdtempSync(join(tmpdir(), 'public-apt-contract-'))
