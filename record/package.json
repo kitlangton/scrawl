@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": { "node": ">=22.13" },
   "files": [
     "dist",
     "src",
@@ -21,6 +22,10 @@
     "./fixtures": {
       "types": "./dist/capabilities/fixtures.d.ts",
       "import": "./dist/capabilities/fixtures.js"
+    },
+    "./host": {
+      "types": "./dist/backend/host/index.d.ts",
+      "import": "./dist/backend/host/index.js"
     },
     "./ui": {
       "types": "./dist/ui/index.d.ts",

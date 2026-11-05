@@ -2,7 +2,7 @@
 
 `@apparent/record` is an independently installable TypeScript workflow and presentation package. Its local recording controller consumes an injected `EngineClient`; its reusable React pill consumes an injected typed `PillHost`. Neither creates a recording or ships a fake/default production capture adapter.
 
-`EngineSdkAdapter` is a host composition adapter for an already constructed, packed `@apparent/engine-sdk` client. It does not choose or launch an executable, select a runtime directory, allocate bundles, or provide a durable private mapping store. The reusable pill is adopted through the existing legacy host; it does not install a replacement Electron main/preload route.
+`EngineSdkAdapter` composes an already constructed, packed `@apparent/engine-sdk` client. Hosts can inject `SqliteCaptureMappingStore` and `PrivateBundleAllocator` from `@apparent/record/host` using explicit private roots (Node 22.13+). These utilities persist private capture identity and reserve bundle destinations; they do not choose or launch an executable, select runtime locations, or establish capture readiness. The reusable pill is adopted through the existing legacy host; it does not install a replacement Electron main/preload route.
 
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 
@@ -14,7 +14,7 @@ Run `npm ci`, `npm run typecheck`, `npm test`, and `npm run build` in this direc
 
 ## Adoption limits
 
-The repository's `apparent capture` CLI already implements GUI start/stop/cancel/inspect control over a same-user Unix socket on macOS/Linux; a separate readiness query is not currently exposed. The native delivery package now builds and stages an explicit `apparent-engine` executable wrapper, but its provider reports `screenCapture: false` and `readiness: "unavailable"`, and cannot perform real capture. Thus the wrapper is not production readiness or native capture evidence. A host still needs to select and launch the executable with a private runtime directory, provide durable private mapping storage and bundle allocation, wire an accepted readiness/capture capability into `EngineClient`, and complete affected platform seam proof before adopting this adapter as a route. The adapter is not an installed route, and this package makes no production recording-availability claim.
+The repository's `apparent capture` CLI already implements GUI start/stop/cancel/inspect control over a same-user Unix socket on macOS/Linux; a separate readiness query is not currently exposed. The native delivery package now builds and stages an explicit `apparent-engine` executable wrapper, but its provider reports `screenCapture: false` and `readiness: "unavailable"`, and cannot perform real capture. Thus the wrapper is not production readiness or native capture evidence. A host still needs to select and launch the executable with a private runtime directory, instantiate the supplied storage and allocator with explicit private roots, wire an accepted readiness/capture capability into `EngineClient`, and complete affected platform seam proof before adopting this adapter as a route. The adapter is not an installed route, and this package makes no production recording-availability claim.
 
 ## Asynchronous ownership
 
@@ -73,7 +73,7 @@ only in states where the workflow admits them;
 it does not provide paste, link, notes, selection, whiteboard, window or clipboard
 behavior. Disposal unsubscribes the presentation adapter and leaves workflow and
 capture ownership intact. This seam is not an installed route. Activation still
-requires a real native readiness/capture provider, durable host mapping and bundle
-allocation, executable/runtime composition, and affected macOS/Linux capture,
+requires a real native readiness/capture provider, composition of the supplied
+durable mapping store and allocator, executable/runtime composition, and affected macOS/Linux capture,
 permission, packaging and ownership proof. Until those gates pass, the installed
 fallback route remains authoritative.

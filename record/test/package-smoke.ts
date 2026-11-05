@@ -27,7 +27,10 @@ try {
     import {hasConfirmedArtifactOpen} from '@apparent/record/capabilities';
     import {createRecordFixture} from '@apparent/record/fixtures';
     import {RecordingPill} from '@apparent/record/ui';
+    import {SqliteCaptureMappingStore, PrivateBundleAllocator} from '@apparent/record/host';
     assert.equal(typeof RecordWorkflow,'function');
+    assert.equal(typeof SqliteCaptureMappingStore,'function');
+    assert.equal(typeof PrivateBundleAllocator,'function');
     assert.equal(hasConfirmedArtifactOpen(createRecordFixture().driver.current(),'unknown'),false);
     assert.match(renderToString(React.createElement(RecordingPill)),/Connecting/);
     console.log('clean packed root/capabilities/fixtures/ui consumer passed');
