@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
-import { assessPrior, catalog, inputDigest, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPath } from './core.ts'
+import { assessPrior, catalog, inputDigest, makePlan, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPath } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
 // accidentally use the hook caller's index, object database or worktree.
@@ -21,10 +21,11 @@ const owner: Owner = { schema: 1, id: 'record', kind: 'npm', package: 'record', 
 function git(cwd: string, ...args: string[]) { execFileSync('git', args, { cwd, stdio: 'ignore' }) }
 function newRepo(path: string) {
   mkdirSync(path, { recursive: true }); git(path, 'init', '-q'); git(path, 'config', 'user.email', 'delivery-test@example.invalid'); git(path, 'config', 'user.name', 'delivery test')
-  for (const dir of ['record', 'shared/ui', 'composition/delivery', '.github/workflows', 'enablement/verification']) mkdirSync(resolve(path, dir), { recursive: true })
+  for (const dir of ['record', 'shared/ui', 'composition/delivery', 'composition/architecture', '.github/workflows', 'enablement/verification']) mkdirSync(resolve(path, dir), { recursive: true })
   writeFileSync(resolve(path, 'record/index.ts'), 'one\n'); writeFileSync(resolve(path, 'record/config.json'), '{}\n'); writeFileSync(resolve(path, 'record/delivery.json'), '{}\n')
   writeFileSync(resolve(path, 'shared/ui/theme.ts'), 'theme\n')
   writeFileSync(resolve(path, 'composition/delivery/core.ts'), 'core\n'); writeFileSync(resolve(path, 'LICENSE'), 'license\n')
+  writeFileSync(resolve(path, 'composition/architecture/guard.ts'), 'guard\n')
   writeFileSync(resolve(path, workflowPath), 'workflow\n'); writeFileSync(resolve(path, 'enablement/verification/workflow-budget.ts'), 'budget\n')
   git(path, 'add', '.'); git(path, 'commit', '-qm', 'initial'); return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path, encoding: 'utf8' }).trim()
 }
@@ -34,10 +35,24 @@ test('catalog reports absent owners pending and blocks present owners without re
   mkdirSync(resolve(path, 'composition/app'), { recursive: true })
   const missing = catalog(path)
   assert.deepEqual(missing.blocked, ['app-shell: source exists without delivery registration'])
-  assert.deepEqual(missing.pending, ['record', 'engine', 'onboarding', 'agent'])
+  assert.deepEqual(missing.pending, ['record', 'engine', 'engine-native', 'onboarding', 'agent'])
   mkdirSync(resolve(path, 'record')); mkdirSync(resolve(path, 'shared/ui'), { recursive: true })
   writeFileSync(resolve(path, 'record/delivery.json'), JSON.stringify({ ...owner, inputs: ['shared/ui/'] }))
   assert.match(catalog(path).blocked.join(';'), /Package source must be covered/)
+})
+
+test('native Engine and SDK are independent lanes with the same architectural owner', () => {
+  const path = resolve(temp, 'native-plan')
+  mkdirSync(resolve(path, 'engine/sdk'), { recursive: true })
+  mkdirSync(resolve(path, 'engine/delivery/native'), { recursive: true })
+  writeFileSync(resolve(path, 'engine/delivery.json'), JSON.stringify({ ...owner, id: 'engine', package: 'engine/sdk', inputs: ['engine/'] }))
+  writeFileSync(resolve(path, 'engine/delivery/native/delivery.json'), JSON.stringify({ ...owner, id: 'engine-native', kind: 'directory', language: 'native', package: 'engine/delivery/native', artifactPath: 'dist', inputs: ['engine/'], targets: ['linux-x64', 'macos-x64'] }))
+  const plan = makePlan(path)
+  assert.deepEqual(plan.blocked, [])
+  const sdk = plan.matrix.include.filter(row => row.id === 'engine')
+  const native = plan.matrix.include.filter(row => row.id === 'engine-native')
+  assert.equal(sdk.length, 1); assert.equal(sdk[0].language, 'typescript')
+  assert.equal(native.length, 2); assert(native.every(row => row.language === 'native' && row.architecture_owner === 'engine'))
 })
 
 test('packed consumer imports code but verifies stylesheet exports as contained assets', () => {
@@ -83,7 +98,7 @@ test('full input closure changes for owner source, delivery core, workflow, budg
   const initial = inputDigest(path, owner)
   const dualTargetOwner: Owner = { ...owner, targets: ['linux-x64', 'macos-x64'] }
   assert.notEqual(inputDigest(path, dualTargetOwner, 'linux-x64'), inputDigest(path, dualTargetOwner, 'macos-x64'))
-  for (const [name, content] of [['composition/delivery/core.ts', 'changed core'], [workflowPath, 'changed workflow'], ['enablement/verification/workflow-budget.ts', 'changed budget'], ['LICENSE', 'changed license'], ['record/native.rs', 'native'], ['record/config.json', '{"value":2}'], ['shared/ui/theme.ts', 'changed theme']]) {
+  for (const [name, content] of [['composition/delivery/core.ts', 'changed core'], ['composition/architecture/guard.ts', 'changed architecture guard'], [workflowPath, 'changed workflow'], ['enablement/verification/workflow-budget.ts', 'changed budget'], ['LICENSE', 'changed license'], ['record/native.rs', 'native'], ['record/config.json', '{"value":2}'], ['shared/ui/theme.ts', 'changed theme']]) {
     writeFileSync(resolve(path, name), content); git(path, 'add', '-A'); git(path, 'commit', '-qm', `change ${name}`)
     assert.notEqual(inputDigest(path, owner), initial, `${name} must invalidate reuse`)
   }
