@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { installUbuntuDependencies, type UbuntuSetup } from '../../../../composition/delivery/ubuntu-dependencies.ts'
+import { installUbuntuDependencies, type UbuntuSetup } from '../../../../composition/delivery/runtime/ubuntu-dependencies.ts'
 
 const site = fileURLToPath(new URL('../../', import.meta.url))
 type Run = (command: string, args: string[], env: NodeJS.ProcessEnv) => void

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { installPublicBrowsers } from './install.ts'
-import { installUbuntuDependencies } from '../../../../composition/delivery/ubuntu-dependencies.ts'
+import { installUbuntuDependencies } from '../../../../composition/delivery/runtime/ubuntu-dependencies.ts'
 
 const environment = { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Linux', ImageOS: 'ubuntu24' }
 const osRelease = 'ID=ubuntu\nVERSION_CODENAME=noble\n'
