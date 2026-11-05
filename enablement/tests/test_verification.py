@@ -249,7 +249,7 @@ class SelectionTests(unittest.TestCase):
         delivery_workflow = verification.select([".github/workflows/value-stream-delivery.yml"])
         self.assertTrue(delivery_workflow["app_shell"])
         self.assertFalse(delivery_workflow["root"])
-        entry_workflow = verification.select([".github/workflows/streams/app-shell.yml"])
+        entry_workflow = verification.select([".github/workflows/stream-app-shell.yml"])
         self.assertTrue(entry_workflow["app_shell"])
         self.assertFalse(entry_workflow["root"])
         self.assertFalse(verification.select(["composition/cli.rs"])["app_shell"])

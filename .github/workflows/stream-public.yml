@@ -12,12 +12,13 @@ on:
       - '.npmrc'
       - 'bunfig.toml'
       - '.bunfig.toml'
-      - '.github/workflows/streams/public.yml'
+      - '.github/workflows/stream-public.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
       - '.github/workflows/value-stream-delivery.yml'
       - '.github/actions/runtime-budget/**'
       - 'enablement/verification/workflow-budget.ts'
+      - 'enablement/verification/web/**'
       - 'LICENSE'
   workflow_run:
     workflows: [Connect producer]
@@ -37,5 +38,5 @@ jobs:
     with:
       owner_id: 'public'
       targets: '{"include":[{"id":"public","target":"web","runner":"ubuntu-24.04","kind":"directory","stage":"website","package":"public/site","verify":[],"build":"verify:installed","language":"typescript","packageManager":"bun","architecture_owner":""}]}'
-      workflow_path: '.github/workflows/streams/public.yml'
+      workflow_path: '.github/workflows/stream-public.yml'
     secrets: inherit

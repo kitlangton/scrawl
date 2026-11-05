@@ -44,7 +44,7 @@ function componentTar() {
 }
 function fixture(runOverrides: Record<string, unknown> = {}) {
   const run: any = { id: 91, run_attempt: 2, status: 'completed', conclusion: 'failure', event: 'push', path: workflowPath, head_branch: 'main', head_sha: sha, repository: { full_name: 'tryapparent/apparent' }, head_repository: { full_name: 'tryapparent/apparent' }, ...runOverrides }
-  const jobs = ['stream (public, web)', 'Delivery contracts', 'Workflow runtime budget'].map(name => ({ name, status: 'completed', conclusion: 'success', run_id: run.id, run_attempt: run.run_attempt }))
+  const jobs = ['deliver / stream (public, web)', 'deliver / Delivery contracts', 'deliver / Workflow runtime budget'].map(name => ({ name, status: 'completed', conclusion: 'success', run_id: run.id, run_attempt: run.run_attempt }))
   const tarBytes = componentTar()
   const receipt = { schema: 1, id: 'public', target: 'web', stage: 'website', sourceSha: run.head_sha, inputDigest, sourceDigest, environmentDigest, sha256: hash(tarBytes), size: tarBytes.length, runId: String(run.id), runAttempt: String(run.run_attempt), reusedFrom: { artifactId: 77, sourceSha: '9'.repeat(40), runId: 80, runAttempt: 1 } }
   const bytes = Buffer.from(zipSync({ 'component.tar.gz': tarBytes, 'receipt.json': Buffer.from(JSON.stringify(receipt)) }))
@@ -72,7 +72,8 @@ test('trust boundary accepts canonical ancestor run even if unrelated matrix wor
   assert.equal(trustedRun({ ...f.run, event: 'pull_request' }, () => true), false)
   validateJobs(f.jobs, f.run)
   assert.throws(() => validateJobs([...f.jobs, f.jobs[0]], f.run), /exactly once/)
-  assert.throws(() => validateJobs(f.jobs.map(job => job.name === 'Delivery contracts' ? { ...job, conclusion: 'failure' } : job), f.run), /did not succeed/)
+  assert.throws(() => validateJobs(f.jobs.map(job => job.name === 'deliver / Delivery contracts' ? { ...job, conclusion: 'failure' } : job), f.run), /did not succeed/)
+  assert.throws(() => validateJobs(f.jobs.map(job => job.name.replace('deliver / ', '')), f.run), /did not succeed/)
   assert.equal(validateArtifact(f.artifact, f.run, inputDigest), hash(f.bytes))
   assert.throws(() => validateArtifact({ ...f.artifact, expired: true }, f.run, inputDigest), /provenance/)
 })
@@ -115,7 +116,7 @@ test('same-run consumer verifies receipt identity and extracts the exact compone
   const root = resolve(import.meta.dirname, '../../../..'), core = await import('../../../../composition/delivery/core.ts')
   const owner = core.catalog(root).owners.find(candidate => candidate.id === 'public')!
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
-  const env = { ...process.env, GITHUB_SHA: head, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/streams/public.yml@refs/heads/main', PUBLIC_COMPONENT_INPUT_DIGEST: inputDigest, ImageOS: 'ubuntu24', ImageVersion: 'consumer-image-does-not-matter' }
+  const env = { ...process.env, GITHUB_SHA: head, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-public.yml@refs/heads/main', PUBLIC_COMPONENT_INPUT_DIGEST: inputDigest, ImageOS: 'ubuntu24', ImageVersion: 'consumer-image-does-not-matter' }
   const input = inputDigest
   const source = core.sourceDigest(root, owner, head), environment = core.environmentDigest(owner, env), tarBytes = componentTar()
   const receipt = { schema: 1, id: 'public', target: 'web', stage: 'website', sourceSha: head, inputDigest: input, sourceDigest: source, environmentDigest: environment, sha256: hash(tarBytes), size: tarBytes.length, runId: '91', runAttempt: '2' }
@@ -131,7 +132,7 @@ test('same-run consumer verifies receipt identity and extracts the exact compone
 test('same-run consumer rejects receipt path, payload hash, workflow identity and environment mismatches without touching output', () => withRoot(async tempRoot => {
   const root = resolve(import.meta.dirname, '../../../..'), core = await import('../../../../composition/delivery/core.ts')
   const owner = core.catalog(root).owners.find(candidate => candidate.id === 'public')!, head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
-  const env = { ...process.env, GITHUB_SHA: head, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/streams/public.yml@refs/heads/main', PUBLIC_COMPONENT_INPUT_DIGEST: inputDigest, ImageOS: 'ubuntu24', ImageVersion: 'consumer-image-does-not-matter' }
+  const env = { ...process.env, GITHUB_SHA: head, GITHUB_RUN_ID: '91', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-public.yml@refs/heads/main', PUBLIC_COMPONENT_INPUT_DIGEST: inputDigest, ImageOS: 'ubuntu24', ImageVersion: 'consumer-image-does-not-matter' }
   const input = inputDigest, tarBytes = componentTar()
   const base = { schema: 1, id: 'public', target: 'web', stage: 'website', sourceSha: head, inputDigest: input, sourceDigest: core.sourceDigest(root, owner, head), environmentDigest: core.environmentDigest(owner, env), sha256: hash(tarBytes), size: tarBytes.length, runId: '91', runAttempt: '2' }
   const component = join(tempRoot, 'component'); mkdirSync(component); writeFileSync(join(component, 'component.tar.gz'), tarBytes)
@@ -166,7 +167,7 @@ test('changed source/config, missing or failed jobs, and artifact tampering do n
   await assert.rejects(consume(root, out, f.api, async () => f.bytes, { ...f.deps, sourceDigest: () => 'e'.repeat(64) }), /No successful trusted main Public artifact/)
   await assert.rejects(consume(root, out, f.api, async () => f.bytes, { ...f.deps, environmentDigest: () => 'f'.repeat(64) }), /No successful trusted main Public artifact/)
   await assert.rejects(consume(root, out, async path => path.includes('/jobs?') ? { total_count: f.jobs.length + 1, jobs: f.jobs } : f.api(path), async () => f.bytes, f.deps), /No successful trusted main Public artifact/)
-  const failedJobs = async (path: string) => path.includes('/jobs?') ? { jobs: f.jobs.filter(job => job.name !== 'Delivery contracts') } : f.api(path)
+  const failedJobs = async (path: string) => path.includes('/jobs?') ? { jobs: f.jobs.filter(job => job.name !== 'deliver / Delivery contracts') } : f.api(path)
   await assert.rejects(consume(root, out, failedJobs, async () => f.bytes, f.deps), /No successful trusted main Public artifact/)
   await assert.rejects(consume(root, out, async path => path.includes('/runs?') ? { workflow_runs: [] } : f.api(path), async () => f.bytes, f.deps), /No successful trusted main Public artifact/)
   await assert.rejects(consume(root, out, f.api, async () => Buffer.from('tampered'), f.deps), /ZIP digest mismatch/)

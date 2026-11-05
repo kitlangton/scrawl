@@ -1,12 +1,11 @@
 # Website and Connect continuous delivery
 
 Each value stream has an independent native GitHub paths-filtered main workflow.
-Owner entrypoints live in `.github/workflows/streams/`; the shared
+Owner entrypoints live in `.github/workflows/stream-<owner>.yml`; the shared
 `value-stream-delivery.yml` is reusable execution only and receives one fixed
 owner/target matrix, so unrelated owners are neither planned nor scheduled.
-Public and the independent Worker publisher also follow successful trusted
-Connect producer completions. This trigger policy supersedes other automatic
-pipeline descriptions below.
+Public follows successful trusted Connect producer completions. The independent
+Worker publisher remains manual, preserving its existing activation contract.
 Existing release admission still rejects diagnostic manual verification receipts;
 manual triggering does not waive publication gates.
 
@@ -16,7 +15,7 @@ they do not rebuild the application.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
-`.github/workflows/streams/*.yml` are the independent main producer workflows for
+`.github/workflows/stream-*.yml` are the independent main producer workflows for
 registered components, including Public's Bun-built web artifact and native Engine
 providers. Each paths filter includes its owner source, shared consumed inputs,
 registration/build contracts and its own workflow. The registry records each
@@ -55,7 +54,7 @@ CI is not Apple Silicon runtime proof. An image change must still pass the same
 checks before Mac publication.
 
 Linux delivery triggers only after successful `Linux verification`.
-Public delivery runs in `streams/public.yml` on its main paths and successful
+Public delivery runs in `stream-public.yml` on its main paths and successful
 Connect producer completions. A dedicated `stream (public, web)` job
 runs delivery/shared architecture contracts, then builds or reuses verified Public
 bytes. `deploy (public, web)` needs only that producer, not the other-owner matrix.

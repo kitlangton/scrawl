@@ -126,7 +126,7 @@ APP_SHELL_ROOT = "composition/app/"
 APP_SHELL_DELIVERY_ROOT = "composition/delivery/"
 APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/", "shared/ui/",
                     ".github/workflows/value-stream-delivery.yml")
-APP_SHELL_WORKFLOW = ".github/workflows/streams/app-shell.yml"
+APP_SHELL_WORKFLOW = ".github/workflows/stream-app-shell.yml"
 
 RECORD_PACKAGE_ROOT = "record/"
 RECORD_FRONTEND_ROOT = "capture/desktop/ui/frontend/"

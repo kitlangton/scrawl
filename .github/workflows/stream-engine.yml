@@ -1,12 +1,10 @@
-name: engine-media-native delivery
+name: engine delivery
 on:
   push:
     branches: [main]
     paths:
       - 'engine/**'
-      - 'capture/engine/**'
-      - '.cargo/**'
-      - '.github/workflows/streams/engine-media-native.yml'
+      - '.github/workflows/stream-engine.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
       - '.github/workflows/value-stream-delivery.yml'
@@ -25,6 +23,6 @@ jobs:
       attestations: write
     uses: ./.github/workflows/value-stream-delivery.yml
     with:
-      owner_id: 'engine-media-native'
-      targets: '{"include":[{"id":"engine-media-native","target":"linux-x64","runner":"ubuntu-24.04","kind":"directory","stage":"library","package":"engine/delivery/media","verify":["verify"],"build":"build","language":"native","packageManager":"npm","architecture_owner":"engine"}]}'
-      workflow_path: '.github/workflows/streams/engine-media-native.yml'
+      owner_id: 'engine'
+      targets: '{"include":[{"id":"engine","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"contract","package":"engine/sdk","verify":["typecheck","test"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"engine"}]}'
+      workflow_path: '.github/workflows/stream-engine.yml'

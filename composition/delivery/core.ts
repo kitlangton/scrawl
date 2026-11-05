@@ -11,7 +11,7 @@ export type Owner = { schema: 1; id: string; kind: Kind; package: string; inputs
 export const auditJob = 'Workflow runtime budget'
 export const contractsJob = 'Delivery contracts'
 export function workflowPathFor(ownerId: string, env = process.env): string {
-  return env.APPARENT_DELIVERY_WORKFLOW_PATH ?? `.github/workflows/streams/${ownerId}.yml`
+  return env.APPARENT_DELIVERY_WORKFLOW_PATH ?? `.github/workflows/stream-${ownerId}.yml`
 }
 const roots = [
   { id: 'app-shell', source: 'composition/app', registration: 'composition/app/delivery.json' },
@@ -92,7 +92,7 @@ export function catalog(root: string) {
 function trackedInputs(root: string, owner: Owner, revision = 'HEAD'): { digest: string; entries: string[] } {
   const registration = roots.find(x => x.id === owner.id)?.registration
   if (!registration) throw new Error('Owner has no registered source identity')
-  const inputRoots = [...new Set([...owner.inputs, ...mandatoryInputs])].sort()
+  const inputRoots = [...new Set([...owner.inputs, ...mandatoryInputs, ...(owner.id === 'public' ? ['enablement/verification/web/'] : [])])].sort()
   const files = [...(owner.files ?? []), workflowPathFor(owner.id), '.github/workflows/value-stream-delivery.yml', '.github/actions/runtime-budget/', 'enablement/verification/workflow-budget.ts', 'LICENSE', registration]
   const paths = new Set<string>()
   for (const pathspec of [...inputRoots, ...files]) {
@@ -220,11 +220,11 @@ export function assessPrior(root: string, owner: Owner, target: Target, currentS
     if (!Number.isSafeInteger(run.id) || run.id <= 0 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt <= 0 || !/^[0-9a-f]{40,64}$/.test(run.head_sha) || run.event !== 'push' || run.head_branch !== 'main' || run.path !== workflowPathFor(owner.id) || run.head_sha === currentSha) continue
     try { execFileSync('git', ['merge-base', '--is-ancestor', run.head_sha, currentSha], { cwd: root, stdio: 'ignore' }) } catch { continue }
     if (fingerprint(root, owner, target, run.head_sha) !== digest) continue
-    const jobName = `stream (${owner.id}, ${target})`
+    const jobName = `deliver / stream (${owner.id}, ${target})`
     const jobs = jobsFor(run)
     if (jobs.filter(j => j.name === jobName && j.status === 'completed' && j.conclusion === 'success').length !== 1 ||
-        jobs.filter(j => j.name === contractsJob && j.status === 'completed' && j.conclusion === 'success').length !== 1 ||
-        jobs.filter(j => j.name === auditJob && j.status === 'completed' && j.conclusion === 'success').length !== 1) continue
+        jobs.filter(j => j.name === `deliver / ${contractsJob}` && j.status === 'completed' && j.conclusion === 'success').length !== 1 ||
+        jobs.filter(j => j.name === `deliver / ${auditJob}` && j.status === 'completed' && j.conclusion === 'success').length !== 1) continue
     const wanted = `stream-${owner.id}-${target}-${digest}`
     const artifact = artifactsFor(run).find(a => Number.isSafeInteger(a.id) && a.id > 0 && a.name === wanted && !a.expired)
     if (artifact) return { reuse: true, reason: 'same workflow owner, successful audit, ancestor source and matching unexpired artifact', input_digest: digest, prior_artifact_id: artifact.id, prior_source_sha: run.head_sha, prior_run_id: run.id, prior_run_attempt: run.run_attempt }

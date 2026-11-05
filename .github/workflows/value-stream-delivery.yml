@@ -53,7 +53,7 @@ jobs:
       - name: Validate the reusable delivery workflow
         uses: docker://rhysd/actionlint:1.7.12
         with:
-          args: -shellcheck= -pyflakes= .github/workflows/value-stream-delivery.yml .github/workflows/streams/agent.yml .github/workflows/streams/app-shell.yml .github/workflows/streams/connect-client.yml .github/workflows/streams/engine-media-native.yml .github/workflows/streams/engine-native.yml .github/workflows/streams/engine.yml .github/workflows/streams/onboarding.yml .github/workflows/streams/platform-config.yml .github/workflows/streams/public.yml .github/workflows/streams/record.yml .github/workflows/connect-delivery.yml .github/workflows/web-delivery.yml
+          args: -shellcheck= -pyflakes= .github/workflows/value-stream-delivery.yml .github/workflows/stream-agent.yml .github/workflows/stream-app-shell.yml .github/workflows/stream-connect-client.yml .github/workflows/stream-engine-media-native.yml .github/workflows/stream-engine-native.yml .github/workflows/stream-engine.yml .github/workflows/stream-onboarding.yml .github/workflows/stream-platform-config.yml .github/workflows/stream-public.yml .github/workflows/stream-record.yml .github/workflows/connect-delivery.yml .github/workflows/web-delivery.yml
 
   stream:
     # The agent whose run hits the limit owns optimization; never raise it.
@@ -99,16 +99,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node --experimental-strip-types composition/delivery/cli.ts admit "$OWNER_ID" "$OWNER_TARGET"
-      - name: Guard TypeScript owners against native source compilation
-        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.language != 'native'
-        shell: bash
-        run: |
-          mkdir "$RUNNER_TEMP/value-stream-no-rust"
-          for tool in cargo rustc; do
-            printf '#!/bin/sh\necho "Rust compilation is outside this owner contract" >&2\nexit 97\n' > "$RUNNER_TEMP/value-stream-no-rust/$tool"
-            chmod 755 "$RUNNER_TEMP/value-stream-no-rust/$tool"
-          done
-          printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
       - name: Retrieve and verify the admitted component
         id: reuse
         continue-on-error: true
@@ -131,6 +121,16 @@ jobs:
             rm -rf "$RUNNER_TEMP/stream-output"
             exit 1
           fi
+      - name: Guard TypeScript owners against native source compilation
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.language != 'native'
+        shell: bash
+        run: |
+          mkdir "$RUNNER_TEMP/value-stream-no-rust"
+          for tool in cargo rustc; do
+            printf '#!/bin/sh\necho "Rust compilation is outside this owner contract" >&2\nexit 97\n' > "$RUNNER_TEMP/value-stream-no-rust/$tool"
+            chmod 755 "$RUNNER_TEMP/value-stream-no-rust/$tool"
+          done
+          printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@stable
         if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.language == 'native'
       - name: Install Engine media runtime and fixture dependencies
@@ -261,16 +261,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node --experimental-strip-types composition/delivery/cli.ts admit "$OWNER_ID" "$OWNER_TARGET"
-      - name: Guard TypeScript owners against native source compilation
-        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.language != 'native'
-        shell: bash
-        run: |
-          mkdir "$RUNNER_TEMP/value-stream-no-rust"
-          for tool in cargo rustc; do
-            printf '#!/bin/sh\necho "Rust compilation is outside this owner contract" >&2\nexit 97\n' > "$RUNNER_TEMP/value-stream-no-rust/$tool"
-            chmod 755 "$RUNNER_TEMP/value-stream-no-rust/$tool"
-          done
-          printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
       - name: Retrieve and verify the admitted component
         id: reuse
         continue-on-error: true
@@ -293,6 +283,16 @@ jobs:
             rm -rf "$RUNNER_TEMP/stream-output"
             exit 1
           fi
+      - name: Guard TypeScript owners against native source compilation
+        if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.language != 'native'
+        shell: bash
+        run: |
+          mkdir "$RUNNER_TEMP/value-stream-no-rust"
+          for tool in cargo rustc; do
+            printf '#!/bin/sh\necho "Rust compilation is outside this owner contract" >&2\nexit 97\n' > "$RUNNER_TEMP/value-stream-no-rust/$tool"
+            chmod 755 "$RUNNER_TEMP/value-stream-no-rust/$tool"
+          done
+          printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
       - uses: oven-sh/setup-bun@v2
         if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.packageManager == 'bun'
         with:

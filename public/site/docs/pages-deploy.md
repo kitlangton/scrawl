@@ -1,7 +1,7 @@
 # Capture website delivery on Cloudflare Pages
 
 The canonical repository is `https://github.com/tryapparent/apparent`, branch
-`main`. `.github/workflows/streams/public.yml` selects the Public producer and the reusable
+`main`. `.github/workflows/stream-public.yml` selects the Public producer and the reusable
 `.github/workflows/value-stream-delivery.yml` contains its single production publisher for
 `app.tryapparent.com`. It publishes the isolated **apparent-capture** Pages project
 in account `a54dcebead3b8ad688f891da0ab54d1f`. It does not publish the document-product

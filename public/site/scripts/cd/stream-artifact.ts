@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url'
 import { unzipSync } from 'fflate'
 
 const repository = 'tryapparent/apparent'
-export const workflowPath = '.github/workflows/streams/public.yml'
+export const workflowPath = '.github/workflows/stream-public.yml'
 export const ownerId = 'public'
 export const target = 'web'
 const maxZipBytes = 512 * 1024 * 1024
@@ -34,7 +34,7 @@ export function trustedRun(run: Run, ancestor: (sha: string) => boolean): boolea
 }
 
 export function validateJobs(jobs: any[], run: Run): void {
-  const required = ['stream (public, web)', 'Delivery contracts', 'Workflow runtime budget']
+  const required = ['deliver / stream (public, web)', 'deliver / Delivery contracts', 'deliver / Workflow runtime budget']
   for (const name of required) {
     const matches = jobs.filter(job => job.name === name)
     if (matches.length !== 1 || matches[0].status !== 'completed' || matches[0].conclusion !== 'success' ||

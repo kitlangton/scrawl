@@ -21,7 +21,7 @@ const owner: Owner = { schema: 1, id: 'record', kind: 'npm', package: 'record', 
 function git(cwd: string, ...args: string[]) { execFileSync('git', args, { cwd, stdio: 'ignore' }) }
 function newRepo(path: string) {
   mkdirSync(path, { recursive: true }); git(path, 'init', '-q'); git(path, 'config', 'user.email', 'delivery-test@example.invalid'); git(path, 'config', 'user.name', 'delivery test')
-  for (const dir of ['record', 'shared/ui', 'composition/delivery', 'composition/architecture', '.github/workflows/streams', 'enablement/verification']) mkdirSync(resolve(path, dir), { recursive: true })
+  for (const dir of ['record', 'shared/ui', 'composition/delivery', 'composition/architecture', '.github/workflows', 'enablement/verification']) mkdirSync(resolve(path, dir), { recursive: true })
   writeFileSync(resolve(path, 'record/index.ts'), 'one\n'); writeFileSync(resolve(path, 'record/config.json'), '{}\n'); writeFileSync(resolve(path, 'record/delivery.json'), '{}\n')
   writeFileSync(resolve(path, 'shared/ui/theme.ts'), 'theme\n')
   writeFileSync(resolve(path, 'composition/delivery/core.ts'), 'core\n'); writeFileSync(resolve(path, 'LICENSE'), 'license\n')
@@ -145,7 +145,7 @@ test('admission requires canonical repo, exact workflow, owner job, audit and un
   git(path, 'commit', '--allow-empty', '-qm', 'later'); let current = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path, encoding: 'utf8' }).trim()
   const digest = inputDigest(path, owner)
   const run = { id: 10, run_attempt: 1, head_sha: sha, head_branch: 'main', event: 'push', conclusion: 'failure', path: workflowPathFor(owner.id) }
-  const goodJobs = [{ name: 'stream (record, linux-x64)', status: 'completed', conclusion: 'success' }, { name: 'Delivery contracts', status: 'completed', conclusion: 'success' }, { name: 'Workflow runtime budget', status: 'completed', conclusion: 'success' }]
+  const goodJobs = [{ name: 'deliver / stream (record, linux-x64)', status: 'completed', conclusion: 'success' }, { name: 'deliver / Delivery contracts', status: 'completed', conclusion: 'success' }, { name: 'deliver / Workflow runtime budget', status: 'completed', conclusion: 'success' }]
   const artifact = [{ id: 9, name: `stream-record-linux-x64-${digest}`, expired: false }]
   const assess = (r = run, j = goodJobs, a = artifact, repository = 'tryapparent/apparent') => assessPrior(path, owner, 'linux-x64', current, repository, [r], () => j, () => a)
   assert.equal(assess().reuse, true)
@@ -206,9 +206,9 @@ test('admit invokes gh api with canonical GH_REPO and no unsupported flags', () 
     '#!/bin/sh',
     '[ "$1" = api ] && [ "$GH_REPO" = tryapparent/apparent ] || exit 90',
     'case "$2" in',
-    '  */actions/workflows/record.yml) printf "%s\\n" \'{"id":4,"path":"' + workflowPathFor(owner.id) + '"}\' ;;',
-    '  */actions/workflows/4/runs?*) printf "%s\\n" \'{"workflow_runs":[{"id":88,"run_attempt":1,"head_sha":"' + ancestor + '","head_branch":"main","event":"push","conclusion":"failure"}]}\' ;;',
-    '  */actions/runs/88/attempts/1/jobs?*) printf "%s\\n" \'{"total_count":3,"jobs":[{"name":"stream (record, linux-x64)","status":"completed","conclusion":"success"},{"name":"Delivery contracts","status":"completed","conclusion":"success"},{"name":"Workflow runtime budget","status":"completed","conclusion":"success"}]}\' ;;',
+    '  */actions/workflows/stream-record.yml) printf "%s\\n" \'{"id":4,"path":"' + workflowPathFor(owner.id) + '"}\' ;;',
+    '  */actions/workflows/4/runs?*) printf "%s\\n" \'{"workflow_runs":[{"id":88,"run_attempt":1,"head_sha":"' + ancestor + '","head_branch":"main","path":"' + workflowPathFor(owner.id) + '","event":"push","conclusion":"success"}]}\' ;;',
+    '  */actions/runs/88/attempts/1/jobs?*) printf "%s\\n" \'{"total_count":3,"jobs":[{"name":"deliver / stream (record, linux-x64)","status":"completed","conclusion":"success"},{"name":"deliver / Delivery contracts","status":"completed","conclusion":"success"},{"name":"deliver / Workflow runtime budget","status":"completed","conclusion":"success"}]}\' ;;',
     '  */actions/runs/88/artifacts?*) printf "%s\\n" \'{"total_count":1,"artifacts":[{"id":91,"name":"stream-record-linux-x64-' + digest + '","expired":false}]}\' ;;',
     '  *) exit 91 ;;',
     'esac',

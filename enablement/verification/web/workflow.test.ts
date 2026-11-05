@@ -5,8 +5,8 @@ import test from 'node:test'
 const root = new URL('../../../.github/workflows/', import.meta.url)
 const reusable = readFileSync(new URL('value-stream-delivery.yml', root), 'utf8')
 const workerCaller = readFileSync(new URL('web-delivery.yml', root), 'utf8')
-const publicEntry = readFileSync(new URL('streams/public.yml', root), 'utf8')
-const entry = (name: string) => readFileSync(new URL(`streams/${name}.yml`, root), 'utf8')
+const publicEntry = readFileSync(new URL('stream-public.yml', root), 'utf8')
+const entry = (name: string) => readFileSync(new URL(`stream-${name}.yml`, root), 'utf8')
 const paths = (source: string) => source.split(/\n\s+paths:\n/)[1]?.split(/\n\s{2,}[a-z_]+:/)[0]?.match(/^\s+- '([^']+)'/gm)?.map(value => value.trim().slice(3, -1)) ?? []
 const section = (source: string, name: string) => source.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z-]+:\n/)[0] ?? ''
 const registrations: Record<string, string> = {
@@ -31,10 +31,11 @@ test('owner entrypoints select only their stream and shared delivery inputs', ()
   for (const name of ['app-shell', 'record', 'connect-client', 'engine', 'engine-native', 'engine-media-native', 'platform-config', 'onboarding', 'agent', 'public']) {
     const source = entry(name)
     assert.match(source, new RegExp(`owner_id: '${name}'`))
-    assert.match(source, new RegExp(`workflow_path: '\\.github/workflows/streams/${name}\\.yml'`))
-    assert(paths(source).includes(`.github/workflows/streams/${name}.yml`))
+    assert.match(source, new RegExp(`workflow_path: '\\.github/workflows/stream-${name}\\.yml'`))
+    assert(paths(source).includes(`.github/workflows/stream-${name}.yml`))
     assert(paths(source).includes('composition/delivery/**'))
     assert(paths(source).includes('composition/architecture/**'))
+    if (name === 'public') assert(paths(source).includes('enablement/verification/web/**'))
     const registration = JSON.parse(readFileSync(new URL(`../../../${registrations[name]}`, import.meta.url), 'utf8'))
     const matrix = JSON.parse(source.match(/^\s+targets: '(.+)'$/m)![1]).include
     assert.deepEqual(matrix.map((row: any) => row.id), matrix.map(() => name))
@@ -71,8 +72,8 @@ test('Public composition consumes only its verified Public and Connect artifacts
   assert.match(deploy, /publish-pages\.ts seal/)
   assert.match(deploy, /WEBSITE_CD_ENABLED == 'true'/)
   assert.equal([...reusable.matchAll(/node public\/site\/scripts\/cd\/publish-pages\.ts/g)].length, 1)
-  assert.match(workerCaller, /workflow_run:\n\s+workflows: \[Connect producer\]/)
   assert.match(workerCaller, /vars\.HOSTED_CD_ENABLED == 'true'/)
+  assert.doesNotMatch(workerCaller, /workflow_run:/)
 })
 
 test('Connect browser/Worker producer retains explicit invocation and client path isolation', () => {
@@ -83,10 +84,8 @@ test('Connect browser/Worker producer retains explicit invocation and client pat
   assert(paths(entry('connect-client')).includes('connect/delivery/client/**'))
   assert(paths(entry('connect-client')).includes('connect/delivery.json'))
   assert(!paths(entry('connect-client')).includes('connect/web/**'))
-  for (const name of ['public.yml', 'web-delivery.yml']) {
-    const source = name === 'public.yml' ? publicEntry : workerCaller
-    assert.match(source, /workflows: \[Connect producer\]/)
-  }
-  const streamWorkflows = readdirSync(new URL('../../../.github/workflows/streams/', import.meta.url)).filter(name => name.endsWith('.yml'))
-  assert.deepEqual(streamWorkflows.sort(), ['agent.yml', 'app-shell.yml', 'connect-client.yml', 'engine-media-native.yml', 'engine-native.yml', 'engine.yml', 'onboarding.yml', 'platform-config.yml', 'public.yml', 'record.yml'])
+  assert.match(publicEntry, /workflows: \[Connect producer\]/)
+  assert.doesNotMatch(workerCaller, /workflow_run:/)
+  const streamWorkflows = readdirSync(new URL('../../../.github/workflows/', import.meta.url)).filter(name => name.endsWith('.yml') && name.startsWith('stream-'))
+  assert.deepEqual(streamWorkflows.sort(), ['stream-agent.yml', 'stream-app-shell.yml', 'stream-connect-client.yml', 'stream-engine-media-native.yml', 'stream-engine-native.yml', 'stream-engine.yml', 'stream-onboarding.yml', 'stream-platform-config.yml', 'stream-public.yml', 'stream-record.yml'])
 })

@@ -1,13 +1,11 @@
-name: agent delivery
+name: Connect client delivery
 on:
   push:
     branches: [main]
     paths:
-      - 'agent/**'
-      - 'engine/sdk/**'
-      - 'engine/delivery.json'
-      - 'shared/contracts/**'
-      - '.github/workflows/streams/agent.yml'
+      - 'connect/delivery/client/**'
+      - 'connect/delivery.json'
+      - '.github/workflows/stream-connect-client.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
       - '.github/workflows/value-stream-delivery.yml'
@@ -26,6 +24,6 @@ jobs:
       attestations: write
     uses: ./.github/workflows/value-stream-delivery.yml
     with:
-      owner_id: 'agent'
-      targets: '{"include":[{"id":"agent","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"library","package":"agent","verify":["test"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"agent"}]}'
-      workflow_path: '.github/workflows/streams/agent.yml'
+      owner_id: 'connect-client'
+      targets: '{"include":[{"id":"connect-client","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"library","package":"connect/delivery/client","verify":["typecheck","test"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"connect"}]}'
+      workflow_path: '.github/workflows/stream-connect-client.yml'

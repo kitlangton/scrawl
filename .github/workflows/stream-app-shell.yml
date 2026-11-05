@@ -6,7 +6,7 @@ on:
       - 'composition/app/**'
       - 'shared/contracts/**'
       - 'shared/ui/**'
-      - '.github/workflows/streams/app-shell.yml'
+      - '.github/workflows/stream-app-shell.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
       - '.github/workflows/value-stream-delivery.yml'
@@ -27,4 +27,4 @@ jobs:
     with:
       owner_id: 'app-shell'
       targets: '{"include":[{"id":"app-shell","target":"linux-x64","runner":"ubuntu-24.04","kind":"app-shell","stage":"development-app","package":"composition/app","verify":["check"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"composition"},{"id":"app-shell","target":"macos-x64","runner":"macos-26-intel","kind":"app-shell","stage":"development-app","package":"composition/app","verify":["check"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"composition"}]}'
-      workflow_path: '.github/workflows/streams/app-shell.yml'
+      workflow_path: '.github/workflows/stream-app-shell.yml'

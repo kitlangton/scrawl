@@ -1,10 +1,12 @@
-name: engine delivery
+name: record delivery
 on:
   push:
     branches: [main]
     paths:
-      - 'engine/**'
-      - '.github/workflows/streams/engine.yml'
+      - 'record/**'
+      - 'shared/ui/**'
+      - 'shared/assets/fonts/**'
+      - '.github/workflows/stream-record.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
       - '.github/workflows/value-stream-delivery.yml'
@@ -23,6 +25,6 @@ jobs:
       attestations: write
     uses: ./.github/workflows/value-stream-delivery.yml
     with:
-      owner_id: 'engine'
-      targets: '{"include":[{"id":"engine","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"contract","package":"engine/sdk","verify":["typecheck","test"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"engine"}]}'
-      workflow_path: '.github/workflows/streams/engine.yml'
+      owner_id: 'record'
+      targets: '{"include":[{"id":"record","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"library","package":"record","verify":["typecheck","test","test:package"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"record"}]}'
+      workflow_path: '.github/workflows/stream-record.yml'

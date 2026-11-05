@@ -1,12 +1,12 @@
-name: record delivery
+name: engine-media-native delivery
 on:
   push:
     branches: [main]
     paths:
-      - 'record/**'
-      - 'shared/ui/**'
-      - 'shared/assets/fonts/**'
-      - '.github/workflows/streams/record.yml'
+      - 'engine/**'
+      - 'capture/engine/**'
+      - '.cargo/**'
+      - '.github/workflows/stream-engine-media-native.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
       - '.github/workflows/value-stream-delivery.yml'
@@ -25,6 +25,6 @@ jobs:
       attestations: write
     uses: ./.github/workflows/value-stream-delivery.yml
     with:
-      owner_id: 'record'
-      targets: '{"include":[{"id":"record","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"library","package":"record","verify":["typecheck","test","test:package"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"record"}]}'
-      workflow_path: '.github/workflows/streams/record.yml'
+      owner_id: 'engine-media-native'
+      targets: '{"include":[{"id":"engine-media-native","target":"linux-x64","runner":"ubuntu-24.04","kind":"directory","stage":"library","package":"engine/delivery/media","verify":["verify"],"build":"build","language":"native","packageManager":"npm","architecture_owner":"engine"}]}'
+      workflow_path: '.github/workflows/stream-engine-media-native.yml'
