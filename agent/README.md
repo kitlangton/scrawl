@@ -39,8 +39,42 @@ The legacy Rust implementation can be removed only after all supported installed
 
 `zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]` creates a real PNG contact sheet plus `zoom.json` in a new private output directory. `--at` accepts `0:12`, seconds such as `12.5`, or narration: it uses the first matching timed-word phrase, then the first transcript-segment fallback. Moment windows lean ¼ of the span before the point; mark windows are centered and include the entire mark plus 500 ms where possible. Sampling includes both endpoints (up to 48 cells). Mark numbers follow `inspect --marks`; use `--frame` to resolve a number shared by keyframes. The default output is a fresh directory under `~/.cache/apparent/agent/zoom`; `--out` must name a fresh absolute directory. The sheet uses row-major image cells without captions; companion JSON keeps absolute source paths, cell timestamps, crop/full-frame source mapping, relevant marks/interactions, and timed narration. Pictures stay visual and text stays semantic.
 
-With an explicitly configured native Engine media provider, zoom requests the exact ordered timestamps through `@apparent/engine-sdk/media`; decode errors and uncertain jobs remain errors. A missing source video is eligible for saved-frame fallback even when provider paths are configured; pending/evidence-only state and actual provider failures remain authoritative. Without configured provider paths, or when the provider reports no decode capability, it composes only retained PNG keyframes inside the requested window and labels the result `saved-keyframes` / `bundle-manifest`. Their timestamps are original manifest keyframe times, so saved mode is sparse and does not create dense video samples. The package includes pure-JS `pngjs` for PNG decoding and sheet encoding; this image-PNG work is separate from native video decoding. Linux native decode has a private local conformance peer and codec fixture, but the production package/discovery path is pending; macOS native media decode is unavailable. No provider is installed or activated by this CLI, and there is no source-build/FFmpeg fallback. Saved keyframes already contain Engine annotations and are not cropped or annotated a second time unless an exact matching retained full-frame image is available. Zoom renders actual timed stroke ink, pins, laser trails, touch trails and nearby click context for provider-decoded frames; mark shapes and flag intent remain semantic in companion JSON. Composition preflights PNG structure, rejects interlacing, bounds input files, dimensions, aggregate bytes/pixels, annotation work and cell count, checks descriptor/path identity, and rejects output collisions. No image is opened or sent automatically. The SDK test double is rejected by the production command.
+With an explicitly configured native Engine media provider, zoom requests the exact ordered timestamps through `@apparent/engine-sdk/media`; decode errors and uncertain jobs remain errors. A missing source video is eligible for saved-frame fallback even when provider paths are configured; pending/evidence-only state and actual provider failures remain authoritative. Without configured provider paths, or when the provider reports no decode capability, it composes only retained PNG keyframes inside the requested window and labels the result `saved-keyframes` / `bundle-manifest`. Their timestamps are original manifest keyframe times, so saved mode is sparse and does not create dense video samples. The package includes pure-JS `pngjs` for PNG decoding and sheet encoding; this image-PNG work is separate from native video decoding. Linux x64 native decode can use the complete admitted media runtime through the explicit offline installer below. macOS native media decode remains unavailable. The `zoom` command does not install or activate a provider, and there is no source-build/FFmpeg fallback. Saved keyframes already contain Engine annotations and are not cropped or annotated a second time unless an exact matching retained full-frame image is available. Zoom renders actual timed stroke ink, pins, laser trails, touch trails and nearby click context for provider-decoded frames; mark shapes and flag intent remain semantic in companion JSON. Composition preflights PNG structure, rejects interlacing, bounds input files, dimensions, aggregate bytes/pixels, annotation work and cell count, checks descriptor/path identity, and rejects output collisions. No image is opened or sent automatically. The SDK test double is rejected by the production command.
 
 `delivery.json` registers Agent with the independent value-stream producer. Its inputs include Agent and the Engine SDK, not Engine Rust/native implementation or Desktop. The Linux producer builds/tests/packs and verifies a fresh public API import. This stages a reusable npm artifact; it does not publish to npm or switch the installed app CLI. The package root exports application helpers without running a CLI. Engine shutdown allows 12 seconds before escalation, matching the provider’s documented native-finalizer integration budget.
 
 Agent-only TypeScript, JSON, Markdown and package-control changes run the installed owner suite without legacy Rust compilation. Engine SDK changes also run Agent tests but retain conservative native selection; unknown/native Agent file types, mixed shared changes and unknown history remain conservative. Hooks never install dependencies.
+# Offline local installation with native Linux media
+
+`apparent-agent-install-local` installs an already-built Agent npm tarball and
+an already-built complete Engine media root into a fresh private Linux x64
+prefix. It performs no download, authentication, build, global npm install or
+OS routing change. The two SHA-256 values must come from a trusted upstream
+admission or receipt; a native manifest hash proves integrity only, not who
+produced it. The installer checks the package hash before npm, validates the
+entire native inventory against its manifest before and after copying, and
+requires the installed Agent 0.1.0 and SDK 0.2.0 media export. Node 22.6+ and
+an existing npm are required.
+
+```sh
+node /absolute/path/to/extracted-agent-package/dist/install-local.js \
+  --agent /absolute/path/apparent-agent-0.1.0.tgz \
+  --agent-sha256 c9e87015dee2ff2c35dcd72bc4627733e21b427e468318888ed29beafca4f3aa \
+  --native-root /absolute/path/to/native-payload \
+  --manifest-sha256 98ef787ed53c430e074484de806bd4de4b08893aba21fb1c34ab36f238a6da20 \
+  --prefix /absolute/fresh/private-prefix
+/absolute/fresh/private-prefix/apparent-agent --version
+/absolute/fresh/private-prefix/apparent-agent frames /absolute/capture.apparent --from 0 --to 2
+```
+
+The example digests identify the locally retained 463f0053908 artifact pair;
+they do not bypass the normal current-tree admission/reuse gate. The launcher
+keeps both native entry and worker in the copied tree, supplies only the
+explicit media executable and private runtime paths, and invokes the installed
+Agent CLI. Install success requires a native media/1 handshake and confirmed
+worker exit. This is not codec proof. Native media decode is available here
+only for Linux x64; Mac media, capture, export and inference remain unavailable.
+Connect is deferred. Standalone Node CLI inspection remains portable without
+the native tree. A failure retains a clearly named private partial prefix and
+never emits a success receipt. Paths are private to cooperating same-UID
+processes; this installer does not promise same-UID isolation.

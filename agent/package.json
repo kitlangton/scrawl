@@ -4,7 +4,8 @@
   "description": "Local .apparent bundle inspection CLI",
   "type": "module",
   "bin": {
-    "apparent-agent": "./dist/cli.js"
+    "apparent-agent": "./dist/cli.js",
+    "apparent-agent-install-local": "./dist/install-local.js"
   },
   "files": [
     "dist",
