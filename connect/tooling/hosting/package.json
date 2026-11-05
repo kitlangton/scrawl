@@ -1,0 +1,19 @@
+{
+  "name": "@apparent/connect-static-hosting",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "npm --prefix ../../web run build && node scripts/package.ts",
+    "test": "npm run typecheck && npm run build && node --test test/worker.test.ts && node scripts/test-runtime.ts",
+    "test:runtime": "node scripts/test-runtime.ts",
+    "dev": "wrangler dev --config wrangler.template.jsonc --local --ip 127.0.0.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261104.1",
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3",
+    "wrangler": "4.158.0"
+  }
+}
