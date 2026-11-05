@@ -4,7 +4,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSyn
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
-import { buildOwner, catalog, environmentDigest, inputDigest, makePlan, sourceDigest } from './core.ts'
+import { assessPrior, buildOwner, catalog, environmentDigest, inputDigest, makePlan, sourceDigest } from './core.ts'
+
+// Hooks must not redirect synthetic Git repositories into the caller's index.
+for (const name of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete process.env[name]
 
 const registration = { schema: 1, id: 'public', kind: 'directory', package: 'public/site', packageManager: 'bun', inputs: ['public/', 'shared/ui/'], files: ['README.md', 'capture/agent/skills/apparent/SKILL.md', '.npmrc'], environment: ['PUBLIC_POSTHOG_ENABLED', 'PUBLIC_POSTHOG_TOKEN'], verify: [], build: 'verify:installed', artifactPath: 'dist-apparent', targets: ['web'], stage: 'website' }
 function fixture() {
@@ -77,4 +80,24 @@ test('directory builder uses locked Bun installation and copies only the declare
     assert.equal(readFileSync(join(outputRoot, 'output/payload/index.html'), 'utf8'), 'verified')
     assert.throws(() => readFileSync(join(outputRoot, 'output/private.txt')))
   } finally { process.env.PATH = saved; f.clean(); rmSync(outputRoot, { recursive: true, force: true }) }
+})
+
+test('web reuse admits unchanged Public bytes after native-only changes and rejects changed build config', () => {
+  const f = fixture(), saved = { ImageOS: process.env.ImageOS, ImageVersion: process.env.ImageVersion, PUBLIC_POSTHOG_TOKEN: process.env.PUBLIC_POSTHOG_TOKEN }
+  try {
+    process.env.ImageOS = 'ubuntu24'; process.env.ImageVersion = 'fixture'; process.env.PUBLIC_POSTHOG_TOKEN = 'first-public-key'
+    const previous = f.git('rev-parse', 'HEAD')
+    f.put('capture/engine/native.rs', 'unrelated native source'); f.commit()
+    const current = f.git('rev-parse', 'HEAD'), owner = f.owner(), digest = inputDigest(f.root, owner, 'web')
+    const run = { id: 12, run_attempt: 1, head_sha: previous, head_branch: 'main', event: 'push', conclusion: 'success', path: '.github/workflows/value-stream-delivery.yml' }
+    const jobs = ['stream (public, web)', 'Delivery contracts', 'Workflow runtime budget'].map(name => ({ name, status: 'completed', conclusion: 'success' }))
+    const artifacts = [{ id: 13, name: `stream-public-web-${digest}`, expired: false }]
+    const admit = () => assessPrior(f.root, owner, 'web', current, 'tryapparent/apparent', [run], () => jobs, () => artifacts)
+    assert.equal(admit().reuse, true)
+    process.env.PUBLIC_POSTHOG_TOKEN = 'changed-public-key'
+    assert.equal(admit().reuse, false)
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
+    f.clean()
+  }
 })
