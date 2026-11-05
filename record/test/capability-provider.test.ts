@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { CapabilitySnapshot, RecordCaptureFacts, RecordNativeFacts, RecordPenConfigPort } from "../src/capabilities/index.ts";
+import type { CapabilitySnapshot, PenColor, RecordCommand, RecordCaptureFacts, RecordNativeFacts, RecordPenConfigPort } from "../src/capabilities/index.ts";
 import { createRecordCapabilityProvider } from "../src/backend/capabilities/provider.ts";
 import { createRecordHostRuntime } from "../dist/backend/host/runtime.js";
 import type { EngineSdkPort, PreparedStart } from "../src/backend/engine/sdk-adapter.ts";
@@ -26,7 +26,7 @@ function runtimeFixture() {
     },
     reconcileStartup: async () => ({ state: "ready", knownRequestIds: [] }),
     unresolvedOwnership: () => ({ requestIds: [], storageUnavailable: false, reconciliation: "complete" as const }),
-    dispose() { disposed = true; listeners.clear(); return this.unresolvedOwnership(); },
+    dispose() { disposed = true; listeners.clear(); return { requestIds: [], storageUnavailable: false, reconciliation: "complete" as const }; },
   } as unknown as RecordHostRuntime;
   return { runtime, isDisposed: () => disposed };
 }
@@ -37,10 +37,10 @@ const nativeFacts = (): RecordNativeFacts => ({
   shortcut: { effective: "Ctrl+Shift+R", label: "Ctrl Shift R", registration: "registered", externallyManaged: false, draft: null },
 });
 const outputFacts = (): RecordCaptureFacts => ({ version: 1, providerEpoch: "output-epoch-1", revision: 1, captures: [], nextShortcutAdmission: { state: "unavailable" } });
-const command = (snapshot: CapabilitySnapshot, type: "refresh" | "start-capture", requestId: string, delivery?: "local-only" | "host-default") => ({
-  type, requestId, expected: { providerEpoch: snapshot.providerEpoch, revision: snapshot.revision },
-  ...(type === "start-capture" ? { delivery: delivery ?? "host-default" } : {}),
-}) as const;
+const command = (snapshot: CapabilitySnapshot, type: "refresh" | "start-capture", requestId: string, delivery?: "local-only" | "host-default"): RecordCommand => {
+  const base = { requestId, expected: { providerEpoch: snapshot.providerEpoch, revision: snapshot.revision } };
+  return type === "start-capture" ? { ...base, type, delivery: delivery ?? "host-default" } : { ...base, type };
+};
 
 test("provider publishes explicit unavailable host/config facts and refuses absent producers", async () => {
   const { runtime } = runtimeFixture();
@@ -162,8 +162,8 @@ test("only the Record output producer can publish saved state; copy dispatch is 
 
 test("pen selection uses the authoritative writer and only publishes confirmed readback", async () => {
   const { runtime } = runtimeFixture();
-  let persisted: "coral" | "blue" = "coral";
-  let effective: "coral" | "blue" = "coral";
+  let persisted: PenColor = "coral";
+  let effective: PenColor = "coral";
   const config: RecordPenConfigPort = {
     read: async () => ({ persisted, effective }),
     writeApplyAndReadBack: async color => { persisted = color; effective = color; return { status: "saved", effective }; },
@@ -228,8 +228,8 @@ test("provider composes the real host runtime and authoritative pen config write
   };
   const roots = { mappingRoot: join(root, "mapping"), bundleRoot: join(root, "bundles") };
   const runtime = await createRecordHostRuntime(sdk, roots);
-  let stored: "coral" | "blue" = "coral";
-  let effective: "coral" | "blue" = "coral";
+  let stored: PenColor = "coral";
+  let effective: PenColor = "coral";
   const config: RecordPenConfigPort = {
     read: async () => ({ persisted: stored, effective }),
     writeApplyAndReadBack: async color => { stored = color; effective = color; return { status: "saved", effective }; },
