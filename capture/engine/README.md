@@ -20,6 +20,14 @@ This port adds no root dependency, production caller, CI or hook-policy change.
 
 ## Caller contract
 
+The standalone v1 provider stores the exact absolute bundle path and screen
+option beside the staged request identity. Same-authority replay must match both
+fields; authentication happens before a durable receipt is returned. Its
+provider lifecycle exposes `Starting → Recording → Stopping → Processing`
+(`finalizing` on the wire), while the legacy `admit` API remains available for
+existing staged-package callers. The binary and native source are documented in
+`engine/README.md`; no existing product caller is routed through it yet.
+
 - Provision one absolute, current-user-owned `0700` runtime directory on a local
   filesystem supporting hard links, advisory locks, atomic rename and fsync.
   Every product must use the SAME persistent directory. Do not place it inside
