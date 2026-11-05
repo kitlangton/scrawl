@@ -1,0 +1,14 @@
+{
+  "name": "@apparent/engine-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": ["dist"],
+  "exports": {
+    ".": { "types": "./dist/src/index.d.ts", "import": "./dist/src/index.js" },
+    "./testing": { "types": "./dist/src/testing.d.ts", "import": "./dist/src/testing.js" }
+  },
+  "scripts": { "build": "tsc -p tsconfig.json", "test": "node --experimental-strip-types --test test/*.test.ts", "typecheck": "tsc --noEmit -p tsconfig.json", "prepack": "npm run build" },
+  "devDependencies": { "@types/node": "22.19.0", "typescript": "5.9.3" },
+  "engines": { "node": ">=22.6" }
+}
