@@ -90,7 +90,7 @@ const apiServer = apiOrigin ? createServer(server.listeners('request')[0]) : nul
 if (apiServer) await new Promise(r => apiServer.listen(Number(new URL(apiOrigin).port), '127.0.0.1', r))
 console.log(`Synthetic hosted fixture at http://127.0.0.1:${server.address().port}/hosted/`)
 if (process.env.HOSTED_FIXTURE_ONLY) await new Promise(() => {})
-const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/home/simon/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome', headless: true, args: ['--no-sandbox'] })
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || chromium.executablePath(), headless: true, args: ['--no-sandbox'] })
 const results = []
 const routeResults = []
 let viteServer

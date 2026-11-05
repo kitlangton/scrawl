@@ -160,3 +160,66 @@ The capture frontend publishes from main to Cloudflare Pages; see `public/site/d
 From `connect/service`, run `npm ci`, `npm run build`, then the affected backend tests (`node --test --test-concurrency=1 test/sharing/*.test.mjs test/access/encryption.test.mjs`). `npm test` retains the full service suite. Source renderer tests and Public's composed browser fixtures require the generated recipient renderer from the service build first.
 
 For actual local Worker + D1/R2 browser checks, run `npm run test:recipient` with installed Chromium (`CHROME_PATH`) and FFmpeg. Set an existing private `RECIPIENT_EVIDENCE` directory or let the check create one under the OS temp directory. It generates synthetic four-second media, uploads it through the actual service, exercises pending→ready, native playback, transcript seek, actual clipboard and refusal fallback, no-JS evidence, responsive layout and revocation. No real account or cloud service is contacted. Screenshots and receipts remain outside git; these do not establish deployed hosting, ChatGPT-web retrieval or native Desktop acceptance.
+
+## Independent static browser hosting source
+
+`connect/tooling/hosting` is the source package for the dedicated
+`apparent-connect-web` Cloudflare Worker. It owns only the existing six
+account/device/share-management documents, their emitted browser graph, and the
+three `/hosted/*.png` illustrations. It does not include the API Worker,
+recipient/capability viewer, account data, or a Pages deployment. Its
+`wrangler.template.jsonc` has no route, workers.dev or preview exposure configured
+and disables Worker observability; an
+operator must configure the intended `app.tryapparent.com/connect*` and
+`app.tryapparent.com/hosted*` zone routes as a separate activation step.
+
+The current `connect/web/dist` remains the intermediate browser artifact used by
+Public composition and its existing delivery schema. The hosting packager reads
+that six-document artifact and writes `connect/tooling/hosting/.output/dist`; only the
+dedicated Worker output rewrites `/assets/*`, the wordmark, and font references
+to `/connect/assets/*`. The three existing art URLs remain `/hosted/*.png`.
+This keeps Public's current composition/admission usable until its owner cuts
+over safely, while making every Worker resource physically present within the
+Worker's owned route space. The packager rejects unexpected inputs and missing
+HTML resource edges before replacing its generated output.
+
+Hosting source inputs are `connect/tooling/hosting/{.gitignore,package.json,
+package-lock.json,tsconfig.json,wrangler.template.jsonc,src/index.ts,
+scripts/package.ts,scripts/test-runtime.ts,test/worker.test.ts}` and the full
+browser build closure: `connect/web/{package.json,bun.lock,tsconfig.json,
+index.html,vite.config.ts,src/**,scripts/**}`, `shared/ui/{src/**,
+scripts/check-theme.py}`, `shared/analytics/{config.ts,browser.ts}`, and the five
+approved files `public/site/public/assets/{hosted/{source-pond-v4,agent-pond-v4,
+agent-reading-v4}.png,fonts/HostGrotesk-Variable.ttf,brand/apparent-wordmark.svg}`.
+The parent CI entrypoints are `npm ci`, `npm run typecheck`, `npm run build`, and
+`npm test` from `connect/tooling/hosting`; the common CI lane calls
+`npm run verify:artifact`, which installs locked web dependencies, prepares browsers,
+runs the browser suite and the real local Worker checks, and builds the final
+asset/runtime payload. PR verification isolates its synthetic analytics environment
+from this publishable graph by disabling analytics there; production main keeps
+its configured, fingerprinted analytics values and rejects fixture contamination.
+Install Connect web with
+`bun install --frozen-lockfile` from `connect/web` first. Build output is
+`connect/tooling/hosting/.output/dist`: six `index.html` documents, one hashed
+JS/CSS pair under `connect/assets/`, the font and wordmark under that same
+namespace, and the three preserved `/hosted/*.png` images (13 files total).
+Wrangler's static asset binding consumes this directory. `.output/worker.js` is
+the bundled runtime and `.output/wrangler.json` is its route-free deployment config;
+publication consumes these verified bytes with `--no-bundle` rather than building
+source. Rewritten assets revalidate rather than using their pre-rewrite filenames
+as immutable content identities. This package does not change delivery artifact schema, route
+inventory, or producer names and does not require Cargo or rustc.
+
+`npm test` starts Wrangler's local Workers runtime against the packaged static
+asset directory and exercises all twelve route/slash forms, query preservation,
+resource fetches, HEAD/GET, method denial, unknown and encoded paths, and the
+privacy/security headers. A handler boundary test checks sensitive request headers and device-code queries
+are removed before the static asset binding; the browser-visible query is retained.
+The runtime test hydrates the rewritten package in Chromium with all nonlocal
+requests intercepted, checking sign-in destinations and device-code preservation. Run the existing browser
+suite separately from `connect/web` with a private evidence directory, for
+example `CONNECT_EVIDENCE=/tmp/connect-web-hosting-evidence npm test`; it covers
+synthetic account/device/share states, analytics, no-JS loading HTML and
+artifact/resource closure. Neither lane logs in or accesses private recordings.
+The local Worker run does not establish zone route activation, live cookies,
+OAuth, provider configuration, or deployment.
