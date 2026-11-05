@@ -1,10 +1,7 @@
 name: Connect publication follow-up
 
 on:
-  workflow_run:
-    workflows: [Connect producer]
-    branches: [main]
-    types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: read

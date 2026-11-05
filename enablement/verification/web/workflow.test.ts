@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import test from 'node:test'
 
 const root = new URL('../../../.github/workflows/', import.meta.url)
@@ -77,4 +77,16 @@ test('Reusable worker caller grants the complete nested contents permission clos
     assert(rank[caller] >= rank[requirement[1]], `worker contents:${caller} cannot grant nested contents:${requirement[1]}`)
   }
   assert.match(workerWorkflow.split('jobs:')[0], /contents: read/)
+})
+
+test('only Value-stream delivery has automatic workflow triggers', () => {
+  const directory = new URL('../../../.github/workflows/', import.meta.url)
+  for (const file of readdirSync(directory).filter(name => /\.ya?ml$/.test(name))) {
+    const source = readFileSync(new URL(file, directory), 'utf8')
+    const triggers = source.split('\non:\n')[1]?.split(/\n[^\s#]/)[0] ?? ''
+    const events = [...triggers.matchAll(/^  ([a-z_]+):/gm)].map(match => match[1])
+    assert(events.length > 0, file)
+    assert.deepEqual(events.filter(event => !['workflow_dispatch', 'workflow_call'].includes(event)),
+      file === 'value-stream-delivery.yml' ? ['push', 'workflow_run'] : [], file)
+  }
 })

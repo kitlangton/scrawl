@@ -1,5 +1,15 @@
 # Website and Connect continuous delivery
 
+Only Value-stream delivery runs automatically (on matching main pushes and trusted
+Connect producer completions). All other
+standalone workflows require an explicit workflow_dispatch; push, completion and
+scheduled triggers are disabled. Reusable workflow_call entry points remain for
+manually started callers. Website publication inside Value-stream delivery retains
+its existing automatic behavior. This trigger policy supersedes other automatic
+pipeline descriptions below.
+Existing release admission still rejects diagnostic manual verification receipts;
+manual triggering does not waive publication gates.
+
 GitHub Actions do not run automatically on PRs or feature-branch pushes. Feature
 pushes run inexpensive selector, push-hook and release-admission contracts locally;
 they do not rebuild the application.
