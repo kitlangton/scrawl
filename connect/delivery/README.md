@@ -1,9 +1,12 @@
 Connect producer prerequisite
 
-connect-delivery.yml builds and verifies browser and Worker outputs on main push
-or manual main dispatch, without native CI. It uploads separate immutable Actions
+connect-delivery.yml builds and verifies browser and Worker outputs on manual main
+dispatch or its supported reusable call, without native CI. It uploads separate immutable Actions
 artifacts named connect-browser-<full SHA> and connect-worker-<full SHA>, each
-containing manifest.json and dist/. The reusable publisher accepts required string
+containing manifest.json and dist/. Browser/Worker input inventories exclude only
+the independent native recipient tooling and local TypeScript client subtrees;
+neighbouring delivery admission code remains included. Historical broader
+manifests are rejected rather than reinterpreted. The reusable publisher accepts required string
 input `producer-run`; an empty input selects the producer, a nonempty input selects
 publication. Public invokes it independently with `secrets: inherit`.
 
