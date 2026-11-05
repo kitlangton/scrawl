@@ -112,7 +112,7 @@ test("canonical API and viewer requests dispatch to the existing service handler
   assert.equal(assets, 0)
 })
 
-test("bundled hosting worker uses synthetic D1/R2 service bindings and canonical OAuth callback", async () => {
+test("bundled hosting worker keeps both canonical and exact legacy API/auth profiles on synthetic D1/R2", async () => {
   const previous = process.cwd()
   process.chdir(resolve(import.meta.dirname, "../../../service"))
   let f: Awaited<ReturnType<typeof fixture>>
@@ -142,6 +142,37 @@ test("bundled hosting worker uses synthetic D1/R2 service bindings and canonical
     const google = new URL(signIn.headers.get("location")!)
     assert.equal(google.origin, "https://accounts.google.com")
     assert.equal(google.searchParams.get("redirect_uri"), "https://app.tryapparent.com/connect/auth/google/callback")
+    const oldSession = await f.mf.dispatchFetch("https://hosted.tryapparent.com/v1/session")
+    assert.equal(oldSession.status, 200)
+    assert.deepEqual(await oldSession.json(), { authenticated: false, csrfToken: null, account: null, slots: { used: 0, limit: 20, remaining: 20 } })
+    const oldDenied = await f.mf.dispatchFetch("https://hosted.tryapparent.com/v1/account")
+    assert.equal(oldDenied.status, 401)
+    const oldSignIn = await f.mf.dispatchFetch("https://hosted.tryapparent.com/auth/google/start?returnTo=%2Fhosted%2Fdevice%3Fcode%3DSYNTHETIC", { redirect: "manual" })
+    assert.equal(oldSignIn.status, 302)
+    assert.equal(oldSignIn.headers.has("set-cookie"), true)
+    const oldGoogle = new URL(oldSignIn.headers.get("location")!)
+    assert.equal(oldGoogle.searchParams.get("redirect_uri"), "https://hosted.tryapparent.com/auth/google/callback")
+    assert.equal(oldGoogle.searchParams.get("state") !== null, true)
+
+    // Existing host-only Better Auth cookies continue to authenticate against
+    // the shared D1 data and legacy Origin/CSRF contract.
+    const oldIdentity = await f.identity("legacy-session")
+    const oldAuthenticated = await f.mf.dispatchFetch("https://hosted.tryapparent.com/v1/session", {
+      headers: { Cookie: oldIdentity.cookie, Origin: "https://hosted.tryapparent.com" },
+    })
+    assert.equal(oldAuthenticated.status, 200)
+    assert.equal((await oldAuthenticated.json()).authenticated, true)
+    const oldLogout = await f.mf.dispatchFetch("https://hosted.tryapparent.com/auth/logout", {
+      method: "POST", headers: { Cookie: oldIdentity.cookie, Origin: "https://hosted.tryapparent.com", "X-CSRF-Token": oldIdentity.csrf },
+    })
+    assert.equal(oldLogout.status, 200)
+    assert.equal(oldLogout.headers.has("set-cookie"), true)
+
+    // Unknown legacy paths and attacker hosts do not enter service-private routes.
+    for (const [host, path] of [["hosted.tryapparent.com", "/auth/private/secret"], ["hosted.tryapparent.com", "/private/secret"], ["attacker.invalid", "/auth/google/start"]]) {
+      const denied = await f.mf.dispatchFetch(`https://${host}${path}`)
+      assert.equal(denied.status, 404, `${host}${path}`)
+    }
     const font = await f.call("/share-font.ttf")
     assert.equal(font.status, 200)
     assert.match(font.headers.get("content-type") ?? "", /font\/ttf/)
