@@ -26,9 +26,11 @@ const sourceSha = cleanTrackedSource()
 if (readdirSync(packageRoot).includes('dist') && readdirSync(output).length) throw new Error('Native artifact output must be absent or empty')
 mkdirSync(output, { recursive: true })
 const cargoTargetDir = resolve(packageRoot, '.build', 'cargo-target')
-const args = ['build', '--locked', '--release', '--manifest-path', manifestPath, '--target', targetConfig.triple, '--target-dir', cargoTargetDir]
-if (process.env.APPARENT_CARGO_OFFLINE === '1') args.push('--offline')
-execFileSync('cargo', args, { cwd: repositoryRoot, stdio: 'inherit' })
+const cargoCommon = ['--locked', '--target', targetConfig.triple, '--target-dir', cargoTargetDir]
+if (process.env.APPARENT_CARGO_OFFLINE === '1') cargoCommon.push('--offline')
+execFileSync('cargo', ['test', ...cargoCommon, '--manifest-path', resolve(repositoryRoot, 'capture/engine/Cargo.toml')], { cwd: repositoryRoot, stdio: 'inherit' })
+execFileSync('cargo', ['test', ...cargoCommon, '--manifest-path', manifestPath], { cwd: repositoryRoot, stdio: 'inherit' })
+execFileSync('cargo', ['build', ...cargoCommon, '--release', '--manifest-path', manifestPath], { cwd: repositoryRoot, stdio: 'inherit' })
 const binary = resolve(cargoTargetDir, targetConfig.triple, 'release', process.platform === 'win32' ? 'apparent-engine.exe' : 'apparent-engine')
 const bytes = readFileSync(binary)
 const mode = statSync(binary).mode & 0o777

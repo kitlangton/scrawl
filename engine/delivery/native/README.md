@@ -20,9 +20,10 @@ OWNER_TARGET=linux-x64 npm run build
 `macos-x64`. Builds run only on the matching x64 host; no cross-compilation is
 claimed. Set `APPARENT_CARGO_OFFLINE=1` to require an already cached locked Rust
 dependency graph. CI should leave it unset so a cold runner may fetch the
-locked graph. `build` uses the locked root engine graph in release mode, verifies
-the output inventory, and exercises the exact staged executable through the
-SDK's real Rust-process tests. The SDK remains a Rust-free consumer package;
+locked graph. `build` runs the locked staged capture Engine and provider Cargo
+tests, builds the release provider, verifies the output inventory, and exercises
+the exact staged executable through the SDK's real Rust-process tests. The SDK
+remains a Rust-free consumer package;
 only this `language: "native"` producer invokes Cargo.
 
 The package artifact path is `dist/`. It contains exactly:
