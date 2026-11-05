@@ -353,3 +353,12 @@ test('normal root import is side-effect-free', async () => {
   assert.equal(typeof result.installLocal, 'function');
   assert.equal(typeof result.parseInstallArguments, 'function');
 });
+
+test('npm-style symlinked installer entry executes argument validation', async () => withTemp(async (directory) => {
+  const entry = join(directory, 'apparent-agent-install-local');
+  await symlink(new URL('../dist/install-local.js', import.meta.url), entry);
+  const result = spawnSync(process.execPath, [entry], { encoding: 'utf8', timeout: 10_000 });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /missing required option/);
+}));
