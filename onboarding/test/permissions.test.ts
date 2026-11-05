@@ -16,15 +16,25 @@ Object.defineProperty(globalThis, "navigator", { configurable: true, value: dom.
 const Button = ({ children, variant: _variant, size: _size, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string }) => createElement("button", props, children);
 class FakeTimer implements RepairTimer {
   entries = new Map<number, () => void>(); next = 0;
-  set(callback: () => void, ms: number) { assert.equal(ms, 800); const id = ++this.next; this.entries.set(id, callback); return id; }
-  clear(handle: unknown) { this.entries.delete(handle as number); }
-  fire() { const entries = [...this.entries.values()]; this.entries.clear(); for (const callback of entries) callback(); }
+  delays = new Map<number, number>();
+  set(callback: () => void, ms: number) { assert.ok([800, 1000].includes(ms)); const id = ++this.next; this.entries.set(id, callback); this.delays.set(id, ms); return id; }
+  clear(handle: unknown) { this.entries.delete(handle as number); this.delays.delete(handle as number); }
+  fire(ms?: number) { const entries = [...this.entries].filter(([id]) => ms === undefined || this.delays.get(id) === ms); for (const [id, callback] of entries) { this.clear(id); callback(); } }
 }
 function fixture() {
   const record = createRecordFixture("reconnect-with-saved-history"); let next = 0;
   const timer = new FakeTimer();
-  const controller = new PermissionRepairController({ record: record.client, id: () => `repair-${++next}`, timer });
-  return { ...record, timer, controller };
+  const storage = { value: initialProgress(), revision: 1, outcome: "saved" as "saved" | "conflict" | "unknown" };
+  const progress: ProgressStore = {
+    async read() { return { revision: storage.revision, value: structuredClone(storage.value) }; },
+    async compareAndSwap(expected, value) {
+      if (storage.outcome === "unknown") return { status: "unknown", message: "uncertain synthetic write" };
+      if (expected !== storage.revision || storage.outcome === "conflict") return { status: "conflict", revision: storage.revision, current: structuredClone(storage.value) };
+      storage.value = structuredClone(value); return { status: "saved", revision: ++storage.revision };
+    },
+  };
+  const controller = new PermissionRepairController({ record: record.client, id: () => `repair-${++next}`, timer, progress, now: () => 1_000_000 });
+  return { ...record, timer, controller, progress, storage };
 }
 function publish(driver: ReturnType<typeof createRecordFixture>["driver"], requirements: NativeRequirement[], connection: CapabilitySnapshot["connection"] = "connected") {
   const current = driver.current();
@@ -66,7 +76,7 @@ test("denied access opens settings; relaunch-needed blocks until usable facts ar
   publish(f.driver, [requirement("screen-capture", { status: "granted", usableNow: false, relaunchNeeded: true, allowedRepairActions: ["request-safe-relaunch"] })]);
   f.controller.activate(["screen-capture"]); assert.equal(f.controller.state.phase, "relaunch-needed");
   await f.controller.repair("screen-capture"); assert.equal(f.driver.commands()[1]?.type, "request-safe-relaunch");
-  assert.equal(f.controller.state.phase, "waiting");
+  assert.equal(f.controller.state.phase, "relaunch-needed");
   publish(f.driver, [requirement("screen-capture", { status: "granted", usableNow: true, allowedRepairActions: [] })]);
   assert.equal(f.controller.state.phase, "ready"); f.controller.dispose();
 });
@@ -120,4 +130,123 @@ test("mounted repair controls are owner activation seam; Later preserves tour pr
   assert.equal(tour.state.progress.status, "completed"); assert.equal(tour.state.progress.stage, "complete");
   f.controller.dispose(); tour.dispose(); await act(async () => root.unmount()); host.remove();
   assert.deepEqual(f.driver.commands().map(command => command.type), ["request-permission"]);
+});
+
+test('commands cannot request a permission outside the explicit subset', async () => {
+  const f = fixture(); publish(f.driver, [requirement('microphone'), requirement('camera')]);
+  f.controller.activate(['microphone']); assert.equal(await f.controller.repair('camera'), null);
+  assert.equal(f.driver.commands().length, 0); f.controller.dispose();
+});
+
+test('empty repair never becomes ready when later snapshots arrive', () => {
+  const f = fixture(); f.controller.activate([]);
+  publish(f.driver, [requirement('camera', { status: 'granted', usableNow: true })]);
+  assert.equal(f.controller.state.phase, 'error'); assert.equal(f.timer.entries.size, 0); f.controller.dispose();
+});
+
+test('steady usable polling preserves one close deadline and a revoked grant cancels it', () => {
+  const f = fixture(), ready = requirement('camera', { status: 'granted', usableNow: true });
+  publish(f.driver, [ready]); f.controller.activate(['camera']);
+  const original = [...f.timer.entries.keys()]; const staleCallback = [...f.timer.entries.values()][0];
+  publish(f.driver, [ready]); publish(f.driver, [ready]);
+  assert.deepEqual([...f.timer.entries.keys()], original);
+  publish(f.driver, [requirement('camera', { status: 'denied' })]); assert.equal(f.timer.entries.size, 0);
+  publish(f.driver, [ready]); staleCallback(); assert.equal(f.controller.state.phase, 'ready', 'a cleared deadline cannot close a fresh interval');
+  f.timer.fire(800); assert.equal(f.controller.state.phase, 'closed'); f.controller.dispose();
+});
+
+test('accepted responses never replace authoritative ready facts with waiting', async () => {
+  const f = fixture(); publish(f.driver, [requirement('camera')]); f.controller.activate(['camera']);
+  f.client.execute = async command => ({ status: 'accepted', requestId: command.requestId, snapshot: { ...f.driver.current(), revision: f.driver.current().revision + 1, readiness: { requirements: [requirement('camera', { status: 'granted', usableNow: true })] } } });
+  await f.controller.repair('camera'); assert.equal(f.controller.state.phase, 'ready'); f.controller.dispose();
+});
+
+test('stale refresh responses do not manufacture usable access', async () => {
+  const f = fixture(); publish(f.driver, [requirement('camera')]); f.controller.activate(['camera']);
+  f.client.execute = async command => ({ status: 'accepted', requestId: command.requestId, snapshot: { ...f.driver.current(), revision: 0, readiness: { requirements: [requirement('camera', { status: 'granted', usableNow: true })] } } });
+  await f.controller.refresh(); assert.equal(f.controller.state.phase, 'blocked'); assert.equal(f.timer.entries.size, 0); f.controller.dispose();
+});
+
+test('throwing UI subscribers cannot interrupt permission fact observation', () => {
+  const f = fixture(); let calls = 0, bad = 0;
+  f.controller.subscribe(() => { bad++; throw new Error('presentation failure'); }); f.controller.subscribe(() => { calls++; });
+  publish(f.driver, [requirement('camera')]); f.controller.activate(['camera']);
+  publish(f.driver, [requirement('camera', { status: 'granted', usableNow: true })]);
+  assert.equal(bad, 1); assert.ok(calls >= 2); assert.equal(f.controller.state.phase, 'ready'); f.controller.dispose();
+});
+
+test('unmount cancels the repair deadline without closing a host afterward', async () => {
+  const f = fixture(); publish(f.driver, [requirement('camera', { status: 'granted', usableNow: true })]);
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host); let closed = 0;
+  await act(async () => root.render(createElement(PermissionRepairContribution, { controller: f.controller, requestedIds: ['camera'], Button, close() { closed++; } })));
+  assert.equal(f.timer.entries.size, 1); await act(async () => root.unmount());
+  assert.equal(f.timer.entries.size, 0); f.timer.fire(); assert.equal(closed, 0); host.remove(); f.controller.dispose();
+});
+
+test('automatic reopen persists its marker, respects restart cooldown and preserves tour state', async () => {
+  const f = fixture(); f.storage.value = { ...initialProgress(), status: 'deferred', stage: 'shortcut' };
+  const row = requirement('screen-recording', { status: 'granted', usableNow: false, relaunchNeeded: true, allowedRepairActions: ['request-safe-relaunch'] });
+  publish(f.driver, [row]); f.controller.activate(['screen-recording']); f.timer.fire(1000);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(f.driver.commands().filter(c => c.type === 'request-safe-relaunch').length, 1);
+  assert.equal(f.storage.value.status, 'deferred'); assert.equal(f.storage.value.stage, 'shortcut'); assert.equal(f.storage.value.legacy.reopenFix, true); assert.equal(f.storage.value.legacy.relaunchedAt, 1_000_000);
+  f.controller.dispose();
+  const timer = new FakeTimer(), resumed = new PermissionRepairController({ record: f.client, id: () => 'restarted', timer, progress: f.progress, now: () => 1_000_100 });
+  resumed.activate(['screen-recording']); timer.fire(1000); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(f.driver.commands().filter(c => c.type === 'request-safe-relaunch').length, 1, 'restart must not create an automatic loop');
+  await resumed.repair('screen-recording'); assert.equal(f.driver.commands().filter(c => c.type === 'request-safe-relaunch').length, 2, 'an explicit user request remains distinct from automatic reopening');
+  resumed.dispose();
+});
+
+test('uncertain/conflicting restart-state publication prevents a relaunch command', async () => {
+  for (const outcome of ['unknown', 'conflict'] as const) {
+    const f = fixture(); f.storage.outcome = outcome;
+    publish(f.driver, [requirement('screen-capture', { status: 'granted', usableNow: false, relaunchNeeded: true, allowedRepairActions: ['request-safe-relaunch'] })]);
+    f.controller.activate(['screen-capture']); await f.controller.repair('screen-capture');
+    assert.equal(f.driver.commands().length, 0); assert.equal(f.controller.state.phase, 'error'); f.controller.dispose();
+  }
+});
+
+test('a stale automatic reopen callback cannot request a permission after readiness changes', () => {
+  const f = fixture(); publish(f.driver, [requirement('screen-recording', { status: 'granted', usableNow: false, relaunchNeeded: true, allowedRepairActions: ['request-safe-relaunch'] })]);
+  f.controller.activate(['screen-recording']); const callback = [...f.timer.entries.values()][0];
+  publish(f.driver, [requirement('screen-recording')]); callback();
+  assert.equal(f.driver.commands().length, 0); f.controller.dispose();
+});
+
+test("relaunch rechecks eligibility after a delayed CAS even if allowed actions still list restart", async () => {
+  const f = fixture(); let release!: () => void;
+  const paused = new Promise<void>(resolve => { release = resolve; });
+  const progress: ProgressStore = { read: () => f.progress.read(), async compareAndSwap(revision, value) { await paused; return f.progress.compareAndSwap(revision, value); } };
+  const controller = new PermissionRepairController({ record: f.client, id: () => "delayed-restart", progress, timer: f.timer });
+  publish(f.driver, [requirement("screen-recording", { status: "granted", relaunchNeeded: true, allowedRepairActions: ["request-safe-relaunch"] })]);
+  controller.activate(["screen-recording"]);
+  const pending = controller.repair("screen-recording");
+  await Promise.resolve();
+  publish(f.driver, [requirement("screen-recording", { status: "granted", usableNow: true, relaunchNeeded: false, allowedRepairActions: ["request-safe-relaunch"] })]);
+  release(); await pending;
+  assert.equal(f.driver.commands().length, 0);
+  assert.equal(controller.state.phase, "ready");
+  controller.dispose(); f.controller.dispose();
+});
+
+test("a completed CAS after closing cannot replace the closed state with a publication error", async () => {
+  const f = fixture(); let release!: () => void;
+  const paused = new Promise<void>(resolve => { release = resolve; });
+  const progress: ProgressStore = { read: () => f.progress.read(), async compareAndSwap() { await paused; return { status: "unknown", message: "synthetic ambiguity" }; } };
+  const controller = new PermissionRepairController({ record: f.client, id: () => "closing-restart", progress, timer: f.timer });
+  publish(f.driver, [requirement("screen-recording", { status: "granted", relaunchNeeded: true, allowedRepairActions: ["request-safe-relaunch"] })]);
+  controller.activate(["screen-recording"]);
+  const pending = controller.repair("screen-recording"); await Promise.resolve(); controller.close();
+  release(); await pending;
+  assert.equal(controller.state.phase, "closed"); assert.equal(controller.state.closeReason, "close"); assert.equal(f.driver.commands().length, 0);
+  controller.dispose(); f.controller.dispose();
+});
+
+test("refresh while ready preserves the continuous-ready deadline", async () => {
+  const f = fixture();
+  publish(f.driver, [requirement("camera", { status: "granted", usableNow: true, allowedRepairActions: [] })]);
+  f.controller.activate(["camera"]); const first = [...f.timer.entries.keys()];
+  await f.controller.refresh(); assert.deepEqual([...f.timer.entries.keys()], first);
+  f.timer.fire(800); assert.equal(f.controller.state.phase, "closed"); f.controller.dispose();
 });

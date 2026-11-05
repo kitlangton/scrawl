@@ -1,4 +1,4 @@
-import { useEffect, useState, type ButtonHTMLAttributes, type ComponentType } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentType } from "react";
 import type { RepairState } from "./controller.js";
 import { PermissionRepairController } from "./controller.js";
 
@@ -11,6 +11,7 @@ export type PermissionRepairContributionProps = {
 
 const names: Record<string, string> = {
   "screen-capture": "Screen Recording",
+  "screen-recording": "Screen Recording",
   microphone: "Microphone",
   accessibility: "Accessibility",
   camera: "Camera",
@@ -19,12 +20,18 @@ const names: Record<string, string> = {
 
 export function PermissionRepairContribution({ controller, requestedIds, Button, close }: PermissionRepairContributionProps) {
   const [state, setState] = useState<RepairState>(controller.state);
+  const closeNotified = useRef(false);
+  const requestKey = requestedIds.join("\0");
   useEffect(() => {
     const off = controller.subscribe(setState);
     controller.activate(requestedIds);
-    return () => { off(); };
-  }, [controller, requestedIds]);
-  useEffect(() => { if (state.phase === "closed") close(); }, [state.phase, close]);
+    setState(controller.state);
+    return () => { off(); controller.cancel(); };
+  }, [controller, requestKey]);
+  useEffect(() => {
+    if (state.phase !== "closed") closeNotified.current = false;
+    else if (controller.state.phase === "closed" && !closeNotified.current) { closeNotified.current = true; close(); }
+  }, [state.phase, close, controller]);
 
   const snapshot = state.snapshot;
   const disconnected = !snapshot || snapshot.connection !== "connected";
@@ -38,9 +45,8 @@ export function PermissionRepairContribution({ controller, requestedIds, Button,
       {!disconnected && state.requestedIds.map(id => {
         const row = snapshot.readiness.requirements.find(item => item.id === id);
         const usable = row?.status === "granted" && row.usableNow && !row.relaunchNeeded;
-        const action = row?.status === "not-determined" && row.allowedRepairActions.includes("request-permission") ? "Request access"
-          : row?.status === "denied" && row.allowedRepairActions.includes("open-system-settings") ? "Open System Settings"
-            : row?.status === "granted" && row.relaunchNeeded && row.allowedRepairActions.includes("request-safe-relaunch") ? "Reopen Apparent" : null;
+        const command = controller.availableAction(id);
+        const action = command === "request-permission" ? "Request access" : command === "open-system-settings" ? "Open System Settings" : command === "request-safe-relaunch" ? "Reopen Apparent" : null;
         return <div className="permission-repair-row onboarding-requirement" key={id}>
           <strong>{names[id] ?? "Access"}</strong>
           <span>{!row ? "Unavailable" : row.relaunchNeeded ? "Reopen Apparent to use this access" : usable ? "Ready" : row.status === "denied" ? "Not allowed" : row.status === "not-determined" ? "Not set up" : "Not ready"}</span>
