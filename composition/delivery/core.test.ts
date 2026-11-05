@@ -42,7 +42,6 @@ test('catalog reports absent owners pending and blocks present owners without re
 })
 
 test('platform config native lane declares its complete source closure and composition architecture owner', () => {
-  assert(catalog(repo).owners.find(owner => owner.id === 'platform-config')?.inputs.includes('shared/contracts/'))
   const path = resolve(temp, 'platform-config-plan')
   for (const dir of ['composition/config/native', 'shared/config-native', '.cargo']) mkdirSync(resolve(path, dir), { recursive: true })
   writeFileSync(resolve(path, 'composition/config/native/delivery.json'), JSON.stringify({ ...owner, id: 'platform-config', kind: 'directory', language: 'native', package: 'composition/config/native', artifactPath: 'dist', inputs: ['composition/config/', 'shared/config-native/', '.cargo/'], targets: ['linux-x64', 'macos-x64'], stage: 'library' }))
@@ -52,11 +51,6 @@ test('platform config native lane declares its complete source closure and compo
   assert.equal(native.length, 2)
   assert(native.every(row => row.language === 'native' && row.kind === 'directory' && row.architecture_owner === 'composition'))
   assert.deepEqual(native.map(row => row.target), ['linux-x64', 'macos-x64'])
-})
-
-test('workflow push paths cover config producer, shared native input and Engine native source closure', () => {
-  const workflow = readFileSync(resolve(repo, workflowPath), 'utf8')
-  for (const path of ['composition/config/**', '.cargo/**', 'capture/engine/**']) assert(workflow.includes(`- '${path}'`), `workflow must trigger on ${path}`)
 })
 
 test('native Engine and SDK are independent lanes with the same architectural owner', () => {

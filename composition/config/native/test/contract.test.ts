@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { after, test } from 'node:test'
@@ -8,6 +8,14 @@ import { manifestFor, targetInfo, validateArtifact } from '../src/contract.ts'
 
 const temp = mkdtempSync(resolve(tmpdir(), 'config-native-contract-'))
 after(() => rmSync(temp, { recursive: true, force: true }))
+
+test('producer registration covers both native and typed client contract inputs', () => {
+  const registration = JSON.parse(readFileSync(new URL('../delivery.json', import.meta.url), 'utf8'))
+  assert.deepEqual(registration.inputs, ['composition/config/', 'shared/config-native/', 'shared/contracts/', '.cargo/'])
+  assert.deepEqual(registration.verify, ['verify'])
+  const workflow = readFileSync(new URL('../../../../.github/workflows/value-stream-delivery.yml', import.meta.url), 'utf8')
+  for (const path of ['composition/config/**', '.cargo/**', 'capture/engine/**']) assert(workflow.includes(`- '${path}'`), `workflow must trigger on ${path}`)
+})
 
 test('native artifact contract binds inventory, full SHA, target triple, bytes, protocol and executable mode', () => {
   const dir = resolve(temp, 'valid'); mkdirSync(dir)
