@@ -35,10 +35,12 @@ const targets: Record<OwnerTarget, { os: 'linux' | 'darwin'; triple: string }> =
 }
 
 export function validateTarget(value: string | undefined, hostOS = platform(), hostArch = arch()): { target: OwnerTarget; os: 'linux' | 'darwin'; triple: string } {
-  if (value !== 'linux-x64' && value !== 'macos-x64') throw new Error('OWNER_TARGET must be linux-x64 or macos-x64')
-  const selected = targets[value]
+  const localTarget = hostOS === 'linux' && hostArch === 'x64' ? 'linux-x64' : hostOS === 'darwin' && hostArch === 'x64' ? 'macos-x64' : undefined
+  const target = value ?? localTarget
+  if (target !== 'linux-x64' && target !== 'macos-x64') throw new Error('OWNER_TARGET must select linux-x64 or macos-x64 on a supported x64 host')
+  const selected = targets[target]
   if (selected.os !== hostOS || hostArch !== 'x64') throw new Error(`Cross compilation is not supported: ${value} requires its native x64 host`)
-  return { target: value, ...selected }
+  return { target, ...selected }
 }
 
 export function sha256(bytes: Buffer): string { return createHash('sha256').update(bytes).digest('hex') }
@@ -83,6 +85,7 @@ function rejectSymlinkTree(root: string, current = root) {
 }
 
 export function validateArtifact(directory: string, expectedTarget: OwnerTarget): NativeManifest {
+  if (lstatSync(directory).isSymbolicLink()) throw new Error('Artifact root must not be a symlink')
   const root = realpathSync(directory)
   if (!statSync(root).isDirectory()) throw new Error('Artifact is not a directory')
   rejectSymlinkTree(root)

@@ -16,9 +16,9 @@ npm run verify
 OWNER_TARGET=linux-x64 npm run build
 ```
 
-`OWNER_TARGET` is required by the producer job and accepts only `linux-x64` or
-`macos-x64`. Builds run only on the matching x64 host; no cross-compilation is
-claimed. Set `APPARENT_CARGO_OFFLINE=1` to require an already cached locked Rust
+Platform sets `OWNER_TARGET` to `linux-x64` or `macos-x64`; local builds may omit
+it to select the matching supported x64 host. Builds run only on the matching
+x64 host; no cross-compilation is claimed. Set `APPARENT_CARGO_OFFLINE=1` to require an already cached locked Rust
 dependency graph. CI should leave it unset so a cold runner may fetch the
 locked graph. `build` runs the locked staged capture Engine and provider Cargo
 tests, builds the release provider, verifies the output inventory, and exercises
