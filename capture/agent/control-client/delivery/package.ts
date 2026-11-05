@@ -1,10 +1,11 @@
 /** Produce the authenticated, target-specific capture-control component archive. */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { publishValidatedDirectory } from '../../../../shared/packaging/transaction.ts';
 
 const sha256 = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 const targets = ['x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu', 'x86_64-apple-darwin', 'aarch64-apple-darwin'];
@@ -28,6 +29,7 @@ function binaryTarget(bytes: Buffer) {
 export function pack(executable: string, source: string, target: string, destination: string) {
   assert(/^[a-f0-9]{40}$/.test(source) && targets.includes(target), 'Exact source and supported target required');
   assert.equal(run('git', ['rev-parse', 'HEAD']), source, 'Producer must run from its exact committed source');
+  assert.equal(run('git', ['status', '--porcelain', '--untracked-files=normal']), '', 'Clean committed source required');
   const stat = lstatSync(executable); assert(stat.isFile() && !stat.isSymbolicLink() && (stat.mode & 0o111), 'Regular executable required');
   const bytes = readFileSync(executable); assert.equal(binaryTarget(bytes), target, 'Executable target mismatch');
   const root = resolve('capture/agent/control-client');
@@ -48,8 +50,55 @@ export function pack(executable: string, source: string, target: string, destina
   return { archive, digest, manifest };
 }
 
+/** Stage only caller-authenticated component bytes into an exclusive app candidate. */
+export function stage(archive: string, expectedDigest: string, target: string, destination: string) {
+  assert(/^[a-f0-9]{64}$/.test(expectedDigest) && targets.includes(target), 'Authenticated digest and supported target required');
+  const snapshot = readFileSync(archive);
+  assert.equal(sha256(snapshot), expectedDigest, 'Capture client archive digest mismatch');
+  const output = resolve(destination);
+  assert(!existsSync(output), 'Capture client destination already exists');
+  const parent = lstatSync(dirname(output));
+  assert(parent.isDirectory() && !parent.isSymbolicLink() && (parent.mode & 0o022) === 0 &&
+    (process.getuid === undefined || parent.uid === process.getuid()), 'Trusted exclusive staging parent required');
+  const temporary = mkdtempSync(join(dirname(output), '.capture-client-stage-'));
+  chmodSync(temporary, 0o700);
+  try {
+    const input = join(temporary, 'input.tar.gz');
+    writeFileSync(input, snapshot, { mode: 0o600, flag: 'wx' });
+    const inventory = run('tar', ['-tzf', input]).trim().split('\n').sort();
+    assert.deepEqual(inventory, ['apparent-capture', 'manifest.json'], 'Unexpected capture client archive inventory');
+    assert(run('tar', ['-tvzf', input]).trim().split('\n').every(line => line.startsWith('-')), 'Only regular files accepted');
+    run('tar', ['-xzf', input, '-C', temporary]);
+    const executable = readFileSync(join(temporary, 'apparent-capture'));
+    const manifestBytes = readFileSync(join(temporary, 'manifest.json'));
+    const manifest = JSON.parse(manifestBytes.toString());
+    assert(manifest.schema === 1 && manifest.kind === 'agent-control-client' && manifest.protocol === 1 &&
+      manifest.executable === 'apparent-capture' && manifest.target === target &&
+      /^[a-f0-9]{40}$/.test(manifest.sourceSha) && /^[a-f0-9]{64}$/.test(manifest.inputsSha256) &&
+      Array.isArray(manifest.inputs) && manifest.inputs.length === 6 &&
+      manifest.inputs.map((item: any) => item.path).sort().join(',') === 'Cargo.lock,Cargo.toml,client.rs,lib.rs,main.rs,wire.rs' &&
+      manifest.inputs.every((item: any) => /^[a-f0-9]{64}$/.test(item.sha256)) &&
+      /^[a-f0-9]{64}$/.test(manifest.executableSha256) && Number.isSafeInteger(manifest.size),
+      'Invalid capture client manifest');
+    assert.equal(sha256(JSON.stringify(manifest.inputs)), manifest.inputsSha256, 'Component input digest mismatch');
+    assert.equal(binaryTarget(executable), target, 'Capture client executable target mismatch');
+    assert.equal(sha256(executable), manifest.executableSha256, 'Capture client executable digest mismatch');
+    assert.equal(executable.length, manifest.size, 'Capture client executable size mismatch');
+    const candidate = join(temporary, 'candidate');
+    mkdirSync(candidate, { mode: 0o700 });
+    writeFileSync(join(candidate, 'apparent-capture'), executable, { mode: 0o755, flag: 'wx' });
+    writeFileSync(join(candidate, 'manifest.json'), manifestBytes, { mode: 0o644, flag: 'wx' });
+    publishValidatedDirectory(candidate, output);
+    assert.deepEqual(readdirSync(output).sort(), ['apparent-capture', 'manifest.json']);
+    return manifest;
+  } finally {
+    rmSync(temporary, { recursive: true });
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const [executable, source, target, destination] = process.argv.slice(2);
-  assert(executable && source && target && destination, 'Usage: package.ts EXECUTABLE SOURCE_SHA TARGET NEW_OUTPUT');
-  console.log(JSON.stringify(pack(executable, source, target, destination)));
+  const [operation, ...args] = process.argv.slice(2);
+  if (operation === 'pack' && args.length === 4) console.log(JSON.stringify(pack(args[0], args[1], args[2], args[3])));
+  else if (operation === 'stage' && args.length === 4) console.log(JSON.stringify(stage(args[0], args[1], args[2], args[3])));
+  else throw new Error('Usage: package.ts pack EXECUTABLE SOURCE_SHA TARGET NEW_OUTPUT | stage ARCHIVE AUTHENTICATED_SHA256 TARGET NEW_DESTINATION');
 }
