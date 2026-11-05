@@ -11,6 +11,7 @@ const run = promisify(execFile);
 const scratch = await mkdtemp(path.join(tmpdir(), 'record-packed-'));
 const headless = path.join(scratch, 'headless');
 const ui = path.join(scratch, 'ui');
+const bundle = path.join(scratch, 'bundle');
 const root = fileURLToPath(new URL('../', import.meta.url));
 const tarball = path.join(scratch, 'apparent-record-0.1.0.tgz');
 
@@ -23,7 +24,7 @@ try {
   // The caller builds once before the smoke. Packing the resulting artifact does
   // not rerun its build; tarball installs below use normal lifecycle and peers.
   await run('npm', ['pack', '--ignore-scripts', '--pack-destination', scratch], { cwd: root });
-  await Promise.all([initConsumer(headless), initConsumer(ui)]);
+  await Promise.all([initConsumer(headless), initConsumer(ui), initConsumer(bundle)]);
 
   await run('npm', ['install', '--no-audit', '--no-fund', tarball], { cwd: headless });
   const headlessInstalled = path.join(headless, 'node_modules/@apparent/record');
@@ -65,6 +66,29 @@ try {
     console.log('headless packed runtime and declaration consumer passed');
   `], { cwd: headless });
   process.stdout.write(runtime.stdout);
+
+  // The canonical bundle subpath uses only the packed public SDK contract.
+  await run('npm', ['install', '--no-audit', '--no-fund', tarball, path.join(root, 'vendor/engine-sdk-0.3.1.tgz')], { cwd: bundle });
+  const bundleDeclarations = path.join(bundle, 'consumer.ts');
+  await writeFile(bundleDeclarations, `
+    import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators } from '@apparent/record/processing/bundle';
+    import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts } from '@apparent/engine-sdk/capture';
+    const validators: BundleValidators = { materials: validateMaterialsDocument, fact: validateFactFile };
+    const consume = (input: BundleAssemblyInput) => assembleCanonicalBundle(input, validators);
+    void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
+  `);
+  const bundleTsc = path.join(root, 'node_modules/typescript/bin/tsc');
+  await run(process.execPath, [bundleTsc, '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', bundleDeclarations], { cwd: bundle });
+  const bundleRuntime = await run(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { assembleCanonicalBundle } from '@apparent/record/processing/bundle';
+    import { validateMaterialsDocument, validateFactFile } from '@apparent/engine-sdk/capture';
+    assert.equal(typeof assembleCanonicalBundle, 'function');
+    assert.equal(typeof validateMaterialsDocument, 'function');
+    assert.equal(typeof validateFactFile, 'function');
+    console.log('packed canonical bundle runtime and SDK consumer passed');
+  `], { cwd: bundle });
+  process.stdout.write(bundleRuntime.stdout);
 
   // The UI consumer opts into the declared peers explicitly and exercises the
   // prebuilt component, stylesheet and font artifact.

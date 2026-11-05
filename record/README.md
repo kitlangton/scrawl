@@ -18,9 +18,47 @@ same client and job ID after decode rejection/timeout and requires SDK inspect o
 cancel reconciliation before another dispatch or cleanup. Assembly preserves
 supplied transcript, selected frames, typed notes/pins, target/device,
 session/context changes, interaction labels, marks and processing warnings.
-Window titles remain manifest-only. It does not select frames, write the
-canonical bundle or perform clipboard/link handoff; those adoption steps remain
-outstanding.
+Window titles remain manifest-only. The existing text formatter does not
+select frames, write files or perform clipboard/link handoff; those adoption
+steps remain outstanding.
+
+`@apparent/record/processing/bundle` exports `assembleCanonicalBundle`. It
+accepts detached materials manifest/payload bytes, supplied fact bytes, explicit
+persisted `createdAtMs` and canonical target admission facts, Record's selected
+frame/mark policy results, and exact sealed artifact bytes. By default it calls
+`validateMaterialsDocument` and `validateFactFile` from the public
+`@apparent/engine-sdk/capture` subpath; hosts may inject equivalent public SDK
+validators. It returns UTF-8 `apparent.json` and `summary.md` bytes, a
+deterministic versioned inventory with hashes/lengths and unavailable/empty
+collection states, plus the validated original materials/fact documents. It
+does not write or publish files, make a Saved claim, copy native materials,
+create a final destination, or perform clipboard/network/cleanup effects.
+
+The headless source install pins SDK 0.3.1 from the committed
+`vendor/engine-sdk-0.3.1.tgz` for development and declares `^0.3.1` as an
+optional peer. A host importing the bundle subpath must install that peer. The
+verified tarball SHA-256 is
+`1b605f06273f9c1a134b68b0ed233605b120813214914ca70ed0c8c5f0346f04`.
+
+Assembly requires at least one selected frame, one contact sheet, and exact
+sealed media references. It refuses stale capture/material/fact identities,
+missing or duplicate paths, escaping paths, mismatched bytes, and unordered
+frame indices/times. Validated source/invocation facts retain capture identity
+in the returned material/fact documents; canonical window snapshots/titles stay
+in `apparent.json`, while the existing summary formatter excludes titles.
+Context/session changes and all interaction variants are retained. Session
+destination fields such as `via` must be supplied as explicit Record admission
+metadata; SDK session IDs remain fact references and are not guessed into a
+routing destination. Frame reasons
+and marks need explicit canonical mappings; Record presentation marks alone do
+not contain enough geometry to make a v1 mark. Transcript
+segments without `endMs` require an explicit Record estimate policy; this
+policy estimates end at the next segment start or capture end and sets
+`estimated: true`. Accepted stroke surface transforms remain authoritative:
+non-empty strokes need an explicit Record-owned canonical v1 stroke mapping or
+assembly returns an exact unsupported error. This API is fixture-ready only;
+it does not decode raw materials, choose frames/marks, produce contact sheets,
+or establish native provenance/full-profile acceptance.
 
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 
