@@ -20,7 +20,9 @@ there is no automatic retry or guessed success. After transport failure, close
 the backend, construct a new one and read persisted state before deciding what
 to do next. Shutdown closes the child process; it does not cancel Engine capture.
 
-Run `npm ci`, `npm run typecheck` and `npm test` without Rust. Native producer
+First run `npm --prefix shared/contracts ci` from the repository root to build
+the linked contract package. In this directory, run `npm ci`, `npm run typecheck`
+and `npm test` without Rust. Native producer
 verification additionally sets `APPARENT_CONFIG_HOST_BIN` to the exact staged
 executable and runs `npm run test:native`. A passing transport fixture is not
 native durability or installed-app evidence. This package does not install a

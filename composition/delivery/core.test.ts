@@ -42,6 +42,7 @@ test('catalog reports absent owners pending and blocks present owners without re
 })
 
 test('platform config native lane declares its complete source closure and composition architecture owner', () => {
+  assert(catalog(repo).owners.find(owner => owner.id === 'platform-config')?.inputs.includes('shared/contracts/'))
   const path = resolve(temp, 'platform-config-plan')
   for (const dir of ['composition/config/native', 'shared/config-native', '.cargo']) mkdirSync(resolve(path, dir), { recursive: true })
   writeFileSync(resolve(path, 'composition/config/native/delivery.json'), JSON.stringify({ ...owner, id: 'platform-config', kind: 'directory', language: 'native', package: 'composition/config/native', artifactPath: 'dist', inputs: ['composition/config/', 'shared/config-native/', '.cargo/'], targets: ['linux-x64', 'macos-x64'], stage: 'library' }))

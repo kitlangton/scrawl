@@ -15,6 +15,9 @@ artifact is not installed or activated by this producer; routing, signing,
 notarization and packaged-app proof remain separate acceptance gates.
 
 Run `npm ci`, `npm run typecheck` and `npm run contract` for producer contracts.
+CI's `npm run verify` installs the locked shared contract and client dependencies,
+then checks the TypeScript client and its transport tests as well. It invokes no
+Rust; Cargo is confined to the explicit native `build` step.
 From a clean committed checkout, run `OWNER_TARGET=linux-x64 npm run build`
 on Linux x64 or `OWNER_TARGET=macos-x64 npm run build` on macOS x64. Set
 `APPARENT_CARGO_OFFLINE=1` only when its complete locked graph is cached.
