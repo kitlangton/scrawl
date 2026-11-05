@@ -3,8 +3,8 @@ import type { Env as ServiceEnv } from '../../../service/src/types.ts'
 
 interface Env extends ServiceEnv { ASSETS: Fetcher }
 
-// The deployed hosted.tryapparent.com service used its root as both API and
-// site origin. Reuse one identity-profile object per runtime environment, and
+// The legacy API used a root API URL but already trusted the configured site
+// origins. Preserve that allowlist. Reuse one profile per runtime environment and
 // replace it whenever any service input changes (especially bindings/secrets).
 const legacyProfiles = new WeakMap<object, { inputs: unknown[]; env: ServiceEnv }>()
 function legacyProfile(env: Env): ServiceEnv {
@@ -15,7 +15,7 @@ function legacyProfile(env: Env): ServiceEnv {
     env.POSTHOG_ENVIRONMENT, env.POSTHOG_EXCLUDED_ACCOUNT_IDS]
   const cached = legacyProfiles.get(env)
   if (cached && inputs.every((value, index) => value === cached.inputs[index])) return cached.env
-  const profile = { ...env, API_ORIGIN: "https://hosted.tryapparent.com", SITE_ORIGIN: "https://hosted.tryapparent.com", LEGACY_SITE_ORIGIN: undefined }
+  const profile = { ...env, API_ORIGIN: "https://hosted.tryapparent.com" }
   legacyProfiles.set(env, { inputs, env: profile })
   return profile
 }
@@ -57,7 +57,7 @@ export default {
     // Keep the old API contract on its exact historical host. The original
     // Request (including method, body, cookies, Origin and auth headers) goes
     // directly to the existing service handler under its legacy origin profile.
-    if (url.hostname === "hosted.tryapparent.com" && url.protocol === "https:" && (
+    if (url.origin === "https://hosted.tryapparent.com" && (
       path === "/v1" || path.startsWith("/v1/") || path === "/auth" || path.startsWith("/auth/")
       || path.startsWith("/s/") || ["/share-view.js", "/share-view.css", "/share-wordmark.svg", "/share-font.ttf"].includes(path)
     )) return service.fetch(request, legacyProfile(env), context)
