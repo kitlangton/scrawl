@@ -13,3 +13,25 @@ Run `npm ci`, `npm run typecheck`, `npm test`, and `npm run build` in this direc
 ## Adoption limits
 
 The repository's `apparent capture` CLI already implements GUI start/stop/cancel/inspect control over a same-user Unix socket on macOS/Linux. A separate readiness query is not currently exposed. This package does not yet provide that process transport, Electron main/preload wiring, or an adopted React surface. Electron needs a host-owned adapter that invokes the existing Rust GUI control path, obtains native readiness from an accepted Engine capability, and maps JSON receipts/events into `EngineClient`. The Engine's native readiness and capture lifecycle remain authoritative. Until that adapter and platform seam proof land, this package is a tested workflow prerequisite and makes no production recording-availability claim.
+
+## Asynchronous ownership
+
+Start reserves its request synchronously in `checking`, before querying readiness.
+Once submitted, that ID cannot be reused within the controller. Only one mutation
+may be in flight; competing commands are refused by returning the current state.
+During a pending start RPC, Cancel is refused until the bounded adapter call
+settles; an admitted `starting` capture can then be cancelled. Adapters must bound
+all calls. A timeout never proves that a native capture ended.
+
+Ambiguous Start/Cancel replies retain the ID in `uncertain`; `reconcile` inspects
+that same capture before allowing another start. Stop transport failure retains
+`stop-failed` and supports inspection or an explicit same-ID retry. Matching Engine
+events supersede pending replies, including failures; phase regressions are
+ignored. Disposal detaches observation and suppresses pending state updates; it
+is not a capture-stop operation. The host must resolve active capture ownership
+before disposing a controller or quitting.
+
+The adapter must translate provider facts: `failed`/`rejected` are terminal only
+when the Engine confirms that this request owns no live capture. Transport errors
+must reject the call rather than manufacture terminal receipts. The current
+consumer interface is not a newly published Engine protocol or native proof.
