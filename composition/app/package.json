@@ -1,0 +1,35 @@
+{
+  "name": "@apparent/app-shell",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/assembly.test.ts",
+    "check": "npm --prefix ../../shared/contracts run build && npm --prefix ../../shared/contracts run typecheck && npm --prefix ../../shared/contracts test && node scripts/check-installed.ts && npm run typecheck && npm test",
+    "build:shell": "node scripts/build.ts shell",
+    "build:alpha": "node scripts/build.ts alpha",
+    "build:beta": "node scripts/build.ts beta",
+    "assemble": "node scripts/assemble.ts dist/shell dist/app dist/artifacts/alpha dist/artifacts/beta",
+    "build": "npm run build:shell && npm run build:alpha && npm run build:beta && npm run assemble",
+    "start": "electron dist/app",
+    "package": "node scripts/package.ts dist/app dist/packages",
+    "test:electron": "node --experimental-strip-types --test tests/electron.test.ts"
+  },
+  "dependencies": {
+    "@apparent/app-contracts": "file:../../shared/contracts",
+    "@apparent/ui": "file:../../shared/ui",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "@playwright/test": "1.56.1",
+    "@types/node": "22.19.1",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
+    "electron": "45.2.1",
+    "esbuild": "0.25.12",
+    "typescript": "5.9.3"
+  }
+}

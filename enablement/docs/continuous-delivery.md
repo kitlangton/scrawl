@@ -338,6 +338,14 @@ dependencies as those workflows; they do not install OS dependencies. The Linux
 Desktop policy, not proof of Mac or Linux OS effects. Run heavy local commands
 through the existing build runner.
 
+App Shell foundation checks are selected for changes under `composition/app/`,
+`shared/contracts/` or `shared/ui/`. Feature pushes run `npm run check` in
+`composition/app/` only when its locked dependencies are already installed; the
+hook never installs them. Main platform verification runs a separate Linux
+foundation job with Node 22, `npm ci`, the same check and the synthetic Electron
+test under Xvfb. This job is independent of Rust verification and does not route
+the installed application or prove native OS behavior.
+
 Client edits also select Capture: root tests intentionally reuse client scenarios
 with the real AppConfig provider. Renderer edits select Capture for Rust bridge
 integration. Shared UI feeds Desktop and service recipient UI. Connect web feeds

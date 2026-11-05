@@ -18,6 +18,63 @@ spec.loader.exec_module(verification)
 
 
 class SelectionTests(unittest.TestCase):
+    def test_app_shell_changed_tree_runs_owner_check_without_cargo(self):
+        with patch.object(verification, "run_app_shell_check") as check, patch.object(
+                verification.subprocess, "run") as run:
+            verification.run_selected_checks(verification.select(["composition/app/src/renderer.tsx"]))
+        check.assert_called_once_with()
+        self.assertFalse(any("cargo" in str(call.args[0]) for call in run.call_args_list))
+
+    def test_app_shell_foundation_closure_selects_check_without_narrowing_shared_ui(self):
+        for path in (
+            "composition/app/package.json", "composition/app/src/main.tsx",
+            "composition/app/test/independence.test.ts",
+            "shared/contracts/src/index.ts", "shared/contracts/test/manifest.test.ts",
+        ):
+            with self.subTest(path=path):
+                selected = verification.select([path])
+                self.assertTrue(selected["app_shell"])
+                self.assertFalse(selected["root"])
+        shared_ui = verification.select(["shared/ui/src/button.tsx"])
+        self.assertTrue(shared_ui["app_shell"])
+        self.assertTrue(shared_ui["root"])
+        self.assertFalse(verification.select(["composition/cli.rs"])["app_shell"])
+
+    def test_app_shell_pr_check_runs_installed_package_script_without_installing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "composition/app"
+            package.mkdir(parents=True)
+            (package / "package.json").write_text('{"devDependencies":{"typescript":"1"}}')
+            (package / "package-lock.json").touch()
+            (package / "tsconfig.json").touch()
+            dependency = package / "node_modules/typescript/package.json"
+            dependency.parent.mkdir(parents=True)
+            dependency.touch()
+            with patch.object(verification, "ROOT", root), patch.object(
+                    verification.subprocess, "run") as run:
+                verification.run_pr_checks({"paths": ["composition/app/src/main.tsx"], "app_shell": True})
+            calls = [call.args[0] for call in run.call_args_list]
+            self.assertIn(["npm", "run", "check"], calls)
+            self.assertFalse(any(command[:2] == ["npm", "ci"] for command in calls))
+            check = next(call for call in run.call_args_list if call.args[0] == ["npm", "run", "check"])
+            self.assertEqual(check.kwargs["cwd"], package)
+            self.assertTrue(check.kwargs["check"])
+
+    def test_app_shell_pr_check_fails_closed_when_dependencies_are_not_installed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "composition/app"
+            package.mkdir(parents=True)
+            (package / "package.json").write_text('{"dependencies":{"react":"1"}}')
+            (package / "package-lock.json").touch()
+            (package / "tsconfig.json").touch()
+            with patch.object(verification, "ROOT", root), patch.object(
+                    verification.subprocess, "run") as run:
+                with self.assertRaisesRegex(RuntimeError, "the hook never installs dependencies"):
+                    verification.run_app_shell_check()
+                run.assert_not_called()
+
     def test_connect_client_typescript_inputs_select_package_tests_without_narrowing_rust(self):
         prefix = "connect/client/typescript/"
         selected = (
@@ -129,10 +186,12 @@ class SelectionTests(unittest.TestCase):
         for paths in ([], ["capture/desktop/native/linux.rs"]):
             with self.subTest(paths=paths), patch.object(verification.subprocess, "run"), patch.object(
                     verification, "run_connect_client_typescript_tests"), patch.object(
-                    verification, "run_public_site_build") as build:
+                    verification, "run_public_site_build") as build, patch.object(
+                    verification, "run_app_shell_check") as app_check:
                 selection = verification.select(paths, history_known=False)
                 verification.run_pr_checks(selection)
                 build.assert_called_once_with()
+                app_check.assert_called_once_with()
         self.assertTrue(verification.public_site_build_selected([]))
 
     def test_public_site_build_runs_declared_build_and_only_after_locked_dependencies_exist(self):
@@ -194,7 +253,8 @@ class SelectionTests(unittest.TestCase):
                 target.touch()
             for name in inputs + ["public/site/docs/features.md"]:
                 with self.subTest(path=name), patch.object(verification, "ROOT", root), patch.object(
-                        verification.subprocess, "run") as run:
+                        verification.subprocess, "run") as run, patch.object(
+                        verification, "run_app_shell_check"):
                     verification.run_pr_checks({"paths": [name]})
                     selected = any(call.args[0] == ["npm", "run", "check:onboarding"]
                                    for call in run.call_args_list)
@@ -215,7 +275,8 @@ class SelectionTests(unittest.TestCase):
             args = ['verification.py', '--base', 'unknown', '--run']
             if suite != 'all': args += ['--suite', suite]
             with self.subTest(suite=suite), patch.object(verification.sys, 'argv', args), patch.object(
-                    verification, 'plan', return_value=verification.select(['build.rs', 'connect/web/package.json'])), patch.object(
+                    verification, 'plan', return_value=verification.select(['build.rs', 'connect/web/package.json', 'shared/contracts/src/index.ts'])), patch.object(
+                    verification, 'run_app_shell_check') as app_check, patch.object(
                     verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout='test result: ok. 1 passed; 0 failed\n')) as run:
                 verification.main()
                 commands = [call.args[0] for call in run.call_args_list]
@@ -223,6 +284,7 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(any(command[0] == 'bun' for command in commands), browser)
                 self.assertEqual(['node', 'scripts/test-browser.mjs'] in commands, browser)
                 self.assertEqual(any('capture/engine/Cargo.toml' in command for command in commands), cargo)
+                self.assertEqual(app_check.call_count, 1 if suite == 'all' else 0)
 
     def test_receipt_wrapper_preserves_explicit_suite(self):
         args = ['verification.py', '--base', 'unknown', '--run', '--online',

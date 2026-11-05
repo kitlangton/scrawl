@@ -1,0 +1,28 @@
+{
+  "name": "@apparent/app-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": ["dist", "src", "tsconfig.build.json"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "react": "19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.0",
+    "@types/react": "19.2.2",
+    "typescript": "5.9.3"
+  }
+}
