@@ -1,5 +1,6 @@
 """Selector contracts and real Git deltas; no compiler/native work in fixtures."""
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -18,6 +19,70 @@ spec.loader.exec_module(verification)
 
 
 class SelectionTests(unittest.TestCase):
+    def test_top_level_onboarding_isolated_inputs_and_unknown_fallback(self):
+        for path in verification.ONBOARDING_PACKAGE_INPUTS:
+            selected = verification.select([path])
+            self.assertTrue(selected['onboarding_package'], path)
+            self.assertEqual(selected['root'], path in verification.ONBOARDING_PACKAGE_BUILD_INPUTS, path)
+            self.assertEqual(selected['engine'], path in verification.ONBOARDING_PACKAGE_BUILD_INPUTS, path)
+        for paths in (['onboarding/native.rs'], ['onboarding/src/new.ts'],
+                      ['onboarding/src/controller.ts', 'build.rs']):
+            selected = verification.select(paths)
+            self.assertTrue(selected['onboarding_package'])
+            self.assertTrue(selected['root'])
+        self.assertTrue(verification.select([], history_known=False)['onboarding_package'])
+        # Legacy shared frontend manifests must retain their original broad lane.
+        self.assertTrue(verification.select(['capture/desktop/ui/frontend/package.json'])['root'])
+
+    def test_top_level_onboarding_runs_its_own_checks_without_cargo(self):
+        selection = verification.select(['onboarding/src/controller.ts'])
+        with patch.object(verification, 'run_onboarding_package_check') as owner, patch.object(verification.subprocess, 'run') as commands:
+            verification.run_selected_checks(selection)
+        owner.assert_called_once_with()
+        self.assertFalse(any(call.args[0][0] == 'cargo' for call in commands.call_args_list))
+
+    def test_top_level_onboarding_preflight_fails_closed_then_executes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = SCRIPT.parents[1]
+            for path in verification.ONBOARDING_PACKAGE_INPUTS:
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((source / path).read_bytes())
+            package = root / 'onboarding'
+            manifest = json.loads((package / 'package.json').read_text())
+            dependencies = {**manifest.get('dependencies', {}), **manifest.get('devDependencies', {})}
+            lock = json.loads((package / 'package-lock.json').read_text())
+            with patch.object(verification, 'ROOT', root), patch.object(verification.subprocess, 'run') as run:
+                with self.assertRaisesRegex(RuntimeError, 'npm ci in onboarding'):
+                    verification.run_onboarding_package_check()
+                run.assert_not_called()
+                for name in dependencies:
+                    target = package / 'node_modules' / name / 'package.json'
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(json.dumps({'version': lock['packages']['node_modules/' + name]['version']}))
+                (package / 'node_modules/.package-lock.json').write_text(json.dumps(lock))
+                verification.run_onboarding_package_check()
+                self.assertEqual([call.args[0] for call in run.call_args_list], [['npm', 'run', 'typecheck'], ['npm', 'test']])
+                self.assertTrue(all(call.kwargs['cwd'] == package and call.kwargs['check'] for call in run.call_args_list))
+                run.reset_mock()
+                (package / 'node_modules/.package-lock.json').write_text('{}')
+                with self.assertRaisesRegex(RuntimeError, 'stale or missing'):
+                    verification.run_onboarding_package_check()
+                run.assert_not_called()
+                (package / 'node_modules/.package-lock.json').write_text(json.dumps(lock))
+                artifact = package / 'vendor/record-0.1.0-afd73fb.tgz'
+                original_artifact = artifact.read_bytes()
+                artifact.write_bytes(b'changed public artifact')
+                with self.assertRaisesRegex(RuntimeError, 'stale or missing'):
+                    verification.run_onboarding_package_check()
+                run.assert_not_called()
+                artifact.write_bytes(original_artifact)
+                (package / 'src/controller.ts').unlink()
+                with self.assertRaisesRegex(RuntimeError, 'missing or deleted'):
+                    verification.run_onboarding_package_check()
+                run.assert_not_called()
+
     def test_record_package_and_pill_consumer_select_owner_checks_without_cargo(self):
         paths = [
             "record/package.json", "record/src/ui/recording-pill.tsx",
@@ -362,12 +427,14 @@ class SelectionTests(unittest.TestCase):
                     verification, "run_connect_client_typescript_tests"), patch.object(
                     verification, "run_public_site_build") as build, patch.object(
                     verification, "run_app_shell_check") as app_check, patch.object(
-                    verification, "run_record_typescript_check") as record_check:
+                    verification, "run_record_typescript_check") as record_check, patch.object(
+                    verification, "run_onboarding_package_check") as onboarding_check:
                 selection = verification.select(paths, history_known=False)
                 verification.run_pr_checks(selection)
                 build.assert_called_once_with()
                 app_check.assert_called_once_with()
                 record_check.assert_called_once_with()
+                onboarding_check.assert_called_once_with()
         self.assertTrue(verification.public_site_build_selected([]))
 
     def test_public_site_build_runs_declared_build_and_only_after_locked_dependencies_exist(self):

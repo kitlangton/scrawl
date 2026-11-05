@@ -88,7 +88,8 @@ class TempPreflightTests(unittest.TestCase):
                 verification, 'run_public_site_build') as public_build, patch.object(
                 verification, 'run_connect_client_typescript_tests') as client_tests, patch.object(
                 verification, 'run_app_shell_check') as app_check, patch.object(
-                verification, 'run_record_typescript_check') as record_check:
+                verification, 'run_record_typescript_check') as record_check, patch.object(
+                verification, 'run_onboarding_package_check') as onboarding_check:
             verification.run_pr_checks()
         public_build.assert_called_once_with()  # Unknown history includes Public feedback.
         client_tests.assert_called_once_with()  # Keep owner checks selected without live dependency setup.
@@ -104,6 +105,7 @@ class TempPreflightTests(unittest.TestCase):
                                     'test_temp_preflight.py', 'test_owner_lanes.py'])
         app_check.assert_called_once_with()
         record_check.assert_called_once_with()
+        onboarding_check.assert_called_once_with()
         self.assertTrue(all(call.kwargs['check'] for call in run.call_args_list))
 
     def test_rejection_precedes_all_subprocesses(self):

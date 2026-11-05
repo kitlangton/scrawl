@@ -180,6 +180,8 @@ function validateManifest(value: any): asserts value is Record<string, any> {
     throw new Error('Invalid bundle: malformed context');
   for (const key of ['note', 'source', 'audio', 'imageQualityWarning'])
     if (value[key] !== undefined && value[key] !== null && typeof value[key] !== 'string') throw new Error(`Invalid bundle: malformed ${key}`);
+  if (value.video !== undefined && value.video !== null && !safeReference(value.video)) throw new Error('Invalid bundle: unsafe video reference');
+  if (value.videoOffsetMs !== undefined && (!Number.isSafeInteger(value.videoOffsetMs) || value.videoOffsetMs < 0)) throw new Error('Invalid bundle: malformed video clock offset');
   if (value.transcript.missing !== undefined && value.transcript.missing !== null &&
       (!object(value.transcript.missing) || typeof value.transcript.missing.reason !== 'string'))
     throw new Error('Invalid bundle: malformed transcript warning');
