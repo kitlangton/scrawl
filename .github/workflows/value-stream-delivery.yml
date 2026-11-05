@@ -27,6 +27,10 @@ on:
       - '.github/actions/runtime-budget/**'
       - 'enablement/verification/workflow-budget.ts'
   workflow_dispatch:
+  workflow_run:
+    workflows: [Connect producer]
+    branches: [main]
+    types: [completed]
 
 permissions:
   contents: read
@@ -40,7 +44,7 @@ concurrency:
 jobs:
   plan:
     # The agent whose run hits the limit owns optimization; never raise it.
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'workflow_run' && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     outputs:
@@ -59,7 +63,7 @@ jobs:
   contracts:
     # The agent whose run hits the limit owns optimization; never raise it.
     name: Delivery contracts
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'workflow_run' && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -212,12 +216,210 @@ jobs:
             sudo unlink "$RUNNER_TEMP/apparent-foundation-chrome-sandbox"
           fi
 
+  stream-public:
+    # The agent whose run hits the limit owns optimization; never raise it.
+    name: stream (${{ matrix.id }}, ${{ matrix.target }})
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: public
+            target: web
+            runner: ubuntu-24.04
+            kind: directory
+            stage: website
+            language: typescript
+            packageManager: bun
+            architecture_owner: ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.target == 'web' && 10 || 15 }}
+    outputs:
+      artifact-name: stream-public-web-${{ steps.admit.outputs.input_digest }}
+      input-digest: ${{ steps.admit.outputs.input_digest }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    env:
+      OWNER_ID: ${{ matrix.id }}
+      OWNER_TARGET: ${{ matrix.target }}
+      PUBLIC_POSTHOG_ENABLED: ${{ vars.PUBLIC_POSTHOG_ENABLED || 'true' }}
+      PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
+      PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
+      PUBLIC_POSTHOG_ENVIRONMENT: production
+      VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+      - name: Validate the exact Public candidate
+        run: node --experimental-strip-types enablement/verification/web/candidate.ts
+      - name: Public delivery and shared architecture contracts
+        run: |
+          node --experimental-strip-types --test composition/delivery/*.test.ts
+          npm --prefix composition/architecture ci --ignore-scripts
+          npm --prefix composition/architecture run typecheck
+          npm --prefix composition/architecture test
+          npm --prefix composition/architecture run check -- --owner shared --owner composition
+      - name: Admit an unchanged verified component or request a fresh build
+        id: admit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types composition/delivery/cli.ts admit "$OWNER_ID" "$OWNER_TARGET"
+      - name: Guard TypeScript owners against native source compilation
+        if: steps.admit.outputs.reuse != 'true' && matrix.language != 'native'
+        shell: bash
+        run: |
+          mkdir "$RUNNER_TEMP/value-stream-no-rust"
+          for tool in cargo rustc; do
+            printf '#!/bin/sh\necho "Rust compilation is outside this owner contract" >&2\nexit 97\n' > "$RUNNER_TEMP/value-stream-no-rust/$tool"
+            chmod 755 "$RUNNER_TEMP/value-stream-no-rust/$tool"
+          done
+          printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
+      - name: Retrieve and verify the admitted component
+        if: steps.admit.outputs.reuse == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRIOR_ARTIFACT: ${{ steps.admit.outputs.prior_artifact_id }}
+          PRIOR_SHA: ${{ steps.admit.outputs.prior_source_sha }}
+          PRIOR_RUN: ${{ steps.admit.outputs.prior_run_id }}
+          PRIOR_ATTEMPT: ${{ steps.admit.outputs.prior_run_attempt }}
+          INPUT_DIGEST: ${{ steps.admit.outputs.input_digest }}
+        shell: bash
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$PRIOR_ARTIFACT/zip" > "$RUNNER_TEMP/prior-component.zip"
+          node --experimental-strip-types composition/delivery/cli.ts reuse "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/prior-component.zip" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST" "$PRIOR_SHA" "$PRIOR_ARTIFACT" "$PRIOR_RUN" "$PRIOR_ATTEMPT"
+      - uses: oven-sh/setup-bun@v2
+        if: steps.admit.outputs.reuse != 'true' && matrix.packageManager == 'bun'
+        with:
+          bun-version: '1.3.10'
+      - name: Independently install, verify and build the owner artifact
+        if: steps.admit.outputs.reuse != 'true'
+        run: node --experimental-strip-types composition/delivery/cli.ts build "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload"
+      - name: Seal the verified component for downstream assembly
+        if: steps.admit.outputs.reuse != 'true'
+        env:
+          INPUT_DIGEST: ${{ steps.admit.outputs.input_digest }}
+        run: node --experimental-strip-types composition/delivery/cli.ts seal "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ runner.temp }}/stream-output/component.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stream-${{ matrix.id }}-${{ matrix.target }}-${{ steps.admit.outputs.input_digest }}
+          path: ${{ runner.temp }}/stream-output/
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    name: deploy (public, web)
+    needs: stream-public
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && vars.WEBSITE_CD_ENABLED == 'true'
+    concurrency:
+      group: website-production-eligible
+      cancel-in-progress: false
+    environment:
+      name: website-production
+      url: https://app.tryapparent.com
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CONNECT_BROWSER_ARTIFACT: ${{ github.workspace }}/.build/connect-browser/dist
+      PUBLIC_POSTHOG_ENABLED: ${{ vars.PUBLIC_POSTHOG_ENABLED || 'true' }}
+      PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
+      PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
+      PUBLIC_POSTHOG_ENVIRONMENT: production
+      VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
+    steps:
+      - name: Verification runtime budget and ownership
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: echo '10 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - name: Test publication contracts
+        run: |
+          node --experimental-strip-types --test enablement/verification/web/*.test.ts
+      - name: Install locked website dependencies and browser
+        working-directory: public/site
+        run: |
+          bun install --frozen-lockfile
+          ./node_modules/.bin/playwright-core install --with-deps chromium firefox
+          echo "CHROME_PATH=$(node --input-type=module -e 'import {chromium} from "playwright-core"; console.log(chromium.executablePath())')" >> "$GITHUB_ENV"
+      - name: Consume verified immutable Connect browser artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types public/site/scripts/connect/artifact.ts .build/connect-browser
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.stream-public.outputs.artifact-name }}
+          path: .build/public-component
+      - name: Consume this run's verified Public component
+        env:
+          PUBLIC_COMPONENT_INPUT_DIGEST: ${{ needs.stream-public.outputs.input-digest }}
+        run: node --experimental-strip-types public/site/scripts/cd/stream-artifact.ts --current .build/public-component .build/public-artifact
+      - name: Compose independently verified Public and Connect bytes
+        working-directory: public/site
+        run: |
+          cp -a "$GITHUB_WORKSPACE/.build/public-artifact" dist-apparent
+          node scripts/connect/compose-connect.ts
+      - name: Prepare source-built Pages artifact
+        working-directory: public/site
+        run: |
+          node --test scripts/connect/artifact*.test.ts scripts/connect/test-compose-connect.ts scripts/pages/test-pages-package.ts scripts/pages/test-pages-video.ts
+          node scripts/pages/prepare-pages.ts
+          COMPOSE_PUBLIC_INPUT="$GITHUB_WORKSPACE/.build/public-artifact" node scripts/site-build/verify-composed.ts
+          PUBLIC_THEME_ARTIFACT=public/site/dist-apparent THEME_SURFACES=public node ../../shared/ui/test/appearance.mjs
+          node scripts/pages/prepare-pages-video.ts
+          SITE_ARTIFACT=dist-apparent node --test scripts/pages/test-public-homepage.ts scripts/connect/composed-browser.test.ts
+          node scripts/cd/publish-pages.ts seal ${{ github.sha }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website-${{ github.sha }}
+          path: .build/website/
+          if-no-files-found: error
+          # The checked public demos use .local-media; do not drop their assets.
+          include-hidden-files: true
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website-connect-input-${{ github.sha }}
+          path: .build/connect-browser-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish checked main to Cloudflare Pages (never Clanker or the Worker)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WEBSITE_PAGES_API_TOKEN: ${{ secrets.WEBSITE_PAGES_API_TOKEN }}
+        run: GITHUB_SHA="${{ github.sha }}" node public/site/scripts/cd/publish-pages.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: website-deployment-receipt
+          path: website-receipt.json
+          if-no-files-found: ignore
+
   runtime-budget:
     name: Workflow runtime budget
     permissions:
       contents: read
       actions: read
-    needs: [plan, contracts, stream]
+    needs: [plan, contracts, stream, stream-public, deploy]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 15
