@@ -28,10 +28,12 @@
     "prepack": "npm run build"
   },
   "peerDependencies": {
+    "@apparent/app-contracts": "0.1.0",
     "@apparent/record": "0.1.0",
     "react": "^19.2.0"
   },
   "peerDependenciesMeta": {
+    "@apparent/app-contracts": { "optional": true },
     "@apparent/record": {
       "optional": true
     }
@@ -46,6 +48,7 @@
     "jsdom": "^26.1.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "@apparent/app-contracts": "file:vendor/apparent-app-contracts-0.1.0.tgz"
   }
 }
