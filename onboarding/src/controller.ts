@@ -16,12 +16,29 @@ const eligiblePracticeCapture = (snapshot: CapabilitySnapshot | null, baseline: 
 export class OnboardingController {
   #state: ControllerState = { progress: initialProgress(), revision: 0, snapshot: null, error: null, saving: false, publication: "confirmed", command: "idle" };
   #listeners = new Set<(state: ControllerState) => void>(); #unsubscribe: () => void; #disposed = false; #op = 0; #lastEpoch: string | null = null;
+  #loaded = false;
+  #confirmedPen: string | null = null;
   constructor(private readonly deps: OnboardingDependencies) {
     this.#unsubscribe = deps.record.observe(snapshot => this.observe(snapshot));
   }
   get state(): ControllerState { return this.#state; }
   subscribe(fn: (state: ControllerState) => void): () => void { this.#listeners.add(fn); return () => this.#listeners.delete(fn); }
-  async load(): Promise<ControllerState> { const op = ++this.#op; try { const snap = await this.deps.progress.read(); if (this.#disposed || op !== this.#op) return this.#state; let progress = normalizeProgress(snap.value); if (progress.stage === "practice-start" && !progress.practiceBaselineIds.length) progress = { ...progress, practiceBaselineIds: this.#state.snapshot?.captures.map(c => c.captureId) ?? [] }; this.set({ ...this.#state, progress, revision: snap.revision, publication: "confirmed", error: null }); } catch (error) { if (!this.#disposed && op === this.#op) this.fail(error instanceof Error ? error.message : "Setup progress could not be loaded."); } return this.#state; }
+  async load(): Promise<ControllerState> {
+    if (this.#disposed || this.#state.saving) return this.#state;
+    const op = ++this.#op;
+    try {
+      const snap = await this.deps.progress.read();
+      if (this.#disposed || op !== this.#op) return this.#state;
+      let progress = normalizeProgress(snap.value);
+      if (progress.stage === "practice-start" && !progress.practiceBaselineIds.length) progress = { ...progress, practiceBaselineIds: this.#state.snapshot?.captures.map(c => c.captureId) ?? [] };
+      this.#loaded = true;
+      this.set({ ...this.#state, progress, revision: snap.revision, publication: "confirmed", error: null });
+      if (this.#state.snapshot) this.advanceObservedFacts(this.#state.snapshot);
+    } catch (error) {
+      if (!this.#disposed && op === this.#op) this.set({ ...this.#state, publication: "unknown", error: error instanceof Error ? error.message : "Setup progress could not be loaded." });
+    }
+    return this.#state;
+  }
   dispose(): void { this.#disposed = true; this.#op++; this.#unsubscribe(); this.#listeners.clear(); }
   async refresh(): Promise<CommandResult | null> { return this.execute({ type: "refresh" }); }
   async repair(type: "request-permission" | "open-system-settings", requirementId: string): Promise<CommandResult | null> { return this.execute({ type, requirementId }); }
@@ -33,12 +50,15 @@ export class OnboardingController {
   async openDesktopShortcutConfig(): Promise<CommandResult | null> { return this.execute({ type: "shortcut-open-desktop-config" }); }
   async retryPracticeCopy(): Promise<CommandResult | null> { const captureId = this.#state.progress.attemptId; if (!captureId || this.#state.progress.stage !== "preparing") return null; const fact = this.#state.snapshot?.captures.find(c => c.captureId === captureId); if (fact?.phase !== "saved") return null; return this.execute({ type: "copy-local", captureId }); }
   async selectPen(value: string): Promise<boolean> {
+    this.#confirmedPen = null;
     const result = await this.execute({ type: "select-pen", value });
     if (result?.status !== "applied" || result.snapshot.pen.effective !== value) { this.fail(result?.status === "outcome-unknown" ? "Your pen choice may not have been saved. Check the current choice before trying again." : result?.status === "refused" ? result.reason : "Your pen choice could not be confirmed. Try again."); return false; }
+    if (this.#disposed || this.#state.snapshot?.pen.effective !== value) return false;
+    this.#confirmedPen = value;
     return true;
   }
   async completePenSelection(): Promise<ControllerState> {
-    if (this.#state.progress.stage !== "pen" || !this.#state.snapshot?.pen.effective) return this.#state;
+    if (this.#disposed || this.#state.saving || this.#state.publication !== "confirmed" || this.#state.command === "unknown" || this.#state.progress.status === "deferred" || this.#state.progress.stage !== "pen" || !this.#confirmedPen || this.#state.snapshot?.connection !== "connected" || this.#state.snapshot.pen.effective !== this.#confirmedPen) return this.#state;
     return this.persist({ ...this.#state.progress, status: "in-progress", stage: "permissions" });
   }
   async dispatch(command: Command): Promise<ControllerState> {
@@ -49,10 +69,12 @@ export class OnboardingController {
     if (command === "refresh") { await this.refresh(); return this.#state; }
     if (command === "defer") return this.persist({ ...p, status: "deferred" });
     if (command === "reopen") return this.persist({ ...p, status: "in-progress", stage: p.status === "completed" ? "welcome" : p.stage, attemptId: p.status === "completed" ? null : p.attemptId, practiceBaselineIds: p.status === "completed" ? [] : p.practiceBaselineIds, manualPasteConfirmed: p.status === "completed" ? false : p.manualPasteConfirmed });
+    if (p.status === "deferred" || p.status === "completed") return this.#state;
     if (command === "manual-paste-confirm") { if (p.stage !== "paste") return this.#state; return this.persist({ ...p, manualPasteConfirmed: true, stage: "locate" }); }
     if (command === "retry") { if (this.#state.publication === "unknown") return this.load(); if (!this.#state.error) return this.#state; return this.persist(p); }
     if (command === "back") { if (stages.indexOf(p.stage) >= stages.indexOf("screen")) return this.#state; const i = stages.indexOf(p.stage); return this.persist({ ...p, status: "in-progress", stage: stages[Math.max(0, i - 1)] }); }
     if (command !== "continue") return this.#state;
+    if (p.stage === "pen") return this.fail("Choose a pen and select Use this pen to continue.");
     if (p.stage === "permissions" && this.readiness(snapshot) !== "ready") return this.fail("Some required access is not ready yet. Allow it, then check access again.");
     if (p.stage === "shortcut" && !this.shortcutConfirmed(snapshot)) return this.fail("Your shortcut is not ready yet. Check the shortcut settings and try again.");
     if (p.stage === "practice-start") {
@@ -86,7 +108,7 @@ export class OnboardingController {
     const required = snapshot.readiness.requirements.filter(r => r.required);
     return required.length > 0 && required.every(r => r.usableNow && !r.relaunchNeeded) ? "ready" : required.some(r => !r.usableNow || r.relaunchNeeded) ? "blocked" : "unknown";
   }
-  private shortcutConfirmed(snapshot: CapabilitySnapshot | null): boolean { return !!snapshot?.shortcut.effective && !snapshot.shortcut.draft && snapshot.shortcut.registration === "registered"; }
+  private shortcutConfirmed(snapshot: CapabilitySnapshot | null): boolean { return snapshot?.connection === "connected" && !!snapshot.shortcut.effective && !snapshot.shortcut.draft && ["registered", "externally-managed"].includes(snapshot.shortcut.registration); }
   private observe(snapshot: CapabilitySnapshot): void {
     if (this.#disposed) return;
     if (this.#lastEpoch && snapshot.providerEpoch !== this.#lastEpoch) {
@@ -102,7 +124,7 @@ export class OnboardingController {
   }
   private advanceObservedFacts(snapshot: CapabilitySnapshot): void {
     const p = this.#state.progress;
-    if (this.#disposed || this.#state.saving || this.#state.publication !== "confirmed" || this.#state.command === "unknown" || snapshot.connection !== "connected") return;
+    if (this.#disposed || !this.#loaded || p.status !== "in-progress" || this.#state.saving || this.#state.publication !== "confirmed" || this.#state.command === "unknown" || snapshot.connection !== "connected") return;
     const capture = p.attemptId ? snapshot.captures.find(c => c.captureId === p.attemptId) : undefined;
     if (!capture || capture.phase === "unknown") return;
     if ((capture.phase === "cancelled" || capture.phase === "failed") && stages.indexOf(p.stage) >= stages.indexOf("screen") && stages.indexOf(p.stage) < stages.indexOf("complete")) {
@@ -133,9 +155,15 @@ export class OnboardingController {
     } catch (error) { this.set({ ...this.#state, command: "unknown", error: error instanceof Error ? error.message : String(error) }); return null; }
   }
   private async persist(value: OnboardingProgress): Promise<ControllerState> {
+    if (this.#disposed || !this.#loaded || this.#state.saving || this.#state.publication !== "confirmed") return this.#state;
     const op = ++this.#op; this.set({ ...this.#state, saving: true, error: null });
     try { const result: SaveResult = await this.deps.progress.compareAndSwap(this.#state.revision, value); if (this.#disposed || op !== this.#op) return this.#state;
-      if (result.status === "saved") this.set({ ...this.#state, progress: value, revision: result.revision, saving: false, publication: "confirmed", error: null });
+      if (result.status === "saved") {
+        this.set({ ...this.#state, progress: value, revision: result.revision, saving: false, publication: "confirmed", error: null });
+        // Provider updates can arrive during the write. Reconcile the newest full
+        // snapshot rather than waiting for another transient event.
+        if (this.#state.snapshot) this.advanceObservedFacts(this.#state.snapshot);
+      }
       else if (result.status === "conflict") this.set({ ...this.#state, progress: normalizeProgress(result.current), revision: result.revision, saving: false, error: "Setup changed elsewhere. The newer progress was reloaded; review it before continuing." });
       else this.set({ ...this.#state, saving: false, publication: "unknown", error: result.message || "Progress save outcome is unknown. Reload before retrying." });
     } catch (error) { if (op === this.#op) this.set({ ...this.#state, saving: false, publication: "unknown", error: error instanceof Error ? error.message : String(error) }); }

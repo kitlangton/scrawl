@@ -1,4 +1,4 @@
-@import "@apparent/ui/theme.css";
+/* The composition host supplies the canonical shared UI tokens and controls. */
 .onboarding-shell { --font-sans: "Host Grotesk", system-ui, sans-serif; --apparent-pen-coral:#d94c44; --apparent-pen-purple:#7a58c7; --apparent-pen-blue:#3b79bd; --apparent-pen-green:#397b61; position: relative; display:flex; flex-direction:column; height:100vh; overflow:auto; padding:0; color:var(--apparent-foreground); background:var(--apparent-background); font:18px/1.5 var(--font-sans); border:1px solid var(--apparent-border); border-radius:15px; }
 .onboarding-shell header,.onboarding-shell footer { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 16px; border-bottom:1px solid var(--apparent-border); }
 .onboarding-shell footer { margin-top:auto; border-top:1px solid var(--apparent-border); border-bottom:0; }

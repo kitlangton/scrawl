@@ -204,3 +204,39 @@ test("disposing Onboarding detaches observation without stopping an active Recor
   const f = fixture("unsubscribe-during-recording"); await f.controller.load(); assert.equal(f.driver.captureContinues(), true); f.controller.dispose();
   assert.equal(f.driver.captureContinues(), true); assert.deepEqual(f.driver.commands(), []);
 });
+
+test("pen progression cannot bypass an explicitly confirmed selection", async () => {
+  const f = fixture(); await f.controller.load(); await f.controller.dispatch("continue");
+  await f.controller.dispatch("continue"); await f.controller.completePenSelection();
+  assert.equal(f.controller.state.progress.stage, "pen");
+  f.controller.dispose();
+});
+
+test("deferred practice does not progress on incoming capture facts", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "deferred", stage: "stop", attemptId: "practice" };
+  await f.controller.load();
+  publish(f.driver, [capture("practice", "saved", [outcome("processing"), outcome("save"), outcome("copy")])]);
+  await Promise.resolve(); await f.controller.dispatch("continue");
+  assert.equal(f.controller.state.progress.status, "deferred"); assert.equal(f.controller.state.progress.stage, "stop");
+  f.controller.dispose();
+});
+
+test("normalized legacy metadata survives a persistence round trip", () => {
+  const once = normalizeProgress({ seen: false, resume: "shortcut", tutorial: "practiced", relaunchedAt: 1234, shortcutChosen: true });
+  assert.deepEqual(normalizeProgress(JSON.parse(JSON.stringify(once))), once);
+});
+
+test("capture updates during a progress write are reconciled after it completes", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "stop", attemptId: "practice" }; await f.controller.load();
+  let finish!: () => void;
+  const original = f.progress.compareAndSwap.bind(f.progress);
+  let delayed = true;
+  f.progress.compareAndSwap = async (expected, value) => {
+    if (delayed) { delayed = false; await new Promise<void>(resolve => { finish = resolve; }); }
+    return original(expected, value);
+  };
+  publish(f.driver, [capture("practice", "processing", [outcome("processing")])]);
+  publish(f.driver, [capture("practice", "saved", [outcome("processing"), outcome("save"), outcome("copy")])]);
+  finish(); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(f.controller.state.progress.stage, "copied"); f.controller.dispose();
+});

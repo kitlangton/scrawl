@@ -8,6 +8,8 @@ export const initialProgress = (): OnboardingProgress => ({ schema: 1, status: "
 export function normalizeProgress(value: unknown): OnboardingProgress {
   if (!value || typeof value !== "object") return initialProgress();
   const v = value as Record<string, unknown>;
+  // Re-reading our normalized schema must preserve the migrated metadata too.
+  const metadata = v.legacy && typeof v.legacy === "object" ? v.legacy as Record<string, unknown> : v;
   const legacyLocation = v.resume ?? v.page ?? v.step ?? v.currentStep ?? v.stage;
   const aliases: Record<string, Stage> = { tutorial: "welcome", howItWorks: "welcome", "how-it-works": "welcome", resume: "welcome", record: "welcome", draw: "welcome", finish: "welcome", done: "complete", "try-it": "practice-start", TryIt: "practice-start", Permissions: "permissions", Shortcut: "shortcut", Done: "complete", Welcome: "welcome", HowItWorks: "welcome", "screen-recording": "permissions", microphone: "permissions", "input-monitoring": "permissions", accessibility: "permissions", camera: "permissions" };
   const stage = (aliases[String(legacyLocation)] ?? legacyLocation) as Stage;
@@ -18,8 +20,8 @@ export function normalizeProgress(value: unknown): OnboardingProgress {
   const malformedCurrentComplete = parsedStage === "complete" && !completed;
   const safeStage = malformedCurrentComplete ? "welcome" : parsedStage;
   const status = completed ? "completed" : deferred ? "deferred" : v.status === "in-progress" || v.seen === false || malformedCurrentComplete ? "in-progress" : "new";
-  const tutorial = v.tutorial === "skipped" || v.tutorial === "watched" || v.tutorial === "practiced" ? v.tutorial : null;
-  return { schema: 1, status, stage: completed ? "complete" : safeStage, attemptId: typeof v.attemptId === "string" ? v.attemptId : null, practiceBaselineIds: Array.isArray(v.practiceBaselineIds) ? v.practiceBaselineIds.filter((x): x is string => typeof x === "string") : [], legacy: { tutorial, relaunchedAt: typeof v.relaunchedAt === "number" && Number.isFinite(v.relaunchedAt) ? v.relaunchedAt : null, reopenFix: v.reopenFix === true, shortcutChosen: v.shortcutChosen === true, firstCaptureCompleted: v.firstCaptureCompleted === true }, manualPasteConfirmed: v.manualPasteConfirmed === true };
+  const tutorial = metadata.tutorial === "skipped" || metadata.tutorial === "watched" || metadata.tutorial === "practiced" ? metadata.tutorial : null;
+  return { schema: 1, status, stage: completed ? "complete" : safeStage, attemptId: typeof v.attemptId === "string" ? v.attemptId : null, practiceBaselineIds: Array.isArray(v.practiceBaselineIds) ? v.practiceBaselineIds.filter((x): x is string => typeof x === "string") : [], legacy: { tutorial, relaunchedAt: typeof metadata.relaunchedAt === "number" && Number.isFinite(metadata.relaunchedAt) ? metadata.relaunchedAt : null, reopenFix: metadata.reopenFix === true, shortcutChosen: metadata.shortcutChosen === true, firstCaptureCompleted: metadata.firstCaptureCompleted === true }, manualPasteConfirmed: v.manualPasteConfirmed === true };
 }
 const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
 export function nextStage(stage: Stage): Stage { return stages[Math.min(stages.indexOf(stage) + 1, stages.length - 1)]; }
