@@ -1,5 +1,64 @@
 use super::*;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct NativeHostObservation {
+    configured: crate::capture::desktop::settings::Shortcuts,
+    record: crate::capture::engine::runtime::ShortcutConfig,
+    paste: crate::capture::engine::runtime::ShortcutConfig,
+    registration: &'static str,
+    can_save: bool,
+    permission_actions: Vec<(&'static str, Vec<&'static str>)>,
+    fingerprint: String,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn permission_id(permission: crate::capture::desktop::settings::onboarding::Permission) -> &'static str {
+    use crate::capture::desktop::settings::onboarding::Permission;
+    match permission {
+        Permission::ScreenRecording => "screen-recording",
+        Permission::Microphone => "microphone",
+        Permission::Accessibility => "accessibility",
+        Permission::Camera => "camera",
+        Permission::SpeechRecognition => "speech-recognition",
+        Permission::InputMonitoring => unreachable!("retired permission is not exposed"),
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(super) fn native_host_permission_actions(
+    permission: crate::capture::desktop::settings::onboarding::Permission,
+    onboarding_session_active: bool,
+) -> Vec<&'static str> {
+    #[cfg(target_os = "macos")]
+    if !onboarding_session_active
+        && !crate::capture::desktop::settings::onboarding::permission_helper::is_busy()
+    {
+        return vec!["request-permission", "open-system-settings"];
+    }
+    #[cfg(target_os = "linux")]
+    if crate::capture::desktop::linux::privacy::settings_available(permission) {
+        return vec!["open-system-settings"];
+    }
+    let _ = permission;
+    let _ = onboarding_session_active;
+    Vec::new()
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn restore_runtime_shortcut(
+    telemetry: &SharedCaptureTelemetry,
+    previous_record: &crate::capture::engine::runtime::ShortcutConfig,
+    previous_paste: &crate::capture::engine::runtime::ShortcutConfig,
+) -> bool {
+    let (current_record, current_paste) = telemetry.shortcuts();
+    let registered = crate::capture::engine::runtime::shortcut_registration_status(telemetry) == "registered";
+    if current_record == *previous_record && current_paste == *previous_paste && registered {
+        return true;
+    }
+    crate::capture::engine::runtime::set_shortcuts(telemetry, previous_record.clone(), previous_paste.clone()).is_ok()
+        && crate::capture::engine::runtime::shortcut_registration_status(telemetry) == "registered"
+}
+
 impl ApparentCoordinator {
     pub(in crate::capture::desktop) fn new(
         telemetry: Arc<SharedCaptureTelemetry>,
@@ -287,8 +346,9 @@ impl ApparentCoordinator {
     ) {
         use crate::capture::desktop::workflow::agent_capture::{Action, Outcome};
         if let Some(native_host) = request.native_host.as_ref() {
-            let response = self.native_host_request(native_host, request.expired());
-            let _ = request.reply.send(response.to_string());
+            if let Some(response) = self.native_host_request(native_host, request.expired(), request.reply.clone()) {
+                let _ = request.reply.send(response.to_string());
+            }
             return;
         }
         if let Some((
@@ -524,22 +584,29 @@ impl ApparentCoordinator {
         &mut self,
         request: &crate::capture::desktop::workflow::native_host::Admitted,
         expired: bool,
-    ) -> serde_json::Value {
+        reply: std::sync::mpsc::SyncSender<String>,
+    ) -> Option<serde_json::Value> {
         use crate::capture::desktop::settings::onboarding::Permission;
         use crate::capture::desktop::workflow::native_host::Operation;
         use crate::capture::engine::runtime::{CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY, CARBON_SHIFT_KEY, ShortcutKind};
         let refusal = |reason: &str| serde_json::json!({"status":"refused","reason":reason});
-        if expired { return refusal("unavailable"); }
-        if self.native_host_epoch.is_empty() { return refusal("unavailable"); }
-        self.refresh_native_host_revision();
+        if expired || crate::capture::desktop::workflow::agent_capture::storage_clock_ms() >= request.deadline {
+            return Some(refusal("unavailable"));
+        }
+        if self.native_host_epoch.is_empty() { return Some(refusal("unavailable")); }
+        let observation = self.native_host_observation();
+        self.refresh_native_host_revision(&observation.fingerprint);
         if !matches!(&request.operation, Operation::ReadSnapshot) {
-            let Some(expected) = request.expected.as_ref() else { return refusal("invalid"); };
+            let Some(expected) = request.expected.as_ref() else { return Some(refusal("invalid")); };
             if expected.process_epoch != self.native_host_epoch || expected.revision != self.native_host_revision {
-                return refusal("stale");
+                return Some(refusal("stale"));
             }
         }
-        match &request.operation {
-            Operation::ReadSnapshot => self.native_host_snapshot(),
+        if crate::capture::desktop::workflow::agent_capture::storage_clock_ms() >= request.deadline {
+            return Some(refusal("unavailable"));
+        }
+        Some(match &request.operation {
+            Operation::ReadSnapshot => self.native_host_snapshot(&observation),
             Operation::RequestPermission(id) | Operation::OpenSystemSettings(id) => {
                 let permission = match id.as_str() {
                     "screen-recording" => Permission::ScreenRecording,
@@ -547,151 +614,202 @@ impl ApparentCoordinator {
                     "accessibility" => Permission::Accessibility,
                     "camera" => Permission::Camera,
                     "speech-recognition" => Permission::SpeechRecognition,
-                    _ => return refusal("invalid"),
+                    _ => return Some(refusal("invalid")),
                 };
-                let action = if matches!(&request.operation, Operation::RequestPermission(_)) { "request" } else { "open-settings" };
-                #[cfg(target_os = "linux")]
-                if action == "request" { return refusal("unavailable"); }
-                if let Some(session) = self.onboarding.as_mut() {
-                    return if session.host_permission_action(action, permission) { serde_json::json!({"status":"accepted"}) } else { refusal("unavailable") };
+                let action = if matches!(&request.operation, Operation::RequestPermission(_)) { "request-permission" } else { "open-system-settings" };
+                #[cfg(target_os = "macos")]
+                if self.onboarding.is_some() { return Some(refusal("busy")); }
+                if !observation.permission_actions.iter().any(|(key, actions)|
+                    *key == permission_id(permission) && actions.contains(&action)) {
+                    return Some(refusal("unavailable"));
                 }
                 #[cfg(target_os = "linux")]
-                if action == "open-settings" && permission == Permission::Accessibility {
-                    crate::capture::desktop::linux::privacy::open_settings(permission);
-                    return serde_json::json!({"status":"accepted"});
+                {
+                    let deadline = request.deadline;
+                    let reply = reply.clone();
+                    return match std::thread::Builder::new().name("apparent-open-permission-settings".into()).spawn(move || {
+                        let result = if crate::capture::desktop::workflow::agent_capture::storage_clock_ms() < deadline
+                            && crate::capture::desktop::linux::privacy::open_settings(permission) {
+                            serde_json::json!({"status":"accepted"})
+                        } else {
+                            serde_json::json!({"status":"refused","reason":"unavailable"})
+                        };
+                        let _ = reply.send(result.to_string());
+                    }) {
+                        Ok(_) => None,
+                        Err(_) => Some(refusal("unavailable")),
+                    };
                 }
-                refusal("unavailable")
+                #[cfg(target_os = "macos")]
+                {
+                    if self.onboarding.is_some() { return Some(refusal("busy")); }
+                    let operation = if action == "request-permission" { "request" } else { "open-settings" };
+                    match crate::capture::desktop::settings::onboarding::permission_helper::dispatch(
+                        operation, permission, Some(request.deadline), Some(reply),
+                    ) {
+                        crate::capture::desktop::settings::onboarding::permission_helper::Dispatch::Queued => return None,
+                        crate::capture::desktop::settings::onboarding::permission_helper::Dispatch::Busy => return Some(refusal("busy")),
+                        crate::capture::desktop::settings::onboarding::permission_helper::Dispatch::Unavailable => return Some(refusal("unavailable")),
+                    }
+                }
             }
             Operation::ValidateRecordShortcut(key, modifiers) => {
                 let supported_modifiers = CARBON_CMD_KEY | CARBON_CONTROL_KEY | CARBON_OPTION_KEY | CARBON_SHIFT_KEY;
-                if modifiers & !supported_modifiers != 0 { return refusal("invalid"); }
+                if modifiers & !supported_modifiers != 0 { return Some(refusal("invalid")); }
                 let candidate = crate::capture::engine::runtime::shortcut_from_key_and_mods(
                     key, modifiers & CARBON_CMD_KEY != 0, modifiers & CARBON_CONTROL_KEY != 0,
                     modifiers & CARBON_OPTION_KEY != 0, modifiers & CARBON_SHIFT_KEY != 0,
                 );
-                let Some(candidate) = candidate else { return refusal("invalid"); };
+                let Some(candidate) = candidate else { return Some(refusal("invalid")); };
                 let pressed = crate::capture::desktop::settings::Pressed {
                     key_code: candidate.key_code, modifiers: candidate.carbon_modifiers,
                     key: candidate.key_label().to_owned(),
                     reserved: crate::capture::desktop::settings::onboarding::host_shortcut_reserved(candidate.key_code, candidate.carbon_modifiers),
                 };
-                let (_, paste) = self.telemetry.shortcuts();
+                let paste = observation.paste.clone();
                 match crate::capture::desktop::settings::validate(ShortcutKind::Record, &pressed, &paste) {
                     Ok(value) => serde_json::json!({"status":"accepted","shortcut":{"keyCode":value.key_code,"modifiers":value.carbon_modifiers,"label":value.label}}),
                     Err(crate::capture::desktop::settings::Rejection::Reserved(_)) => refusal("reserved"),
                     Err(_) => refusal("invalid"),
                 }
             }
-            Operation::SaveRecordShortcut(value) => self.native_host_save_shortcut(value),
-        }
+            Operation::SaveRecordShortcut(value) => self.native_host_save_shortcut(value, &observation, request.deadline),
+        })
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    fn native_host_snapshot(&self) -> serde_json::Value {
-        use crate::capture::desktop::settings::onboarding::{Permission, Status};
+    fn native_host_observation(&self) -> NativeHostObservation {
+        use crate::capture::desktop::settings::onboarding::Permission;
         let (record, paste) = self.telemetry.shortcuts();
         let config_path = crate::shared::handoff::default_config_path();
         let (configured, _) = crate::capture::desktop::settings::Shortcuts::load_from(&config_path, std::path::Path::new("/dev/null"));
         let registration = crate::capture::engine::runtime::shortcut_registration_status(&self.telemetry);
+        let can_save = registration == "registered" && !self.is_recording() && !self.is_processing() && !self.is_selecting();
+        let permission_actions = [Permission::ScreenRecording, Permission::Microphone, Permission::Accessibility, Permission::Camera, Permission::SpeechRecognition]
+            .into_iter().map(|permission| {
+                let actions = native_host_permission_actions(permission, self.onboarding.is_some());
+                (permission_id(permission), actions)
+            }).collect::<Vec<_>>();
+        let fingerprint = format!("{}|{}|{}|{}|{}|{}|{:?}|{:?}",
+            serde_json::to_string(&configured.record).unwrap_or_default(), serde_json::to_string(&configured.paste).unwrap_or_default(),
+            serde_json::to_string(&record).unwrap_or_default(), serde_json::to_string(&paste).unwrap_or_default(),
+            registration, can_save, self.grants, permission_actions);
+        NativeHostObservation { configured, record, paste, registration, can_save, permission_actions, fingerprint }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn native_host_snapshot(&self, observation: &NativeHostObservation) -> serde_json::Value {
+        use crate::capture::desktop::settings::onboarding::{Permission, Status};
         let shortcut_fact = |cfg: &crate::capture::engine::runtime::ShortcutConfig, effective: &crate::capture::engine::runtime::ShortcutConfig| {
             let value = serde_json::json!({"keyCode":cfg.key_code,"modifiers":cfg.carbon_modifiers,"label":cfg.label});
             let effective_value = serde_json::json!({"keyCode":effective.key_code,"modifiers":effective.carbon_modifiers,"label":effective.label});
-            serde_json::json!({"configured":value,"effective":if registration == "registered" { effective_value } else { serde_json::Value::Null },
-                "registration":registration,"canValidate":true,"canSave":registration == "registered" && !self.is_recording() && !self.is_processing() && !self.is_selecting()})
+            serde_json::json!({"configured":value,"effective":if observation.registration == "registered" { effective_value } else { serde_json::Value::Null },
+                "registration":observation.registration,"canValidate":true,"canSave":observation.can_save})
         };
         let permissions = [Permission::ScreenRecording, Permission::Microphone, Permission::Accessibility, Permission::Camera, Permission::SpeechRecognition]
             .into_iter().map(|permission| {
-                let id = match permission {
-                    Permission::ScreenRecording => "screen-recording", Permission::Microphone => "microphone",
-                    Permission::Accessibility => "accessibility", Permission::Camera => "camera",
-                    Permission::SpeechRecognition => "speech-recognition",
-                    Permission::InputMonitoring => unreachable!("retired permission is not exposed"),
-                };
+                let id = permission_id(permission);
                 let status = match self.grants.as_ref().map(|g| g.status(permission)) {
                     None => "unavailable", Some(Status::Granted) => "granted", Some(Status::Denied) => "denied",
                     Some(Status::NotDetermined) => "not-determined",
                 };
                 let relaunch = permission == Permission::ScreenRecording && self.grants.as_ref().is_some_and(|g| g.screen_needs_relaunch);
-                let mut actions: Vec<&str> = Vec::new();
-                #[cfg(target_os = "macos")]
-                if self.onboarding.is_some() { actions.extend(["request-permission", "open-system-settings"]); }
-                #[cfg(target_os = "linux")]
-                if permission == Permission::Accessibility { actions.push("open-system-settings"); }
+                let actions = observation.permission_actions.iter().find(|(key, _)| *key == id)
+                    .map(|(_, actions)| actions.clone()).unwrap_or_default();
                 serde_json::json!({"id":id,"status":status,"usableNow":status == "granted" && !relaunch,"relaunchNeeded":relaunch,"actions":actions})
             }).collect::<Vec<_>>();
         serde_json::json!({"api":1,"processEpoch":self.native_host_epoch,"revision":self.native_host_revision,
             "scope":"running-desktop-process","freshness":"cached-gui-observation","permissions":permissions,
-            "shortcuts":{"record":shortcut_fact(&configured.record, &record),"paste":shortcut_fact(&configured.paste, &paste)}})
+            "shortcuts":{"record":shortcut_fact(&observation.configured.record, &observation.record),"paste":shortcut_fact(&observation.configured.paste, &observation.paste)}})
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    fn refresh_native_host_revision(&mut self) {
-        let (record, paste) = self.telemetry.shortcuts();
-        let path = crate::shared::handoff::default_config_path();
-        let (configured, _) = crate::capture::desktop::settings::Shortcuts::load_from(&path, std::path::Path::new("/dev/null"));
-        let fingerprint = format!("{}|{}|{}|{}|{}|{:?}",
-            serde_json::to_string(&configured.record).unwrap_or_default(), serde_json::to_string(&configured.paste).unwrap_or_default(),
-            serde_json::to_string(&record).unwrap_or_default(), serde_json::to_string(&paste).unwrap_or_default(),
-            crate::capture::engine::runtime::shortcut_registration_status(&self.telemetry), self.grants);
-        if self.native_host_fingerprint.as_ref().is_some_and(|previous| previous != &fingerprint) {
+    fn refresh_native_host_revision(&mut self, fingerprint: &str) {
+        if self.native_host_fingerprint.as_ref().is_some_and(|previous| previous != fingerprint) {
             self.native_host_revision = self.native_host_revision.saturating_add(1);
         }
-        self.native_host_fingerprint = Some(fingerprint);
+        self.native_host_fingerprint = Some(fingerprint.to_owned());
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    fn native_host_save_shortcut(&mut self, shortcut: &crate::capture::desktop::workflow::native_host::Shortcut) -> serde_json::Value {
+    fn native_host_save_shortcut(
+        &mut self,
+        shortcut: &crate::capture::desktop::workflow::native_host::Shortcut,
+        observation: &NativeHostObservation,
+        deadline: u64,
+    ) -> serde_json::Value {
         use crate::capture::engine::runtime::ShortcutKind;
-        if self.is_recording() || self.is_processing() || self.is_selecting() { return serde_json::json!({"status":"refused","reason":"busy"}); }
-        if crate::capture::engine::runtime::shortcut_registration_status(&self.telemetry) != "registered" {
-            return serde_json::json!({"status":"refused","reason":"unavailable"});
+        use std::cell::Cell;
+        let refusal = |reason: &str| serde_json::json!({"status":"refused","reason":reason});
+        if self.is_recording() || self.is_processing() || self.is_selecting() { return refusal("busy"); }
+        if observation.registration != "registered" { return refusal("unavailable"); }
+        if crate::capture::desktop::workflow::agent_capture::storage_clock_ms() >= deadline {
+            return refusal("unavailable");
         }
-        let (old_record, paste) = self.telemetry.shortcuts();
+        let old_record = observation.record.clone();
+        let paste = observation.paste.clone();
+        let (current_record, current_paste) = self.telemetry.shortcuts();
+        if current_record != old_record || current_paste != paste
+            || crate::capture::engine::runtime::shortcut_registration_status(&self.telemetry) != observation.registration {
+            return refusal("stale");
+        }
         let config_path = crate::shared::handoff::default_config_path();
-        let (old_configured, _) = crate::capture::desktop::settings::Shortcuts::load_from(&config_path, std::path::Path::new("/dev/null"));
         let key = shortcut.label.trim_start_matches(|ch| matches!(ch, '⌘' | '⌃' | '⌥' | '⇧'));
         let pressed = crate::capture::desktop::settings::Pressed { key_code:shortcut.key_code, modifiers:shortcut.modifiers,
             key:key.to_owned(), reserved:crate::capture::desktop::settings::onboarding::host_shortcut_reserved(shortcut.key_code, shortcut.modifiers) };
         let validated = match crate::capture::desktop::settings::validate(ShortcutKind::Record, &pressed, &paste) {
             Ok(value) => value,
-            Err(crate::capture::desktop::settings::Rejection::Reserved(_)) => return serde_json::json!({"status":"refused","reason":"reserved"}),
-            Err(_) => return serde_json::json!({"status":"refused","reason":"invalid"}),
+            Err(crate::capture::desktop::settings::Rejection::Reserved(_)) => return refusal("reserved"),
+            Err(_) => return refusal("invalid"),
         };
         if validated.key_code != shortcut.key_code || validated.carbon_modifiers != shortcut.modifiers || validated.label != shortcut.label {
-            return serde_json::json!({"status":"refused","reason":"invalid"});
+            return refusal("invalid");
         }
-        if crate::capture::engine::runtime::set_shortcuts(&self.telemetry, validated.clone(), paste.clone()).is_err() {
-            let (current, current_paste) = self.telemetry.shortcuts();
-            return if current == old_record && current_paste == paste
-                && crate::capture::engine::runtime::shortcut_registration_status(&self.telemetry) == "registered" {
-                serde_json::json!({"status":"refused","reason":"registration-refused"})
-            } else { serde_json::json!({"status":"outcome-unknown"}) };
-        }
-        if crate::capture::engine::runtime::shortcut_registration_status(&self.telemetry) != "registered" {
-            if crate::capture::engine::runtime::set_shortcuts(&self.telemetry, old_record.clone(), paste.clone()).is_err()
-                || crate::capture::engine::runtime::shortcut_registration_status(&self.telemetry) != "registered" {
-                return serde_json::json!({"status":"outcome-unknown"});
-            }
-            return serde_json::json!({"status":"refused","reason":"registration-refused"});
-        }
-        match crate::capture::desktop::settings::save_shortcut_if_current_in(&config_path, ShortcutKind::Record, &old_configured.record, &validated) {
+        let allowed = || crate::capture::desktop::workflow::agent_capture::storage_clock_ms() < deadline;
+        let registration_refused = Cell::new(false);
+        let write_result = crate::capture::desktop::settings::save_shortcut_if_current_allowed_in(
+            &config_path,
+            ShortcutKind::Record,
+            &observation.configured.record,
+            &validated,
+            &allowed,
+            || {
+                if !allowed() { anyhow::bail!("native shortcut request expired before registration"); }
+                if crate::capture::engine::runtime::set_shortcuts(&self.telemetry, validated.clone(), paste.clone()).is_err()
+                    || crate::capture::engine::runtime::shortcut_registration_status(&self.telemetry) != "registered" {
+                    registration_refused.set(true);
+                    anyhow::bail!("shortcut registration refused");
+                }
+                Ok(())
+            },
+        );
+        match write_result {
+            Ok(false) => return refusal("stale"),
             Ok(true) => {}
-            Ok(false) => {
-                let restored = crate::capture::engine::runtime::set_shortcuts(&self.telemetry, old_record, paste).is_ok()
-                    && crate::capture::engine::runtime::shortcut_registration_status(&self.telemetry) == "registered";
-                return if restored { serde_json::json!({"status":"refused","reason":"stale"}) }
-                    else { serde_json::json!({"status":"outcome-unknown"}) };
-            }
-            Err(_) => {
-                let _ = crate::capture::engine::runtime::set_shortcuts(&self.telemetry, old_record, paste);
+            Err(error) => {
+                let uncertain = error.is::<crate::shared::handoff::ConfigPublicationUncertain>();
+                let runtime_restored = restore_runtime_shortcut(&self.telemetry, &old_record, &paste);
+                let config_restored = if uncertain && runtime_restored {
+                    crate::capture::desktop::settings::restore_shortcut_if_current_allowed_in(
+                        &config_path, ShortcutKind::Record, &validated, &observation.configured.record, &allowed,
+                    ).unwrap_or(false)
+                } else { !uncertain };
+                if runtime_restored && config_restored {
+                    return if registration_refused.get() { refusal("registration-refused") }
+                        else if !allowed() { refusal("busy") }
+                        else { refusal("unavailable") };
+                }
                 return serde_json::json!({"status":"outcome-unknown"});
             }
         }
         let persisted = crate::capture::desktop::settings::Shortcuts::load_from(&config_path, std::path::Path::new("/dev/null")).0.record;
         if persisted != validated {
-            let config_restored = crate::capture::desktop::settings::save_shortcut_in(&config_path, ShortcutKind::Record, &old_record).is_ok();
-            let runtime_restored = crate::capture::engine::runtime::set_shortcuts(&self.telemetry, old_record, paste).is_ok();
-            if config_restored && runtime_restored { return serde_json::json!({"status":"refused","reason":"unavailable"}); }
+            let config_restored = crate::capture::desktop::settings::restore_shortcut_if_current_allowed_in(
+                &config_path, ShortcutKind::Record, &validated, &observation.configured.record, &allowed,
+            ).unwrap_or(false);
+            let runtime_restored = restore_runtime_shortcut(&self.telemetry, &old_record, &paste);
+            let persisted_restored = crate::capture::desktop::settings::Shortcuts::load_from(&config_path, std::path::Path::new("/dev/null")).0.record == observation.configured.record;
+            if config_restored && runtime_restored && persisted_restored { return refusal("unavailable"); }
             return serde_json::json!({"status":"outcome-unknown"});
         }
         self.native_host_revision = self.native_host_revision.saturating_add(1);

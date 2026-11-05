@@ -22,6 +22,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(target_os = "macos")]
+pub(crate) mod permission_helper;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Permission {
@@ -963,7 +966,6 @@ pub struct Session {
     fallback: Option<Box<dyn Fn() -> anyhow::Result<Transport>>>,
     fallback_pending: bool,
     transport: Transport,
-    permission_adapter: Option<Transport>,
     polling: std::sync::Arc<std::sync::atomic::AtomicBool>,
     last_view: String,
     shortcut_label: String,
@@ -984,7 +986,6 @@ impl Session {
             fallback: None,
             fallback_pending: false,
             transport: Transport::InProcess(None),
-            permission_adapter: None,
             polling: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_view: String::new(),
             shortcut_label: String::new(),
@@ -1064,7 +1065,6 @@ impl Session {
                     progress.first_capture_completed,
                 ),
             transport,
-            permission_adapter: None,
             fallback,
             fallback_pending: false,
             polling,
@@ -1167,7 +1167,6 @@ impl Session {
         }
         self.fallback_pending = false;
         let Some(fallback) = self.fallback.take() else { return false; };
-        if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
         let old = std::mem::replace(&mut self.transport, Transport::InProcess(None));
         retire_transport(old);
         match fallback() {
@@ -1326,11 +1325,9 @@ impl Session {
             return;
         }
         #[cfg(target_os = "macos")]
-        if let Some(Transport::Helper { stdin: Some(pipe), .. }) = self.permission_adapter.as_mut() {
-            use std::io::Write;
+        {
             for row in self.flow.view().rows.iter().filter(|row| row.status == Status::Granted) {
-                let message = serde_json::json!({"type": "close-guide", "permission": row.permission});
-                let _ = writeln!(pipe, "{message}").and_then(|()| pipe.flush());
+                permission_helper::close_guide(row.permission);
             }
         }
         let mut view = serde_json::to_value(self.flow.view()).unwrap_or_default();
@@ -1377,48 +1374,11 @@ impl Session {
         #[cfg(target_os = "linux")]
         crate::capture::desktop::linux::privacy::open_settings(permission);
         #[cfg(target_os = "macos")]
-        {
-            let adapter_dead = match self.permission_adapter.as_mut() {
-                Some(Transport::Helper { child, stdin }) => stdin.is_none() || !matches!(child.try_wait(), Ok(None)),
-                Some(_) => true,
-                None => false,
-            };
-            if adapter_dead {
-                if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
-                if self.restore_native() { self.permission_action(action, permission); }
-                return;
-            }
-            if self.permission_adapter.is_none() {
-                let Ok(path) = crate::capture::desktop::helper::path() else {
-                    if self.restore_native() { self.permission_action(action, permission); }
-                    return;
-                };
-                let mut command = std::process::Command::new(path);
-                crate::capture::ui_process::configure_build_identity(&mut command);
-                command.args(["onboarding", "--permissions-only"]);
-                self.permission_adapter = Self::spawn_transport(&mut command, |_| {}).ok();
-                if self.permission_adapter.is_none() {
-                    if self.restore_native() { self.permission_action(action, permission); }
-                    return;
-                }
-            }
-            if let Some(Transport::Helper { stdin: Some(pipe), .. }) = self.permission_adapter.as_mut() {
-                use std::io::Write;
-                let message = serde_json::json!({"type": action, "permission": permission});
-                if writeln!(pipe, "{message}").and_then(|()| pipe.flush()).is_err() {
-                    if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
-                    if self.restore_native() { self.permission_action(action, permission); }
-                }
-            }
+        match permission_helper::dispatch(action, permission, None, None) {
+            permission_helper::Dispatch::Queued => {}
+            permission_helper::Dispatch::Busy => crate::capture::engine::runtime::apparent_log("permission helper busy"),
+            permission_helper::Dispatch::Unavailable => crate::capture::engine::runtime::apparent_log("permission helper unavailable"),
         }
-    }
-
-    /// Dispatch through this Session's existing permissions-only native adapter. The result is
-    /// only dispatch acceptance; the normal grant poller remains the source of permission facts.
-    pub(crate) fn host_permission_action(&mut self, action: &str, permission: Permission) -> bool {
-        if self.fallback_pending { return false; }
-        self.permission_action(action, permission);
-        true
     }
 
     fn send(&mut self, message: &serde_json::Value) {
@@ -1468,7 +1428,6 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.polling
             .store(false, std::sync::atomic::Ordering::Release);
-        if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
         self.send(&serde_json::json!({"type": "close"}));
         let transport = std::mem::replace(&mut self.transport, Transport::InProcess(None));
         retire_transport(transport);

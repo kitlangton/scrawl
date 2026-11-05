@@ -162,7 +162,7 @@ pub fn save_shortcut_in(
     kind: ShortcutKind,
     cfg: &ShortcutConfig,
 ) -> anyhow::Result<()> {
-    write_shortcut(path, kind, None, cfg).map(|_| ())
+    write_shortcut(path, kind, None, cfg, None, || Ok(())).map(|_| ())
 }
 
 /// Changes a shortcut only if the owner-decoded persisted value still matches `expected`.
@@ -173,7 +173,41 @@ pub fn save_shortcut_if_current_in(
     expected: &ShortcutConfig,
     cfg: &ShortcutConfig,
 ) -> anyhow::Result<bool> {
-    write_shortcut(path, kind, Some(expected), cfg)
+    write_shortcut(path, kind, Some(expected), cfg, None, || Ok(()))
+}
+
+/// Deadline-aware native-host variant. `before_write` runs only after the shared config lock
+/// is held and the persisted value still matches the observation used to admit the request.
+pub fn save_shortcut_if_current_allowed_in(
+    path: &Path,
+    kind: ShortcutKind,
+    expected: &ShortcutConfig,
+    cfg: &ShortcutConfig,
+    allowed: &dyn Fn() -> bool,
+    before_write: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    write_shortcut(path, kind, Some(expected), cfg, Some(allowed), before_write)
+}
+
+/// Attempts compensation only while the value written by this request still owns the slot.
+/// A false result means another writer changed it, so that value must be preserved.
+pub fn restore_shortcut_if_current_in(
+    path: &Path,
+    kind: ShortcutKind,
+    written: &ShortcutConfig,
+    previous: &ShortcutConfig,
+) -> anyhow::Result<bool> {
+    save_shortcut_if_current_in(path, kind, written, previous)
+}
+
+pub fn restore_shortcut_if_current_allowed_in(
+    path: &Path,
+    kind: ShortcutKind,
+    written: &ShortcutConfig,
+    previous: &ShortcutConfig,
+    allowed: &dyn Fn() -> bool,
+) -> anyhow::Result<bool> {
+    save_shortcut_if_current_allowed_in(path, kind, written, previous, allowed, || Ok(()))
 }
 
 fn write_shortcut(
@@ -181,15 +215,21 @@ fn write_shortcut(
     kind: ShortcutKind,
     expected: Option<&ShortcutConfig>,
     cfg: &ShortcutConfig,
+    allowed: Option<&dyn Fn() -> bool>,
+    before_write: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<bool> {
     let mut conflict = false;
-    let result = crate::shared::handoff::update_config_in(path, |config| {
+    let edit = |config: &mut serde_json::Value| {
         let stored = config.get("shortcuts");
         let current = configured_shortcut(stored, kind).unwrap_or_else(|| kind.default_config());
         if expected.is_some_and(|expected| expected != &current) {
             conflict = true;
             anyhow::bail!("shortcut changed since snapshot");
         }
+        if let Some(allowed) = allowed {
+            anyhow::ensure!(allowed(), "shortcut admission expired");
+        }
+        before_write()?;
         let object = config.as_object_mut().expect("config store returns object");
         let shortcuts = object.entry("shortcuts").or_insert_with(|| serde_json::json!({}));
         if !shortcuts.is_object() { *shortcuts = serde_json::json!({}); }
@@ -204,7 +244,11 @@ fn write_shortcut(
             })?);
         }
         Ok(())
-    });
+    };
+    let result = match allowed {
+        Some(allowed) => crate::shared::handoff::update_config_allowed_in(path, allowed, edit),
+        None => crate::shared::handoff::update_config_in(path, edit),
+    };
     if conflict { return Ok(false); }
     result.map(|_| true)
 }
