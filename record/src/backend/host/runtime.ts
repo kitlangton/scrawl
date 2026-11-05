@@ -21,7 +21,7 @@ export type HostStartupState =
 export interface OwnershipReport {
   requestIds: readonly string[];
   storageUnavailable: boolean;
-  reconciliation: "complete" | "pending" | "interrupted";
+  reconciliation: "complete" | "pending" | "interrupted" | "failed";
 }
 
 export interface RecordHostRuntime {
@@ -67,8 +67,9 @@ export async function createRecordHostRuntime(
       let requestIds: string[];
       try { requestIds = await mappings.listRequestIds(); }
       catch {
-        const blocked = freezeStartup({ state: "blocked", knownRequestIds: startup.knownRequestIds, unresolved: [], storageUnavailable: true });
-        if (!disposed && scanRevision === revision) startup = blocked;
+        const blocked = freezeStartup({ state: "blocked", knownRequestIds: startup.knownRequestIds,
+          unresolved: startup.knownRequestIds.map(requestId => ({ requestId, state: "unknown" })), storageUnavailable: true });
+        if (!disposed && scanRevision === revision) { startup = blocked; reconciliation = "failed"; }
         return blocked;
       }
       if (disposed || scanRevision !== revision) return startup;
@@ -96,7 +97,7 @@ export async function createRecordHostRuntime(
     })();
     scan = work;
     void work.finally(() => {
-      if (scan === work) { scan = undefined; reconciliation = disposed ? "interrupted" : "complete"; }
+      if (scan === work) { scan = undefined; if (disposed) reconciliation = "interrupted"; else if (reconciliation === "pending") reconciliation = "complete"; }
     }).catch(() => undefined);
     return work;
   };

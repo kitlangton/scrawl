@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { chmod, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -236,4 +236,20 @@ test("disposing a scan preserves newly discovered identities and reports incompl
   release();
   assert.equal((await scan).state, "blocked");
   assert.equal(runtime.unresolvedOwnership().reconciliation, "interrupted");
+});
+
+test("failed storage enumeration retains known identities until a successful rescan", async t => {
+  const { provider, roots, create } = await fixture(t);
+  provider.setReady(true);
+  const runtime = await create();
+  await runtime.dispatch({ type: "start", requestId: "known before storage failure" });
+  await runtime.dispatch({ type: "stop" });
+  await chmod(roots.mappingRoot, 0o755);
+  try {
+    assert.equal((await runtime.reconcileStartup()).state, "blocked");
+    assert.deepEqual(runtime.unresolvedOwnership(), { requestIds: ["known before storage failure"], storageUnavailable: true, reconciliation: "failed" });
+    assert.equal((await runtime.dispatch({ type: "start", requestId: "must not start" })).phase, "ready");
+  } finally { await chmod(roots.mappingRoot, 0o700); }
+  assert.equal((await runtime.reconcileStartup()).state, "ready");
+  assert.deepEqual(runtime.dispose(), { requestIds: [], storageUnavailable: false, reconciliation: "complete" });
 });
