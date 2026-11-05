@@ -275,14 +275,20 @@ function validate(input: ProcessingInput): void {
  * Assemble existing Engine outputs into Record's plain-text handoff format.
  * This function selects no frames and invents no transcript, image, or media facts.
  */
-export function assembleProcessingOutput(input: ProcessingInput): ProcessingOutput {
+export function assembleProcessingOutput(
+  input: ProcessingInput,
+  format: "summary" | "local-clipboard" = "summary",
+): ProcessingOutput {
   validate(input);
-  const lines = [`[apparent ${clock(input.durationMs)} · ${targetLabel(input)} · ${input.bundlePath}]`];
-  if (input.destination) {
+  const clipboard = format === "local-clipboard";
+  const lines = [clipboard
+    ? `[apparent ${clock(input.durationMs)} · ${input.bundlePath}]`
+    : `[apparent ${clock(input.durationMs)} · ${targetLabel(input)} · ${input.bundlePath}]`];
+  if (!clipboard && input.destination) {
     const title = input.destination.title || input.destination.session;
     lines.push(`For session: ${title} (${input.destination.session})${input.destination.url ? ` · page ${input.destination.url}` : ""}`);
   }
-  if (input.frames.length) {
+  if (!clipboard && input.frames.length) {
     const hasClick = (input.events ?? []).some((event) => event.kind === "click" || event.kind === "note") || (input.notes ?? []).length > 0;
     lines.push(hasClick
       ? "Open contact-sheet.png and frames/ in that folder before changing anything: the marks and words only make sense on the images, which can show more than the text does."
@@ -302,7 +308,7 @@ export function assembleProcessingOutput(input: ProcessingInput): ProcessingOutp
     else if (warning.kind === "noTranscript") lines.push(`No transcript: ${warning.message}`);
     else lines.push("No words transcribed. Your audio was saved—check it or try again closer to the microphone.");
   }
-  if (input.autocrop) lines.push(`Cropped to: ${input.autocrop.label} (full frames in ${input.autocrop.fullFramesDirectory}/)`);
+  if (!clipboard && input.autocrop) lines.push(`Cropped to: ${input.autocrop.label} (full frames in ${input.autocrop.fullFramesDirectory}/)`);
 
   const timeline = legacyTimeline(input);
   if (input.frames.length) {
@@ -328,7 +334,7 @@ export function assembleProcessingOutput(input: ProcessingInput): ProcessingOutp
       } else {
         lines.push(`- #${frame.index} (${clock(frame.timeMs)})${screenMarker}${flagMarker} ${frame.event ?? ""}`.trimEnd());
       }
-      lines.push(`  ${frame.absolutePath}`);
+      if (!clipboard) lines.push(`  ${frame.absolutePath}`);
       const next = input.frames[i + 1]?.timeMs ?? Number.POSITIVE_INFINITY;
       for (const item of timeline.filter((entry) => entry.timeMs >= frame.timeMs && (entry.timeMs < next || i + 1 === input.frames.length)))
         lines.push(`  · ${clock(item.timeMs)} ${item.text}`);
@@ -341,10 +347,10 @@ export function assembleProcessingOutput(input: ProcessingInput): ProcessingOutp
   if (input.videoPath) {
     if (!isAbsolute(input.videoPath) || resolve(input.videoPath) !== input.videoPath)
       throw new TypeError("videoPath must be absolute and normalized");
-    lines.push(`Video: ${input.videoPath}`);
+    if (!clipboard) lines.push(`Video: ${input.videoPath}`);
   }
-  if (input.contactSheetPath) lines.push(`Contact sheet: ${input.contactSheetPath}`);
-  lines.push(`Bundle: ${input.bundlePath}`);
+  if (!clipboard && input.contactSheetPath) lines.push(`Contact sheet: ${input.contactSheetPath}`);
+  if (!clipboard) lines.push(`Bundle: ${input.bundlePath}`);
   return { summaryMarkdown: `${lines.join("\n")}\n` };
 }
 

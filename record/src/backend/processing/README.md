@@ -20,3 +20,9 @@ or selected by this formatter.
 The golden tests use sanitized Rust summary fixtures and synthetic UI-like PNGs
 under `test/fixtures/take.apparent`; these images verify references and layout,
 not capture or decoder behavior.
+
+The optional `"local-clipboard"` presentation retains semantic context, notes and
+warnings while omitting destination/target metadata, archive image instructions
+and artifact footers. Handoff supplies access instructions before this text, so
+the duration header and timed request remain at the end of a paste. The default
+`"summary"` presentation preserves the archived output contract.
