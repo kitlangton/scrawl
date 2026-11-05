@@ -121,6 +121,67 @@ pub fn read_stream_state_in(path: &Path, owner: &str) -> Result<(u64, serde_json
     }
 }
 
+/// Read the selected owner entry and its identically named top-level legacy key.
+/// Presence is explicit so a missing key remains distinct from JSON null.
+pub fn read_for_adoption_in(path: &Path, owner: &str) -> Result<AdoptionSnapshot> {
+    let writer = ConfigWriter::acquire(path, None)?;
+    let config = read_snapshot(&writer, path)?;
+    adoption_snapshot(&config, owner)
+}
+
+/// Adopt a legacy value only while both the owner entry is still absent and
+/// the exact legacy key still matches the caller's observed presence/value.
+pub fn adopt_legacy_in(
+    path: &Path,
+    owner: &str,
+    expected_legacy: LegacyValue,
+    value: serde_json::Value,
+) -> Result<AdoptResult> {
+    let mut outcome = None;
+    update_config_checked_in(path, None, |config| {
+        let snapshot = adoption_snapshot(config, owner)?;
+        if snapshot.owner.present || snapshot.legacy != expected_legacy {
+            outcome = Some(AdoptResult::Conflict(snapshot));
+            return Ok(false);
+        }
+        let top = config.as_object_mut().context("Config must be an object")?;
+        let stream = top.entry("streamState").or_insert_with(|| serde_json::json!({}));
+        let map = stream.as_object_mut().context("streamState must be an object")?;
+        map.insert(owner.to_owned(), serde_json::json!({"revision":1,"value":value}));
+        outcome = Some(AdoptResult::Saved { revision: 1 });
+        Ok(true)
+    })?;
+    Ok(outcome.expect("transaction always sets outcome"))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LegacyValue { pub present: bool, pub value: serde_json::Value }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnerAdoptionValue { pub present: bool, pub revision: u64, pub value: serde_json::Value }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdoptionSnapshot { pub owner: OwnerAdoptionValue, pub legacy: LegacyValue }
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdoptResult { Saved { revision: u64 }, Conflict(AdoptionSnapshot) }
+
+fn adoption_snapshot(config: &serde_json::Value, owner: &str) -> Result<AdoptionSnapshot> {
+    let top = config.as_object().context("Config must be an object")?;
+    let owner_entry = match top.get("streamState") {
+        None => None,
+        Some(stream) => {
+            let map = stream.as_object().context("streamState must be an object")?;
+            map.get(owner).map(parse_stream_entry).transpose()?
+        }
+    };
+    let legacy = top.get(owner).cloned();
+    Ok(AdoptionSnapshot {
+        owner: OwnerAdoptionValue { present: owner_entry.is_some(), revision: owner_entry.as_ref().map_or(0, |entry| entry.revision), value: owner_entry.map_or(serde_json::Value::Null, |entry| entry.value) },
+        legacy: LegacyValue { present: legacy.is_some(), value: legacy.unwrap_or(serde_json::Value::Null) },
+    })
+}
+
 /// Compare and replace one owner entry under the config writer lock.
 pub fn compare_and_swap_stream_state_in(
     path: &Path,
