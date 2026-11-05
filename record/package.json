@@ -8,6 +8,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./capabilities": {
+      "types": "./dist/capabilities/index.d.ts",
+      "import": "./dist/capabilities/index.js"
+    },
+    "./fixtures": {
+      "types": "./dist/capabilities/fixtures.d.ts",
+      "import": "./dist/capabilities/fixtures.js"
     }
   },
   "scripts": {
