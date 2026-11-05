@@ -9,6 +9,14 @@ const routeDocuments = new Set([
 const art = new Set([
   "/connect/assets/source-pond-v4.png", "/connect/assets/agent-pond-v4.png", "/connect/assets/agent-reading-v4.png",
 ])
+const hostedRedirects = new Map([
+  ["/hosted", "/connect"], ["/hosted/", "/connect/"],
+  ["/hosted/device", "/connect/device"], ["/hosted/device/", "/connect/device/"],
+  ["/hosted/shares", "/connect/shares"], ["/hosted/shares/", "/connect/shares/"],
+  ["/hosted/source-pond-v4.png", "/connect/assets/source-pond-v4.png"],
+  ["/hosted/agent-pond-v4.png", "/connect/assets/agent-pond-v4.png"],
+  ["/hosted/agent-reading-v4.png", "/connect/assets/agent-reading-v4.png"],
+])
 const notFoundHeaders = {
   "Cache-Control": "no-store",
   "Referrer-Policy": "no-referrer",
@@ -43,6 +51,30 @@ export default {
     // Encoded path bytes and backslashes are not part of the published route contract.
     if (path.includes("%") || path.includes("\\") || path.includes("//")) {
       return new Response(null, { status: 404, headers: notFoundHeaders })
+    }
+    const canonicalPath = hostedRedirects.get(path)
+    if (canonicalPath) {
+      // SITE_ORIGIN is deployment controlled. Keep redirects pinned to the
+      // accepted canonical profile; never derive a destination from Host or
+      // returnTo input.
+      let canonicalOrigin: string
+      try {
+        const configured = new URL(env.SITE_ORIGIN)
+        if (configured.origin !== "https://app.tryapparent.com" || configured.pathname !== "/"
+          || configured.search || configured.hash || configured.username || configured.password) {
+          return new Response(null, { status: 404, headers: notFoundHeaders })
+        }
+        canonicalOrigin = configured.origin
+      } catch {
+        return new Response(null, { status: 404, headers: notFoundHeaders })
+      }
+      const query = request.url.indexOf("?")
+      const location = canonicalOrigin + canonicalPath + (query < 0 ? "" : request.url.slice(query))
+      return new Response(null, { status: 302, headers: {
+        ...notFoundHeaders,
+        "Cache-Control": "no-store",
+        Location: location,
+      } })
     }
     const assetPath = routeAssetPath(path)
     if (!assetPath) return new Response(null, { status: 404, headers: notFoundHeaders })

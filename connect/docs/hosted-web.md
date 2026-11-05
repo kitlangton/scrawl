@@ -1,6 +1,6 @@
 # Connect web
 
-Legacy deployed profile (held until canonical gateway acceptance): `https://app.tryapparent.com/connect`, `/connect/device?code=USERCODE`, and `/connect/shares`, including slash/no-slash variants. Legacy `/hosted`, `/hosted/device` and `/hosted/shares` remain rendering aliases. All six are prerendered with a loading state, no account data, `noindex,nofollow`, and no-referrer/no-store metadata. They are absent from the homepage and sitemap. The sole Pages pipeline composes `connect/web/dist` into Public's packaged artifact. This source adoption is not deployment or real sign-in proof.
+Canonical routes are `https://app.tryapparent.com/connect`, `/connect/device?code=USERCODE`, and `/connect/shares`, including slash/no-slash variants. The legacy Public composition retains its six `/hosted` rendering aliases until cutover. The dedicated Worker instead redirects only exact GET/HEAD requests for `/hosted[/]`, `/hosted/device[/]`, `/hosted/shares[/]`, and the three existing `/hosted/{source-pond-v4,agent-pond-v4,agent-reading-v4}.png` links. It preserves query bytes, including device codes, and redirects to the fixed deployment `SITE_ORIGIN` canonical `/connect` equivalents. These are temporary **302** redirects with `no-store`, `no-referrer`, `noindex`, and no cookies, so rollback does not leave a sticky cached redirect. Other methods receive 405; unknown, encoded, private and near-prefix paths receive 404. No Connect bytes are copied into Public by this compatibility bridge. The aliases remain absent from the homepage and sitemap. This source adoption is not deployment or real sign-in proof.
 
 The setup dialog uses `apparent connect login` and `apparent connect status`.
 It tells users to update Apparent for `connect`; older apps can use `apparent cloud`,
@@ -115,6 +115,8 @@ The web package retains its canonical and legacy documents for Public
 composition. The hosting packager includes only the three canonical documents,
 rewrites browser assets and illustrations under `/connect`, and rejects
 unexpected inputs and missing resource edges before replacing generated output.
+The Worker separately retains only the exact legacy redirect map described
+above; it does not render or package legacy `/hosted` documents or assets.
 Its build profile uses `VITE_HOSTED_API_ORIGIN` and `API_ORIGIN` set to
 `https://app.tryapparent.com/connect`, with `SITE_ORIGIN` set to
 `https://app.tryapparent.com`. Public's legacy producer profile is unchanged
