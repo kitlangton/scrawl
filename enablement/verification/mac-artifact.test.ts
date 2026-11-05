@@ -85,7 +85,7 @@ test('runtime closure rejects traversal, loader paths, unknown commands and Xcod
 test('workflow retains success-only producer after existing evidence and before final job', () => {
   const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8')
   const segment = workflow.slice(workflow.indexOf('      - name: Retain verified Intel'))
-  assert.match(segment, /if: success\(\) && runner.os == 'macOS'/)
+  assert.match(segment, /if: success\(\) && github.ref == 'refs\/heads\/main' && runner.os == 'macOS'/)
   assert.match(segment, /if-no-files-found: error/)
   assert.ok(workflow.indexOf('name: verification-receipts-rust-') < workflow.indexOf('      - name: Retain verified Intel'))
   assert.match(segment, /needs: \[select, desktop-ui, connect-client, connect-web, rust\]/)

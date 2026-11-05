@@ -53,7 +53,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(self.admit(platform, number), self.sha)
             self.assertEqual(self.admit(platform), self.sha)
 
-    def test_full_verification_is_main_only_even_for_manual_dispatch(self):
+    def test_main_receipts_remain_separate_from_pull_request_verification(self):
         root = Path(__file__).resolve().parents[2]
         for caller in ('verification.yml', 'verification-mac.yml'):
             text = (root / '.github/workflows' / caller).read_text()
@@ -63,10 +63,10 @@ class AdmissionTests(unittest.TestCase):
         workflow = (root / '.github/workflows/verification-platform.yml').read_text()
         for job in ('desktop-ui', 'connect-client', 'connect-web', 'rust'):
             section = re.search(r'^  ' + job + r':\n(.*?)(?=^  [a-z]|\Z)', workflow, re.M | re.S)[1]
-            self.assertIn("if: github.ref == 'refs/heads/main'\n", section)
+            self.assertIn("if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'\n", section)
             self.assertNotIn('workflow_dispatch', section.split('    steps:', 1)[0])
         receipt = workflow.split('  release-ready:\n', 1)[1]
-        self.assertIn("if: github.ref == 'refs/heads/main'\n", receipt)
+        self.assertIn("if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'\n", receipt)
         self.assertNotIn('workflow_dispatch', receipt)
         for platform in self.runs:
             self.runs[platform].update(event='workflow_dispatch', head_branch='feature')

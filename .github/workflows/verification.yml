@@ -1,6 +1,8 @@
 name: Linux verification
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
@@ -26,9 +28,18 @@ jobs:
     with:
       runner: ubuntu-24.04
 
+  verify-pr:
+    if: github.event_name == 'pull_request'
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/verification-platform.yml
+    with:
+      runner: ubuntu-24.04
+
   runtime-budget:
     if: always()
-    needs: [verify]
+    needs: [verify, verify-pr]
     permissions:
       contents: read
       actions: read

@@ -110,3 +110,18 @@ test('recipient selection is independent of web production and a skip cannot pub
  assert.match(selection,/inputs.producer-run == ''/);
  const release=workflow.split('  recipient-release:')[1];assert.match(release,/needs: \[[^\]]*recipient\]/);
 });
+
+test('PR producer tests run fresh and cannot seal or upload deployment artifacts',async()=>{
+ const workflow=await readFile(new URL('../../.github/workflows/connect-delivery.yml',import.meta.url),'utf8');
+ assert.match(workflow,/pull_request:\n    branches: \[main\]/);
+ for(const job of ['select','produce']) {
+  const block=workflow.split(`  ${job}:\n`)[1].split(/\n  [a-z][\w-]*:\n/)[0];
+  assert.match(block,/github.event_name == 'pull_request'/);
+  assert.doesNotMatch(block,/secrets\.|attestations: write|id-token: write/);
+  for(const step of block.split(/\n      - /).slice(1)) {
+   if(step.includes('upload-artifact')||step.startsWith('name: Seal'))assert.match(step,/if: github.ref == 'refs\/heads\/main'/);
+  }
+ }
+ assert.match(workflow,/if \[ "\$GITHUB_EVENT_NAME" = pull_request \]; then\n\s+echo 'build=true' >> "\$GITHUB_OUTPUT"/);
+ assert.match(workflow,/else\n\s+node --experimental-strip-types connect\/delivery\/select.ts/);
+});

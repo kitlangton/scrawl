@@ -6,6 +6,10 @@ The isolated TypeScript architecture checker in `composition/architecture` rejec
 
 `engine-native` consumes `engine/delivery/native/delivery.json` independently of the SDK slot. Only that native lane installs Rust and produces the exact executable/manifest inventory through the Engine-owned producer. Its inputs include `engine/`, `capture/engine/` and inherited `.cargo/` settings. The current executable reports capture unavailable; packaging does not enable installed routing or prove screen capture.
 
+PRs targeting main run the same registered owner checks/builds and App Shell
+bundle tests in read-only `pr-stream` jobs, without artifact reuse, sealing or
+attestation. Main repeats verification and remains the canonical artifact producer.
+
 Run with Node 22's type stripping, without installing dependencies:
 
 ```sh

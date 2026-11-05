@@ -1,8 +1,11 @@
 # Website and Connect continuous delivery
 
-GitHub Actions do not run automatically on PRs or feature-branch pushes. Feature
-pushes run inexpensive selector, push-hook and release-admission contracts locally;
-they do not rebuild the application.
+Pull requests targeting main run Linux and Mac verification, value-stream owner
+checks/builds and Connect producer tests. Main verification runs again after merge;
+only canonical main receipts and artifacts can authorize publication. PR jobs use
+read-only permissions, do not inherit deployment secrets, and cannot publish
+release attestations or seed trusted native baselines. Feature-branch pushes
+without a PR retain inexpensive local selector, push-hook and admission contracts.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
@@ -25,9 +28,11 @@ candidates coalesce; slow Mac capacity never blocks Linux. Manual main dispatche
 remain diagnostic and cannot substitute for automatic release receipts.
 Both use `verification-platform.yml` and retain full Rust, Engine/client, browser,
 Electron and applicable native checks against the entire selected tree. Cancelled
-pending runs cannot hide changes. Full verification is main-only; feature branches
-use focused checks, independent review, current-base integration and required
-native/platform proof before merge. Do not wait for full branch CI as a merge gate.
+pending runs cannot hide changes. PR verification uses the same platform suites
+on the PR merge candidate, alongside focused checks, independent review,
+current-base integration and required native/platform proof before merge. Require
+the applicable PR checks to pass; main repeats verification before publication.
+PR Mac verification starts directly, independently of the main Linux follower.
 Linux's terminal job is `verify / Release verification`; Mac's terminal receipt
 includes the exact tested SHA, since a workflow-run control SHA may be newer.
 General Mac verification uses `macos-26-intel` so it does not depend on the

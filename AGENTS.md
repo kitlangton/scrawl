@@ -56,11 +56,11 @@ Verification is proportional to changed behavior, not commit IDs. For mechanical
 `.githooks/pre-push` runs cheap selector, hook and release-admission contracts for
 feature pushes while preserving exact-HEAD/clean-tree guards. Explicit local
 `enablement/verification.py --run` and direct main pushes retain conservative
-changed-tree build/tests. GitHub Actions do not run automatically on PRs or
-feature-branch pushes. Full Linux/macOS verification runs only on main, including
-manual dispatch, coalesced to the newest tree per platform. Before merging a PR,
-run focused checks, independent review, current-base integration checks and required
-native/platform proof; do not dispatch or wait for full branch CI. Linux and web publication require the
+changed-tree build/tests. Pull requests targeting main run Linux/macOS and
+value-stream verification; main repeats verification after merge. Feature pushes
+without a PR do not trigger CI. Main candidates coalesce per platform. Before
+merging a PR, require applicable PR checks, focused checks, independent review,
+current-base integration checks and required native/platform proof. Linux and web publication require the
 exact commit's successful Linux/shared verification; Mac publication additionally
 requires its successful Mac verification. A queued or failed Mac run does not block
 Linux publication, and Linux success never substitutes for Mac verification. Native/product acceptance still applies to changed
@@ -79,7 +79,7 @@ For Codex parents, default subagents to the latest available Luna model, current
 
 ## Deliver, safety and consent
 
-At assignment start, identify the requested artifact, checks/platform proof and applicable authority. For work Simon authorizes in `tryapparent/apparent`, the issue owner continues through merge without another code-review or merge approval once every applicable pre-merge Definition of Done is verified: independent review, focused tests and required native/platform evidence for the candidate, current-base integration checks, privacy and cleanup. Full CI runs after merge on main and gates publication of that exact main commit; full branch CI is not a pre-merge requirement. Never waive a requirement, bypass protection or treat partial completion as done. Normal, understood automatic CD consequences are authorized; separate activation, destructive migration, access, spending and external-message restrictions remain. Explicit task limits and PR holds win. For other work, normally deliver a scoped commit and draft PR; a draft PR alone grants no further authority. Verify what actually landed and report it. Never include secrets, private evidence or another writer's work in a delivery.
+At assignment start, identify the requested artifact, checks/platform proof and applicable authority. For work Simon authorizes in `tryapparent/apparent`, the issue owner continues through merge without another code-review or merge approval once every applicable pre-merge Definition of Done is verified: independent review, focused tests and required native/platform evidence for the candidate, current-base integration checks, privacy and cleanup. CI runs on PRs and again after merge on main. Applicable PR checks must pass before merge; only main verification gates publication of that exact main commit. Never waive a requirement, bypass protection or treat partial completion as done. Normal, understood automatic CD consequences are authorized; separate activation, destructive migration, access, spending and external-message restrictions remain. Explicit task limits and PR holds win. For other work, normally deliver a scoped commit and draft PR; a draft PR alone grants no further authority. Verify what actually landed and report it. Never include secrets, private evidence or another writer's work in a delivery.
 
 - Own the accepted outcome, not just a dispatch or readiness receipt. Use existing task/PR completion notifications, consume their results and continue feasible work. A running badge, queued message or published draft is not completion. Ask Simon only for a genuinely uncovered decision, not a repeat of existing authority.
 - For a stream rebuild or feature-parity assignment, retain a compact inventory from the user's scope and the authoritative existing workflows/commands. Distinguish implemented behavior, fixture-only behavior, installed adoption, verification gaps, explicit exclusions and blocked features. A merged package, adapter or prerequisite completes its slice, not the stream. After each merge, select the next authorized feature that can advance; a missing native capability blocks its actual consumers, not unrelated CLI, UI, persistence or compatibility work. Do not invent extra scope to keep working.

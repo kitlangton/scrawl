@@ -11,11 +11,11 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: read
-
+# Permissions come from the caller; only main grants provenance writes.
 jobs:
   select:
+    permissions:
+      contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -71,9 +71,11 @@ jobs:
           python3 enablement/verification.py --base "${BASE:-unknown}" --github-output "$GITHUB_OUTPUT"
 
   desktop-ui:
+    permissions:
+      contents: read
     needs: select
     # Each caller verifies one platform independently.
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     name: desktop-ui (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 15
@@ -127,8 +129,10 @@ jobs:
           retention-days: 14
 
   connect-client:
+    permissions:
+      contents: read
     needs: select
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     name: connect-client (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 15
@@ -175,8 +179,10 @@ jobs:
           retention-days: 14
 
   connect-web:
+    permissions:
+      contents: read
     needs: select
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     name: connect-web (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 15
@@ -214,12 +220,9 @@ jobs:
           retention-days: 14
 
   rust:
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
+    # Inherit read-only PR permissions; main callers grant provenance permissions.
     needs: select
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     name: rust (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
     # Temporary Mac release exception; Linux retains its existing limit.
@@ -311,7 +314,7 @@ jobs:
             capture/agent/control-client/target/debug/apparent-capture "$GITHUB_SHA" "$target" \
             "$RUNNER_TEMP/capture-client-producer"
       - uses: actions/attest-build-provenance@v2
-        if: needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        if: github.ref == 'refs/heads/main' && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
         with:
           subject-path: ${{ runner.temp }}/capture-client-producer/*.tar.gz
       - uses: actions/upload-artifact@v4
@@ -576,10 +579,10 @@ jobs:
           retention-days: 7
 
       - name: Retain verified Intel Mac development executables
-        if: success() && runner.os == 'macOS' && runner.arch == 'X64' && needs.select.outputs.root == 'true'
+        if: success() && github.ref == 'refs/heads/main' && runner.os == 'macOS' && runner.arch == 'X64' && needs.select.outputs.root == 'true'
         run: node enablement/verification/mac-artifact.ts "$RUNNER_TEMP/mac-dev-executables"
       - name: Upload Intel Mac development executable contract
-        if: success() && runner.os == 'macOS' && runner.arch == 'X64' && needs.select.outputs.root == 'true'
+        if: success() && github.ref == 'refs/heads/main' && runner.os == 'macOS' && runner.arch == 'X64' && needs.select.outputs.root == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: mac-dev-executables-${{ github.run_id }}-${{ github.run_attempt }}
@@ -587,15 +590,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Seal completed native verification baseline
-        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        if: success() && github.ref == 'refs/heads/main' && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
         run: node --experimental-strip-types enablement/verification/native-baseline/producer.ts "$RUNNER_TEMP/native-baseline"
       - name: Attest native verification baseline
-        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        if: success() && github.ref == 'refs/heads/main' && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: ${{ runner.temp }}/native-baseline/native-baseline.json
       - name: Upload native verification baseline
-        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        if: success() && github.ref == 'refs/heads/main' && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
         uses: actions/upload-artifact@v4
         with:
           name: native-baseline-${{ inputs.runner }}-${{ github.sha }}
@@ -604,9 +607,11 @@ jobs:
           retention-days: 14
 
   release-ready:
+    permissions:
+      contents: read
     name: ${{ inputs.revision && format('Release verification ({0})', inputs.revision) || 'Release verification' }}
     needs: [select, desktop-ui, connect-client, connect-web, rust]
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
