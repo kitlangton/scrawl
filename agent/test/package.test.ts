@@ -21,9 +21,9 @@ test('packed CLI installs offline outside checkout and inspects without loading 
     assert.equal(run(['--input-type=module','-e',"await import('@apparent/agent')"]),'');
     assert.match(run([cli,'--help']),/Local Apparent/);assert.equal(run([cli,'--version']),'0.1.0\n');
     const bundle=join(root,'fixture.apparent');await mkdir(bundle);
-    const raw=JSON.stringify({version:1,id:'fixture',createdAtMs:1,durationMs:1,target:{},transcript:{text:'hello',segments:[]},strokes:[],marks:[],events:[],keyframes:[],contactSheet:'sheet.png'});
+    const raw=JSON.stringify({version:1,id:'fixture',createdAtMs:1,durationMs:1,target:{mode:'display',app:null,bundleId:null,windowTitle:null,windowId:null,displayId:0,frame:{x:0,y:0,width:800,height:600,scale:1}},transcript:{text:'hello',segments:[]},strokes:[],marks:[],events:[],keyframes:[],contactSheet:'sheet.png'});
     await writeFile(join(bundle,'apparent.json'),raw);await writeFile(join(bundle,'summary.md'),'hello\n');
-    assert.equal(run([cli,'inspect',bundle]),'hello\n');assert.equal(run([cli,'inspect',bundle,'--json']),raw);
+    assert.match(run([cli,'inspect',bundle]),/“hello”/);assert.equal(run([cli,'inspect',bundle,'--stored-summary']),'hello\n');assert.equal(run([cli,'inspect',bundle,'--json']),raw);
     assert.equal(await readFile(join(bundle,'apparent.json'),'utf8'),raw);
   }finally{await rm(root,{recursive:true,force:true});}
 });

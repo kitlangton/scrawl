@@ -24,19 +24,21 @@ const clone = <T>(value: T): T => structuredClone(value);
 
 function initial(scenario: FixtureScenario): CapabilitySnapshot {
   const snapshot: CapabilitySnapshot = {
-    version: 1, providerEpoch: "fixture-epoch-1", revision: 1, connection: "connected",
+    version: 2, providerEpoch: "fixture-epoch-1", revision: 1, connection: "connected",
     readiness: { requirements: [{ id: "screen-capture", required: true, status: "granted", usableNow: true, relaunchNeeded: false, allowedRepairActions: [] }] },
     shortcut: { effective: "Ctrl+Shift+R", label: "Ctrl Shift R", registration: "registered", externallyManaged: false, draft: null },
-    pen: { effective: "ink", supported: ["ink", "laser", "cursor"] }, captures: [],
+    pen: { effective: "coral", supported: ["coral", "purple", "blue", "green"] }, captures: [],
+    // No current production adapter owns an armed-shortcut reservation.
+    nextShortcutAdmission: { state: "unavailable" },
   };
   if (scenario === "permission-granted-relaunch-needed") snapshot.readiness.requirements[0] = {
     id: "screen-capture", required: true, status: "granted", usableNow: false, relaunchNeeded: true, allowedRepairActions: ["request-safe-relaunch"],
   };
   if (scenario === "external-shortcut-save-failure") snapshot.shortcut = { ...snapshot.shortcut, effective: null, label: null, registration: "externally-managed", externallyManaged: true };
   if (scenario === "pen-write-failure-preserves-effective") snapshot.pen.error = "fixture write failure";
-  if (scenario === "unrelated-capture") snapshot.captures = [{ captureId: "capture-unrelated", phase: "recording", outcomes: [{ kind: "first-frame-start", at: "2025-01-01T00:00:00.000Z", ok: true }] }];
-  if (scenario === "reconnect-with-saved-history") snapshot.captures = [{ captureId: "capture-saved", phase: "saved", outcomes: [{ kind: "save", at: "2025-01-01T00:00:01.000Z", ok: true }] }];
-  if (scenario === "ambiguous-command-preserves-capture" || scenario === "unsubscribe-during-recording") snapshot.captures = [{ captureId: "capture-active", phase: "recording", outcomes: [{ kind: "first-frame-start", at: "2025-01-01T00:00:00.000Z", ok: true }] }];
+  if (scenario === "unrelated-capture") snapshot.captures = [{ captureId: "capture-unrelated", delivery: "unknown", phase: "recording", outcomes: [{ kind: "first-frame-start", at: "2025-01-01T00:00:00.000Z", ok: true }] }];
+  if (scenario === "reconnect-with-saved-history") snapshot.captures = [{ captureId: "capture-saved", delivery: "unknown", phase: "saved", outcomes: [{ kind: "save", at: "2025-01-01T00:00:01.000Z", ok: true }] }];
+  if (scenario === "ambiguous-command-preserves-capture" || scenario === "unsubscribe-during-recording") snapshot.captures = [{ captureId: "capture-active", delivery: "unknown", phase: "recording", outcomes: [{ kind: "first-frame-start", at: "2025-01-01T00:00:00.000Z", ok: true }] }];
   return snapshot;
 }
 
@@ -66,7 +68,7 @@ export function createRecordFixture(scenario: FixtureScenario = "permission-gran
       }
     } finally { emitting = false; }
   };
-  const valid = (value: CapabilitySnapshot) => value.version === 1 && !!value.providerEpoch && Number.isSafeInteger(value.revision) && value.revision >= 0;
+  const valid = (value: CapabilitySnapshot) => value.version === 2 && !!value.providerEpoch && Number.isSafeInteger(value.revision) && value.revision >= 0;
   const publish = (value: CapabilitySnapshot): boolean => {
     if (!valid(value) || value.providerEpoch !== snapshot.providerEpoch || value.revision <= snapshot.revision || value.connection !== snapshot.connection) return false;
     snapshot = clone(value); emit(); return true;
@@ -77,9 +79,12 @@ export function createRecordFixture(scenario: FixtureScenario = "permission-gran
     if (command.expected.providerEpoch !== snapshot.providerEpoch || command.expected.revision !== snapshot.revision) return "stale provider epoch or revision";
     const active = snapshot.captures.some(c => ["starting", "recording", "processing", "unknown"].includes(c.phase));
     if (command.type === "start-capture") {
+      if (snapshot.nextShortcutAdmission.state === "armed") return "capture reserved for the next shortcut; cancel the reservation before explicit Start";
       if (active) return "capture already active or unresolved";
       if (snapshot.readiness.requirements.some(r => r.required && (!r.usableNow || r.relaunchNeeded))) return "capture requirements not usable";
     }
+    if (command.type === "arm-next-shortcut" && snapshot.nextShortcutAdmission.state !== "idle") return "next-shortcut admission is unavailable or not idle";
+    if (command.type === "cancel-next-shortcut" && (snapshot.nextShortcutAdmission.state !== "armed" || snapshot.nextShortcutAdmission.admissionId !== command.admissionId)) return "matching next-shortcut admission is not armed";
     if (command.type === "request-permission" || command.type === "open-system-settings") {
       const requirement = snapshot.readiness.requirements.find(r => r.id === command.requirementId);
       if (!requirement?.allowedRepairActions.includes(command.type)) return "repair action unavailable";

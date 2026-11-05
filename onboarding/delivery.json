@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "id": "onboarding",
+  "kind": "npm",
+  "package": "onboarding",
+  "inputs": ["onboarding/"],
+  "verify": ["typecheck", "test"],
+  "build": "build",
+  "targets": ["linux-x64", "macos-x64"],
+  "stage": "library"
+}
