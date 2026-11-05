@@ -18,11 +18,15 @@ function executable(path: string): boolean {
 }
 if (!args.has('--installed')) run('bun', ['install', '--frozen-lockfile'])
 if (env.CHROME_PATH && !executable(env.CHROME_PATH)) throw new Error(`CHROME_PATH is not executable: ${env.CHROME_PATH}`)
-if (!env.CHROME_PATH && args.has('--install-browser')) {
-  const { chromium } = await import('playwright-core')
-  run('./node_modules/.bin/playwright-core', ['install', '--with-deps', 'chromium'])
-  env.CHROME_PATH = chromium.executablePath()
-  if (!existsSync(env.CHROME_PATH)) throw new Error(`Installed Chromium is missing: ${env.CHROME_PATH}`)
+if (args.has('--install-browser')) {
+  const { chromium, firefox } = await import('playwright-core')
+  // The responsive homepage suite exercises Firefox even with a custom Chrome.
+  const browsers = env.CHROME_PATH ? ['firefox'] : ['chromium', 'firefox']
+  run('./node_modules/.bin/playwright-core', ['install', '--with-deps', ...browsers])
+  env.CHROME_PATH ??= chromium.executablePath()
+  for (const path of [env.CHROME_PATH, firefox.executablePath()]) {
+    if (!existsSync(path)) throw new Error(`Installed browser is missing: ${path}`)
+  }
 }
 
 run('npm', ['run', 'build'])
