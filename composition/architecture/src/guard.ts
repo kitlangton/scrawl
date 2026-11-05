@@ -20,7 +20,7 @@ const packageOwners: Record<string, Owner> = {
 };
 const publicEdges: Record<Owner, Owner[]> = {
   engine: ['shared'], record: ['engine', 'shared'], agent: ['engine', 'shared'], onboarding: ['record', 'shared'],
-  connect: [], shared: [], composition: ['engine', 'record', 'agent', 'onboarding', 'shared'], legacy: [], other: [],
+  connect: ['shared'], shared: [], composition: ['engine', 'record', 'agent', 'onboarding', 'shared'], legacy: [], other: [],
 };
 const sourceExt = new Set(['.ts', '.tsx', '.cts', '.mts']);
 const ignoredParts = new Set(['node_modules', 'dist', 'target', '.git']);
@@ -32,7 +32,7 @@ function ownerOf(root: string, file: string): Owner {
   if (rel[0] === 'record') return 'record';
   if (rel[0] === 'agent') return 'agent';
   if (rel[0] === 'onboarding') return 'onboarding';
-  if (rel[0] === 'connect' && ((rel[1] === 'delivery' && rel[2] === 'client') || (rel[1] === 'tooling' && rel[2] === 'hosting'))) return 'connect';
+  if (rel[0] === 'connect' && (rel[1] === 'service' || (rel[1] === 'delivery' && rel[2] === 'client') || (rel[1] === 'tooling' && rel[2] === 'hosting'))) return 'connect';
   if (rel[0] === 'shared') return 'shared';
   if (rel[0] === 'composition') return 'composition';
   if (rel[0] === 'capture') return 'legacy';

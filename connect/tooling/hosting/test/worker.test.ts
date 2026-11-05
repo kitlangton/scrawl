@@ -1,10 +1,14 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import test from "node:test"
 import worker from "../src/index.ts"
+// @ts-expect-error the existing service test fixture is JavaScript
+import { fixture } from "../../../service/test/helpers.mjs"
 
-const routes = ["connect", "connect/device", "connect/shares", "hosted", "hosted/device", "hosted/shares"]
+const routes = ["connect", "connect/device", "connect/shares"]
 
-test("only the six browser management routes and owned static files reach assets", async () => {
+test("only canonical browser routes and owned static files reach assets", async () => {
   const seen: Request[] = []
   const assets = { fetch: async (request: Request) => {
     seen.push(request)
@@ -22,11 +26,11 @@ test("only the six browser management routes and owned static files reach assets
     assert.equal(forwarded.headers.has("cookie"), false)
     assert.equal(forwarded.headers.has("authorization"), false)
   }
-  for (const path of ["/", "/unknown", "/connect/other", "/hosted/device/extra", "/connectivity", "/connect%2Fdevice", "/connect/assets/main.js.map", "/connect/assets/.env", "/connect/assets/manifest.json", "/hosted/private.json"]) {
+  for (const path of ["/", "/unknown", "/connect/other", "/hosted", "/connectivity", "/connect%2Fdevice", "/connect/assets/main.js.map", "/connect/assets/.env", "/connect/assets/manifest.json", "/connect/assets/private.json", "/connect/private/secret"]) {
     const response = await worker.fetch(new Request(`https://app.tryapparent.com${path}`), { ASSETS: assets } as never)
     assert.equal(response.status, 404, path)
   }
-  for (const path of ["/hosted/source-pond-v4.png", "/hosted/agent-pond-v4.png", "/hosted/agent-reading-v4.png", "/connect/assets/main-a1b2.js"]) {
+  for (const path of ["/connect/assets/source-pond-v4.png", "/connect/assets/agent-pond-v4.png", "/connect/assets/agent-reading-v4.png", "/connect/assets/main-a1b2.js"]) {
     const response = await worker.fetch(new Request(`https://app.tryapparent.com${path}`), { ASSETS: assets } as never)
     assert.equal(response.status, 200)
   }
@@ -41,4 +45,60 @@ test("HEAD is bodyless and other methods fail closed without touching assets", a
   const post = await worker.fetch(new Request("https://app.tryapparent.com/connect", { method: "POST" }), { ASSETS: assets } as never)
   assert.equal(post.status, 405)
   assert.equal(calls, 1)
+})
+
+test("canonical API and viewer requests dispatch to the existing service handler", async () => {
+  let assets = 0
+  const env = {
+    ASSETS: { fetch: async () => { assets++; return new Response("must not reach assets") } },
+    API_ORIGIN: "https://app.tryapparent.com/connect",
+    SITE_ORIGIN: "https://app.tryapparent.com",
+  } as never
+  const unknownApi = await worker.fetch(new Request("https://app.tryapparent.com/connect/v1/private-unknown"), env)
+  assert.equal(unknownApi.status, 404)
+  assert.deepEqual(await unknownApi.json(), { error: { code: "not_found", message: "not found" } })
+  assert.equal(unknownApi.headers.get("cache-control"), "no-store")
+  assert.equal(unknownApi.headers.get("x-robots-tag"), "noindex, nofollow, noarchive")
+  const viewer = await worker.fetch(new Request("https://app.tryapparent.com/connect/share-view.js"), env)
+  assert.equal(viewer.status, 200)
+  assert.match(viewer.headers.get("content-type") ?? "", /text\/javascript/)
+  assert.match(await viewer.text(), /createRoot|hydrateRoot/)
+  assert.equal(assets, 0)
+})
+
+test("bundled hosting worker uses synthetic D1/R2 service bindings and canonical OAuth callback", async () => {
+  const previous = process.cwd()
+  process.chdir(resolve(import.meta.dirname, "../../../service"))
+  let f: Awaited<ReturnType<typeof fixture>>
+  try {
+    f = await fixture({
+      API_ORIGIN: "https://app.tryapparent.com/connect",
+      SITE_ORIGIN: "https://app.tryapparent.com",
+    }, {
+      script: readFileSync(resolve(import.meta.dirname, "../.output/worker.js"), "utf8"),
+      assets: { directory: resolve(import.meta.dirname, "../.output/dist"), binding: "ASSETS", routerConfig: { invoke_user_worker_ahead_of_assets: true, has_user_worker: true } },
+    })
+  } finally { process.chdir(previous) }
+  try {
+    const ui = await f.mf.dispatchFetch("https://app.tryapparent.com/connect?code=SYNTHETIC")
+    assert.equal(ui.status, 200, "the exact deployable bundle must include the UI gateway")
+    assert.equal(ui.headers.get("x-apparent-publisher"), "connect-worker")
+    assert.match(await ui.text(), /Checking your account/)
+    const session = await f.call("/v1/session")
+    assert.equal(session.status, 200)
+    assert.deepEqual(await session.json(), { authenticated: false, csrfToken: null, account: null, slots: { used: 0, limit: 20, remaining: 20 } })
+    const denied = await f.call("/v1/account")
+    assert.equal(denied.status, 401)
+    assert.equal((await denied.json()).error.code, "unauthorized")
+    const signIn = await f.call("/auth/google/start?returnTo=%2Fconnect/device%3Fcode%3DSYNTHETIC")
+    assert.equal(signIn.status, 302)
+    assert.equal(signIn.headers.has("set-cookie"), true, "dynamic auth cookies pass through the host unchanged")
+    const google = new URL(signIn.headers.get("location")!)
+    assert.equal(google.origin, "https://accounts.google.com")
+    assert.equal(google.searchParams.get("redirect_uri"), "https://app.tryapparent.com/connect/auth/google/callback")
+    const font = await f.call("/share-font.ttf")
+    assert.equal(font.status, 200)
+    assert.match(font.headers.get("content-type") ?? "", /font\/ttf/)
+    assert.equal((await f.call("/private/secret")).status, 404)
+  } finally { await f.close() }
 })

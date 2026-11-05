@@ -159,3 +159,14 @@ test('discovers .mts files and filenames containing newlines', () => fixture({
   'record/src/line\nbreak.mts': "import '../../agent/src/private.js';",
   'agent/src/private.ts': 'export const x = 1;',
 }, root => assert(checkArchitecture(root).some(x=>x.includes('cross-owner path')))));
+
+test('Connect gateway and service share one owner while service imports cannot cross product boundaries',()=>{
+ fixture({
+  'connect/tooling/hosting/src/index.ts': "import service from '../../../service/src/worker.ts';",
+  'connect/service/src/worker.ts': 'export default {};',
+ },root=>assert.deepEqual(checkArchitecture(root,['connect']),[]));
+ fixture({
+  'connect/service/src/worker.ts': "import '../../../record/src/private.ts';",
+  'record/src/private.ts': 'export const internal = true;',
+ },root=>assert.ok(checkArchitecture(root,['connect']).some(error=>error.includes('connect -> record'))));
+});

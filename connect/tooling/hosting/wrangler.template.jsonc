@@ -10,8 +10,15 @@
     "run_worker_first": true,
     "not_found_handling": "none"
   },
+  "vars": {
+    "API_ORIGIN": "https://app.tryapparent.com/connect",
+    "SITE_ORIGIN": "https://app.tryapparent.com"
+  },
   "preview_urls": false,
   "observability": {
     "enabled": false
-  }
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
 }
