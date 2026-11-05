@@ -8,8 +8,11 @@ npm run build
 node dist/cli.js inspect /path/to/capture.apparent
 node dist/cli.js inspect /path/to/capture.apparent/apparent.json --json
 node dist/cli.js inspect /path/to/capture.apparent --marks
+node dist/cli.js skill
 node dist/cli.js record --duration 30 --out /absolute/path/demo.apparent
 ```
+
+`apparent-agent skill` prints the exact standalone capture-reading guide bundled with the package. The guide documents only this package's local inspection behavior; it does not route or replace the legacy `apparent skill` command.
 
 `inspect` generates semantic text from the validated manifest, including context, notes, timed transcript, marks/events and audio-sample, transcript, image-quality and crop warnings. It regenerates output even when a producer `summary.md` is missing or stale; `--stored-summary` explicitly prints that producer-authored text. `--experiment agentContext` selects the richer event/mark timeline; `experiments.agentContext` in the read-only config can enable it by default, and the explicit flag overrides a configured `false`. The default is off. `--stored-summary` conflicts with this formatter because stored producer text cannot apply it. `--json` writes the raw `apparent.json` bytes unchanged. `--marks` prints semantic mark lines (`--marks --json` returns their structured fields), `--transcript` prints transcript text, and `--images` lists safe relative contact sheet/keyframe references. Explicit bundle directories and manifest paths are supported.
 

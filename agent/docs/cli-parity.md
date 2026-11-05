@@ -22,7 +22,7 @@ This inventory is based on the active parser and handlers in `composition/cli.rs
 | `connect` (`cloud` alias): `login`, `status`, `logout`, `disable`, `retry`, `upload`, `shares list`, `shares revoke`; `fetch` | Connect authentication, upload queue, hosted retrieval and consent. | **Deferred by user.** No Agent network, auth or hosted-fetch work in this campaign slice. |
 | `issue` | Composition/GitHub feedback submission. | Not implemented. Keep separate from capture inspection and require its existing explicit submission policy. |
 | `demo` | Desktop/Engine synthetic bundle generation and optional clipboard. | Not implemented. Depends on a supported synthetic bundle producer; no capture implementation in this slice. |
-| `skill` | Agent skill content. | Existing Rust CLI prints the packaged skill. The Agent package does not yet provide this command. |
+| `skill` | Agent skill content. | **Implemented:** `apparent-agent skill` prints the standalone capture-reading guide bundled in the npm package. It has no arguments, starts no Engine, and does not change legacy `apparent skill` routing. |
 | `autocrop` | Engine crop policy plus Desktop/browser playground. | Not implemented. Engine owns crop semantics; interactive playground remains UI/provider routed. |
 | `lab pill`; `tune list|set|preset|reset|rust` | Desktop developer motion lab and tune settings. | Not implemented. Developer/UI owned; keep debug configuration and surfaces with Desktop. |
 | `fixture`, `capture-sim`, `autocrop-eval`, `windows`, `sck-probe`, `decoder-check`, `encoder-check` | Engine/Desktop developer diagnostics, simulation and platform probes. | Not implemented. Developer/provider owned; each requires its relevant native or corpus capability. |
@@ -37,6 +37,10 @@ Inspection never fetches a URL, invokes Engine/native code, decodes media or cha
 
 ## Acceptance and retirement boundary
 
-This slice is accepted when the Agent owner suite, packed consumer install, and Rust-free TypeScript build all pass; current, legacy and producer-shaped synthetic fixtures match Rust output after substituting only the temporary bundle path; inspection leaves manifest/config bytes unchanged; and the built package works outside the checkout without Desktop, Rust or network access. This semantic-only change has no native OS boundary. No new `apparent` routing is selected here.
+The local inspection slice is accepted when the Agent owner suite, packed consumer install, and Rust-free TypeScript build all pass; current, legacy and producer-shaped synthetic fixtures match Rust output after substituting only the temporary bundle path; inspection leaves manifest/config bytes unchanged; and the built package works outside the checkout without Desktop, Rust or network access. The standalone skill command has no native OS boundary and does not select new `apparent` routing.
 
 The legacy Rust command remains until every supported installed/package-manager consumer has moved and each command family's owner has accepted its replacement. Agent package publication, app command routing and donor deletion are separate campaign gates; a parity entry in this table is not evidence that those gates passed.
+
+## Bundled standalone skill
+
+`apparent-agent skill` writes `skills/apparent/SKILL.md` byte-for-byte to stdout, adding a final newline only if the packaged guide has none. It reads only that package-relative text file; it does not load config, locate bundles, launch Engine or access the network. The standalone guide teaches visual-first reading and the installed `apparent-agent inspect` commands. Its documented recording adapter remains unavailable without a future Engine recorder/media capability. This does not replace or change the legacy Rust `apparent skill` guide or its command routing.
