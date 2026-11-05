@@ -1,0 +1,49 @@
+import { execFileSync, spawnSync } from 'node:child_process'
+import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { createManifest, validateArtifact, validateTarget } from './contract.ts'
+
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const repositoryRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: packageRoot, encoding: 'utf8' }).trim()
+const manifestPath = resolve(repositoryRoot, 'engine/Cargo.toml')
+const targetConfig = validateTarget(process.env.OWNER_TARGET)
+const output = resolve(packageRoot, 'dist')
+
+function cleanTrackedSource(): string {
+  const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: repositoryRoot, encoding: 'utf8' })
+  if (status) throw new Error('Native build requires clean tracked source')
+  return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, encoding: 'utf8' }).trim()
+}
+
+function sanitizedEnvironment() {
+  const env = { ...process.env }
+  for (const name of ['DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY', 'XDG_RUNTIME_DIR']) delete env[name]
+  return env
+}
+
+const sourceSha = cleanTrackedSource()
+if (readdirSync(packageRoot).includes('dist') && readdirSync(output).length) throw new Error('Native artifact output must be absent or empty')
+mkdirSync(output, { recursive: true })
+const args = ['build', '--locked', '--release', '--manifest-path', manifestPath, '--target', targetConfig.triple]
+if (process.env.APPARENT_CARGO_OFFLINE === '1') args.push('--offline')
+execFileSync('cargo', args, { cwd: repositoryRoot, stdio: 'inherit' })
+const binary = resolve(repositoryRoot, 'target', targetConfig.triple, 'release', process.platform === 'win32' ? 'apparent-engine.exe' : 'apparent-engine')
+const bytes = readFileSync(binary)
+const mode = statSync(binary).mode & 0o777
+if ((mode & 0o111) === 0) chmodSync(binary, mode | 0o755)
+writeFileSync(resolve(output, 'apparent-engine'), bytes, { flag: 'wx', mode: mode | 0o755 })
+const stagedMode = statSync(resolve(output, 'apparent-engine')).mode & 0o777
+writeFileSync(resolve(output, 'manifest.json'), `${JSON.stringify(createManifest(sourceSha, targetConfig.target, bytes, stagedMode), null, 2)}\n`, { flag: 'wx', mode: 0o644 })
+if (cleanTrackedSource() !== sourceSha) throw new Error('Tracked source changed during native build')
+validateArtifact(output, targetConfig.target)
+
+const result = spawnSync('node', ['--experimental-strip-types', '--test', resolve(repositoryRoot, 'engine/tests/native-peer.test.ts')], {
+  cwd: repositoryRoot,
+  encoding: 'utf8',
+  env: { ...sanitizedEnvironment(), APPARENT_ENGINE_BIN: resolve(output, 'apparent-engine') },
+})
+process.stdout.write(result.stdout ?? '')
+process.stderr.write(result.stderr ?? '')
+if (result.status !== 0) throw new Error('SDK-to-native protocol checks failed for the staged release executable')
+console.log(`Native Engine artifact built for ${targetConfig.target}: ${output}`)

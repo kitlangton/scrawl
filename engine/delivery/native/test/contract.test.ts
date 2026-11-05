@@ -1,0 +1,47 @@
+import assert from 'node:assert/strict'
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { resolve } from 'node:path'
+import { after, test } from 'node:test'
+import { createManifest, validateArtifact, validateTarget } from '../src/contract.ts'
+
+const temp = mkdtempSync(resolve(tmpdir(), 'engine-native-producer-'))
+after(() => rmSync(temp, { recursive: true, force: true }))
+
+test('targets require the exact supported native host', () => {
+  assert.equal(validateTarget('linux-x64', 'linux', 'x64').triple, 'x86_64-unknown-linux-gnu')
+  assert.equal(validateTarget('macos-x64', 'darwin', 'x64').triple, 'x86_64-apple-darwin')
+  assert.throws(() => validateTarget(undefined, 'linux', 'x64'), /OWNER_TARGET/)
+  assert.throws(() => validateTarget('macos-x64', 'linux', 'x64'), /Cross compilation/)
+  assert.throws(() => validateTarget('linux-x64', 'linux', 'arm64'), /Cross compilation/)
+  assert.throws(() => validateTarget('win-x64', 'win32', 'x64'), /OWNER_TARGET/)
+})
+
+test('manifest reports the exact binary hash and unavailable capture truthfully', () => {
+  const manifest = createManifest('a'.repeat(40), 'linux-x64', Buffer.from('native'), 0o755)
+  assert.equal(manifest.protocolVersion, 1)
+  assert.deepEqual(manifest.capture, { screenCapture: false, readiness: 'unavailable' })
+  assert.equal(manifest.executable.sha256, 'bef32d2c315a289576f2a6828d27edb16bb316a4d85c271f2d794045f3ea668d')
+  assert.throws(() => createManifest('not-a-sha', 'linux-x64', Buffer.from('native'), 0o755), /source SHA/)
+  assert.throws(() => createManifest('a'.repeat(40), 'linux-x64', Buffer.from('native'), 0o644), /execute bit/)
+})
+
+test('inventory rejects extra, tampered, missing and symlinked artifact files', () => {
+  const artifact = resolve(temp, 'artifact'); mkdirSync(artifact)
+  const binary = resolve(artifact, 'apparent-engine'); writeFileSync(binary, 'candidate', { mode: 0o755 }); chmodSync(binary, 0o755)
+  const manifest = createManifest('b'.repeat(40), 'linux-x64', Buffer.from('candidate'), 0o755)
+  const manifestPath = resolve(artifact, 'manifest.json')
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  assert.deepEqual(validateArtifact(artifact, 'linux-x64'), manifest)
+  writeFileSync(resolve(artifact, 'extra'), 'no')
+  assert.throws(() => validateArtifact(artifact, 'linux-x64'), /inventory/)
+  rmSync(resolve(artifact, 'extra'))
+  writeFileSync(binary, 'tampered')
+  assert.throws(() => validateArtifact(artifact, 'linux-x64'), /manifest/)
+  writeFileSync(binary, 'candidate', { mode: 0o755 }); chmodSync(binary, 0o755)
+  writeFileSync(resolve(artifact, 'other'), 'no')
+  rmSync(resolve(artifact, 'other'))
+  rmSync(manifestPath)
+  symlinkSync(binary, manifestPath)
+  assert.throws(() => validateArtifact(artifact, 'linux-x64'), /Symlink/)
+})
