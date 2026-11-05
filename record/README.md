@@ -41,7 +41,12 @@ verified tarball SHA-256 is
 `1b605f06273f9c1a134b68b0ed233605b120813214914ca70ed0c8c5f0346f04`.
 
 Assembly requires at least one selected frame, one contact sheet, and exact
-sealed media references. It refuses stale capture/material/fact identities,
+sealed media references. Each artifact declares the exact materials key; media
+hashes and identities must match the validated material inventory. Generated
+documents have no filesystem identity. Image seals remain caller-attested,
+not authenticated derivative receipts: inventory provenance distinguishes them
+from material references and generated documents. A publisher must still
+validate native derivative authority and actual filesystem contents. It refuses stale capture/material/fact identities,
 missing or duplicate paths, escaping paths, mismatched bytes, and unordered
 frame indices/times. Validated source/invocation facts retain capture identity
 in the returned material/fact documents; canonical window snapshots/titles stay
@@ -55,7 +60,9 @@ not contain enough geometry to make a v1 mark. Transcript
 segments without `endMs` require an explicit Record estimate policy; this
 policy estimates end at the next segment start or capture end and sets
 `estimated: true`. Accepted stroke surface transforms remain authoritative:
-non-empty strokes need an explicit Record-owned canonical v1 stroke mapping or
+non-empty strokes need an explicit Record-owned canonical v1 stroke mapping
+that preserves the declared surface dimensions and observed normalized points;
+projection into a different surface is unsupported. Otherwise
 assembly returns an exact unsupported error. This API is fixture-ready only;
 it does not decode raw materials, choose frames/marks, produce contact sheets,
 or establish native provenance/full-profile acceptance.
@@ -147,7 +154,7 @@ fallback route remains authoritative.
 | Next-shortcut admission and local-only admission | Explicitly unavailable | Current capture-v1 has neither reservation enforcement nor local-only enforcement. Record refuses local-only starts and refuses arm when the producer reports unavailable; it never infers enforcement from intent. A future producer must publish reservation consumption/cancellation/expiry and effective per-capture delivery readback. Engine committed parent-thread notification when usable native capabilities land. |
 | Transcript association | Implemented in the headless package | `associateTranscriptWithSelectedFrames` partitions supplied word/segment facts across existing selected frames using measured clause/anchor rules. Source-derived Rust parity tests cover Unicode whitespace, punctuation, gaps and boundary timing. This does not select images or supply missing native visual metrics. |
 | Semantic processing assembly and frame decode | Consumer implemented; installed adoption partial | PR #704 (main `7c2afd5`) added the formatter and decoder seam; this slice adds durable job ownership and real PNG decode proof against the retained Linux `media/1` artifact. It does not implement frame selection, canonical bundle writing, default output selection or installed handoff adoption. |
-| Capture material to Record bundle assembly and authenticated publication | Blocked on Engine producer contract | Engine is preparing the separately negotiated capture-material → Record assembly → authenticated publish channel because capture-v1 `saved` semantics cannot supply Record policy assembly. Current capture-v1 remains unavailable. Engine has committed direct notification to the parent Record thread when a usable capture SDK/native artifact and authoritative capabilities land. Independent packaged-media notification is also established; it does not prove this Record assembly channel or real decode. |
+| Capture material to Record bundle assembly and authenticated publication | Pure document/inventory assembly implemented; native publication unavailable | `assembleCanonicalBundle` maps public SDK-validated materials and facts plus explicit Record policy into canonical document bytes and an inventory. Image metadata remains caller-attested, not authenticated native derivatives. It performs no file writes or publication. Capture/2, raw-material decode and native publication remain unavailable; Engine retains its committed usable-capability return. |
 | Keyframes, transcript, bundle contents, warnings and default output | Partially implemented; full adoption blocked | Record formats supplied semantic inputs, including target/session context, interaction labels/marks and processing warnings; default keyframe selection, canonical bundle write and installed handoff are still unadopted. Provider maps Engine v1 `saved` to Record `processing`; only authenticated Record output facts may publish `saved` or a successful save outcome. |
 | Clipboard copy, link and artifact open | Local prompt policy implemented; native effects and receipts blocked | `formatLocalHandoff` preserves semantic context, warnings and the timed request, with access instructions first and no clipboard/publication effect. Copy/open actions may be dispatched through the native port, but dispatch is not success. Copy needs a clipboard receipt; link needs the existing link producer; artifact open needs the exact-artifact viewer acknowledgement or supported OS observation. No such production receipts are synthesized here. |
 | Pill/runtime installed binding | Existing UI and runtime adopted through current fallback | Reusable pill and injected workflow host are packaged. This capability provider is owner-local and does not install an Electron main/preload route or switch routing. |

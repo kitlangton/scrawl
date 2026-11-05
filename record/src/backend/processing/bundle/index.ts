@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { MaterialsDocument, ContextFacts, InteractionFacts, TranscriptFacts, StrokeFacts } from "@apparent/engine-sdk/capture";
 import { validateMaterialsDocument, validateFactFile } from "@apparent/engine-sdk/capture";
 import { assembleProcessingOutput, type ProcessingInput, type ProcessingWarning, type SelectedFrame } from "../index.js";
@@ -11,7 +12,8 @@ export interface BundleValidators {
 }
 export interface SealedFile { relativePath:string; identity:{device:string;inode:string;size:number;modifiedNs:string}; sha256:string }
 export interface FactBytes { file: SealedFile; bytes: Uint8Array }
-export interface SealedArtifact { relativePath: string; bytes: Uint8Array; sha256: string; byteLength: number; identity:{device:string;inode:string;size:number;modifiedNs:string}; role: "frame" | "contact-sheet" | "video" | "audio" }
+/** Images remain caller-attested; matching metadata is not native provenance. */
+export interface SealedArtifact { materials: MaterialsDocument["manifest"]["key"]; relativePath: string; bytes: Uint8Array; sha256: string; byteLength: number; identity:{device:string;inode:string;size:number;modifiedNs:string}; role: "frame" | "contact-sheet" | "video" | "audio" }
 export interface CanonicalStroke { id:string;t0:number;t1:number;fw:number;fh:number;on?:string;pin?:number;laser?:boolean;pts:number[] }
 export interface CanonicalMark { id:string;strokes:number[];t0:number;t1:number;boxNorm:[number,number,number,number];shape:"circle"|"underline"|"line"|"arrow"|"tap"|"pin"|"mark"|"flag";from?:[number,number];to?:[number,number];pin?:number;on?:string;description:string;frame?:string }
 export type CanonicalKeyframeReason="mark"|"click"|"laser"|"scene_change"|"speech"|"initial"|"whiteboard";
@@ -36,7 +38,7 @@ export interface BundleAssemblyInput {
   additionalCanonicalFacts?: { strokes?: CanonicalStroke[]; marks?: CanonicalMark[]; screens?: unknown[]; autocrop?: unknown };
   transcriptBounds?: { policy: "estimated"; basis: string };
 }
-export interface PublicationInventory { schema: "apparent.record-bundle-inventory/1"; materials:MaterialsDocument["manifest"]["key"]; retainedFacts:{confirmedSource:MaterialsDocument["payload"]["confirmedSource"];invocation:MaterialsDocument["payload"]["invocation"];references:MaterialsDocument["payload"]["facts"]}; collection: MaterialsDocument["payload"]["collection"]; observations: Record<string,"collected"|"unavailable">; warnings: MaterialsDocument["payload"]["warnings"]; entries: Array<{ path:string; role:string; sha256:string; byteLength:number; identity?:SealedArtifact["identity"] }> }
+export interface PublicationInventory { schema: "apparent.record-bundle-inventory/1"; materials:MaterialsDocument["manifest"]["key"]; retainedFacts:{confirmedSource:MaterialsDocument["payload"]["confirmedSource"];invocation:MaterialsDocument["payload"]["invocation"];references:MaterialsDocument["payload"]["facts"]}; collection: MaterialsDocument["payload"]["collection"]; observations: Record<string,"collected"|"unavailable">; warnings: MaterialsDocument["payload"]["warnings"]; entries: Array<{ path:string; role:string; sha256:string; byteLength:number; provenance:"record-generated"|"material-reference"|"caller-attested"; identity?:SealedArtifact["identity"] }> }
 export interface BundleAssembly { apparentJson: Uint8Array; summaryMd: Uint8Array; inventory: PublicationInventory; materials: MaterialsDocument; validatedFacts: {context?:ContextFacts;interactions?:InteractionFacts;transcript?:TranscriptFacts;acceptedStrokes?:StrokeFacts} }
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -48,10 +50,12 @@ function sameIdentity(value: {captureId:string;materialsId:string}, m: Materials
 function artifactPath(p: string) { if (!p || isAbsolute(p) || /^[A-Za-z]:/u.test(p) || p.includes("\0") || p.split(/[\\/]/u).some(x=>x===".."||x==="."||x==="")) fail(`escaping or invalid artifact reference: ${p}`); return p.replaceAll("\\", "/"); }
 
 /** Assemble canonical v1 DOCUMENT/INVENTORY bytes from validated inputs, without filesystem effects. */
-export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: BundleValidators): BundleAssembly {
+export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: BundleValidators = {}): BundleAssembly {
+  input = structuredClone(input);
   const materialsValidator=validators.materials??((manifest,bytes)=>validateMaterialsDocument(manifest,bytes));
   const factValidator=validators.fact??((file,bytes,materials,kind)=>validateFactFile(file,bytes,materials,kind));
   const m = materialsValidator(input.manifest, input.payloadBytes);
+  if (!m.payload.safety.safeForProcessing) fail("materials are not declared safe for processing");
   if (input.admission.captureId !== m.payload.identity.captureId || input.admission.materialsId !== m.payload.identity.materialsId) fail("admission identity does not match materials");
   if(input.admission.bundleId!==m.payload.bundleId) fail("admission bundle identity does not match materials");
   if (!isAbsolute(input.admission.bundlePath)||resolve(input.admission.bundlePath)!==input.admission.bundlePath) fail("bundlePath must be absolute and normalized");
@@ -71,13 +75,19 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
   if (!input.frames.length) fail("standard profile requires selected sealed frames");
   const byPath = new Map(input.artifacts.map(a=>[artifactPath(a.relativePath),a]));
   if (byPath.size !== input.artifacts.length) fail("duplicate artifact path");
-  for(const [path,a] of byPath){if(!["frame","contact-sheet","video","audio"].includes(a.role)||!a.identity.device||!a.identity.inode||!/^[0-9]+$/u.test(a.identity.modifiedNs)||!Number.isSafeInteger(a.identity.size)||a.byteLength!==a.bytes.byteLength||a.identity.size!==a.byteLength||hash(a.bytes)!==a.sha256)fail(`sealed artifact hash/length mismatch ${path}`);}
+  for(const [path,a] of byPath){if(path==="apparent.json"||path==="summary.md")fail(`artifact collides with generated document: ${path}`);if(!isDeepStrictEqual(a.materials,m.manifest.key))fail(`artifact materials binding is stale or foreign: ${path}`);if(!["frame","contact-sheet","video","audio"].includes(a.role)||!a.identity.device||!a.identity.inode||!/^[0-9]+$/u.test(a.identity.modifiedNs)||!Number.isSafeInteger(a.identity.size)||a.byteLength!==a.bytes.byteLength||a.identity.size!==a.byteLength||hash(a.bytes)!==a.sha256)fail(`sealed artifact hash/length mismatch ${path}`);}
+  function matchMaterial(a:SealedArtifact) {
+    const listed=m.payload.files.find(f=>f.relativePath===a.relativePath);
+    if(!listed||listed.sha256!==a.sha256||!isDeepStrictEqual(listed.identity,a.identity)) fail(`media artifact differs from sealed materials reference: ${a.relativePath}`);
+  }
   const videoArtifact=byPath.get(artifactPath(m.payload.video.file));
   if(!videoArtifact||videoArtifact.role!=="video")fail("canonical video reference lacks its supplied sealed video artifact");
-  if(m.payload.audio){const audioArtifact=byPath.get(artifactPath(m.payload.audio.file));if(!audioArtifact||audioArtifact.role!=="audio")fail("canonical audio reference lacks its supplied sealed audio artifact");}
+  matchMaterial(videoArtifact);
+  if(m.payload.audio){const audioArtifact=byPath.get(artifactPath(m.payload.audio.file));if(!audioArtifact||audioArtifact.role!=="audio")fail("canonical audio reference lacks its supplied sealed audio artifact");matchMaterial(audioArtifact);}
+  for(const artifact of input.artifacts)if((artifact.role==="video"&&artifact!==videoArtifact)||(artifact.role==="audio"&&artifact.relativePath!==m.payload.audio?.file))fail("unreferenced media artifact");
   let previousIndex=0, previousTime=-1;
   const frameFacts = input.frames.map(f=>{
-    if (!Number.isSafeInteger(f.index)||f.index<1||!Number.isSafeInteger(f.timeMs)||f.timeMs<0||f.timeMs>m.payload.clock.durationMs) fail("invalid selected frame index/time");
+    if (!["mark","click","laser","scene_change","speech","initial","whiteboard"].includes(f.canonicalReason)||!Number.isSafeInteger(f.index)||f.index<1||!Number.isSafeInteger(f.timeMs)||f.timeMs<0||f.timeMs>m.payload.clock.durationMs) fail("invalid selected frame reason/index/time");
     if(f.index<=previousIndex||f.timeMs<previousTime) fail("selected frames require unique increasing positive indices and capture time order");
     previousIndex=f.index; previousTime=f.timeMs;
     const path=artifactPath(f.artifactPath), a=byPath.get(path); if(!a||a.role!=="frame") fail(`missing sealed frame artifact ${path}`);
@@ -87,7 +97,7 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
   const sheets=input.artifacts.filter(a=>a.role==="contact-sheet"); if(sheets.length!==1) fail("standard profile requires exactly one sealed contact sheet");
   const sheet=sheets[0]!;
   const context=contextDoc?.context.state==="collected" ? contextDoc.context.value : undefined;
-  const transcript=transcriptDoc ? {source:transcriptDoc.provider,text:transcriptDoc.text,segments:transcriptDoc.segments.map((s,i)=>{
+  const transcript=transcriptDoc ? {source:transcriptDoc.provider,...(transcriptDoc.model!==undefined?{model:transcriptDoc.model}:{}),text:transcriptDoc.text,segments:transcriptDoc.segments.map((s,i)=>{
     if(s.endMs===undefined && !input.transcriptBounds) fail("transcript segment endMs absent; provide explicit estimated Record bounds policy or unsupported");
     if(s.endMs===undefined && input.transcriptBounds?.policy!=="estimated") fail("unsupported transcript bounds policy");
     if(s.endMs===undefined && !input.transcriptBounds?.basis.trim()) fail("estimated transcript bounds require a documented Record policy basis");
@@ -99,6 +109,9 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
     const mapped=input.additionalCanonicalFacts?.strokes?.find((x:any)=>x.id===s.id) as any;
     if(!mapped) fail(`accepted stroke ${s.id} requires a Record-owned canonical v1 surface/transform mapping`);
     if(!Number.isSafeInteger(mapped.t0)||!Number.isSafeInteger(mapped.t1)||mapped.t0!==s.startMs||mapped.t1!==s.endMs||!Number.isSafeInteger(mapped.fw)||mapped.fw<1||!Number.isSafeInteger(mapped.fh)||mapped.fh<1||!Array.isArray(mapped.pts)||mapped.pts.length===0||mapped.pts.length%3!==0||mapped.pts.some((v:number,i:number)=>!Number.isSafeInteger(v)||(i%3===0||i%3===1)&&(v<0||v>10000)||(i%3===2&&(v<0||v>mapped.t1-mapped.t0)))) fail(`accepted stroke ${s.id} has malformed canonical geometry mapping`);
+    const surface=strokesDoc!.surfaces.find(x=>x.surfaceId===s.surfaceId&&x.transformId===s.transformId);
+    const points=s.points.flatMap(p=>[p.x,p.y,p.timeMs-s.startMs]);
+    if(!surface||mapped.fw!==surface.width||mapped.fh!==surface.height||!isDeepStrictEqual(mapped.pts,points))fail(`accepted stroke ${s.id} mapping changes the observed surface geometry`);
     const {id:_sourceStrokeId,...canonical}=mapped; void _sourceStrokeId;
     return canonical;
   }) ?? [];
@@ -108,14 +121,15 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
   if(input.marks.length && !input.additionalCanonicalFacts?.marks) fail("Record marks require an explicit canonical v1 geometry/time/frame mapping");
   const canonicalMarks=input.additionalCanonicalFacts?.marks??[];
   if(new Set(canonicalMarks.map(mark=>mark.id)).size!==canonicalMarks.length)fail("duplicate canonical mark id");
-  for(const mark of canonicalMarks){if(!mark.id||!Number.isSafeInteger(mark.t0)||!Number.isSafeInteger(mark.t1)||mark.t0<0||mark.t1<mark.t0||mark.t1>m.payload.clock.durationMs||!Array.isArray(mark.strokes)||mark.strokes.some(n=>!Number.isSafeInteger(n)||n<0||n>=strokes.length)||!mark.description||!Array.isArray(mark.boxNorm)||!mark.boxNorm.every(n=>Number.isFinite(n)&&n>=0&&n<=1)||([mark.from,mark.to].some(p=>p!==undefined&&(!Array.isArray(p)||!p.every(n=>Number.isFinite(n)&&n>=0&&n<=1)))))fail(`canonical mark ${mark.id||"(empty)"} is malformed`);if(mark.frame){const p=artifactPath(mark.frame);if(byPath.get(p)?.role!=="frame")fail(`canonical mark frame reference is missing: ${p}`);}}
+  for(const mark of canonicalMarks){if(!mark.id||!["circle","underline","line","arrow","tap","pin","mark","flag"].includes(mark.shape)||!Number.isSafeInteger(mark.t0)||!Number.isSafeInteger(mark.t1)||mark.t0<0||mark.t1<mark.t0||mark.t1>m.payload.clock.durationMs||!Array.isArray(mark.strokes)||mark.strokes.some(n=>!Number.isSafeInteger(n)||n<0||n>=strokes.length)||!mark.description||!Array.isArray(mark.boxNorm)||mark.boxNorm.length!==4||!mark.boxNorm.every(n=>Number.isFinite(n)&&n>=0&&n<=1)||([mark.from,mark.to].some(p=>p!==undefined&&(!Array.isArray(p)||p.length!==2||!p.every(n=>Number.isFinite(n)&&n>=0&&n<=1)))))fail(`canonical mark ${mark.id||"(empty)"} is malformed`);if(mark.frame){const p=artifactPath(mark.frame);if(byPath.get(p)?.role!=="frame")fail(`canonical mark frame reference is missing: ${p}`);}}
   if(strokesDoc&&(input.additionalCanonicalFacts?.strokes?.length??0)!==strokesDoc.strokes.length)fail("canonical stroke mapping count does not match accepted strokes");
   if(!strokesDoc&&(input.additionalCanonicalFacts?.strokes?.length??0)>0)fail("canonical stroke mapping has no matching accepted-strokes fact");
-  if(new Set(strokes.map(s=>s.id)).size!==strokes.length)fail("duplicate canonical stroke mapping");
+  const mappedStrokeIds=input.additionalCanonicalFacts?.strokes?.map(s=>s.id)??[];
+  if(new Set(mappedStrokeIds).size!==mappedStrokeIds.length)fail("duplicate canonical stroke mapping");
   for(const frame of frameFacts)if(frame.markId&&!canonicalMarks.some(mark=>mark.id===frame.markId))fail(`selected frame references missing canonical mark ${frame.markId}`);
   const target=input.admission.target;
   const document: Record<string,unknown>={version:1,id:input.admission.bundleId,createdAtMs:input.admission.createdAtMs,durationMs:m.payload.clock.durationMs,target,transcript,
-    strokes,marks:canonicalMarks,events,
+    strokes,marks:canonicalMarks,events,...(m.payload.collection.interactions==="unavailable"?{interactionTelemetry:"video_only"}:{}),
     keyframes:frameFacts.map(f=>({index:f.index,t:f.timeMs,reason:f.canonicalReason,file:f.file,event:f.event??"",...(f.text?{said:f.text}:{}),...(f.markId?{markId:f.markId}:{})})),contactSheet:artifactPath(sheet.relativePath),video:m.payload.video.file,...(m.payload.clock.videoOffsetMs?{videoOffsetMs:m.payload.clock.videoOffsetMs}:{}),
     ...(m.payload.audio?{audio:m.payload.audio.file}:{}),...(input.admission.source?{source:input.admission.source}:{}),...(input.admission.device?{device:input.admission.device}:{}),...(input.admission.note?{note:input.admission.note}:{}),
     ...(input.admission.imageQualityWarning?{imageQualityWarning:input.admission.imageQualityWarning}:{}),
@@ -126,7 +140,7 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
   if(input.admission.destination&&(!input.admission.destination.session||typeof input.admission.destination.title!=="string"||!input.admission.destination.via))fail("explicit destination metadata is incomplete");
   const processing: ProcessingInput={durationMs:m.payload.clock.durationMs,bundlePath:input.admission.bundlePath,target:{app:target.app,windowTitle:target.windowTitle},transcript:{text:transcript.text,segments:transcript.segments.map(s=>({startMs:s.t0,text:s.text}))},frames:frameFacts.map(f=>({...f,absolutePath:resolve(input.admission.bundlePath,f.file)})),marks:input.marks as ProcessingInput["marks"],context:context?.values,contextChanges:context?.changes.map(c=>({timeMs:c.timeMs,key:c.key,value:c.value??undefined})),contactSheetPath:resolve(input.admission.bundlePath,sheet.relativePath),videoPath:resolve(input.admission.bundlePath,m.payload.video.file),destination:input.admission.destination,events:events.map(e=>({kind:e.kind,timeMs:e.t,...(e.kind==="note"?{pin:e.pin,text:e.text}:e.kind==="app_event"?{label:e.label}:{})} as never)),warnings:input.processingWarnings};
   const summary=utf8(assembleProcessingOutput(processing).summaryMarkdown), apparentJson=utf8(`${JSON.stringify(document,null,2)}\n`);
-  const entries=[{path:"apparent.json",role:"manifest",bytes:apparentJson},{path:"summary.md",role:"summary",bytes:summary},...input.artifacts.map(a=>({path:artifactPath(a.relativePath),role:a.role,bytes:a.bytes,identity:a.identity}))].map(e=>({path:e.path,role:e.role,sha256:hash(e.bytes),byteLength:e.bytes.byteLength,...("identity" in e?{identity:e.identity}:{})})).sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+  const entries=[{path:"apparent.json",role:"manifest",bytes:apparentJson,provenance:"record-generated" as const},{path:"summary.md",role:"summary",bytes:summary,provenance:"record-generated" as const},...input.artifacts.map(a=>({path:artifactPath(a.relativePath),role:a.role,bytes:a.bytes,identity:a.identity,provenance:(a.role==="video"||a.role==="audio"?"material-reference":"caller-attested") as "material-reference"|"caller-attested"}))].map(e=>({path:e.path,role:e.role,sha256:hash(e.bytes),byteLength:e.bytes.byteLength,provenance:e.provenance,...("identity" in e?{identity:e.identity}:{})})).sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
   const inventory:PublicationInventory={schema:"apparent.record-bundle-inventory/1",materials:{...m.manifest.key},retainedFacts:{confirmedSource:structuredClone(m.payload.confirmedSource),invocation:structuredClone(m.payload.invocation),references:structuredClone(m.payload.facts)},collection:{...m.payload.collection},observations:{context:contextDoc?.context.state??"unavailable",session:contextDoc?.session.state??"unavailable",windows:contextDoc?.windows.state??"unavailable",cursor:contextDoc?.cursor.state??"unavailable",interactions:m.payload.collection.interactions,transcript:m.payload.collection.transcript,acceptedStrokes:m.payload.collection.acceptedStrokes},warnings:m.payload.warnings.map(w=>({...w})),entries};
   return {apparentJson,summaryMd:summary,inventory,materials:m,validatedFacts:{...(contextDoc?{context:contextDoc}:{}),...(interactionDoc?{interactions:interactionDoc}:{}),...(transcriptDoc?{transcript:transcriptDoc}:{}),...(strokesDoc?{acceptedStrokes:strokesDoc}:{})}};
 }

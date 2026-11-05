@@ -55,7 +55,7 @@ try {
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
     import { createRecordFixture } from '@apparent/record/fixtures';
     const require = createRequire(import.meta.url);
-    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui']) assert.throws(() => require.resolve(name));
+    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk']) assert.throws(() => require.resolve(name));
     assert.equal(typeof RecordWorkflow, 'function');
     assert.equal(typeof createRecordHostRuntime, 'function');
     assert.equal(typeof decodeSelectedFrames, 'function');
@@ -78,7 +78,7 @@ try {
     void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
   `);
   const bundleTsc = path.join(root, 'node_modules/typescript/bin/tsc');
-  await run(process.execPath, [bundleTsc, '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', bundleDeclarations], { cwd: bundle });
+  await run(process.execPath, [bundleTsc, '--noEmit', '--strict', '--types', 'node', '--typeRoots', path.join(root, 'node_modules/@types'), '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', bundleDeclarations], { cwd: bundle });
   const bundleRuntime = await run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     import { assembleCanonicalBundle } from '@apparent/record/processing/bundle';
