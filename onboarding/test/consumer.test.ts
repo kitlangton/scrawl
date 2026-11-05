@@ -21,6 +21,12 @@ const factory: ContributionFactory<OnboardingFactoryDependencies> = onboardingCo
 const codec: ProgressCodec<OnboardingProgress> = onboardingProgressCodec;
 const bootstrap: (backend: LegacyAdoptionBackend) => Promise<OnboardingAdoptionResult> = adoptOnboardingProgress;
 void factory; void codec; void bootstrap;
+async function ownerRepair(dependencies: OnboardingFactoryDependencies) {
+  const concrete = await onboardingContributionFactory.create(dependencies);
+  await concrete.activation.permissionRepair.activate(['microphone']);
+  return concrete.module;
+}
+void ownerRepair;
 `);
     execFileSync(process.execPath, [join(owner, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--module', 'nodenext', '--moduleResolution', 'nodenext', '--target', 'es2022', '--lib', 'es2022,dom', 'consumer.ts'], { cwd: directory, stdio: 'pipe' });
     const result = execFileSync(process.execPath, ['--input-type=module', '-e', "import {onboardingContributionFactory,onboardingProgressCodec} from '@apparent/onboarding'; console.log(onboardingContributionFactory.ownerId,onboardingProgressCodec.decode(null).stage)"], { cwd: directory, encoding: 'utf8' });

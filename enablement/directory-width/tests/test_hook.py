@@ -139,7 +139,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
         workflows = (
             "connect-delivery.yml", "linux-updater-harness.yml", "native-proof-mac.yml",
             "release-linux.yml", "release-mac-preview.yml", "release-windows.yml",
-            "value-stream-delivery.yml", "verification-mac.yml",
+            "stream-admission.yml", "verification-mac.yml",
             "verification-platform.yml", "verification.yml", "web-delivery.yml",
             "stream-agent.yml", "stream-app-shell.yml", "stream-connect-client.yml",
             "stream-engine-media-native.yml", "stream-engine-native.yml", "stream-engine.yml",
@@ -161,7 +161,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
         for name in (
             "connect-delivery.yml", "linux-updater-harness.yml", "native-proof-mac.yml",
             "release-linux.yml", "release-mac-preview.yml", "release-windows.yml",
-            "value-stream-delivery.yml", "verification-mac.yml",
+            "stream-admission.yml", "verification-mac.yml",
             "verification-platform.yml", "verification.yml",
             "stream-agent.yml", "stream-app-shell.yml", "stream-connect-client.yml",
             "stream-engine-media-native.yml", "stream-engine-native.yml", "stream-engine.yml",

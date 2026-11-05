@@ -1,6 +1,6 @@
 # Value stream delivery core
 
-Each source owner registers `delivery.json` beside its package. Schema 1 names the package, tracked input roots, verification scripts, build script, supported target and staging class. `.github/workflows/stream-<owner>.yml` contains a path-filtered main entrypoint for each registered component; each passes a fixed owner/target matrix to `value-stream-delivery.yml`, which is reusable execution only and has no push trigger or shared planner. Public's entrypoint also retries after a successful trusted Connect producer completion. Connect's TypeScript account/crypto client has a separate `connect-client` entrypoint; its browser/Worker producer retains its explicit manual/reusable invocation contract. The client artifact does not prove the remaining Rust transfer lifecycle migrated. Missing owners are reported pending; an existing source without a registration is reported as blocked.
+Each source owner registers `delivery.json` beside its package. Schema 1 names the package, tracked input roots, verification scripts, build script, supported target and staging class. Each `.github/workflows/stream-<owner>.yml` owns its path-filtered PR and main jobs, permissions, fixed owner/target matrix and runtime audit. Small composite actions in `.github/actions/delivery-contracts` and `delivery-component` share repeatable steps without owning workflow jobs. Owner jobs keep the established `deliver / stream (<owner>, <target>)`, `deliver / Delivery contracts`, and `deliver / Workflow runtime budget` receipt names. PR component jobs build and verify fresh with synthetic settings and read-only permissions; main producer jobs may admit verified unchanged artifacts and then seal, attest and upload. Public's workflow is the only Pages publisher and has no Connect completion trigger or artifact dependency. Connect's TypeScript account/crypto client has a separate `connect-client` workflow; its browser/Worker producer retains its explicit manual/reusable invocation contract. The client artifact does not prove the remaining Rust transfer lifecycle migrated. Missing owners are reported pending; an existing source without a registration is reported as blocked.
 
 The isolated TypeScript architecture checker in `composition/architecture` rejects cross-owner source imports, undeclared private package paths, reversed dependencies and alias escapes. `Delivery contracts` tests the checker and scans common shared/composition code; component jobs scan their own owner before artifact admission. An unrelated product violation fails its own lane. A successful shared contract job is required before any prior component can be admitted, and checker inputs are part of every component fingerprint. Before merging owner changes, install the checker's locked dependencies and run its typecheck, tests and repository check as documented there. This guard covers static dependency boundaries, not arbitrary runtime behavior or native effects.
 
@@ -9,8 +9,13 @@ The isolated TypeScript architecture checker in `composition/architecture` rejec
 `engine-media-native` consumes `engine/delivery/media/delivery.json` as a separate
 native `linux-x64` slot owned architecturally by Engine. Its fresh build installs
 the GStreamer development libraries, base/good/libav plugins, and FFmpeg fixture
-tool on the Linux runner; this setup is skipped for artifact reuse and every
-other owner. The producer uses the installed runtime and refuses plugin-source
+tool on the Linux runner; this setup is skipped for successful artifact reuse and every
+other owner. PR and main use the same installer with isolated signed Ubuntu
+archive/security sources over HTTPS, 20-second acquisition timeouts, one retry,
+and process-group deadlines of 60 seconds for metadata and 180 seconds for
+installation, inside the five-minute setup step. This avoids the stalled Azure
+mirror without extending the job/workflow budget or weakening apt authentication.
+The producer uses the installed runtime and refuses plugin-source
 overrides in CI. The catalog fingerprints `engine/`, `capture/engine/` and
 `.cargo/`; packaged-media verification remains inside the owner producer.
 
@@ -21,8 +26,7 @@ invocation, transfer lifecycle and artifact identities.
 
 Pull requests targeting main run contracts and fresh checks/builds only for each
 changed registered owner/target. The owner entrypoints carry the same path filters
-for PRs and main pushes, then pass their fixed target matrix to the reusable
-executor. PR jobs are read-only, use synthetic analytics settings, and do not
+for PRs and main pushes and execute their fixed target matrices directly. PR jobs are read-only, use synthetic analytics settings, and do not
 reuse, seal, attest or publish artifacts. Main keeps its existing producer and
 deployment lanes.
 
@@ -35,7 +39,7 @@ node --experimental-strip-types composition/delivery/cli.ts build record linux-x
 node --experimental-strip-types composition/delivery/cli.ts seal record linux-x64 /controlled/payload /controlled/sealed "$INPUT_DIGEST"
 ```
 
-`plan` remains a local diagnostic and reports registrations; CI callers supply the checked-in target matrix so a run cannot schedule unrelated owners. Package source must be covered by a declared input root. `admit` runs on a hosted runner with its `ImageOS` and `ImageVersion` identity set. It looks only at push runs on main from the exact caller workflow path, with the owner job, `Delivery contracts` and runtime audit all terminal-success, an ancestor source SHA and a matching unexpired artifact. API/auth/identity uncertainty causes a rebuild. Fingerprints use Git tree mode, path and blob IDs for all owner input roots, registration, `LICENSE`, the delivery core, the owner entrypoint and reusable executor, and runtime budget checker/action, and include Node, runner image, OS/architecture and exact target identities.
+`plan` remains a local diagnostic and reports registrations; owner workflows contain checked-in target matrices, so a run cannot schedule unrelated owners. Package source must be covered by a declared input root. `admit` runs on a hosted runner with its `ImageOS` and `ImageVersion` identity set. It looks only at push runs on main from the exact owner workflow path, with the historical owner stream job, `Delivery contracts` and runtime audit all terminal-success, an ancestor source SHA and a matching unexpired artifact. API/auth/identity uncertainty causes a rebuild. Fingerprints use Git tree mode, path and blob IDs for all owner input roots, registration, `LICENSE`, the delivery core, owner workflow and shared component action, and runtime budget checker/action, and include Node, runner image, OS/architecture and exact target identities.
 
 On reuse the workflow downloads the admitted artifact by its numeric ID. `reuse ID TARGET ZIP OUTPUT_DIR INPUT_DIGEST PRIOR_SHA ARTIFACT_ID PRIOR_RUN_ID PRIOR_ATTEMPT` checks the ZIP inventory, receipt identity and archive hash/size without extracting application files. It republishes the exact component bytes with a current-run receipt retaining the prior artifact/source identity. Failed retrieval or validation removes partial output and falls through to a fresh owner build; a failed fresh build still blocks admission. Both fresh and reused components receive provenance attestations and a current-run artifact.
 
@@ -55,12 +59,12 @@ reuse when added. Bun/version, Node, runner and verifier inputs remain pinned.
 The owner workflow reuses unchanged verified artifacts using its existing admission
 and receipt protocol. Website archives use ordinary USTAR regular files and
 directories; receipts include source and environment digests for independent
-consumer validation. Historical producer reuse checks canonical-main identity,
-prior owner/contracts/audit success, source/config equality and archive identity.
-Production deployment validates the current Public producer's exact same-run
-receipt and payload; unrelated owner jobs are not deployment dependencies.
+consumer validation. Public's consumer checks canonical-main producer identity,
+the exact Public job, Delivery contracts and runtime audit, source/config equality
+and ZIP/tar hashes before extracting only public bytes. An unrelated failed stream
+does not invalidate a successful Public job with successful shared contracts/audit.
 
-The reusable Public workflow’s `deploy (public, web)` job needs only its dedicated Public
+The Public owner workflow’s `deploy (public, web)` job needs only its dedicated Public
 producer. It validates the same-run component, Public resource graph, metadata,
 browser/theme/movie behavior and byte preservation, then seals and publishes only
 Public files. It has no Connect artifact, browser, API-origin or completion-trigger
@@ -68,3 +72,20 @@ dependency. Connect pages/resources and path routing belong to its independent
 static Worker. Existing Pages activation, environment, source ordering, readback
 and publication lock remain in force. Cut over only after that Connect-owned route
 seam is verified; the current combined production snapshot must remain until then.
+
+## Pull request admission
+
+`stream-admission.yml` publishes the `value-stream admission` check for the current
+PR head. It reads owner path filters and target matrices from trusted default-branch
+workflows, then requires the selected owners' contracts, every PR target and runtime
+audits. PR events start the receipt; owner start/completion events refresh it without
+polling. Missing results stay pending; failed or uncertain evidence cannot pass.
+The write-capable receipt workflow checks out only the trusted default branch and
+never executes PR code. It runs no owner builds and gates no main deployments.
+Its control job has a five-minute timeout; owner workloads retain their own audits.
+Repository rulesets are separate: this change does not configure required checks.
+
+The receipt summarizes GitHub's PR-defined CI results; it does not attest that a
+PR preserved its workflow implementation or replace independent review of CI
+changes. A PR can change its own tests/workflows, as with ordinary required checks.
+The trusted receipt code never executes those changes with its write-capable token.

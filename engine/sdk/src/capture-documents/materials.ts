@@ -1,6 +1,7 @@
 import { absolutePath, contained, exact, fail, id, optionalExact, parseDetached, record, relativePath, safeInt, sha, string, validateMaterialEnvelopeIdentity, validateMaterialsKey, validateSealedFile } from "./common.ts";
 import type { MaterialsDocument, MaterialsManifest, MaterialsPayload, SealedFile } from "./types.ts";
 import { isDeepStrictEqual } from "node:util";
+import { validateConfirmedSource, validateInvocation } from "./facts.ts";
 
 const factSchemas = { context: "apparent.capture-context/1", interactions: "apparent.capture-interactions/1", candidates: "apparent.capture-candidates/1", transcript: "apparent.capture-transcript/1", acceptedStrokes: "apparent.capture-strokes/1" } as const;
 
@@ -34,8 +35,9 @@ function validatePayload(value: unknown): asserts value is MaterialsPayload {
   if (!Array.isArray(p.warnings)) fail("warnings must be an array");
   p.warnings.forEach((warning, i) => { const w = record(warning, `warnings[${i}]`); optionalExact(w, ["code", "atMs"], ["code"], `warnings[${i}]`); string(w.code, "warning code"); if (w.atMs !== undefined) withinClock(w.atMs, clock.durationMs as number, "warning time"); });
   const safety = record(p.safety, "safety"); exact(safety, ["nativeRemoteDelivery", "safeForProcessing"], "safety"); if (safety.nativeRemoteDelivery !== "forbidden" || typeof safety.safeForProcessing !== "boolean") fail("invalid safety facts");
-  // These fields are factual opaque documents owned by native/platform schemas.
-  if (p.confirmedSource === undefined || p.invocation === undefined) fail("confirmed source and invocation facts must be explicit");
+  const factContext = { payload: p } as unknown as MaterialsDocument;
+  validateConfirmedSource(p.confirmedSource, factContext);
+  validateInvocation(p.invocation, factContext);
 }
 function validateMaterialRef(value: unknown, label: string, paths: Set<string>, referenced: Set<string>): void { relativePath(value, label); if (!paths.has(value)) fail(`${label} does not name a sealed material file`); if (referenced.has(value)) fail(`${label} duplicates another file reference`); referenced.add(value); }
 export function withinClock(value: unknown, durationMs: number, label: string): asserts value is number { safeInt(value, label); if ((value as number) > durationMs) fail(`${label} exceeds capture duration`); }
@@ -68,8 +70,13 @@ export function validateStrokeFacts(fileEnvelope: SealedFile, bytes: Uint8Array,
   if (identity.captureId !== materials.payload.identity.captureId || identity.materialsId !== materials.payload.identity.materialsId) fail("stroke identity does not match materials");
   if (!Array.isArray(s.surfaces) || !Array.isArray(s.strokes)) fail("stroke surfaces and strokes must be arrays");
   const surfaceIds = new Set<string>();
+  const targets = new Map<string, string>();
   s.surfaces.forEach((item, i) => { const x = record(item, `surfaces[${i}]`); exact(x, ["surfaceId", "transformId", "width", "height", "target"], `surfaces[${i}]`); string(x.surfaceId, "surfaceId"); string(x.transformId, "transformId"); safeInt(x.width, "surface width", 1); safeInt(x.height, "surface height", 1); if (x.target !== "capture-rectangle" && x.target !== "whiteboard-canvas") fail("invalid surface target"); const key = `${x.surfaceId}\0${x.transformId}`; if (surfaceIds.has(key)) fail("duplicate surface transform"); surfaceIds.add(key); });
+  for (const surface of s.surfaces as Array<Record<string, string>>) targets.set(`${surface.surfaceId}\0${surface.transformId}`, surface.target);
   const strokeIds = new Set<string>(), duration = materials.payload.clock.durationMs;
   s.strokes.forEach((item, i) => { const x = record(item, `strokes[${i}]`); exact(x, ["id", "surface", "surfaceId", "transformId", "startMs", "endMs", "acceptedAtMs", "points"], `strokes[${i}]`); id(x.id, "stroke id"); if (strokeIds.has(x.id)) fail("duplicate stroke id"); strokeIds.add(x.id); if (x.surface !== "screen" && x.surface !== "whiteboard") fail("invalid stroke surface"); string(x.surfaceId, "stroke surfaceId"); string(x.transformId, "stroke transformId"); if (!surfaceIds.has(`${x.surfaceId}\0${x.transformId}`)) fail("stroke references undeclared surface transform"); withinClock(x.startMs, duration, "stroke start"); withinClock(x.endMs, duration, "stroke end"); withinClock(x.acceptedAtMs, duration, "stroke acceptedAt"); if ((x.startMs as number) > (x.endMs as number) || (x.endMs as number) > (x.acceptedAtMs as number)) fail("invalid stroke time order"); if (!Array.isArray(x.points) || x.points.length === 0) fail("stroke must contain points"); let previous = x.startMs as number; x.points.forEach((point, j) => { const p = record(point, `stroke point ${j}`); exact(p, ["timeMs", "x", "y"], "stroke point"); withinClock(p.timeMs, duration, "point time"); safeInt(p.x, "point x"); safeInt(p.y, "point y"); if ((p.x as number) > 10000 || (p.y as number) > 10000) fail("stroke coordinates exceed normalized range"); if ((p.timeMs as number) < previous || (p.timeMs as number) < (x.startMs as number) || (p.timeMs as number) > (x.endMs as number)) fail("stroke point time is outside sorted stroke interval"); previous = p.timeMs as number; }); });
+  for (const stroke of s.strokes as Array<Record<string, string>>) {
+    if (targets.get(`${stroke.surfaceId}\0${stroke.transformId}`) !== (stroke.surface === "screen" ? "capture-rectangle" : "whiteboard-canvas")) fail("stroke surface does not match its declared target");
+  }
   return s as unknown as import("./types.ts").StrokeFacts;
 }

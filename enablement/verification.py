@@ -125,7 +125,7 @@ CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
 APP_SHELL_ROOT = "composition/app/"
 APP_SHELL_DELIVERY_ROOT = "composition/delivery/"
 APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/", "shared/ui/",
-                    ".github/workflows/value-stream-delivery.yml")
+                    ".github/actions/delivery-contracts/", ".github/actions/delivery-component/")
 APP_SHELL_WORKFLOW = ".github/workflows/stream-app-shell.yml"
 
 RECORD_PACKAGE_ROOT = "record/"
@@ -301,7 +301,7 @@ def select(paths, history_known=True):
             continue
         if path.startswith(APP_SHELL_INPUTS) or path == APP_SHELL_WORKFLOW:
             app_shell = True
-            if path == APP_SHELL_WORKFLOW or path == ".github/workflows/value-stream-delivery.yml":
+            if path == APP_SHELL_WORKFLOW or path.startswith((".github/actions/delivery-contracts/", ".github/actions/delivery-component/")):
                 continue
             # Shared UI also feeds existing consumers, so continue through
             # the ordinary selector for those paths.

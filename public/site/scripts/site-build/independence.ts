@@ -24,7 +24,7 @@ try {
     mkdirSync(dirname(destination), { recursive: true })
     cpSync(source, destination, { recursive: true, filter: sourcePath => !['node_modules', 'dist', 'dist-ssr', 'dist-apparent', '__pycache__', '.git', 'target', '.build'].includes(sourcePath.split('/').at(-1)!) })
   }
-  for (const path of ['public/site', 'public/delivery.json', 'composition/delivery', 'composition/architecture', '.github/workflows/value-stream-delivery.yml', '.github/workflows/stream-public.yml', '.github/actions/runtime-budget', 'enablement/verification/workflow-budget.ts', 'LICENSE', 'shared/ui', 'shared/analytics', 'shared/assets', 'README.md', 'capture/agent/skills/apparent/SKILL.md']) copy(path)
+  for (const path of ['public/site', 'public/delivery.json', 'composition/delivery', 'composition/architecture', '.github/workflows/stream-admission.yml', '.github/actions/delivery-contracts', '.github/actions/delivery-component', '.github/workflows/stream-public.yml', '.github/actions/runtime-budget', 'enablement/verification/workflow-budget.ts', 'LICENSE', 'shared/ui', 'shared/analytics', 'shared/assets', 'README.md', 'capture/agent/skills/apparent/SKILL.md']) copy(path)
   const walk = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(join(directory, entry.name)) : [join(directory, entry.name)])
   assert.equal(walk(site).filter(path => /\.(rs|py|js|mjs|cjs|sh)$/.test(path)).length, 0, 'Public contains non-TypeScript owned source')
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, APPARENT_PUBLIC_SITE: '1' }

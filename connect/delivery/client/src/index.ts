@@ -144,3 +144,11 @@ function fromHex(hex: string): Uint8Array {
   if (!/^(?:[0-9a-f]{2})+$/.test(hex)) throw new Error("invalid hex");
   return Uint8Array.from(hex.match(/../g)!, (byte) => Number.parseInt(byte, 16));
 }
+
+export { RecipientEnvelopeError } from "./recipient-envelope.ts";
+export type { RecipientEnvelope, RecipientEnvelopeFailure } from "./recipient-envelope.ts";
+import type { RecipientEnvelope } from "./recipient-envelope.ts";
+import { validateRecipientEnvelopeWithVerifier } from "./recipient-envelope.ts";
+export function validateRecipientEnvelope(input: unknown, expected: Context, trustedSenderSigningKey: Uint8Array): Promise<RecipientEnvelope> {
+  return validateRecipientEnvelopeWithVerifier(input, expected, trustedSenderSigningKey, verifyEnvelope);
+}

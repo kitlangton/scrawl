@@ -246,9 +246,10 @@ class SelectionTests(unittest.TestCase):
         workflow = verification.select([".github/workflows/verification-platform.yml"])
         self.assertFalse(workflow["app_shell"])
         self.assertTrue(workflow["root"])
-        delivery_workflow = verification.select([".github/workflows/value-stream-delivery.yml"])
-        self.assertTrue(delivery_workflow["app_shell"])
-        self.assertFalse(delivery_workflow["root"])
+        for action in (".github/actions/delivery-contracts/action.yml", ".github/actions/delivery-component/action.yml"):
+            delivery_action = verification.select([action])
+            self.assertTrue(delivery_action["app_shell"])
+            self.assertFalse(delivery_action["root"])
         entry_workflow = verification.select([".github/workflows/stream-app-shell.yml"])
         self.assertTrue(entry_workflow["app_shell"])
         self.assertFalse(entry_workflow["root"])
@@ -1476,6 +1477,10 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
             for job in re.split(r'^  [\w-]+:\n', workflow.read_text(), flags=re.M)[1:]:
                 if re.search(r'^    runs-on:', job, re.M):
                     expected = ('15' if workflow.name in {'verification.yml', 'verification-platform.yml', 'release-linux.yml', 'linux-updater-harness.yml', 'verification-mac.yml', 'native-proof-mac.yml', 'release-mac-preview.yml'} else '10')
+                    if workflow.name == 'stream-admission.yml':
+                        self.assertIn('    timeout-minutes: 5\n', job)
+                        self.assertNotIn('delivery-component', job)
+                        continue  # Control-only status receipt; no build or publication workload.
                     temporary_mac = (workflow.name == 'release-mac-preview.yml' and '    runs-on: macos-latest\n' in job)
                     temporary_platform = (workflow.name == 'verification-platform.yml' and '    name: rust (' in job)
                     bounded_publication = (workflow.name == 'connect-delivery.yml' and
@@ -1486,19 +1491,21 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
                         expected = '60'
                     elif bounded_publication:
                         expected = '2'
-                    elif workflow.name == 'value-stream-delivery.yml':
-                        expected = '2' if '    outputs:\n' in job else ('5' if '    name: Delivery contracts\n' in job else '15')
-                        if '    name: stream (' in job or '    name: pr-stream (' in job:
+                    elif workflow.name.startswith('stream-'):
+                        expected = '5' if '    name: deliver / Delivery contracts\n' in job else '15'
+                        if '    name: deliver / stream (' in job or '    name: verify-pr / pr-stream (' in job:
                             expected = "${{ matrix.target == 'web' && 10 || 15 }}"
                         if '    name: deploy (public, web)' in job:
                             expected = '10'
+                        if '    name: Workflow runtime budget\n' in job:
+                            expected = '15'
                     self.assertIn(f'    timeout-minutes: {expected}\n', job, str(workflow))
                     if bounded_publication:
                         self.assertIn("WORKFLOW_BUDGET_RESERVE_SECONDS: '120'", job)
                         self.assertIn('2 minute execution budget', job)
                     if temporary_mac or temporary_platform:
                         self.assertIn('Simon-authorized Mac release', job)
-                    elif '    name: Workflow runtime budget\n' not in job:
+                    elif 'Workflow runtime budget\n' not in job:
                         self.assertIn('agent whose run hits the limit owns optimization', job)
 
 

@@ -1,13 +1,15 @@
 # Website and Connect continuous delivery
 
 Each value stream has an independent native GitHub paths-filtered workflow.
-Owner entrypoints live in `.github/workflows/stream-<owner>.yml`; their PR and main
-push filters use the same paths, and each passes one fixed owner/target matrix to
-`value-stream-delivery.yml`. The reusable executor has no shared planner, so an
-unrelated owner is neither planned nor scheduled. Changed owners run fresh PR
-checks/builds with read-only permissions and synthetic analytics settings. PR jobs
-do not reuse, seal, attest or publish deployment artifacts; main verifies again
-before publication. The independent Worker publisher remains manual under its existing
+Owner entrypoints in `.github/workflows/stream-<owner>.yml` own their PR and main
+jobs, permissions, fixed owner/target matrix and runtime audit. Small composite
+actions under `.github/actions/delivery-contracts` and `delivery-component` share
+repeatable steps while leaving job ownership and receipt identity in each workflow.
+An owner workflow schedules only its registered targets. Changed owners run fresh
+PR checks/builds with read-only permissions and synthetic analytics settings. PR
+jobs do not reuse, seal, attest or publish deployment artifacts; main producer jobs
+may admit verified unchanged artifacts and then seal, attest and upload. Public
+owns the only Pages publisher and has no Connect completion trigger. The independent Worker publisher remains manual under its existing
 activation contract. Other standalone workflows remain manual-only.
 This trigger policy supersedes other automatic pipeline descriptions below.
 Existing release admission still rejects diagnostic manual verification receipts;
@@ -33,12 +35,9 @@ check for its package inputs. Changes under `composition/delivery/` run that
 check plus the dependency-free Node delivery contracts. Neither hook path
 installs packages.
 
-`Linux verification` runs on main pushes. Running verification finishes; only
-pending work is replaced. `Mac verification` follows successful Linux runs and
-checks their exact SHA, so every automatic Mac candidate retains matching Linux
-proof even while main advances. Mac's running work also finishes and its pending
-candidates coalesce; slow Mac capacity never blocks Linux. Manual main dispatches
-remain diagnostic and cannot substitute for automatic release receipts.
+`Linux verification` and `Mac verification` are manual diagnostic entrypoints.
+The retained verification and release contracts below do not enable automatic
+platform verification or publication.
 Both use `verification-platform.yml` and retain full Rust, Engine/client, browser,
 Electron and applicable native checks against the entire selected tree. Cancelled
 pending runs cannot hide changes. Full verification is main-only; feature branches
@@ -150,10 +149,9 @@ last published version available; fix or revert main and verify the next candida
 CodeQL managed setup is disabled by Simon's explicit instruction; it is not a
 release gate.
 
-Public publication lives only in the value-stream workflow and retains its existing
-website environment and activation variable. The former web workflow retains no
-Public publisher. This policy does not enable a disabled publisher, provision
-resources or apply migrations.
+`.github/workflows/web-delivery.yml` retains the existing independent website and
+hosted production environments and activation variables. This policy does not
+enable a disabled publisher, provision resources or apply migrations.
 
 ## Local commit signing
 
@@ -191,14 +189,14 @@ contain the new hook. Server-side policy is separate.
 ## Checks and artifact identity
 
 Public's credential-free verification runs its source build, owner tests,
-Public-only artifact graph/preservation checks, allowlisted package, Pages movie HTTP
-tests and homepage/analytics browser checks. Connect's independently verified
+allowlisted package, Public resource graph/byte-preservation checks, Pages movie
+HTTP tests and Public browser/analytics seam tests. Connect's independently verified
 producer owns service workerd/D1/R2, account/device/sharing browser and consent
 product tests. Shared inputs fan out through complete candidate input validation.
 
 Public/common delivery pins Node 22.23.4; Connect retains its declared Node pin.
 Bun 1.3.10 is pinned. Public browser installation and Pages tools
-come from its lockfile. Connect retains its existing API origin. Synthetic Public
+come from its lockfile. Public has no Connect API-origin dependency. Synthetic Public
 analytics output stays in private producer temporary directories without Connect;
 it is never uploaded. Pages artifacts include the compiled Function, provider
 configuration and complete checksum manifest outside the served tree, retained
@@ -210,7 +208,7 @@ fail; a superseded Pages candidate reports an intentional successful skip.
 
 ## Website activation: Cloudflare Pages
 
-The `deploy (public, web)` job in the reusable Public delivery execution is the only Public
+The `deploy (public, web)` job in `stream-public.yml` is the only Public
 production entrypoint. The publisher rejects other workflows and job identities.
 It publishes only the sealed source-built `dist-apparent` to the isolated
 `apparent-capture` Pages project, using `public/site/scripts/cd/publish-pages.ts` and
