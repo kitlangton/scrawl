@@ -25,11 +25,14 @@ try {
     import React from 'react';
     import {renderToString} from 'react-dom/server';
     import {RecordWorkflow} from '@apparent/record';
+    import {assembleProcessingOutput, decodeSelectedFrames} from '@apparent/record/processing';
     import {hasConfirmedArtifactOpen} from '@apparent/record/capabilities';
     import {createRecordFixture} from '@apparent/record/fixtures';
     import {RecordingPill} from '@apparent/record/ui';
     import {SqliteCaptureMappingStore, PrivateBundleAllocator, createRecordHostRuntime} from '@apparent/record/host';
     assert.equal(typeof RecordWorkflow,'function');
+    assert.equal(typeof assembleProcessingOutput,'function');
+    assert.equal(typeof decodeSelectedFrames,'function');
     assert.equal(typeof SqliteCaptureMappingStore,'function');
     assert.equal(typeof PrivateBundleAllocator,'function');
     assert.equal(typeof createRecordHostRuntime,'function');
