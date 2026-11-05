@@ -48,13 +48,13 @@ test("packed SDK mapping survives timeout and client reconnect with fresh arbitr
   const reference = new ReferenceEngine();
   const rpcIds: string[] = [];
   const request = reference.request.bind(reference);
-  reference.request = async value => { rpcIds.push(value.rpcId); return request(value); };
+  reference.request = async (value: {rpcId: string}) => { rpcIds.push(value.rpcId); return request(value); };
   const mappings = new MemoryMappings();
   const firstClient = new EngineClient(reference, { allowTestDouble: true });
   const first = new EngineSdkAdapter(firstClient, options(mappings));
   const beforeDispatch = firstClient.start.bind(firstClient);
   let failOnce = true;
-  firstClient.start = async request => {
+  firstClient.start = async (request: PreparedStart) => {
     const result = await beforeDispatch(request);
     if (failOnce) { failOnce = false; throw new Error("private path and owner token must not escape"); }
     return result;
@@ -272,19 +272,19 @@ test('explicit controller reconciliation finds the original private mapping afte
   const adapter=new EngineSdkAdapter(sdk,{...options(),pollIntervalMs:60000});
   const flow=new RecordWorkflow(adapter);
   try {
-    await flow.dispatch({type:'start',requestId:'recover-me'});
-    assert.equal(flow.state.phase,'uncertain');
+    const started=await flow.dispatch({type:'start',requestId:'recover-me'});
+    assert.equal(started.phase,'uncertain');
     sdk.state='recording';
-    await flow.dispatch({type:'reconcile'});
-    assert.equal(flow.state.phase,'recording');
-    await flow.dispatch({type:'cancel'});
-    assert.equal(flow.state.phase,'cancelled');
+    const reconciled=await flow.dispatch({type:'reconcile'});
+    assert.equal(reconciled.phase,'recording');
+    const cancelled=await flow.dispatch({type:'cancel'});
+    assert.equal(cancelled.phase,'cancelled');
   } finally {flow.dispose();adapter.dispose();}
 });
 
 test('late readiness cannot report usable capture after adapter disposal', async () => {
   const sdk=new NativeFacts();
-  let release!: (value: Awaited<ReturnType<EngineSdkPort['handshake']>>) => void;
+  let release!: (value: Awaited<ReturnType<NativeFacts['handshake']>>) => void;
   sdk.handshake=()=>new Promise(resolve=>{release=resolve;});
   const adapter=new EngineSdkAdapter(sdk,options());
   const pending=adapter.readiness();
