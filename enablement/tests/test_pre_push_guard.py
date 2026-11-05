@@ -1,6 +1,7 @@
 """Exercise the actual pre-push hook in disposable Git repositories."""
 
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -49,6 +50,19 @@ class PrePushGuardTests(unittest.TestCase):
         (client / "src/index.ts").write_text("export const value = 1;\n")
         (client / "test").mkdir()
         (client / "test/index.test.ts").write_text("// package test input\n")
+        app_shell = self.repo / "composition/app"
+        source_app_shell = SELECTOR.parents[1] / "composition/app"
+        for name in ("package.json", "package-lock.json", "tsconfig.json", ".gitignore"):
+            destination = app_shell / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_app_shell / name, destination)
+        app_dependencies = json.loads((app_shell / "package.json").read_text())
+        app_node_modules = app_shell / "node_modules"
+        for name in (*app_dependencies.get("dependencies", {}),
+                     *app_dependencies.get("devDependencies", {})):
+            dependency = app_node_modules / name / "package.json"
+            dependency.parent.mkdir(parents=True, exist_ok=True)
+            dependency.write_text("fixture\n")
         shutil.copy2(SELECTOR, self.repo / "enablement" / "verification.py")
         # File-length tests exercise pre-commit only, so this closure stays
         # finite and never recursively invokes the pre-push test suite.
@@ -112,6 +126,7 @@ class PrePushGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.log.exists())
         self.assertIn(f"{site}:run build\n", self.npm_log.read_text())
+        self.assertIn(f"{self.repo / 'composition/app'}:run check\n", self.npm_log.read_text())
 
     def onboarding_delta(self, dependencies=True, delete=False, rename=False):
         frontend = self.repo / "capture/desktop/ui/frontend"
@@ -254,7 +269,9 @@ class PrePushGuardTests(unittest.TestCase):
         self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
         result = self.push(remote="refs/heads/feature")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.log.read_text(), f"{frontend}:run check:onboarding\n")
+        self.assertEqual(self.log.read_text(),
+                         f"{self.repo / 'composition/app'}:run check\n"
+                         f"{frontend}:run check:onboarding\n")
 
     def test_unrelated_public_owner_skips_onboarding_renderer_check(self):
         site = self.public_site_delta()

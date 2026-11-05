@@ -1,0 +1,11 @@
+/* Canonical tokens are prepended during the shell build. */
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--apparent-background); color: var(--apparent-foreground); }
+header, nav, main { padding: 20px; }
+header { border-bottom: 1px solid var(--apparent-border); }
+header p { color: var(--apparent-muted-foreground); }
+nav { display: flex; flex-wrap: wrap; gap: 10px; }
+button { padding: 9px 15px; border: 1px solid var(--apparent-border); border-radius: 8px; background: var(--apparent-surface); color: var(--apparent-foreground); cursor: pointer; }
+button[aria-pressed="true"] { background: var(--apparent-primary); color: var(--apparent-primary-foreground); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--apparent-ring); outline-offset: 3px; }
+section { padding: 16px; margin-bottom: 16px; border: 1px solid var(--apparent-border); border-radius: 8px; }
+label { display: flex; align-items: center; gap: 10px; }

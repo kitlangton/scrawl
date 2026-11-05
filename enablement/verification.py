@@ -116,6 +116,19 @@ CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
     for name in ("package.json", "package-lock.json", "tsconfig.json")
 }
 
+# App Shell foundation is an independent TypeScript package. Its complete
+# verifier closure includes the shared contracts it consumes and canonical
+# shared UI components; these paths do not feed the Rust application build.
+APP_SHELL_ROOT = "composition/app/"
+APP_SHELL_INPUTS = (APP_SHELL_ROOT, "shared/contracts/", "shared/ui/")
+
+
+def app_shell_selected(paths):
+    """Select the App Shell check for its package, contracts, or shared UI."""
+    if not paths:
+        return True  # Unknown history stays conservative.
+    return any(path.startswith(APP_SHELL_INPUTS) for path in paths)
+
 
 def connect_client_typescript_selected(paths):
     """Select the existing client package test for its full local input set."""
@@ -179,10 +192,17 @@ def select(paths, history_known=True):
     engine = False
     browser = False
     public_site = False
+    app_shell = False
     reasons = []
     for path in paths:
         if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
             continue
+        if path.startswith(APP_SHELL_INPUTS):
+            app_shell = True
+            # Shared UI also feeds existing consumers, so continue through
+            # the ordinary selector for those paths.
+            if path.startswith(APP_SHELL_ROOT) or path.startswith("shared/contracts/"):
+                continue
         if path in PUBLIC_CONNECT_SHARED_INPUTS:
             # Shared browser sources and Public-owned assets have Connect
             # consumers; preserve broad root and browser checks as well.
@@ -215,6 +235,7 @@ def select(paths, history_known=True):
             broad = True
             reasons.append(path)
     return {"root": broad, "engine": broad or engine, "browser": browser,
+            "app_shell": app_shell or not history_known or not paths,
             "public_site": public_site or not history_known or not paths,
             "focused": [], "paths": paths,
             "reason": "unknown history or empty delta" if not history_known or not paths
@@ -304,6 +325,8 @@ def run_pr_checks(selection=None):
     subprocess.run(["node", "--experimental-strip-types", "--test", "enablement/file-length/check.test.ts"], cwd=ROOT, check=True)
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
     paths = selection["paths"] if selection else []
+    if (selection or {}).get("app_shell", app_shell_selected(paths)):
+        run_app_shell_check()
     if connect_client_typescript_selected(paths):
         run_connect_client_typescript_tests()
     if directory_width_contract_selected(paths):
@@ -342,6 +365,21 @@ def run_pr_checks(selection=None):
         subprocess.run(["npm", "run", "check:onboarding"], cwd=frontend, check=True)
     if (selection or {}).get("public_site", public_site_build_selected(paths)):
         run_public_site_build()
+
+
+def run_app_shell_check():
+    """Run the installed App Shell package check; hooks never install deps."""
+    package = ROOT / "composition/app"
+    controls = ("package.json", "package-lock.json", "tsconfig.json")
+    missing = [name for name in controls if not (package / name).is_file()]
+    if missing:
+        raise RuntimeError("App Shell check inputs are missing or deleted: " + ", ".join(missing))
+    manifest = json.loads((package / "package.json").read_text())
+    dependencies = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
+    absent = [name for name in dependencies if not (package / "node_modules" / name / "package.json").is_file()]
+    if absent:
+        raise RuntimeError("App Shell check needs installed dependencies: run npm ci in composition/app; the hook never installs dependencies")
+    subprocess.run(["npm", "run", "check"], cwd=package, check=True)
 
 
 def run_connect_client_typescript_tests():
@@ -615,6 +653,8 @@ def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=
 
 
 def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_root_build=False):
+    if selection.get("app_shell"):
+        run_app_shell_check()
     cargo = ["cargo"]
     if subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
         cargo = ["taskpolicy", "-c", "utility", "cargo"]
@@ -739,13 +779,13 @@ def main():
         return
     selection = plan(args.base, args.head)
     if args.suite == 'rust':
-        selection.update(root=True, engine=True, browser=False, focused=[])
+        selection.update(root=True, engine=True, browser=False, app_shell=False, focused=[])
     elif args.suite == 'browser':
-        selection.update(root=False, engine=False, browser=True, focused=[])
+        selection.update(root=False, engine=False, browser=True, app_shell=False, focused=[])
     print(json.dumps(selection, sort_keys=True), flush=True)
     if args.github_output:
         with args.github_output.open("a") as output:
-            for key in ("root", "engine", "browser"):
+            for key in ("root", "engine", "browser", "app_shell"):
                 output.write(f"{key}={str(selection[key]).lower()}\n")
     if args.pr:
         run_pr_checks(selection)
