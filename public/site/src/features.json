@@ -1180,6 +1180,17 @@
       "docs": ["capture/agent/skills/apparent/SKILL.md"]
     },
     {
+      "id": "agent-local-inspection-cli",
+      "group": "cli",
+      "name": "Local TypeScript bundle inspection CLI",
+      "says": "The independently installable apparent-agent command inspects local .apparent manifests and includes a foreground recording adapter for Engine contract v1; a production native recorder remains required and unverified. Inspection has no Desktop, Cargo, network, or Connect dependency.",
+      "status": "main",
+      "added": "2026-11-05",
+      "platforms": ["mac", "linux"],
+      "note": "latest honors APPARENT_CAPTURES_DIR and read-only capturesDir config, with bounded validated manifest reads. Stored summaries are producer authored; image mode lists references but does not inspect images. Recording requires explicit Engine runtime paths and native SDK v1 readiness. No media API, frames, zoom, Connect, authentication, or standalone Engine runtime archive. Existing apparent routing is unchanged.",
+      "docs": ["agent/README.md"]
+    },
+    {
       "id": "cli-read",
       "group": "cli",
       "name": "inspect and frames",
