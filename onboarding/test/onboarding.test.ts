@@ -45,12 +45,12 @@ test("normalizes legacy aliases and keeps defer distinct from completion", async
 test("renders the actual React contribution with accessible controls and packed Record fixture pen choices", async () => {
   const f = fixture(); await f.controller.load(); await f.controller.dispatch("continue");
   const html = renderToStaticMarkup(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} }));
-  assert.match(html, /Pick your pen/); assert.match(html, /aria-label="ink pen"/); assert.match(html, /Frog guide/); assert.match(html, /Try later/); f.controller.dispose();
+  assert.match(html, /Choose your pen color/); for (const color of ["coral", "purple", "blue", "green"]) assert.match(html, new RegExp(`aria-label="${color} pen"`)); assert.doesNotMatch(html, /ink pen|laser pen|cursor pen/); assert.match(html, /Frog guide/); assert.match(html, /Try later/); f.controller.dispose();
 });
 
 test("Record acceptance is dispatch only and failed pen writes preserve the effective value", async () => {
   const f = fixture("pen-write-failure-preserves-effective"); await f.controller.load(); await f.controller.dispatch("continue");
-  assert.equal(await f.controller.selectPen("laser"), false); assert.equal(f.controller.state.snapshot?.pen.effective, "ink"); assert.equal(f.controller.state.progress.stage, "pen"); f.controller.dispose();
+  assert.equal(await f.controller.selectPen("purple"), false); assert.equal(f.controller.state.snapshot?.pen.effective, "coral"); assert.equal(f.controller.state.progress.stage, "pen"); f.controller.dispose();
   const g = fixture(); const before = g.driver.current(); const result = await g.client.execute({ type: "refresh", requestId: "r1", expected: { providerEpoch: before.providerEpoch, revision: before.revision } }); assert.equal(result.status, "accepted"); assert.equal(result.snapshot.captures[0].phase, "saved"); g.controller.dispose();
 });
 
@@ -121,10 +121,10 @@ test("mounted pen choice commits only on Use this pen and reduced motion advance
   await f.controller.load(); await f.controller.dispatch("continue");
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
-  await act(async () => { dom.window.document.querySelector<HTMLButtonElement>('[aria-label="laser pen"]')!.click(); });
-  assert.equal(f.controller.state.snapshot?.pen.effective, "ink", "choosing a swatch is not a provider write");
+  await act(async () => { dom.window.document.querySelector<HTMLButtonElement>('[aria-label="purple pen"]')!.click(); });
+  assert.equal(f.controller.state.snapshot?.pen.effective, "coral", "choosing a color is not a provider write");
   await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Use this pen")!.click(); await Promise.resolve(); });
-  assert.equal(f.controller.state.snapshot?.pen.effective, "laser"); assert.equal(f.controller.state.progress.stage, "permissions");
+  assert.equal(f.controller.state.snapshot?.pen.effective, "purple"); assert.equal(f.controller.state.progress.stage, "permissions");
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
 });
 
@@ -160,7 +160,7 @@ test("failed copy offers a scoped copy retry for the saved practice capture", as
 test("mismatched Record response IDs cannot authorize progress", async () => {
   const f = fixture(); await f.controller.load(); await f.controller.dispatch("continue");
   f.client.execute = async command => ({ status: "applied", requestId: "retired-request", snapshot: f.driver.current() });
-  assert.equal(await f.controller.selectPen("laser"), false); assert.equal(f.controller.state.command, "unknown"); assert.equal(f.controller.state.progress.stage, "pen");
+  assert.equal(await f.controller.selectPen("purple"), false); assert.equal(f.controller.state.command, "unknown"); assert.equal(f.controller.state.progress.stage, "pen");
   await f.controller.dispatch("continue"); assert.equal(f.controller.state.progress.stage, "pen");
   f.client.execute = async command => ({ status: "accepted", requestId: command.requestId, snapshot: f.driver.current() });
   await f.controller.dispatch("refresh"); assert.notEqual(f.controller.state.command, "unknown"); f.controller.dispose();
@@ -169,7 +169,7 @@ test("mismatched Record response IDs cannot authorize progress", async () => {
 test("a response from a retired provider epoch cannot confirm a pen write", async () => {
   const f = fixture(); await f.controller.load(); await f.controller.dispatch("continue");
   let finish!: (result: any) => void, requestId = ""; f.client.execute = command => new Promise(resolve => { requestId = command.requestId; finish = resolve; });
-  const selecting = f.controller.selectPen("laser"); await Promise.resolve();
+  const selecting = f.controller.selectPen("purple"); await Promise.resolve();
   const old = f.driver.current(); f.driver.reconnect({ ...old, providerEpoch: "fixture-epoch-retired", revision: 1, connection: "connected" });
   finish({ status: "applied", requestId, snapshot: old });
   assert.equal(await selecting, false); assert.equal(f.controller.state.command, "unknown"); assert.equal(f.controller.state.snapshot?.providerEpoch, "fixture-epoch-retired"); f.controller.dispose();
@@ -271,7 +271,7 @@ test("complete mounted branded lesson follows one local-only admitted capture to
   const click = async (label: string) => act(async () => { const button = [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === label || b.getAttribute("aria-label") === label); assert.ok(button, `missing button ${label}`); button.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
   const publishSnapshot = async (update: (snapshot: ReturnType<typeof f.driver.current>) => ReturnType<typeof f.driver.current>) => act(async () => { const current = f.driver.current(); assert.equal(f.driver.publish({ ...update(current), revision: current.revision + 1 }), true); await new Promise(resolve => setTimeout(resolve, 0)); });
   await click("Get started"); assert.equal(f.controller.state.progress.stage, "pen");
-  await click("laser pen"); assert.equal(f.driver.current().pen.effective, "ink", "selecting a visible pen does not write it yet");
+  await click("purple pen"); assert.equal(f.driver.current().pen.effective, "coral", "selecting a visible pen color does not write it yet");
   await click("Use this pen"); assert.equal(f.controller.state.progress.stage, "pen", "confirmed choice waits for the donor hop to finish");
   const frogNode = dom.window.document.querySelector(".onboarding-pond-frog")!;
   const animationEnd = new dom.window.Event("animationend", { bubbles: true }); Object.defineProperty(animationEnd, "animationName", { value: "onboarding-pen-hop" });

@@ -1,4 +1,4 @@
 node_modules/
 dist/
 *.tgz
-!vendor/record-0.1.0-e2e5774.tgz
+!vendor/record-0.1.0-afd73fb.tgz

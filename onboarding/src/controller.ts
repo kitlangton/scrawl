@@ -1,4 +1,4 @@
-import type { CapabilitySnapshot, RecordClient, RecordCommand, CommandResult } from "@apparent/record/capabilities";
+import type { CapabilitySnapshot, PenColor, RecordClient, RecordCommand, CommandResult } from "@apparent/record/capabilities";
 import { initialProgress, normalizeProgress, nextStage, type OnboardingProgress, type ProgressStore, type Revision, type SaveResult, type Stage } from "./model.js";
 
 export type ControllerState = { progress: OnboardingProgress; revision: Revision; snapshot: CapabilitySnapshot | null; error: string | null; saving: boolean; publication: "confirmed" | "unknown"; command: "idle" | "accepted" | "applied" | "unknown" | "refused" };
@@ -81,7 +81,7 @@ export class OnboardingController {
     } finally { this.#reserving = false; }
   }
   async retryPracticeCopy(): Promise<CommandResult | null> { const captureId = this.#state.progress.attemptId; if (!captureId || this.#state.progress.stage !== "preparing") return null; const fact = this.#state.snapshot?.captures.find(c => c.captureId === captureId); if (fact?.phase !== "saved") return null; return this.execute({ type: "copy-local", captureId }); }
-  async selectPen(value: string): Promise<boolean> {
+  async selectPen(value: PenColor): Promise<boolean> {
     this.#confirmedPen = null;
     const result = await this.execute({ type: "select-pen", value });
     if (result?.status !== "applied" || result.snapshot.pen.effective !== value) { this.fail(result?.status === "outcome-unknown" ? "Your pen choice may not have been saved. Check the current choice before trying again." : result?.status === "refused" ? result.reason : "Your pen choice could not be confirmed. Try again."); return false; }
