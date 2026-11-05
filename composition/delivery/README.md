@@ -2,6 +2,8 @@
 
 Each source owner registers `delivery.json` beside its package. Schema 1 names the package, tracked input roots, npm verification scripts, build script, supported Linux/macOS target and staging class. Existing Connect and Public pipelines remain external. Onboarding and Agent show as pending until their source owners register; an existing source without a registration is reported as blocked.
 
+The shared `Delivery contracts` job also runs the isolated TypeScript architecture checker in `composition/architecture`. It rejects cross-owner source imports, undeclared private package paths, reversed dependencies and alias escapes. Owner tests remain separate; a successful shared contract job is required before any prior component can be admitted. Checker inputs are part of every component fingerprint. Before merging owner changes, install the checker's locked dependencies and run its typecheck, tests and repository check as documented there. This guard covers static dependency boundaries, not arbitrary runtime behavior or native effects.
+
 Run with Node 22's type stripping, without installing dependencies:
 
 ```sh

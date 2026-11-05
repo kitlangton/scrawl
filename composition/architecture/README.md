@@ -1,0 +1,5 @@
+# TypeScript architecture guard
+
+Run `npm ci`, then `npm run check`, `npm run typecheck`, and `npm test` from this directory. The checker scans tracked and non-ignored untracked `.ts`, `.tsx`, `.cts`, and `.mts` files and inspects product/shared/composition imports plus nested repo-owned package manifests. Product consumers use declared package exports; owner-local paths remain available to local tests and implementation code. Alias mappings come only from the nearest effective `tsconfig.json`, including inherited settings. Local package dependencies must target a matching package root in an allowed owner.
+
+The guard checks statically visible TypeScript dependencies. It cannot prove runtime isolation for generated code, data-driven loaders, native code, or dependencies hidden behind arbitrary runtime behavior. Computed `import()` and `require()` in product owners are rejected because their destinations cannot be bounded from syntax. Composition loaders may remain dynamic because composition is the assembly boundary; their runtime targets are outside this static proof.

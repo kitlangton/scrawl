@@ -1,0 +1,206 @@
+import ts from 'typescript';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+type Owner = 'engine' | 'record' | 'agent' | 'onboarding' | 'shared' | 'composition' | 'legacy' | 'other';
+const product = ['engine', 'record', 'agent', 'onboarding'] as const;
+const packageRoots: Record<string, string> = {
+  '@apparent/engine-sdk': 'engine/sdk', '@apparent/record': 'record',
+  '@apparent/agent': 'agent', '@apparent/onboarding': 'onboarding',
+  '@apparent/app-contracts': 'shared/contracts', '@apparent/ui': 'shared/ui',
+};
+const packageOwners: Record<string, Owner> = {
+  '@apparent/engine-sdk': 'engine', '@apparent/record': 'record', '@apparent/agent': 'agent',
+  '@apparent/onboarding': 'onboarding', '@apparent/app-contracts': 'shared', '@apparent/ui': 'shared',
+};
+const publicEdges: Record<Owner, Owner[]> = {
+  engine: ['shared'], record: ['engine', 'shared'], agent: ['engine', 'shared'], onboarding: ['record', 'shared'],
+  shared: [], composition: ['engine', 'record', 'agent', 'onboarding', 'shared'], legacy: [], other: [],
+};
+const sourceExt = new Set(['.ts', '.tsx', '.cts', '.mts']);
+const ignoredParts = new Set(['node_modules', 'dist', 'target', '.git']);
+const gitEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+
+function ownerOf(root: string, file: string): Owner {
+  const rel = path.relative(root, file).split(path.sep);
+  if (rel[0] === 'engine') return 'engine';
+  if (rel[0] === 'record') return 'record';
+  if (rel[0] === 'agent') return 'agent';
+  if (rel[0] === 'onboarding') return 'onboarding';
+  if (rel[0] === 'shared') return 'shared';
+  if (rel[0] === 'composition') return 'composition';
+  if (rel[0] === 'capture') return 'legacy';
+  return 'other';
+}
+function allowed(from: Owner, to: Owner): boolean { return from === to || publicEdges[from].includes(to); }
+
+function manifestExports(root: string, pkg: string, packageNames: Map<string,{owner:Owner;dir:string}>): Set<string> {
+  const dir = packageNames.get(pkg)?.dir ?? path.resolve(root, packageRoots[pkg] ?? '');
+  try {
+    const value = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { exports?: Record<string, unknown> | string };
+    if (typeof value.exports === 'string') return new Set(['.']);
+    return new Set(Object.keys(value.exports ?? {}));
+  } catch { return new Set(); }
+}
+function packageRef(spec: string, packageNames: Map<string,{owner:Owner;dir:string}>): { name: string; subpath: string } | undefined {
+  if (spec.startsWith('.') || spec.startsWith('/') || spec.startsWith('file:') || spec.startsWith('#')) return;
+  const bits = spec.split('/');
+  const name = spec.startsWith('@') ? bits.slice(0, 2).join('/') : bits[0];
+  return packageOwners[name] || packageNames.has(name) ? { name, subpath: bits.length > (name.startsWith('@') ? 2 : 1) ? './' + bits.slice(name.startsWith('@') ? 2 : 1).join('/') : '.' } : undefined;
+}
+type Alias = { pattern: string; targets: string[] };
+function configAliases(root: string, source: string): Alias[] {
+  let dir = path.dirname(source);
+  while (path.relative(root, dir) !== '..' && !path.relative(root, dir).startsWith(`..${path.sep}`)) {
+    const config = path.join(dir, 'tsconfig.json');
+    if (existsSync(config)) {
+      try {
+        const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} });
+        if (!parsed) return [];
+        const inheritedBase = parsed.options.pathsBasePath;
+        const base = parsed.options.baseUrl ?? (typeof inheritedBase === 'string' ? inheritedBase : dir);
+        return Object.entries(parsed.options.paths ?? {}).map(([pattern, targets]) => ({ pattern, targets: targets.map(t => path.resolve(base, t)) }));
+      } catch { return []; }
+    }
+    const parent = path.dirname(dir); if (parent === dir) break; dir = parent;
+  }
+  return [];
+}
+function aliasTargets(spec: string, aliases: Alias[]): string[] {
+  const out: string[] = [];
+  for (const { pattern, targets } of aliases) {
+    const [before, after] = pattern.split('*');
+    if (after === undefined ? spec === pattern : spec.startsWith(before) && spec.endsWith(after)) {
+      const middle = after === undefined ? '' : spec.slice(before.length, spec.length - after.length);
+      out.push(...targets.map(t => t.replace('*', middle)));
+    }
+  }
+  return out;
+}
+function canonical(p: string): string {
+  let current = path.resolve(p);
+  while (!existsSync(current)) { const parent = path.dirname(current); if (parent === current) return current; current = parent; }
+  const real = realpathSync(current);
+  return path.resolve(real, path.relative(current, path.resolve(p)));
+}
+function resolveLocal(root: string, source: string, spec: string): string {
+  let candidate: string;
+  try { candidate = spec.startsWith('file:') ? fileURLToPath(spec) : (path.isAbsolute(spec) ? spec : path.resolve(path.dirname(source), spec)); }
+  catch { return path.resolve(root, '__invalid_file_url__'); }
+  return canonical(candidate);
+}
+
+export function checkArchitecture(rootInput: string): string[] {
+  const root = canonical(path.resolve(rootInput));
+  const errors: string[] = [];
+  const gitFiles = (patterns: string[]) => execFileSync('git', ['-C', root, 'ls-files', '-z', '-co', '--exclude-standard', '--', ...patterns], { encoding: 'buffer', env: gitEnvironment }).toString().split('\0').filter(Boolean);
+  const files = gitFiles(['*.ts', '*.tsx', '*.cts', '*.mts'])
+    .map(p => path.resolve(root, p)).filter(p => sourceExt.has(path.extname(p)) && !p.split(path.sep).some(part => ignoredParts.has(part)) && existsSync(p));
+  for (const file of files) if (ownerOf(root,canonical(file)) !== ownerOf(root,file)) errors.push(`${path.relative(root,file)}: source symlink resolves into ${ownerOf(root,canonical(file))}`);
+  const fileOwner = new Map(files.map(f => [f, ownerOf(root, f)]));
+  const manifests = gitFiles(['*/package.json', '**/package.json']).map(p => path.resolve(root,p)).filter(p => !p.split(path.sep).some(part => ignoredParts.has(part)) && existsSync(p));
+  const packageNames = new Map<string,{owner:Owner;dir:string}>();
+  for (const mf of manifests) {
+    let value: {name?:string}; try { value=JSON.parse(readFileSync(mf,'utf8')); } catch { continue; }
+    if (value.name) {
+      const expectedRoot = packageRoots[value.name];
+      if (expectedRoot && canonical(path.dirname(mf)) !== canonical(path.resolve(root, expectedRoot))) {
+        errors.push(`${path.relative(root,mf)}: public package identity ${value.name} belongs at ${expectedRoot}`);
+        continue;
+      }
+      if (packageNames.has(value.name)) errors.push(`${path.relative(root,mf)}: duplicate package identity ${value.name}`);
+      packageNames.set(value.name,{owner:ownerOf(root,path.dirname(mf)),dir:path.dirname(mf)});
+    }
+  }
+  for (const mf of manifests) {
+    const manifestOwner=ownerOf(root,path.dirname(mf));
+    if (!['engine','record','agent','onboarding','shared','composition'].includes(manifestOwner)) continue;
+    let manifest: { dependencies?: Record<string,string>; devDependencies?: Record<string,string>; optionalDependencies?: Record<string,string>; peerDependencies?: Record<string,string> };
+    try { manifest = JSON.parse(readFileSync(mf, 'utf8')); } catch { continue; }
+    const dependencies = [manifest.dependencies, manifest.devDependencies, manifest.optionalDependencies, manifest.peerDependencies]
+      .flatMap(group => Object.entries(group ?? {}));
+    for (const [dep, version] of dependencies) {
+      const npmAlias = /^npm:((?:@[^/]+\/)?[^@]+)(?:@.*)?$/.exec(version)?.[1];
+      if (npmAlias && (packageOwners[npmAlias] || packageNames.has(npmAlias))) {
+        errors.push(`${path.relative(root,mf)}: repository dependency ${npmAlias} must use its canonical public name, not npm alias ${dep}`);
+      }
+      const declared = packageOwners[dep] ?? packageNames.get(dep)?.owner;
+      if (declared && !allowed(manifestOwner, declared)) errors.push(`${path.relative(root, mf)}: dependency ${dep} violates ${manifestOwner} -> ${declared}`);
+      if (/\.tgz(?:$|[?#])|\.tar\.gz(?:$|[?#])/.test(version) && !declared) errors.push(`${path.relative(root,mf)}: tarball dependency ${dep} is not a declared public package`);
+      if (!version.startsWith('file:') && !version.startsWith('workspace:')) continue;
+      let targetPath: string | undefined;
+      if (version.startsWith('file:') && !version.endsWith('.tgz') && !version.endsWith('.tar.gz')) targetPath = path.resolve(path.dirname(mf), version.slice(5));
+      if (version.startsWith('workspace:')) {
+        const found = packageNames.get(dep); if (found) targetPath = found.dir;
+      }
+      if (!targetPath) {
+        if (!declared) errors.push(`${path.relative(root,mf)}: local dependency ${dep} (${version}) is not a declared public package`);
+        continue;
+      }
+      const realTarget=canonical(targetPath), relative=path.relative(root,realTarget);
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        errors.push(`${path.relative(root,mf)}: local dependency ${dep} resolves outside the repository`); continue;
+      }
+      const targetManifest=path.join(realTarget,'package.json');
+      if (!existsSync(targetManifest)) {
+        const targetOwner=ownerOf(root,realTarget);
+        errors.push(`${path.relative(root,mf)}: local dependency ${dep} points into ${targetOwner} source, not a declared package root`);
+        continue;
+      }
+      try {
+        const actualName=(JSON.parse(readFileSync(targetManifest,'utf8')) as {name?:string}).name;
+        const actualOwner=ownerOf(root,realTarget);
+        if (actualName !== dep) errors.push(`${path.relative(root,mf)}: local dependency ${dep} targets package ${actualName ?? '(unnamed)'}`);
+        if (packageOwners[dep] && actualOwner !== packageOwners[dep]) errors.push(`${path.relative(root,mf)}: local dependency ${dep} targets ${actualOwner}, expected ${packageOwners[dep]}`);
+        if (!allowed(manifestOwner,actualOwner)) errors.push(`${path.relative(root,mf)}: local dependency ${dep} violates ${manifestOwner} -> ${actualOwner}`);
+      } catch { errors.push(`${path.relative(root,mf)}: cannot read target package manifest for ${dep}`); }
+    }
+  }
+  for (const file of files) {
+    const from = fileOwner.get(file)!;
+    if (!product.includes(from as typeof product[number]) && from !== 'shared' && from !== 'composition') continue;
+    const text = readFileSync(file, 'utf8');
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    const aliases = configAliases(root,file);
+    const inspect = (spec: string, line: number) => {
+      for (const target of aliasTargets(spec, aliases)) {
+        const resolved=canonical(target), relative=path.relative(root,resolved), to=ownerOf(root,resolved);
+        if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) errors.push(`${path.relative(root,file)}:${line}: tsconfig alias resolves outside the repository (${spec})`);
+        else if (to !== from) errors.push(`${path.relative(root,file)}:${line}: tsconfig alias crosses ${from} -> ${to} (${spec})`);
+      }
+      const pkg = packageRef(spec, packageNames);
+      if (pkg) {
+        const target = packageOwners[pkg.name] ?? packageNames.get(pkg.name)!.owner;
+        if (!allowed(from, target)) errors.push(`${path.relative(root,file)}:${line}: forbidden package dependency ${from} -> ${target} (${spec})`);
+        if (!manifestExports(root, pkg.name, packageNames).has(pkg.subpath)) errors.push(`${path.relative(root,file)}:${line}: private or undeclared package subpath ${spec}`);
+        return;
+      }
+      if (spec.startsWith('.') || spec.startsWith('/') || spec.startsWith('file:')) {
+        const local = resolveLocal(root,file,spec);
+        const relative=path.relative(root,local), to=ownerOf(root,local);
+        if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) errors.push(`${path.relative(root,file)}:${line}: local import resolves outside the repository (${spec})`);
+        else if (to !== from) errors.push(`${path.relative(root,file)}:${line}: cross-owner path ${from} -> ${to} (${spec}); consume a declared public package export`);
+      }
+    };
+    const visit = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+        if (node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) inspect(node.moduleSpecifier.text, sf.getLineAndCharacterOfPosition(node.getStart()).line + 1);
+      } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && node.moduleReference.expression && ts.isStringLiteralLike(node.moduleReference.expression)) {
+        inspect(node.moduleReference.expression.text, sf.getLineAndCharacterOfPosition(node.getStart()).line + 1);
+      } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteralLike(node.argument.literal)) {
+        inspect(node.argument.literal.text, sf.getLineAndCharacterOfPosition(node.getStart()).line + 1);
+      } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        if (node.arguments.length && ts.isStringLiteralLike(node.arguments[0])) inspect(node.arguments[0].text, sf.getLineAndCharacterOfPosition(node.getStart()).line + 1);
+        else if (from !== 'composition') errors.push(`${path.relative(root,file)}:${sf.getLineAndCharacterOfPosition(node.getStart()).line + 1}: computed dynamic import is not statically auditable`);
+      } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require') {
+        if (node.arguments.length && ts.isStringLiteralLike(node.arguments[0])) inspect(node.arguments[0].text, sf.getLineAndCharacterOfPosition(node.getStart()).line + 1);
+        else if (from !== 'composition') errors.push(`${path.relative(root,file)}:${sf.getLineAndCharacterOfPosition(node.getStart()).line + 1}: computed require is not statically auditable`);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return [...new Set(errors)].sort();
+}

@@ -18,7 +18,7 @@ const roots = [
   { id: 'onboarding', source: 'onboarding', registration: 'onboarding/delivery.json' },
   { id: 'agent', source: 'agent', registration: 'agent/delivery.json' },
 ]
-const mandatoryInputs = ['composition/delivery/']
+const mandatoryInputs = ['composition/delivery/', 'composition/architecture/']
 const windows = (value: string) => /^[A-Za-z]:[\\/]/.test(value) || value.includes('\\')
 function safeRepoPath(value: unknown, directory = false): string {
   if (typeof value !== 'string' || !value || isAbsolute(value) || windows(value) || value.startsWith('/')) throw new Error('Unsafe repository path')

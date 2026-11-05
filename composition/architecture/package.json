@@ -1,0 +1,16 @@
+{
+  "name": "@apparent/architecture-guard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --experimental-strip-types src/cli.ts --root ../..",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.0",
+    "typescript": "5.9.3"
+  },
+  "engines": { "node": ">=22.6" }
+}

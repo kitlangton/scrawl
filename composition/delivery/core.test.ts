@@ -21,10 +21,11 @@ const owner: Owner = { schema: 1, id: 'record', kind: 'npm', package: 'record', 
 function git(cwd: string, ...args: string[]) { execFileSync('git', args, { cwd, stdio: 'ignore' }) }
 function newRepo(path: string) {
   mkdirSync(path, { recursive: true }); git(path, 'init', '-q'); git(path, 'config', 'user.email', 'delivery-test@example.invalid'); git(path, 'config', 'user.name', 'delivery test')
-  for (const dir of ['record', 'shared/ui', 'composition/delivery', '.github/workflows', 'enablement/verification']) mkdirSync(resolve(path, dir), { recursive: true })
+  for (const dir of ['record', 'shared/ui', 'composition/delivery', 'composition/architecture', '.github/workflows', 'enablement/verification']) mkdirSync(resolve(path, dir), { recursive: true })
   writeFileSync(resolve(path, 'record/index.ts'), 'one\n'); writeFileSync(resolve(path, 'record/config.json'), '{}\n'); writeFileSync(resolve(path, 'record/delivery.json'), '{}\n')
   writeFileSync(resolve(path, 'shared/ui/theme.ts'), 'theme\n')
   writeFileSync(resolve(path, 'composition/delivery/core.ts'), 'core\n'); writeFileSync(resolve(path, 'LICENSE'), 'license\n')
+  writeFileSync(resolve(path, 'composition/architecture/guard.ts'), 'guard\n')
   writeFileSync(resolve(path, workflowPath), 'workflow\n'); writeFileSync(resolve(path, 'enablement/verification/workflow-budget.ts'), 'budget\n')
   git(path, 'add', '.'); git(path, 'commit', '-qm', 'initial'); return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path, encoding: 'utf8' }).trim()
 }
@@ -83,7 +84,7 @@ test('full input closure changes for owner source, delivery core, workflow, budg
   const initial = inputDigest(path, owner)
   const dualTargetOwner: Owner = { ...owner, targets: ['linux-x64', 'macos-x64'] }
   assert.notEqual(inputDigest(path, dualTargetOwner, 'linux-x64'), inputDigest(path, dualTargetOwner, 'macos-x64'))
-  for (const [name, content] of [['composition/delivery/core.ts', 'changed core'], [workflowPath, 'changed workflow'], ['enablement/verification/workflow-budget.ts', 'changed budget'], ['LICENSE', 'changed license'], ['record/native.rs', 'native'], ['record/config.json', '{"value":2}'], ['shared/ui/theme.ts', 'changed theme']]) {
+  for (const [name, content] of [['composition/delivery/core.ts', 'changed core'], ['composition/architecture/guard.ts', 'changed architecture guard'], [workflowPath, 'changed workflow'], ['enablement/verification/workflow-budget.ts', 'changed budget'], ['LICENSE', 'changed license'], ['record/native.rs', 'native'], ['record/config.json', '{"value":2}'], ['shared/ui/theme.ts', 'changed theme']]) {
     writeFileSync(resolve(path, name), content); git(path, 'add', '-A'); git(path, 'commit', '-qm', `change ${name}`)
     assert.notEqual(inputDigest(path, owner), initial, `${name} must invalidate reuse`)
   }
