@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, link, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -52,6 +52,59 @@ test("rejected decode remains durably owned until authoritative inspect", async 
     assert.equal(await reopened.cancel(), "cancelling");
     assert.equal(inspected, 1); assert.equal(cancelled, 1);
     await assert.rejects(reopened.cleanupJournal(), /unresolved/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("durable request is isolated from caller mutations and busy commands", async () => {
+  const root = await mkdtemp(join(tmpdir(), "record-media-owned-"));
+  try {
+    const input = selection(root), original = structuredClone(input); await mkdir(input.outputDirectory, { mode: 0o700 });
+    let calls = 0; let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    const client: ManagedMediaClient = {
+      async decode(request) { calls++; assert.equal(request.source.bundleId, original.source.bundleId); await pending; throw new Error("timeout"); },
+      async inspect() { return { jobId: input.jobId, state: "decoding" }; }, async cancel() { return "cancelling"; },
+    };
+    const job = await RecordMediaJob.create(client, processing, join(root, "job.json"), input);
+    input.source.bundleId = "changed"; input.limits.maxFrames = 99;
+    await assert.rejects(job.decode(input), /does not match/);
+    const first = job.decode(original);
+    await assert.rejects(job.decode(original), /in progress/);
+    await assert.rejects(job.inspect(), /in progress/);
+    // Cancellation remains available while a decode response is pending.
+    assert.equal(await job.cancel(), "cancelling");
+    finish(); await assert.rejects(first, /timeout/); assert.equal(calls, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("reopen rejects invalid journal states and inconsistent inventories", async () => {
+  const root = await mkdtemp(join(tmpdir(), "record-media-validation-"));
+  try {
+    const input = selection(root); await mkdir(input.outputDirectory, { mode: 0o700 });
+    const client: ManagedMediaClient = { async decode() { throw new Error(); }, async inspect() { return { jobId: input.jobId, state: "decoding" }; }, async cancel() { return "cancelling"; } };
+    const journal = join(root, "job.json"); await RecordMediaJob.create(client, processing, journal, input);
+    const original = JSON.parse(await readFile(journal, "utf8"));
+    for (const change of [{ state: "garbage" }, { state: "complete", frames: [] }, { state: "failed" }, { selection: [] }, { request: { ...original.request, requestedBundleMs: [999] } }]) {
+      await writeFile(journal, JSON.stringify({ ...original, ...change }));
+      await assert.rejects(RecordMediaJob.reopen(client, processing, journal), /processing journal/);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("foreign inspection and failed terminal persistence cannot release ownership", async () => {
+  const root = await mkdtemp(join(tmpdir(), "record-media-inspect-"));
+  try {
+    const input = selection(root); await mkdir(input.outputDirectory, { mode: 0o700 });
+    let foreign = true;
+    const client: ManagedMediaClient = { async decode() { throw new Error(); }, async inspect() { return { jobId: foreign ? "b".repeat(32) : input.jobId, state: "cancelled", completedCount: 0, error: { code: "cancelled" } }; }, async cancel() { return "cancelled"; } };
+    const journal = join(root, "job.json"), alias = join(root, "alias.json");
+    const job = await RecordMediaJob.create(client, processing, journal, input);
+    await assert.rejects(job.inspect(), /mismatched job/); assert.equal(job.state, "submitted");
+    foreign = false; await link(journal, alias);
+    await assert.rejects(job.inspect(), /private owned file/);
+    await rm(alias); assert.equal(job.state, "submitted");
+    await assert.rejects(job.cleanupJournal(), /unresolved/);
+    await job.inspect(); assert.equal(job.state, "cancelled"); await job.cleanupJournal();
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

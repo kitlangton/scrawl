@@ -19,6 +19,35 @@ export interface RecordProcessingFunctions {
 }
 export type ProcessingJobRecord = { schema: 1; state: "submitted" | "complete" | "failed" | "cancelled"; dispatchAttempted: boolean; request: MediaJobRequest; selection: DecodeSelection["frames"]; frames?: SelectedFrame[]; terminal?: "failed" | "cancelled" };
 
+function validateRecord(value: unknown): asserts value is ProcessingJobRecord {
+  const r = value as ProcessingJobRecord;
+  const integer = (n: unknown) => Number.isSafeInteger(n) && (n as number) >= 0;
+  const path = (s: unknown) => typeof s === "string" && !s.includes("\0") && isAbsolute(s) && resolve(s) === s;
+  const q = r?.request, source = q?.source, limits = q?.limits;
+  if (r?.schema !== 1 || !["submitted", "complete", "failed", "cancelled"].includes(r.state) || typeof r.dispatchAttempted !== "boolean" ||
+      !q || !/^[0-9a-f]{32}$/u.test(q.jobId) || !path(q.outputDirectory) || !source || typeof source.bundleId !== "string" || !source.bundleId ||
+      !path(source.bundlePath) || !path(source.videoPath) || !Number.isSafeInteger(source.videoOffsetMs) ||
+      !source.identity || ![source.identity.device, source.identity.inode, source.identity.modifiedNs].every(s => typeof s === "string" && /^\d+$/u.test(s)) ||
+      !integer(source.identity.size) || !limits || !Object.values(limits).every(n => integer(n) && n > 0) ||
+      ![limits.maxFrames, limits.maxEdge, limits.maxTotalPixels, limits.deadlineMs].every(n => integer(n) && n > 0) ||
+      !Array.isArray(r.selection) || !r.selection.length || r.selection.length > limits.maxFrames || !Array.isArray(q.requestedBundleMs) || q.requestedBundleMs.length !== r.selection.length)
+    throw new Error("invalid processing journal");
+  let previous = -1;
+  for (const [i, frame] of r.selection.entries()) {
+    if (!integer(frame.index) || frame.index <= previous || !integer(frame.timeMs) || frame.timeMs !== q.requestedBundleMs[i] || (frame.text !== undefined && typeof frame.text !== "string")) throw new Error("invalid processing journal selection");
+    previous = frame.index;
+  }
+  if (r.state === "submitted") {
+    if (r.frames !== undefined || r.terminal !== undefined) throw new Error("invalid unresolved processing journal");
+  } else if (r.state === "complete") {
+    if (!r.dispatchAttempted || r.terminal !== undefined || !Array.isArray(r.frames) || r.frames.length !== r.selection.length) throw new Error("invalid complete processing journal");
+    for (const [i, frame] of r.frames.entries()) {
+      const selected = r.selection[i];
+      if (frame.index !== selected.index || frame.timeMs !== selected.timeMs || frame.text !== selected.text || !path(frame.absolutePath) || !frame.absolutePath.startsWith(`${q.outputDirectory}/`)) throw new Error("invalid journal frame inventory");
+    }
+  } else if (r.frames !== undefined || r.terminal !== r.state) throw new Error("invalid terminal processing journal");
+}
+
 function assertPrivatePath(path: string) {
   if (!isAbsolute(path) || resolve(path) !== path || path.includes("\0")) throw new TypeError("job record path must be absolute and normalized");
 }
@@ -40,11 +69,13 @@ export class RecordMediaJob {
   readonly client: ManagedMediaClient;
   readonly journalPath: string;
   private record: ProcessingJobRecord;
+  private busy = false;
   private readonly processing: RecordProcessingFunctions;
   private constructor(client: ManagedMediaClient, journalPath: string, record: ProcessingJobRecord, processing: RecordProcessingFunctions) {
     this.client = client; this.journalPath = journalPath; this.record = record; this.processing = processing;
   }
   static async create(client: ManagedMediaClient, processing: RecordProcessingFunctions, journalPath: string, selection: DecodeSelection): Promise<RecordMediaJob> {
+    selection = structuredClone(selection);
     assertPrivatePath(journalPath);
     if (!selection.frames.length) throw new Error("cannot create an empty media job");
     if (!/^[0-9a-f]{32}$/u.test(selection.jobId) || !isAbsolute(selection.outputDirectory) || resolve(selection.outputDirectory) !== selection.outputDirectory || selection.frames.length > selection.limits.maxFrames) throw new TypeError("invalid media job identity, output path, or frame count");
@@ -57,6 +88,7 @@ export class RecordMediaJob {
     }
     const request: MediaJobRequest = { jobId: selection.jobId, source: selection.source, requestedBundleMs: selection.frames.map(frame => frame.timeMs), outputDirectory: selection.outputDirectory, limits: selection.limits };
     const record: ProcessingJobRecord = { schema: 1, state: "submitted", dispatchAttempted: false, request, selection: selection.frames.map(frame => ({ ...frame })) };
+    validateRecord(record);
     await writeDurable(journalPath, record, true);
     return new RecordMediaJob(client, journalPath, record, processing);
   }
@@ -65,38 +97,56 @@ export class RecordMediaJob {
     if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0 || await realpath(journalPath) !== journalPath) throw new Error("processing journal must be a private owned file");
     const journal = await open(journalPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     let contents: string; try { contents = await journal.readFile("utf8"); } finally { await journal.close(); }
-    const record = JSON.parse(contents) as ProcessingJobRecord;
-    if (record.schema !== 1 || typeof record.dispatchAttempted !== "boolean" || !Array.isArray(record.selection) || !record.request?.jobId || !isAbsolute(record.request.outputDirectory)) throw new Error("invalid processing journal");
+    const record: unknown = JSON.parse(contents);
+    validateRecord(record);
     return new RecordMediaJob(client, journalPath, record, processing);
   }
   get jobId() { return this.record.request.jobId; }
   get state() { return this.record.state; }
   get outputDirectory() { return this.record.request.outputDirectory; }
-  get frames() { return this.record.frames ? [...this.record.frames] : undefined; }
+  get frames() { return this.record.frames ? structuredClone(this.record.frames) : undefined; }
+  private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.busy) throw new Error("processing job operation already in progress");
+    this.busy = true;
+    try { return await operation(); } finally { this.busy = false; }
+  }
   /** Rejection/timeout leaves the request unresolved; inspect is required before another dispatch or cleanup. */
   async decode(selection: DecodeSelection): Promise<SelectedFrame[]> {
-    if (selection.jobId !== this.jobId || JSON.stringify(selection.source) !== JSON.stringify(this.record.request.source) || selection.outputDirectory !== this.outputDirectory || JSON.stringify(selection.frames) !== JSON.stringify(this.record.selection)) throw new Error("selection does not match the durable processing job");
+    const input = structuredClone(selection);
+    return this.exclusive(() => this.decodeOwned(input));
+  }
+  private async decodeOwned(selection: DecodeSelection): Promise<SelectedFrame[]> {
+    if (selection.jobId !== this.jobId || JSON.stringify(selection.source) !== JSON.stringify(this.record.request.source) || JSON.stringify(selection.limits) !== JSON.stringify(this.record.request.limits) || selection.outputDirectory !== this.outputDirectory || JSON.stringify(selection.frames) !== JSON.stringify(this.record.selection)) throw new Error("selection does not match the durable processing job");
     if (this.record.state !== "submitted" || this.record.dispatchAttempted) throw new Error("processing job requires reconciliation before another decode dispatch");
     this.record = { ...this.record, dispatchAttempted: true }; await writeDurable(this.journalPath, this.record);
-    const frames = await this.processing.decodeSelectedFrames(this.client, selection);
-    this.record = { ...this.record, state: "complete", frames }; await writeDurable(this.journalPath, this.record); return frames;
+    const frames = await this.processing.decodeSelectedFrames(this.client, structuredClone({ ...selection, source: this.record.request.source, limits: this.record.request.limits, frames: this.record.selection }));
+    const complete: ProcessingJobRecord = { ...this.record, state: "complete", frames: structuredClone(frames) };
+    validateRecord(complete); await writeDurable(this.journalPath, complete); this.record = complete; return structuredClone(frames);
   }
   async inspect(timeoutMs = 5000): Promise<MediaJobStatus> {
-    const status = await this.client.inspect(this.record.request, timeoutMs);
+    return this.exclusive(() => this.inspectOwned(timeoutMs));
+  }
+  private async inspectOwned(timeoutMs: number): Promise<MediaJobStatus> {
+    const status = await this.client.inspect(structuredClone(this.record.request), timeoutMs);
+    if (status.jobId !== this.jobId) throw new Error("media SDK returned a mismatched job identity");
     if (status.state === "complete") {
       const selected = this.record.selection;
       const mapped = await this.processing.decodeSelectedFrames({ decode: async () => ({ jobId: this.jobId, state: "complete", frames: status.frames }) }, {
         frames: selected, jobId: this.jobId, source: this.record.request.source, outputDirectory: this.outputDirectory, limits: this.record.request.limits,
       });
-      this.record = { ...this.record, state: "complete", frames: mapped.map((frame, i) => ({ ...frame, index: selected[i].index, text: selected[i].text })) };
-      await writeDurable(this.journalPath, this.record);
+      const complete: ProcessingJobRecord = { ...this.record, dispatchAttempted: true, state: "complete", frames: mapped.map((frame, i) => ({ ...frame, index: selected[i].index, text: selected[i].text })) };
+      validateRecord(complete); await writeDurable(this.journalPath, complete); this.record = complete;
     } else if (status.state === "failed" || status.state === "cancelled") {
-      this.record = { ...this.record, state: status.state, terminal: status.state }; await writeDurable(this.journalPath, this.record);
+      const terminal: ProcessingJobRecord = { ...this.record, state: status.state, terminal: status.state };
+      validateRecord(terminal); await writeDurable(this.journalPath, terminal); this.record = terminal;
     }
     return status;
   }
   cancel(timeoutMs = 5000) { return this.client.cancel(this.jobId, timeoutMs); }
   async cleanupJournal(): Promise<void> {
+    return this.exclusive(() => this.cleanupOwned());
+  }
+  private async cleanupOwned(): Promise<void> {
     if (this.record.state === "submitted") throw new Error("cannot clean an unresolved media job");
     const info = await lstat(this.journalPath);
     if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) throw new Error("processing journal must be a private owned file");
