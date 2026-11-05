@@ -8,6 +8,25 @@ Run `npm ci`, `npm run typecheck`, `npm test`, `npm run build`, and `npm pack --
 
 The shell injects the canonical `Button` from `@apparent/ui/button`, supplies its canonical appearance tokens, and loads `@apparent/onboarding/styles.css`. The build bundles the public Record artifact-open helper from the pinned package; runtime code does not need a sibling checkout or Record package installation. Public declaration consumers supply compatible Record types. React remains host-provided.
 
+## Standalone permission repair slice
+
+`PermissionRepairController.activate(requestedIds)` and `createPermissionRepairContribution` are an owner-specific activation seam for the standalone **Access** screen. A composition host supplies a long-lived public `RecordClient`, canonical `Button`, exact permission requirement IDs and its existing close callback. The screen may be opened after the tour was completed or deferred; it has no `ProgressStore`, does not reset tour progress, and closing with **Later** does not defer or complete the tour. Repeated activation for the same open request reuses the current view. Host composition must retain one setup surface and keep any active tour suspended until repair closes; this package does not register a second stream route or window.
+
+The consumer accepts only `screen-capture`, `microphone`, `accessibility`, `camera`, and `speech-recognition`, then requires every explicitly requested row to be present, connected, granted and usable. `required: false` does not weaken an explicit repair request. `input-monitoring` is rejected. The row action comes only from that row's `allowedRepairActions`: first `not-determined` uses an allowed system request, `denied` opens allowed System Settings, and granted-but-unusable relaunch state remains blocked unless Record allows its safe-relaunch command. Status/readiness and relaunch remain OS/provider facts; acceptance means dispatch only. Ready closes after 800 ms only while the same epoch/revision still reports all requested rows usable. This slice stores no relaunch timestamps or other configuration and performs no automatic relaunch.
+
+Record does not yet expose a blocked-intent event and this checkout has no production host activation wrapper that calls the owner seam. Platform composition must route its existing permission-blocked outcome to one `PermissionRepairController.activate(requestedIds)` handle while preserving the existing setup owner/window. Host factory wiring and native permission production are pending. Tests use the packed public Record fixture and mounted React controls; they prove consumer behavior only, not operating-system effects, a persisted two-minute relaunch guard, installed routing, focus, or capture exclusion. The legacy native fix screen remains the fallback until host adoption and its affected platform permission/focus/capture-exclusion checks are accepted.
+
+## Stream scope inventory
+
+| Slice | State and evidence |
+|---|---|
+| Tour progress, resume/defer/completion, lesson stages, shortcut practice and manual paste | Implemented in this package; existing 40 tour tests cover fixture behavior. Installed routing and native producers remain separate acceptance gates. |
+| Standalone permission repair | Implemented here as a public-client-only controller and mounted contribution; focused fixture tests cover subset validation, allowed actions, fresh readiness, retries/staleness, close and disposal. Host activation is unavailable in this checkout. |
+| Permission effects, grant truth, safe relaunch loop guard | Record/provider/native-owned and not produced by this fixture. No real OS permission change or relaunch was tested. |
+| Production activation and one-window orchestration | Pending the Platform composition owner; no generic IPC, second route, or duplicate registration is added here. |
+
+The accepted full-stream inventory also includes production shortcut admission/local-only enforcement, production pen readback/picker/stroke facts, saved-artifact-open evidence, transactional owner progress, host/preload composition, and affected macOS/Linux seams. A fixture-backed owner slice does not complete those items or the stream.
+
 ## Record contract mapping and adoption limits
 
 Onboarding imports the public capabilities from the packed Record package. Commands use a unique request ID and the observed provider epoch/revision. `accepted` means dispatch only; only provider facts or `applied` plus readback can advance a milestone. Disposal detaches lesson observation; bounded reservation cleanup waits for any late arm and cancels only that admission. It releases observation on consumption/cancellation/expiry, provider replacement or a five-minute deadline; it never stops a capture.
