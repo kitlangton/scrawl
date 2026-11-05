@@ -1,7 +1,7 @@
 import type {Env,Scope} from './types.ts';
 import {analyticsChoice,analyticsIdentity,analyticsNoticeVersion,setAnalyticsChoice} from './analytics.ts';
 import {identity,DEVICE_CODE_GRANT_TYPE} from './identity.ts';
-import {random,hash,json,fail,stmt,body,bounded,session,csrf,usage,slots,rate,envelope,bearer,isRecord} from './common.ts';
+import {random,hash,json,fail,stmt,body,bounded,session,csrf,usage,slots,rate,envelope,bearer,isRecord,apiBase} from './common.ts';
 
 // Validate canonical age X25519 Bech32 encoding, including checksum and padding.
 // This proves encoding, not possession or cryptographic suitability of a key.
@@ -30,7 +30,7 @@ async function call(env:Env,path:string,data?:Record<string,unknown>,headers?:He
  if(h.has('Cookie'))h.set('Origin',env.SITE_ORIGIN);
  const form=path==='/oauth2/token'||path==='/oauth2/revoke';
  if(data)h.set('Content-Type',form?'application/x-www-form-urlencoded':'application/json');
- try{return await identity(env).handler(new Request(env.API_ORIGIN+'/auth'+path,{method:data?'POST':'GET',headers:h,...data?{body:form?new URLSearchParams(data as Record<string,string>):JSON.stringify(data)}:{}}));}catch{fail('auth_unavailable',503);}
+ try{return await identity(env).handler(new Request(apiBase(env)+'/auth'+path,{method:data?'POST':'GET',headers:h,...data?{body:form?new URLSearchParams(data as Record<string,string>):JSON.stringify(data)}:{}}));}catch{fail('auth_unavailable',503);}
 }
 async function tokens(env:Env,g:Grant,response:Response) {
  if(response.status>=500||response.status===429)return {error:'server_error',status:response.status};
@@ -71,12 +71,12 @@ export async function authRoutes(request:Request,env:Env,url:URL) {
  }
  if(p==='/auth/google/start'&&m==='GET') {
   await rate(env,'oauth:'+request.headers.get('CF-Connecting-IP'));
-  const result=await identity(env).api.signInSocial({body:{provider:'google',callbackURL:env.SITE_ORIGIN+returnTo(url.searchParams.get('returnTo')),errorCallbackURL:env.API_ORIGIN+'/auth/error'},asResponse:true});
+  const result=await identity(env).api.signInSocial({body:{provider:'google',callbackURL:env.SITE_ORIGIN+returnTo(url.searchParams.get('returnTo')),errorCallbackURL:apiBase(env)+'/auth/error'},asResponse:true});
   const b=await body(result);if(typeof b.url!=='string')fail('oauth_failed',401);
   const headers=new Headers(result.headers);headers.set('Location',b.url);return new Response(null,{status:302,headers});
  }
  if(p==='/auth/google/callback'&&m==='GET') {
-  const target=new URL(request.url);target.pathname='/auth/callback/google';
+  const target=new URL(request.url);target.pathname=new URL(env.API_ORIGIN).pathname.replace(/\/$/,'')+'/auth/callback/google';
   const response=await identity(env).handler(new Request(target,request));
   const location=response.headers.get('Location');
   if(!location||new URL(location).origin!==env.SITE_ORIGIN)fail('oauth_failed',401);
