@@ -11,12 +11,15 @@ const base: LocalHandoffInput = {
       { startMs: 1_200, text: "Please change this control" },
       { startMs: 3_000, text: "Keep the warning visible" },
     ] },
+    target: { app: "Editor", windowTitle: "PRIVATE WINDOW TITLE" },
+    destination: { session: "private-session", title: "PRIVATE TOKEN abc123", url: "https://private.test/?token=abc123" },
+    context: { auth: "PRIVATE TOKEN xyz789" },
     frames: [{ index: 1, timeMs: 1_000, absolutePath: "/captures/a user's take.apparent/frames/frame-01.png", text: "Please change this control" }],
     notes: [{ timeMs: 4_000, text: "Keep this note" }],
+    warnings: [{ kind: "imageQuality", message: "Image quality is reduced." }],
+    autocrop: { label: "the activity", fullFramesDirectory: "/captures/a user's take.apparent/frames-full" },
     videoPath: "/captures/a user's take.apparent/recording.mp4",
   },
-  warnings: ["Image quality is reduced."],
-  uncroppedFramesPath: "/captures/a user's take.apparent/frames-full",
   requestVideoProof: false,
 };
 
@@ -25,17 +28,16 @@ test("formats the legacy local handoff order and quotes paths safely", () => {
   assert.match(text, /^apparent inspect '\/captures\/a user'\\''s take\.apparent'\n\nOnce per agent session/);
   assert.ok(text.indexOf("apparent inspect") < text.indexOf("Once per agent session"));
   assert.ok(text.indexOf("Once per agent session") < text.indexOf("Inspect contact-sheet.png"));
-  assert.ok(text.indexOf("Inspect contact-sheet.png") < text.indexOf("Warning: Image quality"));
-  assert.ok(text.indexOf("Warning: Image quality") < text.indexOf("[apparent 1:05"));
+  assert.ok(text.indexOf("Inspect contact-sheet.png") < text.indexOf("[apparent 1:05"));
+  assert.ok(text.indexOf("[apparent 1:05") < text.indexOf("Image quality: Image quality is reduced."));
   assert.match(text, /Uncropped images are in \/captures\/a user's take\.apparent\/frames-full\//);
-  assert.match(text, /- #1 \(0:01\).*Please change this control/);
-  assert.match(text, /· 0:03 “Keep the warning visible”/);
+  assert.match(text, /· 0:01 “Please change this control”/);
   assert.match(text, /· 0:04 Typed note: Keep this note/);
   assert.match(text, /Video: \/captures\/a user's take\.apparent\/recording\.mp4/);
   assert.match(text, /Bundle: \/captures\/a user's take\.apparent/);
   assert.equal(text.split("Please change this control").length - 1, 1);
   assert.ok(!text.includes("make-it-apparent"));
-  assert.ok(!text.includes("window title") && !text.includes("ingestToken"));
+  assert.ok(!text.includes("PRIVATE WINDOW TITLE") && !text.includes("PRIVATE TOKEN") && !text.includes("abc123") && !text.includes("xyz789"));
 });
 
 test("preserves the supplied video-proof opt-out exactly", () => {
@@ -46,9 +48,9 @@ test("preserves the supplied video-proof opt-out exactly", () => {
   ));
 });
 
-test("requires explicit proof policy and absolute crop paths", () => {
+test("requires explicit proof policy and accepts only normalized crop paths", () => {
   assert.throws(() => formatLocalHandoff({ ...base, requestVideoProof: undefined as never }), /supplied explicitly/);
-  assert.throws(() => formatLocalHandoff({ ...base, uncroppedFramesPath: "frames-full" }), /absolute and normalized/);
+  assert.throws(() => formatLocalHandoff({ ...base, processing: { ...base.processing, autocrop: { label: "crop", fullFramesDirectory: "frames-full" } } }), /absolute and normalized/);
 });
 
 test("requires a caller-supplied saved bundle fact matching semantic input", () => {

@@ -9,10 +9,6 @@ export interface LocalHandoffInput {
   /** Caller-attested result from an existing publication producer; this formatter does not verify it. */
   savedBundle: { status: "saved"; bundlePath: string };
   processing: ProcessingInput;
-  /** Optional Engine publication warnings, kept verbatim and in caller order. */
-  warnings?: string[];
-  /** Absolute directory containing preserved full frames when the delivered frames are cropped. */
-  uncroppedFramesPath?: string;
   /** Mirrors the existing agentDemoVideo opt-out exactly; caller supplies the effective value. */
   requestVideoProof: boolean;
 }
@@ -30,12 +26,6 @@ function validate(input: LocalHandoffInput): void {
     throw new TypeError("requestVideoProof must be supplied explicitly");
   if (input.savedBundle?.status !== "saved" || input.savedBundle.bundlePath !== input.processing.bundlePath)
     throw new TypeError("savedBundle must identify the processed bundle with saved status");
-  if (input.uncroppedFramesPath !== undefined &&
-    (!isAbsolute(input.uncroppedFramesPath) || resolve(input.uncroppedFramesPath) !== input.uncroppedFramesPath))
-    throw new TypeError("uncroppedFramesPath must be absolute and normalized");
-  for (const warning of input.warnings ?? []) {
-    if (typeof warning !== "string" || !warning.trim()) throw new TypeError("warnings must be non-empty strings");
-  }
 }
 
 /**
@@ -44,15 +34,8 @@ function validate(input: LocalHandoffInput): void {
  */
 export function formatLocalHandoff(input: LocalHandoffInput): LocalHandoffOutput {
   validate(input);
-  const frameText = new Set(input.processing.frames.map((frame) => frame.text?.trim()).filter(Boolean));
-  const processing = {
-    ...input.processing,
-    transcript: {
-      ...input.processing.transcript,
-      segments: input.processing.transcript.segments.filter((segment) => !frameText.has(segment.text.trim())),
-      text: frameText.has(input.processing.transcript.text.trim()) ? "" : input.processing.transcript.text,
-    },
-  };
+  const { target: _target, destination: _destination, device: _device, screenAtStart: _screen,
+    context: _context, contextChanges: _contextChanges, ...processing } = input.processing;
   const semantic = assembleProcessingOutput(processing).summaryMarkdown;
   const lines = [
     `apparent inspect ${shellQuote(input.processing.bundlePath)}`,
@@ -61,12 +44,11 @@ export function formatLocalHandoff(input: LocalHandoffInput): LocalHandoffOutput
     "",
     "Inspect contact-sheet.png and relevant frames/ in that folder before making changes.",
   ];
-  if (input.uncroppedFramesPath)
-    lines[lines.length - 1] += ` Uncropped images are in ${input.uncroppedFramesPath}/.`;
+  const fullFramesDirectory = input.processing.autocrop?.fullFramesDirectory;
+  if (fullFramesDirectory)
+    lines[lines.length - 1] += ` Uncropped images are in ${fullFramesDirectory}/.`;
   if (input.requestVideoProof) lines[lines.length - 1] += ` ${VIDEO_PROOF_REQUEST}`;
   lines.push("");
-  lines.push(...(input.warnings ?? []).map((warning) => `Warning: ${warning.trim()}`));
-  if (input.warnings?.length) lines.push("");
   lines.push(semantic.trimEnd());
   return { text: `${lines.join("\n")}\n` };
 }
