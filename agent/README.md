@@ -10,7 +10,11 @@ node dist/cli.js inspect /path/to/capture.apparent/apparent.json --json
 node dist/cli.js inspect /path/to/capture.apparent --marks
 node dist/cli.js skill
 node dist/cli.js record --duration 30 --out /absolute/path/demo.apparent
+node dist/cli.js issue --title 'Short title' --body 'Exact Markdown description'
+node dist/cli.js issue --title 'Short title' --body-file './description.md' --submit
 ```
+
+`issue` prints the exact repository, title and body as JSON without contacting GitHub by default. `--submit` is the only network path and uses the installed `gh` login, pinned to `github.com` and `tryapparent/apparent`; it reads the new issue back and checks its identity and text before returning success. Search existing issues and show the full preview to the human for approval before adding `--submit`. It collects no captures, attachments, config or diagnostics. Submission is not idempotent: inspect the known issue URL/repository before retrying after an ambiguous failure. The standalone approval skill is bundled at `skills/apparent-issue/SKILL.md`.
 
 `apparent-agent skill` prints the exact standalone capture-reading guide bundled with the package. The guide documents only this package's local inspection behavior; it does not route or replace the legacy `apparent skill` command.
 
