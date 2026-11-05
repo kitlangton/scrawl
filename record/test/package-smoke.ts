@@ -98,7 +98,7 @@ try {
     import {ReferenceCapturePeer} from '@apparent/engine-sdk/capture/testing';
     import {createRecordPublicationRecovery} from '@apparent/record/publication';
     const client = new CaptureClient(new ReferenceCapturePeer(), {allowTestDouble:true});
-    const recovery = createRecordPublicationRecovery(client, './unused-private-root', preflightCapturePublication);
+    const recovery = createRecordPublicationRecovery(client, process.cwd() + '/unused-private-root', preflightCapturePublication);
     assert.equal(typeof recovery.publish, 'function');
     for (const name of ['react','react-dom','electron','@apparent/ui']) assert.throws(()=>createRequire(import.meta.url).resolve(name));
     await client.close();
