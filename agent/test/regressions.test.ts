@@ -95,3 +95,23 @@ test('startup delay does not consume requested duration and request persistence 
   const broken={...client,async start(){assert.equal(calls.at(-1),'persist');throw new Error('ambiguous start');}} as RecordingClient;
   await assert.rejects(recordWithEngine(broken,'/tmp/fixture.apparent',1,()=>false,async()=>{calls.push('persist');}),/ambiguous start/);
 });
+
+test('existing Rust inspection fixtures preserve current/legacy raw JSON, summaries and mark semantics',async()=>{
+  const {readFile,copyFile}=await import('node:fs/promises');
+  const root=await mkdtemp(join(tmpdir(),'agent-compatibility-'));
+  try {
+    for(const name of ['current','legacy']) {
+      const bundle=join(root,`${name}.apparent`);await mkdir(bundle);
+      const fixture=(file:string)=>new URL(`./fixtures/${file}`,import.meta.url);
+      await copyFile(fixture(`${name}.json`),join(bundle,'apparent.json'));
+      await copyFile(fixture(`${name}.md`),join(bundle,'summary.md'));
+      const run=(args:string[])=>spawnSync(process.execPath,[cli,'inspect',bundle,...args],{encoding:'utf8'});
+      const raw=run(['--json']);assert.equal(raw.status,0,raw.stderr);assert.equal(raw.stdout,await readFile(fixture(`${name}.json`),'utf8'));
+      const text=run([]);assert.equal(text.status,0,text.stderr);assert.equal(text.stdout,await readFile(fixture(`${name}.md`),'utf8'));
+      if(name==='current') {
+        const marks=run(['--marks','--json']);assert.equal(marks.status,0,marks.stderr);
+        assert.deepEqual(JSON.parse(marks.stdout),JSON.parse(await readFile(fixture('current.marks.json'),'utf8')));
+      }
+    }
+  }finally{await rm(root,{recursive:true,force:true});}
+});

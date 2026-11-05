@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "id": "current",
+  "createdAtMs": 200,
+  "durationMs": 20000,
+  "target": {
+    "mode": "device",
+    "app": "Synthetic",
+    "bundleId": "test.synthetic",
+    "displayId": 0,
+    "frame": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 100.0,
+      "height": 100.0,
+      "scale": 1.0
+    }
+  },
+  "transcript": {
+    "source": "test",
+    "text": "Read this. Then click.",
+    "segments": [],
+    "words": [
+      {
+        "t0": 1000,
+        "t1": 1400,
+        "text": "Read this."
+      },
+      {
+        "t0": 3000,
+        "t1": 3500,
+        "text": "Then click."
+      }
+    ]
+  },
+  "strokes": [],
+  "marks": [
+    {
+      "id": "m1",
+      "strokes": [],
+      "t0": 1000,
+      "t1": 1400,
+      "boxNorm": [
+        0.1,
+        0.1,
+        0.5,
+        0.5
+      ],
+      "shape": "circle",
+      "description": "circled region",
+      "on": "button \u201cSave\u201d",
+      "frame": "frames/frame-01.png"
+    }
+  ],
+  "events": [
+    {
+      "kind": "click",
+      "t": 3000,
+      "x": 0.2,
+      "y": 0.2,
+      "label": "Save",
+      "role": "button"
+    }
+  ],
+  "keyframes": [
+    {
+      "index": 1,
+      "t": 1000,
+      "reason": "mark",
+      "file": "frames/frame-01.png",
+      "event": "marked",
+      "said": "Read this. Then click.",
+      "markId": "m1"
+    }
+  ],
+  "contactSheet": "contact-sheet.png",
+  "source": "iphone",
+  "device": {
+    "name": "Synthetic phone",
+    "capture": "apparentkit",
+    "width": 100,
+    "height": 100,
+    "app": "Synthetic",
+    "appVersion": "1"
+  },
+  "note": "Keep semantic text.",
+  "context": {
+    "repository": "/work/synthetic"
+  },
+  "interactionTelemetry": "videoOnly"
+}
