@@ -63,7 +63,7 @@ test('clock parser and range selection are integer bounded, ordered, and reject 
 test('saved keyframe selection is inclusive, ordered, deduplicated, safe and keeps manifest timestamps', async () => fixture(async (_root,bundle,_runtime,video) => {
   const frames = join(bundle, 'frames'); await mkdir(frames);
   const values = [
-    {t:1250,file:'frames/a space.png'}, {t:1000,file:'frames/dup.png'},
+    {t:1250,file:'frames/a space.png'}, {t:1500,file:'frames/dup.png'},
     {t:1000,file:'frames/dup.png'}, {t:2000,file:'frames/z.png'}, {t:2126,file:'frames/outside.png'}
   ];
   for (const value of values) await writeFile(join(bundle, value.file), pngHeader(2,2));
@@ -100,6 +100,9 @@ test('saved fallback rejects oversized matches instead of truncating and ignores
     const file=`frames/${String(i).padStart(2,'0')}.png`; manifest.keyframes.push({t:100,file}); await writeFile(join(bundle,file),pngHeader(1,1));
   }
   manifest.keyframes.push({t:100,file:'frames/not-png.dat'}); await writeFile(join(bundle,'frames/not-png.dat'),pngHeader(1,1));
+  // A later unsafe reference must never be inspected once the valid limit is exceeded.
+  manifest.keyframes.push({t:100,file:'frames/late-symlink.png'});
+  await symlink(join(bundle,'frames/00.png'),join(bundle,'frames/late-symlink.png'));
   await writeFile(join(bundle,'apparent.json'),JSON.stringify(manifest));
   await assert.rejects(()=>savedKeyframes(bundle,selectFrameTimes('0.1','0.1',4)),/exceeds the 48-frame limit/);
 }));

@@ -53,30 +53,46 @@ export async function savedKeyframes(bundleInput: string, selection: FrameSelect
   const { value } = await readManifest(bundlePath);
   const margin = Math.floor(Math.ceil(1_000 / selection.fps) / 2);
   const lower = Math.max(0, selection.fromMs - margin), upper = selection.toMs + margin;
-  const chosen: Array<{ timestampMs: number; path: string }> = [];
+  const chosen = new Map<string, { timestampMs: number; path: string }>();
   for (const frame of value.keyframes) {
     if (!Number.isSafeInteger(frame.t) || frame.t < lower || frame.t > upper || typeof frame.file !== 'string') continue;
     if (!safeReference(frame.file) || !frame.file.startsWith('frames/') || !frame.file.endsWith('.png')) continue;
     const path = join(bundlePath, frame.file);
     await assertNoSymlinkPath(path);
+    const canonical = await realpath(path).catch(() => undefined);
+    if (canonical !== path || !canonical.startsWith(`${join(bundlePath, 'frames')}${sep}`)) continue;
+    const prior = chosen.get(canonical);
+    if (prior) { prior.timestampMs = Math.min(prior.timestampMs, frame.t); continue; }
+    const expected = await lstat(path, {bigint:true}).catch(() => undefined);
+    if (!expected?.isFile()) continue;
     const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW).catch(() => undefined);
     if (!file) continue;
     try {
-      const stat = await file.stat();
-      if (!stat.isFile() || stat.size < 24 || stat.size > 16 * 1024 * 1024) continue;
+      const stat = await file.stat({bigint:true});
+      if (!stat.isFile() || stat.dev !== expected.dev || stat.ino !== expected.ino || stat.size < 24n || stat.size > 16n * 1024n * 1024n) continue;
+      await assertNoSymlinkPath(path);
+      if (await realpath(path) !== canonical) throw new Error('Saved keyframe path changed before reading');
+      const current = await lstat(path, {bigint:true});
+      if (current.dev !== stat.dev || current.ino !== stat.ino) throw new Error('Saved keyframe identity changed before reading');
       const header = Buffer.alloc(24);
-      const { bytesRead } = await file.read(header, 0, header.length, 0);
+      let bytesRead = 0;
+      while (bytesRead < header.length) {
+        const read = await file.read(header, bytesRead, header.length - bytesRead, bytesRead);
+        if (read.bytesRead === 0) break;
+        bytesRead += read.bytesRead;
+      }
       const width = header.readUInt32BE(16), height = header.readUInt32BE(20);
       if (bytesRead !== 24 || header.toString('hex', 0, 8) !== '89504e470d0a1a0a' || !width || !height || width * height > 64_000_000) continue;
-      const canonical = await realpath(path);
-      if (!canonical.startsWith(`${join(bundlePath, 'frames')}${sep}`)) continue;
-      chosen.push({ timestampMs: frame.t, path: canonical });
+      await assertNoSymlinkPath(path);
+      const after = await lstat(path, {bigint:true});
+      const descriptor = await file.stat({bigint:true});
+      if (await realpath(path) !== canonical || after.dev !== stat.dev || after.ino !== stat.ino || descriptor.size !== stat.size || descriptor.mtimeNs !== stat.mtimeNs)
+        throw new Error('Saved keyframe identity changed while reading');
+      chosen.set(canonical, { timestampMs: frame.t, path: canonical });
+      if (chosen.size > MAX_FRAMES) throw new Error(`Saved keyframe selection exceeds the ${MAX_FRAMES}-frame limit`);
     } finally { await file.close(); }
   }
-  chosen.sort((a, b) => a.timestampMs - b.timestampMs || a.path.localeCompare(b.path));
-  const seen = new Set<string>();
-  const frames = chosen.filter(frame => !seen.has(frame.path) && !!seen.add(frame.path));
-  if (frames.length > MAX_FRAMES) throw new Error(`Saved keyframe selection exceeds the ${MAX_FRAMES}-frame limit`);
+  const frames = [...chosen.values()].sort((a, b) => a.timestampMs - b.timestampMs || a.path.localeCompare(b.path));
   return { bundlePath, frames };
 }
 
