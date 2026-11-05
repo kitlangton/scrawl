@@ -77,3 +77,46 @@ requires a real native readiness/capture provider, composition of the supplied
 durable mapping store and allocator, executable/runtime composition, and affected macOS/Linux capture,
 permission, packaging and ownership proof. Until those gates pass, the installed
 fallback route remains authoritative.
+
+## Full Record scope inventory
+
+| Agreed behavior | State | Evidence / exact remaining producer |
+|---|---|---|
+| Capture lifecycle and durable request identity | Implemented in owner package; not installed | `RecordWorkflow`, `EngineSdkAdapter`, SQLite mapping and private allocator; existing host-runtime tests exercise readiness, active capture, ambiguous replies, stop and restart reconciliation. The provider consumes this runtime. A usable capture SDK/native artifact is still absent from capture-v1. Engine has committed to notify the parent Record thread when a usable capture SDK/native artifact and authoritative capabilities land. |
+| Screen picker and typed target | Fixture contract only; production blocked | Version-2 picker outcomes require screen plus display/area/window. No real picker receipt producer exists. Platform owns the native host-effect boundary; its committed same-user `capture.sock` GUI actor extension and shared host-port/client binding must publish the receipt. Platform directly notifies the parent Record thread when the usable committed permission/shortcut port is ready, with exact API/injection and platform evidence. |
+| Pen color and persistence | Provider policy implemented; config binding blocked | Record accepts only coral/purple/blue/green and publishes a new effective color only after the injected existing top-level `penColor` writer returns persisted/applied readback. Its initial stored/effective read also comes from that port. The landed config CAS only writes owner-scoped `streamState`; it cannot safely stand in for this app setting. No Record TypeScript binding to the existing pen writer is present yet; until injected, pen is unknown/unavailable. |
+| Drawing and accepted stroke | Fixture contract only; production blocked | Typed screen/whiteboard surface and stable stroke ID are required. No actual drawing/stroke receipt producer exists; current capture-v1 has no drawing capability. Engine's established parent-thread notification covers its usable native capture/artifact/capability delivery. |
+| Permission grant, usability, relaunch and repair actions | Provider translation seam implemented; Platform producer blocked | Native requirement facts are copied from the injected native port; missing/failed binding yields unavailable. Platform owns the same-user `capture.sock` GUI actor extension and shared public host-port types/client; it has committed direct parent-Record-thread notification with the committed API/injection and platform evidence. |
+| Shortcut configuration, registration, edit/save/cancel | Provider translation seam implemented; Platform producer blocked | Effective configured binding and OS registration remain distinct facts. The native producer owns them; this provider neither binds shortcuts nor duplicates the transport. Same Platform notification route as above. |
+| Next-shortcut admission and local-only admission | Explicitly unavailable | Current capture-v1 has neither reservation enforcement nor local-only enforcement. Record refuses local-only starts and refuses arm when the producer reports unavailable; it never infers enforcement from intent. A future producer must publish reservation consumption/cancellation/expiry and effective per-capture delivery readback. Engine committed parent-thread notification when usable native capabilities land. |
+| Processing, keyframes, transcript, bundle and default output | Engine lifecycle composed; processing/output contract remains Engine-owned | Provider uses Engine runtime receipt phases and confirmed save receipt; delivery, keyframes, transcript and bundle text require actual Engine receipts/inspection. Independent packaged-media notification is established; the media producer remains unavailable to this provider until its committed artifact/capability is delivered through the parent Record thread. No processing implementation is copied into Record. |
+| Clipboard copy, link and artifact open | Dispatch seam only; production receipts blocked | Copy/open actions may be dispatched through the native port, but dispatch is not success. Copy needs a clipboard receipt; link needs the existing link producer; artifact open needs the exact-artifact viewer acknowledgement or supported OS observation. No such production receipts are synthesized here. |
+| Pill/runtime installed binding | Existing UI and runtime adopted through current fallback | Reusable pill and injected workflow host are packaged. This capability provider is owner-local and does not install an Electron main/preload route or switch routing. |
+| Platform proof | Blocked for this provider route | No new OS boundary is claimed. Platform's committed evidence notification must name the native facts/action contract and affected macOS/Linux evidence; existing Desktop platform gates still apply before any route adoption. |
+| Windows | Excluded | Apparent supports macOS and Linux only. |
+
+The provider is available from `@apparent/record/capabilities` as
+`createRecordCapabilityProvider`. A host constructs the published Engine-backed
+runtime and injects it, plus the narrow Record-local native/config seams:
+
+```ts
+const runtime = await createRecordHostRuntime(engineSdk, privateRoots);
+const client = createRecordCapabilityProvider({
+  runtime,
+  providerEpoch: crypto.randomUUID(),
+  native: platformRecordPort, // absent until Platform's committed binding lands
+  penConfig: authoritativePenConfigPort, // absent until the config backend is bound
+});
+```
+
+Engine facts come only from runtime readiness and Engine receipts. Native
+permission/shortcut facts and native actions come only from the Platform port;
+pen preference comes only from the authoritative config read/write/apply
+readback. Picker/stroke, delivery, shortcut admission, copy, and artifact-open
+facts pass through only as actual producer receipts. Missing ports report
+unavailable; command acceptance reports dispatch only. `detach()` drops
+observation and disposes the owner runtime adapter without issuing capture stop
+or cancel. The current runtime does not expose persisted terminal history as
+complete capability snapshots, so this provider retains facts observed during
+its lifetime and reports only unresolved startup ownership it can actually
+inspect; it does not reconstruct omitted history or claim an artifact identity.

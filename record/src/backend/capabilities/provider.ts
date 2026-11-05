@@ -1,0 +1,313 @@
+import type { RecordHostRuntime } from "../host/runtime.js";
+import type {
+  CapabilitySnapshot, CaptureFact, CommandResult, NativeRequirement, PenColor,
+  PenPreference, RecordClient, RecordCommand,
+} from "../../capabilities/index.js";
+
+/**
+ * Record-local structural seam for Platform's forthcoming shared host port.
+ * This deliberately contains no transport or OS implementation. A missing port
+ * is represented as unavailable facts and refused actions.
+ */
+export interface RecordNativeFacts {
+  readiness: NativeRequirement[];
+  shortcut: CapabilitySnapshot["shortcut"];
+  captures: CaptureFact[];
+  nextShortcutAdmission: CapabilitySnapshot["nextShortcutAdmission"];
+}
+
+export type NativeAction = Extract<RecordCommand,
+  { type: "request-permission" | "open-system-settings" | "request-safe-relaunch" |
+    "shortcut-begin-edit" | "shortcut-submit" | "shortcut-save" | "shortcut-cancel" |
+    "shortcut-reset" | "shortcut-open-desktop-config" | "arm-next-shortcut" |
+    "cancel-next-shortcut" | "copy-local" | "open-capture" }>;
+
+export interface RecordNativePort {
+  /** Read facts produced by the actual same-user native host transport. */
+  readFacts(): Promise<RecordNativeFacts>;
+  /** Optional notification only; each notification causes an authoritative reread. */
+  observe?(listener: () => void): () => void;
+  /** Dispatch only. This receipt cannot establish an operation outcome. */
+  dispatch?(command: NativeAction): Promise<"accepted" | "refused" | "cancelled" | "outcome-unknown">;
+}
+
+/** Owner adapter over the existing authoritative penColor writer. */
+export interface RecordPenConfigPort {
+  /** Reads the persisted top-level `penColor` and actual currently applied value. */
+  read(): Promise<{ persisted: PenColor | null; effective: PenColor | null }>;
+  /** Delegates to the existing single config writer and its native apply/readback. */
+  writeApplyAndReadBack(color: PenColor): Promise<{ status: "saved"; effective: PenColor } | { status: "unknown" }>;
+}
+
+export interface RecordCapabilityProviderOptions {
+  runtime: RecordHostRuntime;
+  /** Undefined means the Platform host binding is not installed. */
+  native?: RecordNativePort;
+  /** Undefined means the published config backend binding is not installed. */
+  penConfig?: RecordPenConfigPort;
+  /** Stable for one provider process; a restarted process must use a new value. */
+  providerEpoch: string;
+}
+
+export interface RecordCapabilityProvider extends RecordClient {
+  /** Read-only inspection copy for the host and tests. */
+  current(): CapabilitySnapshot;
+}
+
+const clone = <T>(value: T): T => structuredClone(value);
+const unknownPen = (): PenPreference => ({ effective: null, supported: ["coral", "purple", "blue", "green"], error: "authoritative pen config backend unavailable" });
+const unavailableNative = (): RecordNativeFacts => ({
+  readiness: [{ id: "native-host", required: true, status: "unavailable", usableNow: false, relaunchNeeded: false, allowedRepairActions: [] }],
+  shortcut: { effective: null, label: null, registration: "unknown", externallyManaged: false, draft: null },
+  captures: [], nextShortcutAdmission: { state: "unavailable" },
+});
+const engineRequirement = (ready: boolean): NativeRequirement => ({
+  id: "engine-screen-capture", required: true, status: ready ? "granted" : "unavailable",
+  usableNow: ready, relaunchNeeded: false, allowedRepairActions: [],
+});
+const isPenColor = (value: unknown): value is PenColor => value === "coral" || value === "purple" || value === "blue" || value === "green";
+function validNativeFacts(value: unknown): value is RecordNativeFacts {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const facts = value as Record<string, unknown>;
+  const validRequirements = Array.isArray(facts.readiness) && facts.readiness.every(item => !!item && typeof item === "object" &&
+    typeof item.id === "string" && typeof item.required === "boolean" && typeof item.usableNow === "boolean" &&
+    typeof item.relaunchNeeded === "boolean" && ["granted", "denied", "not-determined", "unavailable"].includes(item.status) &&
+    Array.isArray(item.allowedRepairActions) && item.allowedRepairActions.every((action: unknown) => ["request-permission", "open-system-settings", "request-safe-relaunch"].includes(String(action))));
+  const shortcut = facts.shortcut as Record<string, unknown> | undefined;
+  const validShortcut = !!shortcut && (shortcut.effective === null || typeof shortcut.effective === "string") &&
+    (shortcut.label === null || typeof shortcut.label === "string") &&
+    ["registered", "unregistered", "externally-managed", "unknown"].includes(String(shortcut.registration)) &&
+    typeof shortcut.externallyManaged === "boolean" && (shortcut.draft === null || (!!shortcut.draft && typeof shortcut.draft === "object" &&
+      typeof (shortcut.draft as Record<string, unknown>).sessionId === "string" && typeof (shortcut.draft as Record<string, unknown>).value === "string"));
+  const admission = facts.nextShortcutAdmission as Record<string, unknown> | undefined;
+  const validAdmission = !!admission && (
+    admission.state === "unavailable" || admission.state === "idle" ||
+    (admission.state === "armed" && typeof admission.admissionId === "string" &&
+      (admission.delivery === "local-only" || admission.delivery === "host-default") && typeof admission.expiresAt === "string") ||
+    (admission.state === "consumed" && typeof admission.admissionId === "string" && typeof admission.captureId === "string") ||
+    ((admission.state === "cancelled" || admission.state === "expired") && typeof admission.admissionId === "string"));
+  const validCaptures = Array.isArray(facts.captures) && facts.captures.every(capture => {
+    if (!capture || typeof capture !== "object") return false;
+    const item = capture as Record<string, unknown>;
+    if (typeof item.captureId !== "string" || !["local-only", "host-default", "unknown"].includes(String(item.delivery)) ||
+      !["starting", "recording", "processing", "saved", "cancelled", "failed", "unknown"].includes(String(item.phase)) || !Array.isArray(item.outcomes)) return false;
+    return item.outcomes.every(outcome => {
+      if (!outcome || typeof outcome !== "object") return false;
+      const fact = outcome as Record<string, unknown>;
+      if (typeof fact.at !== "string" || typeof fact.ok !== "boolean") return false;
+      if (fact.kind === "picker") return fact.ok
+        ? fact.surface === "screen" && ["display", "area", "window"].includes(String(fact.target))
+        : ["cancelled", "failed", "unavailable"].includes(String(fact.reason));
+      if (fact.kind === "accepted-stroke") return fact.ok
+        ? ["screen", "whiteboard"].includes(String(fact.surface)) && typeof fact.strokeId === "string"
+        : ["screen", "whiteboard"].includes(String(fact.surface)) && ["rejected", "failed"].includes(String(fact.reason));
+      if (fact.kind === "artifact-open") return typeof fact.artifactId === "string" && (fact.ok
+        ? ["viewer-ack", "os-observation"].includes(String(fact.evidence))
+        : ["refused", "failed"].includes(String(fact.reason)));
+      return ["shortcut", "first-frame-start", "whiteboard", "processing", "save", "copy", "open-dispatch"].includes(String(fact.kind));
+    });
+  });
+  return validRequirements && validShortcut && validCaptures && validAdmission;
+}
+
+async function readPenPreference(config?: RecordPenConfigPort): Promise<PenPreference> {
+  if (!config) return unknownPen();
+  try {
+    const value = await config.read();
+    if (value.persisted !== null && !isPenColor(value.persisted)) return { ...unknownPen(), error: "stored pen color is invalid" };
+    if (value.effective !== null && !isPenColor(value.effective)) return { ...unknownPen(), error: "effective pen color is invalid" };
+    return { effective: value.effective, supported: ["coral", "purple", "blue", "green"], ...(value.effective === null ? { error: "effective pen color unavailable" } : {}) };
+  } catch { return { ...unknownPen(), error: "authoritative pen config/readback unavailable" }; }
+}
+
+function mergeCapture(previous: CaptureFact | undefined, next: CaptureFact): CaptureFact {
+  if (!previous) return clone(next);
+  const outcomes = [...previous.outcomes];
+  for (const outcome of next.outcomes) {
+    if (!outcomes.some(value => JSON.stringify(value) === JSON.stringify(outcome))) outcomes.push(clone(outcome));
+  }
+  return { ...previous, ...clone(next), outcomes };
+}
+
+function captureFromRuntime(state: RecordHostRuntime["state"], observedAt: Map<string, string>): CaptureFact | undefined {
+  if (!("captureId" in state)) return undefined;
+  const phase: CaptureFact["phase"] = state.phase === "ready" ? "saved"
+    : state.phase === "stop-failed" || state.phase === "uncertain" ? "unknown"
+      : state.phase === "failed" ? "failed" : state.phase === "cancelled" ? "cancelled"
+        : state.phase === "checking" || state.phase === "cancelling" || state.phase === "stopping" ? "unknown"
+          : state.phase;
+  const outcomes: CaptureFact["outcomes"] = [];
+  const eventKey = `${state.captureId}:${state.phase}`;
+  const at = observedAt.get(eventKey) ?? new Date().toISOString();
+  observedAt.set(eventKey, at);
+  // Engine SDK receipts are authoritative lifecycle evidence. Do not infer
+  // delivery, shortcut, picker, frame, or artifact identity from this state.
+  if (state.phase === "recording") outcomes.push({ kind: "first-frame-start", at, ok: true });
+  if (state.phase === "processing") outcomes.push({ kind: "processing", at, ok: true });
+  if (state.phase === "ready") outcomes.push({ kind: "save", at, ok: true });
+  return { captureId: state.captureId, delivery: "unknown", phase, outcomes };
+}
+
+/** Compose the published Engine runtime with narrow host/config producers. */
+export function createRecordCapabilityProvider(options: RecordCapabilityProviderOptions): RecordCapabilityProvider {
+  if (!options.providerEpoch.trim()) throw new Error("providerEpoch is required");
+  let detached = false;
+  let revision = 0;
+  let nativeReadSequence = 0;
+  let nativeFacts = unavailableNative();
+  let pen = unknownPen();
+  const captures = new Map<string, CaptureFact>();
+  const runtimeObservedAt = new Map<string, string>();
+  const listeners = new Set<(snapshot: CapabilitySnapshot) => void>();
+  const usedRequests = new Set<string>();
+  let commandQueue = Promise.resolve();
+
+  const engineReady = (): { ready: boolean; reason?: string } => {
+    const readiness = options.runtime.state.readiness;
+    return readiness.ready ? { ready: true } : { ready: false, reason: readiness.reason };
+  };
+  const snapshot = (): CapabilitySnapshot => {
+    const live = captureFromRuntime(options.runtime.state, runtimeObservedAt);
+    const merged = new Map<string, CaptureFact>();
+    for (const item of nativeFacts.captures) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
+    for (const item of captures.values()) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
+    if (live) {
+      merged.set(live.captureId, mergeCapture(merged.get(live.captureId), live));
+    }
+    const ready = engineReady();
+    return {
+      version: 2, providerEpoch: options.providerEpoch, revision,
+      connection: detached ? "disconnected" : "connected",
+      readiness: { requirements: [...clone(nativeFacts.readiness), engineRequirement(ready.ready)] },
+      shortcut: clone(nativeFacts.shortcut), pen: clone(pen),
+      captures: [...merged.values()].map(clone),
+      nextShortcutAdmission: clone(nativeFacts.nextShortcutAdmission),
+    };
+  };
+  const publish = () => {
+    if (detached) return;
+    const live = captureFromRuntime(options.runtime.state, runtimeObservedAt);
+    if (live) captures.set(live.captureId, mergeCapture(captures.get(live.captureId), live));
+    revision++;
+    const frame = snapshot();
+    for (const listener of [...listeners]) {
+      if (!listeners.has(listener)) continue;
+      try { listener(clone(frame)); } catch { listeners.delete(listener); }
+    }
+  };
+  const refresh = async (): Promise<void> => {
+    const sequence = ++nativeReadSequence;
+    const [native, configuredPen] = await Promise.all([
+      options.native ? options.native.readFacts().then(value => validNativeFacts(value) ? clone(value) : unavailableNative()).catch(() => unavailableNative()) : Promise.resolve(unavailableNative()),
+      readPenPreference(options.penConfig),
+    ]);
+    if (detached || sequence !== nativeReadSequence) return;
+    nativeFacts = validNativeFacts(native) ? clone(native) : unavailableNative();
+    pen = clone(configuredPen);
+    for (const capture of native.captures) captures.set(capture.captureId, mergeCapture(captures.get(capture.captureId), capture));
+    publish();
+  };
+  const unsubscribeRuntime = options.runtime.subscribe(() => publish());
+  const unsubscribeNative = options.native?.observe?.(() => { void refresh(); }) ?? (() => undefined);
+  void refresh();
+
+  const refuse = (command: RecordCommand, reason: string): CommandResult => ({ status: "refused", requestId: command.requestId, reason, snapshot: snapshot() });
+  const executeOne = async (command: RecordCommand): Promise<CommandResult> => {
+    if (detached) return refuse(command, "provider detached");
+    const current = snapshot();
+    if (command.expected.providerEpoch !== current.providerEpoch || command.expected.revision !== current.revision)
+      return refuse(command, "stale provider epoch or revision");
+    if (!command.requestId.trim() || usedRequests.has(command.requestId)) return refuse(command, "request ID is empty or already used");
+    const response = (status: CommandResult["status"]): CommandResult => ({ status, requestId: command.requestId, snapshot: snapshot() }) as CommandResult;
+    if (command.type === "refresh") { await refresh(); await options.runtime.dispatch({ type: "refresh-readiness" }); publish(); return response("accepted"); }
+    if (command.type === "select-pen") {
+      if (!options.penConfig) return refuse(command, "authoritative config backend unavailable");
+      if (!pen.supported.includes(command.value)) return refuse(command, "unsupported pen color");
+      usedRequests.add(command.requestId);
+      try {
+        const result = await options.penConfig.writeApplyAndReadBack(command.value);
+        if (result.status !== "saved" || result.effective !== command.value) { pen = { ...pen, error: "pen config write/apply readback unknown" }; publish(); return response("outcome-unknown"); }
+        pen = { ...pen, effective: result.effective, error: undefined };
+        publish(); return response("applied");
+      } catch { pen = { ...pen, error: "pen config write/apply outcome unknown" }; publish(); return response("outcome-unknown"); }
+    }
+    if (command.type === "start-capture") {
+      if (command.delivery === "local-only") return refuse(command, "Engine SDK has no local-only enforcement capability");
+      if (options.runtime.startup.state !== "ready") return refuse(command, "Engine runtime startup reconciliation is unresolved");
+      if (nativeFacts.nextShortcutAdmission.state === "armed") return refuse(command, "capture reserved for next shortcut");
+      if (current.readiness.requirements.some(requirement => requirement.required && (!requirement.usableNow || requirement.relaunchNeeded))) return refuse(command, "capture requirements unavailable");
+      if (current.captures.some(capture => ["starting", "recording", "processing", "unknown"].includes(capture.phase))) return refuse(command, "capture active or unresolved");
+      usedRequests.add(command.requestId);
+      try {
+        const state = await options.runtime.dispatch({ type: "start", requestId: command.requestId });
+        publish();
+        if (!("captureId" in state) || state.captureId !== command.requestId) return response("refused");
+        if (state.phase === "uncertain") return response("outcome-unknown");
+        return response("accepted");
+      }
+      catch { return response("outcome-unknown"); }
+    }
+    if ("captureId" in command) {
+      const known = current.captures.find(capture => capture.captureId === command.captureId);
+      if (!known) return refuse(command, "unknown capture");
+      if ((command.type === "copy-local" || command.type === "open-capture") && known.phase !== "saved") return refuse(command, "capture is not saved");
+      if (command.type === "stop-capture" || command.type === "cancel-capture" || command.type === "inspect-capture") {
+        const state = options.runtime.state;
+        if (!("captureId" in state) || state.captureId !== command.captureId) return refuse(command, "Engine runtime does not own this capture");
+        if (command.type === "stop-capture" && state.phase !== "recording") return refuse(command, "Engine runtime cannot stop this phase");
+        if (command.type === "cancel-capture" && !["starting", "recording"].includes(state.phase)) return refuse(command, "Engine runtime cannot cancel this phase");
+        if (command.type === "inspect-capture" && !["uncertain", "stop-failed"].includes(state.phase)) return refuse(command, "Engine runtime has no reconciliation pending");
+        const action = command.type === "stop-capture" ? "stop" : command.type === "cancel-capture" ? "cancel" : "reconcile";
+        usedRequests.add(command.requestId);
+        try { await options.runtime.dispatch({ type: action }); publish(); return response("accepted"); }
+        catch { return response("outcome-unknown"); }
+      }
+    }
+    if (command.type === "request-permission" || command.type === "open-system-settings") {
+      const requirement = nativeFacts.readiness.find(item => item.id === command.requirementId);
+      if (!requirement?.allowedRepairActions.includes(command.type)) return refuse(command, "permission repair action unavailable");
+    }
+    if (command.type === "request-safe-relaunch" && (
+      nativeFacts.readiness.every(item => !item.allowedRepairActions.includes("request-safe-relaunch")) ||
+      current.captures.some(capture => ["starting", "recording", "processing", "unknown"].includes(capture.phase))))
+      return refuse(command, "safe relaunch unavailable while capture is active or unresolved");
+    if (["shortcut-begin-edit", "shortcut-submit", "shortcut-save", "shortcut-cancel", "shortcut-reset"].includes(command.type) &&
+      nativeFacts.shortcut.externallyManaged) return refuse(command, "shortcut is externally managed");
+    if (command.type === "shortcut-begin-edit" && nativeFacts.shortcut.draft) return refuse(command, "shortcut edit already active");
+    if ((command.type === "shortcut-submit" || command.type === "shortcut-save" || command.type === "shortcut-cancel") &&
+      nativeFacts.shortcut.draft?.sessionId !== command.sessionId) return refuse(command, "shortcut edit session not current");
+    if (command.type === "arm-next-shortcut" && nativeFacts.nextShortcutAdmission.state !== "idle")
+      return refuse(command, nativeFacts.nextShortcutAdmission.state === "unavailable" ? "shortcut reservation producer unavailable" : "next-shortcut admission is not idle");
+    if (command.type === "arm-next-shortcut" && command.delivery === "local-only") return refuse(command, "local-only enforcement unavailable");
+    if (command.type === "cancel-next-shortcut" && (nativeFacts.nextShortcutAdmission.state !== "armed" || nativeFacts.nextShortcutAdmission.admissionId !== command.admissionId))
+      return refuse(command, nativeFacts.nextShortcutAdmission.state === "unavailable" ? "shortcut reservation producer unavailable" : "matching next-shortcut admission is not armed");
+    const nativeCommand = command as NativeAction;
+    if (!options.native?.dispatch) return refuse(command, "native host action port unavailable");
+    usedRequests.add(command.requestId);
+    try {
+      const status = await options.native.dispatch(nativeCommand);
+      await refresh();
+      return response(status);
+    } catch { await refresh(); return response("outcome-unknown"); }
+  };
+
+  const client: RecordCapabilityProvider = {
+    current: () => clone(snapshot()),
+    observe(listener) {
+      if (!detached) { listeners.add(listener); try { listener(clone(snapshot())); } catch { listeners.delete(listener); } }
+      return () => listeners.delete(listener);
+    },
+    execute(command) {
+      const work = commandQueue.then(() => executeOne(clone(command)));
+      commandQueue = work.then(() => undefined, () => undefined);
+      return work;
+    },
+    detach() {
+      if (detached) return;
+      detached = true; unsubscribeRuntime(); unsubscribeNative(); listeners.clear();
+      // Runtime disposal only detaches subscriptions; native capture ownership stays with Engine.
+      options.runtime.dispose();
+    },
+  };
+  return client;
+}
