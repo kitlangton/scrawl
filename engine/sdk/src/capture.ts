@@ -7,10 +7,12 @@ import type {
   MaterialsKey,
   PublishEnvelope,
   InvocationFact,
+  PublicationPlan,
 } from "./capture-documents/types.ts";
 import { validatePublicationPlan } from "./capture-documents/publication.ts";
 import type { DerivativeDocumentInput } from "./capture-documents/types.ts";
-import { MAX_DOCUMENT_BYTES, relativePath, validateSealedFile } from "./capture-documents/common.ts";
+import { MAX_DOCUMENT_BYTES, relativePath, validateSealedFile, validateMaterialEnvelopeIdentity } from "./capture-documents/common.ts";
+export { validatePublicationPlan } from "./capture-documents/publication.ts";
 export {
   validateMaterialsDocument,
   validateFactFile,
@@ -155,6 +157,50 @@ export interface PublicationExpectation {
   bundleId: string;
   bundlePath: string;
   manifestSha256: string;
+}
+export interface CapturePublishInput {
+  ownerToken: string;
+  captureId: string;
+  leaseId: string;
+  publicationId: string;
+  planFile: PublishEnvelope;
+  planBytes: Uint8Array;
+  /** Obtain from validateMaterialsDocument with the original detached bytes. */
+  materials: MaterialsDocument;
+  derivatives?: readonly DerivativeDocumentInput[];
+}
+export interface CapturePublicationPreflight {
+  plan: PublicationPlan;
+  expected: PublicationExpectation;
+}
+/** This rejection is local: the SDK has not called the transport. */
+export class CapturePublicationPreflightError extends Error {
+  readonly dispatched = false;
+  constructor() {
+    super("Invalid capture publication input; no request was dispatched");
+    this.name = "CapturePublicationPreflightError";
+  }
+}
+/** Offline input/inventory checks only, shared by publish. No native admission,
+ * filesystem access, authority authentication or full bundle/media validation. */
+export function preflightCapturePublication(input: CapturePublishInput, timeoutMs = 10000): CapturePublicationPreflight {
+  try {
+    timeout(timeoutMs);
+    input = structuredClone(input);
+    exact(object(input, "publish input"), ["ownerToken", "captureId", "leaseId", "publicationId", "planFile", "planBytes", "materials", "derivatives"], ["ownerToken", "captureId", "leaseId", "publicationId", "planFile", "planBytes", "materials"]);
+    validateStatus({ captureId: input.captureId, state: "materials-ready", materials: input.materials.manifest }, input.captureId, true);
+    validateMaterialEnvelopeIdentity(input.materials.payload, input.materials.manifest);
+    if (input.leaseId !== input.materials.manifest.leaseId) throw new Error("publication lease binding mismatch");
+    const plan = validatePublicationPlan(input.planFile, input.planBytes, input.materials, input.derivatives);
+    if (plan.publicationId !== input.publicationId || plan.materials.captureId !== input.captureId) throw new Error("publication binding mismatch");
+    text(plan.bundleId, "expected bundleId", 255);
+    // Fixed-size placeholder envelope IDs make this deterministic and offline.
+    encodeCaptureRequest({ channel: CAPTURE_CHANNEL, protocolVersion: CAPTURE_PROTOCOL_VERSION, clientId: "0".repeat(32), rpcId: "0".repeat(32), method: "publish", ownerToken: input.ownerToken, captureId: input.captureId, leaseId: input.leaseId, publicationId: input.publicationId, materials: plan.materials, stagingRoot: input.planFile.stagingRoot, planFile: input.planFile.planFile, planSha256: input.planFile.planSha256 });
+    return { plan, expected: { materials: structuredClone(plan.materials), bundleId: plan.bundleId, bundlePath: plan.destination.path, manifestSha256: plan.entries.find(entry => entry.relativePath === "apparent.json")!.sha256 } };
+  } catch {
+    // Do not expose arbitrary input/clone diagnostics containing private tokens.
+    throw new CapturePublicationPreflightError();
+  }
 }
 interface Base {
   channel: "capture";
@@ -646,34 +692,13 @@ export class CaptureClient {
     );
   }
   async publish(
-    authority: {
-      ownerToken: string;
-      captureId: string;
-      leaseId: string;
-      publicationId: string;
-      planFile: PublishEnvelope;
-      planBytes: Uint8Array;
-      materials: MaterialsDocument;
-      derivatives?: readonly DerivativeDocumentInput[];
-    },
+    authority: CapturePublishInput,
     timeoutMs = 10000,
   ): Promise<CaptureStatus> {
     this.requireHandshake();
     if (!this.handshakeValue?.capabilities.publication) throw new Error("publication is unavailable");
-    authority = structuredClone(authority);
-    if (authority.leaseId !== authority.materials.manifest.leaseId) throw new Error("publication lease binding mismatch");
-    const plan = validatePublicationPlan(
-      authority.planFile,
-      authority.planBytes,
-      authority.materials,
-      authority.derivatives,
-    );
-    if (
-      plan.publicationId !== authority.publicationId ||
-      plan.materials.revision !== authority.materials.manifest.key.revision ||
-      plan.materials.captureId !== authority.captureId
-    )
-      throw new Error("publication binding mismatch");
+    try { authority = structuredClone(authority); } catch { throw new CapturePublicationPreflightError(); }
+    const { plan, expected } = preflightCapturePublication(authority, timeoutMs);
     const result = this.status(
       await this.rpc(
         "publish",
@@ -691,10 +716,7 @@ export class CaptureClient {
       ),
       authority.captureId,
     );
-    validatePublicationObservation(result, authority.publicationId, authority.planFile.planSha256, {
-      materials: plan.materials, bundleId: plan.bundleId, bundlePath: plan.destination.path,
-      manifestSha256: plan.entries.find(entry => entry.relativePath === "apparent.json")!.sha256,
-    });
+    validatePublicationObservation(result, authority.publicationId, authority.planFile.planSha256, expected);
     return result;
   }
   async inspectPublication(

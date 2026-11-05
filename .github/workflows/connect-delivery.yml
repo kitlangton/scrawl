@@ -1,6 +1,12 @@
 name: Connect producer
 on:
   workflow_dispatch:
+    inputs:
+      web-only:
+        description: Produce browser and Worker artifacts without native recipient builds or releases
+        type: boolean
+        required: false
+        default: false
   workflow_call:
     inputs:
       producer-run:
@@ -191,7 +197,7 @@ jobs:
           platform: web
 
   recipient-select:
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && inputs.producer-run == ''
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && inputs.producer-run == '' && inputs.web-only != true
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -214,7 +220,7 @@ jobs:
 
   recipient:
     needs: recipient-select
-    if: needs.recipient-select.outputs.required == 'true' && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && inputs.producer-run == ''
+    if: needs.recipient-select.outputs.required == 'true' && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && inputs.producer-run == '' && inputs.web-only != true
     strategy:
       fail-fast: false
       matrix:
@@ -279,7 +285,7 @@ jobs:
   recipient-release:
     name: Recipient target release and aggregate
     needs: [select, produce, publish, recipient-select, recipient]
-    if: always() && !cancelled() && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && inputs.producer-run == '' && needs.recipient-select.result == 'success' && (needs.recipient.result == 'success' || needs.recipient.result == 'failure' || needs.recipient.result == 'cancelled')
+    if: always() && !cancelled() && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && inputs.producer-run == '' && needs.recipient-select.result == 'success' && (needs.recipient.result == 'success' || needs.recipient.result == 'failure' || needs.recipient.result == 'cancelled') && inputs.web-only != true
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:

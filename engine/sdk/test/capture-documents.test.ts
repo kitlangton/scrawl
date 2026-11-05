@@ -4,7 +4,9 @@ import { createHash } from "node:crypto";
 import { validateDerivativeEnvelope } from "../src/capture-documents/derivative.ts";
 import { validateInferenceEnvelope } from "../src/capture-documents/inference.ts";
 import { validateMaterialsDocument, validateStrokeFacts } from "../src/capture-documents/materials.ts";
-import { validatePublicationPlan } from "../src/capture-documents/publication.ts";
+import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, validatePublicationPlan } from "../src/capture.ts";
+import { ReferenceCapturePeer } from "../src/capture-testing.ts";
+import type { CapturePublishInput, CaptureTransport } from "../src/capture.ts";
 import { validateContextFacts, validateFactFile } from "../src/capture-documents/facts.ts";
 
 const id = (n: string) => n.repeat(32);
@@ -126,7 +128,7 @@ test("stroke facts bind material identity, declared transforms and bounded order
   assert.throws(() => check({ ...strokes, strokes: [{ ...strokes.strokes[0], points: [{ timeMs: 12, x: 10001, y: 2 }] }] }), /normalized range/);
 });
 
-test("publication binds exact plan bytes and enforces absent-only destination and bundle profile inventory", () => {
+test("public offline publication preflight and publish reject the same malformed inventory before dispatch", async () => {
   const f = material();
   const derivativePayload = { schema: "apparent.media-derivative-payload/1", materials: f.manifest.key, jobId: id("a"), receiptId: id("b"), root: "/private/derivative", frames: [{ requestIndex: 1, requestedBundleMs: 10, effectiveVideoMs: 0, actualVideoMs: 200, clampedToStart: true, clampedToEnd: false, width: 10, height: 5, file: { ...sealed("frame.png"), sha256: "3".repeat(64), identity: { device: "1", inode: "2", size: 50, modifiedNs: "3" } } }] };
   const derivativeBytes = bytes(derivativePayload);
@@ -139,6 +141,53 @@ test("publication binds exact plan bytes and enforces absent-only destination an
     { relativePath: "contact-sheet.png", sha256: "4".repeat(64), byteLength: 50, role: "contact-sheet", input: { kind: "assembled", file: assembledFile("contact-sheet.png", "4".repeat(64), 50) } },
   ], manifestPath: "apparent.json", summaryPath: "summary.md", profile: "apparent-bundle/1" };
   const planBytes = bytes(plan); const envelope = { stagingRoot: plan.stagingRoot, planFile: receiptFile("plan.json", planBytes), planSha256: hash(planBytes) };
+  const input: CapturePublishInput = { ownerToken: "a".repeat(64), captureId: f.payload.identity.captureId, leaseId: f.payload.leaseId, publicationId: plan.publicationId, planFile: envelope, planBytes, materials: f.document, derivatives: proofs };
+  const checked = preflightCapturePublication(input);
+  assert.deepEqual(checked.plan, plan);
+  assert.deepEqual(checked.expected, { materials: f.manifest.key, bundleId: plan.bundleId, bundlePath: plan.destination.path, manifestSha256: "1".repeat(64) });
+  checked.expected.materials.revision = "0".repeat(64);
+  assert.equal(input.materials.manifest.key.revision, f.manifest.key.revision);
+  let dispatched = 0;
+  // Scripted protocol validation only; these claims are not native evidence.
+  const transport: CaptureTransport = {
+    async request(request) {
+      if (request.method !== "handshake") dispatched++;
+      return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, result: request.method === "handshake" ? { ...new ReferenceCapturePeer().handshake, implementation: "native", capabilities: { ...new ReferenceCapturePeer().handshake.capabilities, publication: true } } : { captureId: input.captureId, state: "publishing", materials: f.manifest, publicationId: input.publicationId, planSha256: input.planFile.planSha256 } };
+    },
+    async close() { return "already-exited"; },
+  };
+  const client = new CaptureClient(transport);
+  await client.handshake();
+  const withPlan = (value: unknown): CapturePublishInput => { const raw = bytes(value); return { ...input, planBytes: raw, planFile: { stagingRoot: plan.stagingRoot, planFile: receiptFile("plan.json", raw), planSha256: hash(raw) } }; };
+  const invalidInputs = [
+    ...["summary", "frame", "contact-sheet"].map(role => withPlan({ ...plan, entries: plan.entries.filter(entry => entry.role !== role) })),
+    withPlan({ ...plan, entries: [...plan.entries, plan.entries[0]] }),
+    { ...input, derivatives: [] },
+    { ...input, derivatives: [{ ...proofs[0], bytes: Buffer.from("tampered") }] },
+    { ...input, ownerToken: "invalid" }, { ...input, leaseId: id("f") },
+    { ...input, captureId: id("f") }, { ...input, publicationId: id("f") },
+    { ...input, materials: { ...input.materials, payload: { ...input.materials.payload, root: "/other/materials" } } },
+    { ...input, planFile: { ...envelope, planSha256: "f".repeat(64) } },
+  ];
+  for (const invalid of invalidInputs) {
+    assert.throws(() => preflightCapturePublication(invalid), CapturePublicationPreflightError);
+    await assert.rejects(client.publish(invalid), (error: unknown) => error instanceof CapturePublicationPreflightError && error.dispatched === false);
+  }
+  assert.throws(() => preflightCapturePublication(input, 0), CapturePublicationPreflightError);
+  await assert.rejects(client.publish(input, 0), CapturePublicationPreflightError);
+  const oversized = materialFixture({ bundleId: "b".repeat(256) });
+  const oversizedPlan = withPlan({ ...plan, bundleId: oversized.payload.bundleId, materials: oversized.manifest.key, entries: plan.entries.filter(entry => entry.role !== "frame").concat({ ...plan.entries[3], relativePath: "frame.png", role: "frame" }) });
+  const oversizedInput = { ...oversizedPlan, materials: validateMaterialsDocument(oversized.manifest, oversized.payloadBytes), derivatives: [] };
+  assert.throws(() => preflightCapturePublication(oversizedInput), CapturePublicationPreflightError);
+  await assert.rejects(client.publish(oversizedInput), CapturePublicationPreflightError);
+  assert.equal(dispatched, 0);
+  assert.equal((await client.publish(input)).state, "publishing");
+  assert.equal(dispatched, 1);
+  await client.close();
+  const failedClient = new CaptureClient({ ...transport, async request(request) { if (request.method === "handshake") return transport.request(request); throw new Error("transport failed"); } });
+  await failedClient.handshake();
+  await assert.rejects(failedClient.publish(input), (error: unknown) => error instanceof Error && !(error instanceof CapturePublicationPreflightError) && /outcome is unknown/.test(error.message));
+  await failedClient.close();
   assert.equal(validatePublicationPlan(envelope, planBytes, f.document, proofs).profile, "apparent-bundle/1");
   assert.throws(() => validatePublicationPlan(envelope, planBytes, f.document), /detached receipt bytes/);
   assert.throws(() => validatePublicationPlan(envelope, planBytes, f.document, [{ ...proofs[0], bytes: Buffer.from("tampered") }]), /byte length|SHA256/);
