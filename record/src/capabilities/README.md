@@ -6,6 +6,9 @@ its application logic imports neither Electron nor Engine. The shell must supply
 an authorized narrow preload adapter. No production adapter is shipped here.
 
 `observe` immediately supplies a complete snapshot, then complete replacements.
+The snapshot contract is version 2. Version 1 snapshots must be migrated by
+mapping every capture's delivery fact to `unknown` and setting
+`nextShortcutAdmission` to `unavailable`; absence of those facts is never proof.
 Within one `providerEpoch`, revisions strictly increase. Reconnect to the same
 provider retains its epoch; provider restart changes epoch and may reset revision.
 Old epochs are never restored. Reconnecting supplies accumulated capture-scoped
@@ -22,9 +25,29 @@ reserved for a provider-confirmed operation; the relevant facts must be present
 in its snapshot. `refused`, `cancelled` and `outcome-unknown` never imply success.
 Command cancellation is not capture cancellation. Native grant status and usable
 capture readiness remain distinct; a granted permission may still need relaunch.
-`start-capture` with `delivery: "local-only"` requires the production provider to
-enforce no upload/sharing; it must refuse if enforcement is unavailable, never
-silently downgrade to host defaults. This package implements no such enforcement.
+`start-capture` with `delivery: "local-only"` is a request only. The matching
+`CaptureFact.delivery` is the provider's readback of effective enforced policy:
+`local-only`, `host-default` or `unknown`. A command result, including `accepted`,
+does not set it. A production provider must refuse local-only capture if it cannot
+enforce that policy; it must never silently downgrade to host defaults. This
+package implements no such enforcement.
+
+Picker success has a typed `surface: "screen"` and `target` (`display`, `area` or
+`window`); picker cancellation/failure has no fabricated target. Accepted strokes
+carry a typed `surface` (`screen` or `whiteboard`) and stable factual `strokeId`
+on success. Free-form `detail` cannot substitute for either typed fact.
+
+`nextShortcutAdmission` and `arm-next-shortcut` / `cancel-next-shortcut` are
+request-scoped facts, not an onboarding feature. The caller supplies an opaque
+`admissionId`; it is correlation only, not authorization. An arm command is only
+dispatch. A provider must publish `armed` readback with delivery and expiry, then
+`consumed` with the exact capture ID. That capture carries the same
+`shortcutAdmissionId`, typed shortcut and first-frame outcomes, and effective
+delivery fact. `cancelled` only cancels the reservation; it does not cancel a
+capture. On reconnect, preserve the exact reservation identity or report it as
+unavailable/unknown; never invent a consumed event. No production shortcut
+reservation producer exists yet. The fixture defaults to `unavailable` and refuses
+arm/cancel until its driver publishes a supported state.
 
 `@apparent/record/fixtures` exports `createRecordFixture`, `fixtureScenarios` and
 test-only driver types. Instantiate separately for each consumer test:
@@ -47,9 +70,10 @@ client.detach();
 ```
 
 Fixtures record admitted dispatches in `driver.commands()` and refuse disconnected,
-stale or inapplicable requests. They never mutate effective preferences or create
-capture outcomes in response to a command. Publish explicit provider-like facts
-with `driver.publish` (same epoch, increasing revision); stale frames return false.
+stale or inapplicable requests. They never mutate effective preferences, delivery
+readback, admission state or capture outcomes in response to a command. Publish
+explicit provider-like facts with `driver.publish` (same epoch, increasing revision);
+stale frames return false.
 Use `disconnect`/`reconnect` for connection/epoch changes. Retired epochs return
 false. Each accepted publication reaches observers; listener failures are isolated.
 Script transport uncertainty/refusal/cancellation with `setNextResult`.
@@ -88,3 +112,29 @@ by the Record host adapter. This change defines the fact and controlled fixture
 coverage only; no private app monitoring, new viewer or native route is added.
 Until a verified producer exists, consumers cannot complete a confirmation-based
 stage from actual production facts. Their policy stays outside Record.
+
+Explicit `start-capture` must refuse while a next-shortcut admission is `armed`.
+The caller must observe consumption, cancellation or expiry before requesting an
+explicit Start. An accepted cancel command alone does not disarm it. This avoids
+silently applying a shortcut-only delivery reservation to an unrelated start.
+
+## Pen color, not tool mode
+
+`PenColor` is `coral | purple | blue | green`. `PenPreference.effective` is a
+confirmed named color or `null` when unknown; `supported` lists those color
+choices. `select-pen.value` is a PenColor. Ink/laser/cursor are tool modes, not
+color choices and are not exposed by this preference. Fixtures begin with an
+explicit synthetic stored coral selection, not a claim about product defaults.
+The donor's unnamed legacy red fallback must not be relabelled coral.
+
+The inspected donor at `87c8268c162fc259457cea6babe52cbae84d3dc6` implements
+`shared/handoff/pen.rs::save`: validate the palette, persist `penColor` through
+`set_config_value_in`, then apply the color in memory. A failed write does not
+apply the new color. That writer exists in the release-baseline donor; this
+contract does not copy it to main, add another writer or change release/#658.
+The eventual Record host must delegate to the authoritative writer and publish
+only effective readback. Dispatch acceptance never selects a color; write
+failure preserves the last confirmed effective color. Production mapping is
+still unavailable, while the fixture supports all four explicit readbacks.
+`PEN_COLOR_RGB` exports the donor's exact approved RGB triples for swatches;
+these names must not be interpreted as CSS named colors or replacement branding.
