@@ -18,9 +18,54 @@ same client and job ID after decode rejection/timeout and requires SDK inspect o
 cancel reconciliation before another dispatch or cleanup. Assembly preserves
 supplied transcript, selected frames, typed notes/pins, target/device,
 session/context changes, interaction labels, marks and processing warnings.
-Window titles remain manifest-only. It does not select frames, write the
-canonical bundle or perform clipboard/link handoff; those adoption steps remain
-outstanding.
+Window titles remain manifest-only. The existing text formatter does not
+select frames, write files or perform clipboard/link handoff; those adoption
+steps remain outstanding.
+
+`@apparent/record/processing/bundle` exports `assembleCanonicalBundle`. It
+accepts detached materials manifest/payload bytes, supplied fact bytes, explicit
+persisted `createdAtMs` and canonical target admission facts, Record's selected
+frame/mark policy results, and exact sealed artifact bytes. By default it calls
+`validateMaterialsDocument` and `validateFactFile` from the public
+`@apparent/engine-sdk/capture` subpath; hosts may inject equivalent public SDK
+validators. It returns UTF-8 `apparent.json` and `summary.md` bytes, a
+deterministic versioned inventory with hashes/lengths and unavailable/empty
+collection states, plus the validated original materials/fact documents. It
+does not write or publish files, make a Saved claim, copy native materials,
+create a final destination, or perform clipboard/network/cleanup effects.
+
+The headless source install pins SDK 0.3.1 from the committed
+`vendor/engine-sdk-0.3.1.tgz` for development and declares `^0.3.1` as an
+optional peer. A host importing the bundle subpath must install that peer. The
+verified tarball SHA-256 is
+`1b605f06273f9c1a134b68b0ed233605b120813214914ca70ed0c8c5f0346f04`.
+
+Assembly requires at least one selected frame, one contact sheet, and exact
+sealed media references. Each artifact declares the exact materials key; media
+hashes and identities must match the validated material inventory. Generated
+documents have no filesystem identity. Image seals remain caller-attested,
+not authenticated derivative receipts: inventory provenance distinguishes them
+from material references and generated documents. A publisher must still
+validate native derivative authority and actual filesystem contents. It refuses stale capture/material/fact identities,
+missing or duplicate paths, escaping paths, mismatched bytes, and unordered
+frame indices/times. Validated source/invocation facts retain capture identity
+in the returned material/fact documents; canonical window snapshots/titles stay
+in `apparent.json`, while the existing summary formatter excludes titles.
+Context/session changes and all interaction variants are retained. Session
+destination fields such as `via` must be supplied as explicit Record admission
+metadata; SDK session IDs remain fact references and are not guessed into a
+routing destination. Frame reasons
+and marks need explicit canonical mappings; Record presentation marks alone do
+not contain enough geometry to make a v1 mark. Transcript
+segments without `endMs` require an explicit Record estimate policy; this
+policy estimates end at the next segment start or capture end and sets
+`estimated: true`. Accepted stroke surface transforms remain authoritative:
+non-empty strokes need an explicit Record-owned canonical v1 stroke mapping
+that preserves the declared surface dimensions and observed normalized points;
+projection into a different surface is unsupported. Otherwise
+assembly returns an exact unsupported error. This API is fixture-ready only;
+it does not decode raw materials, choose frames/marks, produce contact sheets,
+or establish native provenance/full-profile acceptance.
 
 The publication subpath has an optional SDK peer: hosts using it supply the
 published SDK. Other Record consumers do not need to install that peer. Source
@@ -143,7 +188,7 @@ fallback route remains authoritative.
 | Next-shortcut admission and local-only admission | Explicitly unavailable | Current capture-v1 has neither reservation enforcement nor local-only enforcement. Record refuses local-only starts and refuses arm when the producer reports unavailable; it never infers enforcement from intent. A future producer must publish reservation consumption/cancellation/expiry and effective per-capture delivery readback. Engine committed parent-thread notification when usable native capabilities land. |
 | Transcript association | Implemented in the headless package | `associateTranscriptWithSelectedFrames` partitions supplied word/segment facts across existing selected frames using measured clause/anchor rules. Source-derived Rust parity tests cover Unicode whitespace, punctuation, gaps and boundary timing. This does not select images or supply missing native visual metrics. |
 | Semantic processing assembly and frame decode | Consumer implemented; installed adoption partial | PR #704 (main `7c2afd5`) added the formatter and decoder seam; this slice adds durable job ownership and real PNG decode proof against the retained Linux `media/1` artifact. It does not implement frame selection, canonical bundle writing, default output selection or installed handoff adoption. |
-| Capture material to Record bundle assembly and authenticated publication | Record binding/reconciliation implemented; bundle assembly and native producer blocked | `@apparent/record/publication` persists the exact capture/publication/materials/plan/destination/manifest binding and reconciles through SDK0.3 `inspectPublication`. It consumes host-supplied validated materials and plan bytes; it does not assemble canonical bundles or release materials. Current SDK testing peer is unavailable/test-double, and the native provider does not implement capture/2 or publication. Engine's committed notification remains required before production adoption. |
+| Capture material to Record bundle assembly and authenticated publication | Pure document assembly and publication recovery implemented; native producer unavailable | `assembleCanonicalBundle` maps validated materials/facts and explicit Record policy into document bytes and an inventory; image metadata remains caller-attested. `@apparent/record/publication` persists the original publication binding and reconciles through SDK0.3.1. Neither supplies native authority, staging writes, material release, raw-material decode, or a usable capture/2 producer. Engine retains its committed usable-capability return. |
 | Keyframes, transcript, bundle contents, warnings and default output | Partially implemented; full adoption blocked | Record formats supplied semantic inputs, including target/session context, interaction labels/marks and processing warnings; default keyframe selection, canonical bundle write and installed handoff are still unadopted. Provider maps Engine v1 `saved` to Record `processing`; only authenticated Record output facts may publish `saved` or a successful save outcome. |
 | Clipboard copy, link and artifact open | Local prompt policy implemented; native effects and receipts blocked | `formatLocalHandoff` preserves semantic context, warnings and the timed request, with access instructions first and no clipboard/publication effect. Copy/open actions may be dispatched through the native port, but dispatch is not success. Copy needs a clipboard receipt; link needs the existing link producer; artifact open needs the exact-artifact viewer acknowledgement or supported OS observation. No such production receipts are synthesized here. |
 | Pill/runtime installed binding | Existing UI and runtime adopted through current fallback | Reusable pill and injected workflow host are packaged. This capability provider is owner-local and does not install an Electron main/preload route or switch routing. |
