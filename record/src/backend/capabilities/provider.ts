@@ -10,8 +10,18 @@ import type {
  * is represented as unavailable facts and refused actions.
  */
 export interface RecordNativeFacts {
+  version: 1;
+  providerEpoch: string;
+  revision: number;
   readiness: NativeRequirement[];
   shortcut: CapabilitySnapshot["shortcut"];
+}
+
+/** Authenticated Record output facts; raw Engine v1 saved material is not enough. */
+export interface RecordCaptureFacts {
+  version: 1;
+  providerEpoch: string;
+  revision: number;
   captures: CaptureFact[];
   nextShortcutAdmission: CapabilitySnapshot["nextShortcutAdmission"];
 }
@@ -19,8 +29,8 @@ export interface RecordNativeFacts {
 export type NativeAction = Extract<RecordCommand,
   { type: "request-permission" | "open-system-settings" | "request-safe-relaunch" |
     "shortcut-begin-edit" | "shortcut-submit" | "shortcut-save" | "shortcut-cancel" |
-    "shortcut-reset" | "shortcut-open-desktop-config" | "arm-next-shortcut" |
-    "cancel-next-shortcut" | "copy-local" | "open-capture" }>;
+    "shortcut-reset" | "shortcut-open-desktop-config" | "copy-local" | "open-capture" }>;
+export type CaptureAction = Extract<RecordCommand, { type: "arm-next-shortcut" | "cancel-next-shortcut" }>;
 
 export interface RecordNativePort {
   /** Read facts produced by the actual same-user native host transport. */
@@ -29,6 +39,13 @@ export interface RecordNativePort {
   observe?(listener: () => void): () => void;
   /** Dispatch only. This receipt cannot establish an operation outcome. */
   dispatch?(command: NativeAction): Promise<"accepted" | "refused" | "cancelled" | "outcome-unknown">;
+}
+
+/** Producer seam for assembled, authenticated Record output and reservation facts. */
+export interface RecordCaptureFactsPort {
+  readFacts(): Promise<RecordCaptureFacts>;
+  observe?(listener: () => void): () => void;
+  dispatch?(command: CaptureAction): Promise<"accepted" | "refused" | "cancelled" | "outcome-unknown">;
 }
 
 /** Owner adapter over the existing authoritative penColor writer. */
@@ -43,6 +60,8 @@ export interface RecordCapabilityProviderOptions {
   runtime: RecordHostRuntime;
   /** Undefined means the Platform host binding is not installed. */
   native?: RecordNativePort;
+  /** Undefined until captured material has passed Record assembly and authenticated publication. */
+  captureFacts?: RecordCaptureFactsPort;
   /** Undefined means the published config backend binding is not installed. */
   penConfig?: RecordPenConfigPort;
   /** Stable for one provider process; a restarted process must use a new value. */
@@ -57,10 +76,11 @@ export interface RecordCapabilityProvider extends RecordClient {
 const clone = <T>(value: T): T => structuredClone(value);
 const unknownPen = (): PenPreference => ({ effective: null, supported: ["coral", "purple", "blue", "green"], error: "authoritative pen config backend unavailable" });
 const unavailableNative = (): RecordNativeFacts => ({
+  version: 1, providerEpoch: "unavailable", revision: 0,
   readiness: [{ id: "native-host", required: true, status: "unavailable", usableNow: false, relaunchNeeded: false, allowedRepairActions: [] }],
   shortcut: { effective: null, label: null, registration: "unknown", externallyManaged: false, draft: null },
-  captures: [], nextShortcutAdmission: { state: "unavailable" },
 });
+const unavailableCaptureFacts = (): RecordCaptureFacts => ({ version: 1, providerEpoch: "unavailable", revision: 0, captures: [], nextShortcutAdmission: { state: "unavailable" } });
 const engineRequirement = (ready: boolean): NativeRequirement => ({
   id: "engine-screen-capture", required: true, status: ready ? "granted" : "unavailable",
   usableNow: ready, relaunchNeeded: false, allowedRepairActions: [],
@@ -69,6 +89,7 @@ const isPenColor = (value: unknown): value is PenColor => value === "coral" || v
 function validNativeFacts(value: unknown): value is RecordNativeFacts {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const facts = value as Record<string, unknown>;
+  if (facts.version !== 1 || typeof facts.providerEpoch !== "string" || !facts.providerEpoch.trim() || !Number.isSafeInteger(facts.revision) || Number(facts.revision) < 0) return false;
   const validRequirements = Array.isArray(facts.readiness) && facts.readiness.every(item => !!item && typeof item === "object" &&
     typeof item.id === "string" && typeof item.required === "boolean" && typeof item.usableNow === "boolean" &&
     typeof item.relaunchNeeded === "boolean" && ["granted", "denied", "not-determined", "unavailable"].includes(item.status) &&
@@ -79,6 +100,13 @@ function validNativeFacts(value: unknown): value is RecordNativeFacts {
     ["registered", "unregistered", "externally-managed", "unknown"].includes(String(shortcut.registration)) &&
     typeof shortcut.externallyManaged === "boolean" && (shortcut.draft === null || (!!shortcut.draft && typeof shortcut.draft === "object" &&
       typeof (shortcut.draft as Record<string, unknown>).sessionId === "string" && typeof (shortcut.draft as Record<string, unknown>).value === "string"));
+  return validRequirements && validShortcut;
+}
+
+function validRecordCaptureFacts(value: unknown): value is RecordCaptureFacts {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const facts = value as Record<string, unknown>;
+  if (facts.version !== 1 || typeof facts.providerEpoch !== "string" || !facts.providerEpoch.trim() || !Number.isSafeInteger(facts.revision) || Number(facts.revision) < 0) return false;
   const admission = facts.nextShortcutAdmission as Record<string, unknown> | undefined;
   const validAdmission = !!admission && (
     admission.state === "unavailable" || admission.state === "idle" ||
@@ -91,7 +119,7 @@ function validNativeFacts(value: unknown): value is RecordNativeFacts {
     const item = capture as Record<string, unknown>;
     if (typeof item.captureId !== "string" || !["local-only", "host-default", "unknown"].includes(String(item.delivery)) ||
       !["starting", "recording", "processing", "saved", "cancelled", "failed", "unknown"].includes(String(item.phase)) || !Array.isArray(item.outcomes)) return false;
-    return item.outcomes.every(outcome => {
+    const validOutcomes = item.outcomes.every(outcome => {
       if (!outcome || typeof outcome !== "object") return false;
       const fact = outcome as Record<string, unknown>;
       if (typeof fact.at !== "string" || typeof fact.ok !== "boolean") return false;
@@ -106,8 +134,34 @@ function validNativeFacts(value: unknown): value is RecordNativeFacts {
         : ["refused", "failed"].includes(String(fact.reason)));
       return ["shortcut", "first-frame-start", "whiteboard", "processing", "save", "copy", "open-dispatch"].includes(String(fact.kind));
     });
+    if (!validOutcomes) return false;
+    return item.phase !== "saved" || item.outcomes.some(outcome => {
+      const fact = outcome as Record<string, unknown>;
+      return fact.kind === "save" && fact.ok === true;
+    });
   });
-  return validRequirements && validShortcut && validCaptures && validAdmission;
+  return validCaptures && validAdmission;
+}
+
+function revisionedPortSnapshots<T extends { version: 1; providerEpoch: string; revision: number }>() {
+  let epoch: string | undefined;
+  let revision = -1;
+  let fingerprint = "";
+  const retired = new Set<string>();
+  return (next: T): T | undefined => {
+    if (retired.has(next.providerEpoch)) return undefined;
+    const nextFingerprint = JSON.stringify(next);
+    if (epoch === undefined || epoch !== next.providerEpoch) {
+      if (epoch !== undefined) retired.add(epoch);
+      epoch = next.providerEpoch;
+      revision = next.revision;
+      fingerprint = nextFingerprint;
+      return next;
+    }
+    if (next.revision < revision || (next.revision === revision && nextFingerprint !== fingerprint)) return undefined;
+    if (next.revision > revision) { revision = next.revision; fingerprint = nextFingerprint; }
+    return next;
+  };
 }
 
 async function readPenPreference(config?: RecordPenConfigPort): Promise<PenPreference> {
@@ -131,7 +185,7 @@ function mergeCapture(previous: CaptureFact | undefined, next: CaptureFact): Cap
 
 function captureFromRuntime(state: RecordHostRuntime["state"], observedAt: Map<string, string>): CaptureFact | undefined {
   if (!("captureId" in state)) return undefined;
-  const phase: CaptureFact["phase"] = state.phase === "ready" ? "saved"
+  const phase: CaptureFact["phase"] = state.phase === "ready" ? "processing"
     : state.phase === "stop-failed" || state.phase === "uncertain" ? "unknown"
       : state.phase === "failed" ? "failed" : state.phase === "cancelled" ? "cancelled"
         : state.phase === "checking" || state.phase === "cancelling" || state.phase === "stopping" ? "unknown"
@@ -140,11 +194,12 @@ function captureFromRuntime(state: RecordHostRuntime["state"], observedAt: Map<s
   const eventKey = `${state.captureId}:${state.phase}`;
   const at = observedAt.get(eventKey) ?? new Date().toISOString();
   observedAt.set(eventKey, at);
-  // Engine SDK receipts are authoritative lifecycle evidence. Do not infer
-  // delivery, shortcut, picker, frame, or artifact identity from this state.
+  // Engine recording/processing receipts are lifecycle evidence. A v1 Engine
+  // saved receipt only closes its material operation; it does not prove Record
+  // policy assembly or authenticated publication, so it remains processing.
+  // Delivery, shortcut, picker, and artifact identity are never inferred here.
   if (state.phase === "recording") outcomes.push({ kind: "first-frame-start", at, ok: true });
-  if (state.phase === "processing") outcomes.push({ kind: "processing", at, ok: true });
-  if (state.phase === "ready") outcomes.push({ kind: "save", at, ok: true });
+  if (state.phase === "processing" || state.phase === "ready") outcomes.push({ kind: "processing", at, ok: true });
   return { captureId: state.captureId, delivery: "unknown", phase, outcomes };
 }
 
@@ -155,6 +210,9 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
   let revision = 0;
   let nativeReadSequence = 0;
   let nativeFacts = unavailableNative();
+  let outputFacts = unavailableCaptureFacts();
+  const acceptNativeSnapshot = revisionedPortSnapshots<RecordNativeFacts>();
+  const acceptOutputSnapshot = revisionedPortSnapshots<RecordCaptureFacts>();
   let pen = unknownPen();
   const captures = new Map<string, CaptureFact>();
   const runtimeObservedAt = new Map<string, string>();
@@ -169,10 +227,11 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
   const snapshot = (): CapabilitySnapshot => {
     const live = captureFromRuntime(options.runtime.state, runtimeObservedAt);
     const merged = new Map<string, CaptureFact>();
-    for (const item of nativeFacts.captures) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
+    for (const item of outputFacts.captures) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
     for (const item of captures.values()) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
     if (live) {
-      merged.set(live.captureId, mergeCapture(merged.get(live.captureId), live));
+      const output = merged.get(live.captureId);
+      merged.set(live.captureId, output ? mergeCapture(live, output) : live);
     }
     const ready = engineReady();
     return {
@@ -181,13 +240,11 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
       readiness: { requirements: [...clone(nativeFacts.readiness), engineRequirement(ready.ready)] },
       shortcut: clone(nativeFacts.shortcut), pen: clone(pen),
       captures: [...merged.values()].map(clone),
-      nextShortcutAdmission: clone(nativeFacts.nextShortcutAdmission),
+      nextShortcutAdmission: clone(outputFacts.nextShortcutAdmission),
     };
   };
   const publish = () => {
     if (detached) return;
-    const live = captureFromRuntime(options.runtime.state, runtimeObservedAt);
-    if (live) captures.set(live.captureId, mergeCapture(captures.get(live.captureId), live));
     revision++;
     const frame = snapshot();
     for (const listener of [...listeners]) {
@@ -197,18 +254,21 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
   };
   const refresh = async (): Promise<void> => {
     const sequence = ++nativeReadSequence;
-    const [native, configuredPen] = await Promise.all([
-      options.native ? options.native.readFacts().then(value => validNativeFacts(value) ? clone(value) : unavailableNative()).catch(() => unavailableNative()) : Promise.resolve(unavailableNative()),
+    const [native, output, configuredPen] = await Promise.all([
+      options.native ? options.native.readFacts().then(value => validNativeFacts(value) ? acceptNativeSnapshot(value) : undefined).catch(() => undefined) : Promise.resolve(undefined),
+      options.captureFacts ? options.captureFacts.readFacts().then(value => validRecordCaptureFacts(value) ? acceptOutputSnapshot(value) : undefined).catch(() => undefined) : Promise.resolve(undefined),
       readPenPreference(options.penConfig),
     ]);
     if (detached || sequence !== nativeReadSequence) return;
-    nativeFacts = validNativeFacts(native) ? clone(native) : unavailableNative();
+    nativeFacts = native ? clone(native) : unavailableNative();
+    outputFacts = output ? clone(output) : unavailableCaptureFacts();
     pen = clone(configuredPen);
-    for (const capture of native.captures) captures.set(capture.captureId, mergeCapture(captures.get(capture.captureId), capture));
+    for (const capture of outputFacts.captures) captures.set(capture.captureId, mergeCapture(captures.get(capture.captureId), capture));
     publish();
   };
   const unsubscribeRuntime = options.runtime.subscribe(() => publish());
   const unsubscribeNative = options.native?.observe?.(() => { void refresh(); }) ?? (() => undefined);
+  const unsubscribeCaptureFacts = options.captureFacts?.observe?.(() => { void refresh(); }) ?? (() => undefined);
   void refresh();
 
   const refuse = (command: RecordCommand, reason: string): CommandResult => ({ status: "refused", requestId: command.requestId, reason, snapshot: snapshot() });
@@ -234,7 +294,7 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
     if (command.type === "start-capture") {
       if (command.delivery === "local-only") return refuse(command, "Engine SDK has no local-only enforcement capability");
       if (options.runtime.startup.state !== "ready") return refuse(command, "Engine runtime startup reconciliation is unresolved");
-      if (nativeFacts.nextShortcutAdmission.state === "armed") return refuse(command, "capture reserved for next shortcut");
+      if (outputFacts.nextShortcutAdmission.state === "armed") return refuse(command, "capture reserved for next shortcut");
       if (current.readiness.requirements.some(requirement => requirement.required && (!requirement.usableNow || requirement.relaunchNeeded))) return refuse(command, "capture requirements unavailable");
       if (current.captures.some(capture => ["starting", "recording", "processing", "unknown"].includes(capture.phase))) return refuse(command, "capture active or unresolved");
       usedRequests.add(command.requestId);
@@ -276,11 +336,17 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
     if (command.type === "shortcut-begin-edit" && nativeFacts.shortcut.draft) return refuse(command, "shortcut edit already active");
     if ((command.type === "shortcut-submit" || command.type === "shortcut-save" || command.type === "shortcut-cancel") &&
       nativeFacts.shortcut.draft?.sessionId !== command.sessionId) return refuse(command, "shortcut edit session not current");
-    if (command.type === "arm-next-shortcut" && nativeFacts.nextShortcutAdmission.state !== "idle")
-      return refuse(command, nativeFacts.nextShortcutAdmission.state === "unavailable" ? "shortcut reservation producer unavailable" : "next-shortcut admission is not idle");
+    if (command.type === "arm-next-shortcut" && outputFacts.nextShortcutAdmission.state !== "idle")
+      return refuse(command, outputFacts.nextShortcutAdmission.state === "unavailable" ? "shortcut reservation producer unavailable" : "next-shortcut admission is not idle");
     if (command.type === "arm-next-shortcut" && command.delivery === "local-only") return refuse(command, "local-only enforcement unavailable");
-    if (command.type === "cancel-next-shortcut" && (nativeFacts.nextShortcutAdmission.state !== "armed" || nativeFacts.nextShortcutAdmission.admissionId !== command.admissionId))
-      return refuse(command, nativeFacts.nextShortcutAdmission.state === "unavailable" ? "shortcut reservation producer unavailable" : "matching next-shortcut admission is not armed");
+    if (command.type === "cancel-next-shortcut" && (outputFacts.nextShortcutAdmission.state !== "armed" || outputFacts.nextShortcutAdmission.admissionId !== command.admissionId))
+      return refuse(command, outputFacts.nextShortcutAdmission.state === "unavailable" ? "shortcut reservation producer unavailable" : "matching next-shortcut admission is not armed");
+    if (command.type === "arm-next-shortcut" || command.type === "cancel-next-shortcut") {
+      if (!options.captureFacts?.dispatch) return refuse(command, "shortcut reservation producer unavailable");
+      usedRequests.add(command.requestId);
+      try { const status = await options.captureFacts.dispatch(command); await refresh(); return response(status); }
+      catch { await refresh(); return response("outcome-unknown"); }
+    }
     const nativeCommand = command as NativeAction;
     if (!options.native?.dispatch) return refuse(command, "native host action port unavailable");
     usedRequests.add(command.requestId);
@@ -304,7 +370,7 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
     },
     detach() {
       if (detached) return;
-      detached = true; unsubscribeRuntime(); unsubscribeNative(); listeners.clear();
+      detached = true; unsubscribeRuntime(); unsubscribeNative(); unsubscribeCaptureFacts(); listeners.clear();
       // Runtime disposal only detaches subscriptions; native capture ownership stays with Engine.
       options.runtime.dispose();
     },

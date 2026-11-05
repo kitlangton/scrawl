@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { CapabilitySnapshot, RecordNativeFacts, RecordPenConfigPort } from "../src/capabilities/index.ts";
+import type { CapabilitySnapshot, RecordCaptureFacts, RecordNativeFacts, RecordPenConfigPort } from "../src/capabilities/index.ts";
 import { createRecordCapabilityProvider } from "../src/backend/capabilities/provider.ts";
 import { createRecordHostRuntime } from "../dist/backend/host/runtime.js";
 import type { EngineSdkPort, PreparedStart } from "../src/backend/engine/sdk-adapter.ts";
@@ -32,10 +32,11 @@ function runtimeFixture() {
 }
 
 const nativeFacts = (): RecordNativeFacts => ({
+  version: 1, providerEpoch: "native-epoch-1", revision: 1,
   readiness: [{ id: "screen-permission", required: true, status: "granted", usableNow: true, relaunchNeeded: false, allowedRepairActions: [] }],
   shortcut: { effective: "Ctrl+Shift+R", label: "Ctrl Shift R", registration: "registered", externallyManaged: false, draft: null },
-  captures: [], nextShortcutAdmission: { state: "unavailable" },
 });
+const outputFacts = (): RecordCaptureFacts => ({ version: 1, providerEpoch: "output-epoch-1", revision: 1, captures: [], nextShortcutAdmission: { state: "unavailable" } });
 const command = (snapshot: CapabilitySnapshot, type: "refresh" | "start-capture", requestId: string, delivery?: "local-only" | "host-default") => ({
   type, requestId, expected: { providerEpoch: snapshot.providerEpoch, revision: snapshot.revision },
   ...(type === "start-capture" ? { delivery: delivery ?? "host-default" } : {}),
@@ -94,7 +95,28 @@ test("provider enforces observed repair permission and external shortcut ownersh
   client.detach();
 });
 
-test("Engine lifecycle is composed, local-only never reaches it, and stop facts come from runtime receipts", async () => {
+test("native fact epochs and revisions reject stale frames and retired epochs", async () => {
+  const { runtime } = runtimeFixture();
+  let facts = nativeFacts();
+  const listeners = new Set<() => void>();
+  const client = createRecordCapabilityProvider({
+    runtime,
+    native: { readFacts: async () => structuredClone(facts), observe: listener => { listeners.add(listener); return () => listeners.delete(listener); } },
+    providerEpoch: "provider-source-epochs",
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  facts = { ...facts, providerEpoch: "native-epoch-2", revision: 1, shortcut: { ...facts.shortcut, effective: "Alt+R" } };
+  for (const listener of listeners) listener();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(client.current().shortcut.effective, "Alt+R");
+  facts = { ...facts, providerEpoch: "native-epoch-1", revision: 99, shortcut: { ...facts.shortcut, effective: "stale" } };
+  for (const listener of listeners) listener();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(client.current().shortcut.effective, null, "retired producer epochs must not restore old bindings");
+  client.detach();
+});
+
+test("Engine lifecycle is composed, local-only never reaches it, and v1 saved waits for Record assembly", async () => {
   const { runtime } = runtimeFixture();
   const client = createRecordCapabilityProvider({ runtime, native: { readFacts: async () => nativeFacts() }, providerEpoch: "provider-3" });
   await new Promise(resolve => setImmediate(resolve));
@@ -110,9 +132,31 @@ test("Engine lifecycle is composed, local-only never reaches it, and stop facts 
   assert.equal(client.current().captures[0].delivery, "unknown");
   const stopCommand = { type: "stop-capture" as const, captureId: "capture-1", requestId: "stop-1", expected: { providerEpoch: client.current().providerEpoch, revision: client.current().revision } };
   assert.equal((await client.execute(stopCommand)).status, "accepted");
-  assert.equal(client.current().captures[0].phase, "saved");
-  assert.equal(client.current().captures[0].outcomes.some(outcome => outcome.kind === "save" && outcome.ok), true);
+  assert.equal(client.current().captures[0].phase, "processing");
+  assert.equal(client.current().captures[0].outcomes.some(outcome => outcome.kind === "processing" && outcome.ok), true);
+  assert.equal(client.current().captures[0].outcomes.some(outcome => outcome.kind === "save" && outcome.ok), false);
   assert.equal(client.current().captures[0].artifactId, undefined);
+  client.detach();
+});
+
+test("only the Record output producer can publish saved state; copy dispatch is not a copy receipt", async () => {
+  const { runtime } = runtimeFixture();
+  const capture = { captureId: "assembled-1", delivery: "unknown" as const, artifactId: "artifact-1", phase: "saved" as const,
+    outcomes: [{ kind: "save" as const, at: "2026-11-05T12:00:00Z", ok: true }] };
+  let dispatched = 0;
+  const client = createRecordCapabilityProvider({
+    runtime,
+    native: { readFacts: async () => nativeFacts(), dispatch: async () => { dispatched++; return "accepted"; } },
+    captureFacts: { readFacts: async () => ({ ...outputFacts(), captures: [capture] }) },
+    providerEpoch: "provider-assembled-output",
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  const snapshot = client.current();
+  assert.equal(snapshot.captures[0].phase, "saved");
+  const copied = await client.execute({ type: "copy-local", captureId: capture.captureId, requestId: "copy-dispatch", expected: { providerEpoch: snapshot.providerEpoch, revision: snapshot.revision } });
+  assert.equal(copied.status, "accepted");
+  assert.equal(dispatched, 1);
+  assert.equal(client.current().captures[0].outcomes.some(outcome => outcome.kind === "copy"), false);
   client.detach();
 });
 
@@ -190,7 +234,7 @@ test("provider composes the real host runtime and authoritative pen config write
     read: async () => ({ persisted: stored, effective }),
     writeApplyAndReadBack: async color => { stored = color; effective = color; return { status: "saved", effective }; },
   };
-  const client = createRecordCapabilityProvider({ runtime, native: { readFacts: async () => nativeFacts() }, penConfig: config, providerEpoch: "runtime-provider" });
+  const client = createRecordCapabilityProvider({ runtime, native: { readFacts: async () => nativeFacts() }, captureFacts: { readFacts: async () => outputFacts() }, penConfig: config, providerEpoch: "runtime-provider" });
   await new Promise(resolve => setImmediate(resolve));
   const before = client.current();
   const pen = await client.execute({ type: "select-pen", value: "blue", requestId: "pen-runtime", expected: { providerEpoch: before.providerEpoch, revision: before.revision } });
@@ -203,7 +247,7 @@ test("provider composes the real host runtime and authoritative pen config write
   assert.equal(client.current().captures[0].phase, "recording");
   const stop = { type: "stop-capture" as const, captureId: "runtime-capture", requestId: "stop-runtime", expected: { providerEpoch: client.current().providerEpoch, revision: client.current().revision } };
   assert.equal((await client.execute(stop)).status, "accepted");
-  assert.equal(client.current().captures[0].phase, "saved");
-  assert.equal(client.current().captures[0].outcomes.some(outcome => outcome.kind === "save" && outcome.ok), true);
+  assert.equal(client.current().captures[0].phase, "processing");
+  assert.equal(client.current().captures[0].outcomes.some(outcome => outcome.kind === "save" && outcome.ok), false);
   client.detach();
 });

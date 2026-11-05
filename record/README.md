@@ -4,6 +4,23 @@
 
 `EngineSdkAdapter` composes an already constructed, packed `@apparent/engine-sdk` client. `createRecordHostRuntime` from `@apparent/record/host` composes it with `RecordWorkflow`, `SqliteCaptureMappingStore` and `PrivateBundleAllocator` using explicit private roots (Node 22.13+). The runtime reconciles persisted request IDs before admitting starts; active or ambiguous captures remain visible and block admission. The host subpath does not import React or Electron. It does not choose or launch an executable, select runtime locations, or establish capture readiness. The reusable pill is adopted through the existing legacy host; it does not install a replacement Electron main/preload route.
 
+`@apparent/record/processing` exports `decodeSelectedFrames` and
+`assembleProcessingOutput`. The decode function consumes an injected public
+`@apparent/engine-sdk/media` client and Record-selected bundle-clock timestamps;
+the Engine owns decoding, safe output publication and truthful execution facts.
+The caller supplies an existing verified media runtime, a fresh private output
+directory, source identity and selected frames. Assembly formats those facts as
+semantic handoff text with absolute frame/video/bundle paths; it does not select
+frames, transcribe, create images or write a bundle. Linux worker conformance is
+documented by Engine, but packaged runtime discovery and Record adoption remain
+pending the Engine owner's committed artifact and verified discovery/launch/
+platform handoff. No native proof is claimed here. The caller must complete the
+SDK handshake first and retain the full client and job ID: a rejected decode is
+not proof that execution stopped. Reconcile with SDK inspect/cancel before
+retrying or cleaning its output. Assembly covers supplied transcript, notes and
+frame facts only; target/session context, interaction events, marks and processing
+warnings still need adoption before this can replace the full legacy handoff.
+
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 
 The interface follows the existing GUI capture control contract: a caller-owned request ID for start, real-frame readiness distinguishing `starting` from `recording`, and ID-scoped stop/cancel/inspect receipts. Stop transport failures retain the same capture ID for retry. The Engine retains capture safety, permission checks, native media execution, finalization and bundle truth. `EngineClient.readiness()` is a future capability for querying actual native admission readiness; the existing CLI does not expose that as a separate query yet, so an adapter cannot infer it from an idle capture state.
@@ -89,7 +106,9 @@ fallback route remains authoritative.
 | Permission grant, usability, relaunch and repair actions | Provider translation seam implemented; Platform producer blocked | Native requirement facts are copied from the injected native port; missing/failed binding yields unavailable. Platform owns the same-user `capture.sock` GUI actor extension and shared public host-port types/client; it has committed direct parent-Record-thread notification with the committed API/injection and platform evidence. |
 | Shortcut configuration, registration, edit/save/cancel | Provider translation seam implemented; Platform producer blocked | Effective configured binding and OS registration remain distinct facts. The native producer owns them; this provider neither binds shortcuts nor duplicates the transport. Same Platform notification route as above. |
 | Next-shortcut admission and local-only admission | Explicitly unavailable | Current capture-v1 has neither reservation enforcement nor local-only enforcement. Record refuses local-only starts and refuses arm when the producer reports unavailable; it never infers enforcement from intent. A future producer must publish reservation consumption/cancellation/expiry and effective per-capture delivery readback. Engine committed parent-thread notification when usable native capabilities land. |
-| Processing, keyframes, transcript, bundle and default output | Engine lifecycle composed; processing/output contract remains Engine-owned | Provider uses Engine runtime receipt phases and confirmed save receipt; delivery, keyframes, transcript and bundle text require actual Engine receipts/inspection. Independent packaged-media notification is established; the media producer remains unavailable to this provider until its committed artifact/capability is delivered through the parent Record thread. No processing implementation is copied into Record. |
+| Semantic processing assembly and frame decode | Implemented in `@apparent/record/processing`; consumer-only | PR #704 (main `7c2afd5`) added `assembleProcessingOutput` and `decodeSelectedFrames`, using supplied transcript/notes/selected frame facts and an injected public Engine media client. It has no real decode proof. It does not implement frame selection, full bundle/context/marks/warnings, default output selection or handoff adoption. |
+| Capture material to Record bundle assembly and authenticated publication | Blocked on Engine producer contract | Engine is preparing the separately negotiated capture-material → Record assembly → authenticated publish channel because capture-v1 `saved` semantics cannot supply Record policy assembly. Current capture-v1 remains unavailable. Engine has committed direct notification to the parent Record thread when a usable capture SDK/native artifact and authoritative capabilities land. Independent packaged-media notification is also established; it does not prove this Record assembly channel or real decode. |
+| Keyframes, transcript, bundle contents, warnings and default output | Partially implemented; full adoption blocked | Record can format only the supplied semantic inputs; default keyframe selection, target/session context, interaction events/marks, processing warnings, canonical bundle write and full handoff are still unadopted. Provider maps Engine v1 `saved` to Record `processing`; only authenticated Record output facts may publish `saved` or a successful save outcome. |
 | Clipboard copy, link and artifact open | Dispatch seam only; production receipts blocked | Copy/open actions may be dispatched through the native port, but dispatch is not success. Copy needs a clipboard receipt; link needs the existing link producer; artifact open needs the exact-artifact viewer acknowledgement or supported OS observation. No such production receipts are synthesized here. |
 | Pill/runtime installed binding | Existing UI and runtime adopted through current fallback | Reusable pill and injected workflow host are packaged. This capability provider is owner-local and does not install an Electron main/preload route or switch routing. |
 | Platform proof | Blocked for this provider route | No new OS boundary is claimed. Platform's committed evidence notification must name the native facts/action contract and affected macOS/Linux evidence; existing Desktop platform gates still apply before any route adoption. |
@@ -105,7 +124,8 @@ const client = createRecordCapabilityProvider({
   runtime,
   providerEpoch: crypto.randomUUID(),
   native: platformRecordPort, // absent until Platform's committed binding lands
-  penConfig: authoritativePenConfigPort, // absent until the config backend is bound
+  captureFacts: authenticatedRecordOutputPort, // absent until Engine's assembly/publish channel lands
+  penConfig: authoritativePenConfigPort, // existing top-level penColor writer/readback binding
 });
 ```
 
@@ -120,3 +140,6 @@ or cancel. The current runtime does not expose persisted terminal history as
 complete capability snapshots, so this provider retains facts observed during
 its lifetime and reports only unresolved startup ownership it can actually
 inspect; it does not reconstruct omitted history or claim an artifact identity.
+The Engine SDK v1 `saved` receipt is only material completion: Record keeps that
+capture in `processing` until the authenticated output port confirms Record's
+assembled artifact. No v1 material receipt can publish Record `saved`.

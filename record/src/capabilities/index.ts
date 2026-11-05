@@ -121,9 +121,12 @@ export interface RecordClient {
 export { createRecordCapabilityProvider } from "../backend/capabilities/provider.js";
 export { hasConfirmedArtifactOpen, PEN_COLOR_RGB } from "./helpers.js";
 export type {
+  CaptureAction,
   NativeAction,
   RecordCapabilityProvider,
   RecordCapabilityProviderOptions,
+  RecordCaptureFacts,
+  RecordCaptureFactsPort,
   RecordNativeFacts,
   RecordNativePort,
   RecordPenConfigPort,
