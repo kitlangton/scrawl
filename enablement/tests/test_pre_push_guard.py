@@ -105,10 +105,13 @@ class PrePushGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), str(self.repo))
 
-    def test_feature_push_runs_contracts_without_cargo(self):
+    def test_unknown_history_feature_push_runs_owner_checks_without_cargo(self):
+        site = self.public_site_delta()
+        run("git", "update-ref", "-d", "refs/remotes/origin/main", cwd=self.repo)
         result = self.push(remote="refs/heads/feature")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.log.exists())
+        self.assertIn(f"{site}:run build\n", self.npm_log.read_text())
 
     def onboarding_delta(self, dependencies=True, delete=False, rename=False):
         frontend = self.repo / "capture/desktop/ui/frontend"
@@ -152,6 +155,77 @@ class PrePushGuardTests(unittest.TestCase):
         self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
         return self.client
 
+    def public_site_delta(self, path="src/features.json", delete=False, rename=False):
+        site = self.repo / "public/site"
+        source_site = HOOK.parents[1] / "public/site"
+        for name in ("package.json", "bun.lock", "tsconfig.json", "vite.config.ts", "index.html"):
+            target = site / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_site / name, target)
+        manifest = __import__("json").loads((site / "package.json").read_text())
+        for name in (*manifest.get("dependencies", {}), *manifest.get("devDependencies", {})):
+            dependency = site / "node_modules" / name / "package.json"
+            dependency.parent.mkdir(parents=True, exist_ok=True)
+            dependency.write_text("fixture\n")
+        (site / ".gitignore").write_text("node_modules/\n")
+        target = site / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("original\n")
+        run("git", "add", ".", cwd=self.repo)
+        run("git", "commit", "-qm", "Public build input baseline", cwd=self.repo)
+        run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=self.repo)
+        if rename:
+            target.rename(target.with_name("renamed.json"))
+        elif delete:
+            target.unlink()
+        elif path in ("package.json", "bun.lock", "tsconfig.json", "vite.config.ts", "index.html"):
+            target.write_text(target.read_text() + "\n")
+        else:
+            target.write_text("changed\n")
+        run("git", "add", "-A", cwd=self.repo)
+        run("git", "commit", "-qm", "Public build input delta", cwd=self.repo)
+        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        return site
+
+    def test_public_site_feature_delta_runs_existing_build_only(self):
+        site = self.public_site_delta()
+        result = self.push(remote="refs/heads/feature")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.npm_log.read_text(), f"{site}:run build\n")
+        self.assertFalse(self.log.exists())
+
+    def test_public_site_build_failure_rejects_feature_push(self):
+        self.public_site_delta()
+        result = self.push(remote="refs/heads/feature", env=dict(self.env, NPM_STATUS="1"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("push rejected", result.stderr)
+
+    def test_public_site_deleted_or_renamed_source_keeps_build_selected(self):
+        for delete, rename in ((True, False), (False, True)):
+            with self.subTest(delete=delete, rename=rename):
+                self.npm_log.unlink(missing_ok=True)
+                site = self.public_site_delta(delete=delete, rename=rename)
+                result = self.push(remote="refs/heads/feature")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.npm_log.read_text(), f"{site}:run build\n")
+
+    def test_public_site_deleted_control_fails_actionably_without_install(self):
+        self.public_site_delta("bun.lock", delete=True)
+        result = self.push(remote="refs/heads/feature")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Public site build inputs are missing or deleted: bun.lock", result.stderr)
+        self.assertIn("restore them or update the pre-push contract", result.stderr)
+        self.assertFalse(self.npm_log.exists())
+
+    def test_public_site_missing_dependencies_never_install(self):
+        site = self.public_site_delta()
+        shutil.rmtree(site / "node_modules")
+        result = self.push(remote="refs/heads/feature")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("bun install --frozen-lockfile` in public/site", result.stderr)
+        self.assertIn("The pre-push hook never installs dependencies", result.stderr)
+        self.assertFalse(self.npm_log.exists())
+
     def test_onboarding_feature_delta_runs_existing_command_in_frontend(self):
         frontend = self.onboarding_delta()
         result = self.push(remote="refs/heads/feature")
@@ -183,18 +257,11 @@ class PrePushGuardTests(unittest.TestCase):
         self.assertEqual(self.log.read_text(), f"{frontend}:run check:onboarding\n")
 
     def test_unrelated_public_owner_skips_onboarding_renderer_check(self):
-        frontend = self.onboarding_delta()
-        entry = frontend / "src/onboarding/main.tsx"
-        entry.write_text("// original entry\n")
-        target = self.repo / "public/site/src/features.json"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("{}\n")
-        run("git", "add", "-A", cwd=self.repo)
-        run("git", "commit", "-qm", "public owner input", cwd=self.repo)
-        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        site = self.public_site_delta()
         result = self.push(remote="refs/heads/feature")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.log.exists())
+        self.assertEqual(self.npm_log.read_text(), f"{site}:run build\n")
 
     def test_onboarding_missing_dependencies_never_install(self):
         self.onboarding_delta(dependencies=False)
@@ -269,6 +336,18 @@ class PrePushGuardTests(unittest.TestCase):
         (self.repo / "connect/service/README.md").write_text("service owner\n")
         run("git", "add", "-A", cwd=self.repo)
         run("git", "commit", "-qm", "Connect service docs", cwd=self.repo)
+        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        result = self.push(remote="refs/heads/feature")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.npm_log.exists())
+
+    def test_unrelated_native_delta_skips_public_site_build(self):
+        run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=self.repo)
+        target = self.repo / "src/capture.rs"
+        target.parent.mkdir(parents=True)
+        target.write_text("// native-owned source\n")
+        run("git", "add", "-A", cwd=self.repo)
+        run("git", "commit", "-qm", "native input", cwd=self.repo)
         self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
         result = self.push(remote="refs/heads/feature")
         self.assertEqual(result.returncode, 0, result.stderr)

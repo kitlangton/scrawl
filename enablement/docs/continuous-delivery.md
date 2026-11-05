@@ -584,6 +584,29 @@ contract before pushing. Existing repository contracts, exact-HEAD/clean-tree
 checks, conservative selection and native/release gates remain unchanged.
 This adds developer feedback, not a guarantee that all product tests run in hooks.
 
+### Public site build feedback before feature pushes
+
+Feature pre-push runs the existing `npm run build` in `public/site` when the
+full merge-base delta changes Public source, served assets, the package/build
+controls, or the build's direct tooling inputs. This command runs the Public
+theme contract, TypeScript check, client and SSR Vite builds, and prerender. It
+does not package Pages output or run browser/video checks. The five Public
+brand assets also consumed by Connect web, shared analytics and shared UI tokens
+retain their broader root and Connect browser checks; unrelated Connect-only and
+native-only deltas skip the Public build. Unknown history selects the Public build
+conservatively even on feature pushes, where broad root checks do not execute.
+
+The selector follows the build's actual closure: `public/site/src`,
+`public/site/public`, `index.html`, `package.json`, `bun.lock`, `tsconfig.json`,
+`vite.config.ts`, the Public asset plugin and site-build prerender inputs, plus
+`shared/analytics/{config,browser}.ts`, shared UI tokens and the theme guard inputs.
+Deleted or renamed source paths still select the build. Missing/deleted package
+controls fail with an instruction to restore or update the contract. Bun 1.3.10
+and locked dependencies must already be installed with
+`bun install --frozen-lockfile`; the hook never installs dependencies. This
+feedback does not change website artifact reuse, composition, publication
+provenance or release gates.
+
 Connect automatic main producers use one stable concurrency group with
 `cancel-in-progress: false`: GitHub retains one active run and replaces the pending
 slot with the latest arrival. This is arrival coalescing, not commit-order FIFO.

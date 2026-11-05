@@ -83,6 +83,102 @@ class SelectionTests(unittest.TestCase):
                     verification.run_connect_client_typescript_tests()
                 run.assert_not_called()
 
+    def test_public_site_build_inputs_select_existing_non_browser_build(self):
+        inputs = (
+            "public/site/src/features.json",
+            "public/site/src/components/home/App.tsx",
+            "public/site/public/assets/brand/icon.svg",
+            "public/site/index.html", "public/site/package.json", "public/site/bun.lock",
+            "public/site/tsconfig.json", "public/site/vite.config.ts",
+            "public/site/lib/public-assets.mjs",
+            "public/site/scripts/site-build/agent-files.ts",
+            "public/site/scripts/site-build/feature-audit.ts",
+            "public/site/scripts/site-build/prerender.ts",
+            "shared/ui/scripts/check-theme.py", "shared/ui/scripts/legacy-colors.json",
+        )
+        for path in inputs:
+            with self.subTest(path=path):
+                selection = verification.select([path])
+                self.assertTrue(selection["public_site"])
+                self.assertFalse(selection["root"])
+                self.assertFalse(selection["engine"])
+                self.assertFalse(selection["browser"])
+                self.assertTrue(verification.public_site_build_selected([path]))
+        for path in (
+            "public/site/docs/pages-deploy.md",
+            "public/site/scripts/cd/publish_pages.py",
+            "public/site/scripts/site-build/verify.mjs",
+            "public/site/functions/Apparent-ghost-demo-v4-lilac.mp4.js",
+            "public/site/video-demo/Cargo.toml",
+            "connect/client/typescript/src/index.ts", "connect/web/src/Hosted.tsx",
+            "connect/service/src/worker.ts", "capture/desktop/native/linux.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(verification.public_site_build_selected([path]))
+
+    def test_public_shared_inputs_keep_connect_browser_checks(self):
+        for path in ("shared/analytics/browser.ts", "shared/analytics/config.ts", "shared/ui/src/tokens.css"):
+            with self.subTest(path=path):
+                selection = verification.select([path])
+                self.assertTrue(selection["public_site"])
+                self.assertTrue(selection["browser"])
+                self.assertTrue(selection["root"])
+                self.assertTrue(verification.public_site_build_selected([path]))
+
+    def test_unknown_history_runs_public_feedback_on_feature_pushes(self):
+        for paths in ([], ["capture/desktop/native/linux.rs"]):
+            with self.subTest(paths=paths), patch.object(verification.subprocess, "run"), patch.object(
+                    verification, "run_connect_client_typescript_tests"), patch.object(
+                    verification, "run_public_site_build") as build:
+                selection = verification.select(paths, history_known=False)
+                verification.run_pr_checks(selection)
+                build.assert_called_once_with()
+        self.assertTrue(verification.public_site_build_selected([]))
+
+    def test_public_site_build_runs_declared_build_and_only_after_locked_dependencies_exist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "public/site"
+            source_package = SCRIPT.parents[1] / "public/site/package.json"
+            manifest = __import__("json").loads(source_package.read_text())
+            for name in ("package.json", "bun.lock", "tsconfig.json", "vite.config.ts", "index.html"):
+                target = package / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(source_package.read_text() if name == "package.json" else "fixture\n")
+            for name in (*manifest.get("dependencies", {}), *manifest.get("devDependencies", {})):
+                (package / "node_modules" / name / "package.json").parent.mkdir(parents=True, exist_ok=True)
+                (package / "node_modules" / name / "package.json").touch()
+            with patch.object(verification, "ROOT", root), patch.object(
+                    verification.subprocess, "run") as run:
+                verification.run_pr_checks({"paths": ["public/site/src/features.json"]})
+            command = ["npm", "run", "build"]
+            calls = [call for call in run.call_args_list if call.args[0] == command]
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0].kwargs["cwd"], package)
+            self.assertTrue(calls[0].kwargs["check"])
+            self.assertFalse(any(call.args[0][0] in ("bun", "cargo") for call in run.call_args_list))
+
+    def test_public_site_missing_controls_or_dependencies_fail_without_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "public/site"
+            package.mkdir(parents=True)
+            for name in ("package.json", "bun.lock", "tsconfig.json", "vite.config.ts", "index.html"):
+                (package / name).touch()
+            (package / "bun.lock").unlink()
+            with patch.object(verification, "ROOT", root), patch.object(
+                    verification.subprocess, "run") as run:
+                with self.assertRaisesRegex(RuntimeError, "Public site build inputs are missing or deleted"):
+                    verification.run_public_site_build()
+                run.assert_not_called()
+            package.joinpath("package.json").write_text('{"dependencies":{"vite":"1"}}')
+            package.joinpath("bun.lock").write_text("fixture\n")
+            with patch.object(verification, "ROOT", root), patch.object(
+                    verification.subprocess, "run") as run:
+                with self.assertRaisesRegex(RuntimeError, r"bun install --frozen-lockfile.*never installs"):
+                    verification.run_public_site_build()
+                run.assert_not_called()
+
     def test_each_real_onboarding_input_selects_renderer_feedback(self):
         frontend = "capture/desktop/ui/frontend/"
         inputs = [frontend + name for name in (
@@ -96,7 +192,7 @@ class SelectionTests(unittest.TestCase):
                 target = root / frontend / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.touch()
-            for name in inputs + ["public/site/src/features.json"]:
+            for name in inputs + ["public/site/docs/features.md"]:
                 with self.subTest(path=name), patch.object(verification, "ROOT", root), patch.object(
                         verification.subprocess, "run") as run:
                     verification.run_pr_checks({"paths": [name]})
@@ -661,11 +757,21 @@ class SelectionTests(unittest.TestCase):
                      "assets/icon.png", "src/ui/recording_completion.rs", "src/handoff.rs",
                      "capture/engine/src/session.rs", "capture/desktop/native/Settings.swift",
                      "enablement/verification.py", ".githooks/pre-push",
-                     ".github/workflows/verification.yml", "public/site/package.json", "connect/service/src/auth.ts"]:
+                     ".github/workflows/verification.yml", "connect/service/src/auth.ts"]:
             with self.subTest(path=path):
                 result = verification.select([path])
                 self.assertTrue(result["root"])
                 self.assertTrue(result["engine"])
+
+    def test_public_site_manifest_is_independent_and_unknown_inputs_stay_broad(self):
+        selected = verification.select(["public/site/package.json"])
+        self.assertEqual((selected["root"], selected["engine"], selected["public_site"]),
+                         (False, False, True))
+        for path in ("public/site/scripts/cd/publish_pages.py", "public/site/functions/worker.ts",
+                     "public/site/video-demo/Cargo.toml"):
+            with self.subTest(path=path):
+                self.assertTrue(verification.select([path])["root"])
+        self.assertTrue(verification.select([])["root"])
 
     def test_mixed_delta_cannot_hide_broad_path(self):
         self.assertTrue(verification.select(["README.md", "main.rs"])["root"])
@@ -722,9 +828,12 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual((selected["root"], selected["engine"], selected["browser"]),
                          (False, False, True))
         for path in ["connect/web/src/Other.tsx", "connect/web/src/sharedlinks.tsx",
-                     "public/site/scripts/cd/publish_pages.py", "public/site/public/hosted/source-pond-v4.png",
-                     "public/site/public/hosted/agent-pond-v4.png", "public/site/public/hosted/agent-reading-v4.png",
-                     "public/site/public/HostGrotesk-Variable.ttf", "public/site/public/apparent-wordmark.svg"]:
+                     "public/site/scripts/cd/publish_pages.py",
+                     "public/site/public/assets/hosted/source-pond-v4.png",
+                     "public/site/public/assets/hosted/agent-pond-v4.png",
+                     "public/site/public/assets/hosted/agent-reading-v4.png",
+                     "public/site/public/assets/fonts/HostGrotesk-Variable.ttf",
+                     "public/site/public/assets/brand/apparent-wordmark.svg"]:
             with self.subTest(path=path):
                 result = verification.select(["connect/web/src/SharedLinks.tsx", path])
                 self.assertTrue(result["root"])
