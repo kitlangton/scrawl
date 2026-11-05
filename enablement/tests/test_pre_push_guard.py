@@ -81,6 +81,20 @@ class PrePushGuardTests(unittest.TestCase):
                 dependency.parent.mkdir(parents=True, exist_ok=True)
                 dependency.write_text("fixture\n")
         shutil.copy2(SELECTOR, self.repo / "enablement" / "verification.py")
+        # The independent top-level owner is selected on unknown history too.
+        # Copy its tracked input closure, not its generated/dependency trees.
+        for name in run("git", "ls-files", "onboarding", cwd=HOOK.parents[1]).stdout.splitlines():
+            target = self.repo / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(HOOK.parents[1] / name, target)
+        package = self.repo / "onboarding"
+        manifest = json.loads((package / "package.json").read_text())
+        lock = json.loads((package / "package-lock.json").read_text())
+        for name in {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}:
+            target = package / "node_modules" / name / "package.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps({'version': lock['packages']['node_modules/' + name]['version']}))
+        (package / 'node_modules/.package-lock.json').write_text(json.dumps(lock))
         # Preserve the dependency-free delivery check closure for conservative
         # unknown-history selection; it never invokes this hook suite.
         delivery = self.repo / "composition/delivery"
@@ -150,6 +164,31 @@ class PrePushGuardTests(unittest.TestCase):
         self.assertFalse(self.log.exists())
         self.assertIn(f"{site}:run build\n", self.npm_log.read_text())
         self.assertIn(f"{self.repo / 'composition/app'}:run check\n", self.npm_log.read_text())
+
+    def test_top_level_onboarding_feature_push_runs_only_owner_commands(self):
+        run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=self.repo)
+        entry = self.repo / 'onboarding/src/controller.ts'
+        entry.write_text(entry.read_text() + '\n// owner-only fixture change\n')
+        run('git', 'add', '.', cwd=self.repo)
+        run('git', 'commit', '-qm', 'standalone onboarding change', cwd=self.repo)
+        self.head = run('git', 'rev-parse', 'HEAD', cwd=self.repo).stdout.strip()
+        result = self.push(remote='refs/heads/feature')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.log.exists(), 'no Cargo may run for this owner-only delta')
+        self.assertEqual(self.npm_log.read_text().splitlines(), [
+            f"{self.repo / 'onboarding'}:run typecheck",
+            f"{self.repo / 'onboarding'}:test",
+        ])
+
+    def test_deleted_top_level_onboarding_entry_rejects_push(self):
+        run('git', 'update-ref', 'refs/remotes/origin/main', 'HEAD', cwd=self.repo)
+        (self.repo / 'onboarding/src/controller.ts').unlink()
+        run('git', 'add', '-A', cwd=self.repo)
+        run('git', 'commit', '-qm', 'deleted standalone entry', cwd=self.repo)
+        self.head = run('git', 'rev-parse', 'HEAD', cwd=self.repo).stdout.strip()
+        result = self.push(remote='refs/heads/feature')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('missing or deleted', result.stderr)
 
     def onboarding_delta(self, dependencies=True, delete=False, rename=False):
         frontend = self.repo / "capture/desktop/ui/frontend"
