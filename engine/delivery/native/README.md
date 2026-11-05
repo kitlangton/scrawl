@@ -26,6 +26,10 @@ the exact staged executable through the SDK's real Rust-process tests. The SDK
 remains a Rust-free consumer package;
 only this `language: "native"` producer invokes Cargo.
 
+`delivery.json` beside this README is the native producer registration contract.
+Platform must add its separate `engine-native` catalog slot before it executes;
+the existing `engine/delivery.json` continues to register the TypeScript SDK.
+
 The package artifact path is `dist/`. It contains exactly:
 
 ```text
@@ -50,15 +54,18 @@ runtime directory must follow the Engine contract in `../../README.md`.
 
 The build requires clean tracked source, freezes the full `HEAD` SHA before
 compilation, checks it again after compilation and validates the staged bytes.
-It refuses a pre-existing nonempty `dist/` so stale output cannot be mistaken
-for the current candidate. Platform's external source fingerprint and build
+It replaces an existing nonempty `dist/` only after validating its exact known
+artifact inventory; unexpected contents are preserved and rejected. The new
+artifact must match the current candidate. Platform's external source fingerprint and build
 attestation remain authoritative; the owner manifest checksum is an inventory
 check, not provenance authorization.
 
 ## Producer input closure
 
 The delivery registration accepts directory roots, so the bounded complete
-owner roots are `engine/` and `capture/engine/`. `engine/` includes the producer
+owner roots are `engine/`, `capture/engine/` and `.cargo/`. `.cargo/config.toml`
+sets the Linux CPU baseline and macOS deployment target inherited by Cargo;
+it must participate in native artifact fingerprints. `engine/` includes the producer
 package, Rust manifests/lockfile/source/tests and the SDK files used by
 real-process verification. It also fingerprints the existing `engine/delivery.json`
 and the SDK package graph as part of that directory; neither is modified or
@@ -70,5 +77,5 @@ The common delivery workflow/core, runtime-budget action and verifier inputs
 are included by the delivery system's mandatory input closure.
 
 Any additional transitive Rust or Node build/verification input must be added to
-the Platform fingerprint before artifact reuse or admission. No SDK registration
-or shared registration slot is owned here.
+the Platform fingerprint before artifact reuse or admission. SDK registration
+and shared catalog wiring remain Platform-owned.

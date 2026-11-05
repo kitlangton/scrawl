@@ -11,8 +11,8 @@ const targetConfig = validateTarget(process.env.OWNER_TARGET)
 const output = resolve(packageRoot, 'dist')
 
 function cleanTrackedSource(): string {
-  const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: repositoryRoot, encoding: 'utf8' })
-  if (status) throw new Error('Native build requires clean tracked source')
+  const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=normal'], { cwd: repositoryRoot, encoding: 'utf8' })
+  if (status) throw new Error('Native build requires clean source, including untracked inputs')
   return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, encoding: 'utf8' }).trim()
 }
 
@@ -37,7 +37,7 @@ if (process.env.APPARENT_CARGO_OFFLINE === '1') cargoCommon.push('--offline')
 execFileSync('cargo', ['test', ...cargoCommon, '--manifest-path', resolve(repositoryRoot, 'capture/engine/Cargo.toml')], { cwd: repositoryRoot, stdio: 'inherit' })
 execFileSync('cargo', ['test', ...cargoCommon, '--manifest-path', manifestPath], { cwd: repositoryRoot, stdio: 'inherit' })
 execFileSync('cargo', ['build', ...cargoCommon, '--release', '--manifest-path', manifestPath], { cwd: repositoryRoot, stdio: 'inherit' })
-const binary = resolve(cargoTargetDir, targetConfig.triple, 'release', process.platform === 'win32' ? 'apparent-engine.exe' : 'apparent-engine')
+const binary = resolve(cargoTargetDir, targetConfig.triple, 'release', 'apparent-engine')
 const bytes = readFileSync(binary)
 writeFileSync(resolve(output, 'apparent-engine'), bytes, { flag: 'wx', mode: 0o755 })
 chmodSync(resolve(output, 'apparent-engine'), 0o755)
@@ -54,4 +54,6 @@ const result = spawnSync('node', ['--experimental-strip-types', '--test', resolv
 process.stdout.write(result.stdout ?? '')
 process.stderr.write(result.stderr ?? '')
 if (result.status !== 0) throw new Error('SDK-to-native protocol checks failed for the staged release executable')
+if (cleanTrackedSource() !== sourceSha) throw new Error('Source changed during staged executable verification')
+validateArtifact(output, targetConfig.target)
 console.log(`Native Engine artifact built for ${targetConfig.target}: ${output}`)
