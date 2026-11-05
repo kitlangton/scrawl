@@ -57,21 +57,17 @@ check, not provenance authorization.
 
 ## Producer input closure
 
-The native delivery registration should fingerprint these repository inputs:
+The delivery registration accepts directory roots, so the bounded complete
+owner roots are `engine/` and `capture/engine/`. `engine/` includes the producer
+package, Rust manifests/lockfile/source/tests and the SDK files used by
+real-process verification. It also fingerprints the existing `engine/delivery.json`
+and the SDK package graph as part of that directory; neither is modified or
+registered as a native producer. Root `Cargo.toml` and `Cargo.lock` are outside
+these roots and are not build inputs: the engine manifest's path dependency
+resolves directly to `capture/engine`.
 
-- `engine/delivery/native/` including package metadata, lockfile, scripts,
-  tests and this contract.
-- `engine/Cargo.toml`, `engine/Cargo.lock` and `engine/src/`.
-- `capture/engine/Cargo.toml`, `capture/engine/Cargo.lock` and
-  `capture/engine/src/`.
-- `engine/tests/native-peer.test.ts`.
-- `engine/sdk/package.json`, `engine/sdk/package-lock.json`,
-  `engine/sdk/tsconfig.json`, `engine/sdk/src/` and `engine/sdk/test/`, which
-  supply the real-process protocol verification consumer.
-- Root `Cargo.toml` and `Cargo.lock` are not build inputs for this package; the
-  engine manifest's path dependency resolves directly to `capture/engine`.
-- The common delivery workflow/core, runtime-budget action and verifier inputs
-  are included by the delivery system's mandatory input closure.
+The common delivery workflow/core, runtime-budget action and verifier inputs
+are included by the delivery system's mandatory input closure.
 
 Any additional transitive Rust or Node build/verification input must be added to
 the Platform fingerprint before artifact reuse or admission. No SDK registration
