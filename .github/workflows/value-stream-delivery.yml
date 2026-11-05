@@ -131,16 +131,8 @@ jobs:
         if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.language == 'native'
       - name: Install Engine media runtime and fixture dependencies
         if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && matrix.id == 'engine-media-native'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            ffmpeg \
-            pkg-config \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-libav
+        timeout-minutes: 5
+        run: node --experimental-strip-types composition/delivery/media-dependencies.ts
       - uses: oven-sh/setup-bun@v2
         if: (steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && (matrix.packageManager == 'bun' || matrix.id == 'connect-browser')
         with:
@@ -454,16 +446,8 @@ jobs:
         if: matrix.language == 'native'
       - name: Install Engine media runtime and fixture dependencies
         if: matrix.id == 'engine-media-native'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            ffmpeg \
-            pkg-config \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-libav
+        timeout-minutes: 5
+        run: node --experimental-strip-types composition/delivery/media-dependencies.ts
       - uses: oven-sh/setup-bun@v2
         if: matrix.packageManager == 'bun' || matrix.id == 'connect-browser'
         with:
