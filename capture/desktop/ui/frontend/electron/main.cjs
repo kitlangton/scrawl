@@ -28,6 +28,9 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler(() => false);
   const window = new BrowserWindow({
     show: !settings,
+    // Settings must keep rendering while hidden so the renderer can confirm a
+    // committed frame before the first native presentation.
+    ...(settings ? { paintWhenInitiallyHidden: true } : {}),
     width: settings ? 720 : 920, height: settings ? 530 : 760,
     minWidth: 640, minHeight: settings ? 530 : 620,
     ...(settings && process.platform === 'darwin' ? {
@@ -94,6 +97,12 @@ app.whenReady().then(() => {
     validate(event, args);
     if (!settings) throw new Error('Unavailable outside Settings');
     settingsMounted = true;
+    showSettings();
+  });
+  ipcMain.handle('apparent:settings-frame-ready', (event, ...args) => {
+    validate(event, args);
+    if (!settings) throw new Error('Unavailable outside Settings');
+    settingsPainted = true;
     showSettings();
   });
   let drawingRevision;
