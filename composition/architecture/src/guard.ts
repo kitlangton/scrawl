@@ -51,22 +51,22 @@ function packageRef(spec: string, packageNames: Map<string,{owner:Owner;dir:stri
   return packageOwners[name] || packageNames.has(name) ? { name, subpath: bits.length > (name.startsWith('@') ? 2 : 1) ? './' + bits.slice(name.startsWith('@') ? 2 : 1).join('/') : '.' } : undefined;
 }
 type Alias = { pattern: string; targets: string[] };
-function configAliases(root: string, source: string): Alias[] {
+function configScope(root: string, source: string): { aliases: Alias[]; options?: ts.CompilerOptions } {
   let dir = path.dirname(source);
   while (path.relative(root, dir) !== '..' && !path.relative(root, dir).startsWith(`..${path.sep}`)) {
     const config = path.join(dir, 'tsconfig.json');
     if (existsSync(config)) {
       try {
         const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} });
-        if (!parsed) return [];
+        if (!parsed) return { aliases: [] };
         const inheritedBase = parsed.options.pathsBasePath;
         const base = parsed.options.baseUrl ?? (typeof inheritedBase === 'string' ? inheritedBase : dir);
-        return Object.entries(parsed.options.paths ?? {}).map(([pattern, targets]) => ({ pattern, targets: targets.map(t => path.resolve(base, t)) }));
-      } catch { return []; }
+        return { options: parsed.options, aliases: Object.entries(parsed.options.paths ?? {}).map(([pattern, targets]) => ({ pattern, targets: targets.map(t => path.resolve(base, t)) })) };
+      } catch { return { aliases: [] }; }
     }
     const parent = path.dirname(dir); if (parent === dir) break; dir = parent;
   }
-  return [];
+  return { aliases: [] };
 }
 function aliasTargets(spec: string, aliases: Alias[]): string[] {
   const out: string[] = [];
@@ -92,6 +92,57 @@ function resolveLocal(root: string, source: string, spec: string): string {
   return canonical(candidate);
 }
 
+type FixtureImport = { function: string; env: string; package: string; exports: string[] };
+
+/** Owner-declared test loaders may resolve only named public package entries. */
+function publicFixtureImport(root: string, source: ts.SourceFile, node: ts.CallExpression, rule: FixtureImport,
+  packageNames: Map<string,{owner:Owner;dir:string}>): string | undefined {
+  const argument = node.arguments[0];
+  if (!argument || !ts.isPropertyAccessExpression(argument) || argument.name.text !== 'href'
+    || !ts.isCallExpression(argument.expression) || !ts.isIdentifier(argument.expression.expression)
+    || argument.expression.expression.text !== 'pathToFileURL' || argument.expression.arguments.length !== 1
+    || !ts.isIdentifier(argument.expression.arguments[0])) return;
+  const importedUrlHelper = source.statements.some(statement => ts.isImportDeclaration(statement)
+    && ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === 'node:url'
+    && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)
+    && statement.importClause.namedBindings.elements.some(element => !element.propertyName && element.name.text === 'pathToFileURL'));
+  if (!importedUrlHelper) return;
+  let parent: ts.Node | undefined = node.parent;
+  while (parent && !ts.isFunctionDeclaration(parent)) {
+    if (ts.isArrowFunction(parent) || ts.isFunctionExpression(parent)) return;
+    parent = parent.parent;
+  }
+  if (!parent || !ts.isFunctionDeclaration(parent) || parent.name?.text !== rule.function || !parent.body) return;
+  const constants = new Map<string, ts.Expression>();
+  for (const statement of parent.body.statements) {
+    if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name) && declaration.initializer) constants.set(declaration.name.text, declaration.initializer);
+    }
+  }
+  const entry = constants.get(argument.expression.arguments[0].text);
+  if (!entry || !ts.isTemplateExpression(entry) || entry.head.text || entry.templateSpans.length !== 1) return;
+  const span = entry.templateSpans[0];
+  if (!ts.isIdentifier(span.expression)) return;
+  const consumer = constants.get(span.expression.text);
+  if (!consumer || !ts.isPropertyAccessExpression(consumer) || consumer.name.text !== rule.env
+    || !ts.isPropertyAccessExpression(consumer.expression) || consumer.expression.name.text !== 'env'
+    || !ts.isIdentifier(consumer.expression.expression) || consumer.expression.expression.text !== 'process') return;
+  try {
+    const packageRoot = packageNames.get(rule.package)?.dir ?? (packageRoots[rule.package] && path.resolve(root, packageRoots[rule.package]));
+    if (!packageRoot) return;
+    const manifest = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+    for (const key of rule.exports) {
+      const declared = manifest.exports?.[key];
+      const target = typeof declared === 'string' ? declared : declared?.import;
+      if (typeof target === 'string' && target.startsWith('./') && !target.split('/').includes('..')
+        && span.literal.text === `/node_modules/${rule.package}/${target.slice(2)}`) {
+        return key === '.' ? rule.package : rule.package + key.slice(1);
+      }
+    }
+  } catch { /* No readable public contract: computed loading remains rejected. */ }
+}
+
 export function checkArchitecture(rootInput: string, owners?: readonly Owner[]): string[] {
   const root = canonical(path.resolve(rootInput));
   const errors: string[] = [];
@@ -103,6 +154,7 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
   const fileOwner = new Map(files.map(f => [f, ownerOf(root, f)]));
   const manifests = gitFiles(['*/package.json', '**/package.json']).map(p => path.resolve(root,p)).filter(p => !p.split(path.sep).some(part => ignoredParts.has(part)) && existsSync(p));
   const packageNames = new Map<string,{owner:Owner;dir:string}>();
+  const fixtureImports = new Map<string, FixtureImport[]>();
   for (const mf of manifests) {
     let value: {name?:string}; try { value=JSON.parse(readFileSync(mf,'utf8')); } catch { continue; }
     if (value.name) {
@@ -119,6 +171,27 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
     const manifestOwner=ownerOf(root,path.dirname(mf));
     if (!selected(manifestOwner)) continue;
     if (!['engine','record','agent','onboarding','shared','composition'].includes(manifestOwner)) continue;
+    const policyPath = path.join(path.dirname(mf), 'architecture.json');
+    if (existsSync(policyPath)) {
+      try {
+        if (canonical(policyPath) !== policyPath) throw new Error('symlinked policy');
+        const policy = JSON.parse(readFileSync(policyPath, 'utf8'));
+        if (policy.schema !== 1 || Object.keys(policy).sort().join(',') !== 'fixtureImports,schema'
+          || !Array.isArray(policy.fixtureImports) || policy.fixtureImports.length > 16) throw new Error('invalid policy');
+        for (const rule of policy.fixtureImports) {
+          if (!rule || Object.keys(rule).sort().join(',') !== 'env,exports,file,function,package'
+            || typeof rule.file !== 'string' || !rule.file.startsWith('test/')
+            || rule.file.includes('\\') || rule.file.split('/').some((part: string) => !part || part === '.' || part === '..')
+            || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(rule.function) || !/^[A-Z][A-Z0-9_]{0,79}$/.test(rule.env)
+            || typeof rule.package !== 'string' || !Array.isArray(rule.exports) || !rule.exports.length || rule.exports.length > 16
+            || rule.exports.some((entry: unknown) => typeof entry !== 'string' || !manifestExports(root, rule.package, packageNames).has(entry))) throw new Error('invalid fixture rule');
+          const file = path.resolve(path.dirname(mf), rule.file);
+          fixtureImports.set(file, [...(fixtureImports.get(file) ?? []), rule]);
+        }
+      } catch {
+        errors.push(`${path.relative(root,policyPath)}: invalid bounded fixture-import policy`);
+      }
+    }
     let manifest: { dependencies?: Record<string,string>; devDependencies?: Record<string,string>; optionalDependencies?: Record<string,string>; peerDependencies?: Record<string,string> };
     try { manifest = JSON.parse(readFileSync(mf, 'utf8')); } catch { continue; }
     const dependencies = [manifest.dependencies, manifest.devDependencies, manifest.optionalDependencies, manifest.peerDependencies]
@@ -166,12 +239,24 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
     if (!product.includes(from as typeof product[number]) && from !== 'shared' && from !== 'composition') continue;
     const text = readFileSync(file, 'utf8');
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-    const aliases = configAliases(root,file);
+    const scope = configScope(root,file);
     const inspect = (spec: string, line: number) => {
-      for (const target of aliasTargets(spec, aliases)) {
+      for (const target of aliasTargets(spec, scope.aliases)) {
         const resolved=canonical(target), relative=path.relative(root,resolved), to=ownerOf(root,resolved);
         if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) errors.push(`${path.relative(root,file)}:${line}: tsconfig alias resolves outside the repository (${spec})`);
         else if (to !== from) errors.push(`${path.relative(root,file)}:${line}: tsconfig alias crosses ${from} -> ${to} (${spec})`);
+      }
+      // baseUrl and package-import mappings can resolve bare names to source
+      // without a paths entry. Use TypeScript's resolver rather than guessing.
+      if (!spec.startsWith('.') && !spec.startsWith('/') && !spec.startsWith('file:') && scope.options) {
+        const resolved = ts.resolveModuleName(spec, file, scope.options, ts.sys).resolvedModule;
+        if (resolved && !resolved.isExternalLibraryImport) {
+          const target = canonical(resolved.resolvedFileName);
+          const relative = path.relative(root, target);
+          if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || ownerOf(root, target) !== from) {
+            errors.push(`${path.relative(root,file)}:${line}: resolved bare import crosses owner boundary (${spec})`);
+          }
+        }
       }
       const pkg = packageRef(spec, packageNames);
       if (pkg) {
@@ -196,7 +281,11 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
         inspect(node.argument.literal.text, sf.getLineAndCharacterOfPosition(node.getStart()).line + 1);
       } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         if (node.arguments.length && ts.isStringLiteralLike(node.arguments[0])) inspect(node.arguments[0].text, sf.getLineAndCharacterOfPosition(node.getStart()).line + 1);
-        else if (from !== 'composition') errors.push(`${path.relative(root,file)}:${sf.getLineAndCharacterOfPosition(node.getStart()).line + 1}: computed dynamic import is not statically auditable`);
+        else {
+          const fixture = (fixtureImports.get(file) ?? []).map(rule => publicFixtureImport(root, sf, node, rule, packageNames)).find(Boolean);
+          if (fixture) inspect(fixture, sf.getLineAndCharacterOfPosition(node.getStart()).line + 1);
+          else if (from !== 'composition') errors.push(`${path.relative(root,file)}:${sf.getLineAndCharacterOfPosition(node.getStart()).line + 1}: computed dynamic import is not statically auditable`);
+        }
       } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require') {
         if (node.arguments.length && ts.isStringLiteralLike(node.arguments[0])) inspect(node.arguments[0].text, sf.getLineAndCharacterOfPosition(node.getStart()).line + 1);
         else if (from !== 'composition') errors.push(`${path.relative(root,file)}:${sf.getLineAndCharacterOfPosition(node.getStart()).line + 1}: computed require is not statically auditable`);
