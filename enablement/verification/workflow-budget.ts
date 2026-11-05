@@ -13,22 +13,11 @@ export function workflowBudgetSeconds(platform = 'linux'): number {
 export const auditName = 'Workflow runtime budget'
 export const optimization = 'Optimize the tests. The agent whose run exceeded the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
 export type Job = { name: string; status: string; conclusion: string | null; started_at: string | null; completed_at: string | null;
-  runner_id?: number | null; runner_name?: string | null; steps?: unknown[]; labels?: string[] }
-
-// Retirement compatibility only: main still emits this check while the removal
-// PR is verified. Remove after the collector is deleted from main.
-function isAdmissionReceipt(job: Job): boolean {
-  // The Checks API receipt also appears in Actions' Jobs API. It waits for
-  // owner audits and executes no workload. Require its exact observed shape;
-  // a real job with this name or uncertain metadata must still be audited.
-  return job.name === 'value-stream admission' && job.runner_id === null && job.runner_name === null &&
-    Array.isArray(job.steps) && job.steps.length === 0 && Array.isArray(job.labels) && job.labels.length === 0
-}
+  runner_id?: number | null; runner_name?: string | null; steps?: unknown[] }
 
 export function executionSeconds(jobs: Job[]): number {
   const intervals: [number, number][] = []
   for (const job of jobs) {
-    if (isAdmissionReceipt(job)) continue
     // Auditing does not count as workload, including nested reusable gates.
     if (job.name === auditName || job.name.endsWith(` / ${auditName}`)) continue
     if (job.status !== 'completed') throw new Error(`Workflow job is not terminal: ${job.name}`)
@@ -84,7 +73,6 @@ export function enforceBudget(jobs: Job[], platform = 'linux'): string {
 /** Reserve a bounded publication job against completed work before it can mutate durable releases. */
 export function enforcePublicationReservation(jobs: Job[], publisherName: string, reservedSeconds: number,
                                              expectedJobNames: string[], platform = 'web'): string {
-  jobs = jobs.filter(job => !isAdmissionReceipt(job))
   const budgetSeconds = workflowBudgetSeconds(platform)
   if (!publisherName || !Number.isSafeInteger(reservedSeconds) || reservedSeconds <= 0 || reservedSeconds > budgetSeconds ||
       !Array.isArray(expectedJobNames) || !expectedJobNames.length || expectedJobNames.some(name => typeof name !== 'string' || !name) ||
