@@ -1,10 +1,12 @@
 import { createRequire } from "node:module"
 import { spawn } from "node:child_process"
 import { createServer } from "node:net"
-import { readdir } from "node:fs/promises"
+import { readdir, mkdtemp, cp, rm } from "node:fs/promises"
 import assert from "node:assert/strict"
 import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
+import { validateOutput } from "./validate-output.ts"
+import { tmpdir } from "node:os"
 import { dirname, resolve } from "node:path"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -15,11 +17,27 @@ const address = socket.address()
 if (!address || typeof address === "string") throw new Error("could not reserve local test port")
 const port = address.port
 await new Promise<void>((resolveClose, reject) => socket.close(error => error ? reject(error) : resolveClose()))
-const child = spawn(resolve(packageRoot, "node_modules/.bin/wrangler"), ["dev", "--config", ".output/wrangler.json", "--no-bundle", "--local", "--ip", "127.0.0.1", "--port", String(port)], { cwd: packageRoot, stdio: "ignore", env: { ...process.env, NO_COLOR: "1" } })
+await validateOutput(resolve(packageRoot, ".output"))
+const runtimeRoot = await mkdtemp(resolve(tmpdir(), "connect-runtime-state-"))
+// Test an unchanged copy of the deployment package: Wrangler may create cache
+// directories beside its config even when persistence is redirected.
+const deployment = resolve(runtimeRoot, "deployment")
+await cp(resolve(packageRoot, ".output"), deployment, { recursive: true }).catch(async error => {
+  await rm(runtimeRoot, { recursive: true, force: true })
+  throw error
+})
+const runtimeState = resolve(runtimeRoot, "state")
+const child = spawn(resolve(packageRoot, "node_modules/.bin/wrangler"), ["dev", "--config", resolve(deployment, "wrangler.json"), "--no-bundle", "--persist-to", runtimeState, "--local", "--ip", "127.0.0.1", "--port", String(port)], { cwd: runtimeRoot, detached: true, stdio: "ignore", env: { ...process.env, NO_COLOR: "1" } })
+let spawnError: Error | undefined
+const exited = new Promise<void>(resolveExit => {
+  child.once("exit", () => resolveExit())
+  child.once("error", error => { spawnError = error; resolveExit() })
+})
 const origin = `http://127.0.0.1:${port}`
 try {
   let ready = false
   for (let attempt = 0; attempt < 80 && !ready; attempt++) {
+    if (spawnError) throw spawnError
     if (child.exitCode !== null) throw new Error(`wrangler dev exited ${child.exitCode}`)
     try { ready = (await fetch(`${origin}/connect`)).status === 200 } catch { await delay(250) }
   }
@@ -129,6 +147,23 @@ try {
   } finally { await browser.close() }
 
 } finally {
-  child.kill("SIGTERM")
-  await Promise.race([new Promise<void>(resolveExit => child.once("exit", () => resolveExit())), delay(3000)])
+  const signalGroup = (signal: NodeJS.Signals) => {
+    try { if (child.pid) process.kill(-child.pid, signal) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error }
+  }
+  signalGroup("SIGTERM")
+  const stopped = await Promise.race([exited.then(() => true), delay(3000).then(() => false)])
+  // Terminate any remaining runtime descendants before removing SQLite/WALs.
+  signalGroup("SIGKILL")
+  if (!stopped) await exited
+  let groupExists = Boolean(child.pid)
+  for (let attempt = 0; attempt < 80 && groupExists; attempt++) {
+    try { process.kill(-child.pid!, 0); await delay(25) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
+      groupExists = false
+    }
+  }
+  if (groupExists) throw new Error(`Wrangler group has not terminated; private state retained at ${runtimeRoot}`)
+  await rm(runtimeRoot, { recursive: true, force: true })
 }
