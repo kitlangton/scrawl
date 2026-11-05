@@ -9,6 +9,9 @@ or produces an artifact. A native `saved` response requires an absolute path,
 artifact version 1 and `artifactProvenance: "native"`. The test-only peer can
 create an explicitly marked `test-synthetic` fixture after a test-double
 handshake; the client rejects that fixture unless it has observed that handshake.
+Production clients reject test-double handshakes by default. Tests must explicitly
+construct `new EngineClient(peer, { allowTestDouble: true })`; never set this option
+in an installed application adapter.
 
 ## Identity and authority
 
@@ -101,8 +104,8 @@ imports `@apparent/engine-sdk` plus the explicitly test-only
 The future Record adapter maps `readiness()` to the Engine handshake's actual
 native readiness, `start(requestId)` to the durable `captureId` (or maintains a
 private mapping if the caller's ID is not 32-hex), and ID-scoped stop/cancel/
-inspect to the matching RPCs with its stored owner token. Record's phase names
-`processing` and `saved` do not directly match Engine's `finalizing` and `saved`;
+inspect to the matching RPCs with its stored owner token. Record's `processing`
+phase corresponds to Engine's `finalizing` phase;
 the adapter must map only observed facts and keep polling authoritative. Its
 listener contract must be driven by observed snapshots, not fabricated native
 events. This SDK currently has no Record adapter, event API or native readiness

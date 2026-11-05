@@ -14,7 +14,8 @@ export async function runV1Scenarios(
   assert.equal(begun.captureId, start.captureId);
   const replay = await client.start(start);
   assert.equal(replay.captureId, start.captureId);
-  assert.equal(replay.receipt.state, begun.receipt.state);
+  // Native work may advance between RPCs; retries preserve identity, not time.
+  assert.equal(replay.receipt.captureId, begun.receipt.captureId);
   const inspected = await reconnect.control(
     "inspect",
     start.captureId,

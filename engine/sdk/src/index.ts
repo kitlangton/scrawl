@@ -128,6 +128,7 @@ function str(v: unknown, n = 4096): v is string {
 function bundleId(v: unknown): v is string {
   return (
     typeof v === "string" &&
+    v.length > 0 &&
     Buffer.byteLength(v, "utf8") <= 255 &&
     v !== "." &&
     v !== ".." &&
@@ -327,8 +328,10 @@ export class EngineClient {
   readonly clientId = uuid();
   private readonly transport: Transport;
   private testDouble = false;
-  constructor(transport: Transport) {
+  private readonly allowTestDouble: boolean;
+  constructor(transport: Transport, options: { allowTestDouble?: boolean } = {}) {
     this.transport = transport;
+    this.allowTestDouble = options.allowTestDouble === true;
   }
   private rpc(
     method: Request["method"],
@@ -352,6 +355,8 @@ export class EngineClient {
     const value = validateHandshake(
       (await this.rpc("handshake", {}, timeoutMs)).result,
     );
+    if (value.implementation === "test-double" && !this.allowTestDouble)
+      throw new Error("Test Engine requires explicit test-only opt-in");
     this.testDouble = value.implementation === "test-double";
     return value;
   }

@@ -73,7 +73,7 @@ test("v1 durable capture identity is distinct from each correlated RPC", async (
 
 test("portable v1 consumer scenarios use only the public client and a reconnect client", async () => {
   const peer = new ReferenceEngine();
-  await runV1Scenarios(new EngineClient(peer), new EngineClient(peer), {
+  await runV1Scenarios(new EngineClient(peer, { allowTestDouble: true }), new EngineClient(peer, { allowTestDouble: true }), {
     id: "portable",
     path: "/tmp/portable",
   });
@@ -81,7 +81,7 @@ test("portable v1 consumer scenarios use only the public client and a reconnect 
 
 test("scenario peer models explicit transitions, stop-before-ready, sticky cancel, and no fake artifact", async () => {
   const peer = new ReferenceEngine(),
-    client = new EngineClient(peer),
+    client = new EngineClient(peer, { allowTestDouble: true }),
     start = client.prepareStart("b", "/tmp/b");
   await client.handshake();
   const begun = await client.start(start);
@@ -115,7 +115,7 @@ test("scenario peer models explicit transitions, stop-before-ready, sticky cance
 
 test("test-only synthetic saved fixture is accepted only after explicit test-double handshake", async () => {
   const peer = new ReferenceEngine(),
-    client = new EngineClient(peer);
+    client = new EngineClient(peer, { allowTestDouble: true });
   await client.handshake();
   const start = client.prepareStart("synthetic", "/tmp/synthetic");
   await client.start(start);
@@ -131,6 +131,7 @@ test("test-only synthetic saved fixture is accepted only after explicit test-dou
   assert.equal(receipt.state, "saved");
   assert.equal(receipt.artifactProvenance, "test-synthetic");
   const unmarked = new EngineClient(peer);
+  await assert.rejects(unmarked.handshake(), /explicit test-only opt-in/);
   await assert.rejects(
     unmarked.control("inspect", start.captureId, start.ownerToken),
     /synthetic test artifact/,
@@ -155,6 +156,7 @@ test("validators reject unknown fields, wrong versions, bad paths, errors and ti
     } as unknown as Request),
   );
   assert.throws(() => encodeRequest({ ...startReq(), bundleId: "../bundle" }));
+  assert.throws(() => encodeRequest({ ...startReq(), bundleId: "" }));
   assert.throws(() =>
     validateReceipt({ protocolVersion: 1, rpcId, captureId, state: "failed" }),
   );
@@ -242,10 +244,13 @@ test("real subprocess transport handles concurrent responses and late timeout re
 });
 
 test("real subprocess transport preserves split UTF-8 and accepts CRLF", async () => {
+  const production = new EngineClient(child("crlf"));
+  await assert.rejects(production.handshake(), /explicit test-only opt-in/);
+  await production.close();
   const split = new EngineClient(child("unicode-split"));
   await assert.rejects(split.handshake(), /unavailable/);
   await split.close();
-  const crlf = new EngineClient(child("crlf"));
+  const crlf = new EngineClient(child("crlf"), { allowTestDouble: true });
   assert.equal((await crlf.handshake()).implementation, "test-double");
   await crlf.close();
 });
