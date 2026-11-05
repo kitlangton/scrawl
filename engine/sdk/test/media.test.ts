@@ -51,6 +51,23 @@ const input = (times = [1250, 0, 1250], jobId = createMediaJobId()) => ({
   limits: request().limits,
 });
 
+test("end clamping preserves the offset-mapped seek and reports decoder position separately", async () => {
+  const context = request([5250]);
+  const client = new MediaClient(new ReferenceMediaPeer(), { allowTestDouble: true });
+  try {
+    await client.handshake();
+    const result = await client.decode(context);
+    const clamped = { ...result, frames: [{ ...result.frames[0], effectiveVideoMs: 5000, actualVideoMs: 1999, clampedToEnd: true }] };
+    const envelope = { channel: "media", protocolVersion: 1, rpcId: context.rpcId, result: clamped };
+    assert.equal(validateMediaResponse(envelope, context.rpcId, context).result, clamped);
+    const inspect: InspectRequest = { channel: "media", protocolVersion: 1, clientId: context.clientId, rpcId: context.rpcId, method: "inspect", jobId: context.jobId };
+    assert.equal(validateMediaResponse(envelope, context.rpcId, inspect, context).result, clamped);
+    const rewrittenSeek = { ...envelope, result: { ...clamped, frames: [{ ...clamped.frames[0], effectiveVideoMs: 1999 }] } };
+    assert.throws(() => validateMediaResponse(rewrittenSeek, context.rpcId, context));
+    assert.throws(() => validateMediaResponse(rewrittenSeek, context.rpcId, inspect, context));
+  } finally { await client.close(); }
+});
+
 test("inspection sanitizes terminal errors and validates completed frames against retained input", async () => {
   const context = request([0]);
   const inspect: InspectRequest = { channel: "media", protocolVersion: 1, clientId: context.clientId, rpcId: context.rpcId, method: "inspect", jobId: context.jobId };
