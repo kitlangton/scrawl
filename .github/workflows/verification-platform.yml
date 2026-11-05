@@ -37,7 +37,7 @@ jobs:
         with:
           node-version: '22'
       - name: Verification receipt contracts
-        run: node --experimental-strip-types --test enablement/verification/*.test.ts enablement/file-length/*.test.ts enablement/native/mac-setup.test.ts enablement/native/owned-processes.test.ts enablement/native/cache-command-timing.test.ts capture/agent/control-client/delivery/workflow.test.ts
+        run: node --experimental-strip-types --test enablement/verification/*.test.ts enablement/verification/native-baseline/*.test.ts enablement/file-length/*.test.ts enablement/native/mac-setup.test.ts enablement/native/owned-processes.test.ts enablement/native/cache-command-timing.test.ts capture/agent/control-client/delivery/workflow.test.ts
       - name: Recipient CLI installation contracts
         run: node --experimental-strip-types --test capture/agent/scripts/tests/install-cli.test.ts
       - name: Linux release download cache contracts
@@ -97,6 +97,8 @@ jobs:
       - run: npm ci --no-audit --no-fund
         working-directory: shared/contracts
       - run: npm ci --no-audit --no-fund
+      - name: Prepare the pinned Electron runtime
+        run: npm run prepare:electron
       - name: Linux Electron dependencies
         run: npx --no-install playwright install-deps chromium
       - name: Prepare the pinned Electron sandbox helper
@@ -621,6 +623,22 @@ jobs:
           path: ${{ runner.temp }}/mac-dev-executables/
           if-no-files-found: error
           retention-days: 7
+      - name: Seal completed native verification baseline
+        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        run: node --experimental-strip-types enablement/verification/native-baseline/producer.ts "$RUNNER_TEMP/native-baseline"
+      - name: Attest native verification baseline
+        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ runner.temp }}/native-baseline/native-baseline.json
+      - name: Upload native verification baseline
+        if: success() && needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-baseline-${{ inputs.runner }}-${{ github.sha }}
+          path: ${{ runner.temp }}/native-baseline/
+          if-no-files-found: error
+          retention-days: 14
 
   release-ready:
     name: ${{ inputs.revision && format('Release verification ({0})', inputs.revision) || 'Release verification' }}

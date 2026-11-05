@@ -38,6 +38,9 @@ class SelectionTests(unittest.TestCase):
         shared_ui = verification.select(["shared/ui/src/button.tsx"])
         self.assertTrue(shared_ui["app_shell"])
         self.assertTrue(shared_ui["root"])
+        workflow = verification.select([".github/workflows/verification-platform.yml"])
+        self.assertTrue(workflow["app_shell"])
+        self.assertTrue(workflow["root"])
         self.assertFalse(verification.select(["composition/cli.rs"])["app_shell"])
 
     def test_app_shell_pr_check_runs_installed_package_script_without_installing(self):

@@ -12,6 +12,8 @@
     "build:beta": "node scripts/build.ts beta",
     "assemble": "node scripts/assemble.ts dist/shell dist/app dist/artifacts/alpha dist/artifacts/beta",
     "build": "npm run build:shell && npm run build:alpha && npm run build:beta && npm run assemble",
+    "prepare:electron": "node node_modules/electron/install.js",
+    "prestart": "npm run prepare:electron",
     "start": "electron dist/app",
     "package": "node scripts/package.ts dist/app dist/packages",
     "test:electron": "node --experimental-strip-types --test tests/electron.test.ts"

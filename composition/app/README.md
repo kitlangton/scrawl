@@ -47,6 +47,10 @@ npm --prefix composition/app run build
 npm --prefix composition/app start
 ```
 
+Electron's npm package does not automatically install its runtime. `start`
+prepares it explicitly; CI runs `npm run prepare:electron` before provisioning
+the matching sandbox helper. Packaging independently obtains the pinned runtime.
+
 `build:shell`, `build:alpha` and `build:beta` are independently callable producer
 commands. `assemble` only consumes their artifacts; it invokes no compiler and
 does not inspect producer source. `build` is a first-run convenience composition.
@@ -90,8 +94,8 @@ package with root ownership and mode `4755` in the disposable runner's temporary
 directory, then removes it after testing. It does not rely on the runner's Chrome
 helper ownership/mode or alter system Chrome.
 
-Feature pushes select the foundation check for shell, contracts or shared UI
-inputs; dependencies must already be installed. Main has a separate Linux shell
+Feature pushes select the foundation check for shell, contracts, shared UI or
+platform-workflow inputs; dependencies must already be installed. Main has a separate Linux shell
 job. Existing native verification and publication gates remain conservative.
 This slice does not yet implement authenticated CI artifact reuse, an independent
 updater, or a general per-stream result cache.

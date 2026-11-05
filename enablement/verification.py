@@ -121,13 +121,14 @@ CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
 # shared UI components; these paths do not feed the Rust application build.
 APP_SHELL_ROOT = "composition/app/"
 APP_SHELL_INPUTS = (APP_SHELL_ROOT, "shared/contracts/", "shared/ui/")
+APP_SHELL_WORKFLOW = ".github/workflows/verification-platform.yml"
 
 
 def app_shell_selected(paths):
-    """Select the App Shell check for its package, contracts, or shared UI."""
+    """Select the App Shell check for package, contract, UI or workflow inputs."""
     if not paths:
         return True  # Unknown history stays conservative.
-    return any(path.startswith(APP_SHELL_INPUTS) for path in paths)
+    return any(path.startswith(APP_SHELL_INPUTS) or path == APP_SHELL_WORKFLOW for path in paths)
 
 
 def connect_client_typescript_selected(paths):
@@ -197,7 +198,7 @@ def select(paths, history_known=True):
     for path in paths:
         if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
             continue
-        if path.startswith(APP_SHELL_INPUTS):
+        if path.startswith(APP_SHELL_INPUTS) or path == APP_SHELL_WORKFLOW:
             app_shell = True
             # Shared UI also feeds existing consumers, so continue through
             # the ordinary selector for those paths.
