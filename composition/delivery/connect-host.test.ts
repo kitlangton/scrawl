@@ -81,3 +81,13 @@ test('Connect browser digest covers its declared source, assets, and build envir
     else process.env.VITE_HOSTED_API_ORIGIN = oldOrigin
   }
 })
+
+test('Connect browser installs pinned Bun in both fresh-main and PR build lanes', () => {
+  const workflow = readFileSync(resolve(repoRoot, '.github/workflows/value-stream-delivery.yml'), 'utf8')
+  const main = workflow.split('\n  stream:\n')[1].split('\n  stream-public:')[0]
+  const pr = workflow.split('\n  stream-pr:\n')[1].split('\n  runtime-budget:')[0]
+  for (const lane of [main, pr]) {
+    assert(lane, 'both independent build lanes exist')
+    assert.match(lane, /uses: oven-sh\/setup-bun@v2\n\s+if: [^\n]*matrix\.id == 'connect-browser'[\s\S]*?bun-version: '1\.3\.10'/)
+  }
+})
