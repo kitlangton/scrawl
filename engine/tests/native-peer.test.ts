@@ -90,6 +90,17 @@ test("standalone transport rejects unknown fields and versions and bounds unterm
   })}\n`);
   assert.equal(JSON.parse(invalidPath.stdout).error.code, "malformed_request");
 
+  const invalidControl = await rawExchange(`${JSON.stringify({
+    ...base,
+    method: "start",
+    ownerToken: "c".repeat(64),
+    captureId: "d".repeat(32),
+    bundleId: "bundle\u0085",
+    bundlePath: "/tmp/capture.apparent",
+    options: { screen: true },
+  })}\n`);
+  assert.equal(JSON.parse(invalidControl.stdout).error.code, "malformed_request");
+
   const oversized = await rawExchange(`${" ".repeat(65 * 1024)}`);
   assert.equal(oversized.stdout, "");
   assert.equal(oversized.code, 0);

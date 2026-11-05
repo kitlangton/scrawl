@@ -3,12 +3,27 @@ use apparent_capture_engine::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::path::{Component, Path, PathBuf};
 
 const MAX_LINE: usize = 64 * 1024;
+const RPC_REPLAY_WINDOW: usize = 4096;
 const VERSION: u8 = 1;
+
+fn remember_rpc(seen: &mut HashSet<String>, order: &mut VecDeque<String>, id: &str) -> bool {
+    if seen.contains(id) {
+        return false;
+    }
+    if order.len() == RPC_REPLAY_WINDOW {
+        if let Some(oldest) = order.pop_front() {
+            seen.remove(&oldest);
+        }
+    }
+    seen.insert(id.to_owned());
+    order.push_back(id.to_owned());
+    true
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -388,6 +403,7 @@ fn main() {
     let mut reader = stdin.lock();
     let mut stdout = io::BufWriter::new(io::stdout().lock());
     let mut seen = HashSet::new();
+    let mut rpc_order = VecDeque::new();
     loop {
         let mut line = Vec::with_capacity(1024);
         let mut terminated = false;
@@ -434,7 +450,7 @@ fn main() {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
-        if !valid_hex(&rpc, 32) || !seen.insert(rpc.clone()) {
+        if !valid_hex(&rpc, 32) || !remember_rpc(&mut seen, &mut rpc_order, &rpc) {
             return;
         }
         let method = raw
@@ -500,5 +516,28 @@ fn main() {
         {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn polling_keeps_a_bounded_replay_window_and_rejects_recent_duplicates() {
+        let mut seen = HashSet::new();
+        let mut order = VecDeque::new();
+        for n in 0..RPC_REPLAY_WINDOW * 3 {
+            assert!(remember_rpc(&mut seen, &mut order, &format!("{n:032x}")));
+            assert!(seen.len() <= RPC_REPLAY_WINDOW);
+            assert!(order.len() <= RPC_REPLAY_WINDOW);
+        }
+        assert!(!remember_rpc(
+            &mut seen,
+            &mut order,
+            &format!("{:032x}", RPC_REPLAY_WINDOW * 3 - 1)
+        ));
+        assert!(remember_rpc(&mut seen, &mut order, &format!("{:032x}", 0)));
+        assert_eq!(seen.len(), RPC_REPLAY_WINDOW);
     }
 }

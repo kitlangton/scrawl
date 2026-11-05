@@ -72,6 +72,14 @@ the SDK. There may be at most 64 concurrent pending RPCs. Unknown/late RPC IDs
 are ignored; a malformed envelope or unsupported version fails all pending
 calls. RPC timeouts are bounded to 1–60,000 ms and never cancel capture.
 
+Clients generate fresh RPC IDs for every call. The native provider rejects
+duplicate IDs within its most recent 4,096 calls, retaining a bounded replay
+window so long-running polling cannot grow process memory indefinitely. Evicted
+RPC IDs are no longer checked; durable capture identity and owner authorization
+still protect start retries independently of this transport-level window.
+Bundle IDs reject all Unicode control characters consistently across Rust and
+TypeScript, as well as path separators and the special names `.` and `..`.
+
 V1 rejects unknown fields at every object level. A peer must not silently ignore
 an extension. Any added field or method requires a new negotiated protocol
 version; v1 clients reject that version rather than guessing. Errors have a
