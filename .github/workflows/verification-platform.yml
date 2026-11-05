@@ -230,28 +230,6 @@ jobs:
           node-version: '22'
           cache: ${{ needs.select.outputs.root == 'true' && 'npm' || '' }}
           cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
-      - name: Independently produce the local inspector
-        if: needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
-        shell: bash
-        run: |
-          cargo fetch --locked --manifest-path capture/agent/inspection/Cargo.toml
-          cargo package --locked --offline --manifest-path capture/agent/inspection/Cargo.toml
-          source_archive=capture/agent/inspection/target/package/apparent-inspect-0.1.0.crate
-          source_digest=$(node -e 'const fs=require("fs"),c=require("crypto");process.stdout.write(c.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "$source_archive")
-          node --experimental-strip-types capture/agent/inspection/delivery/package.ts build "$source_archive" "$source_digest" "$RUNNER_TEMP/inspection-producer" > "$RUNNER_TEMP/inspection-producer-result.json"
-      - uses: actions/attest-build-provenance@v2
-        if: needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
-        with:
-          subject-path: ${{ runner.temp }}/inspection-producer/*.tar.gz
-      - uses: actions/upload-artifact@v4
-        if: needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
-        with:
-          name: inspector-${{ inputs.runner }}-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/inspection-producer/*.tar.gz
-            ${{ runner.temp }}/inspection-producer/*.sha256
-          if-no-files-found: error
-          retention-days: 14
       - name: Build and test the standalone capture-control client
         if: needs.select.outputs.root == 'true' && (inputs.revision == '' || inputs.revision == github.sha)
         shell: bash
