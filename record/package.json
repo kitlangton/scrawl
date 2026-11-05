@@ -60,6 +60,17 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
+  "peerDependenciesMeta": {
+    "@apparent/engine-sdk": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "22.19.0",
     "@types/react": "19.2.0",
@@ -74,10 +85,5 @@
     "esbuild": "0.25.12",
     "@tailwindcss/cli": "4.1.17",
     "@apparent/engine-sdk": "file:vendor/engine-sdk-0.3.1.tgz"
-  },
-  "peerDependenciesMeta": {
-    "@apparent/engine-sdk": {
-      "optional": true
-    }
   }
 }
