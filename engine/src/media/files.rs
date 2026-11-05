@@ -14,6 +14,71 @@ fn owned(fd: i32) -> Result<File> {
         Ok(unsafe { File::from_raw_fd(fd) })
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    struct Root(PathBuf);
+    impl Drop for Root {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    #[test]
+    fn swapped_temporary_manifest_cannot_change_the_published_inode() {
+        let root = Root(std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "engine-manifest-swap-{}",
+            apparent_capture_engine::new_id().unwrap()
+        )));
+        std::fs::create_dir(&root.0).unwrap();
+        std::fs::set_permissions(&root.0, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let dir = Directory::open(&root.0, true).unwrap();
+        let claim = dir.create(".engine-media-job").unwrap();
+        let output = Output {
+            dir,
+            files: vec![],
+            claim,
+        };
+        let mut original = output.dir.create(".manifest.tmp").unwrap();
+        original.write_all(b"verified manifest").unwrap();
+        original.sync_all().unwrap();
+        std::fs::rename(
+            root.0.join(".manifest.tmp"),
+            root.0.join("retained-original"),
+        )
+        .unwrap();
+        let mut replacement = output.dir.create(".manifest.tmp").unwrap();
+        replacement.write_all(b"foreign manifest").unwrap();
+        // The former pathname primitive publishes the replacement at this boundary.
+        assert_eq!(
+            unsafe {
+                libc::linkat(
+                    output.dir.file.as_raw_fd(),
+                    c".manifest.tmp".as_ptr(),
+                    output.dir.file.as_raw_fd(),
+                    c"unsafe.json".as_ptr(),
+                    0,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            std::fs::read(root.0.join("unsafe.json")).unwrap(),
+            b"foreign manifest"
+        );
+        output.link_manifest(&original).unwrap();
+        assert_eq!(
+            std::fs::read(root.0.join("manifest.json")).unwrap(),
+            b"verified manifest"
+        );
+        assert!(!output.dir.unlink_owned(".manifest.tmp", &original));
+        assert_eq!(
+            std::fs::read(root.0.join(".manifest.tmp")).unwrap(),
+            b"foreign manifest"
+        );
+    }
+}
 fn name(s: &str) -> Result<CString> {
     if s.is_empty() || s.contains('/') || matches!(s, "." | "..") {
         return Err("source_mismatch");
@@ -319,6 +384,46 @@ pub struct Output {
     claim: File,
 }
 impl Output {
+    fn link_manifest(&self, file: &File) -> Result<()> {
+        let to = name("manifest.json")?;
+        // Publish the retained inode, not the mutable temporary pathname.
+        #[cfg(target_os = "linux")]
+        let (from_dir, from, flags) = (
+            libc::AT_FDCWD,
+            CString::new(format!("/proc/self/fd/{}", file.as_raw_fd()))
+                .map_err(|_| "invalid_output")?,
+            libc::AT_SYMLINK_FOLLOW,
+        );
+        #[cfg(target_os = "macos")]
+        let (from_dir, from, flags) = (self.dir.file.as_raw_fd(), name(".manifest.tmp")?, 0);
+        if unsafe {
+            libc::linkat(
+                from_dir,
+                from.as_ptr(),
+                self.dir.file.as_raw_fd(),
+                to.as_ptr(),
+                flags,
+            )
+        } != 0
+        {
+            return Err("invalid_output");
+        }
+        let published = owned(unsafe {
+            libc::openat(
+                self.dir.file.as_raw_fd(),
+                to.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        })
+        .map_err(|_| "invalid_output")?;
+        if !same(
+            &published.metadata().map_err(|_| "invalid_output")?,
+            &file.metadata().map_err(|_| "invalid_output")?,
+        ) {
+            return Err("invalid_output");
+        }
+        Ok(())
+    }
     pub fn create(d: &Decode) -> Result<Self> {
         let p = Path::new(&d.output_directory);
         let parent = Directory::open(p.parent().ok_or("invalid_output")?, true)
@@ -389,26 +494,32 @@ impl Output {
             let bytes = serde_json::to_vec(value).map_err(|_| "internal")?;
             f.write_all(&bytes).map_err(|_| "invalid_output")?;
             f.sync_all().map_err(|_| "invalid_output")?;
-            let from = name(".manifest.tmp")?;
-            let to = name("manifest.json")?;
-            if unsafe {
-                libc::linkat(
-                    self.dir.file.as_raw_fd(),
-                    from.as_ptr(),
-                    self.dir.file.as_raw_fd(),
-                    to.as_ptr(),
-                    0,
-                )
-            } != 0
-            {
-                return Err("invalid_output");
-            }
+            self.link_manifest(&f)?;
             if !self.dir.unlink_owned(".manifest.tmp", &f)
                 || !self.dir.unlink_owned(".engine-media-job", &self.claim)
             {
                 return Err("invalid_output");
             }
-            self.dir.sync()
+            self.dir.sync()?;
+            let mut published = self
+                .dir
+                .read("manifest.json")
+                .map_err(|_| "invalid_output")?;
+            if !same(
+                &published.metadata().map_err(|_| "invalid_output")?,
+                &f.metadata().map_err(|_| "invalid_output")?,
+            ) {
+                return Err("invalid_output");
+            }
+            let mut actual = Vec::new();
+            (&mut published)
+                .take(bytes.len() as u64 + 1)
+                .read_to_end(&mut actual)
+                .map_err(|_| "invalid_output")?;
+            if actual != bytes {
+                return Err("invalid_output");
+            }
+            Ok(())
         })();
         if result.is_err() {
             self.dir.unlink_owned(".manifest.tmp", &f);

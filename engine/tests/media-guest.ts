@@ -20,6 +20,9 @@ async function main() {
   await copyFile(join(staged, 'synthetic-h264.mp4'), video); await chmod(video, 0o600);
   await writeFile(join(bundle, 'apparent.json'), JSON.stringify({ version: 1, id: 'synthetic', durationMs: 2250, video: 'recording.mp4', videoOffsetMs: 250 }), { mode: 0o600 });
   const m = await stat(video, { bigint: true });
+  // Match the real Agent adapter, which provisions an empty private destination.
+  const outputDirectory = join(root, 'frames');
+  await mkdir(outputDirectory, { mode: 0o700 });
   // The native decoder starts no capture or display-dependent operation.
   for (const key of ['DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY', 'XDG_RUNTIME_DIR']) delete process.env[key];
   const client = new MediaClient(launchMediaWorker(binary, runtime));
@@ -28,7 +31,7 @@ async function main() {
     assert.equal((await client.handshake()).capabilities.decodeFrames, true);
     const input = { jobId: createMediaJobId(), source: { bundleId: 'synthetic', bundlePath: bundle, videoPath: video, videoOffsetMs: 250,
       identity: { device: String(m.dev), inode: String(m.ino), size: Number(m.size), modifiedNs: String(m.mtimeNs) } },
-      requestedBundleMs: [1250, 0, 5000, 1250], outputDirectory: join(root, 'frames'), limits: { maxFrames: 48, maxEdge: 320, maxTotalPixels: 64000000, deadlineMs: 30000 } };
+    requestedBundleMs: [1250, 0, 5000, 1250], outputDirectory, limits: { maxFrames: 48, maxEdge: 320, maxTotalPixels: 64000000, deadlineMs: 30000 } };
     const result = await client.decode(input);
     assert.deepEqual(result.frames.map(f => f.effectiveVideoMs), [1000, 0, 4750, 1000]);
     assert.deepEqual(result.frames.map(f => f.clampedToStart), [false, true, false, false]);
