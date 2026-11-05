@@ -1,6 +1,7 @@
 # Public website delivery
 
 Public builds, verifies and deploys its own website through
+`.github/workflows/stream-public.yml`, using the reusable
 `.github/workflows/value-stream-delivery.yml`:
 `stream (public, web)` → `deploy (public, web)`. Deployment needs only its producer.
 The canonical repository is `tryapparent/apparent`, branch `main`.
@@ -63,7 +64,8 @@ Sealing is local and does not publish. Actual publication requires the canonical
 value-stream workflow's `deploy` job on main, `WEBSITE_CD_ENABLED`, its existing
 `website-production` environment/Pages token and `website-production-eligible` lock.
 Only this job invokes the publisher; a workflow regression rejects other entrypoints.
-Dispatch `value-stream-delivery.yml` on main for an authorized retry. Publication
+Retry the existing Public owner run on main under its normal gates; the reusable
+executor is not directly dispatchable. Publication
 retains source ordering, exact-candidate checksums and live readback of Public HTML,
 JS/CSS and movie bytes at both the deployment URL and canonical alias. The receipt
 records the exact revision, deployment ID/URL and manifest digest.

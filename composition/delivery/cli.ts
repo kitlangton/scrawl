@@ -2,7 +2,7 @@ import { appendFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { assessPrior, buildOwner, catalog, inputDigest, makePlan, reusePayload, sealPayload, type Owner, type Target, workflowPath } from './core.ts'
+import { assessPrior, buildOwner, catalog, inputDigest, makePlan, reusePayload, sealPayload, type Owner, type Target, workflowPathFor } from './core.ts'
 
 const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
 function output(values: Record<string, string | boolean | number | null>) {
@@ -33,15 +33,25 @@ function ownerFor(id: string): Owner {
   return owner
 }
 function targetArg(value: string): Target { if (value !== 'linux-x64' && value !== 'macos-x64' && value !== 'web') throw new Error('Invalid target'); return value }
+export function assertBuildWorkflowIdentity(env: NodeJS.ProcessEnv, ownerId: string) {
+  if (env.GITHUB_EVENT_NAME !== 'pull_request') return
+  const pullRef = /^refs\/pull\/([1-9][0-9]*)\/merge$/.exec(env.GITHUB_REF ?? '')
+  const expectedPath = `.github/workflows/stream-${ownerId}.yml`
+  if (env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || !pullRef ||
+      env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${expectedPath}@${pullRef[0]}` ||
+      (env.APPARENT_DELIVERY_WORKFLOW_PATH && env.APPARENT_DELIVERY_WORKFLOW_PATH !== expectedPath)) {
+    throw new Error('PR builds require canonical owner workflow identity')
+  }
+}
 async function main(args: string[]) {
   const env = process.env
   if (args.length === 1 && args[0] === 'plan') {
     const plan = makePlan(root)
-    // Main gives Public a dedicated producer; PRs verify every registered owner without deploying.
-    const matrix = { include: plan.matrix.include.filter(owner => env.GITHUB_EVENT_NAME === 'pull_request' || owner.id !== 'public') }
+    // Public has a dedicated producer and deployment job outside the shared diagnostic matrix.
+    const matrix = { include: plan.matrix.include.filter(owner => owner.id !== 'public') }
     output({ matrix: JSON.stringify(matrix), has_ready: matrix.include.length > 0, pending: JSON.stringify(plan.pending), blocked: JSON.stringify(plan.blocked) })
     console.log(JSON.stringify({ ...plan, matrix, has_ready: matrix.include.length > 0 }, null, 2))
-    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `## Delivery plan\n\nMatrix targets: ${matrix.include.length}; Public uses its dedicated producer/deploy jobs on main.\n\nPending owners: ${plan.pending.join(', ') || 'none'}\n\nBlocked registrations: ${plan.blocked.join('; ') || 'none'}\n`)
+    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `## Delivery plan\n\nMatrix targets: ${matrix.include.length}; Public uses its dedicated producer/deploy jobs.\n\nPending owners: ${plan.pending.join(', ') || 'none'}\n\nBlocked registrations: ${plan.blocked.join('; ') || 'none'}\n`)
     return
   }
   if (args.length === 3 && args[0] === 'admit') {
@@ -50,11 +60,12 @@ async function main(args: string[]) {
     let result
     try {
       if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('Invalid repository identity')
-      const workflow = gh<{ id: number; path: string }>(repo, `repos/${repo}/actions/workflows/${basename(workflowPath)}`)
-      if (workflow.path !== workflowPath) throw new Error('Workflow API identity mismatch')
+      const producerPath = workflowPathFor(owner.id)
+      const workflow = gh<{ id: number; path: string }>(repo, `repos/${repo}/actions/workflows/${basename(producerPath)}`)
+      if (workflow.path !== producerPath) throw new Error('Workflow API identity mismatch')
       const runsResponse = gh<{ workflow_runs: Array<{ id: number; run_attempt: number; head_sha: string; head_branch: string; event: string; conclusion: string | null }> }>(repo, `repos/${repo}/actions/workflows/${workflow.id}/runs?branch=main&event=push&per_page=100`)
       // The workflow ID was resolved from, and checked against, the exact workflow file path.
-      const runs = runsResponse.workflow_runs.map(r => ({ ...r, path: workflowPath }))
+      const runs = runsResponse.workflow_runs.map(r => ({ ...r, path: producerPath }))
       result = assessPrior(root, owner, target, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), repo, runs,
         run => ghPages<{ name: string; status: string; conclusion: string | null }>(repo, `repos/${repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`),
         run => ghPages<{ id: number; name: string; expired: boolean }>(repo, `repos/${repo}/actions/runs/${run.id}/artifacts`))
@@ -65,6 +76,7 @@ async function main(args: string[]) {
   }
   if (args.length === 4 && args[0] === 'build') {
     const owner = ownerFor(args[1]); const target = targetArg(args[2])
+    assertBuildWorkflowIdentity(env, owner.id)
     buildOwner(root, owner, target, args[3])
     return
   }

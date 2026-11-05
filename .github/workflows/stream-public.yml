@@ -1,0 +1,69 @@
+name: public delivery
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'public/**'
+      - 'shared/ui/**'
+      - 'shared/analytics/**'
+      - 'shared/assets/**'
+      - 'README.md'
+      - 'capture/agent/skills/apparent/SKILL.md'
+      - '.npmrc'
+      - 'bunfig.toml'
+      - '.bunfig.toml'
+      - '.github/workflows/stream-public.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'enablement/verification/web/**'
+      - 'LICENSE'
+  push:
+    branches: [main]
+    paths:
+      - 'public/**'
+      - 'shared/ui/**'
+      - 'shared/analytics/**'
+      - 'shared/assets/**'
+      - 'README.md'
+      - 'capture/agent/skills/apparent/SKILL.md'
+      - '.npmrc'
+      - 'bunfig.toml'
+      - '.bunfig.toml'
+      - '.github/workflows/stream-public.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'enablement/verification/web/**'
+      - 'LICENSE'
+permissions:
+  contents: read
+jobs:
+  deliver:
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'public'
+      targets: '{"include":[{"id":"public","target":"web","runner":"ubuntu-24.04","kind":"directory","stage":"website","package":"public/site","verify":[],"build":"verify:installed","language":"typescript","packageManager":"bun","architecture_owner":""}]}'
+      workflow_path: '.github/workflows/stream-public.yml'
+    secrets: inherit
+
+  verify-pr:
+    if: github.repository == 'tryapparent/apparent' && github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'public'
+      targets: '{"include":[{"id":"public","target":"web","runner":"ubuntu-24.04","kind":"directory","stage":"website","package":"public/site","verify":[],"build":"verify:installed","language":"typescript","packageManager":"bun","architecture_owner":""}]}'
+      workflow_path: '.github/workflows/stream-public.yml'

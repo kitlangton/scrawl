@@ -1,0 +1,56 @@
+name: agent delivery
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - 'engine/sdk/**'
+      - 'engine/delivery.json'
+      - 'shared/contracts/**'
+      - '.github/workflows/stream-agent.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
+  push:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - 'engine/sdk/**'
+      - 'engine/delivery.json'
+      - 'shared/contracts/**'
+      - '.github/workflows/stream-agent.yml'
+      - 'composition/delivery/**'
+      - 'composition/architecture/**'
+      - '.github/workflows/value-stream-delivery.yml'
+      - '.github/actions/runtime-budget/**'
+      - 'enablement/verification/workflow-budget.ts'
+      - 'LICENSE'
+permissions:
+  contents: read
+jobs:
+  deliver:
+    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'agent'
+      targets: '{"include":[{"id":"agent","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"library","package":"agent","verify":["test"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"agent"}]}'
+      workflow_path: '.github/workflows/stream-agent.yml'
+
+  verify-pr:
+    if: github.repository == 'tryapparent/apparent' && github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/value-stream-delivery.yml
+    with:
+      owner_id: 'agent'
+      targets: '{"include":[{"id":"agent","target":"linux-x64","runner":"ubuntu-24.04","kind":"npm","stage":"library","package":"agent","verify":["test"],"build":"build","language":"typescript","packageManager":"npm","architecture_owner":"agent"}]}'
+      workflow_path: '.github/workflows/stream-agent.yml'

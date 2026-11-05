@@ -8,7 +8,7 @@ export function candidate(env: NodeJS.ProcessEnv, git = (...args: string[]) =>
   if (env.GITHUB_REPOSITORY !== 'tryapparent/apparent' ||
       env.GITHUB_REF !== 'refs/heads/main' ||
       !['push', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME ?? '') ||
-      env.GITHUB_WORKFLOW_REF !== 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main')
+      env.GITHUB_WORKFLOW_REF !== 'tryapparent/apparent/.github/workflows/stream-public.yml@refs/heads/main')
     throw new Error('Public delivery requires the canonical main workflow')
   const sha = env.GITHUB_SHA ?? ''
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Web delivery requires an exact source SHA')
