@@ -99,3 +99,58 @@ test("symlink, hard-linked and permissive store paths are rejected without touch
   await assertAbsent(join(output, `record-${(await import("node:crypto")).createHash("sha256").update("hardlink").digest("hex")}.apparent`));
   assert.equal(dirname(binding.bundlePath), output);
 });
+
+test("same-process concurrent allocations resolve to durable bindings and leave every final path absent", async t => {
+  const parent = await temporary(t), [control, output] = roots(parent);
+  const allocator = new AbsentDestinationAllocator(control, output);
+  const requests = ["same request", "other request", "same request", "third request", "other request", "unicode λ 🐸"];
+  const bindings = await Promise.all(requests.map(request => allocator.allocate(request)));
+  const byRequest = new Map<string, AbsentDestinationBinding>();
+  for (let index = 0; index < requests.length; index++) {
+    const request = requests[index]!, binding = bindings[index]!;
+    const prior = byRequest.get(request);
+    if (prior) assert.deepEqual(binding, prior);
+    else byRequest.set(request, binding);
+    assert.equal(binding.bundlePath, join(output, binding.bundleId));
+    await assertAbsent(binding.bundlePath);
+  }
+  assert.equal(new Set([...byRequest.values()].map(binding => binding.bundleId)).size, byRequest.size);
+  for (const [request, binding] of byRequest) assert.deepEqual(await allocator.allocate(request), binding);
+});
+
+test("tampered durable bundle identity is rejected without following or modifying its path", async t => {
+  const parent = await temporary(t), [control, output] = roots(parent);
+  const allocator = new AbsentDestinationAllocator(control, output);
+  const dbPath = join(control, "capture2-destination-bindings.sqlite");
+  const foreign = join(parent, "foreign-destination");
+  await mkdir(foreign, { mode: 0o700 });
+  await writeFile(join(foreign, "keep"), "synthetic", { mode: 0o600 });
+
+  for (const [request, column, value] of [
+    ["tampered id", "bundle_id", "foreign.apparent"],
+    ["tampered path", "bundle_path", foreign],
+  ] as const) {
+    const binding = await allocator.allocate(request);
+    const digest = (await import("node:crypto")).createHash("sha256").update(request).digest("hex");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare(`UPDATE destination_binding SET ${column} = ? WHERE request_digest = ?`).run(value, digest);
+    } finally { db.close(); }
+
+    await assert.rejects(allocator.allocate(request), error => {
+      assert.equal((error as Error).message, "Record host storage is unavailable or invalid");
+      assert.equal((error as Error).message.includes(foreign), false);
+      return true;
+    });
+    await assertAbsent(binding.bundlePath);
+    assert.equal(await readFile(join(foreign, "keep"), "utf8"), "synthetic");
+  }
+});
+
+test("ill-formed UTF-16 request IDs are rejected before creating allocator metadata", async t => {
+  const parent = await temporary(t), [control, output] = roots(parent);
+  const allocator = new AbsentDestinationAllocator(control, output);
+  await assert.rejects(allocator.allocate("invalid-\ud800-id"), /storage is unavailable/u);
+  await assertAbsent(join(control, "capture2-destination-bindings.sqlite"));
+  await assertAbsent(output);
+});

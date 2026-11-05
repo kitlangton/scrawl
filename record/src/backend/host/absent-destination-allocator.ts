@@ -11,7 +11,7 @@ export interface AbsentDestinationBinding {
 }
 
 const schemaVersion = 1;
-const validRequestId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= 4096 && !value.includes("\0");
+const validRequestId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= 4096 && !value.includes("\0") && Buffer.from(value,"utf8").toString("utf8")===value;
 
 /** Durable identity reservation for capture/2. This stores metadata only and never creates the final bundle path. */
 export class AbsentDestinationAllocator {
@@ -35,19 +35,23 @@ export class AbsentDestinationAllocator {
     await ensurePrivateRoot(this.#destinationRoot);
     const db = await this.#open();
     try {
-      db.exec("BEGIN IMMEDIATE");
       const digest = createHash("sha256").update(requestId, "utf8").digest("hex");
-      const row = db.prepare("SELECT request_id, control_root, destination_root, bundle_id, bundle_path FROM destination_binding WHERE request_digest = ?").get(digest);
-      if (row) {
-        if (row.request_id !== requestId || row.control_root !== this.#controlRoot || row.destination_root !== this.#destinationRoot) throw hostError();
-        const binding = { bundleId: row.bundle_id as string, bundlePath: row.bundle_path as string };
-        db.exec("COMMIT");
-        return binding;
-      }
-
       const bundleId = `record-${digest}.apparent`;
       const bundlePath = join(this.#destinationRoot, bundleId);
-      await assertAbsent(bundlePath);
+      const query=db.prepare("SELECT request_id, control_root, destination_root, bundle_id, bundle_path FROM destination_binding WHERE request_digest = ?");
+      const validate=(row:Record<string,unknown>):AbsentDestinationBinding=>{
+        if(row.request_id!==requestId||row.control_root!==this.#controlRoot||row.destination_root!==this.#destinationRoot||row.bundle_id!==bundleId||row.bundle_path!==bundlePath)throw hostError();
+        return {bundleId,bundlePath};
+      };
+      const existing=query.get(digest);
+      if(existing)return validate(existing);
+      // No filesystem await may hold a SQLite write lock: another synchronous
+      // connection on this event loop must not block the operation that owns it.
+      try {await assertAbsent(bundlePath);}
+      catch(error){const winner=query.get(digest);if(winner)return validate(winner);throw error;}
+      db.exec("BEGIN IMMEDIATE");
+      const winner=query.get(digest);
+      if(winner){const binding=validate(winner);db.exec("COMMIT");return binding;}
       db.prepare("INSERT INTO destination_binding (request_digest, request_id, control_root, destination_root, bundle_id, bundle_path) VALUES (?, ?, ?, ?, ?, ?)")
         .run(digest, requestId, this.#controlRoot, this.#destinationRoot, bundleId, bundlePath);
       db.exec("COMMIT");
