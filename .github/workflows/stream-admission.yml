@@ -17,10 +17,6 @@ on:
       - public delivery
       - record delivery
     types: [in_progress, completed]
-# Serialize updates for the same candidate; different PR heads remain independent.
-concurrency:
-  group: admission-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
-  cancel-in-progress: false
 permissions:
   actions: read
   checks: write
@@ -28,7 +24,20 @@ permissions:
   pull-requests: read
 jobs:
   admission:
-    if: github.repository == 'tryapparent/apparent'
+    # PR events seed the receipt; only rerun starts need to clear an earlier pass.
+    # Filter before runner allocation, checkout and Node setup.
+    if: >-
+      github.repository == 'tryapparent/apparent' &&
+      (github.event_name == 'pull_request_target' ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.repository.full_name == github.repository &&
+        (github.event.action == 'completed' ||
+         (github.event.action == 'in_progress' && github.event.workflow_run.run_attempt > 1))))
+    # Skipped events must not coalesce away a useful pending PR update.
+    concurrency:
+      group: admission-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
