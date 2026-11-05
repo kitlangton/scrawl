@@ -247,4 +247,3 @@ impl Write for DeadlineStream {
         Ok(())
     }
 }
-
