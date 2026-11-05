@@ -158,6 +158,18 @@ jobs:
           node --experimental-strip-types composition/delivery/cli.ts reuse "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/prior-component.zip" "$RUNNER_TEMP/stream-output" "$INPUT_DIGEST" "$PRIOR_SHA" "$PRIOR_ARTIFACT" "$PRIOR_RUN" "$PRIOR_ATTEMPT"
       - uses: dtolnay/rust-toolchain@stable
         if: steps.admit.outputs.reuse != 'true' && matrix.language == 'native'
+      - name: Install Engine media runtime and fixture dependencies
+        if: steps.admit.outputs.reuse != 'true' && matrix.id == 'engine-media-native'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            ffmpeg \
+            pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-libav
       - uses: oven-sh/setup-bun@v2
         if: steps.admit.outputs.reuse != 'true' && matrix.packageManager == 'bun'
         with:
@@ -464,6 +476,18 @@ jobs:
           printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@stable
         if: matrix.language == 'native'
+      - name: Install Engine media runtime and fixture dependencies
+        if: matrix.id == 'engine-media-native'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            ffmpeg \
+            pkg-config \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-libav
       - uses: oven-sh/setup-bun@v2
         if: matrix.packageManager == 'bun'
         with:
