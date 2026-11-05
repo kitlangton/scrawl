@@ -6,6 +6,7 @@ import { EngineSdkAdapter, type CaptureMapping, type CaptureMappingStore, type E
 class MemoryMappings implements CaptureMappingStore {
   readonly byRequest = new Map<string, CaptureMapping>();
   readonly byCapture = new Map<string, CaptureMapping>();
+  async listRequestIds() { return [...this.byRequest.keys()].sort(); }
   async getByRequestId(id: string) { return this.byRequest.get(id); }
   async getByCaptureId(id: string) { return this.byCapture.get(id); }
   async putIfAbsent(mapping: CaptureMapping) {
