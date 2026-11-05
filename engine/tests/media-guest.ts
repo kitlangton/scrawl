@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { chmod, copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import type * as PublicSDK from '../sdk/src/media.ts';
+import { createMediaJobId, MediaClient, launchMediaWorker } from '../sdk/src/media.ts';
 
 async function main() {
   const binary = process.env.SCRAWL_GUI_BINARY!;
@@ -12,7 +11,6 @@ async function main() {
   assert.ok(binary && root);
   await chmod(root, 0o700);
   const staged = dirname(binary);
-  const { createMediaJobId, MediaClient, launchMediaWorker } = await import(pathToFileURL(join(staged, 'media.ts')).href) as typeof PublicSDK;
   const runtime = join(root, 'runtime');
   const bundle = join(root, 'synthetic.apparent');
   await mkdir(runtime, { mode: 0o700 }); await mkdir(bundle, { mode: 0o700 });
