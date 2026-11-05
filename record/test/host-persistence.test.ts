@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import { initializePrivateSqlite } from "../dist/backend/host/sqlite-initialization.js";
 import { SqliteCaptureMappingStore } from "../dist/backend/host/capture-mapping-store.js";
 import { PrivateBundleAllocator } from "../dist/backend/host/bundle-allocator.js";
 import { EngineSdkAdapter, type EngineSdkPort, type PreparedStart } from "../dist/backend/engine/sdk-adapter.js";
@@ -232,4 +233,16 @@ test("real adapter recovers persisted identity after an ambiguous start and host
     assert.equal(started[1]!.captureId, started[0]!.captureId);
     assert.equal(JSON.stringify(result).includes("b".repeat(64)), false);
   } finally { second.dispose(); }
+});
+
+
+test("WAL initialization restores the normal transaction busy timeout", async t => {
+  const root=await temporary(t);
+  const db=new DatabaseSync(join(root,"timeout.sqlite"));
+  try {
+    await initializePrivateSqlite(db);
+    assert.equal(db.prepare("PRAGMA busy_timeout").get()?.timeout,5000);
+    assert.equal(db.prepare("PRAGMA synchronous").get()?.synchronous,2);
+    assert.equal(db.prepare("PRAGMA journal_mode").get()?.journal_mode,"wal");
+  } finally { db.close(); }
 });

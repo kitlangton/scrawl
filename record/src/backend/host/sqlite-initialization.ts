@@ -16,5 +16,5 @@ export async function initializePrivateSqlite(db: DatabaseSync): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, walRetryDelayMs * Math.min(attempt + 1, 4)));
     }
   }
-  db.exec("PRAGMA synchronous = FULL;");
+  db.exec("PRAGMA synchronous = FULL; PRAGMA busy_timeout = 5000;");
 }
