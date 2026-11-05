@@ -1192,6 +1192,17 @@
       "docs": ["capture/agent/skills/apparent/SKILL.md"]
     },
     {
+      "id": "agent-local-demo-cli",
+      "group": "cli",
+      "name": "apparent-agent demo",
+      "says": "Creates a private local synthetic .apparent example with annotated PNG keyframes, semantic marks, interactions and timed illustrative transcript. It is not a recording or native artifact.",
+      "status": "main",
+      "added": "2026-11-05",
+      "platforms": ["mac", "linux"],
+      "note": "No screen, window, session, microphone, provider, UI, Engine or network is read or launched. Default output follows configured capture storage; --out requires a fresh absolute .apparent directory. PNG and semantic files are private, the manifest is published last, and synthetic provenance is explicit. --clipboard fails truthfully before output because native clipboard parity remains pending.",
+      "docs": ["agent/README.md", "agent/docs/cli-parity.md"]
+    },
+    {
       "id": "agent-local-inspection-cli",
       "group": "cli",
       "name": "Local TypeScript bundle inspection CLI",
