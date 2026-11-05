@@ -53,7 +53,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(self.admit(platform, number), self.sha)
             self.assertEqual(self.admit(platform), self.sha)
 
-    def test_main_receipts_remain_separate_from_pull_request_verification(self):
+    def test_full_verification_is_main_only_even_for_manual_dispatch(self):
         root = Path(__file__).resolve().parents[2]
         for caller in ('verification.yml', 'verification-mac.yml'):
             text = (root / '.github/workflows' / caller).read_text()
@@ -63,10 +63,10 @@ class AdmissionTests(unittest.TestCase):
         workflow = (root / '.github/workflows/verification-platform.yml').read_text()
         for job in ('desktop-ui', 'connect-client', 'connect-web', 'rust'):
             section = re.search(r'^  ' + job + r':\n(.*?)(?=^  [a-z]|\Z)', workflow, re.M | re.S)[1]
-            self.assertIn("if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'\n", section)
+            self.assertIn("if: github.ref == 'refs/heads/main'\n", section)
             self.assertNotIn('workflow_dispatch', section.split('    steps:', 1)[0])
         receipt = workflow.split('  release-ready:\n', 1)[1]
-        self.assertIn("if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'\n", receipt)
+        self.assertIn("if: github.ref == 'refs/heads/main'\n", receipt)
         self.assertNotIn('workflow_dispatch', receipt)
         for platform in self.runs:
             self.runs[platform].update(event='workflow_dispatch', head_branch='feature')
@@ -350,7 +350,8 @@ class PublicationProgressTests(unittest.TestCase):
             self.assertIn('github.event_name', concurrency)
         self.assertIn("github.event.workflow_run.conclusion != 'success'", mac)
         self.assertIn("github.event.workflow_run.event != 'push'", mac)
-        self.assertIn('workflows: [Linux verification]', mac)
+        self.assertNotIn('  workflow_run:', mac)
+        self.assertIn('  workflow_dispatch:', mac)
         self.assertNotIn('  push:', mac)
         self.assertIn('revision: ${{ needs.admit.outputs.sha }}', mac)
         self.assertIn('--platform linux --sha "$REQUEST_SHA" --run-id "$VERIFY_RUN_ID"', mac)

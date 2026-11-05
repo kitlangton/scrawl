@@ -25,14 +25,8 @@ test('Linux and Mac callers pass only the permissions needed by the reusable att
 
 test('only the full Rust producer job receives attestation permissions', () => {
   const workflow = read('../../../.github/workflows/verification-platform.yml')
-  const jobs = workflow.slice(workflow.indexOf('\njobs:') + 1)
-  assert.deepEqual(grants(block(jobs, 'rust')), {}) // Inherits main writes or PR read-only grants.
-  for (const job of ['select', 'desktop-ui', 'connect-client', 'connect-web', 'release-ready']) {
-    assert.deepEqual(grants(block(jobs, job)), { contents: 'read' })
-  }
-  assert.doesNotMatch(workflow.slice(0, workflow.indexOf('\njobs:')), /permissions:/)
-  for (const path of ['../../../.github/workflows/verification.yml', '../../../.github/workflows/verification-mac.yml']) {
-    const caller = read(path)
-    assert.deepEqual(grants(block(caller.slice(caller.indexOf('\njobs:') + 1), 'verify-pr')), { actions: 'read', contents: 'read' })
-  }
+  assert.deepEqual(grants(block(workflow.slice(workflow.indexOf('\njobs:') + 1), 'rust')),
+    { contents: 'read', 'id-token': 'write', attestations: 'write' })
+  assert.deepEqual(grants(block(workflow.slice(workflow.indexOf('\njobs:') + 1), 'desktop-ui')), {})
+  assert.match(workflow.slice(0, workflow.indexOf('\njobs:')), /permissions:\n  contents: read/)
 })

@@ -153,14 +153,12 @@ test('Mac no-work followers skip the audit while every executed outcome remains 
   const condition = workflow.split('  runtime-budget:\n')[1].match(/^    if: (.+)$/m)![1]
   for (const admit of ['skipped', 'success', 'failure', 'cancelled'])
     for (const verify of ['skipped', 'success', 'failure', 'cancelled'])
-      for (const native of ['skipped', 'success', 'failure', 'cancelled'])
-        for (const pr of ['skipped', 'success', 'failure', 'cancelled']) {
+      for (const native of ['skipped', 'success', 'failure', 'cancelled']) {
         const expression = condition.replace('always()', 'true')
           .replaceAll('needs.admit.result', JSON.stringify(admit))
           .replaceAll('needs.verify.result', JSON.stringify(verify))
           .replaceAll('needs.connect-native.result', JSON.stringify(native))
-          .replaceAll('needs.verify-pr.result', JSON.stringify(pr))
-        assert.equal(Function(`return (${expression})`)(), [admit, verify, native, pr].some(result => result !== 'skipped'))
+        assert.equal(Function(`return (${expression})`)(), [admit, verify, native].some(result => result !== 'skipped'))
       }
 })
 test('every supported root workflow waits for all payload jobs before auditing', () => {
@@ -337,37 +335,4 @@ printf '${name}:%s\\n' "$*" >> "$CALLS"
       if (scenario === 'symlink' || scenario === 'missing') { rmSync(sandbox, { force: true }); writeFileSync(sandbox, 'synthetic helper') }
     }
   } finally { rmSync(root, { recursive: true, force: true }) }
-})
-
-test('PRs run both platform suites read-only while main retains separate release receipts', () => {
-  for (const filename of ['verification.yml', 'verification-mac.yml']) {
-    const workflow = readFileSync(new URL(`../../.github/workflows/${filename}`, import.meta.url), 'utf8')
-    assert.match(workflow, /on:\n  pull_request:\n    branches: \[main\]/)
-    const pr = workflow.split('  verify-pr:\n')[1].split('  runtime-budget:')[0]
-    assert.match(pr, /if: github.event_name == 'pull_request'/)
-    assert.match(pr, /uses: .\/\.github\/workflows\/verification-platform.yml/)
-    assert.match(pr, /actions: read\n      contents: read/)
-    assert.doesNotMatch(pr, /write|secrets:/)
-    assert.match(workflow.split('  verify:\n')[1].split(/\n  [a-z][\w-]*:/)[0], /if: github.ref == 'refs\/heads\/main'/)
-  }
-  const platform = readFileSync(new URL('../../.github/workflows/verification-platform.yml', import.meta.url), 'utf8')
-  // No called job may elevate the read-only PR caller; main inherits its caller's writes.
-  assert.doesNotMatch(platform, /attestations: write|id-token: write/)
-  for (const step of platform.split(/\n      - /).slice(1)) {
-    if (step.includes('actions/attest-build-provenance') || step.includes('mac-artifact.ts') || step.includes('native-baseline/producer.ts')) {
-      assert.match(step, /if: .*github.ref == 'refs\/heads\/main'/)
-    }
-  }
-})
-
-test('PR value-stream builds run fresh without admitting or emitting canonical artifacts', () => {
-  const workflow = readFileSync(new URL('../../.github/workflows/value-stream-delivery.yml', import.meta.url), 'utf8')
-  assert.match(workflow, /pull_request:\n    branches: \[main\]/)
-  const pr = workflow.split('  stream-pr:\n')[1].split('  runtime-budget:')[0]
-  assert.match(pr, /github.event_name == 'pull_request'/)
-  assert.match(pr, /cli.ts build/)
-  assert.match(pr, /npm run test:electron/)
-  assert.match(pr, /Enforce this owner's dependency boundary/)
-  assert.doesNotMatch(pr, /write\n|secrets\.|GH_TOKEN|cli.ts (?:admit|seal|reuse)|attest-build-provenance|upload-artifact/)
-  assert.match(workflow.split('  stream:\n')[1].split('  stream-pr:')[0], /github.ref == 'refs\/heads\/main'/)
 })

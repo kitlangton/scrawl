@@ -1,11 +1,21 @@
 # Website and Connect continuous delivery
 
-Pull requests targeting main run Linux and Mac verification, value-stream owner
-checks/builds and Connect producer tests. Main verification runs again after merge;
-only canonical main receipts and artifacts can authorize publication. PR jobs use
-read-only permissions, do not inherit deployment secrets, and cannot publish
-release attestations or seed trusted native baselines. Feature-branch pushes
-without a PR retain inexpensive local selector, push-hook and admission contracts.
+Only Value-stream delivery runs automatically (on pull requests targeting main,
+matching main pushes and trusted Connect producer completions). PRs run contracts
+and fresh builds/tests for every registered owner/target, including Public, with
+read-only permissions and synthetic analytics settings. PRs cannot seal or attest
+deployment artifacts or deploy; main verifies again before publication. All other
+standalone workflows require an explicit workflow_dispatch; push, completion and
+scheduled triggers are disabled. Reusable workflow_call entry points remain for
+manually started callers. Website publication inside Value-stream delivery retains
+its existing automatic behavior. This trigger policy supersedes other automatic
+pipeline descriptions below.
+Existing release admission still rejects diagnostic manual verification receipts;
+manual triggering does not waive publication gates.
+
+Feature-branch pushes without a PR retain inexpensive local selector, push-hook
+and release-admission contracts. Applicable Value-stream PR checks must pass
+before merge; standalone Linux/macOS and Connect workflows remain manual-only.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
@@ -28,11 +38,9 @@ candidates coalesce; slow Mac capacity never blocks Linux. Manual main dispatche
 remain diagnostic and cannot substitute for automatic release receipts.
 Both use `verification-platform.yml` and retain full Rust, Engine/client, browser,
 Electron and applicable native checks against the entire selected tree. Cancelled
-pending runs cannot hide changes. PR verification uses the same platform suites
-on the PR merge candidate, alongside focused checks, independent review,
-current-base integration and required native/platform proof before merge. Require
-the applicable PR checks to pass; main repeats verification before publication.
-PR Mac verification starts directly, independently of the main Linux follower.
+pending runs cannot hide changes. Full verification is main-only; feature branches
+use focused checks, independent review, current-base integration and required
+native/platform proof before merge. Do not wait for full branch CI as a merge gate.
 Linux's terminal job is `verify / Release verification`; Mac's terminal receipt
 includes the exact tested SHA, since a workflow-run control SHA may be newer.
 General Mac verification uses `macos-26-intel` so it does not depend on the
@@ -47,22 +55,16 @@ CI is not Apple Silicon runtime proof. An image change must still pass the same
 checks before Mac publication.
 
 Linux delivery triggers only after successful `Linux verification`.
-Web delivery runs on main pushes, manual main dispatches, trusted Connect producer
-completions and common value-stream completions, independently of native application receipts.
-Public production bytes build/test/package once in `stream (public, web)`; the website
-workflow consumes current-source/config-compatible Public receipts, including verified
-unchanged ancestors. Public and shared-contract/runtime-audit jobs must succeed even
-when another component fails. No compatible Public artifact means fail-closed admission;
-there is no website-workflow source rebuild.
-Its full-delta input selector includes Public, Connect browser, shared UI/analytics/assets,
-root README and the Agent skill consumed by generated pages, publisher policy and
-web delivery inputs. It starts from a successful run with actual owner verification
-and a successful budget audit; selector-only successes never advance that baseline.
-A same-source successful Public verification can make a later Connect follower
-unnecessary. Missing, incomplete or uncertain history and unknown inputs broaden
-checks. Its terminal gate accepts
-only required/success or explicitly unnecessary/skipped verification. Manual refresh
-forces checks. Native-only changes can report web checks not applicable.
+Public delivery runs in the common workflow on main pushes, manual dispatches and
+successful Connect producer completions. A dedicated `stream (public, web)` job
+runs delivery/shared architecture contracts, then builds or reuses verified Public
+bytes. `deploy (public, web)` needs only that producer, not the other-owner matrix.
+It downloads the same-run component, validates its receipt against producer outputs,
+composes a compatible verified Connect artifact, and runs existing browser/privacy/
+movie checks before sealing and publishing under existing environment/CD/lock gates.
+Unavailable Connect bytes fail closed; successful Connect completion retries Public.
+The old website workflow now follows Connect only for its independent Worker publisher;
+it no longer deploys Pages. Whole-workflow runtime audits remain after terminal jobs.
 Connect's paired browser/Worker producer combines that input selection with existing
 authenticated artifact compatibility checks; missing compatible bytes still requires
 production. Its recipient matrix has an independent cheap selector, so web artifact
@@ -78,8 +80,7 @@ owners, including Desktop; no fixed-color allowances or global checks were remov
 Public consumes immutable independently verified Connect browser artifacts after
 trusted producer/run/digest, candidate input and current build-configuration checks.
 No compatible retained artifact means fail-closed admission, never a Connect rebuild.
-The common Public lane builds/tests/packages Public; the website consumer checks composition/browser seams;
-the website publisher consumes its revision-named sealed artifact. The separate
+The common Public lane builds/tests/packages Public; its deployment job checks composition/browser seams and publishes the sealed candidate. The separate
 Worker call invokes Connect's reusable publisher after producer completion; it does
 not depend on Public checks. Existing activation/environment gates remain.
 Pages and Worker publication have independent job locks, respectively

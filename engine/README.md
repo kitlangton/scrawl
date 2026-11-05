@@ -1,5 +1,9 @@
 # Engine v1 contract
 
+Full rebuild scope, adoption gaps and consumer return conditions are tracked in
+[`IMPLEMENTATION.md`](IMPLEMENTATION.md). The latest merged slice is not the
+completion boundary for Engine.
+
 The additive Rust-free local decode SDK contract is documented in
 [`sdk/README-media.md`](sdk/README-media.md). It defines a separate `media/1`
 channel. The Linux native worker and its current acceptance limits are documented
@@ -139,15 +143,14 @@ pack lifecycle builds the TypeScript output via `scripts.prepack`; only generate
 imports `@apparent/engine-sdk` plus the explicitly test-only
 `@apparent/engine-sdk/testing` subpath. No Cargo toolchain is involved.
 
-The future Record adapter maps `readiness()` to the Engine handshake's actual
-native readiness, `start(requestId)` to the durable `captureId` (or maintains a
-private mapping if the caller's ID is not 32-hex), and ID-scoped stop/cancel/
-inspect to the matching RPCs with its stored owner token. Record's `processing`
-phase corresponds to Engine's `finalizing` phase;
-the adapter must map only observed facts and keep polling authoritative. Its
-listener contract must be driven by observed snapshots, not fabricated native
-events. This SDK currently has no Record adapter, event API or native readiness
-query implementation.
+Record's owner-local [SDK adapter](../record/src/backend/engine/README.md) maps
+`readiness()` to the handshake's actual native readiness and persists a private
+mapping from its request ID to Engine's capture ID and owner token. ID-scoped
+controls use that same mapping. Record's `processing` phase corresponds to
+Engine's `finalizing` phase; its listeners are driven by authoritative inspection
+snapshots. The adapter does not establish native readiness, select or launch a
+runtime, or switch installed routing. The SDK itself provides no Record product
+adapter or provider event API.
 
 `ReferenceEngine.handshake()` deliberately reports `unavailable`; its scenario
 controls can exercise later protocol phases without asserting readiness.

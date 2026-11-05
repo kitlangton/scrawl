@@ -1,14 +1,15 @@
 # Value stream delivery core
 
-Each source owner registers `delivery.json` beside its package. Schema 1 names the package, tracked input roots, npm verification scripts, build script, supported target and staging class. Public registers a Bun-built `web` directory artifact, with its existing Pages workflow consuming that verified output. Connect retains its separate producer. Missing owners are reported pending; an existing source without a registration is reported as blocked.
+Each source owner registers `delivery.json` beside its package. Schema 1 names the package, tracked input roots, npm verification scripts, build script, supported target and staging class. Public registers a Bun-built `web` directory artifact, with a dedicated deployment job consuming that verified output. Connect retains its separate producer. Missing owners are reported pending; an existing source without a registration is reported as blocked.
 
 The isolated TypeScript architecture checker in `composition/architecture` rejects cross-owner source imports, undeclared private package paths, reversed dependencies and alias escapes. `Delivery contracts` tests the checker and scans common shared/composition code; component jobs scan their own owner before artifact admission. An unrelated product violation fails its own lane. A successful shared contract job is required before any prior component can be admitted, and checker inputs are part of every component fingerprint. Before merging owner changes, install the checker's locked dependencies and run its typecheck, tests and repository check as documented there. This guard covers static dependency boundaries, not arbitrary runtime behavior or native effects.
 
 `engine-native` consumes `engine/delivery/native/delivery.json` independently of the SDK slot. Only that native lane installs Rust and produces the exact executable/manifest inventory through the Engine-owned producer. Its inputs include `engine/`, `capture/engine/` and inherited `.cargo/` settings. The current executable reports capture unavailable; packaging does not enable installed routing or prove screen capture.
 
-PRs targeting main run the same registered owner checks/builds and App Shell
-bundle tests in read-only `pr-stream` jobs, without artifact reuse, sealing or
-attestation. Main repeats verification and remains the canonical artifact producer.
+Pull requests targeting main run contracts and fresh checks/builds for every
+registered owner/target in read-only `pr-stream` jobs, including Public. PRs do not
+reuse, seal or attest deployment artifacts, and cannot publish. Main keeps its
+existing producer/deployment lanes and runs verification again.
 
 Run with Node 22's type stripping, without installing dependencies:
 
@@ -44,7 +45,9 @@ the exact Public job, Delivery contracts and runtime audit, source/config equali
 and ZIP/tar hashes before extracting only public bytes. An unrelated failed stream
 does not invalidate a successful Public job with successful shared contracts/audit.
 
-The Pages workflow downloads Public and Connect artifacts, checks their composed
+The common workflow’s `deploy (public, web)` job needs only the dedicated Public
+producer. It downloads that producer’s same-run artifact and a compatible Connect
+artifact, then checks their composed
 resource/privacy/browser seams, seals the final candidate and publishes under its
 existing controls. It never recompiles Public or Connect. Enabled synthetic Public
 analytics fixtures stay private to the producer and are never uploaded.

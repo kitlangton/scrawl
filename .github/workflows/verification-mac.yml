@@ -1,12 +1,6 @@
 name: Mac verification
 
 on:
-  pull_request:
-    branches: [main]
-  workflow_run:
-    workflows: [Linux verification]
-    branches: [main]
-    types: [completed]
   workflow_dispatch:
     inputs:
       connect_worker_proof:
@@ -70,20 +64,11 @@ jobs:
     if: github.ref != 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.connect_worker_proof
     uses: ./.github/workflows/native-proof-mac.yml
 
-  verify-pr:
-    if: github.event_name == 'pull_request'
-    permissions:
-      actions: read
-      contents: read
-    uses: ./.github/workflows/verification-platform.yml
-    with:
-      runner: macos-26-intel
-
   runtime-budget:
     # An ineligible follower has no workload; keep the entire run skipped.
     # Still audit failed/cancelled attempts whenever a workload was admitted.
-    if: always() && (needs.admit.result != 'skipped' || needs.verify.result != 'skipped' || needs.connect-native.result != 'skipped' || needs.verify-pr.result != 'skipped')
-    needs: [admit, verify, connect-native, verify-pr]
+    if: always() && (needs.admit.result != 'skipped' || needs.verify.result != 'skipped' || needs.connect-native.result != 'skipped')
+    needs: [admit, verify, connect-native]
     permissions:
       contents: read
       actions: read

@@ -27,6 +27,10 @@
       "types": "./dist/backend/host/index.d.ts",
       "import": "./dist/backend/host/index.js"
     },
+    "./processing": {
+      "types": "./dist/backend/processing/index.d.ts",
+      "import": "./dist/backend/processing/index.js"
+    },
     "./ui": {
       "types": "./dist/ui/index.d.ts",
       "import": "./dist/ui/index.js"

@@ -23,12 +23,33 @@ fn fixtures_never_share_state_when_the_clock_repeats() {
     fs::remove_dir_all(b).unwrap();
 }
 fn host(path: &PathBuf, owner: &str, request: &str) -> (i32, String) {
+    host_ordered(path, owner, request, false)
+}
+fn host_ordered(path: &PathBuf, owner: &str, request: &str, wait_before_input: bool) -> (i32, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_apparent-config-host"))
         .args(["--config", path.to_str().unwrap(), "--owner", owner])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
-    child.stdin.take().unwrap().write_all(request.as_bytes()).unwrap();
+    let mut input = child.stdin.take().unwrap();
+    if wait_before_input { child.wait().unwrap(); }
+    let write_result = input.write_all(request.as_bytes());
+    if wait_before_input { assert_eq!(write_result.as_ref().unwrap_err().kind(), std::io::ErrorKind::BrokenPipe); }
+    drop(input);
     let out = child.wait_with_output().unwrap();
+    if let Err(error) = write_result {
+        let intentional_early_close = error.kind() == std::io::ErrorKind::BrokenPipe
+            && (out.status.code() == Some(2) || request.len() > 64 * 1024);
+        assert!(intentional_early_close, "host closed stdin for a valid request: {error}");
+    }
     (out.status.code().unwrap_or(-1), String::from_utf8(out.stdout).unwrap())
+}
+
+#[test]
+fn argument_rejection_can_close_the_pipe_before_the_fixture_sends_input() {
+    let dir = temp();
+    let (status, output) = host_ordered(&dir.join("config.json"), "InvalidOwner", &req("x", "read", ""), true);
+    assert_eq!(status, 2);
+    assert!(output.is_empty());
+    fs::remove_dir_all(dir).unwrap();
 }
 fn req(id: &str, operation: &str, tail: &str) -> String { format!("{{\"protocol\":1,\"id\":\"{id}\",\"operation\":\"{operation}\"{tail}}}\n") }
 fn response(s: &str) -> Value { serde_json::from_str::<Value>(s.lines().next().unwrap()).unwrap()["result"].clone() }
