@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { basename, join, relative, resolve, sep } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { chunkPath, movie } from '../../lib/pages-video-metadata.ts'
 
 export const ACCOUNT = 'a54dcebead3b8ad688f891da0ab54d1f'
 export const PROJECT = 'apparent-capture'
@@ -58,13 +59,37 @@ const sameInventory = (left: Inventory, right: Inventory) => {
   const keys = Object.keys(left)
   return keys.length === Object.keys(right).length && keys.every(key => left[key] === right[key])
 }
+// Pages receives only the Public site output. Keep this path contract here as
+// a second admission boundary: a matching checksum manifest cannot authorize
+// Connect, hosted app, or arbitrary files into the shared Pages project.
+function isPublicOutputPath(name: string): boolean {
+  if (name === 'wrangler.jsonc') return true
+  if (!name.startsWith('dist-apparent/')) return false
+  const path = name.slice('dist-apparent/'.length)
+  if (['index.html', '404.html', '_routes.json', '_worker.js', '_headers', '_redirects', 'robots.txt', 'sitemap.xml', 'icon.svg', 'apparent-wordmark.svg', 'social-preview-v1.png', 'Apparent-ghost-demo-v4-lilac-poster.jpg', 'HostGrotesk-Variable.ttf', 'footer-theatre.webp', 'frog-air-cohesive.png', 'frog-lounge-cohesive.png', 'frog-rest-cohesive.png', 'frog-wave-cohesive.png', 'lily-clean.png', 'olivia-dog-cutout.png', 'simon-cutout.png'].includes(path)) return true
+  if (movie.chunks.some(chunk => path === chunkPath(chunk).slice(1))) return true
+  if (/(?:^|[\/._-])(connect|hosted)(?:[\/._-]|$)/i.test(path)) return false
+  return /^(assets\/[^/]+\.(?:js|css)|feature-demos\/(?:anywhere|handoff|how-it-works|timeline)\/(?:index\.html|\.local-media\/[^/]+\.(?:png|jpe?g|webp|mp4))|pond\/(?:belief\/[^/]+\.(?:png|jpe?g|webp)|[^/]+\.(?:png|jpe?g|webp))|team\/[^/]+\.(?:svg|png|jpe?g|webp))$/.test(path)
+}
 export function verifyArtifact(sha: string, artifact: string): Manifest {
   const actual = inventory(artifact)
   const manifest = JSON.parse(readFileSync(join(artifact, 'manifest.json'), 'utf8')) as Manifest
   delete actual['manifest.json']
   if (manifest.schema !== 1 || manifest.revision !== sha) throw new Error('Artifact revision mismatch')
   if (!sameInventory(actual, manifest.files)) throw new Error('Artifact checksum/inventory mismatch')
-  if (Object.keys(actual).some(name => !(name === 'wrangler.jsonc' || name.startsWith('dist-apparent/')))) throw new Error('Unexpected artifact input')
+  if (Object.keys(actual).some(name => !isPublicOutputPath(name))) throw new Error('Unexpected artifact input')
+  const headers = readFileSync(join(artifact, 'dist-apparent/_headers'), 'utf8')
+  if (headers !== '/*\n  Cache-Control: no-cache, no-transform\n  X-Apparent-Publisher: cloudflare-pages\n' || readFileSync(join(artifact, 'dist-apparent/_redirects'), 'utf8') !== '') throw new Error('Invalid Public Pages metadata')
+  const routes = JSON.parse(readFileSync(join(artifact, 'dist-apparent/_routes.json'), 'utf8'))
+  if (JSON.stringify(routes) !== JSON.stringify({ version: 1, include: [movie.path], exclude: [] })) throw new Error('Invalid Public video routes')
+  if (manifest.movie?.path !== movie.path || manifest.movie.sha256 !== movie.sha256) throw new Error('Invalid Public movie manifest')
+  const wholeMovie = createHash('sha256')
+  for (const chunk of movie.chunks) {
+    const path = chunkPath(chunk).slice(1), file = join(artifact, 'dist-apparent', path)
+    if (actual['dist-apparent/' + path] !== chunk.sha256 || statSync(file).size !== chunk.size) throw new Error('Invalid approved Public movie chunk')
+    wholeMovie.update(readFileSync(file))
+  }
+  if (wholeMovie.digest('hex') !== movie.sha256) throw new Error('Invalid approved Public movie reconstruction')
   return manifest
 }
 export function seal(sha: string, root = ROOT): Manifest {
@@ -76,8 +101,7 @@ export function seal(sha: string, root = ROOT): Manifest {
   writeFileSync(join(artifact, 'wrangler.jsonc'), readFileSync(join(root, 'public/site/wrangler.pages.jsonc')))
   const files = inventory(artifact)
   for (const required of ['dist-apparent/index.html', 'dist-apparent/404.html', 'dist-apparent/_routes.json', 'dist-apparent/_worker.js']) if (!(required in files)) throw new Error('Incomplete Pages artifact: ' + required)
-  const movie = join(root, 'public/site/public/assets/media/Apparent-ghost-demo-v4-lilac.mp4')
-  const manifest: Manifest = { schema: 1, revision: sha, files, movie: { path: '/' + basename(movie), sha256: digest(readFileSync(movie)) } }
+  const manifest: Manifest = { schema: 1, revision: sha, files, movie: { path: movie.path, sha256: movie.sha256 } }
   // Preserve Python's recursively sorted, indented JSON representation.
   writeFileSync(join(artifact, 'manifest.json'), JSON.stringify({ files: Object.fromEntries(Object.entries(files).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)), movie: { path: manifest.movie.path, sha256: manifest.movie.sha256 }, revision: sha, schema: 1 }, null, 2) + '\n')
   verifyArtifact(sha, artifact)
@@ -120,7 +144,7 @@ export async function verify(sha: string, packagePath: string, deps: PublisherDe
   const deployment = project.canonical_deployment
   if (deployment.latest_stage.status !== 'success' || deployment.deployment_trigger.metadata.commit_hash !== sha) throw new Error('Pages production is not the checked revision')
   const manifest = verifyArtifact(sha, resolve(packagePath, '..'))
-  const paths: [string, string][] = [['index.html', '/'], ['connect/index.html', '/connect/'], ['connect/device/index.html', '/connect/device/'], ['connect/shares/index.html', '/connect/shares/']]
+  const paths: [string, string][] = [['index.html', '/']]
   for (const name of Object.keys(manifest.files)) if (name.startsWith('dist-apparent/assets/') && /\.(js|css)$/.test(name)) { const path = name.slice('dist-apparent/'.length); paths.push([path, '/' + path]) }
   const origins = [...new Set([deployment.url, 'https://app.tryapparent.com'])]
   for (let oi = 0; oi < origins.length; oi++) {
@@ -131,7 +155,6 @@ export async function verify(sha: string, packagePath: string, deps: PublisherDe
       const body = new Uint8Array(await response.arrayBuffer()), headers = response.headers
       const responseMetaValue = responseMeta(headers, ['Content-Encoding', 'Content-Type', 'CF-Cache-Status', 'Age', 'CF-Ray'])
       if (headers.get('X-Apparent-Publisher') !== 'cloudflare-pages') throw new Error('Missing Pages publisher header')
-      if (route.startsWith('/connect/') && (!headers.get('Cache-Control')?.toLowerCase().includes('no-store') || !new Set(headers.get('X-Robots-Tag')?.toLowerCase().replaceAll(',', ' ').split(/\s+/)).has('noindex') || !headers.get('X-Robots-Tag')?.toLowerCase().replaceAll(',', ' ').split(/\s+/).includes('nofollow'))) throw new Error('Missing Connect privacy headers')
       const actualHash = digest(body), expectedHash = manifest.files['dist-apparent/' + path]
       if (actualHash !== expectedHash) {
         const expected = readFileSync(join(packagePath, path))
@@ -194,7 +217,7 @@ export async function main(deps: PublisherDeps = {}) {
       process.env.GITHUB_WORKFLOW_REF !== 'tryapparent/apparent/.github/workflows/value-stream-delivery.yml@refs/heads/main' ||
       process.env.GITHUB_JOB !== 'deploy') throw new Error('Public publication requires the canonical value-stream deploy job')
   const artifact = join(root, '.build/website'), manifest = verifyArtifact(sha, artifact), packagePath = join(artifact, 'dist-apparent')
-  if (!existsSync(join(packagePath, '404.html')) || !existsSync(join(packagePath, '_routes.json'))) throw new Error('Missing privacy/routing preparation')
+  if (!existsSync(join(packagePath, '404.html')) || !existsSync(join(packagePath, '_routes.json'))) throw new Error('Missing Public routing preparation')
   if (lstatSync(packagePath).isSymbolicLink() || Object.entries(inventory(packagePath)).some(([name]) => statSync(join(packagePath, name)).size > MAX_ASSET)) throw new Error('Package has a symlink or oversized asset')
   const token = process.env.WEBSITE_PAGES_API_TOKEN
   if (!token) throw new Error('WEBSITE_PAGES_API_TOKEN is required')

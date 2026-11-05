@@ -1,7 +1,6 @@
 # Website and Connect continuous delivery
 
-Only Value-stream delivery runs automatically (on matching main pushes and trusted
-Connect producer completions). All other
+Only Value-stream delivery runs automatically (on matching main pushes). All other
 standalone workflows require an explicit workflow_dispatch; push, completion and
 scheduled triggers are disabled. Reusable workflow_call entry points remain for
 manually started callers. Website publication inside Value-stream delivery retains
@@ -21,8 +20,7 @@ workflow for registered components, including Public's Bun-built web artifact an
 native Engine providers. The registry records each owner's supported targets and
 artifact stage; missing registrations remain explicitly pending or blocked. A
 component artifact does not certify installed capture routing or native readiness.
-Public's website pipeline consumes its verified component for composition and
-publication. Connect retains its separate producer. Feature-push selection runs the App Shell installed
+Public's deployment job validates and publishes only its verified website component. Connect retains its separate producer. Feature-push selection runs the App Shell installed
 check for its package inputs. Changes under `composition/delivery/` run that
 check plus the dependency-free Node delivery contracts. Neither hook path
 installs packages.
@@ -52,16 +50,16 @@ CI is not Apple Silicon runtime proof. An image change must still pass the same
 checks before Mac publication.
 
 Linux delivery triggers only after successful `Linux verification`.
-Public delivery runs in the common workflow on main pushes, manual dispatches and
-successful Connect producer completions. A dedicated `stream (public, web)` job
-runs delivery/shared architecture contracts, then builds or reuses verified Public
-bytes. `deploy (public, web)` needs only that producer, not the other-owner matrix.
-It downloads the same-run component, validates its receipt against producer outputs,
-composes a compatible verified Connect artifact, and runs existing browser/privacy/
-movie checks before sealing and publishing under existing environment/CD/lock gates.
-Unavailable Connect bytes fail closed; successful Connect completion retries Public.
-The old website workflow now follows Connect only for its independent Worker publisher;
-it no longer deploys Pages. Whole-workflow runtime audits remain after terminal jobs.
+Public delivery runs in the common workflow on main pushes and manual dispatches.
+Its dedicated producer builds or reuses only the Public website component. Its
+`deploy (public, web)` job needs only that producer, validates the same-run artifact
+and Public-only resource/browser/theme/movie seams, then seals and publishes under
+existing Pages environment/CD/lock/readback gates. It never fetches, composes,
+tests or publishes Connect browser bytes and has no Connect completion trigger.
+Connect owns an independent static Worker for the same-origin /connect* and /hosted*
+paths, with assets namespaced under /connect/. Preserve the combined production
+Pages snapshot until the Connect owner supplies verified routing-cutover evidence.
+The old browser-artifact wait does not clear that cutover condition.
 Connect's paired browser/Worker producer combines that input selection with existing
 authenticated artifact compatibility checks; missing compatible bytes still requires
 production. Its recipient matrix has an independent cheap selector, so web artifact
@@ -74,10 +72,9 @@ require their real reviewed artifacts and applicable platform acceptance.
 Public and Connect builds invoke the color guard for their own frontend surfaces
 plus shared sources. The default repository-wide color guard still checks all
 owners, including Desktop; no fixed-color allowances or global checks were removed.
-Public consumes immutable independently verified Connect browser artifacts after
-trusted producer/run/digest, candidate input and current build-configuration checks.
-No compatible retained artifact means fail-closed admission, never a Connect rebuild.
-The common Public lane builds/tests/packages Public; its deployment job checks composition/browser seams and publishes the sealed candidate. The separate
+Public produces and publishes only its website artifact. Connect browser bytes,
+route/resource/auth/privacy verification and static Worker publication belong to
+Connect. Public neither admits nor republishes Connect artifacts. The separate
 Worker call invokes Connect's reusable publisher after producer completion; it does
 not depend on Public checks. Existing activation/environment gates remain.
 Pages and Worker publication have independent job locks, respectively
@@ -145,9 +142,10 @@ last published version available; fix or revert main and verify the next candida
 CodeQL managed setup is disabled by Simon's explicit instruction; it is not a
 release gate.
 
-`.github/workflows/web-delivery.yml` retains the existing independent website and
-hosted production environments and activation variables. This policy does not
-enable a disabled publisher, provision resources or apply migrations.
+Public publication lives only in the value-stream workflow and retains its existing
+website environment and activation variable. The former web workflow retains no
+Public publisher. This policy does not enable a disabled publisher, provision
+resources or apply migrations.
 
 ## Local commit signing
 
@@ -185,19 +183,19 @@ contain the new hook. Server-side policy is separate.
 ## Checks and artifact identity
 
 Public's credential-free verification runs its source build, owner tests,
-allowlisted package, Pages movie HTTP tests, immutable Connect artifact composition
-and artifact-only browser/analytics seam tests. Connect's independently verified
+Public-only artifact graph/preservation checks, allowlisted package, Pages movie HTTP
+tests and homepage/analytics browser checks. Connect's independently verified
 producer owns service workerd/D1/R2, account/device/sharing browser and consent
 product tests. Shared inputs fan out through complete candidate input validation.
 
 Public/common delivery pins Node 22.23.4; Connect retains its declared Node pin.
 Bun 1.3.10 is pinned. Public browser installation and Pages tools
-come from its lockfile. Production uses the existing API origin. Synthetic Public
+come from its lockfile. Connect retains its existing API origin. Synthetic Public
 analytics output stays in private producer temporary directories without Connect;
 it is never uploaded. Pages artifacts include the compiled Function, provider
 configuration and complete checksum manifest outside the served tree, retained
-for 90 days. Source-built Public bytes and Connect resource graphs survive
-composition without overlays. The publisher uses `--no-bundle`, verifies downloaded
+for 90 days. Source-built Public bytes survive metadata preparation without
+overlays. The publisher uses `--no-bundle`, verifies downloaded
 bytes and reads back the immutable and canonical deployment. Older/equal revisions
 cannot replace newer published source. Provider readback and remote errors still
 fail; a superseded Pages candidate reports an intentional successful skip.

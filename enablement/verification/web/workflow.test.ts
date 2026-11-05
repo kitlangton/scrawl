@@ -25,12 +25,11 @@ test('Public has its own static stream and deployment does not wait for unrelate
   assert.deepEqual([...deploy.matchAll(/^\s+needs: (.+)$/gm)].map((match) => match[1]), ['stream-public'])
   assert.match(deploy, /PUBLIC_COMPONENT_INPUT_DIGEST: \$\{\{ needs\.stream-public\.outputs\.input-digest \}\}/)
   assert.match(deploy, /stream-artifact\.ts --current \.build\/public-component \.build\/public-artifact/)
-  assert.match(deploy, /scripts\/connect\/artifact\.ts/)
-  assert.match(deploy, /scripts\/connect\/compose-connect\.ts/)
+  assert.doesNotMatch(deploy, /scripts\/connect\/|CONNECT_BROWSER_ARTIFACT|COMPOSE_|connect-browser|connect\/delivery|VITE_HOSTED_API_ORIGIN/)
+  assert.match(deploy, /scripts\/artifact\/verify\.ts/)
   assert.match(deploy, /scripts\/pages\/prepare-pages\.ts/)
   assert.match(deploy, /scripts\/pages\/prepare-pages-video\.ts/)
   assert.match(deploy, /scripts\/pages\/test-public-homepage\.ts/)
-  assert.match(deploy, /scripts\/connect\/composed-browser\.test\.ts/)
   assert.match(deploy, /publish-pages\.ts seal \$\{\{ github\.sha \}\}/)
   assert.match(deploy, /node public\/site\/scripts\/cd\/publish-pages\.ts/)
   assert.equal([...workflow.matchAll(/node public\/site\/scripts\/cd\/publish-pages\.ts/g)].length, 1)
@@ -43,17 +42,9 @@ test('Public has its own static stream and deployment does not wait for unrelate
   assert.doesNotMatch(workerWorkflow, /publish-pages\.ts|website-production|WEBSITE_CD_ENABLED/)
 })
 
-test('Public candidate workflow runs on push, manual dispatch, and successful Connect completion only', () => {
-  assert.match(workflow, /workflow_run:\n\s+workflows: \[Connect producer\]/)
-  assert.match(workflow, /types: \[completed\]/)
-  const plan = section(workflow, 'plan')
-  const contracts = section(workflow, 'contracts')
-  assert.match(plan, /github\.event_name != 'workflow_run'/)
-  assert.match(contracts, /github\.event_name != 'workflow_run'/)
-  const stream = section(workflow, 'stream-public')
-  assert.match(stream, /github\.event\.workflow_run\.conclusion == 'success'/)
-  assert.match(stream, /github\.repository == 'tryapparent\/apparent'/)
-  assert.match(stream, /github\.ref == 'refs\/heads\/main'/)
+test('Public delivery has no Connect completion trigger or configuration dependency', () => {
+  assert.doesNotMatch(workflow.split('jobs:')[0], /workflow_run:|Connect producer/)
+  for (const id of ['stream-public', 'deploy']) assert.doesNotMatch(section(workflow, id), /VITE_HOSTED_API_ORIGIN|CONNECT_BROWSER_ARTIFACT|workflow_run/)
 })
 
 test('Connect completion keeps the independent Worker publisher and audit', () => {
@@ -87,7 +78,7 @@ test('only Value-stream delivery has automatic workflow triggers', () => {
     const events = [...triggers.matchAll(/^  ([a-z_]+):/gm)].map(match => match[1])
     assert(events.length > 0, file)
     assert.deepEqual(events.filter(event => !['workflow_dispatch', 'workflow_call'].includes(event)),
-      file === 'value-stream-delivery.yml' ? ['push', 'workflow_run'] : [], file)
+      file === 'value-stream-delivery.yml' ? ['push'] : [], file)
   }
 })
 

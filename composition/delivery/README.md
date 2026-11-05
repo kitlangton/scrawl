@@ -43,14 +43,16 @@ reuse when added. Bun/version, Node, runner and verifier inputs remain pinned.
 The common workflow reuses unchanged verified artifacts using its existing admission
 and receipt protocol. Website archives use ordinary USTAR regular files and
 directories; receipts include source and environment digests for independent
-consumer validation. Public's consumer checks canonical-main producer identity,
-the exact Public job, Delivery contracts and runtime audit, source/config equality
-and ZIP/tar hashes before extracting only public bytes. An unrelated failed stream
-does not invalidate a successful Public job with successful shared contracts/audit.
+consumer validation. Historical producer reuse checks canonical-main identity,
+prior owner/contracts/audit success, source/config equality and archive identity.
+Production deployment validates the current Public producer's exact same-run
+receipt and payload; unrelated owner jobs are not deployment dependencies.
 
-The common workflow’s `deploy (public, web)` job needs only the dedicated Public
-producer. It downloads that producer’s same-run artifact and a compatible Connect
-artifact, then checks their composed
-resource/privacy/browser seams, seals the final candidate and publishes under its
-existing controls. It never recompiles Public or Connect. Enabled synthetic Public
-analytics fixtures stay private to the producer and are never uploaded.
+The common workflow’s `deploy (public, web)` job needs only its dedicated Public
+producer. It validates the same-run component, Public resource graph, metadata,
+browser/theme/movie behavior and byte preservation, then seals and publishes only
+Public files. It has no Connect artifact, browser, API-origin or completion-trigger
+dependency. Connect pages/resources and path routing belong to its independent
+static Worker. Existing Pages activation, environment, source ordering, readback
+and publication lock remain in force. Cut over only after that Connect-owned route
+seam is verified; the current combined production snapshot must remain until then.
