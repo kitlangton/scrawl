@@ -28,10 +28,10 @@ function fixture(scenario: Parameters<typeof createRecordFixture>[0] = "reconnec
 function publish(driver: ReturnType<typeof createRecordFixture>["driver"], captures: CaptureFact[]) {
   const current = driver.current(); assert.equal(driver.publish({ ...current, revision: current.revision + 1, captures }), true);
 }
-function capture(id: string, phase: CaptureFact["phase"], outcomes: CaptureOutcome[], artifactId?: string): CaptureFact {
-  return { captureId: id, phase, outcomes, ...(artifactId ? { artifactId } : {}) };
+function capture(id: string, phase: CaptureFact["phase"], outcomes: CaptureOutcome[], artifactId?: string, delivery: CaptureFact["delivery"] = "unknown", shortcutAdmissionId?: string): CaptureFact {
+  return { captureId: id, phase, delivery, outcomes, ...(shortcutAdmissionId ? { shortcutAdmissionId } : {}), ...(artifactId ? { artifactId } : {}) };
 }
-const outcome = (kind: "shortcut" | "first-frame-start" | "picker" | "whiteboard" | "accepted-stroke" | "processing" | "save" | "copy" | "open-dispatch", detail?: string): CaptureOutcome => ({ kind, at: "2026-11-05T00:00:00.000Z", ok: true, ...(detail ? { detail } : {}) });
+const outcome = (kind: "shortcut" | "first-frame-start" | "picker" | "whiteboard" | "accepted-stroke" | "processing" | "save" | "copy" | "open-dispatch", detail?: string): CaptureOutcome => kind === "picker" ? { kind, at: "2026-11-05T00:00:00.000Z", ok: true, surface: "screen", target: "display" } : kind === "accepted-stroke" ? { kind, at: "2026-11-05T00:00:00.000Z", ok: true, surface: detail === "screen" ? "screen" : "whiteboard", strokeId: `stroke-${detail ?? "board"}` } : ({ kind, at: "2026-11-05T00:00:00.000Z", ok: true, ...(detail ? { detail } : {}) } as CaptureOutcome);
 
 test("normalizes legacy aliases and keeps defer distinct from completion", async () => {
   assert.equal(normalizeProgress({ page: "tutorial", deferred: true }).stage, "welcome");
@@ -61,16 +61,16 @@ test("granted-but-unusable permissions and external shortcuts do not pass setup"
   await g.controller.dispatch("continue"); assert.equal(g.controller.state.progress.stage, "shortcut"); assert.match(g.controller.state.error ?? "", /shortcut is not ready/); g.controller.dispose();
 });
 
-test("practice excludes captures already active at attempt activation", async () => {
-  const f = fixture("unrelated-capture"); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "practice-start" };
-  const start = f.driver.current(); publish(f.driver, [...start.captures, capture("preexisting", "recording", [outcome("shortcut"), outcome("first-frame-start")])]); await f.controller.load();
-  await f.controller.dispatch("continue"); assert.equal(f.controller.state.progress.stage, "practice-start");
-  const original = f.driver.current().captures;
-  publish(f.driver, [...original, capture("menu", "recording", [outcome("first-frame-start")])]); await f.controller.dispatch("continue"); assert.equal(f.controller.state.progress.stage, "practice-start");
-  publish(f.driver, [...original, capture("shortcut-no-frame", "starting", [outcome("shortcut")])]); await f.controller.dispatch("continue"); assert.equal(f.controller.state.progress.stage, "practice-start");
-  publish(f.driver, [...original, capture("preexisting", "recording", [outcome("shortcut"), outcome("first-frame-start")])]); await f.controller.dispatch("continue"); assert.match(f.controller.state.error ?? "", /new shortcut-started/);
-  publish(f.driver, [...original, capture("eligible", "recording", [outcome("shortcut"), outcome("first-frame-start")])]); await f.controller.dispatch("continue");
-  assert.equal(f.controller.state.progress.stage, "practice-start"); assert.equal(f.controller.state.progress.attemptId, null); assert.match(f.controller.state.error ?? "", /stay on this device/); f.controller.dispose();
+test("practice excludes baseline, unreserved, and host-default shortcut captures", async () => {
+  const f = fixture("unrelated-capture"), admissionId = "reserved-practice"; const start = f.driver.current();
+  assert.equal(f.driver.publish({ ...start, revision: start.revision + 1, nextShortcutAdmission: { state: "armed", admissionId, delivery: "local-only", expiresAt: "2026-11-05T00:05:00Z" } }), true);
+  f.progress.value = { ...initialProgress(), status: "in-progress", stage: "practice-start", admissionId, practiceBaselineIds: ["capture-unrelated"] }; await f.controller.load();
+  assert.equal(f.driver.publish({ ...f.driver.current(), revision: f.driver.current().revision + 1, nextShortcutAdmission: { state: "consumed", admissionId, captureId: "host-default" }, captures: [...f.driver.current().captures, capture("host-default", "recording", [outcome("shortcut")], undefined, "host-default", admissionId)] }), true);
+  assert.equal(f.controller.state.progress.stage, "practice-start"); assert.equal(f.controller.state.progress.attemptId, null);
+  assert.equal(f.driver.publish({ ...f.driver.current(), revision: f.driver.current().revision + 1, nextShortcutAdmission: { state: "consumed", admissionId, captureId: "menu" }, captures: [...f.driver.current().captures, capture("menu", "recording", [outcome("shortcut"), outcome("first-frame-start")])] }), true);
+  assert.equal(f.controller.state.progress.stage, "practice-start"); assert.equal(f.controller.state.progress.attemptId, null);
+  assert.equal(f.driver.publish({ ...f.driver.current(), revision: f.driver.current().revision + 1, nextShortcutAdmission: { state: "consumed", admissionId, captureId: "capture-unrelated" }, captures: f.driver.current().captures.map(c => c.captureId === "capture-unrelated" ? { ...c, delivery: "local-only", shortcutAdmissionId: admissionId } : c) }), true);
+  assert.equal(f.controller.state.progress.stage, "practice-start", "an ID present before reservation cannot be adopted"); f.controller.dispose();
 });
 
 test("CAS conflict and unknown publication never overwrite or claim progress", async () => {
@@ -153,7 +153,7 @@ test("mounted shortcut action reaches Record and cancellation returns practice t
 
 test("failed copy offers a scoped copy retry for the saved practice capture", async () => {
   const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "preparing", attemptId: "copy-retry" }; await f.controller.load();
-  publish(f.driver, [capture("copy-retry", "saved", [outcome("save"), { ...outcome("copy"), ok: false }], "artifact-copy")]);
+  publish(f.driver, [capture("copy-retry", "saved", [outcome("save"), { kind: "copy", at: "2026-11-05T00:00:00.000Z", ok: false }], "artifact-copy")]);
   const result = await f.controller.retryPracticeCopy(); assert.equal(result?.status, "accepted"); assert.equal(f.driver.commands().at(-1)?.type, "copy-local"); f.controller.dispose();
 });
 
@@ -201,8 +201,10 @@ test("new provider epoch without the associated capture clears the stale practic
 });
 
 test("disposing Onboarding detaches observation without stopping an active Record capture", async () => {
-  const f = fixture("unsubscribe-during-recording"); await f.controller.load(); assert.equal(f.driver.captureContinues(), true); f.controller.dispose();
-  assert.equal(f.driver.captureContinues(), true); assert.deepEqual(f.driver.commands(), []);
+  const f = fixture("unsubscribe-during-recording"), admissionId = "dispose-pending"; f.progress.value = { ...initialProgress(), status: "in-progress", stage: "practice-start", admissionId };
+  const snapshot = f.driver.current(); f.driver.publish({ ...snapshot, revision: snapshot.revision + 1, nextShortcutAdmission: { state: "armed", admissionId, delivery: "local-only", expiresAt: "2026-11-05T00:05:00Z" } });
+  await f.controller.load(); assert.equal(f.driver.captureContinues(), true); f.controller.dispose(); await Promise.resolve();
+  assert.equal(f.driver.captureContinues(), true); assert.deepEqual(f.driver.commands().map(c => c.type), ["cancel-next-shortcut"]);
 });
 
 test("pen progression cannot bypass an explicitly confirmed selection", async () => {
@@ -239,4 +241,118 @@ test("capture updates during a progress write are reconciled after it completes"
   publish(f.driver, [capture("practice", "saved", [outcome("processing"), outcome("save"), outcome("copy")])]);
   finish(); await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(f.controller.state.progress.stage, "copied"); f.controller.dispose();
+});
+
+test("complete mounted branded lesson follows one local-only admitted capture to confirmed open", async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  Object.defineProperty(dom.window, "matchMedia", { configurable: true, value: () => ({ matches: false }) });
+  let commandId = 0;
+  f.client.execute = async command => {
+    let current = f.driver.current();
+    if (command.type === "select-pen") {
+      current = { ...current, revision: current.revision + 1, pen: { ...current.pen, effective: command.value } };
+      f.driver.publish(current); return { status: "applied", requestId: command.requestId, snapshot: current };
+    }
+    if (command.type === "arm-next-shortcut") {
+      current = { ...current, revision: current.revision + 1, nextShortcutAdmission: { state: "armed", admissionId: command.admissionId, delivery: command.delivery, expiresAt: command.expiresAt } };
+      f.driver.publish(current); return { status: "accepted", requestId: command.requestId, snapshot: current };
+    }
+    if (command.type === "cancel-next-shortcut") {
+      current = { ...current, revision: current.revision + 1, nextShortcutAdmission: { state: "cancelled", admissionId: command.admissionId } };
+      f.driver.publish(current); return { status: "applied", requestId: command.requestId, snapshot: current };
+    }
+    return { status: "accepted", requestId: command.requestId, snapshot: current };
+  };
+  const initialSnapshot = f.driver.current(); assert.equal(f.driver.publish({ ...initialSnapshot, revision: initialSnapshot.revision + 1, nextShortcutAdmission: { state: "idle" } }), true);
+  await f.controller.load();
+  let closed = 0, pasted = 0; const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() { closed++; }, onManualPasteInstructions() { pasted++; } })); await new Promise(resolve => setTimeout(resolve, 0)); });
+  const click = async (label: string) => act(async () => { const button = [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === label || b.getAttribute("aria-label") === label); assert.ok(button, `missing button ${label}`); button.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  const publishSnapshot = async (update: (snapshot: ReturnType<typeof f.driver.current>) => ReturnType<typeof f.driver.current>) => act(async () => { const current = f.driver.current(); assert.equal(f.driver.publish({ ...update(current), revision: current.revision + 1 }), true); await new Promise(resolve => setTimeout(resolve, 0)); });
+  await click("Get started"); assert.equal(f.controller.state.progress.stage, "pen");
+  await click("laser pen"); assert.equal(f.driver.current().pen.effective, "ink", "selecting a visible pen does not write it yet");
+  await click("Use this pen"); assert.equal(f.controller.state.progress.stage, "pen", "confirmed choice waits for the donor hop to finish");
+  const frogNode = dom.window.document.querySelector(".onboarding-pond-frog")!;
+  const animationEnd = new dom.window.Event("animationend", { bubbles: true }); Object.defineProperty(animationEnd, "animationName", { value: "onboarding-pen-hop" });
+  await act(async () => { frogNode.dispatchEvent(animationEnd); await new Promise(resolve => setTimeout(resolve, 0)); });
+  assert.equal(f.controller.state.progress.stage, "permissions");
+  await click("Continue"); assert.equal(f.controller.state.progress.stage, "shortcut");
+  await click("Continue"); assert.equal(f.controller.state.progress.stage, "practice-start");
+  const admissionId = f.controller.state.progress.admissionId!; assert.equal(f.driver.current().nextShortcutAdmission.state, "armed");
+  const practice = capture("lesson-capture", "starting", [outcome("shortcut")], undefined, "local-only", admissionId);
+  await publishSnapshot(s => ({ ...s, nextShortcutAdmission: { state: "consumed", admissionId, captureId: practice.captureId }, captures: [...s.captures, practice] }));
+  assert.equal(f.controller.state.snapshot?.nextShortcutAdmission.state, "consumed"); assert.equal(f.controller.state.progress.admissionId, admissionId); assert.equal(f.controller.state.progress.status, "in-progress");
+  assert.equal(f.controller.state.progress.stage, "screen"); assert.equal(f.controller.state.progress.attemptId, "lesson-capture");
+  await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "starting", [outcome("shortcut"), outcome("picker")], undefined, "local-only", admissionId)] }));
+  assert.equal(f.controller.state.progress.stage, "screen", "screen selection can precede the first frame");
+  await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "recording", [outcome("shortcut"), outcome("picker"), outcome("first-frame-start")], undefined, "local-only", admissionId)] }));
+  assert.equal(f.controller.state.progress.stage, "whiteboard");
+  await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "recording", [outcome("shortcut"), outcome("picker"), outcome("first-frame-start"), outcome("whiteboard")], undefined, "local-only", admissionId)] }));
+  assert.equal(f.controller.state.progress.stage, "board-ink");
+  await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "recording", [outcome("shortcut"), outcome("picker"), outcome("first-frame-start"), outcome("whiteboard"), outcome("accepted-stroke")], undefined, "local-only", admissionId)] }));
+  assert.equal(f.controller.state.progress.stage, "screen-ink");
+  await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "recording", [outcome("shortcut"), outcome("picker"), outcome("first-frame-start"), outcome("whiteboard"), outcome("accepted-stroke"), outcome("accepted-stroke", "screen")], undefined, "local-only", admissionId)] }));
+  assert.equal(f.controller.state.progress.stage, "stop");
+  await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "processing", [outcome("shortcut"), outcome("picker"), outcome("first-frame-start"), outcome("whiteboard"), outcome("accepted-stroke"), outcome("accepted-stroke", "screen"), outcome("processing")], undefined, "local-only", admissionId)] }));
+  assert.equal(f.controller.state.progress.stage, "preparing");
+  const outcomes = [outcome("shortcut"), outcome("picker"), outcome("first-frame-start"), outcome("whiteboard"), outcome("accepted-stroke"), outcome("accepted-stroke", "screen"), outcome("processing"), outcome("save"), outcome("copy")];
+  await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "saved", outcomes, "lesson-artifact", "local-only", admissionId)] }));
+  assert.equal(f.controller.state.progress.stage, "copied");
+  await click("How to paste"); assert.equal(f.controller.state.progress.stage, "paste");
+  await click("Show paste instructions"); assert.equal(pasted, 1);
+  await click("I pasted it"); assert.equal(f.controller.state.progress.stage, "locate"); assert.equal(f.controller.state.progress.manualPasteConfirmed, true);
+  await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "saved", [...outcomes, { kind: "artifact-open", at: "2026-11-05T00:05:00.000Z", artifactId: "lesson-artifact", ok: true, evidence: "viewer-ack" }], "lesson-artifact", "local-only", admissionId)] }));
+  assert.equal(f.controller.state.progress.status, "completed"); assert.equal(f.controller.state.progress.stage, "complete");
+  await click("Finish setup"); assert.equal(closed, 1); assert.equal(f.controller.state.progress.attemptId, "lesson-capture");
+  await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
+});
+
+test("cancelled practice can reserve again after reconnect and deferral releases the pending scope", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" };
+  const issued: string[] = [];
+  const first = f.driver.current(); f.driver.publish({ ...first, revision: first.revision + 1, nextShortcutAdmission: { state: "idle" } });
+  f.client.execute = async command => {
+    issued.push(command.type);
+    let current = f.driver.current();
+    if (command.type === "arm-next-shortcut") {
+      current = { ...current, revision: current.revision + 1, nextShortcutAdmission: { state: "armed", admissionId: command.admissionId, delivery: command.delivery, expiresAt: command.expiresAt } };
+      f.driver.publish(current); return { status: "accepted", requestId: command.requestId, snapshot: current };
+    }
+    if (command.type === "cancel-next-shortcut") {
+      current = { ...current, revision: current.revision + 1, nextShortcutAdmission: { state: "cancelled", admissionId: command.admissionId } };
+      f.driver.publish(current); return { status: "applied", requestId: command.requestId, snapshot: current };
+    }
+    return { status: "accepted", requestId: command.requestId, snapshot: current };
+  };
+  await f.controller.load(); await f.controller.dispatch("continue"); const firstAdmission = f.controller.state.progress.admissionId!;
+  assert.equal(f.controller.state.progress.stage, "practice-start");
+  const admitted = capture("attempt-one", "recording", [outcome("shortcut")], undefined, "local-only", firstAdmission);
+  let current = f.driver.current(); assert.equal(f.driver.publish({ ...current, revision: current.revision + 1, nextShortcutAdmission: { state: "consumed", admissionId: firstAdmission, captureId: admitted.captureId }, captures: [admitted] }), true);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(f.controller.state.snapshot?.nextShortcutAdmission.state, "consumed"); assert.equal(f.controller.state.progress.admissionId, firstAdmission);
+  assert.equal(f.controller.state.progress.stage, "screen");
+  current = f.driver.current(); f.driver.publish({ ...current, revision: current.revision + 1, captures: [{ ...admitted, phase: "cancelled" }] });
+  await new Promise(resolve => setTimeout(resolve, 0)); assert.equal(f.controller.state.progress.stage, "practice-start"); assert.equal(f.controller.state.progress.attemptId, null); assert.equal(f.controller.state.progress.admissionId, null);
+  current = f.driver.current(); assert.equal(f.driver.reconnect({ ...current, providerEpoch: "fixture-epoch-2", revision: 1, connection: "connected", nextShortcutAdmission: { state: "idle" }, captures: [] }), true);
+  await f.controller.dispatch("continue"); const retryAdmission = f.controller.state.progress.admissionId!;
+  assert.notEqual(retryAdmission, firstAdmission); assert.equal(f.controller.state.progress.stage, "practice-start");
+  const deferred = await f.controller.dispatch("defer"); assert.equal(deferred.progress.status, "deferred"); assert.equal(f.driver.current().nextShortcutAdmission.state, "cancelled");
+  assert.equal(issued.slice(-2).join(","), "arm-next-shortcut,cancel-next-shortcut"); assert.equal(issued.some(c => c === "stop-capture" || c === "cancel-capture"), false); f.controller.dispose();
+});
+
+test("progress load errors fail closed and retry reloads before enabling transitions", async () => {
+  const f = fixture(); let unavailable = true; const read = f.progress.read.bind(f.progress);
+  f.progress.read = async () => { if (unavailable) throw new Error("progress store unavailable"); return read(); };
+  await f.controller.load(); assert.equal(f.controller.state.publication, "unknown"); assert.equal(f.controller.state.progress.stage, "welcome");
+  await f.controller.dispatch("continue"); assert.equal(f.controller.state.progress.stage, "welcome");
+  unavailable = false; await f.controller.dispatch("retry"); assert.equal(f.controller.state.publication, "confirmed"); await f.controller.dispatch("continue"); assert.equal(f.controller.state.progress.stage, "pen"); f.controller.dispose();
+});
+
+test("a late progress read after dispose cannot publish stale setup state", async () => {
+  const f = fixture(); let finish!: (value: { revision: number; value: OnboardingProgress }) => void;
+  f.progress.read = () => new Promise(resolve => { finish = resolve; });
+  const loading = f.controller.load(); f.controller.dispose();
+  finish({ revision: 9, value: { ...initialProgress(), status: "in-progress", stage: "locate", manualPasteConfirmed: true } });
+  await loading; assert.equal(f.controller.state.progress.stage, "welcome"); assert.equal(f.controller.state.progress.status, "new");
 });

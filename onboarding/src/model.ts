@@ -1,10 +1,10 @@
 export type Stage = "welcome" | "pen" | "permissions" | "shortcut" | "practice-start" | "screen" | "whiteboard" | "board-ink" | "screen-ink" | "stop" | "preparing" | "copied" | "paste" | "locate" | "complete";
 export type LegacyMetadata = { tutorial: "skipped" | "watched" | "practiced" | null; relaunchedAt: number | null; reopenFix: boolean; shortcutChosen: boolean; firstCaptureCompleted: boolean };
-export type OnboardingProgress = { schema: 1; status: "new" | "in-progress" | "deferred" | "completed"; stage: Stage; attemptId: string | null; practiceBaselineIds: string[]; legacy: LegacyMetadata; manualPasteConfirmed: boolean };
+export type OnboardingProgress = { schema: 1; status: "new" | "in-progress" | "deferred" | "completed"; stage: Stage; attemptId: string | null; admissionId: string | null; practiceBaselineIds: string[]; legacy: LegacyMetadata; manualPasteConfirmed: boolean };
 export type Revision = string | number;
 export type SaveResult = { status: "saved"; revision: Revision } | { status: "conflict"; revision: Revision; current: OnboardingProgress } | { status: "unknown"; message: string };
 export interface ProgressStore { read(): Promise<{ revision: Revision; value: OnboardingProgress }>; compareAndSwap(expected: Revision, value: OnboardingProgress): Promise<SaveResult> }
-export const initialProgress = (): OnboardingProgress => ({ schema: 1, status: "new", stage: "welcome", attemptId: null, practiceBaselineIds: [], legacy: { tutorial: null, relaunchedAt: null, reopenFix: false, shortcutChosen: false, firstCaptureCompleted: false }, manualPasteConfirmed: false });
+export const initialProgress = (): OnboardingProgress => ({ schema: 1, status: "new", stage: "welcome", attemptId: null, admissionId: null, practiceBaselineIds: [], legacy: { tutorial: null, relaunchedAt: null, reopenFix: false, shortcutChosen: false, firstCaptureCompleted: false }, manualPasteConfirmed: false });
 export function normalizeProgress(value: unknown): OnboardingProgress {
   if (!value || typeof value !== "object") return initialProgress();
   const v = value as Record<string, unknown>;
@@ -21,7 +21,7 @@ export function normalizeProgress(value: unknown): OnboardingProgress {
   const safeStage = malformedCurrentComplete ? "welcome" : parsedStage;
   const status = completed ? "completed" : deferred ? "deferred" : v.status === "in-progress" || v.seen === false || malformedCurrentComplete ? "in-progress" : "new";
   const tutorial = metadata.tutorial === "skipped" || metadata.tutorial === "watched" || metadata.tutorial === "practiced" ? metadata.tutorial : null;
-  return { schema: 1, status, stage: completed ? "complete" : safeStage, attemptId: typeof v.attemptId === "string" ? v.attemptId : null, practiceBaselineIds: Array.isArray(v.practiceBaselineIds) ? v.practiceBaselineIds.filter((x): x is string => typeof x === "string") : [], legacy: { tutorial, relaunchedAt: typeof metadata.relaunchedAt === "number" && Number.isFinite(metadata.relaunchedAt) ? metadata.relaunchedAt : null, reopenFix: metadata.reopenFix === true, shortcutChosen: metadata.shortcutChosen === true, firstCaptureCompleted: metadata.firstCaptureCompleted === true }, manualPasteConfirmed: v.manualPasteConfirmed === true };
+  return { schema: 1, status, stage: completed ? "complete" : safeStage, attemptId: typeof v.attemptId === "string" ? v.attemptId : null, admissionId: typeof v.admissionId === "string" ? v.admissionId : null, practiceBaselineIds: Array.isArray(v.practiceBaselineIds) ? v.practiceBaselineIds.filter((x): x is string => typeof x === "string") : [], legacy: { tutorial, relaunchedAt: typeof metadata.relaunchedAt === "number" && Number.isFinite(metadata.relaunchedAt) ? metadata.relaunchedAt : null, reopenFix: metadata.reopenFix === true, shortcutChosen: metadata.shortcutChosen === true, firstCaptureCompleted: metadata.firstCaptureCompleted === true }, manualPasteConfirmed: v.manualPasteConfirmed === true };
 }
 const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
 export function nextStage(stage: Stage): Stage { return stages[Math.min(stages.indexOf(stage) + 1, stages.length - 1)]; }

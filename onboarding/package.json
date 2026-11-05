@@ -22,7 +22,7 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json && cp src/styles.css dist/styles.css && mkdir -p dist/assets && cp src/assets/frog.png dist/assets/frog.png",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "test": "npm run build && node --experimental-strip-types --test test/*.test.ts",
     "prepare": "npm run build",
     "prepack": "npm run build"
@@ -31,10 +31,15 @@
     "@apparent/record": "0.1.0",
     "react": "^19.2.0"
   },
+  "peerDependenciesMeta": {
+    "@apparent/record": { "optional": true }
+  },
   "devDependencies": {
-    "@apparent/record": "file:vendor/record-0.1.0-db88348.tgz",
+    "@apparent/record": "file:vendor/record-0.1.0-e2e5774.tgz",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "22.19.0",
     "@types/react": "19.2.0",
+    "@types/react-dom": "^19.2.7",
     "jsdom": "^26.1.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
