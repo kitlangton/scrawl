@@ -10,7 +10,12 @@ The isolated TypeScript architecture checker in `composition/architecture` rejec
 native `linux-x64` slot owned architecturally by Engine. Its fresh build installs
 the GStreamer development libraries, base/good/libav plugins, and FFmpeg fixture
 tool on the Linux runner; this setup is skipped for artifact reuse and every
-other owner. The producer uses the installed runtime and refuses plugin-source
+other owner. PR and main use the same installer with isolated signed Ubuntu
+archive/security sources over HTTPS, 20-second acquisition timeouts, one retry,
+and process-group deadlines of 60 seconds for metadata and 180 seconds for
+installation, inside the five-minute setup step. This avoids the stalled Azure
+mirror without extending the job/workflow budget or weakening apt authentication.
+The producer uses the installed runtime and refuses plugin-source
 overrides in CI. The catalog fingerprints `engine/`, `capture/engine/` and
 `.cargo/`; packaged-media verification remains inside the owner producer.
 

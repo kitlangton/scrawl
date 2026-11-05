@@ -337,16 +337,18 @@ printf '${name}:%s\\n' "$*" >> "$CALLS"
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('media runtime packages install only for a fresh native media producer build', () => {
+test('PR and fresh main media builds share the bounded runtime dependency installer', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/value-stream-delivery.yml', import.meta.url), 'utf8')
-  const setup = workflow.match(/- name: Install Engine media runtime and fixture dependencies[\s\S]*?(?=\n      - name: Independently install, verify and build the owner artifact)/)?.[0]
-  assert.ok(setup, 'media dependency setup must precede the owner build')
-  assert.match(setup, /if: steps\.admit\.outputs\.reuse != 'true' && matrix\.id == 'engine-media-native'/)
-  for (const packageName of ['ffmpeg', 'pkg-config', 'libgstreamer1.0-dev', 'libgstreamer-plugins-base1.0-dev', 'gstreamer1.0-plugins-base', 'gstreamer1.0-plugins-good', 'gstreamer1.0-libav']) assert.match(setup, new RegExp(`\\b${packageName.replaceAll('.', '\\.')}\\b`))
-  assert.doesNotMatch(setup, /APPARENT_GST_PLUGIN_SOURCE/)
+  const main = workflow.split('  stream:\n')[1].split('  stream-public:\n')[0]
   const pr = workflow.split('  stream-pr:\n')[1]
-  const prSetup = pr.match(/- name: Install Engine media runtime and fixture dependencies[\s\S]*?(?=\n      - uses: oven-sh)/)?.[0]
-  assert.ok(prSetup, 'PR media checks need the same native dependencies')
+  const setup = (job: string) => job.match(/- name: Install Engine media runtime and fixture dependencies[\s\S]*?(?=\n      - uses: oven-sh)/)?.[0]
+  const mainSetup = setup(main), prSetup = setup(pr)
+  assert.ok(mainSetup); assert.ok(prSetup)
+  assert.match(mainSetup, /if: steps\.admit\.outputs\.reuse != 'true' && matrix\.id == 'engine-media-native'/)
   assert.match(prSetup, /if: matrix\.id == 'engine-media-native'/)
-  assert.equal(prSetup.split('        run:')[1], setup.split('        run:')[1].split('\n      - uses: oven-sh')[0])
+  for (const block of [mainSetup, prSetup]) {
+    assert.match(block, /timeout-minutes: 5/)
+    assert.match(block, /run: node --experimental-strip-types composition\/delivery\/media-dependencies\.ts/)
+    assert.doesNotMatch(block, /apt-get|APPARENT_GST_PLUGIN_SOURCE/)
+  }
 })
