@@ -1,74 +1,466 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createMediaJobId, encodeMediaRequest, MediaClient, MediaChildProcessTransport, validateMediaRequest, validateMediaResponse, type DecodeRequest } from "../src/media.ts";
+import {
+  createMediaJobId,
+  encodeMediaRequest,
+  MediaClient,
+  MediaChildProcessTransport,
+  validateMediaRequest,
+  validateMediaResponse,
+  type DecodeRequest,
+} from "../src/media.ts";
 import { ReferenceMediaPeer } from "../src/media-testing.ts";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 
-const req = (times = [1250, 1000, 1250]): DecodeRequest => ({channel:"media",protocolVersion:1,clientId:"1".repeat(32),rpcId:"2".repeat(32),method:"decode",jobId:"3".repeat(32),source:{bundleId:"bundle",bundlePath:"/tmp/bundle.apparent",videoPath:"/tmp/bundle.apparent/recording.mp4",videoOffsetMs:250,identity:{device:"1",inode:"2",size:1000,modifiedNs:"123456789"}},requestedBundleMs:times,outputDirectory:"/tmp/private-job",limits:{maxFrames:48,maxEdge:1280,maxTotalPixels:10_000_000,deadlineMs:30_000}});
-
-test("media wire marker is incompatible with capture v1 and requires explicit source/output/clock", () => {
-  assert.throws(() => validateMediaRequest({...req(),channel:"capture"} as never), /channel/);
-  assert.throws(() => validateMediaRequest({...req(),protocolVersion:2} as never), /version/);
-  assert.throws(() => validateMediaRequest({...req(),source:{...req().source,videoOffsetMs:-1}}), /source/);
-  assert.throws(() => validateMediaRequest({...req(),outputDirectory:"relative"}), /decode/);
-  assert.throws(() => validateMediaRequest({...req(),requestedBundleMs:[249]}), /precedes/);
-  assert.throws(() => validateMediaRequest({...req(),limits:{...req().limits,maxFrames:0}}), /limits/);
-  assert.throws(() => validateMediaRequest({...req(),source:{...req().source,identity:{...req().source.identity,inode:"bad"}}}), /identity/);
-  assert.throws(() => encodeMediaRequest({...req(),unexpected:true} as never), /fields/);
+const source = {
+  bundleId: "bundle",
+  bundlePath: "/tmp/bundle.apparent",
+  videoPath: "/tmp/bundle.apparent/recording.mp4",
+  videoOffsetMs: 250,
+  identity: { device: "1", inode: "2", size: 1000, modifiedNs: "123456789" },
+};
+const request = (
+  times = [1250, 0, 1250],
+  jobId = "3".repeat(32),
+): DecodeRequest => ({
+  channel: "media",
+  protocolVersion: 1,
+  clientId: "1".repeat(32),
+  rpcId: "2".repeat(32),
+  method: "decode",
+  jobId,
+  source,
+  requestedBundleMs: times,
+  outputDirectory: "/tmp/private-job",
+  limits: {
+    maxFrames: 48,
+    maxEdge: 2560,
+    maxTotalPixels: 64_000_000,
+    deadlineMs: 30_000,
+  },
+});
+const input = (times = [1250, 0, 1250], jobId = createMediaJobId()) => ({
+  jobId,
+  source,
+  requestedBundleMs: times,
+  outputDirectory: "/tmp/private-job",
+  limits: request().limits,
 });
 
-test("test peer is opt-in, carries caller order and duplicates with explicit offset mapping", async () => {
+test("media marker and strict request bounds keep capture v1 separate", () => {
+  assert.throws(
+    () => validateMediaRequest({ ...request(), channel: "capture" } as never),
+    /channel/,
+  );
+  assert.throws(
+    () => validateMediaRequest({ ...request(), protocolVersion: 2 }),
+    /version/,
+  );
+  assert.throws(
+    () =>
+      validateMediaRequest({
+        ...request(),
+        source: { ...source, videoOffsetMs: -1 },
+      }),
+    /source/,
+  );
+  assert.throws(
+    () => validateMediaRequest({ ...request(), outputDirectory: "relative" }),
+    /decode/,
+  );
+  assert.throws(
+    () =>
+      validateMediaRequest({
+        ...request(),
+        limits: { ...request().limits, maxFrames: 0 },
+      }),
+    /limits/,
+  );
+  assert.throws(
+    () =>
+      validateMediaRequest({
+        ...request(),
+        source: { ...source, identity: { ...source.identity, inode: "bad" } },
+      }),
+    /identity/,
+  );
+  for (const bundleId of [
+    ".",
+    "..",
+    "x/../y",
+    "x\\y",
+    "a".repeat(256),
+    "é".repeat(128),
+  ]) {
+    assert.throws(
+      () =>
+        validateMediaRequest({ ...request(), source: { ...source, bundleId } }),
+      /source/,
+    );
+  }
+  assert.throws(
+    () =>
+      validateMediaRequest({
+        ...request(),
+        source: { ...source, videoPath: "/tmp/outside.mp4" },
+      }),
+    /source path/,
+  );
+  assert.throws(
+    () => encodeMediaRequest({ ...request(), unexpected: true } as never),
+    /fields/,
+  );
+});
+
+test("test peer is opt-in and preserves requested order, duplicates, and saturating offset mapping", async () => {
   const peer = new ReferenceMediaPeer();
-  const denied = new MediaClient(peer);
-  await assert.rejects(denied.handshake(), /explicit test-only opt-in/);
-  const client = new MediaClient(peer, {allowTestDouble:true});
-  assert.equal((await client.handshake()).implementation, "test-double");
-  const result = await client.decode({source:req().source,requestedBundleMs:[1250,1000,1250],outputDirectory:"/tmp/private-job",limits:req().limits});
-  assert.deepEqual(result.frames.map(f => [f.requestIndex,f.requestedBundleMs,f.effectiveVideoMs]), [[1,1250,1000],[2,1000,750],[3,1250,1000]]);
-  assert.deepEqual(result.frames.map(f => f.path), ["/tmp/private-job/frame-001.png","/tmp/private-job/frame-002.png","/tmp/private-job/frame-003.png"]);
-  assert.ok(peer.requests.every(r => r.channel === "media" && r.protocolVersion === 1));
-  assert.equal(new Set(peer.requests.map(r => r.rpcId)).size, peer.requests.length);
+  await assert.rejects(
+    new MediaClient(peer).handshake(),
+    /explicit test-only opt-in/,
+  );
+  const client = new MediaClient(peer, { allowTestDouble: true });
+  await client.handshake();
+  const job = input([1250, 0, 250, 1250]);
+  const result = await client.decode(job);
+  assert.deepEqual(
+    result.frames.map((f) => [
+      f.requestIndex,
+      f.requestedBundleMs,
+      f.effectiveVideoMs,
+      f.clampedToStart,
+    ]),
+    [
+      [1, 1250, 1000, false],
+      [2, 0, 0, true],
+      [3, 250, 0, false],
+      [4, 1250, 1000, false],
+    ],
+  );
+  assert.equal(new Set(result.frames.map((f) => f.path)).size, 4);
+  assert.equal(peer.requests.filter((r) => r.method === "decode").length, 1);
+  await assert.rejects(client.decode(job), /busy/);
+  const reorderedSource = {
+    identity: {
+      modifiedNs: source.identity.modifiedNs,
+      inode: source.identity.inode,
+      size: source.identity.size,
+      device: source.identity.device,
+    },
+    videoOffsetMs: source.videoOffsetMs,
+    videoPath: source.videoPath,
+    bundlePath: source.bundlePath,
+    bundleId: source.bundleId,
+  };
+  await assert.rejects(
+    client.decode({ ...job, source: reorderedSource }),
+    /busy/,
+  );
+  await assert.rejects(
+    client.decode({ ...job, outputDirectory: "/tmp/other" }),
+    /identity_conflict/,
+  );
   await client.close();
 });
 
-test("partial decode failure, source mismatch and existing output fail as request errors", async () => {
-  for (const scenario of ["partial-decode-failure", "source-mismatch", "output-exists"] as const) {
-    const client = new MediaClient(new ReferenceMediaPeer(scenario), {allowTestDouble:true});
-    await client.handshake();
-    const expected = scenario === "source-mismatch" ? /source_mismatch/ : scenario === "output-exists" ? /invalid_output/ : /decode_failed/;
-    await assert.rejects(client.decode({source:req().source,requestedBundleMs:[1000],outputDirectory:"/tmp/private-job",limits:req().limits}), expected);
+test("request snapshot protects against mutation and failure is terminal without partial inventory", async () => {
+  const peer = new ReferenceMediaPeer("partial-decode-failure");
+  const client = new MediaClient(peer, { allowTestDouble: true });
+  await client.handshake();
+  const job = input([0]);
+  const pending = client.decode(job);
+  job.requestedBundleMs[0] = 999;
+  await assert.rejects(pending, /decode_failed/);
+  const decode = peer.requests.find(
+    (r) => r.method === "decode",
+  ) as DecodeRequest;
+  assert.deepEqual(decode.requestedBundleMs, [0]);
+  const status = await client.inspect(input([0], job.jobId));
+  assert.equal(status.state, "failed");
+  assert.equal(await client.cancel(job.jobId), "failed");
+  await client.close();
+});
+
+test("result validator rejects incomplete, aliased, reordered, and oversized inventory", () => {
+  const req = request([1250, 0]);
+  const frames = [1250, 0].map((requestedBundleMs, index) => ({
+    requestIndex: index + 1,
+    requestedBundleMs,
+    effectiveVideoMs: Math.max(0, requestedBundleMs - 250),
+    clampedToStart: requestedBundleMs < 250,
+    clampedToEnd: false,
+    path: `/tmp/private-job/frame-${String(index + 1).padStart(3, "0")}.png`,
+    width: 640,
+    height: 480,
+    byteLength: 128,
+    sha256: "a".repeat(64),
+  }));
+  const base = {
+    channel: "media",
+    protocolVersion: 1,
+    rpcId: req.rpcId,
+    result: { jobId: req.jobId, state: "complete", frames },
+  };
+  assert.equal(validateMediaResponse(base, req.rpcId, req).rpcId, req.rpcId);
+  assert.throws(
+    () =>
+      validateMediaResponse(
+        { ...base, result: { ...base.result, frames: frames.slice(0, 1) } },
+        req.rpcId,
+        req,
+      ),
+    /decode result/,
+  );
+  assert.throws(
+    () =>
+      validateMediaResponse(
+        { ...base, result: { ...base.result, frames: [frames[1], frames[0]] } },
+        req.rpcId,
+        req,
+      ),
+    /reference/,
+  );
+  assert.throws(
+    () =>
+      validateMediaResponse(
+        {
+          ...base,
+          result: {
+            ...base.result,
+            frames: [frames[0], { ...frames[1], path: frames[0].path }],
+          },
+        },
+        req.rpcId,
+        req,
+      ),
+    /reference/,
+  );
+  assert.throws(
+    () =>
+      validateMediaResponse(
+        {
+          ...base,
+          result: {
+            ...base.result,
+            frames: frames.map((f) => ({ ...f, width: 4096, height: 4096 })),
+          },
+        },
+        req.rpcId,
+        req,
+      ),
+    /bounds/,
+  );
+  assert.throws(
+    () =>
+      validateMediaResponse(
+        {
+          ...base,
+          result: {
+            ...base.result,
+            frames: frames.map((f, i) =>
+              i ? f : { ...f, path: "/tmp/private-job-escape/frame-001.png" },
+            ),
+          },
+        },
+        req.rpcId,
+        req,
+      ),
+    /escapes/,
+  );
+});
+
+test("timeout leaves job inspectable and later completion is recoverable", async () => {
+  const client = new MediaClient(new ReferenceMediaPeer("timeout"), {
+    allowTestDouble: true,
+  });
+  await client.handshake();
+  const job = input([0]);
+  await assert.rejects(client.decode(job, 20), /timed out/);
+  assert.equal((await client.inspect(job)).state, "decoding");
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal((await client.inspect(job)).state, "complete");
+  await client.close();
+});
+
+test("cancel before completion settles decode and cancellation of complete preserves terminal state", async () => {
+  const client = new MediaClient(new ReferenceMediaPeer("timeout"), {
+    allowTestDouble: true,
+  });
+  await client.handshake();
+  const job = input([0]);
+  const pending = client.decode(job, 500);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(await client.cancel(job.jobId), "cancelled");
+  await assert.rejects(pending, /cancelled/);
+  assert.equal((await client.inspect(job)).state, "cancelled");
+  await client.close();
+
+  const done = new MediaClient(new ReferenceMediaPeer(), {
+    allowTestDouble: true,
+  });
+  await done.handshake();
+  const completed = input([0]);
+  await done.decode(completed);
+  assert.equal(await done.cancel(completed.jobId), "complete");
+  assert.equal((await done.inspect(completed)).state, "complete");
+  await done.close();
+});
+
+test("child transport rejects timed out RPCs, ignores late frames, and close settles waiters", async () => {
+  const fixture = fileURLToPath(
+    new URL("./media-child-fixture.ts", import.meta.url),
+  );
+  const transport = new MediaChildProcessTransport(
+    spawn(
+      process.execPath,
+      ["--experimental-strip-types", fixture, "timeout"],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    ),
+  );
+  const client = new MediaClient(transport, { allowTestDouble: true });
+  await client.handshake();
+  const job = input([0]);
+  await assert.rejects(client.decode(job, 50), /timed out/);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal((await client.inspect(job)).state, "complete");
+  const outcome = await client.close();
+  assert.ok(
+    [
+      "already-exited",
+      "eof-exited",
+      "term-requested-after-timeout",
+      "kill-requested-after-timeout",
+    ].includes(outcome),
+  );
+});
+
+test("child transport enforces UTF-8, channel, version, fields, size, and CRLF policy", async () => {
+  const fixture = fileURLToPath(
+    new URL("./media-child-fixture.ts", import.meta.url),
+  );
+  const crlf = new MediaClient(
+    new MediaChildProcessTransport(
+      spawn(process.execPath, ["--experimental-strip-types", fixture, "crlf"], {
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    ),
+    { allowTestDouble: true },
+  );
+  assert.equal((await crlf.handshake()).implementation, "test-double");
+  await crlf.close();
+
+  for (const [mode, expected] of [
+    ["bad-utf8", /malformed media response/],
+    ["oversized", /exceeds protocol limit/],
+    ["wrong-channel", /incompatible media peer/],
+    ["wrong-version", /incompatible media peer/],
+    ["unknown-fields", /protocol fields/],
+  ] as const) {
+    const client = new MediaClient(
+      new MediaChildProcessTransport(
+        spawn(process.execPath, ["--experimental-strip-types", fixture, mode], {
+          stdio: ["pipe", "pipe", "pipe"],
+        }),
+      ),
+      { allowTestDouble: true },
+    );
+    await assert.rejects(client.handshake(), expected);
     await client.close();
   }
 });
 
-test("result validation rejects incomplete, reordered and oversized inventories", () => {
-  const request = req();
-  const base = {channel:"media",protocolVersion:1,rpcId:request.rpcId,result:{jobId:request.jobId,state:"complete",frames:[{requestIndex:1,requestedBundleMs:1250,effectiveVideoMs:1000,clampedToEnd:false,path:"/tmp/private-job/frame-001.png",width:640,height:480,byteLength:128,sha256:"a".repeat(64)},{requestIndex:2,requestedBundleMs:1000,effectiveVideoMs:750,clampedToEnd:false,path:"/tmp/private-job/frame-002.png",width:640,height:480,byteLength:128,sha256:"a".repeat(64)},{requestIndex:3,requestedBundleMs:1250,effectiveVideoMs:1000,clampedToEnd:false,path:"/tmp/private-job/frame-003.png",width:640,height:480,byteLength:128,sha256:"a".repeat(64)}]}};
-  assert.equal(validateMediaResponse(base, request.rpcId, request).rpcId, request.rpcId);
-  assert.throws(() => validateMediaResponse({...base,result:{...base.result,frames:base.result.frames.slice(0,2)}},request.rpcId,request), /decode result/);
-  assert.throws(() => validateMediaResponse({...base,result:{...base.result,frames:[...base.result.frames.slice(1),base.result.frames[0]]}},request.rpcId,request), /reference/);
-  const tooLarge = {...base,result:{...base.result,frames:base.result.frames.map(f=>({...f,width:2048,height:2048}))}};
-  assert.throws(() => validateMediaResponse(tooLarge,request.rpcId,request), /bounds/);
-  const escaped = {...base,result:{...base.result,frames:base.result.frames.map((f,index)=>index === 0 ? {...f,path:"/tmp/private-job-escape/frame.png"} : f)}};
-  assert.throws(() => validateMediaResponse(escaped,request.rpcId,request), /escapes/);
+test("child close reports a kill request without claiming reaping and is idempotent", async () => {
+  const fixture = fileURLToPath(
+    new URL("./media-child-fixture.ts", import.meta.url),
+  );
+  const child = spawn(
+    process.execPath,
+    ["--experimental-strip-types", fixture, "hold"],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  await new Promise<void>((resolve) =>
+    child.stderr.once("data", () => resolve()),
+  );
+  const transport = new MediaChildProcessTransport(child, 30);
+  const first = transport.close();
+  const second = transport.close();
+  assert.equal(first, second);
+  assert.equal(await first, "kill-requested-after-timeout");
 });
 
-test("per-request RPC identity, cancel acknowledgment and timeout do not imply completion", async () => {
-  const fixture = fileURLToPath(new URL("./media-child-fixture.ts", import.meta.url));
-  const transport = new MediaChildProcessTransport(spawn(process.execPath,["--experimental-strip-types",fixture,"timeout"],{stdio:["pipe","pipe","pipe"]}));
-  const client = new MediaClient(transport, {allowTestDouble:true});
+test("closing settles an outstanding child RPC without waiting for its timeout", async () => {
+  const fixture = fileURLToPath(
+    new URL("./media-child-fixture.ts", import.meta.url),
+  );
+  const client = new MediaClient(
+    new MediaChildProcessTransport(
+      spawn(
+        process.execPath,
+        ["--experimental-strip-types", fixture, "timeout"],
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      ),
+    ),
+    { allowTestDouble: true },
+  );
   await client.handshake();
-  const started = Date.now();
-  const jobId = createMediaJobId();
-  const pending = client.decode({jobId,source:req().source,requestedBundleMs:[1000],outputDirectory:"/tmp/private-job",limits:req().limits},50);
-  assert.equal(await client.cancel(jobId), "cancelled");
-  await assert.rejects(pending, /timed out/);
-  assert.ok(Date.now() - started < 500);
-  const cancelPeer = new ReferenceMediaPeer();
-  const cancelClient = new MediaClient(cancelPeer,{allowTestDouble:true});
-  await cancelClient.handshake();
-  assert.equal(await cancelClient.cancel("4".repeat(32)), "cancelled");
-  assert.equal((cancelPeer.requests.at(-1) as {rpcId:string}).rpcId.length,32);
-  await client.close(); await cancelClient.close();
+  const pending = client.decode(input([0]), 30_000);
+  const rejection = pending.catch((error: unknown) => error);
+  assert.ok(["already-exited", "eof-exited"].includes(await client.close()));
+  const error = await rejection;
+  assert.ok(error instanceof Error && /transport closing/.test(error.message));
+});
+
+test("timed-out RPCs still count toward the bounded child write queue", async () => {
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: EventEmitter & {
+      writableLength: number;
+      write: (line: string, callback: (error?: Error | null) => void) => void;
+      end: () => void;
+    };
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    kill: (signal?: NodeJS.Signals) => boolean;
+  };
+  child.stdin = Object.assign(new EventEmitter(), {
+    writableLength: 0,
+    write: (_line: string, _callback: (error?: Error | null) => void) => true,
+    end: () => {
+      child.exitCode = 0;
+      child.emit("exit", 0, null);
+    },
+  });
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => true;
+  const transport = new MediaChildProcessTransport(child as never, 30);
+  child.stderr.emit("error", new Error("synthetic stderr stream failure"));
+  const pending: Promise<unknown>[] = [];
+  const largeSource = {
+    ...source,
+    identity: { ...source.identity, device: "1".repeat(36_000) },
+  };
+  for (let index = 0; index < 32; index++) {
+    const rpcId = index.toString(16).padStart(32, "0");
+    pending.push(
+      transport
+        .request({ ...request([0]), rpcId, source: largeSource }, 1)
+        .catch((error: unknown) => error),
+    );
+  }
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const results = await Promise.all(pending);
+  assert.ok(
+    results.some(
+      (result) =>
+        result instanceof Error && /write buffer limit/.test(result.message),
+    ),
+  );
+  await transport.close();
 });
