@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "id": "record",
+  "kind": "npm",
+  "package": "record",
+  "inputs": [
+    "record/",
+    "shared/ui/",
+    "shared/assets/fonts/"
+  ],
+  "verify": [
+    "typecheck",
+    "test",
+    "test:package"
+  ],
+  "build": "build",
+  "targets": [
+    "linux-x64"
+  ],
+  "stage": "library"
+}

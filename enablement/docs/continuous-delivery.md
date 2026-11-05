@@ -6,6 +6,18 @@ they do not rebuild the application.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
+`.github/workflows/value-stream-delivery.yml` is the independent main shipping
+workflow for the App Shell and other registered TypeScript streams. Its fast plan
+selects App Shell on Linux and Mac, Record's npm library checks, and Engine's
+SDK contract tests. The current Engine slice proves its SDK contract only; it
+does not claim that production Engine has moved out of the root Rust app.
+Onboarding and Agent registration are pending and are reported as such rather
+than represented as shipping checks. Existing Connect and Public delivery
+pipelines remain independent. Feature-push selection runs the App Shell installed
+check for its package inputs. Changes under `composition/delivery/` run that
+check plus the dependency-free Node delivery contracts. Neither hook path
+installs packages.
+
 `Linux verification` runs on main pushes. Running verification finishes; only
 pending work is replaced. `Mac verification` follows successful Linux runs and
 checks their exact SHA, so every automatic Mac candidate retains matching Linux
@@ -339,12 +351,13 @@ Desktop policy, not proof of Mac or Linux OS effects. Run heavy local commands
 through the existing build runner.
 
 App Shell foundation checks are selected for changes under `composition/app/`,
-`shared/contracts/` or `shared/ui/`. Feature pushes run `npm run check` in
+`shared/contracts/` or `shared/ui/`; delivery contract changes under
+`composition/delivery/` select the App Shell package check and pure Node tests
+without selecting the Rust root build. Feature pushes run `npm run check` in
 `composition/app/` only when its locked dependencies are already installed; the
-hook never installs them. Main platform verification runs a separate Linux
-foundation job with Node 22, `npm ci`, the same check and the synthetic Electron
-test under Xvfb. This job is independent of Rust verification and does not route
-the installed application or prove native OS behavior.
+hook never installs them. The main value-stream workflow runs this stream on
+Linux and Mac. These checks do not route the installed application or prove
+native OS behavior.
 
 Client edits also select Capture: root tests intentionally reuse client scenarios
 with the real AppConfig provider. Renderer edits select Capture for Rust bridge

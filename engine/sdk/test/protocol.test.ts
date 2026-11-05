@@ -157,6 +157,7 @@ test("validators reject unknown fields, wrong versions, bad paths, errors and ti
   );
   assert.throws(() => encodeRequest({ ...startReq(), bundleId: "../bundle" }));
   assert.throws(() => encodeRequest({ ...startReq(), bundleId: "" }));
+  assert.throws(() => encodeRequest({ ...startReq(), bundleId: "bundle\u0085" }));
   assert.throws(() =>
     validateReceipt({ protocolVersion: 1, rpcId, captureId, state: "failed" }),
   );

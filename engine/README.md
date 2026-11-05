@@ -1,17 +1,42 @@
 # Engine v1 contract
 
-`engine/sdk` defines a TypeScript client and a JSON Lines contract for a future
-native Engine executable. This is a contract checkpoint only: there is no native
-peer, capture implementation, durable store, media validation, crash recovery,
-permission proof, readiness implementation, or EOF finalization implementation
-in this slice. `ReferenceEngine` is test-only and never reports native readiness
-or produces an artifact. A native `saved` response requires an absolute path,
-artifact version 1 and `artifactProvenance: "native"`. The test-only peer can
-create an explicitly marked `test-synthetic` fixture after a test-double
-handshake; the client rejects that fixture unless it has observed that handshake.
-Production clients reject test-double handshakes by default. Tests must explicitly
-construct `new EngineClient(peer, { allowTestDouble: true })`; never set this option
-in an installed application adapter.
+`engine/sdk` defines the TypeScript client and JSON Lines contract. The standalone
+`apparent-engine` executable now implements the bounded protocol transport and
+uses `capture/engine` for durable, authenticated admission and receipts. Its
+screen adapter is not implemented yet: handshake reports `readiness: "unavailable"`
+and `screenCapture: false`, and an admitted start is durably failed without
+creating media. This is not native capture acceptance. There is still no real
+first-frame readiness, permission proof, complete bundle/media validation,
+crash-during-capture recovery, or EOF finalization proof. `ReferenceEngine` is
+test-only and never reports native readiness or produces a native artifact.
+
+Build the executable with `cargo build --manifest-path engine/Cargo.toml
+--offline`. The caller provisions one absolute private runtime directory and
+passes it using `--runtime-directory`; no fallback path is selected. A native
+`saved` response still requires an absolute path, artifact version 1 and
+`artifactProvenance: "native"`. The test-only peer can create an explicitly
+marked `test-synthetic` fixture after a test-double handshake; production clients
+reject test-double handshakes by default. Tests must explicitly construct
+`new EngineClient(peer, { allowTestDouble: true })`; never set this option in an
+installed application adapter.
+
+The executable is not wired into installed routing. The existing root runtime
+remains authoritative. A future route can use `launchEngine` only after the
+standalone source provides first-real-frame readiness, a validated durable
+bundle and the required OS proof. Keep `ScreenCaptureSession` and its current
+callers/build inputs until that replacement is accepted; then remove the donor
+only after every consumer is verified.
+
+## Shutdown budget
+
+The existing Linux GStreamer finalizer has an eight-second EOS deadline. The
+SDK's compatible `launchEngine(path, runtimeDirectory, shutdownTimeoutMs)` option
+defaults to 3 seconds, so that default would send SIGTERM before the current
+native finish deadline and SIGKILL at 6 seconds. A caller integrating that
+finalizer should explicitly use `12_000` ms: EOF then gets 12 seconds before
+SIGTERM, with later bounded escalation, leaving four seconds beyond the current
+EOS deadline. This is a justified configuration, not a native shutdown proof;
+measure real finalization and keep timeout outcomes distinct from saved receipts.
 
 ## Identity and authority
 
@@ -46,6 +71,14 @@ only. Stderr is drained but its private diagnostics are not returned or logged b
 the SDK. There may be at most 64 concurrent pending RPCs. Unknown/late RPC IDs
 are ignored; a malformed envelope or unsupported version fails all pending
 calls. RPC timeouts are bounded to 1–60,000 ms and never cancel capture.
+
+Clients generate fresh RPC IDs for every call. The native provider rejects
+duplicate IDs within its most recent 4,096 calls, retaining a bounded replay
+window so long-running polling cannot grow process memory indefinitely. Evicted
+RPC IDs are no longer checked; durable capture identity and owner authorization
+still protect start retries independently of this transport-level window.
+Bundle IDs reject all Unicode control characters consistently across Rust and
+TypeScript, as well as path separators and the special names `.` and `..`.
 
 V1 rejects unknown fields at every object level. A peer must not silently ignore
 an extension. Any added field or method requires a new negotiated protocol

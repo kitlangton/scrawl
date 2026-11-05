@@ -95,10 +95,14 @@ directory, then removes it after testing. It does not rely on the runner's Chrom
 helper ownership/mode or alter system Chrome.
 
 Feature pushes select the foundation check for shell, contracts, shared UI or
-platform-workflow inputs; dependencies must already be installed. Main has a separate Linux shell
-job. Existing native verification and publication gates remain conservative.
-This slice does not yet implement authenticated CI artifact reuse, an independent
-updater, or a general per-stream result cache.
+delivery-workflow inputs; dependencies must already be installed. Main runs
+the independent `Value-stream delivery` workflow, without the legacy verify
+selector. Registered owners build and verify separately; unchanged owner inputs
+can reuse a successful prior component receipt from that workflow. The shell
+lane packages its prebuilt output and tests that exact bundle on Linux and Mac.
+See [delivery contracts](../delivery/README.md) for registration and admission.
+Artifacts remain development output; stable publication and an updater are not
+provided. Existing native verification and publication gates remain conservative.
 
 For production adoption, a stream must supply its real artifact/contract and
 owner checks, prove affected OS seams, then switch a complete workflow. Preserve

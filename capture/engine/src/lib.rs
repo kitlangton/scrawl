@@ -13,4 +13,5 @@ pub use finalizer::FinalizerSuccess;
 pub use identity::{new_id, new_owner_token};
 pub use lease::{BundleLease, LeaseKind};
 pub use receipt::{Receipt, Status};
+pub use session::Binding;
 pub use session::{Admission, Control, Runtime, Session};

@@ -22,7 +22,6 @@ jobs:
       root: ${{ steps.plan.outputs.root }}
       engine: ${{ steps.plan.outputs.engine }}
       browser: ${{ steps.plan.outputs.browser }}
-      app_shell: ${{ steps.plan.outputs.app_shell }}
     steps:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
@@ -70,54 +69,6 @@ jobs:
           # Full tree: a cancelled earlier main run must not hide its delta.
           BASE=$(git hash-object -t tree /dev/null)
           python3 enablement/verification.py --base "${BASE:-unknown}" --github-output "$GITHUB_OUTPUT"
-
-  app-shell-foundation:
-    needs: select
-    if: github.ref == 'refs/heads/main' && startsWith(inputs.runner, 'ubuntu-') && needs.select.outputs.app_shell == 'true'
-    name: app-shell-foundation
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: composition/app
-    steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.revision || github.sha }}
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: composition/app/package-lock.json
-      - run: npm ci --no-audit --no-fund
-        working-directory: shared/contracts
-      - run: npm ci --no-audit --no-fund
-      - name: Prepare the pinned Electron runtime
-        run: npm run prepare:electron
-      - name: Linux Electron dependencies
-        run: npx --no-install playwright install-deps chromium
-      - name: Prepare the pinned Electron sandbox helper
-        run: |
-          # Runner Chrome images need not ship a setuid helper. Provision the
-          # helper matching our pinned Electron in this disposable runner only.
-          sudo install -o root -g root -m 4755 node_modules/electron/dist/chrome-sandbox \
-            "$RUNNER_TEMP/apparent-foundation-chrome-sandbox"
-      - run: npm run check
-      - name: Synthetic Electron shell under Xvfb
-        run: xvfb-run -a npm run test:electron
-        env:
-          APPARENT_FOUNDATION_SANDBOX_HELPER: ${{ runner.temp }}/apparent-foundation-chrome-sandbox
-      - name: Remove the disposable sandbox helper
-        if: always()
-        run: |
-          if [ -e "$RUNNER_TEMP/apparent-foundation-chrome-sandbox" ]; then
-            sudo unlink "$RUNNER_TEMP/apparent-foundation-chrome-sandbox"
-          fi
 
   desktop-ui:
     needs: select
