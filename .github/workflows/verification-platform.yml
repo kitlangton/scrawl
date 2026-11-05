@@ -256,6 +256,10 @@ jobs:
           retention-days: 14
 
   rust:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     needs: select
     if: github.ref == 'refs/heads/main'
     name: rust (${{ inputs.runner }})
