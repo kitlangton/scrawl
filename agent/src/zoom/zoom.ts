@@ -150,18 +150,38 @@ async function inspectPng(path: string, bundlePath: string, providerOutput = fal
   } finally { await file.close(); }
 }
 
-function makeDecoder() {
+export function makeDecoder() {
   const worker=new Worker(new URL('./png-worker.js',import.meta.url),{resourceLimits:{maxOldGenerationSizeMb:96,maxYoungGenerationSizeMb:24,stackSizeMb:4}});
-  let serial=0;
-  return {worker,decode(bytes:Buffer,crop:Crop,timeoutMs:number):Promise<{width:number;height:number;data:ArrayBuffer}> {
+  type Decoded={width:number;height:number;data:ArrayBuffer};
+  const pending=new Map<number,{resolve:(value:Decoded)=>void;reject:(error:Error)=>void;timer:NodeJS.Timeout}>();
+  let serial=0, failure:Error|undefined;
+  const fail=(error:Error)=>{
+    failure=error;
+    for(const request of pending.values()){clearTimeout(request.timer);request.reject(error);}
+    pending.clear();
+  };
+  worker.on('error',()=>fail(new Error('PNG worker failed within its resource limits')));
+  worker.on('exit',()=>fail(new Error('PNG worker exited before decode completed')));
+  worker.on('message',(message:any)=>{
+    const request=pending.get(message.id);if(!request)return;
+    pending.delete(message.id);clearTimeout(request.timer);
+    message.error?request.reject(new Error(message.error)):request.resolve(message);
+  });
+  return {worker,decode(bytes:Buffer,crop:Crop,timeoutMs:number):Promise<Decoded> {
+    if(failure)return Promise.reject(failure);
     const id=++serial;
     return new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{worker.terminate();reject(new Error('PNG worker exceeded zoom deadline'));},Math.max(1,timeoutMs));
-      const done=(message:any)=>{if(message.id!==id)return;clearTimeout(timer);worker.off('message',done);message.error?reject(new Error(message.error)):resolve(message);};
-      worker.on('message',done);worker.postMessage({id,bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),crop,maxWidth:CELL_W,maxHeight:CELL_H});
+      const timer=setTimeout(()=>{
+        fail(new Error('PNG worker exceeded zoom deadline'));
+        void worker.terminate();
+      },Math.max(1,timeoutMs));
+      pending.set(id,{resolve,reject,timer});
+      try{worker.postMessage({id,bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),crop,maxWidth:CELL_W,maxHeight:CELL_H});}
+      catch{fail(new Error('PNG worker could not accept decode input'));}
     });
   }};
 }
+
 function relativeBundlePath(bundlePath:string,path:string):string|undefined { const prefix=`${bundlePath}${sep}`; return path.startsWith(prefix)?path.slice(prefix.length).split(sep).join('/'):undefined; }
 async function readVerifiedBytes(path:string,bundlePath:string,provider:boolean,expected:PngInfo):Promise<Buffer>{
   await assertNoSymlinkPath(path);const canonical=await realpath(path);if(canonical!==expected.canonical||canonical!==resolve(path))throw new Error('PNG source identity changed before decode');
@@ -397,7 +417,7 @@ export async function runZoom(options: { bundle: string; at?: string; mark?: str
       const relative=relativeBundlePath(bundlePath,refs[index].path),full=relative?.startsWith(`${bundle.autocrop?.fullFrames}/`),framePath=full?`frames/${relative!.slice(`${bundle.autocrop.fullFrames}/`.length)}`:relative;
       const owning=bundle.keyframes.find((k:any)=>k.file===framePath)??bundle.keyframes.reduce((best:any,k:any)=>!best||Math.abs(k.t-image.at)<Math.abs(best.t-image.at)?k:best,undefined);
       return{index:index+1,row:Math.floor(index/columns)+1,column:index%columns+1,timestampMs:image.at,time:clock(image.at),framePath:refs[index].path,...(sourceKind==='decoded-video'?{decode:{effectiveVideoMs:refs[index].effectiveVideoMs,actualVideoMs:refs[index].actualVideoMs,clampedToStart:refs[index].clampedToStart,clampedToEnd:refs[index].clampedToEnd}}:{}),...cellMappings[index],
-        marks:contextualMarks(bundle,image.at,mark,owning),interactions:bundle.events.filter((e:any)=>e.kind==='click'?Math.abs(e.t-image.at)<=600:e.kind==='drag'?e.t<=image.at&&image.at-e.t1<=900||Math.abs(e.t-image.at)<=600:false).map((e:any)=>e)};
+        marks:contextualMarks(bundle,image.at,mark,owning),interactions:eventsAt(bundle.events,image.at).filter((e:any)=>e.kind==='click'?Math.abs(e.t-image.at)<=600:e.kind==='drag'?e.t<=image.at&&image.at-e.t1<=900||Math.abs(e.t-image.at)<=600:false).map((e:any)=>e)};
     }),said,narration:{words:(bundle.transcript.words??[]).filter((w:any)=>w.t1>=bounds[0]&&w.t0<=bounds[1]),segments:bundle.transcript.segments.filter((s:any)=>s.t1>=bounds[0]&&s.t0<=bounds[1])},mark:mark??null};
     const json=Buffer.from(JSON.stringify(metadata,null,2)+'\n');if(json.length>16*1024*1024)throw new Error('Zoom semantic sidecar exceeds size limit');
     const side=await open(sidecarPath,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { deflateSync } from 'node:zlib';
 import { PNG } from 'pngjs';
-import { annotateZoomFrame, findPhraseMs, markWindow, parseZoomTime, runZoom, sampleTimes, zoomWindow } from '../dist/zoom/zoom.js';
+import { annotateZoomFrame, findPhraseMs, markWindow, parseZoomTime, runZoom, sampleTimes, zoomWindow, makeDecoder } from '../dist/zoom/zoom.js';
 
 function png(color: [number,number,number,number], width=20, height=10) {
   const image=new PNG({width,height});
@@ -46,6 +46,9 @@ test('zoom time, phrase, legacy windows, inclusive sampling and limits',()=>{
 test('saved zoom composes real PNGs in row-major order and keeps semantic text in JSON',async()=>{
   const bundle=await bundleFixture(), out=join(await mkdtemp(join(tmpdir(),'zoom-out-parent-')),'fresh');
   try {
+    const manifest=JSON.parse(await readFile(join(bundle,'apparent.json'),'utf8'));
+    manifest.events.push({kind:'drag',t:900,t1:1900,x0:0.1,y0:0.1,x1:0.9,y1:0.9,button:'touch',path:[[0.1,0.1],[0.5,0.5],[0.9,0.9]]});
+    await writeFile(join(bundle,'apparent.json'),JSON.stringify(manifest));
     const result=await runZoom({bundle,at:'width changes',span:2,frames:3,full:false,out,json:true});
     assert.equal(result.sourceKind,'saved-keyframes');
     assert.equal(result.cells[0].timestampMs,1000);
@@ -57,7 +60,17 @@ test('saved zoom composes real PNGs in row-major order and keeps semantic text i
     assert.equal(result.mark,null);
     const sidecar=JSON.parse(await readFile(join(out,'zoom.json'),'utf8'));
     assert.deepEqual(sidecar.cells.map((cell:any)=>cell.time),result.cells.map((cell:any)=>cell.time));
+    const drag=sidecar.cells[0].interactions.find((event:any)=>event.kind==='drag');
+    assert.equal(drag.t1,sidecar.cells[0].timestampMs);
+    assert.deepEqual(drag.path,[[0.1,0.1]]);
   } finally { await rm(bundle,{recursive:true,force:true}); await rm(join(out,'..'),{recursive:true,force:true}); }
+});
+
+test('a PNG worker exiting during decode rejects promptly and clears its pending deadline', {timeout:2000}, async()=>{
+  const decoder=makeDecoder();
+  const pending=assert.rejects(decoder.decode(png([255,0,0,255]),[0,0,1,1],60_000),/PNG worker exited/);
+  await decoder.worker.terminate();
+  await pending;
 });
 
 test('mark lookup, full-frame mapping and output collision protection',async()=>{
