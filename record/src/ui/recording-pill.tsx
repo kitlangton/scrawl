@@ -14,6 +14,14 @@ const actionIcons:Record<string,LucideIcon>={
 
 /** Existing Electron pill presentation, driven only by the injected host contract. */
 export function RecordingPill({host}: {host?:PillHost}) {
+  const ids = useRef(new WeakMap<PillHost, number>());
+  const serial = useRef(0);
+  if(host && !ids.current.has(host)) ids.current.set(host, ++serial.current);
+  // A replacement connection is a new revision namespace and owns no old async work.
+  return <PillSession key={host ? ids.current.get(host) : 'unavailable'} host={host}/>;
+}
+
+function PillSession({host}: {host?:PillHost}) {
   const [view,setView]=useState<PillView|null>(null);
   const [pending,setPending]=useState(false);
   const [error,setError]=useState(false);

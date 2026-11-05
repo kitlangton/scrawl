@@ -12,7 +12,7 @@ Run `npm ci`, `npm run typecheck`, `npm test`, and `npm run build` in this direc
 
 ## Adoption limits
 
-The repository's `apparent capture` CLI already implements GUI start/stop/cancel/inspect control over a same-user Unix socket on macOS/Linux. A separate readiness query is not currently exposed. This package does not yet provide that process transport, Electron main/preload wiring, or an adopted React surface. Electron needs a host-owned adapter that invokes the existing Rust GUI control path, obtains native readiness from an accepted Engine capability, and maps JSON receipts/events into `EngineClient`. The Engine's native readiness and capture lifecycle remain authoritative. Until that adapter and platform seam proof land, this package is a tested workflow prerequisite and makes no production recording-availability claim.
+The repository's `apparent capture` CLI already implements GUI start/stop/cancel/inspect control over a same-user Unix socket on macOS/Linux. A separate readiness query is not currently exposed. This package does not yet provide that process transport or a replacement Electron main/preload route; its React pill is adopted through the existing legacy host. Electron needs a host-owned adapter that invokes the existing Rust GUI control path, obtains native readiness from an accepted Engine capability, and maps JSON receipts/events into `EngineClient`. The Engine's native readiness and capture lifecycle remain authoritative. Until that adapter and platform seam proof land, this package is a tested workflow prerequisite and makes no production recording-availability claim.
 
 ## Asynchronous ownership
 
@@ -47,3 +47,14 @@ repair. No capture is cancelled as a side effect of an observer failure.
 `src/ui` owns the existing Desktop recording pill presentation and CSS. The `@apparent/record/ui` export exposes `RecordingPill`, `PillView`, `PocketView` and the injected `PillHost` API; it has no window globals or app mount assumptions. The Record build places the CSS and Host Grotesk font beside the emitted component. The Desktop renderer imports the built package through its file dependency. Its thin `src/pill` legacy adapter injects the existing privileged Electron preload API, mounts the component, and applies the transparent window reset.
 
 The existing Electron `electron/pill` host and Rust `ui/electron_pill` lifecycle/transport remain authoritative. Installed routing stays on its existing fallback-aware path; this adoption does not enable or switch a native route, add config, or claim capture capability. Rollback restores the previous frontend package dependency and pill component mount. Remove that adapter and its legacy consumers only when a separately accepted host migration retires the current runtime, and remove the old native pill only after the recorded native acceptance gates in `capture/desktop/ui/frontend/README.md` pass.
+
+The public UI artifact bundles shared controls and icons; only React/React DOM
+remain host peers. Import `@apparent/record/ui/style.css` with `RecordingPill`.
+Its stylesheet is precompiled and ships its font: packed consumers need neither
+shared source nor Tailwind tooling. Shared UI is a development/build input only.
+`npm run test:package` installs a tarball in an isolated temporary consumer and
+exercises root, capabilities, fixtures and server-rendered UI imports. This
+explicit artifact check may install React peers; hooks do not install dependencies.
+Source builds require the repository's `shared/ui` and shared font inputs, but
+never Rust. Replacing an injected PillHost remounts its presentation session,
+clearing old revisions, pending actions and subscriptions before new interaction.

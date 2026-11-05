@@ -128,14 +128,38 @@ RECORD_FRONTEND_ROOT = "capture/desktop/ui/frontend/"
 RECORD_UI_INPUTS = {
     RECORD_FRONTEND_ROOT + "pill/index.html",
 }
+RECORD_TYPESCRIPT_INPUTS = {
+    RECORD_PACKAGE_ROOT + name for name in (
+        "package.json", "package-lock.json", "tsconfig.json",
+        "scripts/copy-ui-assets.ts", "scripts/build-ui.ts",
+        "src/index.ts", "src/backend/engine/client.ts", "src/backend/workflow/controller.ts",
+        "src/capabilities/index.ts", "src/capabilities/fixtures.ts",
+        "src/ui/index.ts", "src/ui/recording-pill.tsx", "src/ui/UploadPocket.tsx",
+        "src/ui/types.ts", "src/ui/style.css", "src/ui/styles.d.ts",
+        "test/workflow.test.ts", "test/capabilities.test.ts", "test/package-smoke.ts",
+    )
+}
+RECORD_PILL_INPUTS = RECORD_UI_INPUTS | {
+    RECORD_FRONTEND_ROOT + "src/pill/" + name for name in (
+        "main.tsx", "legacy-mount.tsx", "legacy.css", "bridge.d.ts",
+    )
+}
+RECORD_PILL_INPUTS |= {
+    RECORD_FRONTEND_ROOT + "tests/pill/" + name for name in (
+        "host.cjs", "smoke.cjs", "protocol.test.cjs", "pinning.test.ts",
+        "exceptions.smoke.ts", "shape.test.ts", "framing.cjs", "visibility.test.ts",
+        "host-swap.smoke.ts",
+    )
+}
 
 
 def record_typescript_selected(paths):
     """Select Record checks for its package and the retained pill consumer seam."""
     if not paths:
-        return False  # The ordinary unknown-history selection already runs all owner lanes.
+        return True  # Unknown history must include the independently built renderer.
     return any(
         (path.startswith(RECORD_PACKAGE_ROOT) and not path.endswith(".md"))
+        or path.startswith(("shared/ui/", "shared/assets/fonts/"))
         or path in RECORD_UI_INPUTS
         or path.startswith(RECORD_FRONTEND_ROOT + "src/pill/")
         or path.startswith(RECORD_FRONTEND_ROOT + "tests/pill/")
@@ -213,15 +237,12 @@ def select(paths, history_known=True):
     browser = False
     public_site = False
     app_shell = False
-    record = record_typescript_selected(paths)
+    record = not history_known or record_typescript_selected(paths)
     reasons = []
     for path in paths:
         if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
             continue
-        if ((path.startswith(RECORD_PACKAGE_ROOT) and not path.endswith(".md"))
-                or path in RECORD_UI_INPUTS
-                or path.startswith(RECORD_FRONTEND_ROOT + "src/pill/")
-                or path.startswith(RECORD_FRONTEND_ROOT + "tests/pill/")):
+        if path in RECORD_TYPESCRIPT_INPUTS or path in RECORD_PILL_INPUTS:
             continue
         if path.startswith(APP_SHELL_INPUTS) or path == APP_SHELL_WORKFLOW:
             app_shell = True
@@ -447,6 +468,8 @@ def run_record_typescript_check():
         "node_modules/@types/react/package.json",
         "node_modules/@apparent/ui/package.json",
         "node_modules/lucide-react/package.json",
+        "node_modules/esbuild/package.json",
+        "node_modules/@tailwindcss/cli/package.json",
     )
     missing = [name for name in package_dependencies if not (package / name).is_file()]
     if missing:
@@ -850,7 +873,7 @@ def main():
     if args.suite == 'rust':
         selection.update(root=True, engine=True, browser=False, app_shell=False, record=False, focused=[])
     elif args.suite == 'browser':
-        selection.update(root=False, engine=False, browser=True, app_shell=False, focused=[])
+        selection.update(root=False, engine=False, browser=True, app_shell=False, record=False, focused=[])
     print(json.dumps(selection, sort_keys=True), flush=True)
     if args.github_output:
         with args.github_output.open("a") as output:

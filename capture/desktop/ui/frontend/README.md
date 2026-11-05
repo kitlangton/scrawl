@@ -835,3 +835,10 @@ It typechecks the existing onboarding entry and transitive imports, then builds
 shared CSS/Tailwind scanning and font inputs. It does not generate Connect
 adapters or check Settings/pill TypeScript. This developer command is not a
 packaging, bridge, native or release check; the full build remains authoritative.
+
+The Record pill dependency publishes bundled shared controls and precompiled CSS;
+its legacy mount imports `@apparent/record/ui/style.css`. Install/build `record/`
+before installing this consumer. Source producer inputs remain checked for
+freshness; packed artifacts need no adjacent repository. The focused
+`tests/pill/host-swap.smoke.ts` exercises lower-revision host replacement and late
+old-host replies; it does not start capture or establish OS/native acceptance.

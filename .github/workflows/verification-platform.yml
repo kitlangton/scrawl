@@ -143,6 +143,13 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
+      - name: Build independent Record artifact before installing its consumer
+        working-directory: record
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+          npm run test:package
       - run: npm ci --no-audit --no-fund
       - name: Prepare Electron before timed renderer tests
         run: node node_modules/electron/install.js
@@ -422,6 +429,7 @@ jobs:
         if: needs.select.outputs.root == 'true'
         shell: bash
         run: |
+          npm --prefix record ci --no-audit --no-fund
           npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
           npm --prefix capture/desktop/ui/frontend run build
           # Electron 45 downloads lazily. Resolve it once before the test;

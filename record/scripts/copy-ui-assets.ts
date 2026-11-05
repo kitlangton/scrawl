@@ -5,10 +5,6 @@ const packageRoot = new URL("../", import.meta.url);
 const output = new URL("dist/ui/", packageRoot);
 await mkdir(fileURLToPath(output), { recursive: true });
 await copyFile(
-  fileURLToPath(new URL("src/ui/style.css", packageRoot)),
-  fileURLToPath(new URL("style.css", output)),
-);
-await copyFile(
   fileURLToPath(new URL("../shared/assets/fonts/HostGrotesk-Variable.ttf", packageRoot)),
   fileURLToPath(new URL("HostGrotesk-Variable.ttf", output)),
 );

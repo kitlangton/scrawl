@@ -43,10 +43,23 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(selected["root"])
                 self.assertTrue(selected["engine"])
         self.assertFalse(verification.select(["record/README.md"])["record"])
-        self.assertFalse(verification.record_typescript_selected([]))
+        self.assertTrue(verification.record_typescript_selected([]))
         shared = verification.select(["shared/ui/src/button.tsx"])
-        self.assertFalse(shared["record"])
+        self.assertTrue(shared["record"])
         self.assertTrue(shared["root"])
+
+    def test_unknown_record_inputs_and_missing_history_remain_conservative(self):
+        for path in ("record/native.rs", "record/build.rs", "record/src/security.ts",
+                     "record/.cargo/config.toml", "record/scripts/new-build.ts"):
+            with self.subTest(path=path):
+                selected = verification.select([path])
+                self.assertTrue(selected["root"])
+                self.assertTrue(selected["engine"])
+                self.assertTrue(selected["record"])
+        for paths in ([], ["README.md"]):
+            selected = verification.select(paths, history_known=False)
+            self.assertTrue(selected["root"])
+            self.assertTrue(selected["record"])
 
     def test_record_owner_check_uses_both_packages_without_cargo(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -59,6 +72,8 @@ class SelectionTests(unittest.TestCase):
                 "node_modules/@types/react/package.json",
                 "node_modules/@apparent/ui/package.json",
                 "node_modules/lucide-react/package.json",
+                "node_modules/esbuild/package.json",
+                "node_modules/@tailwindcss/cli/package.json",
             ):
                 target = record / name
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -265,11 +280,13 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(paths=paths), patch.object(verification.subprocess, "run"), patch.object(
                     verification, "run_connect_client_typescript_tests"), patch.object(
                     verification, "run_public_site_build") as build, patch.object(
-                    verification, "run_app_shell_check") as app_check:
+                    verification, "run_app_shell_check") as app_check, patch.object(
+                    verification, "run_record_typescript_check") as record_check:
                 selection = verification.select(paths, history_known=False)
                 verification.run_pr_checks(selection)
                 build.assert_called_once_with()
                 app_check.assert_called_once_with()
+                record_check.assert_called_once_with()
         self.assertTrue(verification.public_site_build_selected([]))
 
     def test_public_site_build_runs_declared_build_and_only_after_locked_dependencies_exist(self):
@@ -338,7 +355,8 @@ class SelectionTests(unittest.TestCase):
                     selected = any(call.args[0] == ["npm", "run", "check:onboarding"]
                                    for call in run.call_args_list)
                     self.assertEqual(selected, name in inputs)
-                    self.assertFalse(record_check.called)
+                    self.assertEqual(record_check.called, name in (
+                        "shared/assets/fonts/HostGrotesk-Variable.ttf", "shared/ui/theme.css"))
 
     def setUp(self):
         guard = patch.object(verification, "check_temp_environment")
