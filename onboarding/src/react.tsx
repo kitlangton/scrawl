@@ -5,7 +5,7 @@ import type { PenColor, RepairAction } from "@apparent/record/capabilities";
 const frog = new URL("./assets/frog.png", import.meta.url).href;
 const penColor = (value: PenColor) => `var(--apparent-pen-${value})`;
 
-export type OnboardingContributionProps = { controller: OnboardingController; Button: ComponentType<ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "default" | "ghost" | "outline"; size?: "default" | "icon" }>; close(): void; onManualPasteInstructions?(): void };
+export type OnboardingContributionProps = { controller: OnboardingController; Button: ComponentType<ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "default" | "ghost" | "outline"; size?: "default" | "icon" }>; close(): void; onManualPasteInstructions?(): void; loadOnMount?: boolean };
 const pages: Record<string, { title: string; text: string; action?: Command; label?: string }> = {
   welcome: { title: "Welcome to apparent.", text: "Record a moment, add a mark, and share it with your agent. Everything in this practice stays on this device.", action: "continue", label: "Get started" },
   pen: { title: "Choose your pen color.", text: "" },
@@ -24,14 +24,14 @@ const pages: Record<string, { title: string; text: string; action?: Command; lab
   complete: { title: "Ready for your next idea.", text: "Your first capture is saved and handed off." },
 };
 
-export function OnboardingContribution({ controller, Button, close, onManualPasteInstructions }: OnboardingContributionProps) {
+export function OnboardingContribution({ controller, Button, close, onManualPasteInstructions, loadOnMount = true }: OnboardingContributionProps) {
   const [state, setState] = useState<ControllerState>(controller.state);
   const snapshot = state.snapshot;
   const [color, setColor] = useState<PenColor>(snapshot?.pen.effective ?? "coral");
   const [shortcutValue, setShortcutValue] = useState("");
   const [animation, setAnimation] = useState(false);
   const mounted = useRef(true), penArmed = useRef(false);
-  useEffect(() => { mounted.current = true; let alive = true; const off = controller.subscribe(s => alive && setState(s)); void controller.load().then(s => alive && setState(s)); return () => { alive = false; mounted.current = false; off(); }; }, [controller]);
+  useEffect(() => { mounted.current = true; let alive = true; const off = controller.subscribe(s => alive && setState(s)); if (loadOnMount) void controller.load().then(s => alive && setState(s)); return () => { alive = false; mounted.current = false; off(); }; }, [controller, loadOnMount]);
   const p = state.progress, page = pages[p.stage];
   useEffect(() => { if (snapshot?.pen.effective && !snapshot.pen.supported.includes(color)) setColor(snapshot.pen.effective); }, [snapshot?.pen.effective, snapshot?.pen.supported, color]);
   useEffect(() => {

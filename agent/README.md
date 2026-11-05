@@ -10,6 +10,8 @@ node dist/cli.js inspect /path/to/capture.apparent/apparent.json --json
 node dist/cli.js inspect /path/to/capture.apparent --marks
 node dist/cli.js frames /path/to/capture.apparent --from 0:04 --to 0:06 --fps 4
 node dist/cli.js zoom /path/to/capture.apparent --at 'width changes' --frames 12
+node dist/cli.js demo
+node dist/cli.js demo --out '/tmp/my synthetic demo.apparent'
 node dist/cli.js zoom latest --mark m2 --frame 2 --full
 node dist/cli.js skill
 node dist/cli.js record --duration 30 --out /absolute/path/demo.apparent
@@ -20,6 +22,10 @@ node dist/cli.js issue --title 'Short title' --body-file './description.md' --su
 `issue` prints the exact repository, title and body as JSON without contacting GitHub by default. `--submit` is the only network path and uses the installed `gh` login, pinned to `github.com` and `tryapparent/apparent`; it reads the new issue back and checks its identity and text before returning success. Search existing issues and show the full preview to the human for approval before adding `--submit`. It collects no captures, attachments, config or diagnostics. Submission is not idempotent: inspect the known issue URL/repository before retrying after an ambiguous failure. The standalone approval skill is bundled at `skills/apparent-issue/SKILL.md`.
 
 `apparent-agent skill` prints the exact standalone capture-reading guide bundled with the package. The guide documents only this package's local inspection behavior; it does not route or replace the legacy `apparent skill` command.
+
+`apparent-agent demo [--out FRESH.apparent] [--json]` creates a private, local illustrative bundle with annotated PNG keyframes, contact sheet, semantic marks, clicks, timed synthetic narration and summary. It reads no screen, window, session, microphone or config secrets. By default it writes a fresh randomized `.apparent` directory under the configured captures directory (read-only `capturesDir`, or the OS default); `--out` requires an absolute fresh path. Existing destinations and symlink parents fail without overwrite. JSON output contains the summary and absolute image paths. `--clipboard` is recognized but fails before writing because no native clipboard route is published. The imagery and every event/text are synthetic; this command does not create a recording, audio/video file, or native artifact.
+
+Synthetic demo generation owns its fresh private output directory until the manifest is published. Use a parent directory controlled by your user or root; other same-user processes must not mutate that directory during generation. File identity checks preserve detected foreign replacements, but this local workflow is not an isolation boundary against another process with the same user identity.
 
 `inspect` generates semantic text from the validated manifest, including context, notes, timed transcript, marks/events and audio-sample, transcript, image-quality and crop warnings. It regenerates output even when a producer `summary.md` is missing or stale; `--stored-summary` explicitly prints that producer-authored text. `--experiment agentContext` selects the richer event/mark timeline; `experiments.agentContext` in the read-only config can enable it by default, and the explicit flag overrides a configured `false`. The default is off. `--stored-summary` conflicts with this formatter because stored producer text cannot apply it. `--json` writes the raw `apparent.json` bytes unchanged. `--marks` prints semantic mark lines (`--marks --json` returns their structured fields), `--transcript` prints transcript text, and `--images` lists safe relative contact sheet/keyframe references. Explicit bundle directories and manifest paths are supported.
 

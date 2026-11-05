@@ -1,4 +1,4 @@
-use apparent_config_native::{compare_and_swap_stream_state_in, read_stream_state_in, CasResult, ConfigPublicationUncertain};
+use apparent_config_native::{adopt_legacy_in, compare_and_swap_stream_state_in, read_for_adoption_in, read_stream_state_in, AdoptResult, CasResult, ConfigPublicationUncertain, LegacyValue};
 use serde_json::{json, Value};
 use std::{io::{self, BufRead, Read, Write}, path::PathBuf};
 const LIMIT: usize = 64 * 1024;
@@ -34,10 +34,22 @@ fn main() {
 fn dispatch(req: &Value, path: &PathBuf, owner: &str) -> (String, Value) {
     let Some(object) = req.as_object() else { return (String::new(), unknown("invalid request")); };
     let id = object.get("id").and_then(Value::as_str).filter(|id| id.len() <= 128).unwrap_or("").to_owned();
-    let valid_keys = object.keys().all(|k| ["protocol", "id", "operation", "expected", "value"].contains(&k.as_str()));
+    let valid_keys = object.keys().all(|k| ["protocol", "id", "operation", "expected", "value", "expectedLegacy"].contains(&k.as_str()));
     if !valid_keys || object.get("protocol").and_then(Value::as_u64) != Some(1) || id.is_empty() { return (id, unknown("invalid request")); }
     let result = match object.get("operation").and_then(Value::as_str) {
         Some("read") if object.len() == 3 => read_stream_state_in(path, owner).map(|(revision, value)| json!({"revision":revision,"value":value})),
+        Some("readForAdoption") if object.len() == 3 => read_for_adoption_in(path, owner).map(|snapshot| snapshot_json(&snapshot)),
+        Some("adoptLegacy") if object.len() == 5 => {
+            let expected_legacy = object.get("expectedLegacy").and_then(parse_legacy_value);
+            let value = object.get("value");
+            match (expected_legacy, value) {
+                (Some(expected), Some(value)) => adopt_legacy_in(path, owner, expected, value.clone()).map(|result| match result {
+                    AdoptResult::Saved { revision } => json!({"status":"saved","revision":revision}),
+                    AdoptResult::Conflict(snapshot) => json!({"status":"conflict","snapshot":snapshot_json(&snapshot)}),
+                }),
+                _ => return (id, unknown("invalid request")),
+            }
+        }
         Some("compareAndSwap") if object.len() == 5 => {
             let expected = object.get("expected").and_then(Value::as_u64);
             let value = object.get("value");
@@ -53,6 +65,21 @@ fn dispatch(req: &Value, path: &PathBuf, owner: &str) -> (String, Value) {
     };
     (id, match result { Ok(result) => result, Err(error) => operation_failure(&error) })
 }
+
+fn parse_legacy_value(value: &Value) -> Option<LegacyValue> {
+    let object = value.as_object()?;
+    if object.len() != 2 || !object.contains_key("present") || !object.contains_key("value") { return None; }
+    let present = object.get("present")?.as_bool()?;
+    let value = object.get("value")?;
+    if !present && !value.is_null() { return None; }
+    Some(LegacyValue { present, value: value.clone() })
+}
+
+fn snapshot_json(snapshot: &apparent_config_native::AdoptionSnapshot) -> Value {
+    json!({"owner":{"present":snapshot.owner.present,"revision":snapshot.owner.revision,"value":snapshot.owner.value},"legacy":field_json(&snapshot.legacy)})
+}
+
+fn field_json(field: &LegacyValue) -> Value { json!({"present":field.present,"value":field.value}) }
 
 // Only fixed categories and numeric errno values cross this boundary. Never
 // expose error Display text: it may contain paths, settings or credentials.
@@ -70,6 +97,7 @@ fn operation_failure(error: &anyhow::Error) -> Value {
         ("Config lock changed while waiting", "lock-replaced"),
         ("Config must be a regular file", "config-not-regular"),
         ("streamState must be an object", "invalid-owner-map"),
+        ("Config must be an object", "invalid-config-root"),
         ("Invalid streamState entry", "invalid-owner-entry"),
         ("Invalid streamState revision", "invalid-owner-revision"),
         ("revision limit reached", "revision-limit"),
