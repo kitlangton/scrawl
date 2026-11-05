@@ -24,7 +24,7 @@ try {
     mkdirSync(dirname(destination), { recursive: true })
     cpSync(source, destination, { recursive: true, filter: sourcePath => !['node_modules', 'dist', 'dist-ssr', 'dist-apparent', '__pycache__', '.git', 'target', '.build'].includes(sourcePath.split('/').at(-1)!) })
   }
-  for (const path of ['public/site', 'shared/ui', 'shared/analytics', 'shared/assets', 'README.md', 'capture/agent/skills/apparent/SKILL.md']) copy(path)
+  for (const path of ['public/site', 'public/delivery.json', 'composition/delivery', 'composition/architecture', '.github/workflows/value-stream-delivery.yml', '.github/actions/runtime-budget', 'enablement/verification/workflow-budget.ts', 'LICENSE', 'shared/ui', 'shared/analytics', 'shared/assets', 'README.md', 'capture/agent/skills/apparent/SKILL.md']) copy(path)
   const walk = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(join(directory, entry.name)) : [join(directory, entry.name)])
   assert.equal(walk(site).filter(path => /\.(rs|py|js|mjs|cjs|sh)$/.test(path)).length, 0, 'Public contains non-TypeScript owned source')
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, APPARENT_PUBLIC_SITE: '1', VITE_HOSTED_API_ORIGIN: 'https://hosted.tryapparent.com' }
@@ -34,6 +34,14 @@ try {
     assert.equal(result.status, 0, `${command} ${args.join(' ')} failed`)
   }
   for (const command of forbidden) assert.equal(spawnSync(command, ['--version'], { env, stdio: 'ignore' }).status, 97)
+  const git = (args: string[]) => {
+    const result = spawnSync('git', args, { cwd: root, env, stdio: 'inherit' })
+    assert.ifError(result.error); assert.equal(result.status, 0)
+  }
+  // Artifact compatibility checks need a source identity, never application build output.
+  git(['init', '--quiet'])
+  git(['add', '.'])
+  git(['-c', 'user.name=Public source fixture', '-c', 'user.email=public-fixture@example.invalid', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'isolated source fixture'])
   run('node', ['scripts/site-build/verify.ts'])
   assert.ok(existsSync(join(site, 'dist-apparent/index.html')))
   assert.match(readFileSync(join(site, 'dist-apparent/index.html'), 'utf8'), /Tell your coding agent what to change/)

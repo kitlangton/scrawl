@@ -12,10 +12,13 @@ export function candidate(env: NodeJS.ProcessEnv, git = (...args: string[]) =>
     throw new Error('Web delivery requires the canonical main workflow')
   if (env.GITHUB_EVENT_NAME === 'workflow_run') {
     const run = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH!, 'utf8')).workflow_run
-    if (run?.name !== 'Connect producer' || run.path !== '.github/workflows/connect-delivery.yml' ||
-        run.status !== 'completed' || run.conclusion !== 'success' || run.head_branch !== 'main' ||
+    const connect = run?.name === 'Connect producer' && run.path === '.github/workflows/connect-delivery.yml' && run.conclusion === 'success'
+    // Other streams may fail while Public and the shared contracts/audit pass.
+    // The artifact consumer independently checks Public's exact successful jobs.
+    const publicStream = run?.name === 'Value-stream delivery' && run.path === '.github/workflows/value-stream-delivery.yml'
+    if ((!connect && !publicStream) || run.status !== 'completed' || run.head_branch !== 'main' ||
         run.head_repository?.full_name !== 'tryapparent/apparent' ||
-        !['push', 'workflow_dispatch'].includes(run.event)) throw Error('Untrusted Connect completion event')
+        !['push', 'workflow_dispatch'].includes(run.event)) throw Error('Untrusted producer completion event')
   }
   const sha = env.GITHUB_SHA ?? ''
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Web delivery requires an exact source SHA')

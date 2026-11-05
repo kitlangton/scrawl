@@ -14,7 +14,8 @@
     "package:public": "npm run build && node scripts/site-build/package-apparent.ts",
     "build:pages-worker": "esbuild lib/pages-worker.ts --bundle --platform=browser --format=esm --outfile=dist-apparent/_worker.js",
     "verify": "node scripts/site-build/verify.ts",
-    "check:independence": "node scripts/site-build/independence.ts"
+    "check:independence": "node scripts/site-build/independence.ts",
+    "verify:installed": "node scripts/site-build/verify.ts --installed --install-browser"
   },
   "dependencies": {
     "knobs": "npm:@kitlangton/knobs@0.3.0",

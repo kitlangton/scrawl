@@ -8,7 +8,10 @@ use std::{
 
 #[test]
 fn finalizer_rechecks_exact_bytes_directory_and_completion_markers() {
-    let root = std::env::temp_dir().join(format!("engine-finalizer-{}", new_id().unwrap()));
+    let root = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join(format!("engine-finalizer-{}", new_id().unwrap()));
     fs::create_dir(&root).unwrap();
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     let runtime = Runtime::open(&root).unwrap();
