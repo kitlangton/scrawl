@@ -40,6 +40,13 @@ test('safe asset links escape metadata and exclude third-party resources', () =>
  assert.ok(html.includes('&lt;untrusted&gt;'));assert.ok(!html.includes('third-party.example'))
  assert.ok(!html.includes('<img src=x'))
 })
+test('mounted capability pages load viewer assets from the same /connect base', () => {
+ const mounted={...model,url:'https://app.tryapparent.com/connect/s/secret',files:model.files.map(file=>({...file,url:file.url.replace('https://share.example','https://app.tryapparent.com/connect')}))}
+ const html=renderShare(mounted)
+ assert.ok(html.includes('href="/connect/share-view.css"'))
+ assert.ok(html.includes('src="/connect/share-view.js"'))
+ assert.ok(html.includes('https://app.tryapparent.com/connect/s/secret/files/recording.mp4'))
+})
 test('incomplete and terminal states do not disclose ready evidence', () => {
  for (const status of ['pending','paused','failed','expired','revoked','deleted']) {
   const html = renderShare({...model,status})

@@ -76,8 +76,11 @@ analytics fixtures stay private to the producer and are never uploaded.
 `stream-admission.yml` publishes the `value-stream admission` check for the current
 PR head. It reads owner path filters and target matrices from trusted default-branch
 workflows, then requires the selected owners' contracts, every PR target and runtime
-audits. PR events start the receipt; owner start/completion events refresh it without
-polling. Missing results stay pending; failed or uncertain evidence cannot pass.
+audits. PR events start the receipt; owner completion and rerun-start events refresh
+it without polling. Main/manual events and initial owner starts skip the job before
+allocating a runner. GitHub may still display their skipped workflow records.
+Concurrency applies only to the eligible job, so skipped events cannot replace a
+pending PR update. Missing results stay pending; failed or uncertain evidence cannot pass.
 The write-capable receipt workflow checks out only the trusted default branch and
 never executes PR code. It runs no owner builds and gates no main deployments.
 Its control job has a five-minute timeout; owner workloads retain their own audits.

@@ -48,14 +48,15 @@ const context=await browser.newContext({viewport:{width:1100,height:1000}})
 const page=await context.newPage()
 const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message))
 const apiOrigin=process.env.HOSTED_TEST_API_ORIGIN||'https://hosted.tryapparent.com'
-const apiServer=createServer((req,res)=>{void handler(req,res)})
+const apiHostOrigin=new URL(apiOrigin).origin
+const apiServer=createServer((req,res)=>{const mount=new URL(apiOrigin).pathname.replace(/\/$/,'');if(mount&&req.url?.startsWith(mount+'/'))req.url=req.url.slice(mount.length);void handler(req,res)})
 if(apiOrigin.startsWith('http://127.0.0.1:'))await new Promise<void>(r=>apiServer.listen(Number(new URL(apiOrigin).port),'127.0.0.1',r))
 else await context.route(apiOrigin+'/**',async route=>{
  const request=route.request(),headers=await request.allHeaders()
  const response=await fetch(origin+new URL(request.url()).pathname,{method:request.method(),headers:{...headers,origin},body:request.postData()||undefined})
  await route.fulfill({status:response.status,headers:{...Object.fromEntries(response.headers),'access-control-allow-origin':origin},body:await response.text()})
 })
-await context.route('**/*',route=>{const url=new URL(route.request().url());return url.origin===origin||url.origin===apiOrigin?route.fallback():route.abort()})
+await context.route('**/*',route=>{const url=new URL(route.request().url());return url.origin===origin||url.origin===apiHostOrigin?route.fallback():route.abort()})
 await context.addCookies([{name:'fixture',value:'1',url:origin}])
 await context.addCookies([{name:'fixture',value:'1',url:apiOrigin,...apiOrigin.startsWith('https:')?{secure:true,sameSite:'None' as const}:{}}])
 try{

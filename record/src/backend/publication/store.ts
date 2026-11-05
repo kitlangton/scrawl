@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { isAbsolute, join, resolve } from "node:path";
 import { ensurePrivateFile, ensurePrivateRoot, hostError, validatePrivateFile } from "../host/private-path.js";
+import { initializePrivateSqlite } from "../host/sqlite-initialization.js";
 
 export interface PublicationBinding {
   captureId: string;
@@ -120,7 +121,7 @@ export class SqlitePublicationBindingStore {
     let db: DatabaseSync | undefined;
     try {
       db = new DatabaseSync(this.#path);
-      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+      await initializePrivateSqlite(db);
       const current = Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
       if (current === 0) db.exec("CREATE TABLE IF NOT EXISTS publication_binding (capture_id TEXT PRIMARY KEY, publication_id TEXT NOT NULL UNIQUE, bundle_path TEXT NOT NULL UNIQUE, binding_json TEXT NOT NULL) STRICT; PRAGMA user_version = 1;");
       else if (current !== version) throw hostError();
