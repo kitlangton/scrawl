@@ -172,9 +172,11 @@ test('full input closure changes for owner source, delivery core, workflow, budg
   const initial = inputDigest(path, owner)
   const dualTargetOwner: Owner = { ...owner, targets: ['linux-x64', 'macos-x64'] }
   assert.notEqual(inputDigest(path, dualTargetOwner, 'linux-x64'), inputDigest(path, dualTargetOwner, 'macos-x64'))
-  for (const [name, content] of [['composition/delivery/core.ts', 'changed core'], ['composition/architecture/guard.ts', 'changed architecture guard'], [workflowPathFor(owner.id), 'changed workflow'], ['enablement/verification/workflow-budget.ts', 'changed budget'], ['LICENSE', 'changed license'], ['record/native.rs', 'native'], ['record/config.json', '{"value":2}'], ['shared/ui/theme.ts', 'changed theme']]) {
-    writeFileSync(resolve(path, name), content); git(path, 'add', '-A'); git(path, 'commit', '-qm', `change ${name}`)
-    assert.notEqual(inputDigest(path, owner), initial, `${name} must invalidate reuse`)
+  let previousDigest = initial
+  for (const [name, content] of [['.github/actions/delivery-component/action.yml', 'changed component steps'], ['.github/actions/delivery-contracts/action.yml', 'changed delivery contracts'], ['composition/delivery/core.ts', 'changed core'], ['composition/architecture/guard.ts', 'changed architecture guard'], [workflowPathFor(owner.id), 'changed workflow'], ['enablement/verification/workflow-budget.ts', 'changed budget'], ['LICENSE', 'changed license'], ['record/native.rs', 'native'], ['record/config.json', '{"value":2}'], ['shared/ui/theme.ts', 'changed theme']]) {
+    mkdirSync(resolve(path, name, '..'), { recursive: true }); writeFileSync(resolve(path, name), content); git(path, 'add', '-A'); git(path, 'commit', '-qm', `change ${name}`)
+    assert.notEqual(inputDigest(path, owner), previousDigest, `${name} must invalidate reuse`)
+    previousDigest = inputDigest(path, owner)
   }
   git(path, 'mv', 'record/index.ts', 'record/renamed.ts'); git(path, 'commit', '-qm', 'rename')
   assert.notEqual(inputDigest(path, owner), initial)
