@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash as cryptoHash } from "node:crypto";
-import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, validateMaterialsDocument, type CapturePublishInput, type CaptureStatus } from "@apparent/engine-sdk/capture";
 import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
@@ -207,6 +208,32 @@ test("private storage failure retains material ownership and never dispatches", 
     await assert.rejects(recovery.publish(makeInput(join(root, "final.apparent"))), /storage is unavailable/);
     assert.equal(dispatches, 0);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("publication store retries first-open WAL contention and bounds exhaustion", async () => {
+  const root = await temp();
+  const privateRoot = join(root, "private");
+  await mkdir(privateRoot, { mode: 0o700 });
+  const path = join(privateRoot, "publication-bindings.sqlite");
+  const lock = new DatabaseSync(path);
+  await chmod(path, 0o600);
+  lock.exec("BEGIN EXCLUSIVE");
+  const release = setTimeout(() => lock.exec("ROLLBACK"), 80);
+  try {
+    assert.equal(await new SqlitePublicationBindingStore(privateRoot).get(captureId), undefined);
+  } finally { clearTimeout(release); try { lock.exec("ROLLBACK"); } catch { /* timer may have released it */ } lock.close(); }
+
+  const blockedRoot = join(root, "blocked");
+  await mkdir(blockedRoot, { mode: 0o700 });
+  const blockedPath = join(blockedRoot, "publication-bindings.sqlite");
+  const blockedDb = new DatabaseSync(blockedPath);
+  await chmod(blockedPath, 0o600);
+  blockedDb.exec("BEGIN EXCLUSIVE");
+  const started = Date.now();
+  try {
+    await assert.rejects(new SqlitePublicationBindingStore(blockedRoot).get(captureId), /storage is unavailable/);
+    assert.ok(Date.now() - started < 2000, "WAL retry must stop within its bounded retry budget");
+  } finally { blockedDb.exec("ROLLBACK"); blockedDb.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 test("foreign observed bindings and stale pending replies cannot replace a terminal observation", async () => {

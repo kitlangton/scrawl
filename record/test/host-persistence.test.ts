@@ -172,6 +172,31 @@ test("SQLite sidecars remain private and pre-existing sidecar aliases are refuse
   }
 });
 
+test("first-open WAL initialization retries SQLite lock contention and stops after a bounded budget", async t => {
+  const parent = await temporary(t);
+  const root = join(parent, "mapping");
+  await mkdir(root, { mode: 0o700 });
+  const path = join(root, "capture-mappings.sqlite");
+  const lock = new DatabaseSync(path);
+  await chmod(path, 0o600);
+  lock.exec("BEGIN EXCLUSIVE");
+  const release = setTimeout(() => lock.exec("ROLLBACK"), 80);
+  try {
+    assert.deepEqual(await new SqliteCaptureMappingStore(root).listRequestIds(), []);
+  } finally { clearTimeout(release); try { lock.exec("ROLLBACK"); } catch { /* timer may have released it */ } lock.close(); }
+
+  const blocked = join(parent, "blocked");
+  await mkdir(blocked, { mode: 0o700 });
+  const blockedDb = new DatabaseSync(join(blocked, "capture-mappings.sqlite"));
+  await chmod(join(blocked, "capture-mappings.sqlite"), 0o600);
+  blockedDb.exec("BEGIN EXCLUSIVE");
+  const started = Date.now();
+  try {
+    await assert.rejects(new SqliteCaptureMappingStore(blocked).listRequestIds(), /storage is unavailable/);
+    assert.ok(Date.now() - started < 2000, "WAL retry must stop within its bounded retry budget");
+  } finally { blockedDb.exec("ROLLBACK"); blockedDb.close(); }
+});
+
 test("real adapter recovers persisted identity after an ambiguous start and host recreation", async t => {
   const parent = await temporary(t);
   const allocator = new PrivateBundleAllocator(join(parent, "bundles"));
