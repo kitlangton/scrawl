@@ -78,7 +78,9 @@ test('successful recipient targets publish signed independent receipts before th
  assert.deepEqual(JSON.parse(expected!),['select','produce','publish','recipient-select',
   'recipient (ubuntu-24.04, x86_64-unknown-linux-gnu)','recipient (ubuntu-24.04-arm, aarch64-unknown-linux-gnu)',
   'recipient (macos-15, aarch64-apple-darwin)','recipient (macos-15-intel, x86_64-apple-darwin)',
-  'Recipient target release and aggregate','Workflow runtime budget']);
+  'Recipient target release and aggregate']);
+ assert.match(workflow,/runtime-budget:[\s\S]*needs: \[select, produce, publish, recipient-select, recipient, recipient-release\]/,
+  'the terminal audit is downstream of the publisher and must not be expected in its live job inventory');
  assert.match(aggregate,/if: always\(\) && !cancelled\(\)/);
  assert.doesNotMatch(aggregate,/continue-on-error: true/);
  assert.match(aggregate,/if: needs\.recipient\.result == 'success'/);
