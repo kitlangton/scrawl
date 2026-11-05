@@ -18,14 +18,14 @@ node --experimental-strip-types public/site/scripts/connect/artifact.ts .build/c
 export CONNECT_BROWSER_ARTIFACT="$PWD/.build/connect-browser/dist"
 cd public/site
 APPARENT_PUBLIC_SITE=1 npm run build
-node scripts/site-build/package-apparent.mjs
-node scripts/connect/compose-connect.mjs
+node scripts/site-build/package-apparent.ts
+node scripts/connect/compose-connect.ts
 node scripts/pages/prepare-pages.ts
 node scripts/site-build/verify-composed.ts
-node scripts/pages/prepare-pages-video.mjs
+node scripts/pages/prepare-pages-video.ts
 ./node_modules/.bin/esbuild lib/pages-worker.ts --bundle --platform=browser --format=esm --outfile=dist-apparent/_worker.js
-PAGES_WORKER=dist-apparent/_worker.js node --test scripts/pages/test-pages-video-runtime.mjs
-python3 scripts/cd/publish_pages.py seal <full-commit-sha>
+PAGES_WORKER=dist-apparent/_worker.js node --test scripts/pages/test-pages-video-runtime.ts
+node scripts/cd/publish-pages.ts seal <full-commit-sha>
 ```
 
 Upload only the sealed `dist-apparent/` using the publisher. Never upload `dist`, this repository, the artifact manifest, evidence, private prototypes, pitches, internal feature maps or
@@ -38,7 +38,7 @@ hosted routes and their query strings. Anonymous capability recipients and their
 media/manifest/preview/script/styles remain on the hosted Worker origin, not Pages.
 
 The TypeScript/React source build is the production homepage. Packaging admits
-only the public allowlist, and `compose-connect.mjs` adds the independently built
+only the public allowlist, and `compose-connect.ts` adds the independently built
 Connect browser artifact. `prepare-pages.ts` adds provider metadata without
 replacing homepage or asset bytes. `verify-composed.ts` verifies the source-built
 homepage survives unchanged, validates Connect-owned bytes and both resource
@@ -65,6 +65,28 @@ builds/packages the website without installing either Connect package or invokin
 Cargo. `npm run build:pages-worker` compiles its Pages Function; the real workerd
 movie test uses Public dependencies. Production composition still requires the
 Connect browser artifact. The Pages publisher installs only Public dependencies.
+
+## Independent Public development
+
+Use Node 22.23+ and Bun 1.3.10. From `public/site`, `npm run verify` installs the
+locked dependencies, builds, packages and runs Public's owner and publication
+contract tests. Browser checks need installed Playwright Chromium or `CHROME_PATH`.
+`npm run check:independence` copies only Public and its declared shared/content
+inputs to a disposable source tree, denies Cargo/rustc/rustup/Python commands,
+then verifies fresh installation, build, owner tests, packaging and the dev server.
+It reuses no application/native build output and removes its temporary tree.
+The production Pages movie test uses Public's prebuilt workerd distribution;
+Public never compiles its native implementation. Connect composition still needs
+its separately verified artifact; independence does not remove that contract.
+
+Public's maintained code, tooling and Pages handler are TypeScript. The source
+boundary test prevents Rust, Python, authored JavaScript and shell tooling from
+returning. Generated browser/Worker JavaScript remains build output outside Git.
+The unconsumed `video-demo` Rust renderer and its exclusive input assets were
+retired after checking manifests, imports, scripts, workflows and package inputs;
+current site demo/media and their TypeScript generation tools remain available.
+Legacy generated-output exclusions stay bounded to `public/site/video-demo/output/`
+so retained renders in older checkouts are not mistaken for maintained source.
 
 ## Immutable Connect consumer contract
 

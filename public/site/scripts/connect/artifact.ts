@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { unzipSync } from 'fflate'
-import { safePath } from './compose-connect.mjs'
+import { safePath } from './compose-connect.ts'
 
 const repository = 'tryapparent/apparent'
 export const producerPath = '.github/workflows/connect-delivery.yml'

@@ -135,3 +135,15 @@ Later Desktop/Agent slices use the Engine boundary to remove Rust from ordinary
 product changes. Retain native safety enforcement and proportionate macOS/Linux
 proof. Completion means adopted behavior plus demonstrated build independence,
 not folder relocation, a package skeleton or this decision record.
+
+## Public adoption checkpoint
+
+Public now owns TypeScript source/tooling and independently builds/packages its
+website and Pages Function. Its publisher is TypeScript; the shared color guard
+has one TypeScript implementation with a legacy Python forwarding entrypoint for
+other owners. `npm run check:independence` in `public/site` proves clean-source
+install/build/tests/package/dev with Cargo, Rust and Python invocations denied.
+See [Public development and delivery](../../public/site/docs/pages-deploy.md#independent-public-development).
+Production composition retains authenticated immutable Connect artifact admission
+and its existing activation/publication gates. This checkpoint does not certify
+Connect, Desktop, Agent or the new App Shell as migrated.

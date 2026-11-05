@@ -3,7 +3,7 @@ import { mkdtempSync, cpSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { composeArtifacts } from './compose-connect.mjs'
+import { composeArtifacts } from './compose-connect.ts'
 const site = resolve(import.meta.dirname, '../..')
 const connect = resolve(process.env.CONNECT_BROWSER_ARTIFACT || join(site, '../../connect/web/dist'))
 const root = mkdtempSync(join(tmpdir(), 'public-analytics-smoke-'))
@@ -14,7 +14,7 @@ try {
   run(join(site, 'node_modules/.bin/vite'), ['build', '--outDir', env.PUBLIC_BUILD_DIR])
   run(join(site, 'node_modules/.bin/vite'), ['build', '--ssr', 'src/entry-server.tsx', '--outDir', env.PUBLIC_SSR_DIR])
   run('node', ['scripts/site-build/prerender.ts'])
-  run('node', ['scripts/site-build/package-apparent.mjs'])
+  run('node', ['scripts/site-build/package-apparent.ts'])
   const out = join(root, 'composed')
   composeArtifacts(env.PUBLIC_PACKAGE_OUTPUT, connect, join(site, 'public'), out)
   // Provider metadata is copied byte-for-byte from the checked composition.

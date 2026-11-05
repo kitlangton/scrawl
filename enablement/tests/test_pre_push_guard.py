@@ -102,7 +102,7 @@ class PrePushGuardTests(unittest.TestCase):
         # its actual dependency closure in this disposable hook repository.
         theme = self.repo / "shared/ui/scripts"
         theme.mkdir(parents=True)
-        for name in ("check-theme.py", "legacy-colors.json"):
+        for name in ("check-theme.py", "check-theme.ts", "legacy-colors.json"):
             shutil.copy2(SELECTOR.parents[1] / "shared/ui/scripts" / name, theme / name)
         run("git", "add", ".", cwd=self.repo)
         run("git", "commit", "-qm", "original", cwd=self.repo)
@@ -479,6 +479,7 @@ class PrePushGuardTests(unittest.TestCase):
         result = self.push()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text().splitlines(), [
+            f"node {self.repo}/shared/ui/scripts/check-theme.ts",
             "bun install --frozen-lockfile", "bun run build",
             "node --test test/artifact.test.mjs test/closure.test.mjs test/routes.test.mjs",
             "node scripts/test-browser.mjs",
