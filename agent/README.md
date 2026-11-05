@@ -57,7 +57,7 @@ requires the installed Agent 0.1.0 and SDK 0.2.0 media export. Node 22.6+ and
 an existing npm are required.
 
 ```sh
-node /absolute/path/to/apparent-agent-install-local.js \
+node /absolute/path/to/extracted-agent-package/dist/install-local.js \
   --agent /absolute/path/apparent-agent-0.1.0.tgz \
   --agent-sha256 c9e87015dee2ff2c35dcd72bc4627733e21b427e468318888ed29beafca4f3aa \
   --native-root /absolute/path/to/native-payload \
