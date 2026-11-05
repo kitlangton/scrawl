@@ -957,7 +957,7 @@
       "says": "Pick iPhone with a phone plugged in: a mirror opens, the phone's own video records with your narration, and ink works over the mirror.",
       "status": "stable@0.3.4",
       "platforms": ["mac"],
-      "note": "Needs AVFoundation's screen capture devices.",
+      "note": "Deferred; no current maintenance or rebuild-adoption commitment. The version records historical availability. Legacy implementation needs AVFoundation's screen capture devices.",
       "shortcuts": [{ "keys": "M", "does": "Flag a moment (iPhone mirror focused)" }],
       "docs": ["README.md#iphone", "capture/engine/docs/iphone-and-routing.md"]
     },
@@ -1071,7 +1071,7 @@
       "says": "A minute after a cabled capture, its video is re-encoded to HEVC at 1600 px (750 MB to 72 MB in one test).",
       "status": "stable@0.3.4",
       "platforms": ["mac"],
-      "note": "The iPhone path is Mac only.",
+      "note": "iPhone support, including phone-specific shrinking, is deferred and need not be maintained or adopted in the current rebuild. The version records historical availability; the legacy path is Mac only.",
       "docs": ["README.md#keeping-captures-small"]
     },
     {

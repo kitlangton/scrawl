@@ -3,7 +3,7 @@ import {Collapsible,CollapsibleTrigger,CollapsibleContent} from '@apparent/ui/co
 import {Alert,AlertTitle,AlertDescription} from '@apparent/ui/alert';
 import {Button} from '@apparent/ui/button';
 import {ChevronDown,ChevronUp,CircleAlert,Info,TriangleAlert} from 'lucide-react';
-import type {PocketView} from './bridge';
+import type {PocketView} from './types.js';
 
 /** Disclosure is local presentation state; all mutations use existing Rust actions. */
 export function UploadPocket({pocket,notice,children,actions,onLayout}: {
