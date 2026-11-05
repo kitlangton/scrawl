@@ -23,7 +23,7 @@ test('manifest reports the exact binary hash and unavailable capture truthfully'
   assert.deepEqual(manifest.capture, { screenCapture: false, readiness: 'unavailable' })
   assert.equal(manifest.executable.sha256, 'bef32d2c315a289576f2a6828d27edb16bb316a4d85c271f2d794045f3ea668d')
   assert.throws(() => createManifest('not-a-sha', 'linux-x64', Buffer.from('native'), 0o755), /source SHA/)
-  assert.throws(() => createManifest('a'.repeat(40), 'linux-x64', Buffer.from('native'), 0o644), /execute bit/)
+  assert.throws(() => createManifest('a'.repeat(40), 'linux-x64', Buffer.from('native'), 0o644), /mode must be 0755/)
 })
 
 test('inventory rejects extra, tampered, missing and symlinked artifact files', () => {
