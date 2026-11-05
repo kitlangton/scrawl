@@ -41,7 +41,7 @@ test("command acceptance is distinct from explicit provider facts and observer d
   assert.equal(seen.length, 1);
   assert.equal(driver.commands()[0].type, "start-capture");
   assert.deepEqual(driver.commands()[0], command(before, { type: "start-capture", delivery: "local-only" }));
-  const started: CapabilitySnapshot = { ...before, revision: 2, captures: [{ captureId: "controlled-id", invocationId: result.requestId, phase: "recording", outcomes: [{ kind: "first-frame-start", at: "2025-01-01T00:00:00Z", ok: true }] }] };
+  const started: CapabilitySnapshot = { ...before, revision: 2, captures: [{ captureId: "controlled-id", invocationId: result.requestId, delivery: "unknown", phase: "recording", outcomes: [{ kind: "first-frame-start", at: "2025-01-01T00:00:00Z", ok: true }] }] };
   assert.equal(driver.publish(started), true);
   assert.deepEqual(seen.at(-1), started);
 });
@@ -148,4 +148,89 @@ test("artifact open confirmation requires exact capture and saved artifact; disp
   driver.disconnect();
   driver.reconnect();
   assert.equal(hasConfirmedArtifactOpen(driver.current(), 'capture-saved'), true);
+});
+
+test("picker and accepted-stroke facts have typed surfaces and cannot use free-form detail", () => {
+  const { driver } = createRecordFixture();
+  const before = driver.current();
+  const typed: CapabilitySnapshot = { ...before, revision: 2, captures: [{
+    captureId: "surface-facts", delivery: "unknown", phase: "recording", outcomes: [
+      { kind: "picker", at: "2025-01-01T00:00:00Z", ok: true, surface: "screen", target: "window" },
+      { kind: "accepted-stroke", at: "2025-01-01T00:00:01Z", ok: true, surface: "whiteboard", strokeId: "stroke-1" },
+    ],
+  }] };
+  assert.equal(driver.publish(typed), true);
+  assert.equal(driver.current().captures[0].outcomes[0].kind, "picker");
+  assert.equal(driver.current().captures[0].outcomes[1].kind, "accepted-stroke");
+  // @ts-expect-error picker success requires a typed screen target, not detail text
+  const vaguePicker: import("../src/capabilities/index.ts").CaptureOutcome = { kind: "picker", at: "now", ok: true, detail: "window" };
+  // @ts-expect-error accepted strokes require an explicit screen or whiteboard surface
+  const vagueStroke: import("../src/capabilities/index.ts").CaptureOutcome = { kind: "accepted-stroke", at: "now", ok: true, detail: "whiteboard" };
+  void vaguePicker; void vagueStroke;
+});
+
+test("delivery readback preserves unknown and host-default as distinct from local-only", () => {
+  const { driver } = createRecordFixture("unrelated-capture");
+  assert.equal(driver.current().captures[0].delivery, "unknown");
+  const hostDefault: CapabilitySnapshot = { ...driver.current(), revision: 2, captures: [{
+    ...driver.current().captures[0], delivery: "host-default",
+  }] };
+  assert.equal(driver.publish(hostDefault), true);
+  assert.equal(driver.current().captures[0].delivery, "host-default");
+  assert.notEqual(driver.current().captures[0].delivery, "local-only");
+});
+
+test("shortcut admission is refused until supported; dispatch alone does not arm or enforce delivery", async () => {
+  const { client, driver } = createRecordFixture("unrelated-capture");
+  const existing = driver.current();
+  // Existing unrelated capture remains distinguishable and has no invented delivery proof.
+  assert.equal(existing.captures[0].captureId, "capture-unrelated");
+  assert.equal(existing.captures[0].delivery, "unknown");
+  assert.equal((await client.execute(command(existing, { type: "arm-next-shortcut", admissionId: "admission-1", delivery: "local-only", expiresAt: "2025-01-01T00:01:00Z" }))).status, "refused");
+  assert.equal(driver.current().nextShortcutAdmission.state, "unavailable");
+
+  const idle = { ...existing, revision: existing.revision + 1, captures: [], nextShortcutAdmission: { state: "idle" } as const };
+  assert.equal(driver.publish(idle), true);
+  const armReply = await client.execute(command(driver.current(), { type: "arm-next-shortcut", admissionId: "admission-1", delivery: "local-only", expiresAt: "2025-01-01T00:01:00Z" }));
+  assert.equal(armReply.status, "accepted");
+  assert.equal(driver.current().nextShortcutAdmission.state, "idle");
+
+  driver.setNextResult("refused");
+  assert.equal((await client.execute(command(driver.current(), { type: "arm-next-shortcut", admissionId: "admission-refused", delivery: "local-only", expiresAt: "2025-01-01T00:01:00Z" }))).status, "refused");
+  assert.equal(driver.current().nextShortcutAdmission.state, "idle");
+  driver.setNextResult("outcome-unknown");
+  assert.equal((await client.execute(command(driver.current(), { type: "arm-next-shortcut", admissionId: "admission-unknown", delivery: "local-only", expiresAt: "2025-01-01T00:01:00Z" }))).status, "outcome-unknown");
+  assert.equal(driver.current().nextShortcutAdmission.state, "idle");
+
+  const armed: CapabilitySnapshot = { ...driver.current(), revision: driver.current().revision + 1, nextShortcutAdmission: { state: "armed", admissionId: "admission-1", delivery: "local-only", expiresAt: "2025-01-01T00:01:00Z" } };
+  assert.equal(driver.publish(armed), true);
+  assert.equal((await client.execute(command(armed, { type: "start-capture", delivery: "local-only" }))).status, "accepted");
+  assert.equal(driver.current().captures.length, 0);
+  assert.equal(driver.current().nextShortcutAdmission.state, "armed");
+
+  const consumed: CapabilitySnapshot = { ...armed, revision: armed.revision + 1,
+    nextShortcutAdmission: { state: "consumed", admissionId: "admission-1", captureId: "capture-new" },
+    captures: [{ captureId: "capture-new", invocationId: "shortcut-invocation", shortcutAdmissionId: "admission-1", delivery: "local-only", phase: "recording", outcomes: [
+      { kind: "shortcut", at: "2025-01-01T00:00:01Z", ok: true },
+      { kind: "first-frame-start", at: "2025-01-01T00:00:02Z", ok: true },
+    ] }],
+  };
+  assert.equal(driver.publish(consumed), true);
+  assert.equal(driver.current().captures[0].captureId, "capture-new");
+  assert.equal(driver.current().captures[0].shortcutAdmissionId, "admission-1");
+  assert.equal(driver.current().captures[0].delivery, "local-only");
+});
+
+test("cancelling a shortcut reservation does not cancel an already recording capture", async () => {
+  const { client, driver } = createRecordFixture("unrelated-capture");
+  const active = driver.current();
+  const armed: CapabilitySnapshot = { ...active, revision: active.revision + 1,
+    nextShortcutAdmission: { state: "armed", admissionId: "admission-cancel", delivery: "host-default", expiresAt: "2025-01-01T00:01:00Z" },
+  };
+  assert.equal(driver.publish(armed), true);
+  assert.equal((await client.execute(command(armed, { type: "cancel-next-shortcut", admissionId: "admission-cancel" }))).status, "accepted");
+  assert.equal(driver.captureContinues(), true);
+  const cancelled = { ...driver.current(), revision: driver.current().revision + 1, nextShortcutAdmission: { state: "cancelled", admissionId: "admission-cancel" } as const };
+  assert.equal(driver.publish(cancelled), true);
+  assert.equal(driver.captureContinues(), true);
 });

@@ -24,6 +24,14 @@ export interface PenPreference {
 export type CaptureOutcomeKind =
   | "shortcut" | "picker" | "first-frame-start" | "whiteboard" | "accepted-stroke"
   | "processing" | "save" | "copy" | "open-dispatch";
+export type CaptureSurface = "screen" | "whiteboard";
+export type PickerOutcome =
+  | { kind: "picker"; at: string; ok: true; surface: "screen"; target: "display" | "area" | "window" }
+  | { kind: "picker"; at: string; ok: false; reason: "cancelled" | "failed" | "unavailable" };
+export type AcceptedStrokeOutcome =
+  | { kind: "accepted-stroke"; at: string; ok: true; surface: CaptureSurface; strokeId: string }
+  | { kind: "accepted-stroke"; at: string; ok: false; surface: CaptureSurface; reason: "rejected" | "failed" };
+export type GenericCaptureOutcomeKind = Exclude<CaptureOutcomeKind, "picker" | "accepted-stroke">;
 export type ArtifactOpenOutcome = {
   kind: "artifact-open";
   at: string;
@@ -33,11 +41,18 @@ export type ArtifactOpenOutcome = {
   | { ok: false; reason: "refused" | "failed" }
 );
 export type CaptureOutcome =
-  | { kind: CaptureOutcomeKind; at: string; ok: boolean; detail?: string }
+  | { kind: GenericCaptureOutcomeKind; at: string; ok: boolean; detail?: string }
+  | PickerOutcome
+  | AcceptedStrokeOutcome
   | ArtifactOpenOutcome;
+export type DeliveryEnforcement = "local-only" | "host-default" | "unknown";
 export interface CaptureFact {
   captureId: string;
   invocationId?: string;
+  /** Effective enforced delivery policy for this capture, never the requested command value. */
+  delivery: DeliveryEnforcement;
+  /** Request-scoped shortcut admission that produced this capture, when known. */
+  shortcutAdmissionId?: string;
   /** Opaque immutable identity of the saved artifact; never its private path. */
   artifactId?: string;
   phase: "starting" | "recording" | "processing" | "saved" | "cancelled" | "failed" | "unknown";
@@ -52,7 +67,7 @@ export function hasConfirmedArtifactOpen(snapshot: CapabilitySnapshot, captureId
   );
 }
 export interface CapabilitySnapshot {
-  version: 1;
+  version: 2;
   providerEpoch: string;
   revision: number;
   connection: "connected" | "disconnected";
@@ -60,7 +75,16 @@ export interface CapabilitySnapshot {
   shortcut: ShortcutBinding;
   pen: PenPreference;
   captures: CaptureFact[];
+  nextShortcutAdmission: ShortcutAdmissionFact;
 }
+
+export type ShortcutAdmissionFact =
+  | { state: "unavailable" }
+  | { state: "idle" }
+  | { state: "armed"; admissionId: string; delivery: Exclude<DeliveryEnforcement, "unknown">; expiresAt: string }
+  | { state: "consumed"; admissionId: string; captureId: string }
+  | { state: "cancelled"; admissionId: string }
+  | { state: "expired"; admissionId: string };
 
 export interface CommandBase { requestId: string; expected: { providerEpoch: string; revision: number } }
 export type RecordCommand = CommandBase & (
@@ -76,6 +100,8 @@ export type RecordCommand = CommandBase & (
   | { type: "shortcut-open-desktop-config" }
   | { type: "select-pen"; value: string }
   | { type: "start-capture"; delivery: "local-only" | "host-default" }
+  | { type: "arm-next-shortcut"; admissionId: string; delivery: "local-only" | "host-default"; expiresAt: string }
+  | { type: "cancel-next-shortcut"; admissionId: string }
   | { type: "stop-capture"; captureId: string }
   | { type: "cancel-capture"; captureId: string }
   | { type: "inspect-capture"; captureId: string }
