@@ -1,10 +1,9 @@
-import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import { APP_SHELL_API, REACT_VERSION, parseStreamManifest } from '@apparent/app-contracts';
+import { APP_SHELL_API, REACT_VERSION } from '@apparent/app-contracts';
 import { digest, readRegular, shellFiles } from './artifacts.ts';
 import { checkInstalled } from './check-installed.ts';
 
@@ -14,21 +13,6 @@ const common = { bundle: true, format: 'esm' as const, platform: 'browser' as co
   target: 'es2022', jsx: 'automatic' as const, nodePaths: [join(root, 'node_modules')],
   define: { 'process.env.NODE_ENV': '"production"' }, legalComments: 'inline' as const };
 
-/** Reference producer for synthetic fixtures. Each invocation builds exactly one stream. */
-export async function buildStream(source: string, output: string) {
-  await checkInstalled();
-  const metadata = JSON.parse(await readFile(join(source, 'stream.json'), 'utf8'));
-  await mkdir(output, { recursive: true });
-  const result = await build({ ...common, entryPoints: [join(source, 'index.tsx')],
-    outfile: join(output, 'index.js'), external, metafile: true });
-  for (const file of Object.values(result.metafile!.outputs)) {
-    assert(file.imports.every(item => external.includes(item.path)), 'Unbundled stream dependency');
-  }
-  const manifest = parseStreamManifest({ ...metadata, schemaVersion: 1, shellApi: APP_SHELL_API,
-    reactVersion: REACT_VERSION, entry: 'index.js', sha256: digest(await readRegular(join(output, 'index.js'))) });
-  await writeFile(join(output, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
-  return manifest;
-}
 export async function buildShell(output: string) {
   await checkInstalled();
   await mkdir(join(output, 'vendor'), { recursive: true });
@@ -63,10 +47,14 @@ export async function buildShell(output: string) {
   await writeFile(join(output, 'manifest.json'), JSON.stringify({ schemaVersion: 1,
     shellApi: APP_SHELL_API, reactVersion: REACT_VERSION, files }, null, 2) + '\n');
 }
+export async function buildApp(output: string) {
+  await buildShell(join(output, 'shell'));
+  // Preserve independently built stream artifacts for explicit assembly.
+  await mkdir(join(output, 'artifacts'), { recursive: true });
+}
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const target = process.argv[2];
   if (target === 'shell') await buildShell(resolve(process.argv[3] ?? join(root, 'dist/shell')));
-  else if (target === 'alpha' || target === 'beta') {
-    await buildStream(join(root, 'fixtures', target), resolve(process.argv[3] ?? join(root, 'dist/artifacts', target)));
-  } else throw new Error('Usage: node scripts/build.ts shell|alpha|beta [output-directory]');
+  else if (target === 'app') await buildApp(resolve(process.argv[3] ?? join(root, 'dist')));
+  else throw new Error('Usage: node scripts/build.ts shell|app [output-directory]');
 }

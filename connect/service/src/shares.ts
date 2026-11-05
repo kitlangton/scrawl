@@ -1,5 +1,5 @@
 import type {Env, ShareRow, ShareState, ShareModel, CaptureRow, FileRow} from './types.ts';
-import {random,hash,envelope,stmt,bearer,session,csrf,json,fail,body,isRecord} from './common.ts';
+import {random,hash,envelope,stmt,bearer,session,csrf,json,fail,body,isRecord,apiBase} from './common.ts';
 import {getObject} from './storage.ts';
 import {validPath} from './captures.ts';
 import {queueDailyActivity} from './reporting/aggregate-dau.ts';
@@ -15,7 +15,7 @@ function state(row: ShareRow): ShareState {
 }
 function plaintext(row:Pick<CaptureRow,'format'>) {if(row.format!=='plaintext-v1')fail('encrypted_sharing_unsupported',409);}
 const join=`SELECT s.*,c.format,c.status,c.expires_at,c.pending_until,c.bytes FROM shares s JOIN captures c ON c.id=s.capture_id`;
-const publicUrl=(env: Env,secret: string)=>env.API_ORIGIN+'/s/'+secret;
+const publicUrl=(env: Env,secret: string)=>apiBase(env)+'/s/'+secret;
 async function owner(request: Request,env: Env,write=false) {
  // Bearer and browser authority are explicit alternatives, never a capability.
  if(request.headers.has('Authorization'))return bearer(request,env,write);

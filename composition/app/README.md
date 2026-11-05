@@ -1,9 +1,11 @@
 # App Shell foundation
 
-This development-only shell composes two synthetic stream artifacts into one
-Electron application. It does not replace the installed Apparent route, capture,
-onboarding, updater or production Settings. No experiment/config flag is added.
-Record, Connect and Engine are not adopted by this slice.
+This development-only shell composes independently built stream artifacts into
+one Electron application. Its default build is a usable empty shell; synthetic
+contributions are generated only in disposable test directories. It does not
+replace the installed Apparent route, capture, onboarding, updater or production
+Settings. No experiment/config flag is added. Record, Connect and Engine are
+not adopted by this slice.
 
 ## Ownership and contract
 
@@ -15,11 +17,11 @@ stream artifacts. There is no dynamic plugin discovery or arbitrary-path loading
 
 Each stream exports a default `{id, Screen, Settings}` contribution. `Settings`
 is the owner's component, including validation, persistence and effects. The
-shell simply presents it. Alpha stores its boolean and Beta stores its selection
-under separate synthetic localStorage keys; changing one does not rewrite the
-other. This is synthetic persistence proof, not a production config API or a
-security boundary between trusted streams. Future owners choose their supported
-persistence/credential adapter; no renderer receives Node or generic filesystem IPC.
+shell simply presents it. Tests generate small contributions with independent
+synthetic preferences; this is persistence proof, not a production config API
+or a security boundary between trusted streams. Future owners choose their
+supported persistence/credential adapter; no renderer receives Node or generic
+filesystem IPC.
 There is intentionally no preload bridge until a real capability requires one.
 
 `@apparent/app-contracts/host` defines the API 1 owner host seam. A compiled-in
@@ -74,20 +76,18 @@ Electron's npm package does not automatically install its runtime. `start`
 prepares it explicitly; CI runs `npm run prepare:electron` before provisioning
 the matching sandbox helper. Packaging independently obtains the pinned runtime.
 
-`build:shell`, `build:alpha` and `build:beta` are independently callable producer
-commands. `assemble` only consumes their artifacts; it invokes no compiler and
-does not inspect producer source. `build` is a first-run convenience composition.
-Alpha/Beta are fixtures using a reference producer, not real product owners or
-required build tools for future streams.
+`build:shell` compiles the shell. `build` creates the empty default application
+and `assemble` only consumes its shell and any explicitly supplied stream
+artifacts; assembly invokes no compiler and does not inspect producer source.
+The repository does not ship demo stream sources or a production stream producer.
 
 Assembly requires a **fresh destination** and refuses to overwrite an existing
-app. To assemble an update after rebuilding only Alpha, reuse the existing shell
-and Beta artifacts and choose another directory:
+app. To assemble an update from owner-built artifacts, reuse the existing shell,
+pass the artifact directories and choose another destination:
 
 ```sh
 cd composition/app
-npm run build:alpha
-node scripts/assemble.ts dist/shell dist/app-next dist/artifacts/alpha dist/artifacts/beta
+node scripts/assemble.ts dist/shell dist/app-next /path/to/stream-a /path/to/stream-b
 node scripts/package.ts dist/app-next dist/packages-next
 ```
 
@@ -101,11 +101,13 @@ Mac packaged launch/signing proof is required before adopting that route on Mac.
 ## Verification and adoption
 
 `npm run check` rebuilds/tests the contracts, checks installed local dependency
-freshness, typechecks and exercises artifact acceptance, independent rebuild,
-unchanged artifact preservation and assembly with Cargo/rustc/TypeScript/esbuild/npm
-commands denied. `xvfb-run -a npm run test:electron` on Linux launches the real
-packaged executable, exercises both screens and Settings sections, verifies owner
-preferences across restart and checks renderer isolation/network refusal.
+freshness, typechecks and exercises generated synthetic artifact acceptance,
+independent rebuild, unchanged artifact preservation, empty-shell assembly and
+assembly with Cargo/rustc/TypeScript/esbuild/npm commands denied.
+`xvfb-run -a npm run test:electron` on Linux launches the exact packaged empty
+shell plus a separately packaged app with generated test contributions, exercises
+both screens and Settings sections, verifies preferences across restart and
+checks renderer isolation/network refusal.
 These are synthetic shell checks, not native recording, clipboard or Mac proof.
 
 Linux execution requires working Chromium sandbox support. On restricted test
@@ -117,12 +119,9 @@ package with root ownership and mode `4755` in the disposable runner's temporary
 directory, then removes it after testing. It does not rely on the runner's Chrome
 helper ownership/mode or alter system Chrome.
 
-Feature pushes select the foundation check for shell, contracts, shared UI or
-delivery-workflow inputs; dependencies must already be installed. Main runs
-the independent `Value-stream delivery` workflow, without the legacy verify
-selector. Registered owners build and verify separately; unchanged owner inputs
-can reuse a successful prior component receipt from that workflow. The shell
-lane packages its prebuilt output and tests that exact bundle on Linux and Mac.
+Pull requests run the `app-shell delivery` owner checks on Linux and Mac; main
+pushes also produce the registered development-app receipts. The shell lane
+packages its prebuilt output and tests that exact bundle on Linux and Mac.
 See [delivery contracts](../delivery/README.md) for registration and admission.
 Artifacts remain development output; stable publication and an updater are not
 provided. Existing native verification and publication gates remain conservative.

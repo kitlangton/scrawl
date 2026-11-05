@@ -20,9 +20,10 @@ export async function fixture(bindings={},options={}) {
  await db.exec((await readFile('migrations/0002.sql','utf8')).replaceAll('\n',' '));
  await db.exec((await readFile('migrations/0004.sql','utf8')).replace(/^--.*$/gm,'').replaceAll('\n',' '));
  await db.exec((await readFile('migrations/0005.sql','utf8')).replace(/^--.*$/gm,'').replaceAll('\n',' '));
+ const apiOrigin=config.bindings.API_ORIGIN;
  const call=async (path,{token,cookie,csrf,origin,method='GET',body,raw,headers={},instance}={})=>{
   const target=instance?await mf.getWorker(instance):mf,fetch=instance?target.fetch.bind(target):target.dispatchFetch.bind(target);
-  return fetch('https://api.example'+path,{method,redirect:'manual',headers:{...(token?{Authorization:'Bearer '+token}:{}),...(cookie?{Cookie:cookie}:{}),...(csrf?{'X-CSRF-Token':csrf}:{}),...(origin?{Origin:origin}:{}),...headers},...(body!==undefined?{body:JSON.stringify(body)}:raw!==undefined?{body:raw}:{})});
+  return fetch(apiOrigin.replace(/\/$/,'')+path,{method,redirect:'manual',headers:{...(token?{Authorization:'Bearer '+token}:{}),...(cookie?{Cookie:cookie}:{}),...(csrf?{'X-CSRF-Token':csrf}:{}),...(origin?{Origin:origin}:{}),...headers},...(body!==undefined?{body:JSON.stringify(body)}:raw!==undefined?{body:raw}:{})});
  };
  async function identity(id,beta='active') {
   const subject=id,account=digest('https://accounts.google.com/'+subject),token=randomBytes(32).toString('hex'),read=randomBytes(32).toString('hex'),session=randomBytes(32).toString('hex'),csrf=digest(session+authSecret),now=new Date().toISOString(),expiry=new Date(Date.now()+86400000).toISOString();

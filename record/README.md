@@ -18,9 +18,106 @@ same client and job ID after decode rejection/timeout and requires SDK inspect o
 cancel reconciliation before another dispatch or cleanup. Assembly preserves
 supplied transcript, selected frames, typed notes/pins, target/device,
 session/context changes, interaction labels, marks and processing warnings.
-Window titles remain manifest-only. It does not select frames, write the
-canonical bundle or perform clipboard/link handoff; those adoption steps remain
-outstanding.
+Window titles remain manifest-only. The existing text formatter does not
+select frames, write files or perform clipboard/link handoff; those adoption
+steps remain outstanding.
+
+`@apparent/record/processing/bundle` exports `assembleCanonicalBundle`. It
+accepts detached materials manifest/payload bytes, supplied fact bytes, explicit
+persisted `createdAtMs` and canonical target admission facts, Record's selected
+frame/mark policy results, and exact sealed artifact bytes. By default it calls
+`validateMaterialsDocument` and `validateFactFile` from the public
+`@apparent/engine-sdk/capture` subpath; hosts may inject equivalent public SDK
+validators. It returns UTF-8 `apparent.json` and `summary.md` bytes, a
+deterministic versioned inventory with hashes/lengths and unavailable/empty
+collection states, plus the validated original materials/fact documents. It
+does not write or publish files, make a Saved claim, copy native materials,
+create a final destination, or perform clipboard/network/cleanup effects.
+
+The headless source install pins SDK 0.3.1 from the committed
+`vendor/engine-sdk-0.3.1.tgz` for development and declares `^0.3.1` as an
+optional peer. A host importing the bundle subpath must install that peer. The
+verified tarball SHA-256 is
+`1b605f06273f9c1a134b68b0ed233605b120813214914ca70ed0c8c5f0346f04`.
+
+Assembly requires at least one selected frame, one contact sheet, and exact
+sealed media references. Each artifact declares the exact materials key; media
+hashes and identities must match the validated material inventory. Generated
+documents have no filesystem identity. Image seals remain caller-attested,
+not authenticated derivative receipts: inventory provenance distinguishes them
+from material references and generated documents. A publisher must still
+validate native derivative authority and actual filesystem contents. It refuses stale capture/material/fact identities,
+missing or duplicate paths, escaping paths, mismatched bytes, and unordered
+frame indices/times. Validated source/invocation facts retain capture identity
+in the returned material/fact documents; canonical window snapshots/titles stay
+in `apparent.json`, while the existing summary formatter excludes titles.
+Context/session changes and all interaction variants are retained. Session
+destination fields such as `via` must be supplied as explicit Record admission
+metadata; SDK session IDs remain fact references and are not guessed into a
+routing destination. Frame reasons
+and marks need explicit canonical mappings; Record presentation marks alone do
+not contain enough geometry to make a v1 mark. Transcript
+segments without `endMs` require an explicit Record estimate policy; this
+policy estimates end at the next segment start or capture end and sets
+`estimated: true`. Accepted stroke surface transforms remain authoritative:
+non-empty strokes need an explicit Record-owned canonical v1 stroke mapping
+that preserves the declared surface dimensions and observed normalized points;
+projection into a different surface is unsupported. Otherwise
+assembly returns an exact unsupported error. This API is fixture-ready only;
+it does not decode raw materials, choose frames/marks, produce contact sheets,
+or establish native provenance/full-profile acceptance.
+
+The publication subpath has an optional SDK peer: hosts using it supply the
+published SDK. Other Record consumers do not need to install that peer. Source
+checks use the pinned `record/vendor/engine-sdk-0.3.1.tgz` package (SHA256
+`1b605f06273f9c1a134b68b0ed233605b120813214914ca70ed0c8c5f0346f04`),
+without importing or building an adjacent Engine checkout. Publication remains
+separate from the package root.
+
+`@apparent/record/publication` exports `createRecordPublicationRecovery`, a
+headless Record-owned SQLite binding and explicit reconnect reconciliation
+wrapper for an already constructed `@apparent/engine-sdk/capture` client. The
+host supplies the original capture authority and validated immutable materials,
+plan bytes and derivative receipts. Record durably binds capture/publication IDs,
+exact plan SHA256, materials key and lease ID, bundle ID/path and `apparent.json` SHA256 before
+calling SDK publish. Hosts inject `preflightCapturePublication` from the same SDK
+as the client; Record runs it before reserving the dispatch and checks native
+publication availability before creating a binding. Hosts first validate the
+materials with `validateMaterialsDocument(manifest, originalPayloadBytes)`. The
+preflight validates inventory and byte bindings, not native authority or filesystem
+contents. Record stores control metadata privately and never creates or
+replaces the final bundle path. After an ambiguous reply, `reconcile` restores
+its expected receipt from that original binding and calls `inspectPublication`;
+changed bindings fail closed and a repeated command does not allocate new IDs.
+The API does not assemble canonical bundles, release retained materials, or
+claim native capture/publication availability. SDK0.3's testing peer remains a
+test double and cannot produce native Saved.
+
+`prepareRecordPublication` in the same subpath writes a private plan namespace
+from canonical assembly output. It accepts exact source materials bytes and
+caller-supplied frame/contact-sheet bytes, records actual filesystem identities
+for generated files, and runs the packed SDK preflight before returning a
+`CapturePublishInput`. Material references remain references; caller-attested
+images stay `assembled` inputs and are not native derivative receipts. This
+operation never calls `recovery.publish`, creates the final destination, or
+claims Saved. Replays require byte-identical files in the same publication
+namespace. The assembly reports its admitted `bundlePath`; staging requires
+that exact destination so summary paths stay correct. Staging and destination
+roots must not overlap; existing destination ancestors must not be aliases.
+Inputs are snapshotted, and coalesced callers receive
+independent results. Unmarked populated namespaces are refused without adding
+ownership metadata; conflicting or partial files are retained for reconciliation and
+never removed implicitly. The returned input remains fixture/packed-consumer
+support: it does not establish native authority, filesystem/profile acceptance,
+or production capture availability.
+
+```ts
+import { preflightCapturePublication } from "@apparent/engine-sdk/capture";
+import { createRecordPublicationRecovery } from "@apparent/record/publication";
+const recovery = createRecordPublicationRecovery(client, privateControlRoot, preflightCapturePublication);
+await recovery.publish(validatedPublicationInput);
+await recovery.reconcile(captureId, ownerToken);
+```
 
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 
@@ -108,9 +205,9 @@ fallback route remains authoritative.
 | Shortcut configuration, registration, edit/save/cancel | Provider translation seam implemented; Platform producer blocked | Effective configured binding and OS registration remain distinct facts. The native producer owns them; this provider neither binds shortcuts nor duplicates the transport. Same Platform notification route as above. |
 | Next-shortcut admission and local-only admission | Explicitly unavailable | Current capture-v1 has neither reservation enforcement nor local-only enforcement. Record refuses local-only starts and refuses arm when the producer reports unavailable; it never infers enforcement from intent. A future producer must publish reservation consumption/cancellation/expiry and effective per-capture delivery readback. Engine committed parent-thread notification when usable native capabilities land. |
 | Transcript association | Implemented in the headless package | `associateTranscriptWithSelectedFrames` partitions supplied word/segment facts across existing selected frames using measured clause/anchor rules. Source-derived Rust parity tests cover Unicode whitespace, punctuation, gaps and boundary timing. This does not select images or supply missing native visual metrics. |
-| Semantic processing assembly and frame decode | Consumer implemented; installed adoption partial | PR #704 (main `7c2afd5`) added the formatter and decoder seam; this slice adds durable job ownership and real PNG decode proof against the retained Linux `media/1` artifact. It does not implement frame selection, canonical bundle writing, default output selection or installed handoff adoption. |
-| Capture material to Record bundle assembly and authenticated publication | Blocked on Engine producer contract | Engine is preparing the separately negotiated capture-material → Record assembly → authenticated publish channel because capture-v1 `saved` semantics cannot supply Record policy assembly. Current capture-v1 remains unavailable. Engine has committed direct notification to the parent Record thread when a usable capture SDK/native artifact and authoritative capabilities land. Independent packaged-media notification is also established; it does not prove this Record assembly channel or real decode. |
-| Keyframes, transcript, bundle contents, warnings and default output | Partially implemented; full adoption blocked | Record formats supplied semantic inputs, including target/session context, interaction labels/marks and processing warnings; default keyframe selection, canonical bundle write and installed handoff are still unadopted. Provider maps Engine v1 `saved` to Record `processing`; only authenticated Record output facts may publish `saved` or a successful save outcome. |
+| Semantic processing assembly and frame decode | Consumer implemented; installed adoption partial | PR #704 (main `7c2afd5`) added the formatter and decoder seam; this slice adds durable job ownership and real PNG decode proof against the retained Linux `media/1` artifact. It does not implement frame selection, native final publication, default output selection or installed handoff adoption. |
+| Capture material to Record bundle assembly and authenticated publication | Document assembly, private staging and publication recovery implemented; native producer unavailable | `assembleCanonicalBundle` maps validated facts and explicit policy into documents/inventory. `prepareRecordPublication` stages exact bytes privately with SDK0.3.1 preflight; images remain caller-attested. Recovery persists the original publication binding and reconciles through the SDK. Native authority, final publication, material release, raw-material decode and capture/2 remain unavailable. Engine retains its committed usable-capability return. |
+| Keyframes, transcript, bundle contents, warnings and default output | Partially implemented; full adoption blocked | Record formats supplied semantic inputs, including target/session context, interaction labels/marks and processing warnings; default keyframe selection, native final bundle publication and installed handoff are still unadopted. Provider maps Engine v1 `saved` to Record `processing`; only authenticated Record output facts may publish `saved` or a successful save outcome. |
 | Clipboard copy, link and artifact open | Local prompt policy implemented; native effects and receipts blocked | `formatLocalHandoff` preserves semantic context, warnings and the timed request, with access instructions first and no clipboard/publication effect. Copy/open actions may be dispatched through the native port, but dispatch is not success. Copy needs a clipboard receipt; link needs the existing link producer; artifact open needs the exact-artifact viewer acknowledgement or supported OS observation. No such production receipts are synthesized here. |
 | Pill/runtime installed binding | Existing UI and runtime adopted through current fallback | Reusable pill and injected workflow host are packaged. This capability provider is owner-local and does not install an Electron main/preload route or switch routing. |
 | Platform proof | Blocked for this provider route | No new OS boundary is claimed. Platform's committed evidence notification must name the native facts/action contract and affected macOS/Linux evidence; existing Desktop platform gates still apply before any route adoption. |

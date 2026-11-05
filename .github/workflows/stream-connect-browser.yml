@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - 'connect/tooling/hosting/**'
+      - 'connect/service/**'
       - 'connect/web/**'
       - 'shared/ui/**'
       - 'shared/analytics/**'
@@ -15,7 +16,6 @@ on:
       - '.github/workflows/stream-connect-browser.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
-      - '.github/workflows/stream-admission.yml'
       - '.github/actions/delivery-contracts/**'
       - '.github/actions/delivery-component/**'
       - '.github/actions/runtime-budget/**'
@@ -25,6 +25,7 @@ on:
     branches: [main]
     paths:
       - 'connect/tooling/hosting/**'
+      - 'connect/service/**'
       - 'connect/web/**'
       - 'shared/ui/**'
       - 'shared/analytics/**'
@@ -36,7 +37,6 @@ on:
       - '.github/workflows/stream-connect-browser.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
-      - '.github/workflows/stream-admission.yml'
       - '.github/actions/delivery-contracts/**'
       - '.github/actions/delivery-component/**'
       - '.github/actions/runtime-budget/**'
@@ -87,7 +87,9 @@ jobs:
       PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
       PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
       PUBLIC_POSTHOG_ENVIRONMENT: production
-      VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
+      VITE_HOSTED_API_ORIGIN: https://app.tryapparent.com/connect
+      API_ORIGIN: https://app.tryapparent.com/connect
+      SITE_ORIGIN: https://app.tryapparent.com
     steps:
       - uses: actions/checkout@v4
         with:
@@ -124,7 +126,9 @@ jobs:
       PUBLIC_POSTHOG_TOKEN: phc_synthetic
       PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
       PUBLIC_POSTHOG_ENVIRONMENT: synthetic
-      VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
+      VITE_HOSTED_API_ORIGIN: https://app.tryapparent.com/connect
+      API_ORIGIN: https://app.tryapparent.com/connect
+      SITE_ORIGIN: https://app.tryapparent.com
     steps:
       - uses: actions/checkout@v4
         with:

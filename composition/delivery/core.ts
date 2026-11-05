@@ -94,7 +94,7 @@ function trackedInputs(root: string, owner: Owner, revision = 'HEAD'): { digest:
   const registration = roots.find(x => x.id === owner.id)?.registration
   if (!registration) throw new Error('Owner has no registered source identity')
   const inputRoots = [...new Set([...owner.inputs, ...mandatoryInputs, ...(owner.id === 'public' ? ['enablement/verification/web/'] : [])])].sort()
-  const files = [...(owner.files ?? []), workflowPathFor(owner.id), '.github/workflows/stream-admission.yml', '.github/actions/delivery-contracts/', '.github/actions/delivery-component/', '.github/actions/runtime-budget/', 'enablement/verification/workflow-budget.ts', 'LICENSE', registration]
+  const files = [...(owner.files ?? []), workflowPathFor(owner.id), '.github/actions/delivery-contracts/', '.github/actions/delivery-component/', '.github/actions/runtime-budget/', 'enablement/verification/workflow-budget.ts', 'LICENSE', registration]
   const paths = new Set<string>()
   for (const pathspec of [...inputRoots, ...files]) {
     const result = git(root, ['ls-tree', '-r', '-z', '--full-tree', revision, '--', pathspec])

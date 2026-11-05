@@ -73,19 +73,6 @@ static Worker. Existing Pages activation, environment, source ordering, readback
 and publication lock remain in force. Cut over only after that Connect-owned route
 seam is verified; the current combined production snapshot must remain until then.
 
-## Pull request admission
 
-`stream-admission.yml` publishes the `value-stream admission` check for the current
-PR head. It reads owner path filters and target matrices from trusted default-branch
-workflows, then requires the selected owners' contracts, every PR target and runtime
-audits. PR events start the receipt; owner start/completion events refresh it without
-polling. Missing results stay pending; failed or uncertain evidence cannot pass.
-The write-capable receipt workflow checks out only the trusted default branch and
-never executes PR code. It runs no owner builds and gates no main deployments.
-Its control job has a five-minute timeout; owner workloads retain their own audits.
-Repository rulesets are separate: this change does not configure required checks.
-
-The receipt summarizes GitHub's PR-defined CI results; it does not attest that a
-PR preserved its workflow implementation or replace independent review of CI
-changes. A PR can change its own tests/workflows, as with ordinary required checks.
-The trusted receipt code never executes those changes with its write-capable token.
+PR readiness is established from the affected owner workflows directly. Each owner
+retains its own checks, builds, permissions and publication gates.

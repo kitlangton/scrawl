@@ -4,12 +4,13 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "npm --prefix ../../web run build && node scripts/package.ts && node scripts/bundle.ts",
-    "test": "npm run typecheck && npm run build && node --test test/worker.test.ts && node scripts/test-runtime.ts",
+    "typecheck": "npm run prepare:service && tsc --noEmit",
+    "build": "npm run prepare:service && npm --prefix ../../web run build && node scripts/package.ts && node scripts/bundle.ts",
+    "test": "npm run build && tsc --noEmit && node --test test/worker.test.ts && node scripts/test-runtime.ts",
     "test:runtime": "node scripts/test-runtime.ts",
     "dev": "wrangler dev --config wrangler.template.jsonc --local --ip 127.0.0.1",
-    "verify:artifact": "node scripts/verify.ts"
+    "verify:artifact": "node scripts/verify.ts",
+    "prepare:service": "npm --prefix ../../service ci --include=dev && npm --prefix ../../service run build:recipient"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261104.1",
