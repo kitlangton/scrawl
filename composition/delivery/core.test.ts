@@ -35,10 +35,27 @@ test('catalog reports absent owners pending and blocks present owners without re
   mkdirSync(resolve(path, 'composition/app'), { recursive: true })
   const missing = catalog(path)
   assert.deepEqual(missing.blocked, ['app-shell: source exists without delivery registration'])
-  assert.deepEqual(missing.pending, ['record', 'engine', 'engine-native', 'onboarding', 'agent', 'public'])
+  assert.deepEqual(missing.pending, ['record', 'engine', 'engine-native', 'platform-config', 'onboarding', 'agent', 'public'])
   mkdirSync(resolve(path, 'record')); mkdirSync(resolve(path, 'shared/ui'), { recursive: true })
   writeFileSync(resolve(path, 'record/delivery.json'), JSON.stringify({ ...owner, inputs: ['shared/ui/'] }))
   assert.match(catalog(path).blocked.join(';'), /Package source must be covered/)
+})
+
+test('platform config native lane declares its complete source closure and composition architecture owner', () => {
+  const path = resolve(temp, 'platform-config-plan')
+  for (const dir of ['composition/config/native', 'shared/config-native', '.cargo']) mkdirSync(resolve(path, dir), { recursive: true })
+  writeFileSync(resolve(path, 'composition/config/native/delivery.json'), JSON.stringify({ ...owner, id: 'platform-config', kind: 'directory', language: 'native', package: 'composition/config/native', artifactPath: 'dist', inputs: ['composition/config/', 'shared/config-native/', '.cargo/'], targets: ['linux-x64', 'macos-x64'], stage: 'library' }))
+  const plan = makePlan(path)
+  const native = plan.matrix.include.filter(row => row.id === 'platform-config')
+  assert.deepEqual(plan.blocked, [])
+  assert.equal(native.length, 2)
+  assert(native.every(row => row.language === 'native' && row.kind === 'directory' && row.architecture_owner === 'composition'))
+  assert.deepEqual(native.map(row => row.target), ['linux-x64', 'macos-x64'])
+})
+
+test('workflow push paths cover config producer, shared native input and Engine native source closure', () => {
+  const workflow = readFileSync(resolve(repo, workflowPath), 'utf8')
+  for (const path of ['composition/config/**', '.cargo/**', 'capture/engine/**']) assert(workflow.includes(`- '${path}'`), `workflow must trigger on ${path}`)
 })
 
 test('native Engine and SDK are independent lanes with the same architectural owner', () => {

@@ -5,11 +5,14 @@ on:
     branches: [main]
     paths:
       - 'composition/app/**'
+      - 'composition/config/**'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
       - 'shared/**'
       - 'record/**'
       - 'engine/**'
+      - 'capture/engine/**'
+      - '.cargo/**'
       - 'onboarding/**'
       - 'agent/**'
       - 'connect/delivery.json'

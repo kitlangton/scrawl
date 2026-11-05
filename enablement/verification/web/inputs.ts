@@ -19,6 +19,7 @@ export function relevant(owner: Owner, path: string): boolean {
   if (path.startsWith('public/site/')) return owner==='public' || (owner==='connect' && browserAssets.has(path))
   if (path.startsWith('connect/web/') || path.startsWith('connect/service/')) return owner==='connect' || (owner==='public' && path.startsWith('connect/web/'))
   if (path.startsWith('connect/client/')) return owner==='recipient'
+  if (path.startsWith('shared/config-native/')) return owner==='recipient'
   if (path.startsWith('connect/delivery/recipient/')) return owner==='recipient'
   if (path.startsWith('connect/delivery/')) return owner!=='recipient'
   if (path.startsWith('shared/ui/') || path.startsWith('shared/analytics/') || path.startsWith('shared/assets/')) return owner!=='recipient'

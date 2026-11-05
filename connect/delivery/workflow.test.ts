@@ -63,6 +63,9 @@ test('successful recipient targets publish signed independent receipts before th
  const aggregate=workflow.split('\n  recipient-release:\n')[1];
  assert.match(recipient,/contents: read[\s\S]*id-token: write[\s\S]*attestations: write/);
  assert.ok(recipient.indexOf('Test and build component only')<recipient.indexOf('Seal executable bytes'));
+ assert.ok(recipient.includes('cp -R shared/config-native/. "$RUNNER_TEMP/recipient-source/shared/config-native/"'));
+ assert.ok(recipient.includes('cp -R connect/client/. "$RUNNER_TEMP/recipient-source/connect/client/"'));
+ assert.ok(recipient.includes('working-directory: ${{ runner.temp }}/recipient-source/connect/client'));
  assert.ok(recipient.includes("if [ '${{ matrix.runner }}' = 'macos-15-intel' ]; then"));
  assert.ok(recipient.includes('build_jobs="$(sysctl -n hw.ncpu)"'));
  assert.ok(recipient.includes('test "$build_jobs" -eq 4'));

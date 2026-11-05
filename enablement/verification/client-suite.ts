@@ -28,11 +28,11 @@ export function sourceInputs(root: string) {
   const all = createHash('sha256'), packageHash = createHash('sha256')
   let regular = true
   for (const path of paths) {
-    // The pinned standalone package has no path dependencies, build script or
-    // external source/fixture includes. These owners cannot change its inputs.
+    // The one native config resource is an explicit path dependency. Other
+    // owners cannot change this standalone package's source inputs.
     // Root checks still exercise their real-provider integration; service/API,
     // build/configuration, verification and unknown paths remain conservative.
-    if (['capture/', 'composition/', 'shared/', 'public/', 'connect/web/',
+    if (!path.startsWith('shared/config-native/') && ['capture/', 'composition/', 'shared/', 'public/', 'connect/web/',
       'enablement/native/'].some(prefix => path.startsWith(prefix))) continue
     let bytes = 'missing'
     try {
@@ -42,7 +42,7 @@ export function sourceInputs(root: string) {
     } catch { regular = false }
     const row = JSON.stringify([path, bytes]) + '\n'
     all.update(row)
-    if (path.startsWith('connect/client/') || path.startsWith('.cargo/') ||
+    if (path.startsWith('connect/client/') || path.startsWith('shared/config-native/') || path.startsWith('.cargo/') ||
         ['Cargo.toml', 'Cargo.lock', 'rust-toolchain', 'rust-toolchain.toml'].includes(path)) packageHash.update(row)
   }
   return { fingerprint: all.digest('hex'), reviewedPackage: packageHash.digest('hex'), regular,
