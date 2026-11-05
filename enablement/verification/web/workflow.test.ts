@@ -85,7 +85,7 @@ test('Public alone owns Pages deployment without Connect inputs or completion tr
   assert.deepEqual([...deploy.matchAll(/^\s+needs: (.+)$/gm)].map(match => match[1]), ['stream'])
   assert.doesNotMatch(deploy, /scripts\/connect\/|CONNECT_BROWSER_ARTIFACT|COMPOSE_|connect-browser|VITE_HOSTED_API_ORIGIN/)
   assert.match(deploy, /scripts\/artifact\/verify\.ts/)
-  assert.match(deploy, /node scripts\/browser-setup\/install\.ts/)
+  assert.match(deploy, /node --experimental-strip-types scripts\/browser-setup\/install\.ts/)
   assert.doesNotMatch(deploy, /playwright-core install --with-deps/)
   assert.match(deploy, /scripts\/pages\/prepare-pages-video\.ts/)
   assert.match(deploy, /scripts\/pages\/test-public-homepage\.ts/)

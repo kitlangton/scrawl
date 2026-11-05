@@ -192,7 +192,7 @@ jobs:
         working-directory: public/site
         run: |
           bun install --frozen-lockfile
-          node scripts/browser-setup/install.ts
+          node --experimental-strip-types scripts/browser-setup/install.ts
           echo "CHROME_PATH=$(node --input-type=module -e 'import {chromium} from "playwright-core"; console.log(chromium.executablePath())')" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
