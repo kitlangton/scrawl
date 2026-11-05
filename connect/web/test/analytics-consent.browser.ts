@@ -43,7 +43,7 @@ const handler=async(req:import('node:http').IncomingMessage,res:ServerResponse)=
 const server=createServer((req,res)=>{void handler(req,res)})
 await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));origin=`http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`
 // Existing dist-test may use either a production-shaped origin or a loopback build origin.
-const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/home/simon/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome',headless:true,args:['--no-sandbox']})
+const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||chromium.executablePath(),headless:true,args:['--no-sandbox']})
 const context=await browser.newContext({viewport:{width:1100,height:1000}})
 const page=await context.newPage()
 const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message))
