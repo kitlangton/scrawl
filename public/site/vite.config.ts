@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin } from "vite"
 import { fileURLToPath } from "node:url"
-import { publicAssetPlugin } from "./lib/public-assets.mjs"
+import { publicAssetPlugin } from "./lib/public-assets.ts"
 import react from "@vitejs/plugin-react"
 import { agentFiles, jsonLd } from "./scripts/site-build/agent-files.ts"
 import { MAP_DIR } from "./scripts/site-build/feature-audit.ts"

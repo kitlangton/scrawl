@@ -167,7 +167,7 @@ PUBLIC_SITE_BUILD_INPUTS = {
     )
 }
 PUBLIC_SITE_TOOLING_INPUTS = {
-    PUBLIC_SITE_ROOT + "lib/public-assets.mjs",
+    PUBLIC_SITE_ROOT + "lib/public-assets.ts",
     PUBLIC_SITE_ROOT + "scripts/site-build/agent-files.ts",
     PUBLIC_SITE_ROOT + "scripts/site-build/feature-audit.ts",
     PUBLIC_SITE_ROOT + "scripts/site-build/prerender.ts",
@@ -175,6 +175,7 @@ PUBLIC_SITE_TOOLING_INPUTS = {
     "shared/analytics/browser.ts",
     "shared/ui/src/tokens.css",
     "shared/ui/scripts/check-theme.py",
+    "shared/ui/scripts/check-theme.ts",
     "shared/ui/scripts/legacy-colors.json",
 }
 PUBLIC_CONNECT_SHARED_ASSETS = {

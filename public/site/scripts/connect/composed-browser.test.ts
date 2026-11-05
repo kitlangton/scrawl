@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { resolve, extname } from 'node:path'
 import { chromium } from 'playwright-core'
-import { routes } from './compose-connect.mjs'
+import { routes } from './compose-connect.ts'
 
 test('composed routes, queries and analytics work without rebuilding Connect', async () => {
   const root = resolve(process.env.SITE_ARTIFACT || 'dist-apparent')

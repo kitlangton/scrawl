@@ -75,7 +75,7 @@ jobs:
       - name: Test publication contracts
         run: |
           node --experimental-strip-types --test enablement/verification/web/*.test.ts
-          python3 -m unittest discover -s public/site/scripts/cd -p 'test_*.py'
+          node --test public/site/scripts/cd/*.test.ts
       - name: Install locked website dependencies and browser
         working-directory: public/site
         run: |
@@ -93,24 +93,24 @@ jobs:
           VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
         run: |
           npm run build
-          node scripts/site-build/package-apparent.mjs
-          node --test scripts/brand/test-brand-favicon.mjs scripts/browser-proof/test-github-stars.mjs scripts/pages/test-latest-download.mjs scripts/pages/test-platform-os.mjs scripts/pages/test-public-homepage.ts scripts/browser-proof/test-video-demo.mjs
-          node --test scripts/commerce/test-package-text.mjs scripts/site-build/test-expected-canonical-packaging.mjs scripts/browser-proof/test-upstream-link-guard.mjs scripts/browser-proof/test-og-stage-redirect.mjs scripts/browser-proof/test-og-video-stage-browser.mjs
+          node scripts/site-build/package-apparent.ts
+          node --test scripts/brand/test-brand-favicon.ts scripts/browser-proof/test-github-stars.ts scripts/pages/test-latest-download.ts scripts/pages/test-platform-os.ts scripts/pages/test-public-homepage.ts scripts/browser-proof/test-video-demo.ts
+          node --test scripts/commerce/test-package-text.ts scripts/site-build/test-expected-canonical-packaging.ts scripts/browser-proof/test-upstream-link-guard.ts scripts/browser-proof/test-og-stage-redirect.ts scripts/browser-proof/test-og-video-stage-browser.ts
           cp -a dist-apparent "$RUNNER_TEMP/public-artifact"
-          node scripts/connect/compose-connect.mjs
+          node scripts/connect/compose-connect.ts
       - name: Prepare source-built Pages artifact
         working-directory: public/site
         run: |
-          node --test scripts/connect/artifact*.test.ts scripts/connect/test-compose-connect.mjs scripts/pages/test-pages-package.ts scripts/pages/test-pages-video.mjs scripts/pages/test-pages-video-runtime.mjs
+          node --test scripts/connect/artifact*.test.ts scripts/connect/test-compose-connect.ts scripts/pages/test-pages-package.ts scripts/pages/test-pages-video.ts scripts/pages/test-pages-video-runtime.ts
           node scripts/pages/prepare-pages.ts
           COMPOSE_PUBLIC_INPUT="$RUNNER_TEMP/public-artifact" node scripts/site-build/verify-composed.ts
           PUBLIC_THEME_ARTIFACT=public/site/dist-apparent THEME_SURFACES=public node ../../shared/ui/test/appearance.mjs
-          node scripts/pages/prepare-pages-video.mjs
+          node scripts/pages/prepare-pages-video.ts
           ./node_modules/.bin/esbuild lib/pages-worker.ts --bundle --platform=browser --format=esm --outfile=dist-apparent/_worker.js
-          PAGES_WORKER=dist-apparent/_worker.js node --test scripts/pages/test-pages-video-runtime.mjs
+          PAGES_WORKER=dist-apparent/_worker.js node --test scripts/pages/test-pages-video-runtime.ts
           SITE_ARTIFACT=dist-apparent node --test scripts/pages/test-public-homepage.ts scripts/connect/composed-browser.test.ts
           SITE_ARTIFACT=dist-apparent node --experimental-strip-types scripts/connect/analytics-smoke.ts
-          python3 scripts/cd/publish_pages.py seal ${{ needs.admit.outputs.sha }}
+          node scripts/cd/publish-pages.ts seal ${{ needs.admit.outputs.sha }}
       - uses: actions/upload-artifact@v4
         with:
           name: website-${{ needs.admit.outputs.sha }}
@@ -183,7 +183,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WEBSITE_PAGES_API_TOKEN: ${{ secrets.WEBSITE_PAGES_API_TOKEN }}
-        run: GITHUB_SHA="${{ needs.admit.outputs.sha }}" python3 public/site/scripts/cd/publish_pages.py
+        run: GITHUB_SHA="${{ needs.admit.outputs.sha }}" node public/site/scripts/cd/publish-pages.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:
