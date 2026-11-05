@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
-import { assessPrior, catalog, inputDigest, makePlan, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPath } from './core.ts'
+import { assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPath } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
 // accidentally use the hook caller's index, object database or worktree.
@@ -105,6 +105,28 @@ test('packed consumer imports code but verifies stylesheet exports as contained 
   rmSync(resolve(pkg, 'style.css')); writeFileSync(resolve(pkg, 'style.css'), '.pill {}')
   writeFileSync(resolve(pkg, 'index.js'), stripTypeScriptTypes('throw new Error("broken public JS export");\n'))
   assert.throws(verify) // Asset handling must not skip runtime code checks.
+})
+
+test('all-exports verification provisions declared optional host peers without making them required', () => {
+  const manifest = { peerDependencies: { react: '^19.2.0', 'react-dom': '^19.2.0', required: '^1' }, peerDependenciesMeta: { react: { optional: true }, 'react-dom': { optional: true } } }
+  assert.deepEqual(optionalVerificationPeers(manifest), ['react@^19.2.0', 'react-dom@^19.2.0'])
+  assert.deepEqual(optionalVerificationPeers({ peerDependencies: { required: '^1' } }), [])
+  for (const [name, version] of [['--prefix', 'outside'], ['peer', ''], ['peer', 1], ['peer', '1\0']])
+    assert.throws(() => optionalVerificationPeers({ peerDependencies: { [String(name)]: version }, peerDependenciesMeta: { [String(name)]: { optional: true } } }), /Invalid optional/)
+
+  const consumer = resolve(temp, 'optional-host-peer')
+  const pkg = resolve(consumer, 'node_modules/optional-ui')
+  mkdirSync(pkg, { recursive: true })
+  writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name: 'optional-ui', type: 'module', exports: { '.': './index.js', './ui': './ui.js' }, peerDependencies: { 'host-peer': '^1' }, peerDependenciesMeta: { 'host-peer': { optional: true } } }))
+  writeFileSync(resolve(pkg, 'index.js'), stripTypeScriptTypes('export const headless: boolean = true;'))
+  writeFileSync(resolve(pkg, 'ui.js'), stripTypeScriptTypes('export { supplied } from "host-peer";'))
+  verifyPublicExports(consumer, 'optional-ui', ['.'])
+  assert.throws(() => verifyPublicExports(consumer, 'optional-ui', ['.', './ui']))
+  const peer = resolve(consumer, 'node_modules/host-peer'); mkdirSync(peer)
+  writeFileSync(resolve(peer, 'package.json'), JSON.stringify({ name: 'host-peer', type: 'module', exports: './index.js' }))
+  writeFileSync(resolve(peer, 'index.js'), stripTypeScriptTypes('export const supplied: boolean = true;'))
+  verifyPublicExports(consumer, 'optional-ui', ['.', './ui'])
+  assert.equal(JSON.parse(readFileSync(resolve(pkg, 'package.json'), 'utf8')).peerDependenciesMeta['host-peer'].optional, true)
 })
 
 test('reuse reissues the exact admitted bytes and rejects tampering and wrong receipts', () => {

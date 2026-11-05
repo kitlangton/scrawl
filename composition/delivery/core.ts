@@ -169,7 +169,7 @@ export function buildOwner(root: string, owner: Owner, target: Target, outputPat
     cpSync(actual, resolve(output, 'payload'), { recursive: true, dereference: false, verbatimSymlinks: true })
     return
   }
-  const manifest = JSON.parse(readFileSync(resolve(root, owner.package, 'package.json'), 'utf8')) as { name?: string; exports?: Record<string, unknown> }
+  const manifest = JSON.parse(readFileSync(resolve(root, owner.package, 'package.json'), 'utf8')) as { name?: string; exports?: Record<string, unknown>; peerDependencies?: Record<string, unknown>; peerDependenciesMeta?: Record<string, { optional?: boolean }> }
   if (!manifest.name || !/^@?[a-z0-9][a-z0-9._/-]*$/.test(manifest.name)) throw new Error('Invalid npm package name')
   const packed = execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', output], { cwd: resolve(root, owner.package), encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, CI: 'true' } })
   const result = JSON.parse(packed) as Array<{ filename?: string }>
@@ -178,11 +178,23 @@ export function buildOwner(root: string, owner: Owner, target: Target, outputPat
   const consumer = resolve(output, '.consumer')
   mkdirSync(consumer)
   try {
-    execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', consumer, tarball], { cwd: consumer, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+    // This consumer exercises every export, including optional UI entrypoints.
+    // Install their declared host peers here, never in the staged library artifact.
+    execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', consumer, tarball, ...optionalVerificationPeers(manifest)], { cwd: consumer, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
     const publicPaths = Object.keys(manifest.exports ?? {}).filter(key => key === '.' || key.startsWith('./'))
     if (publicPaths.some(key => key.includes('*'))) throw new Error('Wildcard exports require an explicit consumer verification contract')
     verifyPublicExports(consumer, manifest.name, publicPaths.length ? publicPaths : ['.'])
   } finally { rmSync(consumer, { recursive: true, force: true }) }
+}
+
+/** Host peers required by the all-exports verifier, not by headless consumers. */
+export function optionalVerificationPeers(manifest: { peerDependencies?: Record<string, unknown>; peerDependenciesMeta?: Record<string, { optional?: boolean }> }): string[] {
+  return Object.entries(manifest.peerDependencies ?? {}).sort(([a], [b]) => a.localeCompare(b)).flatMap(([name, version]) => {
+    if (manifest.peerDependenciesMeta?.[name]?.optional !== true) return [];
+    if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(name) || typeof version !== 'string' || !version.trim() || version.includes('\0'))
+      throw new Error('Invalid optional verification peer');
+    return [`${name}@${version}`];
+  })
 }
 
 /** Exercise packed JS exports and inspect declared stylesheet assets as files. */
