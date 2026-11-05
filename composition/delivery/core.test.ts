@@ -125,6 +125,14 @@ test('all-exports verification provisions declared optional host peers without m
   for (const [name, version] of [['--prefix', 'outside'], ['peer', ''], ['peer', 1], ['peer', '1\0']])
     assert.throws(() => optionalVerificationPeers({ peerDependencies: { [String(name)]: version }, peerDependenciesMeta: { [String(name)]: { optional: true } } }), /Invalid optional/)
 
+  const owner = resolve(temp, 'local-peer-owner'); mkdirSync(owner);
+  const packedPeer = resolve(owner, 'peer.tgz'); writeFileSync(packedPeer, 'fixture');
+  const local = { peerDependencies: { '@apparent/private': '0.1.0' }, peerDependenciesMeta: { '@apparent/private': { optional: true } }, devDependencies: { '@apparent/private': 'file:peer.tgz' } };
+  assert.deepEqual(optionalVerificationPeers(local, owner), [packedPeer]);
+  assert.throws(() => optionalVerificationPeers(local), /package root/);
+  const outside = resolve(temp, 'outside-peer.tgz'); writeFileSync(outside, 'fixture');
+  assert.throws(() => optionalVerificationPeers({ ...local, devDependencies: { '@apparent/private': 'file:../outside-peer.tgz' } }, owner), /contained/);
+
   const consumer = resolve(temp, 'optional-host-peer')
   const pkg = resolve(consumer, 'node_modules/optional-ui')
   mkdirSync(pkg, { recursive: true })
