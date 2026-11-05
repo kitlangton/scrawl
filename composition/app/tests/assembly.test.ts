@@ -10,13 +10,15 @@ import { digest } from '../scripts/artifacts.ts';
 import { verifyPackagedApplication } from '../scripts/package.ts';
 
 test('CI explicitly installs Electron before provisioning its sandbox helper', async () => {
-  const workflow = await readFile(join(root, '../../.github/workflows/value-stream-delivery.yml'), 'utf8');
+  const workflow = await readFile(join(root, '../../.github/workflows/stream-app-shell.yml'), 'utf8');
   const job = workflow.split('\n  stream:\n')[1]?.split(/\n  [a-z-]+:\n/)[0];
   assert(job, 'Independent stream producer job must exist');
-  const build = job.indexOf('composition/delivery/cli.ts build');
-  const install = job.indexOf('run: npm run prepare:electron');
-  const sandbox = job.indexOf('sudo install -o root -g root -m 4755 node_modules/electron/dist/chrome-sandbox');
-  const smoke = job.indexOf('xvfb-run -a npm run test:electron');
+  assert(job.includes('uses: ./.github/actions/delivery-component'));
+  const component = await readFile(join(root, '../../.github/actions/delivery-component/action.yml'), 'utf8');
+  const build = component.indexOf('composition/delivery/cli.ts build');
+  const install = component.indexOf('run: npm run prepare:electron');
+  const sandbox = component.indexOf('sudo install -o root -g root -m 4755 node_modules/electron/dist/chrome-sandbox');
+  const smoke = component.indexOf('xvfb-run -a npm run test:electron');
   assert(build >= 0 && install > build && sandbox > install && smoke > sandbox,
     'Package installation must precede runtime installation, helper provisioning and Electron execution');
   const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));

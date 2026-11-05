@@ -6,7 +6,7 @@ import { readFile, writeFile, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as ed25519 from '@noble/ed25519';
 import {
-  signedBytes, signEnvelope, verifyEnvelope, decryptAge, encryptAge,
+  signedBytes, signEnvelope, verifyEnvelope, validateRecipientEnvelope, decryptAge, encryptAge,
   decodeArchive, encodeArchive, splitAgeStream, joinAgeParts,
 } from '../src/index.ts';
 import type { Context, Asset, Signed } from '../src/index.ts';
@@ -31,6 +31,8 @@ const envelope = await readJson('spool/envelope.json');
 assert.deepEqual(envelope.signed.context, fixture.context);
 assert.equal(Buffer.from(signedBytes(envelope.signed)).toString('hex'), fixture.signedBytesHex);
 assert.equal(await verifyEnvelope(publicKey, envelope.signed, envelope.signature), true);
+assert.deepEqual(await validateRecipientEnvelope(envelope, fixture.context, publicKey), envelope);
+await assert.rejects(validateRecipientEnvelope(envelope, { ...fixture.context, senderGrantId: "wrong-grant" }, publicKey), { category: "encrypted_context_mismatch" });
 assert.equal(await signEnvelope(senderSeed, envelope.signed), envelope.signature);
 for (const vector of fixture.strictCases) {
   assert.equal(await verifyEnvelope(Buffer.from(vector.publicKey, 'hex'),

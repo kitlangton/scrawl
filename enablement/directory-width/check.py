@@ -17,7 +17,7 @@ WORKFLOW_DIRECTORY = b".github/workflows"
 WORKFLOW_FILES = {
     b"connect-delivery.yml", b"linux-updater-harness.yml", b"native-proof-mac.yml",
     b"release-linux.yml", b"release-mac-preview.yml", b"release-windows.yml",
-    b"value-stream-delivery.yml", b"verification-mac.yml",
+    b"stream-admission.yml", b"verification-mac.yml",
     b"verification-platform.yml", b"verification.yml", b"web-delivery.yml",
     b"stream-agent.yml", b"stream-app-shell.yml", b"stream-connect-client.yml",
     b"stream-engine-media-native.yml", b"stream-engine-native.yml", b"stream-engine.yml",

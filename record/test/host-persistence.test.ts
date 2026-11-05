@@ -21,7 +21,7 @@ async function temporary(t: { after(fn: () => void | Promise<void>): void }) {
 
 function runChild(root: string, value: ReturnType<typeof mapping>, loseReply = false): Promise<ReturnType<typeof mapping>> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--experimental-strip-types", new URL("./host-child.ts", import.meta.url).pathname,
+    const child = spawn(process.execPath, ["--experimental-strip-types", new URL("./helpers/host-child.ts", import.meta.url).pathname,
       root, value.requestId, value.captureId, value.ownerToken, ...(loseReply ? ["lose-reply"] : [])], { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";

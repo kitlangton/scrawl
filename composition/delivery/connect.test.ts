@@ -25,7 +25,7 @@ function repo(name: string) {
   writeFileSync(resolve(root, 'engine/sdk/implementation.ts'), 'export const engine = true\n')
   writeFileSync(resolve(root, 'composition/delivery/core.ts'), 'delivery\n')
   writeFileSync(resolve(root, 'composition/architecture/guard.ts'), 'architecture\n')
-  writeFileSync(resolve(root, '.github/workflows/value-stream-delivery.yml'), 'workflow\n')
+  mkdirSync(resolve(root, '.github/actions/delivery-component'), { recursive: true }); writeFileSync(resolve(root, '.github/actions/delivery-component/action.yml'), 'component steps\n')
   writeFileSync(resolve(root, 'enablement/verification/workflow-budget.ts'), 'budget\n')
   writeFileSync(resolve(root, 'LICENSE'), 'license\n')
   git(root, 'add', '.'); git(root, 'commit', '-qm', 'initial')
