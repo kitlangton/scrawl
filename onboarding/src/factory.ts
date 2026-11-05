@@ -20,7 +20,7 @@ export const onboardingContributionFactory: ContributionFactory<OnboardingFactor
   async create(deps): Promise<HostedContribution> {
     const controller = new OnboardingController({ progress: deps.progress, record: deps.record, id: deps.id });
     let active = false;
-    let disposed = false;
+    let phase: "ready" | "dispose-failed" | "disposed" = "ready";
     const activationListeners = new Set<(value: boolean) => void>();
     const setActive = (value: boolean) => { active = value; for (const listener of activationListeners) listener(value); };
     let lifecycle = Promise.resolve();
@@ -36,18 +36,29 @@ export const onboardingContributionFactory: ContributionFactory<OnboardingFactor
     };
     const Settings: ComponentType = () => {
       const [busy, setBusy] = useState(false);
+      const [error, setError] = useState<string | null>(null);
+      const [status, setStatus] = useState(controller.state.progress.status);
+      useEffect(() => controller.subscribe(state => setStatus(state.progress.status)), []);
       return createElement("section", { "aria-label": "Onboarding settings" },
         createElement("h2", null, "Setup"),
-        createElement(deps.Button, { disabled: busy, onClick: () => { setBusy(true); void contribution.activation.activate({ reason: "resume" }).finally(() => setBusy(false)); } },
-          controller.state.progress.status === "completed" ? "Replay welcome tour" : "Resume setup"));
+        createElement(deps.Button, { disabled: busy, onClick: () => {
+          setBusy(true); setError(null);
+          void contribution.activation.activate({ reason: "resume" }).catch(() => {
+            setError("Setup could not be opened. Please try again.");
+          }).finally(() => setBusy(false));
+        } }, status === "completed" ? "Replay welcome tour" : "Resume setup"),
+        error ? createElement("p", { role: "alert" }, error) : null);
     };
     const contribution: HostedContribution = {
       module: { id: "onboarding", Screen, Settings },
       activation: {
         async activate({ reason }: { reason: ActivationReason }) {
           return serialize(async () => {
-            if (disposed) throw new Error("Disposed onboarding contribution cannot be activated");
-            const loaded = await controller.load();
+            if (phase !== "ready") throw new Error("Disposed onboarding contribution cannot be activated");
+            await waitForProgress();
+            await controller.load();
+            await waitForProgress();
+            const loaded = controller.state;
             if (loaded.publication === "unknown") throw new Error("Onboarding progress could not be loaded");
             if (reason === "firstLaunch" && (loaded.progress.status === "completed" || loaded.progress.status === "deferred")) {
               setActive(false);
@@ -63,15 +74,23 @@ export const onboardingContributionFactory: ContributionFactory<OnboardingFactor
         },
         async dispose() {
           return serialize(async () => {
-            if (disposed) return;
+            if (phase === "disposed") return;
             setActive(false);
-            await hideCoach();
-            disposed = true;
+            try { await hideCoach(); }
+            catch (error) { phase = "dispose-failed"; throw error; }
+            phase = "disposed";
             controller.dispose();
           });
         },
       },
     };
+    async function waitForProgress(): Promise<void> {
+      if (!controller.state.saving) return;
+      await new Promise<void>(resolve => {
+        const off = controller.subscribe(state => { if (!state.saving) { off(); resolve(); } });
+        if (!controller.state.saving) { off(); resolve(); }
+      });
+    }
     async function hideCoach() {
       if (!deps.coaching) return;
       const result = await deps.coaching.hide("onboarding-progress");

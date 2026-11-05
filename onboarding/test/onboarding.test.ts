@@ -64,7 +64,7 @@ test("host factory loads before rendering and applies first-launch versus explic
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => { root.render(createElement(hosted.module.Screen)); await Promise.resolve(); });
   assert.equal(dom.window.document.querySelector("main.onboarding-shell"), null);
-  await hosted.activation.activate({ reason: "resume" });
+  await act(async () => { await hosted.activation.activate({ reason: "resume" }); });
   assert.equal(f.progress.value.stage, "screen-ink"); assert.equal(f.progress.value.status, "in-progress");
   await act(async () => { await Promise.resolve(); });
   assert.equal(dom.window.document.querySelector("main.onboarding-shell")?.getAttribute("data-stage"), "screen-ink");
@@ -454,4 +454,60 @@ test("mounted deferred setup exposes Resume without resetting its saved step", a
   await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Resume setup")!.click(); });
   assert.equal(f.controller.state.progress.status, "in-progress"); assert.equal(f.controller.state.progress.stage, "permissions");
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
+});
+
+test('codec rejects malformed values and preserves legacy grant history without invoking getters', () => {
+  for (const value of [true, 'future', 4, [], { unrelated: 1 }, { ...initialProgress(), status: 'completed', stage: 'welcome' }]) {
+    assert.throws(() => onboardingProgressCodec.decode(value as any));
+  }
+  const legacy = onboardingProgressCodec.decode({ seen: false, deferred: true, resume: 'shortcut', granted: ['screen-recording', 'accessibility'] });
+  assert.deepEqual(onboardingProgressCodec.decode(onboardingProgressCodec.encode(legacy)).legacy.granted, ['screen-recording', 'accessibility']);
+  let accessed = false;
+  const baseline: string[] = [];
+  Object.defineProperty(baseline, '0', { enumerable: true, get() { accessed = true; return 'secret'; } });
+  assert.throws(() => onboardingProgressCodec.encode({ ...initialProgress(), practiceBaselineIds: baseline }), /accessors/);
+  assert.equal(accessed, false);
+});
+
+test('Settings displays activation failure instead of an unhandled rejection', async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: 'http://localhost' });
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window }); Object.defineProperty(globalThis, 'document', { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, value: true });
+  f.progress.read = async () => { throw new Error('private synthetic storage detail'); };
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => 'settings-error', Button: TestButton, close() {} });
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  await act(async () => { root.render(createElement(hosted.module.Settings)); });
+  await act(async () => { dom.window.document.querySelector<HTMLButtonElement>('button')!.click(); });
+  assert.match(dom.window.document.querySelector('[role=alert]')?.textContent ?? '', /could not be opened/);
+  assert.doesNotMatch(dom.window.document.body.textContent ?? '', /private synthetic/);
+  await act(async () => root.unmount()); await hosted.activation.dispose(); f.controller.dispose(); dom.window.close();
+});
+
+test('failed host disposal is retryable and never permits activation or stops capture', async () => {
+  const f = fixture('unsubscribe-during-recording'); let unavailable = true, hides = 0;
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => 'cleanup', Button: TestButton, close() {}, coaching: {
+    async show() { return { status: 'ok' }; }, async update() { return { status: 'ok' }; },
+    async hide() { hides++; return unavailable ? { status: 'unavailable', capability: 'coaching.hide' } : { status: 'ok' }; },
+  } });
+  await assert.rejects(hosted.activation.dispose(), /could not be removed/);
+  await assert.rejects(hosted.activation.activate({ reason: 'resume' }), /cannot be activated/);
+  unavailable = false; await hosted.activation.dispose(); await hosted.activation.dispose();
+  assert.equal(hides, 2); assert.equal(f.driver.captureContinues(), true); assert.deepEqual(f.driver.commands(), []); f.controller.dispose();
+});
+
+test('host activation waits for a pending owner write before reading progress again', async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: 'http://localhost' });
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window }); Object.defineProperty(globalThis, 'document', { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, value: true });
+  let reads = 0; const read = f.progress.read.bind(f.progress); f.progress.read = async () => { reads++; return read(); };
+  let finish!: () => void; const write = f.progress.compareAndSwap.bind(f.progress);
+  f.progress.compareAndSwap = async (revision, value) => { await new Promise<void>(resolve => { finish = resolve; }); return write(revision, value); };
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => 'write-race', Button: TestButton, close() {} });
+  await hosted.activation.activate({ reason: 'firstLaunch' });
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  await act(async () => root.render(createElement(hosted.module.Screen)));
+  await act(async () => { [...dom.window.document.querySelectorAll('button')].find(b => b.textContent === 'Get started')!.click(); });
+  const activation = hosted.activation.activate({ reason: 'resume' }); await Promise.resolve();
+  assert.equal(reads, 1);
+  await act(async () => { finish(); await activation; });
+  assert.equal(reads, 2); assert.equal(dom.window.document.querySelector('main')?.getAttribute('data-stage'), 'pen');
+  await act(async () => root.unmount()); await hosted.activation.dispose(); f.controller.dispose(); dom.window.close();
 });
