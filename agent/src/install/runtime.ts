@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { MediaClient, launchMediaWorker } from '@apparent/engine-sdk/media';
 import type { HandshakeResult, InstallerDependencies } from './types.js';
 
 export const systemInstallerDependencies: InstallerDependencies = {
@@ -26,8 +26,9 @@ export const systemInstallerDependencies: InstallerDependencies = {
     if (output.trim() !== '0.1.0') throw new Error('installed Agent CLI version smoke check failed');
   },
 
-  async handshake(sdkMediaModule, entry, runtime): Promise<HandshakeResult> {
-    const { MediaClient, launchMediaWorker } = await import(pathToFileURL(sdkMediaModule).href);
+  async handshake(_sdkMediaModule, entry, runtime): Promise<HandshakeResult> {
+    // Use the installer's published SDK dependency; core separately validates
+    // the installed consumer's matching SDK version and media export.
     const client = new MediaClient(launchMediaWorker(entry, runtime, 3000));
     let reply: HandshakeResult['reply'] | undefined;
     let failure: unknown;
