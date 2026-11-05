@@ -63,6 +63,8 @@ export type RecordCommand = CommandBase & (
   | { type: "open-capture"; captureId: string }
 );
 export type CommandResult =
+  /** Dispatch accepted; no operation outcome is implied. Observe provider facts. */
+  | { status: "accepted"; requestId: string; snapshot: CapabilitySnapshot }
   | { status: "applied"; requestId: string; snapshot: CapabilitySnapshot; receipt?: { captureId?: string } }
   | { status: "refused"; requestId: string; reason: string; snapshot: CapabilitySnapshot }
   | { status: "cancelled"; requestId: string; snapshot: CapabilitySnapshot }
