@@ -10,11 +10,10 @@ directory count, while its contents remain eligible and checked at their own
 levels. Nested hidden directories count normally. Files and symlinks whose names
 start with a dot remain included in the root file count.
 
-GitHub Actions requires a separate workflow file for each independently
-scheduled delivery stream. The exact `.github/workflows/` inventory may contain
-11 files (including `value-stream-delivery.yml`) and at most 10 subdirectories.
-Unknown entries remain blocked; this exception does not apply elsewhere under
-`.github`.
+GitHub Actions requires a separate immediate workflow file for each independently
+scheduled delivery stream. The exact `.github/workflows/` file inventory is
+bounded by the explicitly named allowlist in `check.py`; unknown files and
+directories remain blocked. This exception does not apply elsewhere under `.github`.
 
 On violation, split changes by responsibility and stage only the intended
 changes; the hook never edits or stages files. Git/plumbing failures reject the

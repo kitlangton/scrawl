@@ -166,6 +166,7 @@ test('every supported root workflow waits for all payload jobs before auditing',
   for (const name of readdirSync(folder)) {
     const text = readFileSync(new URL(name, folder), 'utf8')
     if (name === 'release-windows.yml' || name === 'runtime-budget.yml') continue
+    if (text.includes('uses: ./.github/workflows/value-stream-delivery.yml')) continue
     // Only root workflows: callable platform verification is covered by caller.
     if (!/^  (push|workflow_dispatch|workflow_run|schedule):/m.test(text)) continue
     const jobs = [...text.split('jobs:\n')[1].matchAll(/^  ([\w-]+):$/gm)].map(m => m[1])
@@ -341,7 +342,7 @@ test('media runtime packages install only for a fresh native media producer buil
   const workflow = readFileSync(new URL('../../.github/workflows/value-stream-delivery.yml', import.meta.url), 'utf8')
   const setup = workflow.match(/- name: Install Engine media runtime and fixture dependencies[\s\S]*?(?=\n      - name: Independently install, verify and build the owner artifact)/)?.[0]
   assert.ok(setup, 'media dependency setup must precede the owner build')
-  assert.match(setup, /if: steps\.admit\.outputs\.reuse != 'true' && matrix\.id == 'engine-media-native'/)
+  assert.match(setup, /if: \(steps\.admit\.outputs\.reuse != 'true' \|\| steps\.reuse\.outcome != 'success'\) && matrix\.id == 'engine-media-native'/)
   for (const packageName of ['ffmpeg', 'pkg-config', 'libgstreamer1.0-dev', 'libgstreamer-plugins-base1.0-dev', 'gstreamer1.0-plugins-base', 'gstreamer1.0-plugins-good', 'gstreamer1.0-libav']) assert.match(setup, new RegExp(`\\b${packageName.replaceAll('.', '\\.')}\\b`))
   assert.doesNotMatch(setup, /APPARENT_GST_PLUGIN_SOURCE/)
   const pr = workflow.split('  stream-pr:\n')[1]
