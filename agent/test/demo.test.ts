@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -12,8 +13,13 @@ import { runZoom } from '../dist/zoom/zoom.js';
 test('demo writes private synthetic consumer bundle with annotated PNGs and CLI-readable semantics',async()=>{
   const parent=await mkdtemp(join(tmpdir(),'agent-demo-')),out=join(parent,'a path with spaces.apparent');
   try{
+    const started=Date.now();
     const made=await generateDemo(out);const {value}=await readManifest(out);
     assert.equal(made.path,out);assert.equal(value.synthetic,true);assert.equal(value.provenance.kind,'synthetic-demo');
+    assert.equal(value.keyframes[0].reason,'scene_change');
+    assert.ok(value.createdAtMs>=started&&value.createdAtMs<=Date.now());
+    const second=await generateDemo(join(parent,'second.apparent'));
+    assert.notEqual((await readManifest(second.path)).value.id,value.id);
     assert.match(value.target.app,/synthetic/i);assert.equal(value.audio,undefined);assert.equal(value.video,undefined);
     assert.deepEqual(value.marks.map((m:any)=>m.strokes),[[0],[1,2],[3]]);
     assert.equal(value.transcript.words[0].t0,600);assert.equal(value.transcript.words.at(-1).t1,9400);
@@ -31,17 +37,38 @@ test('demo writes private synthetic consumer bundle with annotated PNGs and CLI-
 
 test('demo default honors capturesDir without changing config and removes partial owned output on render failure',async()=>{
   const parent=await mkdtemp(join(tmpdir(),'agent-demo-default-')),home=join(parent,'home'),configured=join(parent,'configured captures');
-  await mkdir(join(home,'.config','apparent'),{recursive:true});await mkdir(configured);
+  await mkdir(join(home,'.config','apparent'),{recursive:true});await mkdir(configured,{mode:0o700});
   const configPath=join(home,'.config','apparent','config.json'),config=JSON.stringify({capturesDir:configured,unrelatedSecret:'keep-private'});
   await writeFile(configPath,config);
   try{
     const cli=new URL('../dist/cli.js',import.meta.url).pathname;
     const generated=spawnSync(process.execPath,[cli,'demo','--json'],{encoding:'utf8',env:{...process.env,HOME:home,XDG_DATA_HOME:join(parent,'xdg'),APPARENT_CAPTURES_DIR:undefined}});
     assert.equal(generated.status,0,generated.stderr);const result=JSON.parse(generated.stdout);assert.ok(result.path.startsWith(configured+'/'));assert.equal(await readFile(configPath,'utf8'),config);
+    const latest=spawnSync(process.execPath,[cli,'inspect','latest','--json'],{encoding:'utf8',env:{...process.env,HOME:home,XDG_DATA_HOME:join(parent,'xdg'),APPARENT_CAPTURES_DIR:undefined}});
+    assert.equal(latest.status,0,latest.stderr);assert.equal(JSON.parse(latest.stdout).id,(await readManifest(result.path)).value.id);
     const original=PNG.sync.write;let calls=0;(PNG.sync as any).write=(...args:any[])=>{if(++calls===2)throw new Error('injected PNG encoder failure');return original.apply(PNG.sync,args);};
     const failed=join(parent,'partial.apparent');try{await assert.rejects(generateDemo(failed),/injected PNG encoder failure/);}finally{(PNG.sync as any).write=original;}
     await assert.rejects(access(failed));
   }finally{await rm(parent,{recursive:true,force:true});}
+});
+
+test('demo failure preserves a foreign replacement instead of deleting by pathname',async()=>{
+  const parent=await mkdtemp(join(tmpdir(),'agent-demo-replacement-')),out=join(parent,'partial.apparent');
+  const original=PNG.sync.write;let calls=0;
+  (PNG.sync as any).write=(...args:any[])=>{
+    if(++calls===2){
+      const frame=join(out,'frames/frame-01.png');
+      renameSync(frame,join(parent,'retained-original.png'));
+      writeFileSync(frame,'foreign replacement',{flag:'wx'});
+      throw new Error('injected failure after replacement');
+    }
+    return original.apply(PNG.sync,args);
+  };
+  try{
+    await assert.rejects(generateDemo(out),/injected failure after replacement/);
+    assert.equal(await readFile(join(out,'frames/frame-01.png'),'utf8'),'foreign replacement');
+    await assert.rejects(access(join(out,'apparent.json')));
+  }finally{(PNG.sync as any).write=original;await rm(parent,{recursive:true,force:true});}
 });
 
 test('demo refuses collisions, symlink parents, invalid output before creating anything, and clipboard before side effects',async()=>{
@@ -50,6 +77,9 @@ test('demo refuses collisions, symlink parents, invalid output before creating a
     const target=join(parent,'existing.apparent');await mkdir(target);await writeFile(join(target,'keep'),'untouched');
     await assert.rejects(generateDemo(target),/EEXIST|already exists/);assert.equal(await readFile(join(target,'keep'),'utf8'),'untouched');
     const link=join(parent,'link');await symlink(parent,link);await assert.rejects(generateDemo(join(link,'new.apparent')),/symlink/);
+    const shared=join(parent,'shared');await mkdir(shared);await chmod(shared,0o777);
+    await assert.rejects(generateDemo(join(shared,'unsafe.apparent')),/writable by other users/);
+    await assert.rejects(access(join(shared,'unsafe.apparent')));
     const fifo=join(parent,'pipe.apparent');spawnSync('mkfifo',[fifo]);await assert.rejects(generateDemo(fifo),/EEXIST|already exists/);
     await assert.rejects(generateDemo('relative.apparent'),/canonical absolute/);
     const cli=new URL('../dist/cli.js',import.meta.url).pathname;
