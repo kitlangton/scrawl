@@ -39,9 +39,40 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(shared_ui["app_shell"])
         self.assertTrue(shared_ui["root"])
         workflow = verification.select([".github/workflows/verification-platform.yml"])
-        self.assertTrue(workflow["app_shell"])
+        self.assertFalse(workflow["app_shell"])
         self.assertTrue(workflow["root"])
+        delivery_workflow = verification.select([".github/workflows/value-stream-delivery.yml"])
+        self.assertTrue(delivery_workflow["app_shell"])
+        self.assertTrue(delivery_workflow["root"])
         self.assertFalse(verification.select(["composition/cli.rs"])["app_shell"])
+
+    def test_delivery_sources_select_app_shell_and_dependency_free_node_contracts_only(self):
+        for path in ("composition/delivery/core.ts", "composition/delivery/cli.ts",
+                     "composition/delivery/contracts.test.ts"):
+            with self.subTest(path=path):
+                selected = verification.select([path])
+                self.assertTrue(selected["app_shell"])
+                self.assertTrue(selected["delivery"])
+                self.assertFalse(selected["root"])
+                self.assertFalse(selected["engine"])
+        self.assertFalse(verification.delivery_tests_selected(["composition/app/src/main.tsx"]))
+        self.assertTrue(verification.delivery_tests_selected([]))
+
+    def test_delivery_feature_check_runs_node_tests_without_installing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "composition/delivery"
+            package.mkdir(parents=True)
+            (package / "delivery.test.ts").touch()
+            with patch.object(verification, "ROOT", root), patch.object(
+                    verification, "run_app_shell_check") as app_shell, patch.object(
+                    verification.subprocess, "run") as run:
+                verification.run_pr_checks({"paths": ["composition/delivery/core.ts"]})
+            command = ["node", "--experimental-strip-types", "--test",
+                       "composition/delivery/delivery.test.ts"]
+            app_shell.assert_called_once_with()
+            self.assertIn(command, [call.args[0] for call in run.call_args_list])
+            self.assertFalse(any(call.args[0][:2] == ["npm", "ci"] for call in run.call_args_list))
 
     def test_app_shell_pr_check_runs_installed_package_script_without_installing(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -794,11 +825,11 @@ class SelectionTests(unittest.TestCase):
         for path in (".githooks/pre-commit", "enablement/verification.py",
                      "enablement/directory-width/check.py",
                      "enablement/directory-width/tests/test_hook.py",
+                     "enablement/directory-width/README.md",
                      "enablement/file-length/check.ts"):
             with self.subTest(path=path):
                 self.assertTrue(verification.directory_width_contract_selected([path]))
         for path in ("README.md", "capture/desktop/ui/frontend/src/main.tsx",
-                     "enablement/directory-width/README.md",
                      "enablement/file-length/check.test.ts"):
             with self.subTest(path=path):
                 self.assertFalse(verification.directory_width_contract_selected([path]))
@@ -1240,6 +1271,8 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
                         expected = '60'
                     elif bounded_publication:
                         expected = '2'
+                    elif workflow.name == 'value-stream-delivery.yml':
+                        expected = '2' if '    outputs:\n' in job else ('5' if '    name: Delivery contracts\n' in job else '15')
                     self.assertIn(f'    timeout-minutes: {expected}\n', job, str(workflow))
                     if bounded_publication:
                         self.assertIn("WORKFLOW_BUDGET_RESERVE_SECONDS: '120'", job)

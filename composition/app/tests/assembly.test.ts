@@ -9,17 +9,22 @@ import { buildShell, buildStream, root } from '../scripts/build.ts';
 import { digest } from '../scripts/artifacts.ts';
 
 test('CI explicitly installs Electron before provisioning its sandbox helper', async () => {
-  const workflow = await readFile(join(root, '../../.github/workflows/verification-platform.yml'), 'utf8');
-  const job = workflow.split('\n  app-shell-foundation:\n')[1]?.split('\n  desktop-ui:\n')[0];
-  assert(job, 'Foundation job must exist');
+  const workflow = await readFile(join(root, '../../.github/workflows/value-stream-delivery.yml'), 'utf8');
+  const job = workflow.split('\n  stream:\n')[1]?.split('\n  runtime-budget:\n')[0];
+  assert(job, 'Independent stream producer job must exist');
+  const build = job.indexOf('composition/delivery/cli.ts build');
   const install = job.indexOf('run: npm run prepare:electron');
   const sandbox = job.indexOf('sudo install -o root -g root -m 4755 node_modules/electron/dist/chrome-sandbox');
-  const smoke = job.indexOf('run: xvfb-run -a npm run test:electron');
-  assert(install > job.lastIndexOf('run: npm ci') && sandbox > install && smoke > sandbox,
+  const smoke = job.indexOf('xvfb-run -a npm run test:electron');
+  assert(build >= 0 && install > build && sandbox > install && smoke > sandbox,
     'Package installation must precede runtime installation, helper provisioning and Electron execution');
   const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   assert.equal(metadata.scripts['prepare:electron'], 'node node_modules/electron/install.js');
   assert.equal(metadata.scripts.prestart, 'npm run prepare:electron');
+  const legacy = await readFile(join(root, '../../.github/workflows/verification-platform.yml'), 'utf8');
+  assert(!legacy.includes('\n  app-shell-foundation:'), 'Legacy verification must not run App Shell again');
+  assert(!workflow.includes('needs: select') && !workflow.includes('workflow_run:'),
+    'Independent delivery must not wait for legacy verification');
 });
 
 test('independent stream rebuild and compiler-free assembly preserve unchanged artifacts', async t => {

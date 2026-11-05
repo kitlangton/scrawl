@@ -96,6 +96,7 @@ BROWSER_FILES = {"connect/web/" + path for path in (
 DIRECTORY_WIDTH_CONTRACT_INPUTS = {
     ".githooks/pre-commit",
     "enablement/directory-width/check.py",
+    "enablement/directory-width/README.md",
     "enablement/file-length/check.ts",
     "enablement/verification.py",
 }
@@ -120,8 +121,9 @@ CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
 # verifier closure includes the shared contracts it consumes and canonical
 # shared UI components; these paths do not feed the Rust application build.
 APP_SHELL_ROOT = "composition/app/"
-APP_SHELL_INPUTS = (APP_SHELL_ROOT, "shared/contracts/", "shared/ui/")
-APP_SHELL_WORKFLOW = ".github/workflows/verification-platform.yml"
+APP_SHELL_DELIVERY_ROOT = "composition/delivery/"
+APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/", "shared/ui/")
+APP_SHELL_WORKFLOW = ".github/workflows/value-stream-delivery.yml"
 
 
 def app_shell_selected(paths):
@@ -194,6 +196,7 @@ def select(paths, history_known=True):
     browser = False
     public_site = False
     app_shell = False
+    delivery = False
     reasons = []
     for path in paths:
         if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
@@ -202,7 +205,9 @@ def select(paths, history_known=True):
             app_shell = True
             # Shared UI also feeds existing consumers, so continue through
             # the ordinary selector for those paths.
-            if path.startswith(APP_SHELL_ROOT) or path.startswith("shared/contracts/"):
+            if path.startswith(APP_SHELL_ROOT) or path.startswith(APP_SHELL_DELIVERY_ROOT) or path.startswith("shared/contracts/"):
+                if path.startswith(APP_SHELL_DELIVERY_ROOT):
+                    delivery = True
                 continue
         if path in PUBLIC_CONNECT_SHARED_INPUTS:
             # Shared browser sources and Public-owned assets have Connect
@@ -237,6 +242,7 @@ def select(paths, history_known=True):
             reasons.append(path)
     return {"root": broad, "engine": broad or engine, "browser": browser,
             "app_shell": app_shell or not history_known or not paths,
+            "delivery": delivery or not history_known or not paths,
             "public_site": public_site or not history_known or not paths,
             "focused": [], "paths": paths,
             "reason": "unknown history or empty delta" if not history_known or not paths
@@ -328,6 +334,8 @@ def run_pr_checks(selection=None):
     paths = selection["paths"] if selection else []
     if (selection or {}).get("app_shell", app_shell_selected(paths)):
         run_app_shell_check()
+    if (selection or {}).get("delivery", delivery_tests_selected(paths)):
+        run_delivery_tests()
     if connect_client_typescript_selected(paths):
         run_connect_client_typescript_tests()
     if directory_width_contract_selected(paths):
@@ -381,6 +389,22 @@ def run_app_shell_check():
     if absent:
         raise RuntimeError("App Shell check needs installed dependencies: run npm ci in composition/app; the hook never installs dependencies")
     subprocess.run(["npm", "run", "check"], cwd=package, check=True)
+
+
+def delivery_tests_selected(paths):
+    """Select pure Node delivery contracts for changes to their TypeScript owner."""
+    if not paths:
+        return True  # Unknown history stays conservative.
+    return any(path.startswith(APP_SHELL_DELIVERY_ROOT) for path in paths)
+
+
+def run_delivery_tests():
+    """Run delivery's dependency-free Node tests without installing packages."""
+    tests = sorted((ROOT / APP_SHELL_DELIVERY_ROOT).glob("*.test.ts"))
+    if not tests:
+        raise RuntimeError("Delivery checks need composition/delivery/*.test.ts; the hook never installs dependencies")
+    subprocess.run(["node", "--experimental-strip-types", "--test",
+                    *[str(test.relative_to(ROOT)) for test in tests]], cwd=ROOT, check=True)
 
 
 def run_connect_client_typescript_tests():
@@ -656,6 +680,8 @@ def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=
 def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_root_build=False):
     if selection.get("app_shell"):
         run_app_shell_check()
+    if selection.get("delivery"):
+        run_delivery_tests()
     cargo = ["cargo"]
     if subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
         cargo = ["taskpolicy", "-c", "utility", "cargo"]

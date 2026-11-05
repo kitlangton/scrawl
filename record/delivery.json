@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "id": "record",
+  "kind": "npm",
+  "package": "record",
+  "inputs": ["record/"],
+  "verify": ["typecheck", "test"],
+  "build": "build",
+  "targets": ["linux-x64"],
+  "stage": "library"
+}

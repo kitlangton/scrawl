@@ -92,7 +92,7 @@ class TempPreflightTests(unittest.TestCase):
         public_build.assert_called_once_with()  # Unknown history includes Public feedback.
         client_tests.assert_called_once_with()  # Keep owner checks selected without live dependency setup.
         patterns = [call.args[0][-1] for call in run.call_args_list]
-        self.assertEqual(patterns, ['enablement/file-length/check.test.ts', 'shared/ui/scripts/check-theme.py', 'test_*.py',
+        self.assertEqual(patterns, ['enablement/file-length/check.test.ts', 'shared/ui/scripts/check-theme.py', 'composition/delivery/core.test.ts', 'test_*.py',
                                     'test_*push*.py', 'test_verification.py', 'test_release_gate.py',
                                     'test_temp_preflight.py', 'test_owner_lanes.py'])
         app_check.assert_called_once_with()

@@ -64,6 +64,12 @@ class PrePushGuardTests(unittest.TestCase):
             dependency.parent.mkdir(parents=True, exist_ok=True)
             dependency.write_text("fixture\n")
         shutil.copy2(SELECTOR, self.repo / "enablement" / "verification.py")
+        # Preserve the dependency-free delivery check closure for conservative
+        # unknown-history selection; it never invokes this hook suite.
+        delivery = self.repo / "composition/delivery"
+        delivery.mkdir(parents=True)
+        for name in ("core.ts", "cli.ts", "core.test.ts"):
+            shutil.copy2(SELECTOR.parents[1] / "composition/delivery" / name, delivery / name)
         # File-length tests exercise pre-commit only, so this closure stays
         # finite and never recursively invokes the pre-push test suite.
         for name in (".githooks/pre-commit", "enablement/directory-width/check.py",
