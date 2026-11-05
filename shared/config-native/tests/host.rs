@@ -1,11 +1,26 @@
 use serde_json::{Value, json};
-use std::{fs, io::Write, path::PathBuf, process::{Command, Stdio}, sync::{Arc, Barrier}};
+use std::{fs, io::Write, os::unix::fs::DirBuilderExt, path::PathBuf, process::{Command, Stdio}, sync::{Arc, Barrier, atomic::{AtomicU64, Ordering}}};
+
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 fn temp() -> PathBuf {
-    let p = std::env::temp_dir().join(format!("apparent-config-host-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-    fs::create_dir_all(&p).unwrap();
-    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; fs::set_permissions(&p, fs::Permissions::from_mode(0o700)).unwrap(); }
+    temp_at(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
+}
+fn temp_at(stamp: u128) -> PathBuf {
+    let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+    let p = std::env::temp_dir().join(format!("apparent-config-host-{}-{stamp}-{sequence}", std::process::id()));
+    fs::DirBuilder::new().mode(0o700).create(&p).unwrap();
     p.canonicalize().unwrap()
+}
+
+#[test]
+fn fixtures_never_share_state_when_the_clock_repeats() {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let a = temp_at(stamp);
+    let b = temp_at(stamp);
+    assert_ne!(a, b, "independent tests must never share config or lock files");
+    fs::remove_dir_all(a).unwrap();
+    fs::remove_dir_all(b).unwrap();
 }
 fn host(path: &PathBuf, owner: &str, request: &str) -> (i32, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_apparent-config-host"))
@@ -33,8 +48,8 @@ fn host_cas_is_serialized_persistent_and_preserves_legacy_keys() {
     }
     barrier.wait();
     let outputs: Vec<_> = joins.into_iter().map(|j| j.join().unwrap()).collect(); let results: Vec<_> = outputs.iter().map(|s| response(s)).collect();
-    assert_eq!(results.iter().filter(|v| v["status"] == "saved").count(), 1);
-    assert_eq!(results.iter().filter(|v| v["status"] == "conflict").count(), 1);
+    assert_eq!(results.iter().filter(|v| v["status"] == "saved").count(), 1, "{results:?}");
+    assert_eq!(results.iter().filter(|v| v["status"] == "conflict").count(), 1, "{results:?}");
     let read = response(&host(&path, "desktop", &req("read", "read", "")).1);
     assert_eq!(read["revision"], 1);
     let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
