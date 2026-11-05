@@ -15,11 +15,16 @@ export async function packageApplication(assembly: string, output: string) {
     platform: process.platform, arch: process.arch, overwrite: false, prune: false,
     asar: false, quiet: true });
   assert.equal(packages.length, 1, 'Expected one fresh application bundle');
-  // Packager must retain the verified payload byte-for-byte.
-  const resources = process.platform === 'darwin'
-    ? resolve(packages[0], 'Contents/Resources/app') : resolve(packages[0], 'resources/app');
+  return verifyPackagedApplication(packages[0], process.platform);
+}
+
+/** Packager returns a distribution directory; macOS nests its .app within it. */
+export async function verifyPackagedApplication(directory: string, platform: 'linux' | 'darwin') {
+  const application = platform === 'darwin' ? resolve(directory, 'apparent-foundation.app') : resolve(directory);
+  const resources = platform === 'darwin'
+    ? resolve(application, 'Contents/Resources/app') : resolve(application, 'resources/app');
   await verifyAssembly(resources);
-  return packages[0];
+  return application;
 }
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const [assembly, output] = process.argv.slice(2);

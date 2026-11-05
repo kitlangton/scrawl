@@ -5,8 +5,9 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, sy
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
-import { assessPrior, catalog, inputDigest, reusePayload, sealPayload, type Owner, workflowPath } from './core.ts'
+import { assessPrior, catalog, inputDigest, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPath } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
 // accidentally use the hook caller's index, object database or worktree.
@@ -37,6 +38,25 @@ test('catalog reports absent owners pending and blocks present owners without re
   mkdirSync(resolve(path, 'record')); mkdirSync(resolve(path, 'shared/ui'), { recursive: true })
   writeFileSync(resolve(path, 'record/delivery.json'), JSON.stringify({ ...owner, inputs: ['shared/ui/'] }))
   assert.match(catalog(path).blocked.join(';'), /Package source must be covered/)
+})
+
+test('packed consumer imports code but verifies stylesheet exports as contained assets', () => {
+  const consumer = resolve(temp, 'asset-consumer')
+  const pkg = resolve(consumer, 'node_modules/@apparent/asset-fixture')
+  mkdirSync(pkg, { recursive: true })
+  writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name: '@apparent/asset-fixture', type: 'module', exports: { '.': './index.js', './ui/style.css': './style.css' } }))
+  writeFileSync(resolve(pkg, 'index.js'), stripTypeScriptTypes('export const ready: boolean = true;\n'))
+  writeFileSync(resolve(pkg, 'style.css'), '.pill { display: flex; }\n')
+  const verify = () => verifyPublicExports(consumer, '@apparent/asset-fixture', ['.', './ui/style.css'])
+  verify() // Node would reject CSS if it were imported as JavaScript.
+  rmSync(resolve(pkg, 'style.css')); assert.throws(verify)
+  writeFileSync(resolve(pkg, 'style.css'), ''); assert.throws(verify)
+  rmSync(resolve(pkg, 'style.css'))
+  const external = resolve(consumer, 'external.css'); writeFileSync(external, '.outside {}')
+  symlinkSync(external, resolve(pkg, 'style.css')); assert.throws(verify)
+  rmSync(resolve(pkg, 'style.css')); writeFileSync(resolve(pkg, 'style.css'), '.pill {}')
+  writeFileSync(resolve(pkg, 'index.js'), stripTypeScriptTypes('throw new Error("broken public JS export");\n'))
+  assert.throws(verify) // Asset handling must not skip runtime code checks.
 })
 
 test('reuse reissues the exact admitted bytes and rejects tampering and wrong receipts', () => {
