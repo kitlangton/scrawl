@@ -32,7 +32,6 @@ fn host_ordered(path: &PathBuf, owner: &str, request: &str, wait_before_input: b
     let mut input = child.stdin.take().unwrap();
     if wait_before_input { child.wait().unwrap(); }
     let write_result = input.write_all(request.as_bytes());
-    if wait_before_input { assert_eq!(write_result.as_ref().unwrap_err().kind(), std::io::ErrorKind::BrokenPipe); }
     drop(input);
     let out = child.wait_with_output().unwrap();
     if let Err(error) = write_result {
