@@ -99,6 +99,13 @@ test('issue body-file preserves exact UTF-8 text and refuses FIFO inputs promptl
     const boundary = spawnSync(process.execPath, [cli, 'issue', '--title', scalarTitle, '--body', scalarBody], { encoding: 'utf8', env: f.env });
     assert.equal(boundary.status, 0, boundary.stderr);
     assert.equal(JSON.parse(boundary.stdout).title, scalarTitle); assert.equal(JSON.parse(boundary.stdout).body, scalarBody);
+    await writeFile(path, scalarBody);
+    const fileBoundary = spawnSync(process.execPath, [cli, 'issue', '--title', title, '--body-file', path], { encoding: 'utf8', env: f.env });
+    assert.equal(fileBoundary.status, 0, fileBoundary.stderr);
+    assert.equal(JSON.parse(fileBoundary.stdout).body, scalarBody);
+    await writeFile(path, `${scalarBody}x`);
+    const oversized = spawnSync(process.execPath, [cli, 'issue', '--title', title, '--body-file', path, '--submit'], { encoding: 'utf8', env: f.env });
+    assert.equal(oversized.status, 1); assert.equal(oversized.stdout, '');
     assert.equal(await readFile(f.log).catch(() => Buffer.alloc(0)).then(bytes => bytes.length), 0);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

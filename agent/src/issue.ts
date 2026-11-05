@@ -61,7 +61,12 @@ async function readBody(path: string): Promise<string> {
       if (!info.isFile()) execution('--body-file must be a regular file (nothing sent).');
       if (info.size > MAX_BODY) execution('--body-file exceeds 60000 UTF-8 bytes (nothing sent).');
       const bytes = Buffer.alloc(MAX_BODY + 1);
-      const { bytesRead } = await file!.read(bytes, 0, bytes.length, 0);
+      let bytesRead = 0;
+      while (bytesRead < bytes.length) {
+        const read = await file!.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
+        if (read.bytesRead === 0) break;
+        bytesRead += read.bytesRead;
+      }
       if (bytesRead > MAX_BODY) execution('--body-file exceeds 60000 UTF-8 bytes (nothing sent).');
       try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, bytesRead)); }
       catch { execution('--body-file must contain valid UTF-8 (nothing sent).'); }
