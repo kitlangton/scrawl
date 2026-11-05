@@ -336,3 +336,12 @@ printf '${name}:%s\\n' "$*" >> "$CALLS"
     }
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+
+test('media runtime packages install only for a fresh native media producer build', () => {
+  const workflow = readFileSync(new URL('../../.github/workflows/value-stream-delivery.yml', import.meta.url), 'utf8')
+  const setup = workflow.match(/- name: Install Engine media runtime and fixture dependencies[\s\S]*?(?=\n      - name: Independently install, verify and build the owner artifact)/)?.[0]
+  assert.ok(setup, 'media dependency setup must precede the owner build')
+  assert.match(setup, /if: steps\.admit\.outputs\.reuse != 'true' && matrix\.id == 'engine-media-native'/)
+  for (const packageName of ['ffmpeg', 'pkg-config', 'libgstreamer1.0-dev', 'libgstreamer-plugins-base1.0-dev', 'gstreamer1.0-plugins-base', 'gstreamer1.0-plugins-good', 'gstreamer1.0-libav']) assert.match(setup, new RegExp(`\\b${packageName.replaceAll('.', '\\.')}\\b`))
+  assert.doesNotMatch(setup, /APPARENT_GST_PLUGIN_SOURCE/)
+})
