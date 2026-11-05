@@ -162,9 +162,28 @@ export function buildOwner(root: string, owner: Owner, target: Target, outputPat
     execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', consumer, tarball], { cwd: consumer, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
     const publicPaths = Object.keys(manifest.exports ?? {}).filter(key => key === '.' || key.startsWith('./'))
     if (publicPaths.some(key => key.includes('*'))) throw new Error('Wildcard exports require an explicit consumer verification contract')
-    const imports = (publicPaths.length ? publicPaths : ['.']).map(key => key === '.' ? manifest.name! : manifest.name! + key.slice(1))
-    execFileSync('node', ['--input-type=module', '-e', imports.map(name => `await import(${JSON.stringify(name)})`).join(';')], { cwd: consumer, stdio: 'inherit' })
+    verifyPublicExports(consumer, manifest.name, publicPaths.length ? publicPaths : ['.'])
   } finally { rmSync(consumer, { recursive: true, force: true }) }
+}
+
+/** Exercise packed JS exports and inspect declared stylesheet assets as files. */
+export function verifyPublicExports(consumer: string, packageName: string, publicPaths: string[]) {
+  const imports = publicPaths.map(key => key === '.' ? packageName : packageName + key.slice(1))
+  execFileSync('node', ['--input-type=module', '-e', `
+    import { realpathSync, statSync, readFileSync } from 'node:fs';
+    import { fileURLToPath } from 'node:url';
+    import { resolve, relative, isAbsolute, sep } from 'node:path';
+    const packageRoot = realpathSync(resolve('node_modules', process.argv[2]));
+    for (const name of JSON.parse(process.argv[1])) {
+      const resolved = import.meta.resolve(name);
+      if (new URL(resolved).pathname.endsWith('.css')) {
+        const file = realpathSync(fileURLToPath(resolved));
+        const rel = relative(packageRoot, file);
+        if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel) || !statSync(file).isFile() || !readFileSync(file).length)
+          throw new Error('Stylesheet export is missing, empty or outside the packed package');
+      } else { await import(name); }
+    }
+  `, JSON.stringify(imports), packageName], { cwd: consumer, stdio: 'inherit' })
 }
 
 type Run = { id: number; run_attempt: number; head_sha: string; head_branch: string; event: string; conclusion: string | null; path?: string }
