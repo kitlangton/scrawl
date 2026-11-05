@@ -23,10 +23,11 @@ test('demo writes private synthetic consumer bundle with annotated PNGs and CLI-
     assert.match(value.target.app,/synthetic/i);assert.equal(value.audio,undefined);assert.equal(value.video,undefined);
     assert.deepEqual(value.marks.map((m:any)=>m.strokes),[[0],[1,2],[3]]);
     assert.equal(value.transcript.words[0].t0,600);assert.equal(value.transcript.words.at(-1).t1,9400);
+    assert.equal(value.keyframes.map((frame:any)=>frame.said).filter(Boolean).join(' '),value.transcript.text);
     for(const frame of value.keyframes){const image=PNG.sync.read(await readFile(join(out,frame.file)));assert.equal(image.width,960);assert.equal(image.height,600);assert.equal((await stat(join(out,frame.file))).mode&0o777,0o600);}
     assert.equal((await stat(out)).mode&0o777,0o700);for(const file of ['apparent.json','summary.md','contact-sheet.png'])assert.equal((await stat(join(out,file))).mode&0o777,0o600);
     const stored=await readFile(join(out,'frames/frame-03.png'));assert.deepEqual(stored.subarray(0,8),Buffer.from([137,80,78,71,13,10,26,10]));
-    const result=await runZoom({bundle:out,mark:'demo-circle',span:2,frames:3,full:false,json:true});assert.equal(result.sourceKind,'saved-keyframes');assert.equal(result.mark.id,'demo-circle');assert.equal(result.cells.length,1);
+    const result=await runZoom({bundle:out,mark:'demo-circle',span:2,frames:3,full:false,out:join(parent,'zoom'),json:true});assert.equal(result.sourceKind,'saved-keyframes');assert.equal(result.mark.id,'demo-circle');assert.equal(result.cells.length,1);
     const cli=new URL('../dist/cli.js',import.meta.url).pathname;
     const inspect=spawnSync(process.execPath,[cli,'inspect',out],{encoding:'utf8'});assert.equal(inspect.status,0,inspect.stderr);assert.match(inspect.stdout,/Synthetic demonstration only/);assert.doesNotMatch(inspect.stdout,/No microphone audio was saved/);
     const marks=spawnSync(process.execPath,[cli,'inspect',out,'--marks'],{encoding:'utf8'});assert.equal(marks.status,0,marks.stderr);assert.match(marks.stdout,/circled “Header band”/);assert.match(marks.stdout,/drew an arrow pointing to “Tool usage”/);

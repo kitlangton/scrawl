@@ -31,7 +31,7 @@ function stroke(points:number[][],t0:number,t1:number,on:string,pin?:number) {
 function model() {
   const circle=Array.from({length:37},(_,i)=>[.51+.14*Math.cos(i*Math.PI*2/36),.175+.075*Math.sin(i*Math.PI*2/36)]);
   const strokes=[stroke(circle,2900,3548,'Header band'),stroke(Array.from({length:13},(_,i)=>[.22+.22*i/12,.48-.12*i/12]),5800,5992,'Tool usage'),stroke([[.41,.35],[.44,.36],[.42,.4]],6100,6160,'Tool usage'),stroke([[.88,.88]],8900,8900,'Send button',1)];
-  const frame=(index:number,t:number,reason:string,event:string,markId:string|null)=>({index,t,reason,event,said:t<5000?'The header shifts when I select the tool.':'The spacing below the card feels too tight.',markId,file:`frames/frame-${String(index).padStart(2,'0')}.png`});
+  const frame=(index:number,t:number,reason:string,event:string,markId:string|null)=>({index,t,reason,event,said:words.filter(w=>w.t0>=(index===1?0:t)&&w.t0<(times[index]??DURATION)).map(w=>w.text).join(' ')||null,markId,file:`frames/frame-${String(index).padStart(2,'0')}.png`});
   const marks=[
     {id:'demo-circle',strokes:[0],t0:2900,t1:3548,boxNorm:[.37,.10,.65,.25],shape:'circle',description:'Circled the synthetic header',on:'Header band',frame:'frames/frame-03.png'},
     {id:'demo-arrow',strokes:[1,2],t0:5800,t1:6160,boxNorm:[.22,.35,.44,.48],shape:'arrow',description:'Arrow toward the synthetic tool card',on:'Tool usage',from:[.22,.48],to:[.44,.36],frame:'frames/frame-04.png'},
