@@ -22,6 +22,7 @@ export interface SelectedFrame {
 
 export interface RecordTarget {
   app?: string;
+  /** Manifest context only; never rendered in summary or clipboard handoff. */
   windowTitle?: string;
 }
 
@@ -178,10 +179,7 @@ function targetLabel(input: ProcessingInput): string {
     }
     return target;
   }
-  let target = input.target?.app || "Display";
-  const title = input.target?.windowTitle;
-  if (title && title !== input.target?.app) target += ` “${title}”`;
-  return target;
+  return input.target?.app || "Display";
 }
 
 interface TimelineItem { timeMs: number; text: string }
@@ -211,7 +209,14 @@ function legacyTimeline(input: ProcessingInput): TimelineItem[] {
     const key = contextValue(change.key);
     items.push({ timeMs: change.timeMs, text: change.value === undefined ? `${key} cleared` : `${key} → ${contextValue(change.value)}` });
   }
-  if (!input.frames.length) {
+  const compact = (value: string) => value.split(/\s+/u).filter(Boolean).join(" ");
+  const annotatedTranscript = compact(input.frames.map(frame => frame.text ?? "").join(" "));
+  const suppliedTranscript = compact(input.transcript.segments.length
+    ? input.transcript.segments.map(segment => segment.text).join(" ") : input.transcript.text);
+  // Frame annotations may be incomplete. Suppress the authoritative transcript
+  // only when their ordered text contains the complete supplied transcript.
+  // Otherwise retain its full timeline rather than guess missing associations.
+  if (!input.frames.length || annotatedTranscript !== suppliedTranscript) {
     for (const segment of input.transcript.segments)
       items.push({ timeMs: segment.startMs, text: `“${segment.text}”` });
     if (!input.transcript.segments.length && input.transcript.text.trim())

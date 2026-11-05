@@ -123,7 +123,7 @@ test("matches legacy mixed spoken, typed note, mark pin, warning and crop semant
     autocrop: { label: "App", fullFramesDirectory: `${bundlePath}/frames` },
   });
   assert.equal(summary.summaryMarkdown, [
-    `[apparent 0:14 · App “Window” · ${bundlePath}]`,
+    `[apparent 0:14 · App · ${bundlePath}]`,
     "Open contact-sheet.png and frames/ in that folder before changing anything: the marks and words only make sense on the images, which can show more than the text does.",
     "Note: Simplify it.",
     "Image quality: Some frames use lower-resolution candidates.",
@@ -143,4 +143,32 @@ test("processing warnings preserve explicit video-only and transcript failure fa
     warnings: [{ kind: "videoOnlyInteractionTelemetry" }, { kind: "noTranscript", message: "The selected model was unavailable." }] });
   assert.match(output.summaryMarkdown, /timed CLI video only; clicks and Shift ink were not collected/);
   assert.match(output.summaryMarkdown, /No transcript: The selected model was unavailable\./);
+});
+
+
+test("window titles remain outside semantic handoff text", () => {
+  const output = assembleProcessingOutput({ durationMs: 3_000, bundlePath: "/captures/private.apparent",
+    target: { app: "Browser", windowTitle: "Private document title" },
+    transcript: { text: "", segments: [] }, frames: [] });
+  assert.match(output.summaryMarkdown, /· Browser ·/);
+  assert.doesNotMatch(output.summaryMarkdown, /Private document title/);
+});
+
+for (const annotated of [false, true]) test(`incomplete frame speech annotations preserve the transcript (partial=${annotated})`, () => {
+  const output = assembleProcessingOutput({ durationMs: 4_000, bundlePath: "/captures/speech.apparent",
+    transcript: { text: "First words. Later words.", segments: [
+      { startMs: 500, text: "First words." }, { startMs: 2_000, text: "Later words." },
+    ] },
+    frames: [{ index: 1, timeMs: 1_000, absolutePath: "/captures/speech.apparent/frame.png", text: annotated ? "First words." : undefined }],
+    notes: [{ timeMs: 3_000, text: "Typed context" }] });
+  assert.match(output.summaryMarkdown, /First words\./);
+  assert.match(output.summaryMarkdown, /· 0:02 “Later words\.”/);
+  assert.match(output.summaryMarkdown, /Typed context/);
+});
+
+test("untimed speech survives selected frames without complete annotations", () => {
+  const output = assembleProcessingOutput({ durationMs: 3_000, bundlePath: "/captures/speech.apparent",
+    transcript: { text: "Unsegmented words", segments: [] },
+    frames: [{ index: 1, timeMs: 1_000, absolutePath: "/captures/speech.apparent/frame.png" }] });
+  assert.match(output.summaryMarkdown, /Unsegmented words/);
 });
