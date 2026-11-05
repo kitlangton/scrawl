@@ -1127,14 +1127,14 @@
       "id": "cli-issue-reporting",
       "group": "cli",
       "name": "Agent GitHub issue reporting",
-      "says": "apparent issue previews exact text as JSON; explicit --submit publishes to tryapparent/apparent using the caller's GitHub CLI login and verifies the issue before returning its URL. No automatic capture or log attachments.",
+      "says": "apparent issue and apparent-agent issue preview exact text as JSON; explicit --submit publishes to tryapparent/apparent using the caller's GitHub CLI login and verifies the issue before returning its URL. No automatic capture or log attachments.",
       "status": "main",
       "added": "2026-11-01",
       "platforms": [
         "mac",
         "linux"
       ],
-      "note": "Available by default; preview stays offline unless --submit is supplied. Agents must get approval of the exact repository and text before submitting. No automatic implementation or merge.",
+      "note": "Available by default in the legacy apparent CLI and the standalone apparent-agent package; preview stays offline unless --submit is supplied. Agents must search for duplicates and get approval of the exact repository and text before submitting. No automatic attachments, implementation or merge.",
       "docs": [
         "capture/desktop/docs/issue-reporting.md"
       ]
@@ -1187,8 +1187,19 @@
       "status": "main",
       "added": "2026-11-05",
       "platforms": ["mac", "linux"],
-      "note": "latest honors APPARENT_CAPTURES_DIR and read-only capturesDir config, with bounded validated manifest reads. Default inspect text is regenerated from manifest semantics when summary.md is missing or stale; --stored-summary selects producer text, --experiment agentContext enriches the local timeline, and --json preserves raw manifest bytes. Image mode lists safe references without inspecting pixels. Recording requires explicit Engine runtime paths and native SDK v1 readiness. No frames, zoom, Connect, authentication, or standalone Engine runtime archive. Existing apparent routing is unchanged.",
+      "note": "latest honors APPARENT_CAPTURES_DIR and read-only capturesDir config, with bounded validated manifest reads. Default inspect text is regenerated from manifest semantics when summary.md is missing or stale; --stored-summary selects producer text, --experiment agentContext enriches the local timeline, and --json preserves raw manifest bytes. Image mode lists safe references without inspecting pixels. Recording requires explicit Engine runtime paths and native SDK v1 readiness. Frames selection consumes the published media SDK contract but still requires a native decoder provider, which is not implemented; no real decode or PNG success is claimed. Zoom, Connect, authentication, and standalone Engine runtime archives are not included. Existing apparent routing is unchanged.",
       "docs": ["agent/README.md", "agent/docs/cli-parity.md"]
+    },
+    {
+      "id": "agent-frames-media-cli",
+      "group": "cli",
+      "name": "Agent local frame range selection",
+      "says": "apparent-agent frames selects ordered bundle-clock timestamps and requests local decoding through the Engine media SDK into a fresh private runtime job directory.",
+      "status": "main",
+      "added": "2026-11-05",
+      "platforms": ["mac", "linux"],
+      "note": "Consumer orchestration is implemented and available by default. It requires explicit canonical APPARENT_ENGINE_FRAMES_EXECUTABLE and owner-only APPARENT_ENGINE_RUNTIME paths. The published @apparent/engine-sdk/media 0.2.0 protocol has no native decoder provider yet, so normal installed runtimes report decoding unavailable. Contract tests use an explicitly injected ReferenceMediaPeer and do not prove PNG decoding or native platform behavior. No ffmpeg, PATH/source fallback, bundle mutation, image opening, or network behavior.",
+      "docs": ["agent/README.md", "agent/docs/cli-parity.md", "capture/agent/skills/apparent/SKILL.md", "engine/sdk/README-media.md"]
     },
     {
       "id": "agent-standalone-skill",
