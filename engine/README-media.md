@@ -78,8 +78,20 @@ bytes and manifest publication, ordered duplicate/nonzero-offset/end-clamped
 requests, identity/marker/corrupt-source errors, collisions/symlinks, pixel limits,
 cancellation/deadlines, timeout inventory recovery, source replacement and strict
 protocol rejection. Host MJPEG proof is separate from H.264 codec proof,
-disposable Linux guest proof and macOS proof. Those remaining gates must be
-recorded explicitly; no platform parity is implied.
+disposable Linux guest proof and macOS proof. Keep those verdicts distinct;
+no platform parity is implied.
+
+The Linux implementation checkpoint was exercised in a disposable Omarchy guest
+against a synthetic H.264/YUV420P MP4 through the public SDK. The guest lacked
+`gst-libav`: decoding failed before provisioning, passed with the exact matching
+signed plugin extracted into a private job directory, failed again without that
+path, and passed after restoration. Package signature/dependencies and actual
+PNG hashes/dimensions/order/clamp fields were checked; the installed-package
+inventory stayed unchanged, artifacts were retained, and the guest/expiry ended.
+The codec fixture is a runtime prerequisite, not a production fallback or proof
+that an eventual distribution includes its decoder closure. Host MJPEG lifecycle,
+lease/admission, timeout, cancellation and forced-death tests cover separate
+boundaries. macOS decode proof and companion packaging remain outstanding.
 
 The native delivery producer currently publishes only `apparent-engine`, not
 this companion. Packaging/discovery and real consumer adoption require a separate

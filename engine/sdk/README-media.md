@@ -89,7 +89,7 @@ Every envelope has the literal `channel: "media"`, `protocolVersion: 1`,
 caller-supplied video file identity (`device`, `inode`, `size`, nanosecond
 modification time). The identity metadata is a consistency key, not
 authorization to access arbitrary paths. Native implementation status and
-platform acceptance are recorded in [`../README-media.md`](../README-media.md).
+platform acceptance are recorded in the [Engine native worker documentation](https://github.com/tryapparent/apparent/blob/main/engine/README-media.md).
 Descriptor pinning, before/after identity checks, bundle validation and path
 swap rejection are native conformance gates, independent of SDK validation.
 
