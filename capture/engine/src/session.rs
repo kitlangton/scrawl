@@ -1,5 +1,11 @@
 use crate::{Receipt, Status, identity, locking::Lock, receipt::Record, secure::Store};
 use std::{io, path::Path, sync::Arc};
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Binding {
+    pub bundle_path: String,
+    pub screen: bool,
+}
 #[derive(Clone)]
 pub struct Runtime {
     pub(crate) store: Arc<Store>,
@@ -53,13 +59,35 @@ impl Session {
         self.transition(Status::Starting, Status::Recording)
     }
     pub fn processing(&mut self) -> io::Result<()> {
-        self.transition(Status::Recording, Status::Processing)
+        let current = self.load()?.receipt.status;
+        match current {
+            Status::Stopping => self.transition(Status::Stopping, Status::Processing),
+            // Retain the staged package's existing caller contract until its consumers migrate.
+            Status::Recording => self.transition(Status::Recording, Status::Processing),
+            _ => Err(crate::secure::invalid()),
+        }
+    }
+    /// Persist the stop boundary after the native source has drained its first frame stream.
+    pub fn stopping(&mut self) -> io::Result<()> {
+        self.transition(Status::Recording, Status::Stopping)
     }
     pub fn control(&self) -> io::Result<Option<Control>> {
         let _tx = self.runtime.transaction()?;
         Ok(self.load()?.control)
     }
     pub fn finish(self, result: Result<crate::FinalizerSuccess, ()>) -> io::Result<Receipt> {
+        self.finish_inner(result, "finalization_failed")
+    }
+    /// Persist a failed admitted attempt when a required native source is unavailable.
+    /// No media side effect may have started before using this outcome.
+    pub fn finish_unavailable(self) -> io::Result<Receipt> {
+        self.finish_inner(Err(()), "native_unavailable")
+    }
+    fn finish_inner(
+        self,
+        result: Result<crate::FinalizerSuccess, ()>,
+        failure: &str,
+    ) -> io::Result<Receipt> {
         let _tx = self.runtime.transaction()?;
         let mut record = self.load()?;
         if record.control == Some(Control::Cancel) {
@@ -79,13 +107,29 @@ impl Session {
             }
         } else {
             record.receipt.status = Status::Failed;
-            record.receipt.error = Some("finalization_failed".into());
+            record.receipt.error = Some(failure.into());
         }
         record.write(&self.runtime.store)?;
         Ok(record.receipt)
     }
 }
 impl Runtime {
+    /// Authenticate a durable operation before recovery can mutate or disclose its receipt.
+    pub fn inspect_authorized(&self, id: &str, token: &str) -> io::Result<Option<Receipt>> {
+        identity::validate(id, 32)?;
+        identity::validate(token, 64)?;
+        let _tx = self.transaction()?;
+        let Some(record) = Record::read(&self.store, id)? else {
+            return Ok(None);
+        };
+        if !identity::equal_secret(token, &record.token) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wrong owner authority",
+            ));
+        }
+        Ok(self.read_recover(id)?.map(|r| r.receipt))
+    }
     pub fn inspect(&self, id: &str) -> io::Result<Option<Receipt>> {
         identity::validate(id, 32)?;
         let _tx = self.transaction()?;
@@ -138,6 +182,9 @@ impl Runtime {
             }
             if record.control != Some(Control::Cancel) {
                 record.control = Some(control);
+                if control == Control::Stop && record.receipt.status == Status::Recording {
+                    record.receipt.status = Status::Stopping;
+                }
             }
             record.write(&self.store)?;
         }
@@ -156,17 +203,46 @@ impl Runtime {
         Ok(lock)
     }
     pub fn admit(&self, id: &str, token: &str, bundle_id: &str) -> io::Result<Admission> {
+        self.admit_inner(id, token, bundle_id, None)
+    }
+    /// Provider admission binds every v1 start field before any native side effect.
+    pub fn admit_bound(
+        &self,
+        id: &str,
+        token: &str,
+        bundle_id: &str,
+        binding: Binding,
+    ) -> io::Result<Admission> {
+        if !binding.screen || !Path::new(&binding.bundle_path).is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid start binding",
+            ));
+        }
+        self.admit_inner(id, token, bundle_id, Some(binding))
+    }
+    fn admit_inner(
+        &self,
+        id: &str,
+        token: &str,
+        bundle_id: &str,
+        binding: Option<Binding>,
+    ) -> io::Result<Admission> {
         identity::validate(id, 32)?;
         identity::validate(token, 64)?;
         identity::validate_bundle(bundle_id)?;
         let _tx = self.transaction()?;
         if let Some(record) = Record::read(&self.store, id)? {
-            if !identity::equal_secret(token, &record.token)
-                || record.receipt.bundle_id != bundle_id
-            {
+            if !identity::equal_secret(token, &record.token) {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    "request identity or authority mismatch",
+                    "wrong owner authority",
+                ));
+            }
+            if record.receipt.bundle_id != bundle_id || record.binding != binding {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "identity conflict",
                 ));
             }
             self.read_recover(id)?;
@@ -179,6 +255,7 @@ impl Runtime {
         let mut record = Record {
             token: token.into(),
             control: None,
+            binding,
             receipt: Receipt {
                 version: 1,
                 request_id: id.into(),
