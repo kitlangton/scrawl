@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -12,7 +12,7 @@ type Input = Omit<DecodeRequest, 'channel' | 'protocolVersion' | 'clientId' | 'r
 const pause = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'apparent-media-peer-'));
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'apparent-media-peer-'));
   await chmod(root, 0o700);
   const runtime = join(root, 'runtime');
   const bundle = join(root, 'synthetic.apparent');
@@ -155,8 +155,24 @@ test('native media survives RPC timeout and pins against a source pathname repla
   } finally { await f.close(); }
 });
 
+test('independent workers cannot both claim the same empty output', { skip: !binary }, async () => {
+  const f = await fixture();
+  const other = new MediaClient(launchMediaWorker(resolve(binary!), f.runtime));
+  try {
+    await other.handshake();
+    await mkdir(f.input.outputDirectory, { mode: 0o700 });
+    const outcomes = await Promise.allSettled([f.client.decode(f.input), other.decode({ ...f.input, jobId: createMediaJobId() })]);
+    const winners = outcomes.filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<MediaClient['decode']>>> => r.status === 'fulfilled');
+    assert.equal(winners.length, 1);
+    const loser = outcomes.find(r => r.status === 'rejected') as PromiseRejectedResult;
+    assert.ok(loser.reason instanceof MediaRpcError);
+    assert.equal(loser.reason.code, 'invalid_output');
+    assert.deepEqual(JSON.parse(await readFile(join(f.input.outputDirectory, 'manifest.json'), 'utf8')), winners[0].value);
+  } finally { await other.close(); await f.close(); }
+});
+
 test('native media rejects foreign channels/versions, duplicate RPCs and oversized input', { skip: !binary }, async () => {
-  const root = await mkdtemp(join(tmpdir(), 'apparent-media-wire-')); await chmod(root, 0o700);
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'apparent-media-wire-')); await chmod(root, 0o700);
   const args = ['--media-runtime-directory', root, '--media-channel', 'media', '--media-protocol-version', '1'];
   const envelope = { channel: 'media', protocolVersion: 1, clientId: 'a'.repeat(32), rpcId: 'b'.repeat(32), method: 'handshake' };
   async function exchange(lines: string) {

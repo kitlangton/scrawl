@@ -7,7 +7,10 @@ use std::process::{Command, Stdio};
 
 #[test]
 fn real_media_child_holds_read_lease_without_consuming_capture_admission() {
-    let root = std::env::temp_dir().join(format!("engine-media-resources-{}", new_id().unwrap()));
+    let root = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join(format!("engine-media-resources-{}", new_id().unwrap()));
     std::fs::create_dir(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     let runtime = root.join("runtime");
