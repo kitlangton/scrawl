@@ -14,7 +14,12 @@ semantic handoff text with absolute frame/video/bundle paths; it does not select
 frames, transcribe, create images or write a bundle. Linux worker conformance is
 documented by Engine, but packaged runtime discovery and Record adoption remain
 pending the Engine owner's committed artifact and verified discovery/launch/
-platform handoff. No native proof is claimed here.
+platform handoff. No native proof is claimed here. The caller must complete the
+SDK handshake first and retain the full client and job ID: a rejected decode is
+not proof that execution stopped. Reconcile with SDK inspect/cancel before
+retrying or cleaning its output. Assembly covers supplied transcript, notes and
+frame facts only; target/session context, interaction events, marks and processing
+warnings still need adoption before this can replace the full legacy handoff.
 
 The controller accepts `start` only from idle or a terminal state after a fresh readiness query. A capture moves through `starting` → `recording` → `stopping` → `processing` → `ready`; a pending or active capture can be cancelled, and a failed stop can be retried with its original ID. Session IDs scope every event, and out-of-order phase regressions are ignored.
 

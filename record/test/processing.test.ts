@@ -53,3 +53,12 @@ test("rejects a partial or reordered decode inventory", async () => {
   };
   await assert.rejects(decodeSelectedFrames(media, input), /mismatched decode inventory/);
 });
+
+test("untimed transcript survives alongside typed notes", () => {
+  const result = assembleProcessingOutput({ durationMs: 5_000, bundlePath: "/captures/notes.apparent",
+    transcript: { text: "spoken words", segments: [] }, frames: [],
+    notes: [{ timeMs: 2_000, text: "typed context" }] });
+  assert.match(result.summaryMarkdown, /“spoken words”/);
+  assert.match(result.summaryMarkdown, /· 0:02 Typed note: typed context/);
+  assert.equal(result.summaryMarkdown.split("spoken words").length - 1, 1);
+});

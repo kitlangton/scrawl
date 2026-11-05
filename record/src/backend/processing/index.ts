@@ -140,7 +140,8 @@ export function assembleProcessingOutput(input: ProcessingInput): ProcessingOutp
   ].filter((item) => item.text.length > 2).sort((a, b) => a.timeMs - b.timeMs);
   if (timeline.length) {
     for (const item of timeline) lines.push(`· ${clock(item.timeMs)} ${item.text}`);
-  } else if (!input.transcript.segments.length && input.transcript.text.trim()) {
+  }
+  if (!input.transcript.segments.length && input.transcript.text.trim()) {
     lines.push(`“${input.transcript.text.trim()}”`);
   }
   if (input.videoPath) {
