@@ -1,7 +1,7 @@
 # Capture website delivery on Cloudflare Pages
 
 The canonical repository is `https://github.com/tryapparent/apparent`, branch
-`main`. `.github/workflows/web-delivery.yml` is the sole production publisher for
+`main`. `.github/workflows/value-stream-delivery.yml` is the sole production publisher for
 `app.tryapparent.com`. It publishes the isolated **apparent-capture** Pages project
 in account `a54dcebead3b8ad688f891da0ab54d1f`. It does not publish the document-product
 project `tryapparent-website`, the hosted API Worker, or `public/site/wrangler.jsonc`.
@@ -131,28 +131,24 @@ credentialed browser product verification in its producer.
 
 ## Main-branch CD
 
-The workflow starts on main pushes, manual main dispatches, trusted Connect
-producer completions and common value-stream completions. Candidate admission validates canonical-main event,
-workflow, checkout and ancestry identity. The full delta since a successful main
-web run selects Public/Connect browser, shared UI/analytics and delivery inputs,
-including deletions. Unknown history broadens verification. Unrelated native-only
-changes select an explicit not-applicable gate; missing, failed or unexpectedly
-skipped required checks fail closed. Manual main refreshes force checks, including
-producer manual refreshes that change recorded build configuration.
+Value-stream delivery contains a dedicated Public producer and deployment pair:
+`stream (public, web)` → `deploy (public, web)`. Public is excluded from the
+other-owner matrix. Deployment needs only the Public producer, which runs its own
+delivery and shared architecture contracts before admitting or building bytes.
+Unrelated owner jobs cannot hold Public deployment.
 
-The credential-free consumer downloads compatible verified Public and Connect browser
-artifacts. If a matching producer has not finished yet, admission fails closed;
-producer completion retries the candidate. It never rebuilds either stream as a fallback. Shared input changes require a new producer artifact and
-Public composition checks. `CONNECT_BROWSER_ARTIFACT` identifies the route-only
-input; producer SHA/run/artifact/digest receipts remain outside served content.
+The producer uploads its sealed artifact and exposes its exact name and fingerprint.
+Deployment downloads that same-run artifact and validates its revision, run/attempt,
+source/configuration identity, inventory and checksums before extraction. It consumes
+Connect's independently verified browser artifact; unavailable compatible Connect
+output fails closed. Successful Connect completion retries Public delivery through
+the common workflow. Neither stream is rebuilt by the composition step.
 
-The composition job checks and seals `.build/website/` with the candidate revision,
-compiled Pages Function, provider config and full checksum inventory. The website
-job consumes only that run's revision-named artifact and deploys without bundling;
-`WEBSITE_CD_ENABLED` and the existing environment remain its activation controls.
-The publisher verifies current main, source ordering, immutable/canonical bytes,
-movie ranges and Connect privacy headers. Pages publication uses its own
-`website-production-eligible` job lock without canceling publication.
+The deployment job runs existing composition, privacy, browser, theme and movie
+checks, seals the exact candidate, and publishes under `WEBSITE_CD_ENABLED`, the
+`website-production` environment and `website-production-eligible` lock. The
+publisher retains source ordering and immutable/canonical readback verification.
+The former website workflow no longer publishes Pages, preventing duplicate writers.
 
 The independent Worker call uses Connect's reusable workflow and controls, triggered
 by a successful producer completion and `HOSTED_CD_ENABLED`. It has no dependency

@@ -1487,6 +1487,8 @@ sys.exit(watchdog(30, ['sh', '-c', command]))
                         expected = '2' if '    outputs:\n' in job else ('5' if '    name: Delivery contracts\n' in job else '15')
                         if '    name: stream (' in job:
                             expected = "${{ matrix.target == 'web' && 10 || 15 }}"
+                        if '    name: deploy (public, web)' in job:
+                            expected = '10'
                     self.assertIn(f'    timeout-minutes: {expected}\n', job, str(workflow))
                     if bounded_publication:
                         self.assertIn("WORKFLOW_BUDGET_RESERVE_SECONDS: '120'", job)
