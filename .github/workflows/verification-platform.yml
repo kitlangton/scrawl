@@ -99,11 +99,23 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: Linux Electron dependencies
         run: npx --no-install playwright install-deps chromium
+      - name: Prepare the pinned Electron sandbox helper
+        run: |
+          # Runner Chrome images need not ship a setuid helper. Provision the
+          # helper matching our pinned Electron in this disposable runner only.
+          sudo install -o root -g root -m 4755 node_modules/electron/dist/chrome-sandbox \
+            "$RUNNER_TEMP/apparent-foundation-chrome-sandbox"
       - run: npm run check
       - name: Synthetic Electron shell under Xvfb
         run: xvfb-run -a npm run test:electron
         env:
-          APPARENT_FOUNDATION_SANDBOX_HELPER: /opt/google/chrome/chrome-sandbox
+          APPARENT_FOUNDATION_SANDBOX_HELPER: ${{ runner.temp }}/apparent-foundation-chrome-sandbox
+      - name: Remove the disposable sandbox helper
+        if: always()
+        run: |
+          if [ -e "$RUNNER_TEMP/apparent-foundation-chrome-sandbox" ]; then
+            sudo unlink "$RUNNER_TEMP/apparent-foundation-chrome-sandbox"
+          fi
 
   desktop-ui:
     needs: select

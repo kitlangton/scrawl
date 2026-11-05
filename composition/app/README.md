@@ -85,7 +85,10 @@ Linux execution requires working Chromium sandbox support. On restricted test
 hosts, `APPARENT_FOUNDATION_SANDBOX_HELPER=/opt/google/chrome/chrome-sandbox`
 may name an existing root-owned, setuid, non-writable-by-others helper. The test
 links that helper into its disposable runtime only; it changes no system files
-and never disables sandboxing. CI uses the Ubuntu runner's installed helper.
+and never disables sandboxing. CI provisions the helper from the pinned Electron
+package with root ownership and mode `4755` in the disposable runner's temporary
+directory, then removes it after testing. It does not rely on the runner's Chrome
+helper ownership/mode or alter system Chrome.
 
 Feature pushes select the foundation check for shell, contracts or shared UI
 inputs; dependencies must already be installed. Main has a separate Linux shell
