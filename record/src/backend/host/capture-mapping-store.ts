@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isAbsolute, join, resolve } from "node:path";
 import type { CaptureMapping, CaptureMappingStore } from "../engine/sdk-adapter.js";
 import { ensurePrivateFile, ensurePrivateRoot, hostError, validatePrivateFile } from "./private-path.js";
+import { initializePrivateSqlite } from "./sqlite-initialization.js";
 
 const schemaVersion = 1;
 const valid = (mapping: CaptureMapping) =>
@@ -92,7 +93,7 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
     let db: DatabaseSync | undefined;
     try {
       db = new DatabaseSync(this.#databasePath);
-      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+      await initializePrivateSqlite(db);
       const version = Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
       if (version === 0) {
         db.exec("CREATE TABLE IF NOT EXISTS capture_mapping (request_id TEXT PRIMARY KEY, capture_id TEXT NOT NULL UNIQUE, owner_token TEXT NOT NULL, bundle_id TEXT NOT NULL UNIQUE, bundle_path TEXT NOT NULL UNIQUE) STRICT; PRAGMA user_version = 1;");
