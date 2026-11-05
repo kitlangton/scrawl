@@ -27,6 +27,15 @@ test('allows public APIs and owner-local internals', () => fixture({
   'record/src/local.ts': 'export const y = 1;',
 }, root => assert.deepEqual(checkArchitecture(root), [])));
 
+test('Connect client cannot import Record private implementation', () => fixture({
+  'connect/delivery/client/package.json': JSON.stringify({ name: '@apparent/connect-client', exports: { '.': './dist/index.js' } }),
+  'connect/delivery/client/src/index.ts': "import '../../../../record/src/private.js';",
+  'record/src/private.ts': 'export const internal = true;',
+}, root => {
+  const errors = checkArchitecture(root, ['connect']);
+  assert(errors.some(error => error.includes('cross-owner path connect -> record')));
+}));
+
 test('shared cannot hide product imports behind a computed loader or forged package name', () => fixture({
   'shared/contracts/src/index.ts': 'import(destination); require(destination);',
   'shared/forged/package.json': JSON.stringify({ name: '@apparent/record', exports: { '.': './index.ts' } }),

@@ -89,7 +89,7 @@ checked in. Run this migration-only compatibility lane from the repository root:
 
 ```sh
 APPARENT_CONNECT_INTEROP_NODE="$(command -v node)" \
-APPARENT_CONNECT_INTEROP_SCRIPT="$PWD/connect/client/typescript/test/production-interop.ts" \
+APPARENT_CONNECT_INTEROP_SCRIPT="$PWD/connect/delivery/client/test/production-interop.ts" \
 cargo test --manifest-path connect/client/Cargo.toml --offline \
   production_typescript_crypto_interop -- --ignored --nocapture
 ```

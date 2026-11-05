@@ -7,11 +7,13 @@ export const ROUTES=['connect','connect/device','connect/shares','hosted','hoste
 const contract={version:1,browserOrigin:'https://app.tryapparent.com',apiOrigin:'https://hosted.tryapparent.com',routes:ROUTES};
 const digest=(v:Buffer)=>createHash('sha256').update(v).digest('hex');
 const canonical=(v:unknown):string=>JSON.stringify(v,(_,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.entries(x).sort()):x);
+const independentDeliveryRoots=['connect/delivery/recipient','connect/delivery/client'];
+const independentDeliveryInput=(path:string)=>independentDeliveryRoots.some(root=>path===root||path.startsWith(root+'/'));
 export async function inventory(root:string,kind:string){
- // Native recipient delivery tools are not browser/Worker build or admission inputs.
+ // Native recipient tooling and the local client are not browser/Worker inputs.
  // Keep the shared delivery sources and combined workflow/budget contracts below.
  const result:Record<string,string>={};
- async function walk(path:string){const stat=await lstat(join(root,path));if(stat.isSymbolicLink())throw Error(`symlink: ${path}`);if(stat.isDirectory()){if(path==='connect/delivery/recipient')return;for(const name of (await readdir(join(root,path))).sort()){if(path==='connect/web'&&name==='public')continue;if(['__pycache__','node_modules','dist','dist-ssr','.git','.generated'].includes(name)||name.startsWith('dist-')||name.endsWith('.tsbuildinfo'))continue;await walk(`${path}/${name}`)}}else if(stat.isFile())result[path]=digest(await readFile(join(root,path)));else throw Error('unsupported input');}
+ async function walk(path:string){const stat=await lstat(join(root,path));if(stat.isSymbolicLink())throw Error(`symlink: ${path}`);if(stat.isDirectory()){if(independentDeliveryRoots.includes(path))return;for(const name of (await readdir(join(root,path))).sort()){if(path==='connect/web'&&name==='public')continue;if(['__pycache__','node_modules','dist','dist-ssr','.git','.generated'].includes(name)||name.startsWith('dist-')||name.endsWith('.tsbuildinfo'))continue;await walk(`${path}/${name}`)}}else if(stat.isFile())result[path]=digest(await readFile(join(root,path)));else throw Error('unsupported input');}
  for(const p of [kind==='connect-browser'?'connect/web':'connect/service','connect/delivery','shared/ui','shared/analytics',...(kind==='connect-worker'?['shared/assets']:[])])await walk(p);
  if(kind==='connect-browser'){
  const assets=await readFile(join(root,'connect/web/scripts/assets.mjs'),'utf8');
@@ -21,7 +23,7 @@ export async function inventory(root:string,kind:string){
  for(const p of ['.github/workflows/connect-delivery.yml','.github/actions/runtime-budget','enablement/verification/workflow-budget.ts','enablement/release_gate.py','enablement/verification/web/inputs.ts','enablement/verification/web/baseline.ts'])await walk(p);
  const tracked=new Set(execFileSync('git',['ls-files','-z'],{cwd:root,encoding:'utf8'}).split('\0'));
  const changed=execFileSync('git',['diff','HEAD','--name-only','--diff-filter=D'],{cwd:root,encoding:'utf8'}).trim().split('\n');
- for(const p of changed)if(p.startsWith(kind==='connect-browser'?'connect/web/':'connect/service/')||(p.startsWith('connect/delivery/')&&!p.startsWith('connect/delivery/recipient/'))||p.startsWith('shared/'))throw Error(`deleted input: ${p}`);
+ for(const p of changed)if(p.startsWith(kind==='connect-browser'?'connect/web/':'connect/service/')||(p.startsWith('connect/delivery/')&&!independentDeliveryInput(p))||p.startsWith('shared/'))throw Error(`deleted input: ${p}`);
  for(const p of Object.keys(result)){if(!tracked.has(p))throw Error(`untracked input: ${p}`);const original=execFileSync('git',['show',`HEAD:${p}`],{cwd:root});if(digest(original)!==result[p])throw Error(`dirty input: ${p}`);}
  return result;
 }

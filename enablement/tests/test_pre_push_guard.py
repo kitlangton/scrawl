@@ -40,11 +40,11 @@ class PrePushGuardTests(unittest.TestCase):
         for name in ("test_fixture_push.py", "test_verification.py", "test_release_gate.py",
                      "test_temp_preflight.py", "test_owner_lanes.py"):
             (self.repo / "enablement" / "tests" / name).write_text(fixture_test)
-        client = self.repo / "connect/client/typescript"
+        client = self.repo / "connect/delivery/client"
         for name in ("package.json", "package-lock.json", "tsconfig.json"):
             destination = client / name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(HOOK.parents[1] / "connect/client/typescript" / name, destination)
+            shutil.copy2(HOOK.parents[1] / "connect/delivery/client" / name, destination)
         (client / ".gitignore").write_text("node_modules/\n")
         (client / "src").mkdir()
         (client / "src/index.ts").write_text("export const value = 1;\n")
@@ -121,7 +121,7 @@ class PrePushGuardTests(unittest.TestCase):
         run("git", "add", ".", cwd=self.repo)
         run("git", "commit", "-qm", "original", cwd=self.repo)
         self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
-        self.client = self.repo / "connect/client/typescript"
+        self.client = self.repo / "connect/delivery/client"
         for name in ("typescript/bin/tsc", "@types/node/package.json",
                      "age-encryption/package.json", "@noble/ed25519/package.json"):
             dependency = self.client / "node_modules" / name
@@ -407,7 +407,7 @@ class PrePushGuardTests(unittest.TestCase):
         self.connect_client_delta()
         result = self.push(remote="refs/heads/feature")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("run `npm ci --no-audit --no-fund` in connect/client/typescript", result.stderr)
+        self.assertIn("run `npm ci --no-audit --no-fund` in connect/delivery/client", result.stderr)
         self.assertIn("never installs dependencies", result.stderr)
         self.assertFalse(self.npm_log.exists())
 

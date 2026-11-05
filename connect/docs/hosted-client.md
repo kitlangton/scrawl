@@ -29,7 +29,7 @@ for consent, cancellation, disable/disconnect and recovery behavior. Compilation
 alone does not prove account approval, deployment or native behavior; the readiness
 map records the separately executed bounded beta acceptance and its limits.
 
-`client/typescript/src/settings-controller.cts` and `settings-presentation.ts` own
+`delivery/client/src/settings-controller.cts` and `settings-presentation.ts` own
 the Electron workflow and presentation. The generated Desktop entry uses the
 existing private socket's backend RPC for local snapshots, renewal and durable
 mutations. The TypeScript controller admits explicit consent, confirmation,
