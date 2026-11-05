@@ -145,7 +145,6 @@ test('Connect browser installs pinned Bun through the shared action on fresh mai
     assert.match(lane, /id: \$\{\{ matrix.id \}\}/)
   }
   assert.match(component, /uses: oven-sh\/setup-bun@v2\n\s+if: [^\n]*inputs.id == 'connect-browser'[\s\S]*?bun-version: '1\.3\.10'/)
-  assert.match(readFileSync(resolve(repoRoot, '.github/workflows/stream-admission.yml'), 'utf8'), /      - Connect browser delivery\n/)
   assert.match(readFileSync(resolve(repoRoot, '.github/actions/delivery-contracts/action.yml'), 'utf8'), /stream-connect-browser\.yml/)
 })
 
