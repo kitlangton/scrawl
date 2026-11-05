@@ -1,5 +1,9 @@
 # Engine v1 contract
 
+The additive Rust-free local decode SDK contract is documented in
+[`sdk/README-media.md`](sdk/README-media.md). It defines a separate `media/1`
+channel; no native frames worker is implemented or advertised yet.
+
 `engine/sdk` defines the TypeScript client and JSON Lines contract. The standalone
 `apparent-engine` executable now implements the bounded protocol transport and
 uses `capture/engine` for durable, authenticated admission and receipts. Its

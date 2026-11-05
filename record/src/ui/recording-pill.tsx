@@ -68,13 +68,13 @@ function PillSession({host}: {host?:PillHost}) {
       aria-label={`${view.noteCount} saved notes. Open notes`} disabled={pending || !view.actions.some(a=>a.id==='notes' && a.enabled)}
       onClick={()=>void act('notes')}><StickyNote aria-hidden="true"/><span>{view.noteCount>99?'99+':view.noteCount}</span></Button></div>}
     <div className="pill-row">
-    {(view.phase!=='selecting' || trigger) && <div className={`lead ${view.draggable?'movable':''} ${view.draggable&&host?.manualDrag?'manual-drag':''}`} title={view.draggable?'Drag recording controls':undefined}
+    {(view.phase!=='selecting' || trigger || view.status) && <div className={`lead ${view.draggable?'movable':''} ${view.draggable&&host?.manualDrag?'manual-drag':''}`} title={view.draggable?'Drag recording controls':undefined}
       onPointerDown={event=>{if(view.draggable && !(event.target as HTMLElement).closest('button') && host?.manualDrag && event.button===0 && event.isPrimary)void host.beginDrag(view.revision).catch(()=>{});}}>
       <span className={`indicator-slot ${view.phase}`}>
         {trigger || (view.phase==='completed'?<Check aria-hidden="true" className="indicator completed"/>:view.phase==='processing'?<LoaderCircle aria-hidden="true" className="indicator processing"/>:<span aria-hidden="true" className={`indicator ${view.phase}`}/>)}
       </span>
-      {view.phase!=='selecting' && <span className="clock" aria-label={view.phase==='recording'?`Recording ${view.clock}`:undefined}>
-        {view.phase==='recording'?view.clock:view.phase==='processing'?'Processing…':view.label}
+      {(view.phase!=='selecting' || view.status) && <span className="clock" aria-label={view.phase==='recording'?`Recording ${view.clock}`:undefined}>
+        {view.phase==='selecting'?view.status:view.phase==='recording'?view.clock:view.phase==='processing'?'Processing…':view.label}
       </span>}
     </div>}
     {view.inputLevel!==null && view.phase==='recording' && <span className="meter" aria-label="Microphone input level">{[.55,.8,1,.75,.5].map((gain,index)=><i key={index} style={{height:`${3+19*gain*view.inputLevel!}px`}}/>)}</span>}
