@@ -1,0 +1,58 @@
+import type { NativeManifest, RuntimeFile } from './types.js';
+import { DEFAULT_LIMITS } from './types.js';
+
+function fail(message: string): never { throw new Error(message); }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+function exactKeys(value: Record<string, unknown>, expected: string[]): boolean {
+  return JSON.stringify(Object.keys(value).sort()) === JSON.stringify(expected.slice().sort());
+}
+function safeRelativeFilePath(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.startsWith('/') || value.includes('\\') || value.includes('\0')) return false;
+  return value.split('/').every((part) => part !== '' && part !== '.' && part !== '..');
+}
+
+export function validateManifest(value: unknown): NativeManifest {
+  if (!isRecord(value) || !exactKeys(value, ['schema', 'sourceSha', 'target', 'rustTriple', 'capabilities', 'launch', 'environment', 'runtimeFiles'])) {
+    fail('native media manifest has an invalid schema');
+  }
+  const launch = value.launch;
+  if (!isRecord(launch) || !exactKeys(launch, ['entry', 'argv', 'worker', 'pathLookup', 'runtimeBuilds'])) {
+    fail('native media launch contract has an invalid schema');
+  }
+  const expectedArgv = ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1'];
+  if (value.schema !== 1 || typeof value.sourceSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceSha) ||
+      value.target !== 'linux-x64' || value.rustTriple !== 'x86_64-unknown-linux-gnu' ||
+      JSON.stringify(value.capabilities) !== JSON.stringify(['media/1']) ||
+      launch.entry !== 'apparent-engine-frames' || launch.worker !== 'libexec/apparent-engine-frames' ||
+      launch.pathLookup !== false || launch.runtimeBuilds !== false || JSON.stringify(launch.argv) !== JSON.stringify(expectedArgv) ||
+      !isRecord(value.environment) || !Array.isArray(value.runtimeFiles) || value.runtimeFiles.length > DEFAULT_LIMITS.maxFiles) {
+    fail('native media manifest contract rejected');
+  }
+
+  const seen = new Set<string>();
+  const runtimeFiles: RuntimeFile[] = [];
+  for (const raw of value.runtimeFiles) {
+    if (!isRecord(raw) || !exactKeys(raw, ['path', 'mode', 'sha256']) || !safeRelativeFilePath(raw.path) ||
+        Buffer.byteLength(raw.path) > DEFAULT_LIMITS.maxPathBytes ||
+        (raw.mode !== 0o644 && raw.mode !== 0o755) || typeof raw.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(raw.sha256)) {
+      fail('native runtime inventory entry is malformed');
+    }
+    if (seen.has(raw.path)) fail(`duplicate native runtime path: ${raw.path}`);
+    seen.add(raw.path);
+    runtimeFiles.push({ path: raw.path, mode: raw.mode, sha256: raw.sha256 });
+  }
+  if (!seen.has(launch.entry) || !seen.has(launch.worker)) fail('native runtime entry or worker is undeclared');
+  const entry = runtimeFiles.find((file) => file.path === launch.entry);
+  const worker = runtimeFiles.find((file) => file.path === launch.worker);
+  if (entry?.mode !== 0o755 || worker?.mode !== 0o755) fail('native entry and worker must be executable files');
+
+  return { ...value, launch: { ...launch }, runtimeFiles } as NativeManifest;
+}
+
+export function sameInventory(actual: RuntimeFile[], expected: RuntimeFile[]): boolean {
+  const sort = (files: RuntimeFile[]) => files.slice().sort((left, right) => left.path.localeCompare(right.path));
+  const project = (files: RuntimeFile[]) => sort(files).map(({ path, mode, sha256 }) => ({ path, mode, sha256 }));
+  return JSON.stringify(project(actual)) === JSON.stringify(project(expected));
+}

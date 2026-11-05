@@ -1,14 +1,16 @@
 # Website and Connect continuous delivery
 
 Each value stream has an independent native GitHub paths-filtered workflow.
-Owner entrypoints live in `.github/workflows/stream-<owner>.yml`; their PR and main
-push filters use the same paths, and each passes one fixed owner/target matrix to
-`value-stream-delivery.yml`. The reusable executor has no shared planner, so an
-unrelated owner is neither planned nor scheduled. Changed owners run fresh PR
-checks/builds with read-only permissions and synthetic analytics settings. PR jobs
-do not reuse, seal, attest or publish deployment artifacts; main verifies again
-before publication. Public follows successful trusted Connect producer
-completions. The independent Worker publisher remains manual under its existing
+Owner entrypoints in `.github/workflows/stream-<owner>.yml` own their PR and main
+jobs, permissions, fixed owner/target matrix and runtime audit. Small composite
+actions under `.github/actions/delivery-contracts` and `delivery-component` share
+repeatable steps while leaving job ownership and receipt identity in each workflow.
+An owner workflow schedules only its registered targets. Changed owners run fresh
+PR checks/builds with read-only permissions and synthetic analytics settings. PR
+jobs do not reuse, seal, attest or publish deployment artifacts; main producer jobs
+may admit verified unchanged artifacts and then seal, attest and upload. Public
+follows successful trusted Connect producer completions and owns the only Pages
+publisher. The independent Worker publisher remains manual under its existing
 activation contract. Other standalone workflows remain manual-only.
 This trigger policy supersedes other automatic pipeline descriptions below.
 Existing release admission still rejects diagnostic manual verification receipts;
@@ -34,12 +36,9 @@ check for its package inputs. Changes under `composition/delivery/` run that
 check plus the dependency-free Node delivery contracts. Neither hook path
 installs packages.
 
-`Linux verification` runs on main pushes. Running verification finishes; only
-pending work is replaced. `Mac verification` follows successful Linux runs and
-checks their exact SHA, so every automatic Mac candidate retains matching Linux
-proof even while main advances. Mac's running work also finishes and its pending
-candidates coalesce; slow Mac capacity never blocks Linux. Manual main dispatches
-remain diagnostic and cannot substitute for automatic release receipts.
+`Linux verification` and `Mac verification` are manual diagnostic entrypoints.
+The retained verification and release contracts below do not enable automatic
+platform verification or publication.
 Both use `verification-platform.yml` and retain full Rust, Engine/client, browser,
 Electron and applicable native checks against the entire selected tree. Cancelled
 pending runs cannot hide changes. Full verification is main-only; feature branches

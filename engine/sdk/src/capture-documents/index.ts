@@ -8,6 +8,7 @@
 export * from "./types.ts";
 export { MAX_DOCUMENT_BYTES } from "./common.ts";
 export { validateMaterialsDocument, validateStrokeFacts } from "./materials.ts";
+export { validateConfirmedSource, validateInvocation, validateContextFacts, validateInteractionFacts, validateCandidateFacts, validateTranscriptFacts, validateFactFile } from "./facts.ts";
 export { validateDerivativeEnvelope } from "./derivative.ts";
 export { validateInferenceEnvelope } from "./inference.ts";
 export { validatePublicationPlan } from "./publication.ts";

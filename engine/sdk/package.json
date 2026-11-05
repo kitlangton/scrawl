@@ -1,6 +1,6 @@
 {
   "name": "@apparent/engine-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "files": ["dist"],
@@ -8,7 +8,9 @@
     ".": { "types": "./dist/src/index.d.ts", "import": "./dist/src/index.js" },
     "./testing": { "types": "./dist/src/testing.d.ts", "import": "./dist/src/testing.js" },
     "./media": { "types": "./dist/src/media.d.ts", "import": "./dist/src/media.js" },
-    "./media/testing": { "types": "./dist/src/media-testing.d.ts", "import": "./dist/src/media-testing.js" }
+    "./media/testing": { "types": "./dist/src/media-testing.d.ts", "import": "./dist/src/media-testing.js" },
+    "./capture": { "types": "./dist/src/capture.d.ts", "import": "./dist/src/capture.js" },
+    "./capture/testing": { "types": "./dist/src/capture-testing.d.ts", "import": "./dist/src/capture-testing.js" }
   },
   "scripts": { "build": "tsc -p tsconfig.json", "test": "node --experimental-strip-types --test test/*.test.ts", "typecheck": "tsc --noEmit -p tsconfig.json", "prepack": "npm run build" },
   "dependencies": { "@types/node": "22.19.0" },

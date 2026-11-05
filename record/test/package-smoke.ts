@@ -27,12 +27,16 @@ try {
     import {RecordWorkflow} from '@apparent/record';
     import {createRecordCapabilityProvider, hasConfirmedArtifactOpen} from '@apparent/record/capabilities';
     import {assembleProcessingOutput, decodeSelectedFrames} from '@apparent/record/processing';
+    import {RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory} from '@apparent/record/processing/media-consumer';
     import {createRecordFixture} from '@apparent/record/fixtures';
     import {RecordingPill} from '@apparent/record/ui';
     import {SqliteCaptureMappingStore, PrivateBundleAllocator, createRecordHostRuntime} from '@apparent/record/host';
     assert.equal(typeof RecordWorkflow,'function');
     assert.equal(typeof assembleProcessingOutput,'function');
     assert.equal(typeof decodeSelectedFrames,'function');
+    assert.equal(typeof RecordMediaJob,'function');
+    assert.equal(typeof processCompletedBundle,'function');
+    assert.equal(typeof createProcessingOutputDirectory,'function');
     assert.equal(typeof SqliteCaptureMappingStore,'function');
     assert.equal(typeof PrivateBundleAllocator,'function');
     assert.equal(typeof createRecordHostRuntime,'function');
