@@ -3,7 +3,6 @@ import type { Asset, Context, Signed } from "./index.js";
 const JSON_BYTES = 128 * 1024;
 const PART_BYTES = 32 * 1024 * 1024;
 const MAX_BYTES = 500_000_000;
-const MAX_FILES = 512;
 
 export type RecipientEnvelope = { signed: Signed; signature: string };
 export type RecipientEnvelopeFailure =
@@ -11,7 +10,6 @@ export type RecipientEnvelopeFailure =
   | "unsupported_encryption_format"
   | "invalid_encryption_context"
   | "invalid_encryption_parts"
-  | "invalid_manifest"
   | "quota_exceeded"
   | "encrypted_context_mismatch"
   | "invalid_encryption_signature";
@@ -46,25 +44,13 @@ function contextValid(value: unknown): value is Context {
   if (!host || !/^[A-Za-z0-9.-]+$/.test(host) || authority.includes("/")) return false;
   if (authority.includes(":")) {
     const port = authority.slice(authority.indexOf(":") + 1);
-    if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) return false;
+    if (!/^\+?\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) return false;
   }
   if (origin.startsWith("http://") && !["localhost", "127.0.0.1"].includes(host)) return false;
-  if (typeof accountId !== "string" || !accountId.length || accountId.length > 256 || /[\x00-\x1f\x7f]/.test(accountId)) return false;
-  if (typeof senderGrantId !== "string" || !senderGrantId.length || senderGrantId.length > 256 || /[\x00-\x1f\x7f]/.test(senderGrantId)) return false;
+  if (typeof accountId !== "string" || !accountId.length || new TextEncoder().encode(accountId).length > 256 || /[\p{Cc}\uD800-\uDFFF]/u.test(accountId)) return false;
+  if (typeof senderGrantId !== "string" || !senderGrantId.length || new TextEncoder().encode(senderGrantId).length > 256 || /[\p{Cc}\uD800-\uDFFF]/u.test(senderGrantId)) return false;
   if (typeof captureId !== "string" || !/^[0-9a-f]{32}$/.test(captureId)) return false;
-  return group === undefined || group === "evidence" || group === "media";
-}
-function safeAssetPath(path: string): boolean {
-  if (path.length > 128 || /[^\x00-\x7f]/.test(path) || path.includes("\\") || path.split("/").some((p) => !p || p.startsWith("."))) return false;
-  if (path.startsWith("sealed/")) return /^sealed\/part-[0-9]{6}\.age$/.test(path);
-  if (["summary.md", "apparent.json", "notes.json", "contact-sheet.png", "contact-sheet-full.png", "recording.mp4", "recording.mov", "audio.wav", "timeline.json", "finish-trace.json"].includes(path)) return true;
-  const parts = path.split("/");
-  return parts.length === 2 && ["frames", "frames-full"].includes(parts[0]!) && /^frame-[0-9]+\.png$/.test(parts[1]!);
-}
-function validAsset(asset: unknown): asset is Asset {
-  return record(asset) && exactKeys(asset, ["path", "size", "sha256"]) && typeof asset.path === "string" && safeAssetPath(asset.path)
-    && Number.isSafeInteger(asset.size) && (asset.size as number) >= 0 && (asset.size as number) <= 90_000_000
-    && typeof asset.sha256 === "string" && /^[0-9a-f]{64}$/.test(asset.sha256);
+  return group == null || group === "evidence" || group === "media";
 }
 function validateChunks(chunks: unknown): chunks is Asset[] {
   if (!Array.isArray(chunks) || chunks.length < 1 || chunks.length > 16) return false;
@@ -102,10 +88,20 @@ export async function validateRecipientEnvelopeWithVerifier(
   if (!Array.isArray(signed.chunks) || signed.chunks.length > 16) fail("invalid_encryption_parts");
   if (!validateChunks(signed.chunks)) fail("invalid_encryption_parts");
   if (typeof input.signature !== "string" || !/^[0-9a-f]{128}$/.test(input.signature)) fail("invalid_encryption_envelope");
-  const context = signed.context;
+  // Snapshot checked primitive fields before the asynchronous verifier. Never return
+  // the caller-owned object, which can change while verification is pending.
+  const context: Context = {
+    origin: signed.context.origin, accountId: signed.context.accountId,
+    captureId: signed.context.captureId, senderGrantId: signed.context.senderGrantId,
+    ...(signed.context.group == null ? {} : { group: signed.context.group }),
+  };
+  const checked: RecipientEnvelope = {
+    signed: { version: 1, context, chunks: signed.chunks.map(({ path, size, sha256 }) => ({ path, size, sha256 })) },
+    signature: input.signature,
+  };
   if (context.origin !== expected.origin || context.accountId !== expected.accountId || context.captureId !== expected.captureId || context.senderGrantId !== expected.senderGrantId || context.group !== expected.group) fail("encrypted_context_mismatch");
   try {
-    if (!(await verify(trustedSenderSigningKey, signed as unknown as Signed, input.signature))) fail("invalid_encryption_signature");
+    if (!(await verify(trustedSenderSigningKey.slice(), checked.signed, checked.signature))) fail("invalid_encryption_signature");
   } catch { fail("invalid_encryption_signature"); }
-  return input as unknown as RecipientEnvelope;
+  return checked;
 }

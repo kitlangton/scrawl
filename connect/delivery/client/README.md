@@ -110,8 +110,9 @@ On Clanker, wrap that Cargo command once with `t3-build`, per root instructions.
 This explicit cross-language migration check needs Rust; ordinary package
 install/build/test/pack commands above do not. The fixture does not certify
 production TypeScript transport, filesystem publication, account enrollment or
-grouped evidence/media consumers, which remain migration work. The new envelope
-validator has synthetic compatibility/failure tests only; next adoption requires
+grouped evidence/media consumers, which remain migration work. The envelope
+validator is exercised on the production Rust multipart envelope in this lane,
+alongside synthetic context, bounds, signature and mutation cases. Next adoption requires
 a real recipient caller to supply bounded strict decoding, current
 authorization-derived sender key and pinned expected context, then retain Rust
 unpack/native publication and authorization gates until those consumers are
