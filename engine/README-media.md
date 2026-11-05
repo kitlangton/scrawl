@@ -9,6 +9,11 @@ capture producer does not enable this feature. Decoder plugins determine which
 movies can actually decode; a registered factory alone is not proof. There is no
 production FFmpeg fallback. macOS decoding is unimplemented and its handshake
 reports `decodeFrames: false`. Capture-v1 remains unavailable and unchanged.
+The decoder re-exec preserves launcher-supplied `LD_LIBRARY_PATH` and GStreamer
+plugin/system-plugin paths (including `_1_0` variants), so it uses the same native
+runtime closure. A future packaged producer must inventory and verify that
+closure; executable identity alone does not prove plugin identity. The decoder
+uses no persistent registry cache and inherits no display/session-bus settings.
 
 Launch with the SDK's `launchMediaWorker` using an absolute verified executable
 and an existing caller-provisioned mode-0700 runtime directory. Stdout is media/1

@@ -88,6 +88,20 @@ impl Active {
                 .env_clear();
             cmd.env("GST_REGISTRY", "/dev/null")
                 .env("GST_REGISTRY_FORK", "no");
+            // Preserve the launcher's native runtime closure in the re-exec.
+            // These are process launch inputs, never JSON-controlled settings.
+            // A packaged producer must inventory/verify its libraries/plugins.
+            for key in [
+                "LD_LIBRARY_PATH",
+                "GST_PLUGIN_PATH",
+                "GST_PLUGIN_PATH_1_0",
+                "GST_PLUGIN_SYSTEM_PATH",
+                "GST_PLUGIN_SYSTEM_PATH_1_0",
+            ] {
+                if let Some(value) = std::env::var_os(key) {
+                    cmd.env(key, value);
+                }
+            }
             let parent_pid = std::process::id();
             unsafe {
                 cmd.pre_exec(move || {

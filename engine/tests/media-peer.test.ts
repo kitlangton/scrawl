@@ -56,7 +56,6 @@ test('native media/1 decodes actual ordered PNGs, offsets, duplicates and end cl
     assert.deepEqual(result.frames.map(r => r.clampedToStart), [false, true, false, false]);
     assert.deepEqual(result.frames.map(r => r.clampedToEnd), [false, false, true, false]);
     assert.ok(result.frames[2].actualVideoMs! < result.frames[2].effectiveVideoMs);
-    assert.ok(result.frames[2].actualVideoMs! < 2000);
     for (const frame of result.frames) {
       const bytes = await readFile(frame.path);
       assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');

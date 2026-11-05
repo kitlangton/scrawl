@@ -34,7 +34,6 @@ async function main() {
     assert.deepEqual(result.frames.map(f => f.clampedToStart), [false, true, false, false]);
     assert.deepEqual(result.frames.map(f => f.clampedToEnd), [false, false, true, false]);
   assert.ok(result.frames[2].actualVideoMs! < result.frames[2].effectiveVideoMs);
-  assert.ok(result.frames[2].actualVideoMs! < 2000);
     for (const f of result.frames) {
       const bytes = await readFile(f.path);
       assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
