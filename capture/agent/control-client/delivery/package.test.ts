@@ -25,7 +25,7 @@ test('real standalone artifact roundtrip and fail-closed staging', () => {
     chmodSync(root, 0o700);
     const produced = pack(executable, source, target, join(root, 'producer'));
     const destination = join(root, 'package');
-    const manifest = stage(produced.archive, produced.digest, target, destination);
+    const manifest = stage(produced.archive, produced.digest, source, target, destination);
     assert.equal(manifest.sourceSha, source);
     assert.equal(manifest.protocol, 1);
     assert.equal(hash(readFileSync(join(destination, 'apparent-capture'))), manifest.executableSha256);
@@ -34,10 +34,11 @@ test('real standalone artifact roundtrip and fail-closed staging', () => {
     assert.deepEqual(requireNames(destination), ['apparent-capture', 'manifest.json']);
 
     const retained = join(root, 'retained'); mkdirSync(retained); writeFileSync(join(retained, 'sentinel'), 'keep');
-    assert.throws(() => stage(produced.archive, produced.digest, target, retained), /already exists/);
+    assert.throws(() => stage(produced.archive, produced.digest, source, target, retained), /already exists/);
     assert.equal(readFileSync(join(retained, 'sentinel'), 'utf8'), 'keep');
-    assert.throws(() => stage(produced.archive, '0'.repeat(64), target, join(root, 'bad-digest')), /archive digest mismatch/);
-    assert.throws(() => stage(produced.archive, produced.digest, 'x86_64-unknown-linux-gnu', join(root, 'wrong-target')),
+    assert.throws(() => stage(produced.archive, '0'.repeat(64), source, target, join(root, 'bad-digest')), /archive digest mismatch/);
+    const wrongTarget = target === 'x86_64-unknown-linux-gnu' ? 'aarch64-unknown-linux-gnu' : 'x86_64-unknown-linux-gnu';
+    assert.throws(() => stage(produced.archive, produced.digest, source, wrongTarget, join(root, 'wrong-target')),
       /target mismatch|manifest/);
 
     const tamper = join(root, 'tamper'); mkdirSync(tamper);
@@ -47,19 +48,19 @@ test('real standalone artifact roundtrip and fail-closed staging', () => {
     writeFileSync(join(tamper, 'manifest.json'), JSON.stringify(changedManifest));
     const tamperedArchive = join(root, 'tampered.tar.gz');
     run('tar', ['-czf', tamperedArchive, '-C', tamper, 'apparent-capture', 'manifest.json']);
-    assert.throws(() => stage(tamperedArchive, hash(readFileSync(tamperedArchive)), target, join(root, 'bad-protocol')), /manifest/);
+    assert.throws(() => stage(tamperedArchive, hash(readFileSync(tamperedArchive)), source, target, join(root, 'bad-protocol')), /manifest/);
 
     writeFileSync(join(tamper, 'manifest.json'), JSON.stringify({ ...manifest, sourceSha: '0'.repeat(40) }));
     const changedSourceArchive = join(root, 'changed-source.tar.gz');
     run('tar', ['-czf', changedSourceArchive, '-C', tamper, 'apparent-capture', 'manifest.json']);
-    assert.throws(() => stage(changedSourceArchive, hash(readFileSync(changedSourceArchive)), target, join(root, 'bad-source')), /manifest/);
+    assert.throws(() => stage(changedSourceArchive, hash(readFileSync(changedSourceArchive)), source, target, join(root, 'bad-source')), /source identity mismatch/);
 
     const linked = join(root, 'linked'); mkdirSync(linked);
     writeFileSync(join(linked, 'manifest.json'), JSON.stringify(manifest));
     symlinkSync(executable, join(linked, 'apparent-capture'));
     const linkedArchive = join(root, 'linked.tar.gz');
     run('tar', ['-czf', linkedArchive, '-C', linked, 'apparent-capture', 'manifest.json']);
-    assert.throws(() => stage(linkedArchive, hash(readFileSync(linkedArchive)), target, join(root, 'bad-link')), /regular files/);
+    assert.throws(() => stage(linkedArchive, hash(readFileSync(linkedArchive)), source, target, join(root, 'bad-link')), /regular files/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -51,8 +51,9 @@ export function pack(executable: string, source: string, target: string, destina
 }
 
 /** Stage only caller-authenticated component bytes into an exclusive app candidate. */
-export function stage(archive: string, expectedDigest: string, target: string, destination: string) {
-  assert(/^[a-f0-9]{64}$/.test(expectedDigest) && targets.includes(target), 'Authenticated digest and supported target required');
+export function stage(archive: string, expectedDigest: string, expectedSource: string, target: string, destination: string) {
+  assert(/^[a-f0-9]{64}$/.test(expectedDigest) && /^[a-f0-9]{40}$/.test(expectedSource) && targets.includes(target),
+    'Authenticated digest, source and supported target required');
   const snapshot = readFileSync(archive);
   assert.equal(sha256(snapshot), expectedDigest, 'Capture client archive digest mismatch');
   const output = resolve(destination);
@@ -80,6 +81,7 @@ export function stage(archive: string, expectedDigest: string, target: string, d
       manifest.inputs.every((item: any) => /^[a-f0-9]{64}$/.test(item.sha256)) &&
       /^[a-f0-9]{64}$/.test(manifest.executableSha256) && Number.isSafeInteger(manifest.size),
       'Invalid capture client manifest');
+    assert.equal(manifest.sourceSha, expectedSource, 'Capture client source identity mismatch');
     assert.equal(sha256(JSON.stringify(manifest.inputs)), manifest.inputsSha256, 'Component input digest mismatch');
     assert.equal(binaryTarget(executable), target, 'Capture client executable target mismatch');
     assert.equal(sha256(executable), manifest.executableSha256, 'Capture client executable digest mismatch');
@@ -99,6 +101,6 @@ export function stage(archive: string, expectedDigest: string, target: string, d
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const [operation, ...args] = process.argv.slice(2);
   if (operation === 'pack' && args.length === 4) console.log(JSON.stringify(pack(args[0], args[1], args[2], args[3])));
-  else if (operation === 'stage' && args.length === 4) console.log(JSON.stringify(stage(args[0], args[1], args[2], args[3])));
-  else throw new Error('Usage: package.ts pack EXECUTABLE SOURCE_SHA TARGET NEW_OUTPUT | stage ARCHIVE AUTHENTICATED_SHA256 TARGET NEW_DESTINATION');
+  else if (operation === 'stage' && args.length === 5) console.log(JSON.stringify(stage(args[0], args[1], args[2], args[3], args[4])));
+  else throw new Error('Usage: package.ts pack EXECUTABLE SOURCE_SHA TARGET NEW_OUTPUT | stage ARCHIVE AUTHENTICATED_SHA256 SOURCE_SHA TARGET NEW_DESTINATION');
 }
