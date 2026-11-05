@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { assembleCanonicalBundle, type BundleAssemblyInput } from "@apparent/record/processing/bundle";
+import { prepareRecordPublication } from "../../dist/backend/publication/staging.js";
 
 const identity = { captureId: "a".repeat(32), materialsId: "b".repeat(32) };
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
@@ -83,6 +85,44 @@ test("assembles an SDK-validated materials envelope and sealed facts with defaul
   assert.deepEqual(document.context, { workspace: "demo" });
   assert.deepEqual(document.events.map((event: { kind: string }) => event.kind), ["app_change", "click"]);
   assert.deepEqual(result.validatedFacts.transcript?.identity, identity);
+});
+
+test("private staging prepares SDK-validated plan without touching destination or dispatching", async () => {
+  const input = await fixture();
+  const assembly = assembleCanonicalBundle(input);
+  const root = await mkdtemp(join(tmpdir(), "record-stage-fixture-"));
+  const destinationPath = join(root, "final.apparent");
+  try {
+    const prepared = await prepareRecordPublication({
+      ownerToken: "c".repeat(64), publicationId: "b".repeat(32), stagingRoot: join(root, "private"), destinationPath,
+      materialsManifest: input.manifest, materialsPayloadBytes: input.payloadBytes, assembly,
+      artifactBytes: Object.fromEntries(input.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
+    });
+    assert.equal(prepared.plan.publicationId, "b".repeat(32));
+    assert.equal(prepared.plan.materials.revision, assembly.materials.manifest.key.revision);
+    assert.equal(prepared.plan.destination.path, destinationPath);
+    assert.equal(prepared.plan.entries.find(entry => entry.role === "frame")?.input.kind, "assembled");
+    assert.equal(prepared.plan.entries.find(entry => entry.role === "video")?.input.kind, "material");
+    assert.equal(prepared.input.planFile.planSha256, sha(prepared.input.planBytes));
+    await assert.rejects(readFile(destinationPath));
+    const replay = await prepareRecordPublication({
+      ownerToken: "c".repeat(64), publicationId: "b".repeat(32), stagingRoot: join(root, "private"), destinationPath,
+      materialsManifest: input.manifest, materialsPayloadBytes: input.payloadBytes, assembly,
+      artifactBytes: Object.fromEntries(input.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
+    });
+    assert.equal(replay.input.planFile.planSha256, prepared.input.planFile.planSha256, "an exact replay resumes the same staged plan");
+    const foreign = join(root, "private", "b".repeat(32), "foreign.txt");
+    await writeFile(foreign, "preserve me", { mode: 0o600 });
+    await assert.rejects(prepareRecordPublication({
+      ownerToken: "c".repeat(64), publicationId: "b".repeat(32), stagingRoot: join(root, "private"), destinationPath,
+      materialsManifest: input.manifest, materialsPayloadBytes: input.payloadBytes, assembly,
+      artifactBytes: Object.fromEntries(input.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
+    }), /unrelated state/u);
+    assert.equal(await readFile(foreign, "utf8"), "preserve me", "conflicting staged state is never cleaned up implicitly");
+    const summary = new TextDecoder().decode(assembly.summaryMd);
+    assert.match(summary, /hello there/u);
+    assert.match(new TextDecoder().decode(assembly.apparentJson), /contact-sheet\.png/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("refuses same-named video bytes whose seal differs from the SDK materials reference", async () => {

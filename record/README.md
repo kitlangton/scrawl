@@ -93,6 +93,19 @@ The API does not assemble canonical bundles, release retained materials, or
 claim native capture/publication availability. SDK0.3's testing peer remains a
 test double and cannot produce native Saved.
 
+`prepareRecordPublication` in the same subpath writes a private plan namespace
+from canonical assembly output. It accepts exact source materials bytes and
+caller-supplied frame/contact-sheet bytes, records actual filesystem identities
+for generated files, and runs the packed SDK preflight before returning a
+`CapturePublishInput`. Material references remain references; caller-attested
+images stay `assembled` inputs and are not native derivative receipts. This
+operation never calls `recovery.publish`, creates the final destination, or
+claims Saved. Replays require byte-identical files in the same publication
+namespace; conflicting or partial files are retained for reconciliation and
+never removed implicitly. The returned input remains fixture/packed-consumer
+support: it does not establish native authority, filesystem/profile acceptance,
+or production capture availability.
+
 ```ts
 import { preflightCapturePublication } from "@apparent/engine-sdk/capture";
 import { createRecordPublicationRecovery } from "@apparent/record/publication";
