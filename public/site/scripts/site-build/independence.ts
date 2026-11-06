@@ -27,7 +27,7 @@ try {
   for (const path of ['public/site', 'public/delivery.json', 'composition/delivery', 'composition/architecture', '.github/actions/delivery-contracts', '.github/actions/delivery-component', '.github/workflows/stream-public.yml', '.github/actions/runtime-budget', 'enablement/verification/workflow-budget.ts', 'LICENSE', 'shared/ui', 'shared/analytics', 'shared/assets', 'README.md', 'capture/agent/skills/apparent/SKILL.md']) copy(path)
   const walk = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(join(directory, entry.name)) : [join(directory, entry.name)])
   assert.equal(walk(site).filter(path => /\.(rs|py|js|mjs|cjs|sh)$/.test(path)).length, 0, 'Public contains non-TypeScript owned source')
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, APPARENT_PUBLIC_SITE: '1', VITE_HOSTED_API_ORIGIN: 'https://hosted.tryapparent.com' }
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, APPARENT_PUBLIC_SITE: '1' }
   const run = (command: string, args: string[]) => {
     const result = spawnSync(command, args, { cwd: site, env, stdio: 'inherit' })
     assert.ifError(result.error)

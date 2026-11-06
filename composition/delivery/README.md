@@ -1,6 +1,6 @@
 # Value stream delivery core
 
-Each source owner registers `delivery.json` beside its package. Schema 1 names the package, tracked input roots, verification scripts, build script, supported target and staging class. Each `.github/workflows/stream-<owner>.yml` owns its path-filtered PR and main jobs, permissions, fixed owner/target matrix and runtime audit. Small composite actions in `.github/actions/delivery-contracts` and `delivery-component` share repeatable steps without owning workflow jobs. Owner jobs keep the established `deliver / stream (<owner>, <target>)`, `deliver / Delivery contracts`, and `deliver / Workflow runtime budget` receipt names. PR component jobs build and verify fresh with synthetic settings and read-only permissions; main producer jobs may admit verified unchanged artifacts and then seal, attest and upload. Public's workflow also retries after a successful trusted Connect producer completion and is the only Pages publisher. Connect's TypeScript account/crypto client has a separate `connect-client` workflow; its independent static hosting package has a separate `connect-browser` workflow, while the legacy browser/Worker producer retains its explicit manual/reusable invocation contract. The client artifact does not prove the remaining Rust transfer lifecycle migrated. Missing owners are reported pending; an existing source without a registration is reported as blocked.
+Each source owner registers `delivery.json` beside its package. Schema 1 names the package, tracked input roots, verification scripts, build script, supported target and staging class. Each `.github/workflows/stream-<owner>.yml` owns its path-filtered PR and main jobs, permissions, fixed owner/target matrix and runtime audit. Small composite actions in `.github/actions/delivery-contracts` and `delivery-component` share repeatable steps without owning workflow jobs. Owner jobs keep the established `deliver / stream (<owner>, <target>)`, `deliver / Delivery contracts`, and `deliver / Workflow runtime budget` receipt names. PR component jobs build and verify fresh with synthetic settings and read-only permissions; main producer jobs may admit verified unchanged artifacts and then seal, attest and upload. Public's workflow is the only Pages publisher and has no Connect completion trigger or artifact dependency. Connect's TypeScript account/crypto client has a separate `connect-client` workflow; its independent static hosting package has a separate `connect-browser` workflow, while the legacy browser/Worker producer retains its explicit manual/reusable invocation contract. The client artifact does not prove the remaining Rust transfer lifecycle migrated. Missing owners are reported pending; an existing source without a registration is reported as blocked.
 
 The isolated TypeScript architecture checker in `composition/architecture` rejects cross-owner source imports, undeclared private package paths, reversed dependencies and alias escapes. `Delivery contracts` tests the checker and scans common shared/composition code; component jobs scan their own owner before artifact admission. An unrelated product violation fails its own lane. A successful shared contract job is required before any prior component can be admitted, and checker inputs are part of every component fingerprint. Before merging owner changes, install the checker's locked dependencies and run its typecheck, tests and repository check as documented there. This guard covers static dependency boundaries, not arbitrary runtime behavior or native effects.
 
@@ -64,12 +64,14 @@ the exact Public job, Delivery contracts and runtime audit, source/config equali
 and ZIP/tar hashes before extracting only public bytes. An unrelated failed stream
 does not invalidate a successful Public job with successful shared contracts/audit.
 
-The reusable Public workflow’s `deploy (public, web)` job needs only the dedicated Public
-producer. It downloads that producer’s same-run artifact and a compatible Connect
-artifact, then checks their composed
-resource/privacy/browser seams, seals the final candidate and publishes under its
-existing controls. It never recompiles Public or Connect. Enabled synthetic Public
-analytics fixtures stay private to the producer and are never uploaded.
+The Public owner workflow’s `deploy (public, web)` job needs only its dedicated Public
+producer. It validates the same-run component, Public resource graph, metadata,
+browser/theme/movie behavior and byte preservation, then seals and publishes only
+Public files. It has no Connect artifact, browser, API-origin or completion-trigger
+dependency. Connect pages, API/auth/viewer resources and path routing belong to its
+independent Worker. Existing Pages activation, environment, source ordering, readback
+and publication lock remain in force. The Connect owner has verified the live route/auth/privacy cutover. Retain
+its app routes when publishing or rolling back the Public-only snapshot.
 
 
 PR readiness is established from the affected owner workflows directly. Each owner

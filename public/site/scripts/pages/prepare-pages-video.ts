@@ -1,17 +1,17 @@
 // Prepare media before sealing the candidate for value-stream CI deployment.
 // from public/site/. Functions remain source code outside the uploaded static tree.
 import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs"
-import { createHash } from "node:crypto"
+import { createHash, type Hash } from "node:crypto"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { movie, chunkPath } from "../../lib/pages-video-metadata.ts"
 
-function regular(path, directory = false) {
+function regular(path: string, directory = false) {
   const stat = lstatSync(path)
   if (stat.isSymbolicLink() || !(directory ? stat.isDirectory() : stat.isFile())) throw new Error(`Not a regular ${directory ? "directory" : "file"}: ${path}`)
   return stat
 }
-function digest(path, whole = null) {
+function digest(path: string, whole: Hash | null = null) {
   regular(path)
   const fd = openSync(path, "r")
   const hash = createHash("sha256")
@@ -27,7 +27,7 @@ function digest(path, whole = null) {
   } finally { closeSync(fd) }
   return { size, sha256: hash.digest("hex") }
 }
-function verify(path, expected, whole) {
+function verify(path: string, expected: { size: number; sha256: string }, whole?: Hash) {
   const actual = digest(path, whole)
   if (actual.size !== expected.size || actual.sha256 !== expected.sha256) throw new Error(`Video identity mismatch: ${path}`)
 }
@@ -54,7 +54,7 @@ export function preparePagesVideo(output = fileURLToPath(new URL("../../dist-app
             if (!count) throw new Error("Movie changed during preparation")
             offset += count
           }
-          const name = chunkPath(chunk).split("/").at(-1)
+          const name = chunkPath(chunk).split("/").at(-1)!
           const staged = join(staging, name)
           writeFileSync(staged, buffer, { flag: "wx" })
           verify(staged, chunk)
@@ -62,7 +62,7 @@ export function preparePagesVideo(output = fileURLToPath(new URL("../../dist-app
       } finally { closeSync(fd) }
       // All chunks must be fully written and verified before touching source.
       for (const chunk of movie.chunks) {
-        const name = chunkPath(chunk).split("/").at(-1)
+        const name = chunkPath(chunk).split("/").at(-1)!
         const destination = join(assets, name)
         if (existsSync(destination)) verify(destination, chunk)
         else renameSync(join(staging, name), destination)
