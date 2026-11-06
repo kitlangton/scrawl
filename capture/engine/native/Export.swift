@@ -53,7 +53,10 @@ struct ExportPlan: Decodable {
         throw DecodingError.dataCorruptedError(in: values, debugDescription: "RGB requires exactly three bytes")
       }
     }
-    func color(alpha: Double) -> CGColor { CGColor(red: r, green: g, blue: b, alpha: alpha) }
+    func color(alpha: Double) -> CGColor {
+      // Device RGB can be Display P3 on Macs; recorded bytes use sRGB on every renderer.
+      CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!, components: [r, g, b, alpha])!
+    }
   }
   struct Stroke: Decodable {
     var rgb: RGB?

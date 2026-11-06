@@ -388,7 +388,7 @@ pub struct Stroke {
     pub pin: Option<u32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub laser: bool,
-    /// Exact recorded RGB bytes. Absent retains the renderer's unnamed legacy default.
+    /// Exact recorded sRGB bytes. Absent retains the renderer's unnamed legacy default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgb: Option<[u8; 3]>,
     /// Flat triples `[x, y, dt_ms, ...]` where `x, y` are in `0..=SCALE` and `dt_ms` is ms since `t0`.

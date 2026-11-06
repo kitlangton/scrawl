@@ -184,7 +184,7 @@ destination absent. The existing v1 reservation-directory allocator is incompati
 ## Recorded stroke RGB (SDK 0.3.2)
 
 `StrokeFacts.strokes[].rgb?: StrokeRgb` is an optional exact `[r,g,b]` tuple of
-three integer bytes (0–255), snapshotted when the native stroke begins. Black
+three sRGB integer bytes (0–255), snapshotted when the native stroke begins. Black
 `[0,0,0]` is a color; absence is distinct and retains the existing unnamed legacy
 renderer default. Null, palette names, fractional bytes and other tuple lengths
 are invalid. `validateFactFile(..., "acceptedStrokes")` validates and preserves
