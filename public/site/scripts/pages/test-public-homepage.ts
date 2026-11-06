@@ -8,6 +8,7 @@ import { DEMO_CURSOR } from "../../src/demo/content/cursor-track.ts"
 import { cameraOffsetAt } from "../../src/demo/core/cursor-camera.ts"
 import { parseStatus } from "../../src/features.ts"
 import { browserAnalyticsDefinitions } from "../../../../shared/analytics/config.ts"
+import { movie, chunkPath } from "../../lib/pages-video-metadata.ts"
 
 const site = join(dirname(fileURLToPath(import.meta.url)), "../..")
 const publicDir = process.env.SITE_ARTIFACT ? resolve(process.env.SITE_ARTIFACT) : join(site, "dist-apparent")
@@ -144,12 +145,36 @@ test("source homepage preserves accepted responsive layout and interactions", as
   const { extname } = await import("node:path")
   const { mkdir, writeFile } = await import("node:fs/promises")
   const { firefox } = await import("playwright-core")
+  // Pages replaces the single MP4 with immutable chunks. Exercise its actual
+  // compiled worker, not a missing-file response or a substitute source movie.
+  const prepared = !existsSync(join(publicDir, movie.path.slice(1))) && existsSync(join(publicDir, "_routes.json"))
+  const { Miniflare } = await import("miniflare")
+  const movieRuntime = prepared ? new Miniflare({
+    modules: true, script: readFileSync(join(publicDir, "_worker.js"), "utf8"),
+    compatibilityDate: "2026-08-06", host: "127.0.0.1", port: 0,
+    serviceBindings: { ASSETS(request) {
+      const path = new URL(request.url).pathname
+      assert(movie.chunks.some(chunk => chunkPath(chunk) === path), "movie worker reads only approved chunks")
+      return new Response(readFileSync(join(publicDir, path.slice(1))))
+    } },
+  }) : null
+  const movieOrigin = movieRuntime ? await movieRuntime.ready.catch(async error => { await movieRuntime.dispose(); throw error }) : null
+  console.info(`Homepage browser fixture: ${prepared ? "compiled Pages movie worker" : "raw source movie"}`)
   const types: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".webp": "image/webp", ".jpg": "image/jpeg", ".ttf": "font/ttf", ".mp4": "video/mp4" }
-  const server = createServer((request, response) => {
+  const server = createServer(async (request, response) => {
     const pathname = new URL(request.url!, "http://localhost").pathname
     const file = resolve(publicDir, "." + (pathname.endsWith("/") ? pathname + "index.html" : pathname))
     if (!file.startsWith(publicDir + "/")) { response.writeHead(403).end(); return }
     try {
+      if (movieOrigin && pathname === movie.path) {
+        const result = await fetch(new URL(movie.path, movieOrigin), {
+          method: request.method, headers: request.headers.range ? { Range: request.headers.range } : {},
+        })
+        const bytes = Buffer.from(await result.arrayBuffer())
+        response.writeHead(result.status, Object.fromEntries(result.headers))
+        response.end(bytes)
+        return
+      }
       response.setHeader("Content-Type", types[extname(file)] || "application/octet-stream")
       const bytes = readFileSync(file)
       if (extname(file) === ".mp4") {
@@ -429,5 +454,8 @@ test("source homepage preserves accepted responsive layout and interactions", as
       } finally { await browser.close() }
     }
     if (process.env.SITE_EVIDENCE) await writeFile(join(process.env.SITE_EVIDENCE, "source-homepage.json"), JSON.stringify(receipts, null, 2))
-  } finally { await new Promise<void>(done => server.close(() => done())) }
+  } finally {
+    try { await new Promise<void>(done => server.close(() => done())) }
+    finally { await movieRuntime?.dispose() }
+  }
 })

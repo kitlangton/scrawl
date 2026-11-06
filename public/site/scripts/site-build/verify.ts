@@ -1,9 +1,12 @@
 // Standalone Public verification. Pages preparation and publication remain
 // in the Public deployment job; this is not a publication command.
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, cpSync, mkdtempSync, rmSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { installPublicBrowsers } from '../browser-setup/install.ts'
+import { preparePagesVideo } from '../pages/prepare-pages-video.ts'
 
 const args = new Set(process.argv.slice(2))
 for (const arg of args) if (!['--installed', '--install-browser'].includes(arg)) throw new Error(`Unknown argument: ${arg}`)
@@ -39,5 +42,15 @@ const tests = [
   'browser-proof/test-og-stage-redirect.ts', 'browser-proof/test-og-video-stage-browser.ts',
 ]
 run('node', ['--test', ...tests.map(path => `scripts/${path}`)])
+// Verify browser playback after the same chunking performed before publication,
+// retaining raw output for its consumers and cleaning only this owned copy.
+const prepared = mkdtempSync(join(tmpdir(), 'public-prepared-browser-'))
+try {
+  cpSync(join(cwd, 'dist-apparent'), prepared, { recursive: true })
+  preparePagesVideo(prepared)
+  const check = spawnSync('node', ['--test', 'scripts/pages/test-public-homepage.ts'], { cwd, env: { ...env, SITE_ARTIFACT: prepared }, stdio: 'inherit' })
+  if (check.error) throw check.error
+  if (check.status !== 0) throw new Error(`Prepared Public browser verification failed (${check.status})`)
+} finally { rmSync(prepared, { recursive: true, force: true }) }
 run('node', ['--test', 'scripts/browser-setup/install.test.ts', 'scripts/cd/publish-pages.test.ts', 'scripts/cd/source-boundary.test.ts', 'scripts/cd/stream-artifact.test.ts'])
 run('node', ['--experimental-strip-types', 'scripts/cd/analytics-smoke.ts'])
