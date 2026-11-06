@@ -248,6 +248,55 @@ pub fn copy_string_to_clipboard(content: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifiedClipboardTextWrite {
+    Applied,
+    Unavailable,
+    OutcomeUnknown,
+}
+
+/// Uses the existing platform clipboard writer, then confirms the exact text and write owner.
+/// This method returns no clipboard content and never attempts to restore a previous owner.
+pub fn copy_string_to_clipboard_verified(content: &str) -> VerifiedClipboardTextWrite {
+    if content.contains('\0') {
+        return VerifiedClipboardTextWrite::Unavailable;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let before = pasteboard.changeCount();
+        if copy_string_to_clipboard(content).is_err() {
+            return VerifiedClipboardTextWrite::OutcomeUnknown;
+        }
+        let after = pasteboard.changeCount();
+        let actual = unsafe { pasteboard.stringForType(NSPasteboardTypeString) };
+        if pasteboard_write_confirmed(before as isize, after as isize, actual.is_some_and(|text| text.to_string() == content)) {
+            VerifiedClipboardTextWrite::Applied
+        } else {
+            VerifiedClipboardTextWrite::OutcomeUnknown
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        match crate::capture::desktop::linux::clipboard::set_text_verified(content) {
+            crate::capture::desktop::linux::clipboard::VerifiedTextWrite::Applied => VerifiedClipboardTextWrite::Applied,
+            crate::capture::desktop::linux::clipboard::VerifiedTextWrite::Unavailable => VerifiedClipboardTextWrite::Unavailable,
+            crate::capture::desktop::linux::clipboard::VerifiedTextWrite::OutcomeUnknown => VerifiedClipboardTextWrite::OutcomeUnknown,
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = content;
+        VerifiedClipboardTextWrite::Unavailable
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn pasteboard_write_confirmed(before: isize, after: isize, exact_readback: bool) -> bool {
+    after > before && exact_readback
+}
+
 #[cfg(target_os = "macos")]
 pub fn copy_png_to_clipboard(png_bytes: &[u8]) -> Result<()> {
     use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG};

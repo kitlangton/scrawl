@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/client.ts", "./pen": "./src/pen.ts" },
+  "exports": { ".": "./src/client.ts", "./pen": "./src/pen.ts", "./clipboard": "./src/clipboard.ts" },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test test/client.test.ts"

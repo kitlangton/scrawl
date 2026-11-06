@@ -4,13 +4,14 @@
 //! the data.
 
 use std::io::{BufRead as _, Read as _, Write as _};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result, anyhow};
 use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
 
 static CLIPBOARD: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
+static WAYLAND_TEXT_OWNER: Mutex<Option<Child>> = Mutex::new(None);
 const MAX_MIME_TYPES: usize = 32;
 const MAX_MIME_BYTES: usize = 256;
 const MAX_CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
@@ -455,6 +456,142 @@ pub fn set_text(text: &str) -> Result<()> {
     with(|c| c.set_text(text.to_owned()))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifiedTextWrite {
+    Applied,
+    Unavailable,
+    OutcomeUnknown,
+}
+
+/// Writes through the existing clipboard backend and confirms both its owner and exact text.
+/// The text is never returned or logged. Unknown leaves whatever owner currently has the
+/// selection untouched.
+pub fn set_text_verified(text: &str) -> VerifiedTextWrite {
+    if text.contains('\0') {
+        return VerifiedTextWrite::Unavailable;
+    }
+    if native_wayland_clipboard() {
+        return set_text_wayland_verified(text);
+    }
+    if !x11_resource_available() {
+        return VerifiedTextWrite::Unavailable;
+    }
+    if with(|clipboard| clipboard.set_text(text.to_owned())).is_err() {
+        return VerifiedTextWrite::OutcomeUnknown;
+    }
+    let our_process = std::process::id();
+    let owner_before_readback = x11_clipboard_owner_pid();
+    if owner_before_readback != Some(our_process) { return VerifiedTextWrite::OutcomeUnknown; }
+    let exact_readback = with(|clipboard| clipboard.get_text().map(|actual| actual == text))
+        .unwrap_or(false);
+    let owner_after_readback = x11_clipboard_owner_pid();
+    if x11_write_confirmed(owner_before_readback, exact_readback, owner_after_readback, our_process) {
+        VerifiedTextWrite::Applied
+    } else {
+        VerifiedTextWrite::OutcomeUnknown
+    }
+}
+
+fn clipboard_tool(name: &str) -> Option<std::path::PathBuf> {
+    let bundled = std::env::current_exe().ok()?.parent()?.join(name);
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+}
+
+fn set_text_wayland_verified(text: &str) -> VerifiedTextWrite {
+    let Some(display) = super::super::wayland_display() else {
+        return VerifiedTextWrite::Unavailable;
+    };
+    let (Some(copy), Some(paste), Some(timeout)) = (
+        clipboard_tool("wl-copy"), clipboard_tool("wl-paste"), clipboard_tool("timeout"),
+    ) else {
+        return VerifiedTextWrite::Unavailable;
+    };
+    let _ = (paste, timeout); // read_wayland uses these same packaged/PATH tools.
+    let mut owner_slot = WAYLAND_TEXT_OWNER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(old) = owner_slot.as_mut() {
+        if old.try_wait().ok().flatten().is_some() {
+            *owner_slot = None;
+        }
+    }
+    let mut child = match Command::new(copy)
+        .args(["--foreground", "--type", "text/plain;charset=utf-8"])
+        .env("WAYLAND_DISPLAY", display)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return VerifiedTextWrite::Unavailable,
+    };
+    let Some(mut stdin) = child.stdin.take() else {
+        *owner_slot = Some(child);
+        return VerifiedTextWrite::OutcomeUnknown;
+    };
+    if stdin.write_all(text.as_bytes()).is_err() {
+        drop(stdin);
+        *owner_slot = Some(child);
+        return VerifiedTextWrite::OutcomeUnknown;
+    }
+    drop(stdin);
+    let owner_alive = |child: &mut Child| child.try_wait().is_ok_and(|status| status.is_none());
+    let owner_alive_before = owner_alive(&mut child);
+    let exact_readback = owner_alive_before
+        && still_ours("text/plain;charset=utf-8", text.as_bytes()).unwrap_or(false);
+    let owner_alive_after = owner_alive_before && owner_alive(&mut child);
+    if !wayland_write_confirmed(owner_alive_before, exact_readback, owner_alive_after) {
+        *owner_slot = Some(child);
+        return VerifiedTextWrite::OutcomeUnknown;
+    }
+    *owner_slot = Some(child);
+    VerifiedTextWrite::Applied
+}
+
+fn x11_write_confirmed(owner_before: Option<u32>, exact_readback: bool, owner_after: Option<u32>, pid: u32) -> bool {
+    owner_before == Some(pid) && exact_readback && owner_after == Some(pid)
+}
+
+fn wayland_write_confirmed(owner_alive_before: bool, exact_readback: bool, owner_alive_after: bool) -> bool {
+    owner_alive_before && exact_readback && owner_alive_after
+}
+
+fn x11_resource_available() -> bool {
+    use x11rb::{
+        connection::Connection,
+        protocol::{res::{ClientIdMask, ClientIdSpec, ConnectionExt as _}, xproto::ConnectionExt as _},
+    };
+    let Ok((connection, _)) = x11rb::connect(None) else { return false; };
+    if !connection.query_extension(b"X-Resource").ok()
+        .and_then(|reply| reply.reply().ok()).is_some_and(|reply| reply.present) {
+        return false;
+    }
+    let client = connection.setup().resource_id_base;
+    connection.res_query_client_ids(&[ClientIdSpec { client, mask: ClientIdMask::LOCAL_CLIENT_PID }]).ok()
+        .and_then(|reply| reply.reply().ok())
+        .is_some_and(|reply| reply.ids.into_iter().any(|id|
+            id.spec.client == client && id.spec.mask == ClientIdMask::LOCAL_CLIENT_PID
+                && id.value.as_slice() == [std::process::id()]))
+}
+
+fn x11_clipboard_owner_pid() -> Option<u32> {
+    use x11rb::{
+        protocol::{res::{ClientIdMask, ClientIdSpec, ConnectionExt as _}, xproto::ConnectionExt as _},
+    };
+    let (connection, _) = x11rb::connect(None).ok()?;
+    let atom = connection.intern_atom(false, b"CLIPBOARD").ok()?.reply().ok()?.atom;
+    let owner = connection.get_selection_owner(atom).ok()?.reply().ok()?.owner;
+    if owner == 0 { return None; }
+    let spec = ClientIdSpec { client: owner, mask: ClientIdMask::LOCAL_CLIENT_PID };
+    connection.res_query_client_ids(&[spec]).ok()?.reply().ok()?.ids.into_iter()
+        .find(|id| id.spec.client == owner && id.spec.mask == ClientIdMask::LOCAL_CLIENT_PID)?
+        .value.into_iter().next()
+}
+
 pub fn set_png(png_bytes: &[u8]) -> Result<()> {
     if native_wayland_clipboard() {
         return copy_wayland("image/png", png_bytes);
@@ -529,6 +666,17 @@ fn copy_wayland(mime: &str, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verified_text_requires_our_live_selection_owner_and_exact_readback() {
+        assert!(x11_write_confirmed(Some(42), true, Some(42), 42));
+        assert!(!x11_write_confirmed(Some(42), false, Some(42), 42));
+        assert!(!x11_write_confirmed(Some(42), true, Some(99), 42));
+        assert!(!x11_write_confirmed(Some(42), true, None, 42));
+        assert!(wayland_write_confirmed(true, true, true));
+        assert!(!wayland_write_confirmed(true, false, true));
+        assert!(!wayland_write_confirmed(true, true, false));
+    }
 
     #[test]
     fn snapshot_preserves_each_mime_once_when_the_owner_advertises_duplicates() {

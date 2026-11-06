@@ -5,7 +5,10 @@ import { chmod, mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { createHash } from 'node:crypto';
+import { MAX_SERIALIZED_FRAME_BYTES, MAX_UTF8_TEXT_BYTES } from '@apparent/app-contracts/host';
 import { createNativeHostPort } from '../src/client.ts';
+import { createNativeClipboardPort } from '../src/clipboard.ts';
 import { createNativePenPort } from '../src/pen.ts';
 
 const facts = {
@@ -258,4 +261,95 @@ test('pen facade admits one process-wide effect and reports excess work unavaila
     assert.deepEqual(await first, { status: 'applied', rgb: [1, 2, 3] });
     assert.equal(dispatches, 1);
   });
+});
+
+test('clipboard facade binds exact text digest and byte length without returning clipboard data', async () => {
+  const text = 'quote " slash \\ tab\t newline\nλ 🖍';
+  const bytes = Buffer.from(text, 'utf8');
+  await withSocket(request => {
+    assert.equal(request.operation, 'writeClipboardText');
+    assert.deepEqual(Object.keys(request).sort(), ['deadline', 'id', 'observed', 'operation', 'owner', 'protocol', 'text']);
+    assert.deepEqual(request.observed, expected);
+    assert.equal(request.text, text);
+    return { status: 'applied', digest: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.length };
+  }, async () => {
+    assert.deepEqual(await createNativeClipboardPort().writeText(text, expected), {
+      status: 'applied', digest: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.length,
+    });
+  });
+});
+
+test('clipboard bounds include worst-case JSON escaping, maximum envelope, and the line feed', async () => {
+  assert.equal(MAX_SERIALIZED_FRAME_BYTES, 131_072);
+  assert.equal(MAX_UTF8_TEXT_BYTES, 21_800);
+  const text = '\u0001'.repeat(MAX_UTF8_TEXT_BYTES);
+  let dispatches = 0;
+  await withSocket(request => {
+    dispatches++;
+    assert.equal(request.text, text);
+    const frameBytes = Buffer.byteLength(`${JSON.stringify(request)}\n`);
+    assert.ok(frameBytes <= MAX_SERIALIZED_FRAME_BYTES);
+    assert.ok(frameBytes >= MAX_SERIALIZED_FRAME_BYTES - 20);
+    const bytes = Buffer.from(text, 'utf8');
+    return { status: 'applied', digest: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.length };
+  }, async () => {
+    assert.equal((await createNativeClipboardPort().writeText(text, {
+      processEpoch: 'e'.repeat(64), revision: Number.MAX_SAFE_INTEGER,
+    })).status, 'applied');
+  });
+  assert.equal(dispatches, 1);
+  await withSocket(() => { dispatches++; return { status: 'applied', digest: '0'.repeat(64), byteLength: MAX_UTF8_TEXT_BYTES + 1 }; }, async () => {
+    assert.deepEqual(await createNativeClipboardPort().writeText(`${text}a`, expected), { status: 'refused', reason: 'too-large' });
+  });
+  assert.equal(dispatches, 1);
+});
+
+test('clipboard rejects NUL and malformed UTF-16 before transport and never truncates', async () => {
+  let dispatches = 0;
+  await withSocket(() => { dispatches++; return DROP; }, async () => {
+    const port = createNativeClipboardPort();
+    for (const text of ['before\0after', '\ud800', '\udc00']) {
+      assert.deepEqual(await port.writeText(text, expected), { status: 'refused', reason: 'invalid-text' });
+    }
+  });
+  assert.equal(dispatches, 0);
+});
+
+test('clipboard facade admits one write and refuses concurrent work before dispatch', async () => {
+  let release!: () => void, dispatched!: () => void, dispatches = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { dispatched = resolve; });
+  const digest = createHash('sha256').update('first').digest('hex');
+  await withSocket(async () => {
+    dispatches++;
+    dispatched();
+    await gate;
+    return { status: 'applied', digest, byteLength: 5 };
+  }, async () => {
+    const first = createNativeClipboardPort().writeText('first', expected);
+    await started;
+    assert.deepEqual(await createNativeClipboardPort().writeText('second', expected), { status: 'refused', reason: 'busy' });
+    release();
+    assert.deepEqual(await first, { status: 'applied', digest, byteLength: 5 });
+    assert.equal(dispatches, 1);
+  });
+});
+
+test('clipboard stale, busy, unavailable, malformed receipt, and lost reply stay truthful without retry', async () => {
+  for (const result of [
+    { status: 'refused', reason: 'stale' },
+    { status: 'refused', reason: 'busy' },
+    { status: 'refused', reason: 'unavailable' },
+    { status: 'applied', digest: 'bad', byteLength: 2 },
+    DROP,
+  ]) {
+    let dispatches = 0;
+    await withSocket(() => { dispatches++; return result; }, async () => {
+      const receipt = await createNativeClipboardPort().writeText('exact', expected);
+      if (result === DROP || (typeof result === 'object' && result.status === 'applied')) {
+        assert.deepEqual(receipt, { status: 'outcome-unknown' });
+      } else assert.deepEqual(receipt, result);
+    });
+    assert.equal(dispatches, 1);
+  }
 });
