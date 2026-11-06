@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 const mode = process.argv[2];
 const completed = process.argv[3];
 const peerId = process.argv.at(-1)!;
-const facts = { schema: "apparent.engine-recovery-peer/1", peerId, channel: "capture/2", implementation: "native", role: "recovery", startsFreshCapture: false, onInputEof: "retain-admitted-finite-work" };
+const facts = { schema: "apparent.engine-recovery-peer/1", peerId, channel: process.argv[4], implementation: "native", role: "recovery", startsFreshCapture: false, onInputEof: "retain-admitted-finite-work" };
 if (mode === "unsupported") {
   setInterval(() => {}, 1000);
 } else {

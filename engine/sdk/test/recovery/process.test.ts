@@ -20,7 +20,7 @@ async function caller(mode: string, completed: string): Promise<{ output: string
   });
   return { output, elapsed: performance.now() - started };
 }
-for (const mode of ["confirmed", "lost-ack", "pair-failure"]) test(`recovery candidate frees caller handles with ${mode}; finite synthetic process work survives`, async () => {
+for (const mode of ["confirmed", "lost-ack", "pair-failure", "media-confirmed", "media-lost-ack"]) test(`recovery candidate frees caller handles with ${mode}; finite synthetic process work survives`, async () => {
   const root = await mkdtemp(join(tmpdir(), "engine-recovery-local-"));
   const completed = join(root, "completed");
   try {
