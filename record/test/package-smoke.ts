@@ -91,14 +91,22 @@ try {
   const bundleDeclarations = path.join(bundle, 'consumer.ts');
   await writeFile(bundleDeclarations, `
     import { RecordMedia2Job, type RecordMedia2JobState } from '@apparent/record/processing/media2-consumer';
+    import { readRetainedDerivativeArtifacts, type ReadRetainedDerivativeArtifactsInput } from '@apparent/record/processing/retained-artifacts';
     import { Media2Client, preflightMedia2Dispatch, type Media2JobInput } from '@apparent/engine-sdk/media2';
     import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators, type CanonicalStroke } from '@apparent/record/processing/bundle';
+    import type { PreparePublicationInput } from '@apparent/record/publication';
     import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts, type StrokeRgb } from '@apparent/engine-sdk/capture';
     import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
     import {createCapture2RecordRuntime, type Capture2RecordRuntimeOptions} from '@apparent/record/host/capture2-runtime';
     declare const capture2RuntimeOptions: Capture2RecordRuntimeOptions;
     void createCapture2RecordRuntime(capture2RuntimeOptions);
     const createMedia2Job = (client: Media2Client, input: Media2JobInput) => RecordMedia2Job.create(client, '/tmp/record-media2-job.json', input);
+    const consumeRetainedArtifacts = async (input: ReadRetainedDerivativeArtifactsInput) => {
+      const retained = await readRetainedDerivativeArtifacts(input);
+      const assemblyArtifacts: BundleAssemblyInput['artifacts'] = retained.artifacts;
+      const publicationBindings: NonNullable<PreparePublicationInput['derivative2Artifacts']> = retained.derivative2Artifacts;
+      return { assemblyArtifacts, publicationBindings };
+    };
     const validators: BundleValidators = { materials: validateMaterialsDocument, fact: validateFactFile };
     const consume = (input: BundleAssemblyInput) => assembleCanonicalBundle(input, validators);
     const loadAndAssemble = async (input: CaptureMaterialsInput, policy: Omit<BundleAssemblyInput, 'manifest' | 'payloadBytes' | 'facts'>) => {
@@ -109,7 +117,7 @@ try {
     const canonical: CanonicalStroke = { id: 'record-mapping', t0: 0, t1: 1, fw: 1, fh: 1, pts: [0, 0, 0], rgb };
     declare const media2Input: Media2JobInput;
     const media2State: RecordMedia2JobState = 'ready';
-    void [RecordMedia2Job, Media2Client, preflightMedia2Dispatch, media2Input, media2State, createMedia2Job];
+    void [RecordMedia2Job, Media2Client, preflightMedia2Dispatch, media2Input, media2State, createMedia2Job, consumeRetainedArtifacts];
     void canonical; void loadAndAssemble; void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
   `);
   const bundleTsc = path.join(root, 'node_modules/typescript/bin/tsc');
@@ -119,6 +127,7 @@ try {
     import {createRequire} from 'node:module';
     import { assembleCanonicalBundle } from '@apparent/record/processing/bundle';
     import { RecordMedia2Job } from '@apparent/record/processing/media2-consumer';
+    import { readRetainedDerivativeArtifacts } from '@apparent/record/processing/retained-artifacts';
     import { validateMaterialsDocument, validateFactFile } from '@apparent/engine-sdk/capture';
     import { Media2Client, preflightMedia2Dispatch } from '@apparent/engine-sdk/media2';
     const {readCaptureMaterials} = await import('@apparent/record/host/materials');
@@ -127,7 +136,7 @@ try {
     assert.equal(typeof validateMaterialsDocument, 'function');
     assert.equal(typeof validateFactFile, 'function');
     for (const name of ['react','react-dom','electron']) assert.throws(()=>createRequire(import.meta.url).resolve(name));
-    assert.deepEqual([RecordMedia2Job, Media2Client, preflightMedia2Dispatch].map(value => typeof value), ['function','function','function']);
+    assert.deepEqual([RecordMedia2Job, readRetainedDerivativeArtifacts, Media2Client, preflightMedia2Dispatch].map(value => typeof value), ['function','function','function','function']);
     console.log('packed canonical bundle runtime and SDK consumer passed');
   `], { cwd: bundle });
   process.stdout.write(bundleRuntime.stdout);

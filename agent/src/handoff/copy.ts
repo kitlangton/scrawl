@@ -53,7 +53,7 @@ export async function localCopyText(input = 'latest'): Promise<string> {
   }
   const processing: ProcessingInput = {
     bundlePath, durationMs: bundle.durationMs, target: bundle.target, device: bundle.device,
-    context: bundle.context, contextChanges: bundle.contextChanges?.map((event: any) => ({ timeMs: event.t, key: event.key, value: event.value })),
+    context: bundle.context, contextChanges: bundle.contextChanges?.map((event: any) => ({ timeMs: event.t, key: event.key, value: event.value ?? undefined })),
     screenAtStart: bundle.screens?.find((screen: any) => screen.t0 === 0)?.name,
     transcript: { text: bundle.transcript.text, segments: bundle.transcript.segments.map((segment: any) => ({ startMs: segment.t0, text: segment.text })) },
     frames: bundle.keyframes.map((frame: any, i: number) => ({ index: frame.index ?? i + 1, timeMs: frame.t ?? 0, absolutePath: join(bundlePath, frame.file), text: frame.said ?? undefined,

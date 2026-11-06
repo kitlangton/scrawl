@@ -286,7 +286,7 @@ class SelectionTests(unittest.TestCase):
             delivery_action = verification.select([action])
             self.assertTrue(delivery_action["app_shell"])
             self.assertFalse(delivery_action["root"])
-        entry_workflow = verification.select([".github/workflows/stream-app-shell.yml"])
+        entry_workflow = verification.select([".github/workflows/stream-platform.yml"])
         self.assertTrue(entry_workflow["app_shell"])
         self.assertFalse(entry_workflow["root"])
         self.assertFalse(verification.select(["composition/cli.rs"])["app_shell"])
@@ -372,12 +372,14 @@ class SelectionTests(unittest.TestCase):
             package = root / "composition/delivery"
             package.mkdir(parents=True)
             (package / "delivery.test.ts").touch()
+            (package / "platform").mkdir()
+            (package / "platform/selector.test.ts").touch()
             with patch.object(verification, "ROOT", root), patch.object(
                     verification, "run_app_shell_check") as app_shell, patch.object(
                     verification.subprocess, "run") as run:
                 verification.run_pr_checks({"paths": ["composition/delivery/core.ts"]})
             command = ["node", "--experimental-strip-types", "--test",
-                       "composition/delivery/delivery.test.ts"]
+                       "composition/delivery/delivery.test.ts", "composition/delivery/platform/selector.test.ts"]
             app_shell.assert_called_once_with()
             self.assertIn(command, [call.args[0] for call in run.call_args_list])
             self.assertFalse(any(call.args[0][:2] == ["npm", "ci"] for call in run.call_args_list))
@@ -464,10 +466,7 @@ class SelectionTests(unittest.TestCase):
             self.assertTrue(calls[0].kwargs["check"])
             patterns = [call.args[0][-1] for call in run.call_args_list
                         if call.args[0][:4] == ["python3", "-m", "unittest", "discover"]]
-            self.assertLess(run.call_args_list.index(calls[0]), next(
-                index for index, call in enumerate(run.call_args_list)
-                if call.args[0][:4] == ["python3", "-m", "unittest", "discover"]))
-            self.assertIn("test_*push*.py", patterns)
+            self.assertNotIn("test_*push*.py", patterns)
 
     def test_connect_client_missing_locked_dependencies_fails_without_install(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1179,7 +1178,101 @@ class SelectionTests(unittest.TestCase):
                 if expected:
                     self.assertLess(commands.index(command), commands.index(
                         ["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
-                         "-p", "test_*push*.py"]))
+                         "-p", "test_verification.py"]))
+
+    def test_machinery_regressions_follow_changed_test_and_input_closures(self):
+        expected = {
+            "README.md": [],
+            "enablement/docs/continuous-delivery.md": [],
+            "record/src/index.ts": [],
+            ".githooks/pre-push": ["test_pre_push_guard.py"],
+            "enablement/verification.py": list(verification.MACHINERY_TEST_INPUTS),
+            "enablement/verification/dependencies/preflight.test.ts": [
+                "test_pre_push_guard.py", "test_verification.py", "test_temp_preflight.py",
+            ],
+            "enablement/tests/test_pre_push_guard.py": ["test_pre_push_guard.py"],
+            "enablement/tests/test_commit_push_checkpoint.py": ["test_commit_push_checkpoint.py"],
+            "enablement/tests/test_signing_push.py": ["test_signing_push.py"],
+            "enablement/tests/test_mac_prepare_push.py": ["test_mac_prepare_push.py"],
+            "enablement/tests/test_mac_cache_push.py": ["test_mac_cache_push.py"],
+            "enablement/tests/test_verification.py": ["test_verification.py"],
+            ".githooks/post-commit": ["test_commit_push_checkpoint.py"],
+            ".githooks/reference-transaction": ["test_signing_push.py"],
+            "capture/desktop/scripts/mac/prepare.py": ["test_mac_prepare_push.py"],
+            "capture/desktop/scripts/mac/cache.py": ["test_mac_cache_push.py"],
+            "enablement/release_gate.py": ["test_release_gate.py"],
+            "enablement/owner_lanes.py": ["test_owner_lanes.py"],
+            ".github/workflows/release-linux.yml": ["test_verification.py", "test_release_gate.py"],
+            ".github/workflows/verification-platform.yml": ["test_verification.py", "test_release_gate.py", "test_owner_lanes.py"],
+            ".github/workflows/verification.yml": ["test_verification.py", "test_release_gate.py"],
+            "composition/architecture/src/cli.ts": ["test_verification.py"],
+            "enablement/tests/test_temp_preflight.py": ["test_temp_preflight.py"],
+            "enablement/tests/test_release_gate.py": ["test_release_gate.py"],
+            "enablement/verification/new_helper.py": list(verification.MACHINERY_TEST_INPUTS),
+        }
+        for path, suites in expected.items():
+            with self.subTest(path=path):
+                self.assertEqual(verification.machinery_tests_selected([path]), suites)
+        self.assertEqual(verification.machinery_tests_selected([], history_known=False),
+                         list(verification.MACHINERY_TEST_INPUTS))
+        self.assertEqual(verification.machinery_tests_selected(
+            [".githooks/post-commit", ".githooks/new-hook"]),
+            list(verification.MACHINERY_TEST_INPUTS))
+        self.assertEqual(verification.machinery_tests_selected(
+            ["enablement/tests/test_mac_cache_push.py", "enablement/tests/test_cache.py"]),
+            list(verification.MACHINERY_TEST_INPUTS))
+
+    def test_live_machinery_fixture_inputs_select_their_consumers(self):
+        for package in ("composition/app", "composition/architecture", "record",
+                        "capture/desktop/ui/frontend", "connect/delivery/client", "onboarding"):
+            for name in ("package.json", "package-lock.json"):
+                path = f"{package}/{name}"
+                with self.subTest(path=path):
+                    self.assertIn("test_pre_push_guard.py", verification.machinery_tests_selected([path]))
+        for path in ("composition/app/package.json", "composition/app/package-lock.json",
+                     "onboarding/vendor/replacement.tgz", "onboarding/src/controller.ts",
+                     "public/site/package.json", ".github/workflows/verification-mac.yml"):
+            with self.subTest(path=path):
+                self.assertIn("test_verification.py", verification.machinery_tests_selected([path]))
+        for path in ("shared/ui/scripts/check-theme.ts", "composition/delivery/core.ts",
+                     "capture/desktop/ui/frontend/scripts/check-dependency-freshness.ts"):
+            with self.subTest(path=path):
+                self.assertIn("test_pre_push_guard.py", verification.machinery_tests_selected([path]))
+        self.assertEqual(verification.machinery_tests_selected(["record/src/ui/recording-pill.tsx"]), [])
+
+    def test_skipped_machinery_does_not_admit_architecture_install_for_docs_or_mac_script(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+                verification, "ROOT", Path(directory)), patch.object(
+                verification.subprocess, "run") as run:
+            for paths in (["README.md"], ["capture/desktop/scripts/mac/cache.py"]):
+                verification.preflight_dependencies({"paths": paths}, include_architecture=True)
+            run.assert_not_called()
+
+    def test_pr_command_plan_omits_unrelated_machinery_but_keeps_actual_guards(self):
+        with patch.object(verification, "preflight_dependencies"), patch.object(
+                verification, "run_dependency_contracts") as dependency_contracts, patch.object(
+                verification, "run_architecture_check") as architecture, patch.object(
+                verification.subprocess, "run") as run:
+            verification.run_pr_checks({"paths": ["README.md"]})
+        dependency_contracts.assert_called_once_with()
+        architecture.assert_called_once_with(["README.md"])
+        commands = [call.args[0] for call in run.call_args_list]
+        patterns = [command[-1] for command in commands
+                    if command[:4] == ["python3", "-m", "unittest", "discover"]]
+        self.assertEqual(patterns, [])
+        self.assertIn(["node", "--experimental-strip-types", "--test",
+                       "enablement/file-length/check.test.ts"], commands)
+        self.assertIn(["python3", "shared/ui/scripts/check-theme.py"], commands)
+
+    def test_explicit_main_or_full_changed_tree_keeps_full_contract_suite(self):
+        selection = verification.select(["README.md"])
+        with patch.object(verification, "preflight_dependencies"), patch.object(
+                verification, "run_contract_checks") as contracts, patch.object(
+                verification, "run_selected_checks") as selected, patch.object(
+                verification.subprocess, "run"):
+            verification.run_checks(selection)
+        contracts.assert_called_once_with()
+        selected.assert_called_once()
 
     def test_unknown_shared_build_security_lifecycle_and_tooling_broaden(self):
         for path in ["new-owner/foo.rs", "Cargo.toml", "Cargo.lock", "build.rs",

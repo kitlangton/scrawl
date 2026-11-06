@@ -115,6 +115,121 @@ def directory_width_contract_selected(paths):
                for path in paths)
 
 
+# These are selector/hook regression suites, not the checks that enforce the
+# current push contract.  Keep their production input closures explicit so an
+# ordinary owner or documentation change does not rerun unrelated machinery.
+# Unknown verification/tooling inputs and unknown history remain conservative.
+MACHINERY_TEST_INPUTS = {
+    "test_pre_push_guard.py": {
+        ".githooks/pre-push", "enablement/verification.py",
+        "enablement/verification/dependencies/preflight.test.ts",
+    },
+    "test_commit_push_checkpoint.py": {".githooks/post-commit"},
+    "test_signing_push.py": {".githooks/reference-transaction"},
+    "test_mac_prepare_push.py": {"capture/desktop/scripts/mac/prepare.py"},
+    "test_mac_cache_push.py": {"capture/desktop/scripts/mac/cache.py"},
+    "test_verification.py": {
+        "enablement/verification.py", "enablement/verification/dependencies/preflight.test.ts",
+        "enablement/file-length/check.ts", "enablement/file-length/check.test.ts",
+        "enablement/directory-width/check.py", "enablement/directory-width/README.md",
+        ".githooks/pre-commit",
+    },
+    "test_release_gate.py": {"enablement/release_gate.py"},
+    "test_temp_preflight.py": {
+        "enablement/verification.py", "enablement/verification/dependencies/preflight.test.ts",
+    },
+    "test_owner_lanes.py": {
+        "enablement/owner_lanes.py", ".github/workflows/verification-platform.yml",
+    },
+}
+# The hook fixture copies these live inputs rather than replacing them with
+# constants. They belong to its regression closure even for owner-local edits.
+MACHINERY_TEST_INPUTS["test_pre_push_guard.py"].update({
+    f"{package}/{name}"
+    for package in ("composition/app", "composition/architecture", "record",
+                    "capture/desktop/ui/frontend", "connect/delivery/client")
+    for name in ("package.json", "package-lock.json")
+})
+MACHINERY_TEST_INPUTS["test_pre_push_guard.py"].update({
+    "composition/app/tsconfig.json", "composition/app/.gitignore",
+    "connect/delivery/client/tsconfig.json",
+    "capture/desktop/ui/frontend/scripts/check-dependency-freshness.ts",
+    "capture/desktop/ui/frontend/scripts/check-dependency-freshness.test.ts",
+    "composition/delivery/core.ts", "composition/delivery/cli.ts",
+    "composition/delivery/core.test.ts", "composition/delivery/runtime/pr-candidate.ts",
+    "composition/delivery/runtime/pr-candidate.test.ts",
+    "composition/delivery/consumer/handoff.ts", "composition/delivery/consumer/handoff.test.ts",
+    ".githooks/pre-commit", "enablement/directory-width/check.py",
+    "enablement/directory-width/tests/test_hook.py",
+    "enablement/file-length/check.ts", "enablement/file-length/check.test.ts",
+    "shared/ui/scripts/check-theme.py", "shared/ui/scripts/check-theme.ts",
+    "shared/ui/scripts/legacy-colors.json",
+    *{f"public/site/{name}" for name in
+      ("package.json", "bun.lock", "tsconfig.json", "vite.config.ts", "index.html")},
+})
+MACHINERY_TEST_INPUTS["test_verification.py"].update({
+    "public/site/package.json", "composition/app/package.json",
+    "composition/app/package-lock.json", "composition/app/tsconfig.json",
+})
+MACHINERY_TEST_FILES = {"enablement/tests/" + name for name in MACHINERY_TEST_INPUTS}
+MACHINERY_WORKFLOW_INPUTS = {
+    ".github/workflows/" + name for name in (
+        "verification.yml", "verification-mac.yml", "verification-platform.yml",
+        "release-linux.yml", "release-mac-preview.yml",
+    )
+}
+MACHINERY_OWNER_WORKFLOW_INPUTS = {".github/workflows/verification-platform.yml"}
+MACHINERY_SHARED_INPUTS = {
+    "enablement/verification.py",
+}
+MACHINERY_KNOWN_ENABLEMENT_INPUTS = MACHINERY_TEST_FILES | set().union(
+    *MACHINERY_TEST_INPUTS.values()) | {"enablement/refactor.md"}
+
+
+def machinery_tests_selected(paths, history_known=True):
+    """Return only regression suites whose test or production inputs changed."""
+    if not history_known or not paths:
+        return list(MACHINERY_TEST_INPUTS)
+    paths = set(paths)
+    # The shared selector supplies execution paths and contracts for every
+    # machinery suite, so changing it selects the complete affected matrix.
+    # Individual hooks select only their own integration suite below.
+    if paths & MACHINERY_SHARED_INPUTS:
+        return list(MACHINERY_TEST_INPUTS)
+    if any(path.startswith("enablement/") and path not in MACHINERY_KNOWN_ENABLEMENT_INPUTS
+           and not path.startswith(("enablement/docs/", "enablement/directory-width/tests/"))
+           for path in paths):
+        return list(MACHINERY_TEST_INPUTS)
+    selected = set()
+    for name, inputs in MACHINERY_TEST_INPUTS.items():
+        if "enablement/tests/" + name in paths or paths & inputs:
+            selected.add(name)
+    # The hook copies every tracked Onboarding input; the selector's real
+    # prerequisite fixture also consumes the owner's committed input inventory.
+    if any(path.startswith("onboarding/") for path in paths):
+        selected.update(("test_pre_push_guard.py", "test_verification.py"))
+    if paths & MACHINERY_WORKFLOW_INPUTS:
+        selected.add("test_release_gate.py")
+    if paths & MACHINERY_OWNER_WORKFLOW_INPUTS:
+        selected.add("test_owner_lanes.py")
+    if any(path.startswith(".github/workflows/") for path in paths):
+        selected.add("test_verification.py")  # Reads every workflow's job budgets.
+    if any(path.startswith("composition/architecture/") for path in paths):
+        selected.add("test_verification.py")
+    # Unknown hook/workflow files may alter verification behavior.
+    if any(path.startswith(".githooks/") and path not in {
+            ".githooks/pre-commit", ".githooks/pre-push", ".githooks/post-commit",
+            ".githooks/reference-transaction"}
+           for path in paths):
+        selected.update(MACHINERY_TEST_INPUTS)
+    if any(path.startswith(".github/workflows/") and path not in MACHINERY_WORKFLOW_INPUTS
+           for path in paths):
+        selected.update(MACHINERY_TEST_INPUTS)
+    if any(path.startswith(".github/actions/") for path in paths):
+        selected.update(MACHINERY_TEST_INPUTS)
+    return [name for name in MACHINERY_TEST_INPUTS if name in selected]
+
+
 CONNECT_CLIENT_TYPESCRIPT = "connect/delivery/client/"
 CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
     CONNECT_CLIENT_TYPESCRIPT + name
@@ -142,7 +257,7 @@ APP_SHELL_ROOT = "composition/app/"
 APP_SHELL_DELIVERY_ROOT = "composition/delivery/"
 APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/", "shared/ui/",
                     ".github/actions/delivery-contracts/", ".github/actions/delivery-component/")
-APP_SHELL_WORKFLOW = ".github/workflows/stream-app-shell.yml"
+APP_SHELL_WORKFLOW = ".github/workflows/stream-platform.yml"
 
 RECORD_PACKAGE_ROOT = "record/"
 RECORD_FRONTEND_ROOT = "capture/desktop/ui/frontend/"
@@ -501,8 +616,7 @@ def run_pr_checks(selection=None):
         subprocess.run(["python3", "-m", "unittest", "discover", "-s",
                         "enablement/directory-width/tests", "-p", "test_*.py"],
                        cwd=ROOT, check=True)
-    for pattern in ("test_*push*.py", "test_verification.py", "test_release_gate.py",
-                    "test_temp_preflight.py", "test_owner_lanes.py"):
+    for pattern in machinery_tests_selected(paths, history_known=selection is not None):
         subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                         "-p", pattern], cwd=ROOT, check=True)
     if onboarding_renderer_selected(paths):
@@ -585,7 +699,8 @@ def run_agent_tests():
 
 def run_delivery_tests():
     """Run delivery's dependency-free Node tests without installing packages."""
-    tests = sorted((ROOT / APP_SHELL_DELIVERY_ROOT).glob("*.test.ts"))
+    package = ROOT / APP_SHELL_DELIVERY_ROOT
+    tests = sorted([*package.glob("*.test.ts"), *package.glob("platform/*.test.ts")])
     if not tests:
         raise RuntimeError("Delivery checks need composition/delivery/*.test.ts; the hook never installs dependencies")
     subprocess.run(["node", "--experimental-strip-types", "--test",

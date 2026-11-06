@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import type { MaterialsManifest } from "@apparent/engine-sdk/capture";
-import { readCaptureMaterials, type CaptureMaterialsExpected, type CaptureSealedFile } from "../../src/backend/host/materials.ts";
+import { readCaptureMaterials, type CaptureMaterialsExpected, type CaptureSealedFile } from "../../dist/backend/host/materials.js";
 
 const enc = (x: unknown) => new TextEncoder().encode(JSON.stringify(x));
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");

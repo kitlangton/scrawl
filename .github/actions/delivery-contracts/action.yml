@@ -10,7 +10,7 @@ runs:
         cache-dependency-path: composition/architecture/package-lock.json
     - name: Selection, artifact admission and workflow contracts
       shell: bash
-      run: node --experimental-strip-types --test composition/delivery/*.test.ts enablement/verification/web/workflow.test.ts
+      run: node --experimental-strip-types --test composition/delivery/*.test.ts composition/delivery/platform/*.test.ts enablement/verification/web/workflow.test.ts
     - name: Install the isolated architecture checker
       shell: bash
       run: npm --prefix composition/architecture ci --ignore-scripts --prefer-offline --no-fund
@@ -31,4 +31,4 @@ runs:
     - name: Validate the independent workflows
       uses: docker://rhysd/actionlint:1.7.12
       with:
-        args: -shellcheck= -pyflakes= .github/workflows/stream-agent.yml .github/workflows/stream-app-shell.yml .github/workflows/stream-connect-browser.yml .github/workflows/stream-connect-client.yml .github/workflows/stream-engine.yml .github/workflows/stream-onboarding.yml .github/workflows/stream-platform-config.yml .github/workflows/stream-platform-resources.yml .github/workflows/stream-public.yml .github/workflows/stream-record.yml .github/workflows/connect-delivery.yml .github/workflows/web-delivery.yml
+        args: -shellcheck= -pyflakes= .github/workflows/stream-agent.yml .github/workflows/stream-connect-browser.yml .github/workflows/stream-connect-client.yml .github/workflows/stream-engine.yml .github/workflows/stream-onboarding.yml .github/workflows/stream-platform.yml .github/workflows/stream-public.yml .github/workflows/stream-record.yml .github/workflows/connect-delivery.yml .github/workflows/web-delivery.yml

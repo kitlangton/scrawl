@@ -1,4 +1,5 @@
 import './runtime/pr-candidate.test.ts'
+import './consumer/handoff.test.ts'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -231,6 +232,24 @@ test('admission requires canonical repo, exact workflow, owner job, audit and un
   assert.equal(assess(run, goodJobs, [{ id: 11, name: `stream-record-linux-x64-${inputDigest(path, owner)}`, expired: false }]).reuse, false)
 })
 
+test('exact-commit handoff admits only the producer receipt digest without a hosted runner identity', () => {
+  const path = resolve(temp, 'exact-admit-repo'); const sha = newRepo(path)
+  const exactDigest = 'b'.repeat(64)
+  const run = { id: 77, run_attempt: 1, head_sha: sha, head_branch: 'main', event: 'push', conclusion: 'success', path: workflowPathFor(owner.id) }
+  const jobs = [{ name: 'deliver / stream (record, linux-x64)', status: 'completed', conclusion: 'success' }, { name: 'deliver / Delivery contracts', status: 'completed', conclusion: 'success' }, { name: 'deliver / Workflow runtime budget', status: 'completed', conclusion: 'success' }]
+  const artifacts = [{ id: 88, name: `stream-record-linux-x64-${exactDigest}`, expired: false }]
+  const imageOS = process.env.ImageOS, imageVersion = process.env.ImageVersion
+  try {
+    delete process.env.ImageOS; delete process.env.ImageVersion
+    const accepted = assessPrior(path, owner, 'linux-x64', sha, 'tryapparent/apparent', [run], () => jobs, () => artifacts, sha, exactDigest)
+    assert.equal(accepted.reuse, true)
+    assert.throws(() => assessPrior(path, owner, 'linux-x64', sha, 'tryapparent/apparent', [run], () => jobs, () => artifacts, 'f'.repeat(40), exactDigest), /same explicit source commit/)
+  } finally {
+    if (imageOS) process.env.ImageOS = imageOS
+    if (imageVersion) process.env.ImageVersion = imageVersion
+  }
+})
+
 test('sealing only archives contained payloads under canonical main identity', () => {
   const input = resolve(temp, 'payload'); const output = resolve(temp, 'sealed')
   mkdirSync(input); writeFileSync(resolve(input, 'package.tgz'), 'bundle')
@@ -419,12 +438,12 @@ test('App Shell promotion retains the exact packaged archive and original build 
   const app: Owner = { ...owner, id: 'app-shell', kind: 'app-shell', package: 'composition/app', inputs: ['composition/app/'], targets: ['linux-x64', 'macos-x64'], stage: 'development-app' }
   const input = resolve(temp, 'app-package-candidate'); mkdirSync(resolve(input, 'bundle'), { recursive: true })
   writeFileSync(resolve(input, 'bundle/app'), 'synthetic packaged runtime bytes')
-  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-app-shell.yml@refs/pull/9/merge', GITHUB_RUN_ID: '887', GITHUB_RUN_ATTEMPT: '1' }
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform.yml@refs/pull/9/merge', GITHUB_RUN_ID: '887', GITHUB_RUN_ATTEMPT: '1' }
   for (const target of app.targets) {
     const sealed = resolve(temp, 'app-sealed-' + target), promoted = resolve(temp, 'app-promoted-' + target)
     const receipt = sealPayload(repo, app, target, input, sealed, 'a'.repeat(64), prEnv, true)
     const zip = resolve(temp, 'app-' + target + '.zip'); execFileSync('zip', ['-q', zip, 'component.tar.gz', 'receipt.json'], { cwd: sealed })
-    const next = reusePayload(repo, app, target, zip, promoted, receipt.inputDigest, receipt.sourceSha, '99', '887', '1', { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-app-shell.yml@refs/heads/main', GITHUB_RUN_ID: '888' })
+    const next = reusePayload(repo, app, target, zip, promoted, receipt.inputDigest, receipt.sourceSha, '99', '887', '1', { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform.yml@refs/heads/main', GITHUB_RUN_ID: '888' })
     assert.equal(next.buildSourceSha, receipt.sourceSha); assert.equal(next.reusedFrom.runId, '887')
     assert.deepEqual(readFileSync(resolve(promoted, 'component.tar.gz')), readFileSync(resolve(sealed, 'component.tar.gz')))
   }
@@ -488,7 +507,7 @@ test('Config candidate sealing retains each staged helper manifest under its own
   const input = resolve(temp, 'config-helper-payload'); mkdirSync(input)
   writeFileSync(resolve(input, 'manifest.json'), JSON.stringify({ sourceSha: 'b'.repeat(40), protocol: 1 }))
   writeFileSync(resolve(input, 'apparent-config-host'), 'synthetic helper')
-  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform-config.yml@refs/pull/9/merge', GITHUB_RUN_ID: '997', GITHUB_RUN_ATTEMPT: '1' }
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform.yml@refs/pull/9/merge', GITHUB_RUN_ID: '997', GITHUB_RUN_ATTEMPT: '1' }
   for (const target of config.targets) {
     const sealed = resolve(temp, 'config-helper-sealed-' + target)
     const receipt = sealPayload(repo, config, target, input, sealed, 'c'.repeat(64), prEnv, true)
