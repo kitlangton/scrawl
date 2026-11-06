@@ -99,7 +99,7 @@ test("renders the actual React contribution with accessible controls and packed 
   assert.match(html, /Pick your pen\./); for (const color of ["coral", "purple", "blue", "green"]) assert.match(html, new RegExp(`aria-label="${color} pen"`)); assert.equal((html.match(/<span aria-hidden="true" style="--pencil:/g) ?? []).length, 4); assert.match(html, /Choose a color for your pen/); assert.doesNotMatch(html, /ink pen|laser pen|cursor pen|Frog guide|A quick setup/); assert.match(html, /Try later/); f.controller.dispose();
 });
 
-test("mounted permission rows use readable names and provider-factual states", async () => {
+test("mounted permission checklist stays compact and reports provider facts without false readiness", async () => {
   const f = fixture();
   f.progress.value = { ...initialProgress(), status: "in-progress", stage: "permissions" };
   const current = f.driver.current();
@@ -116,8 +116,23 @@ test("mounted permission rows use readable names and provider-factual states", a
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
   const text = dom.window.document.body.textContent ?? "";
-  assert.match(text, /Review recording access\./); assert.match(text, /Screen Recording/); assert.match(text, /Reopen Apparent to use this access/);
-  assert.match(text, /Microphone/); assert.match(text, /Not allowed/); assert.match(text, /Access/); assert.doesNotMatch(text, /screen-capture|future-internal-id/);
+  assert.match(text, /Review recording access/); assert.match(text, /Screen Recording/); assert.match(text, /Reopen Apparent to use this access/);
+  assert.match(text, /Microphone/); assert.match(text, /Not allowed/); assert.match(text, /Access/); assert.doesNotMatch(text, /screen-capture|future-internal-id|operating system remains/);
+  const beforeUnknown = f.driver.current();
+  f.driver.publish({ ...beforeUnknown, revision: beforeUnknown.revision + 1, readiness: { requirements: [{ id: "microphone", required: true, status: "unavailable", usableNow: false, relaunchNeeded: false, allowedRepairActions: [] }] } });
+  await act(async () => { await Promise.resolve(); });
+  assert.match(dom.window.document.body.textContent ?? "", /Status unknown/);
+  assert.match(dom.window.document.body.textContent ?? "", /Access status is unknown/);
+  assert.doesNotMatch(dom.window.document.body.textContent ?? "", /✓ Enabled/);
+  const unavailable = f.driver.current();
+  f.driver.publish({ ...unavailable, revision: unavailable.revision + 1, readiness: { requirements: [{ id: "microphone", required: true, status: "granted", usableNow: true, relaunchNeeded: false, allowedRepairActions: [] }] } });
+  await act(async () => { await Promise.resolve(); });
+  assert.match(dom.window.document.body.textContent ?? "", /✓ Enabled/);
+  assert.doesNotMatch(dom.window.document.body.textContent ?? "", /Access status is unknown/);
+  f.driver.disconnect();
+  await act(async () => { await Promise.resolve(); });
+  assert.match(dom.window.document.body.textContent ?? "", /Status unknown/);
+  assert.doesNotMatch(dom.window.document.body.textContent ?? "", /✓ Enabled/);
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
 });
 
