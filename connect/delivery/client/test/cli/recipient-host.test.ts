@@ -6,14 +6,22 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runRecipientHost, type RecipientHostOptions, type RecipientHostResources } from "../../src/cli/recipient-host.ts";
-import { parseRecipientCommand } from "../../src/cli/recipient.ts";
+import { runRecipientHost, recipientFailureReceipt, type RecipientHostOptions, type RecipientHostResources } from "../../src/cli/recipient-host.ts";
+import { parseRecipientCommand, publishVerified } from "../../src/cli/recipient.ts";
 
 const id = "a".repeat(32), sourceSha = "b".repeat(40), manifestSha = "c".repeat(64);
 const supported = process.arch === "x64" && ["linux", "darwin"].includes(process.platform);
 const target = process.platform === "darwin" ? "macos-x64" as const : "linux-x64" as const;
 const remote = { skip: !supported };
 const fail = async (): Promise<never> => { throw Error("private diagnostic"); };
+
+test("host failure projection retains a committed path when evidence receipt verification fails", async () => {
+  const result = await publishVerified({ captureId: id, server: "https://sync.example", evidenceOnly: true, files: [] }, "/synthetic/output",
+    async () => ({ state: "committed", path: "/synthetic/committed.apparent" }));
+  assert.equal(result.ok, false); if (result.ok) return;
+  assert.deepEqual(recipientFailureReceipt(result), { exitCode: 1, stdout: "", stderr: "publication_unverified\n",
+    publication: { state: "committed", path: "/synthetic/committed.apparent" } });
+});
 
 test("local inspect preserves options and never resolves remote state, provider or writer", async () => {
   let calls = 0;

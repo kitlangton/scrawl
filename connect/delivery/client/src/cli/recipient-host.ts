@@ -41,6 +41,12 @@ export type RecipientHostResult = Readonly<{
   }>;
 }>;
 const failed = (category: string, exitCode: 1 | 2 = 1): RecipientHostReceipt => ({ exitCode, stdout: "", stderr: `${category}\n` });
+/** Project an already-validated command failure, retaining effects despite later receipt failure. */
+export function recipientFailureReceipt(result: Extract<RecipientCliResult, { ok: false }>): RecipientHostReceipt {
+  const publication = result.publication ? Object.freeze({ ...result.publication })
+    : result.error.category === "publication_uncertain" ? { state: "uncertain" as const } : undefined;
+  return { ...failed(result.error.category), ...(publication ? { publication } : {}) };
+}
 const absolute = (value: string) => typeof value === "string" && path.isAbsolute(value) && !value.includes("\0")
   && !value.split(path.sep).includes("..") && path.normalize(value) === value;
 function hostTarget(): Target | undefined {
@@ -113,8 +119,7 @@ export async function runRecipientHost(args: readonly string[], options: Recipie
       const result: RecipientCliResult = await runRecipientCommandFromState(command, { directory, approvedServer, resources,
         inspectLocal: async source => source, signal, renewRead: writer.renewRead, allowLegacyPlaintext });
       if (!result.ok) {
-        if (result.error.category === "publication_uncertain") publication = { state: "uncertain" };
-        receipt = { ...failed(result.error.category), ...(publication ? { publication } : {}) };
+        receipt = recipientFailureReceipt(result); publication = receipt.publication;
       } else {
         publication = Object.freeze({ state: "committed", path: result.path });
         receipt = command.kind === "fetch" ? { exitCode: 0, stdout: `${result.path}\n`, stderr: "", publication } : await inspectSource(result.path);

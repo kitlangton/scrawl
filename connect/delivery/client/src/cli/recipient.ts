@@ -22,7 +22,8 @@ export type RecipientCliDependencies = {
   resolveIdentity?: () => Promise<{ age: string; signing: Uint8Array }>;
   authorize?: RecipientAuthorization;
 };
-export type RecipientCliResult = { ok: true; path: string } | { ok: false; error: CliFailure };
+export type RecipientCommittedPublication = Readonly<{ state: "committed"; path: string }>;
+export type RecipientCliResult = { ok: true; path: string } | { ok: false; error: CliFailure; publication?: RecipientCommittedPublication };
 
 function invalid(message: string): never { throw new CliArgumentError(message); }
 export class CliArgumentError extends Error { readonly category = "invalid_arguments"; }
@@ -126,7 +127,9 @@ export async function publishVerified(
   const evidenceOnly = capture.evidenceOnly;
   const publication = await publish(capture, destination);
   if (publication.state !== "committed") return { ok: false, error: { category: "publication_uncertain", message: "publication outcome is uncertain; inspect the destination before taking further action" } };
-  if (evidenceOnly && publication.evidenceOnlyReceipt !== true) return { ok: false, error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" } };
+  if (evidenceOnly && publication.evidenceOnlyReceipt !== true) return { ok: false,
+    error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" },
+    publication: Object.freeze({ state: "committed", path: publication.path }) };
   return { ok: true, path: publication.path };
 }
 
