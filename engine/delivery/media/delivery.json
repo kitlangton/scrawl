@@ -3,10 +3,19 @@
   "id": "engine-media-native",
   "kind": "directory",
   "package": "engine/delivery/media",
-  "inputs": ["engine/", "capture/engine/", ".cargo/"],
-  "verify": ["verify"],
+  "inputs": [
+    "engine/",
+    "capture/engine/",
+    ".cargo/"
+  ],
+  "verify": [
+    "verify"
+  ],
   "build": "build",
-  "targets": ["linux-x64"],
+  "targets": [
+    "linux-x64",
+    "macos-x64"
+  ],
   "stage": "library",
   "language": "native",
   "artifactPath": "dist"

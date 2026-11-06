@@ -167,3 +167,18 @@ test('non-stream workflows remain manual or reusable', () => {
     assert(events.every(event => ['workflow_dispatch', 'workflow_call'].includes(event)), `${file} has no automatic event`)
   }
 })
+
+test('media native targets use the same producer with platform-specific fresh setup', () => {
+  const workflow = entry('engine-media-native');
+  const matrices = [...workflow.matchAll(/^\s+matrix: (.+)$/gm)].map(match => JSON.parse(match[1]).include);
+  assert.equal(matrices.length, 2);
+  for (const rows of matrices) assert.deepEqual(rows.map((row: any) => [row.target, row.runner]), [['linux-x64', 'ubuntu-24.04'], ['macos-x64', 'macos-26-intel']]);
+  const linux = component.split('    - name: Install Engine media runtime and fixture dependencies')[1].split('    - name:')[0];
+  assert.match(linux, /inputs.target == 'linux-x64'/);
+  const mac = component.split('    - name: Qualify native Intel Mac media toolchain')[1].split('    - name:')[0];
+  assert.match(mac, /inputs.target == 'macos-x64'/);
+  assert.match(mac, /steps.admit.outputs.reuse != 'true'/);
+  assert.match(mac, /process.arch !== 'x64'/);
+  assert.match(mac, /Swift 6.2\+ and SDK 26\+ required/);
+  assert.doesNotMatch(mac, /apt-get|brew install|--target/);
+});

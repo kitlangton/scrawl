@@ -97,15 +97,17 @@ test('native Engine and SDK are independent lanes with the same architectural ow
   assert.equal(native.length, 2); assert(native.every(row => row.language === 'native' && row.architecture_owner === 'engine'))
 })
 
-test('native Engine media is a Linux-only lane with a complete owner input closure', () => {
+test('native Engine media has Linux and native Intel Mac lanes with a complete owner input closure', () => {
   const path = resolve(temp, 'engine-media-plan')
   for (const dir of ['engine/delivery/media', 'engine/sdk', 'capture/engine', '.cargo']) mkdirSync(resolve(path, dir), { recursive: true })
   writeFileSync(resolve(path, 'engine/delivery.json'), JSON.stringify({ ...owner, id: 'engine', package: 'engine/sdk', inputs: ['engine/'] }))
-  writeFileSync(resolve(path, 'engine/delivery/media/delivery.json'), JSON.stringify({ ...owner, id: 'engine-media-native', kind: 'directory', language: 'native', package: 'engine/delivery/media', artifactPath: 'dist', verify: ['verify'], inputs: ['engine/', 'capture/engine/', '.cargo/'], targets: ['linux-x64'] }))
+  writeFileSync(resolve(path, 'engine/delivery/media/delivery.json'), JSON.stringify({ ...owner, id: 'engine-media-native', kind: 'directory', language: 'native', package: 'engine/delivery/media', artifactPath: 'dist', verify: ['verify'], inputs: ['engine/', 'capture/engine/', '.cargo/'], targets: ['linux-x64', 'macos-x64'] }))
   const plan = makePlan(path)
   assert.deepEqual(plan.blocked, [])
   const media = plan.matrix.include.filter(row => row.id === 'engine-media-native')
-  assert.equal(media.length, 1)
+  assert.equal(media.length, 2)
+  assert.equal(media[1].target, 'macos-x64')
+  assert.equal(media[1].runner, 'macos-26-intel')
   assert.equal(media[0].target, 'linux-x64')
   assert.equal(media[0].runner, 'ubuntu-24.04')
   assert.equal(media[0].language, 'native')
