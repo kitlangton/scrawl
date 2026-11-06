@@ -3,11 +3,14 @@
 .onboarding-shell header,.onboarding-shell footer { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:16px; padding:12px 16px; border-bottom:1px solid var(--apparent-border); }
 .onboarding-shell footer { margin-top:auto; border-top:1px solid var(--apparent-border); border-bottom:0; }
 .onboarding-shell section { min-height:0; overflow:auto; padding:24px 32px; flex:1; }
-.onboarding-shell section.onboarding-practice { display:flex; flex-direction:column; justify-content:center; max-width:760px; width:100%; margin:0 auto; }
+.onboarding-shell section.onboarding-practice { position:relative; display:flex; flex:0 1 auto; flex-direction:column; justify-content:center; max-width:680px; width:calc(100% - 48px); margin:62px auto 24px; padding:30px; border:1px solid var(--apparent-border); border-radius:24px 24px 24px 6px; background:var(--apparent-surface); box-shadow:0 12px 30px var(--apparent-shadow); overflow:visible; }
+.onboarding-coach-frog { position:absolute; top:-42px; left:18px; width:82px; height:58px; object-fit:contain; pointer-events:none; animation:onboarding-coach-arrive .42s cubic-bezier(.2,.7,.3,1); }
+.onboarding-shell[data-practice=true] { overflow:auto; border-color:transparent; background:transparent; }
+.onboarding-shell[data-practice=true] .onboarding-practice { overflow-wrap:anywhere; }
 .onboarding-practice .onboarding-brand img { width:112px; height:82px; }
 .onboarding-practice .onboarding-eyebrow { color:var(--apparent-primary); letter-spacing:.04em; }
 .onboarding-waiting { margin-top:24px; padding:14px 18px; border:1px solid var(--apparent-border); border-radius:12px; color:var(--apparent-muted-foreground); }
-.onboarding-shell h1 { margin:0 0 12px; font-size:2rem; line-height:1.15; }
+.onboarding-shell h1 { margin:0 0 20px; font-size:2.25rem; line-height:1.1; text-wrap:balance; overflow-wrap:anywhere; }
 .onboarding-shell p { max-width:58ch; }
 .onboarding-brand img { width:72px; height:52px; object-fit:contain; }
 .onboarding-welcome-icon { display:block; width:96px; height:96px; object-fit:contain; margin:28px auto 36px; }
@@ -29,6 +32,11 @@
 .permission-repair-row span { color:var(--apparent-muted-foreground); }
 .onboarding-shell button { min-height:44px; border-radius:0; font:inherit; }
 .onboarding-shell button:focus-visible { outline:2px solid var(--apparent-signal); outline-offset:3px; }
+.onboarding-shortcut-recorder { display:grid; gap:8px; padding:16px; border:1px solid var(--apparent-border); background:var(--apparent-muted); }
+.onboarding-shortcut-recorder:focus-visible { outline:2px solid var(--apparent-ring); outline-offset:3px; }
+.onboarding-shortcut-recorder p { margin:0; }
+.onboarding-shortcut-recorder kbd { font:500 1.25rem/1.5 var(--font-sans); overflow-wrap:anywhere; }
+@keyframes onboarding-coach-arrive { 0%{transform:translate(-28px,12px) rotate(-10deg);opacity:.3} 55%{transform:translate(-10px,-18px) rotate(6deg);opacity:1} 100%{transform:none} }
 @keyframes onboarding-pen-hop { 0%{transform:translate(0,0)} 45%{transform:translate(85px,-60px) rotate(8deg)} 70%{transform:translate(165px,35px) scale(1.1,.8)} 100%{transform:translate(165px,50px)} }
-@media(prefers-reduced-motion:reduce){.onboarding-pond[data-hop=true] .onboarding-pond-frog{animation:none;transform:translate(165px,50px)} }
-@media(max-width:560px){.onboarding-requirement{grid-template-columns:1fr;gap:8px}.onboarding-pencils{gap:4px}}
+@media(prefers-reduced-motion:reduce){.onboarding-pond[data-hop=true] .onboarding-pond-frog{animation:none;transform:translate(165px,50px)}.onboarding-coach-frog{animation:none} }
+@media(max-width:560px){.onboarding-requirement{grid-template-columns:1fr;gap:8px}.onboarding-pencils{gap:4px}.onboarding-shell section.onboarding-practice{width:calc(100% - 32px);padding:24px 16px}.onboarding-shell h1{font-size:1.75rem}}

@@ -207,12 +207,65 @@ test("mounted shortcut action reaches Record and cancellation returns practice t
   const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" }); Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
-  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Change shortcut")!.click(); await Promise.resolve(); });
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Choose recording shortcut")!.click(); await Promise.resolve(); });
   assert.equal(f.driver.commands().at(-1)?.type, "shortcut-begin-edit");
   f.progress.value = { ...f.progress.value, stage: "screen-ink", attemptId: "cancelled-practice" };
   await act(async () => { await f.controller.load(); publish(f.driver, [capture("cancelled-practice", "cancelled", [])]); await new Promise(resolve => setTimeout(resolve, 0)); });
   assert.equal(f.controller.state.progress.stage, "practice-start"); assert.equal(f.controller.state.progress.attemptId, null);
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
+});
+
+test("mounted shortcut recorder submits modifier and physical key names, then requires provider readback before save", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await f.controller.load(); const initialEffective = f.controller.state.snapshot?.shortcut.effective;
+  const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" }); Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  const root = createRoot(dom.window.document.getElementById("root")!); let draft = null as null | { sessionId: string; value: string; error?: string }; let submitted = "", lastShortcutCommand = "";
+  f.client.execute = async command => {
+    const current = f.driver.current();
+    if (command.type.startsWith("shortcut-")) lastShortcutCommand = command.type;
+    if (command.type === "shortcut-begin-edit") draft = { sessionId: "edit-1", value: "" };
+    if (command.type === "shortcut-submit") { draft = { sessionId: command.sessionId, value: command.value }; submitted = command.value; }
+    if (command.type === "shortcut-cancel") draft = null;
+    const shortcut = command.type === "shortcut-save" ? { ...current.shortcut, effective: "Ctrl+Shift+R", label: "Ctrl+Shift+R", registration: "registered" as const, draft: null } : { ...current.shortcut, draft };
+    const updated = { ...current, revision: current.revision + 1, shortcut };
+    f.driver.publish(updated);
+    return { status: command.type === "shortcut-save" ? "applied" as const : "accepted" as const, requestId: command.requestId, snapshot: updated };
+  };
+  await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Choose recording shortcut")!.click(); await Promise.resolve(); });
+  const recorder = dom.window.document.querySelector<HTMLElement>("[aria-label='Shortcut recorder']")!;
+  await act(async () => { recorder.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "r", code: "KeyR", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true })); });
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Check shortcut")!.click(); await Promise.resolve(); });
+  assert.equal(submitted, "Ctrl+Shift+R");
+  assert.equal(f.controller.state.snapshot?.shortcut.effective, initialEffective); assert.equal(f.controller.state.progress.stage, "shortcut");
+  assert.equal([...dom.window.document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Save shortcut")?.disabled, false);
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Save shortcut")!.click(); await Promise.resolve(); });
+  assert.equal(f.controller.state.snapshot?.shortcut.effective, "Ctrl+Shift+R"); assert.equal(f.controller.state.snapshot?.shortcut.registration, "registered");
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Choose recording shortcut")!.click(); await Promise.resolve(); });
+  await act(async () => { dom.window.document.querySelector<HTMLElement>("[aria-label='Shortcut recorder']")!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true })); await Promise.resolve(); });
+  assert.equal(lastShortcutCommand, "shortcut-cancel"); assert.equal(f.driver.current().shortcut.draft, null);
+  await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
+});
+
+test("late pen animation completion after deferral cannot resume setup", async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  Object.defineProperty(dom.window, "matchMedia", { configurable: true, value: () => ({ matches: false }) });
+  f.client.execute = async command => { const current = f.driver.current(); if (command.type !== "select-pen") return { status: "accepted", requestId: command.requestId, snapshot: current }; const updated = { ...current, revision: current.revision + 1, pen: { ...current.pen, effective: command.value } }; f.driver.publish(updated); return { status: "applied", requestId: command.requestId, snapshot: updated }; };
+  await f.controller.load(); await f.controller.dispatch("continue"); const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
+  await act(async () => { dom.window.document.querySelector<HTMLButtonElement>('[aria-label="purple pen"]')!.click(); });
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(button => button.textContent === "Use this pen")!.click(); await Promise.resolve(); });
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(button => button.textContent === "Try later")!.click(); await Promise.resolve(); });
+  const frogNode = dom.window.document.querySelector(".onboarding-pond-frog")!; const animationEnd = new dom.window.Event("animationend", { bubbles: true }); Object.defineProperty(animationEnd, "animationName", { value: "onboarding-pen-hop" });
+  await act(async () => { frogNode.dispatchEvent(animationEnd); await Promise.resolve(); });
+  assert.equal(f.controller.state.progress.status, "deferred"); assert.equal(f.controller.state.progress.stage, "pen");
+  await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
+});
+
+test("practice renderer is a compact coach in the owner screen without setup navigation chrome", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "screen" }; await f.controller.load();
+  const html = renderToStaticMarkup(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} }));
+  assert.match(html, /data-practice="true"/); assert.match(html, /class="onboarding-practice"/); assert.match(html, /class="onboarding-coach-frog"/); assert.doesNotMatch(html, /aria-label="Close setup"/); assert.match(html, /Try later/); f.controller.dispose();
 });
 
 test("failed copy offers a scoped copy retry for the saved practice capture", async () => {
@@ -342,8 +395,8 @@ test("complete mounted branded lesson follows one local-only admitted capture to
   const animationEnd = new dom.window.Event("animationend", { bubbles: true }); Object.defineProperty(animationEnd, "animationName", { value: "onboarding-pen-hop" });
   await act(async () => { frogNode.dispatchEvent(animationEnd); await new Promise(resolve => setTimeout(resolve, 0)); });
   assert.equal(f.controller.state.progress.stage, "permissions");
-  await click("Continue"); assert.equal(f.controller.state.progress.stage, "shortcut");
-  await click("Continue"); assert.equal(f.controller.state.progress.stage, "practice-start");
+  await click("Choose recording shortcut"); assert.equal(f.controller.state.progress.stage, "shortcut");
+  await click("Try a capture"); assert.equal(f.controller.state.progress.stage, "practice-start");
   const admissionId = f.controller.state.progress.admissionId!; assert.equal(f.driver.current().nextShortcutAdmission.state, "armed");
   const practice = capture("lesson-capture", "starting", [outcome("shortcut")], undefined, "local-only", admissionId);
   await publishSnapshot(s => ({ ...s, nextShortcutAdmission: { state: "consumed", admissionId, captureId: practice.captureId }, captures: [...s.captures, practice] }));
