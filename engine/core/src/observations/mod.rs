@@ -6,6 +6,8 @@
 const THUMBNAIL_WIDTH: usize = 64;
 const THUMBNAIL_HEIGHT: usize = 36;
 const GRID_LIMIT: usize = 128;
+const APOBS001_HEADER_BYTES: usize = 20;
+pub const APOBS001_MAX_BYTES: usize = APOBS001_HEADER_BYTES + 4 * (64 * 36 + 128 * 128);
 
 /// Samples the centers of a fixed 64×36 grid using the legacy keyframe math.
 ///
@@ -94,6 +96,45 @@ impl LumaGrid {
     }
 }
 
+/// Serializes the bounded private `apOB` observation profile for one final
+/// RGBA8 frame plane. Invalid or incomplete planes are rejected.
+///
+/// The profile is `APOBS001`, little-endian width/height, little-endian
+/// region columns/rows, followed by thumbnail and row-major region luma as
+/// little-endian `f32`. It contains measurements only; no selection policy.
+pub fn apobs001_profile(rgba: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let expected_bytes = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    if rgba.len() != expected_bytes {
+        return None;
+    }
+
+    let thumbnail = luma_thumbnail64x36(rgba, width, height);
+    let grid = luma_grid_up_to_128(rgba, width, height);
+    let columns = u16::try_from(grid.columns()).ok()?;
+    let rows = u16::try_from(grid.rows()).ok()?;
+    let float_count = thumbnail.len().checked_add(grid.cells().len())?;
+    let byte_len = APOBS001_HEADER_BYTES.checked_add(float_count.checked_mul(4)?)?;
+    if byte_len > APOBS001_MAX_BYTES {
+        return None;
+    }
+
+    let mut profile = Vec::with_capacity(byte_len);
+    profile.extend_from_slice(b"APOBS001");
+    profile.extend_from_slice(&width.to_le_bytes());
+    profile.extend_from_slice(&height.to_le_bytes());
+    profile.extend_from_slice(&columns.to_le_bytes());
+    profile.extend_from_slice(&rows.to_le_bytes());
+    for value in thumbnail.iter().chain(grid.cells()) {
+        profile.extend_from_slice(&value.to_le_bytes());
+    }
+    Some(profile)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,6 +142,26 @@ mod tests {
     fn set_pixel(rgba: &mut [u8], width: usize, x: usize, y: usize, color: [u8; 4]) {
         let offset = (y * width + x) * 4;
         rgba[offset..offset + 4].copy_from_slice(&color);
+    }
+
+    fn profile_u16(profile: &[u8], offset: usize) -> u16 {
+        u16::from_le_bytes(profile[offset..offset + 2].try_into().unwrap())
+    }
+
+    fn profile_u32(profile: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(profile[offset..offset + 4].try_into().unwrap())
+    }
+
+    fn profile_f32(profile: &[u8], offset: usize) -> f32 {
+        f32::from_le_bytes(profile[offset..offset + 4].try_into().unwrap())
+    }
+
+    fn assert_profile_header(profile: &[u8], width: u32, height: u32, columns: u16, rows: u16) {
+        assert_eq!(&profile[..8], b"APOBS001");
+        assert_eq!(profile_u32(profile, 8), width);
+        assert_eq!(profile_u32(profile, 12), height);
+        assert_eq!(profile_u16(profile, 16), columns);
+        assert_eq!(profile_u16(profile, 18), rows);
     }
 
     #[test]
@@ -198,5 +259,99 @@ mod tests {
         let incomplete = luma_grid_up_to_128(&[255, 0, 0, 255, 0, 0, 0, 255], 2, 2);
         assert_eq!((incomplete.columns(), incomplete.rows()), (2, 2));
         assert_eq!(incomplete.cells(), &[53.0_f32 / 255.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn apobs001_small_plane_matches_source_derived_luma_golden() {
+        let rgba = [255, 0, 0, 255, 0, 255, 0, 255];
+        let profile = apobs001_profile(&rgba, 2, 1).unwrap();
+        assert_eq!(profile.len(), 20 + 4 * (64 * 36 + 2));
+        assert_profile_header(&profile, 2, 1, 2, 1);
+
+        let thumbnail_offset = APOBS001_HEADER_BYTES;
+        let red = (0.2126 * 255.0_f32) / 255.0;
+        let green = (0.7152 * 255.0_f32) / 255.0;
+        for y in 0..36 {
+            for x in 0..64 {
+                let expected = if x < 32 { red } else { green };
+                let offset = thumbnail_offset + (y * 64 + x) * 4;
+                assert_eq!(profile_f32(&profile, offset), expected);
+            }
+        }
+        let grid_offset = thumbnail_offset + 64 * 36 * 4;
+        assert_eq!(profile_f32(&profile, grid_offset), 53.0_f32 / 255.0);
+        assert_eq!(profile_f32(&profile, grid_offset + 4), 182.0_f32 / 255.0);
+    }
+
+    #[test]
+    fn apobs001_odd_plane_matches_source_derived_luma_golden() {
+        let (width, height) = (5, 3);
+        let mut rgba = vec![0; width * height * 4];
+        set_pixel(&mut rgba, width, 2, 1, [0, 0, 255, 255]);
+        set_pixel(&mut rgba, width, 4, 2, [0, 255, 0, 255]);
+        let profile = apobs001_profile(&rgba, width as u32, height as u32).unwrap();
+        assert_eq!(profile.len(), 20 + 4 * (64 * 36 + 5 * 3));
+        assert_profile_header(&profile, 5, 3, 5, 3);
+
+        let thumbnail_offset = APOBS001_HEADER_BYTES;
+        assert_eq!(
+            profile_f32(&profile, thumbnail_offset + (12 * 64 + 32) * 4),
+            (0.0722 * 255.0_f32) / 255.0
+        );
+        assert_eq!(
+            profile_f32(&profile, thumbnail_offset + (24 * 64 + 51) * 4),
+            (0.7152 * 255.0_f32) / 255.0
+        );
+        let grid_offset = thumbnail_offset + 64 * 36 * 4;
+        assert_eq!(profile_f32(&profile, grid_offset + 7 * 4), 18.0_f32 / 255.0);
+        assert_eq!(
+            profile_f32(&profile, grid_offset + 14 * 4),
+            182.0_f32 / 255.0
+        );
+        assert!(
+            profile[grid_offset..]
+                .chunks_exact(4)
+                .all(|value| { f32::from_le_bytes(value.try_into().unwrap()).is_finite() })
+        );
+    }
+
+    #[test]
+    fn apobs001_large_plane_matches_source_derived_bounded_grid_golden() {
+        let (width, height) = (2049_usize, 1025_usize);
+        let mut rgba = vec![0; width * height * 4];
+        for y in 0..height {
+            set_pixel(&mut rgba, width, 12, y, [255, 255, 255, 255]);
+            set_pixel(&mut rgba, width, 13, y, [255, 255, 255, 255]);
+        }
+        let profile = apobs001_profile(&rgba, width as u32, height as u32).unwrap();
+        assert_eq!(profile.len(), APOBS001_MAX_BYTES);
+        assert_profile_header(&profile, width as u32, height as u32, 128, 128);
+
+        let thumbnail_offset = APOBS001_HEADER_BYTES;
+        assert!(
+            profile[thumbnail_offset..thumbnail_offset + 64 * 36 * 4]
+                .chunks_exact(4)
+                .all(|value| f32::from_le_bytes(value.try_into().unwrap()) == 0.0)
+        );
+        let grid_offset = thumbnail_offset + 64 * 36 * 4;
+        for row in 0..128 {
+            for column in 0..128 {
+                let expected = if column == 0 { 0.2 } else { 0.0 };
+                assert_eq!(
+                    profile_f32(&profile, grid_offset + (row * 128 + column) * 4),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn apobs001_rejects_invalid_plane_dimensions_and_lengths() {
+        assert!(apobs001_profile(&[], 0, 1).is_none());
+        assert!(apobs001_profile(&[], 1, 0).is_none());
+        let wide_plane = vec![0; 4097 * 4];
+        let wide_profile = apobs001_profile(&wide_plane, 4097, 1).unwrap();
+        assert_profile_header(&wide_profile, 4097, 1, 128, 1);
+        assert!(apobs001_profile(&[0; 3], 1, 1).is_none());
     }
 }
