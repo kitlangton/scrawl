@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { CapturePublishInput } from "../../src/capture.ts";
+import { launchCaptureRecoveryPeer, launchMedia2RecoveryPeer } from "../../src/recovery/index.ts";
 import { ChildProcessCaptureTransport } from "../../src/capture.ts";
 import { MediaProcessTransport } from "../../src/media.ts";
 import { encodeMedia2Rpc, MEDIA2_MAX_LINE, type Media2RpcRequest, type Media2RpcResponse } from "../../src/media2/protocol.ts";
@@ -10,7 +14,35 @@ const fixtureMode = mode.replace(/^media-/, "");
 const channel = mode.startsWith("media-") ? "media/2" : "capture/2";
 const completed = process.argv[3];
 let constructed = false;
-try {
+async function nativeCaller(): Promise<void> {
+  const capture = await launchCaptureRecoveryPeer(process.env.APPARENT_ENGINE_CAPTURE_BIN!, completed);
+  let media: Awaited<ReturnType<typeof launchMedia2RecoveryPeer>> | undefined;
+  try {
+    const hello = await capture.client.handshake();
+    assert.equal(hello.readiness, "unavailable");
+    assert.equal(hello.capabilities.displayCapture, false);
+    assert.equal(hello.capabilities.sourceDiscovery, false);
+    await assert.rejects(capture.client.close(), /peer.release/);
+    if (mode === "native-publication") {
+      const raw = JSON.parse(readFileSync(process.argv[4], "utf8"));
+      const input: CapturePublishInput = { ...raw, planBytes: readFileSync(join(raw.planFile.stagingRoot, raw.planFile.planFile.relativePath)) };
+      await assert.rejects(capture.client.publish(input, 100), /operation was not cancelled/);
+    } else {
+      media = await launchMedia2RecoveryPeer(process.env.APPARENT_ENGINE_MEDIA2_BIN!, completed);
+      assert.equal((await media.client.handshake()).implementation, "native");
+      await assert.rejects(media.client.close(), /peer.release/);
+    }
+    // Every local operation above has settled; native outcome can remain unknown.
+    const released = await Promise.all([capture.release(), media?.release()]);
+    await assert.rejects(capture.client.close(), /peer.release/);
+    await assert.rejects(capture.client.handshake(), /unknown|released|ended|exited/);
+    if (media) await assert.rejects(media.client.close(), /peer.release/);
+    assert.ok(Object.isFrozen(capture.lifetime));
+    console.log(JSON.stringify(released));
+  } finally { await Promise.all([capture.release(), media?.release()]); }
+}
+if (mode.startsWith("native-")) await nativeCaller();
+else try {
   const fixtureArgs = (value: string) => ["--experimental-strip-types", fileURLToPath(new URL("./fixture.ts", import.meta.url)), value, completed, channel];
   const peer = await connectRecoveryPeer<{ request: () => Promise<unknown> }>(process.execPath, fixtureArgs(fixtureMode === "pair-failure" ? "confirmed" : fixtureMode), channel, child => {
     constructed = true;

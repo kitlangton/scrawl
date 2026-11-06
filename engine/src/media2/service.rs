@@ -160,15 +160,15 @@ pub fn run(runtime: &Path, role: Option<crate::recovery::Role<'_>>) -> Result<()
     let native_available = crate::job::decode_available();
     let store = Arc::new(SecureStore::open(runtime).map_err(|_| "source_mismatch")?);
     let registry = JobRegistry::open(store).map_err(native_error)?;
-    if let Some(role) = role {
-        crate::recovery::lifecycle(role, "ready");
-    }
     let fd = std::io::stdout().as_raw_fd();
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err("internal");
     }
     let inputs = transport::reader(protocol::MAX_LINE);
+    if let Some(role) = role {
+        crate::recovery::lifecycle(role, "ready");
+    }
     let mut client = None;
     let mut seen = HashSet::new();
     let mut order = VecDeque::new();
@@ -192,17 +192,38 @@ pub fn run(runtime: &Path, role: Option<crate::recovery::Role<'_>>) -> Result<()
             Ok(transport::Input::Closed) | Err(RecvTimeoutError::Disconnected) => {
                 if let Some(role) = role {
                     crate::recovery::lifecycle(role, "input-closed");
-                    crate::recovery::detach_outputs().map_err(|_| "internal")?;
+                    // A broken output sink is a connection failure, never a
+                    // reason to kill an admitted recovery job.
+                    let _ = crate::recovery::detach_outputs();
                     input_closed = true;
                 } else {
                     break Ok(());
                 }
                 continue;
             }
-            Ok(transport::Input::Invalid) => break Err("malformed_request"),
+            Ok(transport::Input::Invalid) => {
+                if role.is_some() {
+                    // Framing failure closes this connection's admission, but
+                    // does not establish an observed EOF for a lifecycle ACK.
+                    let _ = crate::recovery::detach_outputs();
+                    input_closed = true;
+                    continue;
+                }
+                break Err("malformed_request");
+            }
             Err(RecvTimeoutError::Timeout) => continue,
         };
-        let value: Value = serde_json::from_slice(&bytes).map_err(|_| "malformed_request")?;
+        let value: Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(_) => {
+                if role.is_some() {
+                    let _ = crate::recovery::detach_outputs();
+                    input_closed = true;
+                    continue;
+                }
+                break Err("malformed_request");
+            }
+        };
         let rpc = value
             .get("rpcId")
             .and_then(Value::as_str)

@@ -151,12 +151,19 @@ mod recovery_peer_tests {
         }
     }
 
-    fn lifecycle(stderr: &mut BufReader<std::process::ChildStderr>, event: &str, peer: &str) {
+    fn lifecycle(
+        stderr: &mut BufReader<std::process::ChildStderr>,
+        event: &str,
+        peer: &str,
+        channel: &str,
+    ) {
         let mut line = String::new();
         stderr.read_line(&mut line).unwrap();
         let value: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(value["schema"], "apparent.engine-recovery-peer/1");
         assert_eq!(value["peerId"], peer);
+        assert_eq!(value["channel"], channel);
+        assert_eq!(value["implementation"], "native");
         assert_eq!(value["role"], "recovery");
         assert_eq!(value["startsFreshCapture"], false);
         assert_eq!(value["onInputEof"], "retain-admitted-finite-work");
@@ -238,9 +245,21 @@ mod recovery_peer_tests {
             .spawn()
             .unwrap();
         let mut stderr = BufReader::new(child.stderr.take().unwrap());
-        lifecycle(&mut stderr, "ready", &peer);
+        lifecycle(&mut stderr, "ready", &peer, "capture/2");
         let mut stdin = child.stdin.take().unwrap();
         let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        writeln!(
+            stdin,
+            "{}",
+            json!({"channel":"capture","protocolVersion":2,"clientId":"b".repeat(32),"rpcId":"a".repeat(32),"method":"handshake"})
+        )
+        .unwrap();
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap();
+        let handshake: Value = serde_json::from_str::<Value>(&line).unwrap()["result"].clone();
+        assert_eq!(handshake["readiness"], "unavailable");
+        assert_eq!(handshake["capabilities"]["displayCapture"], false);
+        assert_eq!(handshake["capabilities"]["sourceDiscovery"], false);
         let request = json!({"channel":"capture","protocolVersion":2,"clientId":"b".repeat(32),"rpcId":"c".repeat(32),"method":"start","ownerToken":"d".repeat(64),"captureId":"e".repeat(32),"bundleId":"recovery-test.apparent","bundlePath":root.join("recovery-test.apparent"),"source":{},"options":{"screen":true},"invocation":{}});
         writeln!(stdin, "{request}").unwrap();
         let mut line = String::new();
@@ -254,7 +273,7 @@ mod recovery_peer_tests {
                 .exists()
         );
         drop(stdin);
-        lifecycle(&mut stderr, "input-closed", &peer);
+        lifecycle(&mut stderr, "input-closed", &peer, "capture/2");
         wait(&mut child);
         assert!(child.wait().unwrap().success());
         assert!(matches!(
@@ -287,7 +306,7 @@ mod recovery_peer_tests {
             .spawn()
             .unwrap();
         let mut stderr = BufReader::new(child.stderr.take().unwrap());
-        lifecycle(&mut stderr, "ready", &peer);
+        lifecycle(&mut stderr, "ready", &peer, "media/2");
         let mut stdin = child.stdin.take().unwrap();
         let mut stdout = BufReader::new(child.stdout.take().unwrap());
         writeln!(stdin, "{}", json!({"channel":"media","protocolVersion":2,"clientId":"1".repeat(32),"rpcId":"2".repeat(32),"method":"handshake"})).unwrap();
@@ -302,7 +321,7 @@ mod recovery_peer_tests {
         // response failure must not tear down the native recovery process.
         writeln!(stdin, "{}", json!({"channel":"media","protocolVersion":2,"clientId":"1".repeat(32),"rpcId":"3".repeat(32),"method":"handshake"})).unwrap();
         drop(stdin);
-        lifecycle(&mut stderr, "input-closed", &peer);
+        lifecycle(&mut stderr, "input-closed", &peer, "media/2");
         wait(&mut child);
         assert!(child.wait().unwrap().success());
 
@@ -328,6 +347,20 @@ mod recovery_peer_tests {
 
     #[test]
     fn media2_finite_job_is_reaped_and_reconciled_after_output_disconnect_and_eof() {
+        finite_job_after_disconnection(b"");
+    }
+
+    #[test]
+    fn media2_truncated_recovery_input_does_not_cancel_admitted_work() {
+        finite_job_after_disconnection(b"{\"rpcId\":");
+    }
+
+    #[test]
+    fn media2_invalid_recovery_json_does_not_cancel_admitted_work() {
+        finite_job_after_disconnection(b"{broken}\n");
+    }
+
+    fn finite_job_after_disconnection(tail: &[u8]) {
         use apparent_capture_engine::SecureStore;
 
         let base = runtime();
@@ -427,7 +460,7 @@ mod recovery_peer_tests {
             .spawn()
             .unwrap();
         let mut stderr = BufReader::new(child.stderr.take().unwrap());
-        lifecycle(&mut stderr, "ready", &"7a".repeat(16));
+        lifecycle(&mut stderr, "ready", &"7a".repeat(16), "media/2");
         let mut stdin = child.stdin.take().unwrap();
         let mut stdout = BufReader::new(child.stdout.take().unwrap());
         writeln!(
@@ -456,7 +489,8 @@ mod recovery_peer_tests {
         assert_eq!(initial["result"]["state"], "running", "{initial}");
         drop(stdout);
         drop(stderr);
-        thread::sleep(Duration::from_millis(10));
+        stdin.write_all(tail).unwrap();
+        stdin.flush().unwrap();
         drop(stdin);
         wait(&mut child);
         assert!(child.wait().unwrap().success());

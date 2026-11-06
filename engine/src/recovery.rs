@@ -21,6 +21,7 @@ pub fn lifecycle(role: Role<'_>, event: &'static str) {
         "schema": SCHEMA,
         "peerId": role.peer_id,
         "channel": role.channel,
+        "implementation": "native",
         "role": "recovery",
         "startsFreshCapture": false,
         "onInputEof": "retain-admitted-finite-work",

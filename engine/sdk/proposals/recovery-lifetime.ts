@@ -87,7 +87,7 @@ export declare function proposedLaunchMedia2RecoveryPeer(
  *   another peer's live capture. Recovery may inspect/control original captures
  *   and resume only already-authorized finite processing/publication operations.
  *   Its normal CaptureClient handshake also reports fresh-start readiness
- *   unavailable and screenCapture=false; role metadata alone is insufficient.
+ *   unavailable and displayCapture=false; role metadata alone is insufficient.
  * - Media EOF drains admitted work under its original deadline and supervision,
  *   rather than manufacturing owner_lost because the observer disconnected.
  * - Publication retains original auth/material/plan bindings and held resources
