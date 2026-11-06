@@ -183,7 +183,7 @@ try {
     assert.equal(createHash('sha256').update(await readFile(path.join(admittedPayload, 'manifest.json'))).digest('hex'), createHash('sha256').update(await readFile(path.join(payload, 'manifest.json'))).digest('hex'), 'external extracted payload matches archive manifest');
     const capture2 = path.join(scratch, 'capture2');
     await initConsumer(capture2);
-    await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact], { cwd: capture2 });
+    await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact, 'react@19.2.0', 'react-dom@19.2.0'], { cwd: capture2 });
     const capture2Result = await runQualification(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
       import assert from 'node:assert/strict';
       import {createHash} from 'node:crypto';
@@ -196,6 +196,7 @@ try {
       import {createCapture2Host} from '@apparent/record/host/capture2';
       import {createCapture2RecordRuntime} from '@apparent/record/host/capture2-runtime';
       import {createRecordCapabilityProvider} from '@apparent/record/capabilities';
+      import {createRecordClientPillHost,disposeWorkflowPillHost} from '@apparent/record/ui';
       import {AbsentDestinationAllocator, SqliteCaptureMappingStore} from '@apparent/record/host';
       import {readCaptureMaterials} from '@apparent/record/host/materials';
       const {reconcileAndCancel,runBounded,trackChild,waitForExit} = await import(pathToFileURL(process.env.APPARENT_QUALIFICATION_HELPERS).href);
@@ -255,7 +256,7 @@ try {
         const mappings = new SqliteCaptureMappingStore(control);
         const destinations = new AbsentDestinationAllocator(control,bundles);
         let host = createCapture2Host({client,mappings,destinations});
-        let recordRuntime, recordClient;
+        let recordRuntime, recordClient, pillHost;
         try {
           if (sceneSpawnError) throw sceneSpawnError;
           const deadline = Date.now()+150000;
@@ -282,18 +283,18 @@ try {
           let before=recordClient.current();
           const localOnly=await recordClient.execute({type:'start-capture',delivery:'local-only',requestId:'packed-native-local-only-'+Date.now(),expected:{providerEpoch:before.providerEpoch,revision:before.revision}});
           assert.equal(localOnly.status,'refused','native remote-delivery refusal is not Record pipeline local-only enforcement');
-          before=recordClient.current();
-          const started=await recordClient.execute({type:'start-capture',delivery:'host-default',requestId,expected:{providerEpoch:before.providerEpoch,revision:before.revision}});
-          assert.ok(['accepted','outcome-unknown'].includes(started.status));
+          let actionIds=0;
+          pillHost=createRecordClientPillHost(recordClient,{createRequestId:()=>actionIds++===0?requestId:'packed-pill-action-'+actionIds});
+          const initialPill=await pillHost.read(); assert.ok(initialPill.actions.some(action=>action.id==='record'&&action.enabled));
+          await pillHost.act(initialPill.revision,'record');
           const active=await waitFor(async()=>recordClient.current().captures.find(x=>x.captureId===requestId&&x.phase==='recording'),'public RecordClient recording fact');
           const mapping = await mappings.getByRequestId(requestId); assert.ok(mapping?.capture2Intent);
           assert.equal(mapping.bundlePath,path.join(bundles,path.basename(mapping.bundlePath)));
           await assert.rejects(lstat(mapping.bundlePath),e=>e.code==='ENOENT','Record must reserve, never create, the final destination');
           const recording = await waitFor(async()=>{const x=await host.inspect(requestId);return x.phase==='recording'?x:null;},'real recording receipt');
           assert.equal(recording.requestId,requestId);
-          before=recordClient.current();
-          const stopCommand=await recordClient.execute({type:'stop-capture',captureId:requestId,requestId:'packed-native-stop-'+Date.now(),expected:{providerEpoch:before.providerEpoch,revision:before.revision}});
-          assert.ok(['accepted','outcome-unknown'].includes(stopCommand.status));
+          const recordingPill=await pillHost.read(); assert.equal(recordingPill.phase,'recording');
+          await pillHost.act(recordingPill.revision,'finish');
           const stopReceipt = await host.inspect(requestId);
           assert.ok(['stopping','materials-ready'].includes(stopReceipt.phase));
           const stopped = stopReceipt.phase==='materials-ready' ? stopReceipt : await waitFor(async()=>{const value=await host.inspect(requestId);return value.phase==='materials-ready'?value:null;},'retained materials ready');
@@ -338,6 +339,7 @@ try {
           console.log('packed Record capture/2 native Xvfb consumer passed');
         } finally {
           await reconcileAndCancel(mappings,client,Date.now()+15000);
+          if(pillHost)disposeWorkflowPillHost(pillHost);
           recordClient?.detach(); recordRuntime?.dispose();
           host.dispose();
           await client.close();

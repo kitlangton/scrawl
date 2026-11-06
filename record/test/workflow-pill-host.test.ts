@@ -270,3 +270,17 @@ test("only authenticated artifact identity displays saved state; local-only and 
   assert.deepEqual(view.actions.map(action => action.id), ["refresh"]);
   disposeWorkflowPillHost(host);
 });
+
+test("RecordClient pill retires old provider epochs after reconnect", async () => {
+  const fixture = recordClientFixture();
+  const host = createRecordClientPillHost(fixture.client, { createRequestId: () => "reconnect-action" });
+  const old = fixture.value();
+  fixture.emit({ ...old, providerEpoch: "provider-b", revision: 1, captures: [{ captureId: "new-capture", delivery: "unknown", phase: "recording", outcomes: [] }] });
+  const replacement = (await host.read())!;
+  fixture.emit({ ...old, revision: 100, captures: [{ captureId: "retired-capture", delivery: "unknown", phase: "recording", outcomes: [] }] });
+  assert.equal((await host.read())!.revision, replacement.revision, "retired epoch cannot replace the current frame");
+  await host.act(replacement.revision, "finish");
+  assert.equal(fixture.commands[0]?.expected.providerEpoch, "provider-b");
+  assert.equal(fixture.commands[0]?.type === "stop-capture" && fixture.commands[0].captureId, "new-capture");
+  disposeWorkflowPillHost(host);
+});

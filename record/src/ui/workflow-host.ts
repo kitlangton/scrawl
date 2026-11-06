@@ -71,12 +71,14 @@ export type RecordClientPillHostOptions = {
 /** Binds the existing pill to the public, revisioned RecordClient contract. */
 export function createRecordClientPillHost(client: RecordClient, options: RecordClientPillHostOptions): PillHost {
   let snapshot: CapabilitySnapshot | undefined;
+  const retiredEpochs = new Set<string>();
   let revision = 0;
   let disposed = false;
   let view: PillView | null = null;
   const observers = new Set<(value: PillView) => void>();
   const publish = (next: CapabilitySnapshot) => {
-    if (disposed || (snapshot && next.providerEpoch === snapshot.providerEpoch && next.revision < snapshot.revision)) return;
+    if (disposed || retiredEpochs.has(next.providerEpoch) || (snapshot && next.providerEpoch === snapshot.providerEpoch && next.revision < snapshot.revision)) return;
+    if (snapshot && next.providerEpoch !== snapshot.providerEpoch) retiredEpochs.add(snapshot.providerEpoch);
     snapshot = structuredClone(next);
     view = presentClient(snapshot, ++revision, options);
     for (const observer of [...observers]) try { observer(structuredClone(view)); } catch { observers.delete(observer); }
