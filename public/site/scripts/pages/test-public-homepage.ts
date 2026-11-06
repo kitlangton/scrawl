@@ -201,7 +201,8 @@ test("source homepage preserves accepted responsive layout and interactions", as
           page.on("pageerror", error => errors.push(error.message))
           page.on("console", message => { if (message.type() === "error" && /React|hydrat/i.test(message.text())) errors.push(message.text()) })
           await page.route("https://api.github.com/**", route => route.fulfill({ contentType: "application/json", body: "[]" }))
-          await page.route("https://www.linkedin.com/**", route => route.fulfill({ contentType: "text/html", body: "<title>Synthetic LinkedIn destination</title>" }))
+          // Page routes do not intercept a popup's initial navigation.
+          await page.context().route("https://www.linkedin.com/**", route => route.fulfill({ contentType: "text/html", body: "<title>Synthetic LinkedIn destination</title>" }))
           const analyticsRequests: string[] = []
           await page.route("https://eu.i.posthog.com/**", route => {
             analyticsRequests.push(route.request().url())
@@ -399,7 +400,11 @@ test("source homepage preserves accepted responsive layout and interactions", as
           const popup = await destination
           await popup.waitForLoadState()
           assert.match(popup.url(), /linkedin\.com\/in\/simon-van-laak/)
+          assert.equal(await popup.title(), "Synthetic LinkedIn destination", "the first profile activation reaches the isolated fixture")
           await popup.close()
+          await page.bringToFront()
+          assert.equal(page.url(), origin + "/", "opening the profile preserves the homepage")
+          assert.equal(await dialog.evaluate((element: HTMLDialogElement) => element.open), true, "the original social dialog remains open")
           await dialog.locator(".footer-close").click()
           assert.equal(await page.locator(".footer-hi").evaluate(element => element === document.activeElement), true)
           if (width === 320) {
