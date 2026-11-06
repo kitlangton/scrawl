@@ -13,11 +13,31 @@ export interface ShortcutBinding {
   /** Configured native value, distinct from the binding actually in effect. */
   configured?: string | null;
   effective: string | null;
+  /** Opaque identity of the exact effective registration; required for physical trial admission. */
+  bindingId?: string;
   label: string | null;
   registration: "registered" | "unregistered" | "externally-managed" | "unknown" | "unavailable";
   externallyManaged: boolean;
   draft: null | { sessionId: string; value: string; error?: string };
 }
+export interface ScreenStrokeCursor {
+  /** Opaque stroke-history incarnation; changes when a history is reset or replaced. */
+  historyId: string;
+  /** Durable monotone sequence within that incarnation. Timestamps are not causal order. */
+  sequence: number;
+}
+export interface ShortcutTrialBinding {
+  sourceEpoch: string;
+  sourceRevision: number;
+  bindingId: string;
+  effectiveBinding: string;
+}
+export type ShortcutTrialFact =
+  | { state: "unavailable" }
+  | ({ state: "idle" } & ShortcutTrialBinding)
+  | ({ state: "reserved" | "pressing" } & ShortcutTrialBinding & { reservationId: string; expiresAt: string })
+  | ({ state: "observed" } & ShortcutTrialBinding & { reservationId: string; pressId: string; pressedAt: string; releasedAt: string })
+  | ({ state: "expired" | "cancelled" | "unknown" } & ShortcutTrialBinding & { reservationId: string });
 export type PenColor = "coral" | "purple" | "blue" | "green";
 /** Named penColor preference; drawing tool modes are a separate capability. */
 export interface PenPreference {
@@ -26,16 +46,22 @@ export interface PenPreference {
   error?: string;
 }
 export type CaptureOutcomeKind =
-  | "shortcut" | "picker" | "first-frame-start" | "whiteboard" | "accepted-stroke"
+  | "shortcut" | "picker" | "first-frame-start" | "whiteboard" | "accepted-stroke" | "note-save"
   | "processing" | "save" | "copy" | "open-dispatch";
 export type CaptureSurface = "screen" | "whiteboard";
 export type PickerOutcome =
   | { kind: "picker"; at: string; ok: true; surface: "screen"; target: "display" | "area" | "window" }
   | { kind: "picker"; at: string; ok: false; reason: "cancelled" | "failed" | "unavailable" };
 export type AcceptedStrokeOutcome =
-  | { kind: "accepted-stroke"; at: string; ok: true; surface: CaptureSurface; strokeId: string }
+  | { kind: "accepted-stroke"; at: string; ok: true; surface: "screen"; strokeId: string; cursor?: ScreenStrokeCursor }
+  | { kind: "accepted-stroke"; at: string; ok: true; surface: "whiteboard"; strokeId: string }
   | { kind: "accepted-stroke"; at: string; ok: false; surface: CaptureSurface; reason: "rejected" | "failed" };
-export type GenericCaptureOutcomeKind = Exclude<CaptureOutcomeKind, "picker" | "accepted-stroke">;
+/** Success is emitted only after a non-empty note is durably saved. Its barrier
+ * is the authoritative screen-stroke cursor read at that save, not arrival time. */
+export type PracticeNoteSaveOutcome =
+  | { kind: "note-save"; at: string; ok: true; noteId: string; receiptId: string; screenStrokeBarrier: ScreenStrokeCursor }
+  | { kind: "note-save"; at: string; ok: false; reason: "draft" | "empty" | "failed" | "cancelled" };
+export type GenericCaptureOutcomeKind = Exclude<CaptureOutcomeKind, "picker" | "accepted-stroke" | "note-save">;
 export type ArtifactOpenOutcome = {
   kind: "artifact-open";
   at: string;
@@ -53,6 +79,7 @@ export type CaptureOutcome =
   | { kind: GenericCaptureOutcomeKind; at: string; ok: boolean; detail?: string }
   | PickerOutcome
   | AcceptedStrokeOutcome
+  | PracticeNoteSaveOutcome
   | ArtifactOpenOutcome
   | ClipboardCopyOutcome;
 export type DeliveryEnforcement = "local-only" | "host-default" | "unknown";
@@ -79,6 +106,8 @@ export interface CapabilitySnapshot {
   pen: PenPreference;
   captures: CaptureFact[];
   nextShortcutAdmission: ShortcutAdmissionFact;
+  /** Optional for v2 compatibility; providers publish `unavailable` when no trusted producer exists. */
+  shortcutTrial?: ShortcutTrialFact;
 }
 
 export type ShortcutAdmissionFact =
@@ -105,6 +134,8 @@ export type RecordCommand = CommandBase & (
   | { type: "start-capture"; delivery: "local-only" | "host-default" }
   | { type: "arm-next-shortcut"; admissionId: string; delivery: "local-only" | "host-default"; expiresAt: string }
   | { type: "cancel-next-shortcut"; admissionId: string }
+  | { type: "begin-shortcut-trial"; reservationId: string; bindingId: string; effectiveBinding: string; sourceEpoch: string; sourceRevision: number; expiresAt: string }
+  | { type: "cancel-shortcut-trial"; reservationId: string }
   | { type: "stop-capture"; captureId: string }
   | { type: "cancel-capture"; captureId: string }
   | { type: "inspect-capture"; captureId: string }

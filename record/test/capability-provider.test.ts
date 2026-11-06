@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { CapabilitySnapshot, PenColor, RecordCommand, RecordCaptureFacts, RecordNativeFacts, RecordPenConfigPort } from "../src/capabilities/index.ts";
+import { createRecordFixture } from "../src/capabilities/fixtures.ts";
 import { createRecordCapabilityProvider } from "../src/backend/capabilities/provider.ts";
 import { createRecordHostRuntime } from "../dist/backend/host/runtime.js";
 import type { EngineSdkPort, PreparedStart } from "../src/backend/engine/sdk-adapter.ts";
@@ -50,8 +51,143 @@ test("provider publishes explicit unavailable host/config facts and refuses abse
   assert.equal(snapshot.readiness.requirements.find(item => item.id === "native-host")?.status, "unavailable");
   assert.equal(snapshot.shortcut.registration, "unknown");
   assert.deepEqual(snapshot.nextShortcutAdmission, { state: "unavailable" });
+  assert.deepEqual(snapshot.shortcutTrial, { state: "unavailable" });
   assert.equal(snapshot.pen.effective, null);
   assert.equal((await client.execute({ ...command(snapshot, "start-capture", "start-no-runtime", "local-only") })).status, "refused");
+  assert.equal((await client.execute({ type: "begin-shortcut-trial", requestId: "trial-no-native", reservationId: "trial-1", bindingId: "binding-1", effectiveBinding: "Ctrl+Shift+R", sourceEpoch: "native-epoch", sourceRevision: 1, expiresAt: "2026-01-01T00:01:00Z", expected: { providerEpoch: snapshot.providerEpoch, revision: snapshot.revision } })).status, "refused");
+  client.detach();
+});
+
+test("shortcut trial requires matching source epoch, revision, effective binding and reservation; dispatch is not observation", async () => {
+  const { runtime } = runtimeFixture();
+  const facts = nativeFacts();
+  facts.shortcut = { ...facts.shortcut, bindingId: "binding-1" };
+  facts.shortcutTrial = { state: "idle", sourceEpoch: facts.providerEpoch, sourceRevision: facts.revision, bindingId: "binding-1", effectiveBinding: "Ctrl+Shift+R" };
+  const actions: RecordCommand[] = [];
+  const client = createRecordCapabilityProvider({ runtime, providerEpoch: "provider-trial", native: {
+    readFacts: async () => structuredClone(facts),
+    dispatch: async action => { actions.push(structuredClone(action)); return "accepted"; },
+  } });
+  await new Promise(resolve => setImmediate(resolve));
+  const idle = client.current();
+  assert.deepEqual(idle.shortcutTrial?.state, "idle");
+  const begin = { type: "begin-shortcut-trial" as const, requestId: "trial-dispatch", reservationId: "reservation-1", bindingId: "binding-1",
+    effectiveBinding: "Ctrl+Shift+R", sourceEpoch: facts.providerEpoch, sourceRevision: facts.revision, expiresAt: "2026-01-01T00:01:00Z",
+    expected: { providerEpoch: idle.providerEpoch, revision: idle.revision } };
+  const dispatched = await client.execute(begin);
+  assert.equal(dispatched.status, "accepted");
+  assert.equal(client.current().shortcutTrial?.state, "idle", "accepted dispatch is not a physical press/release fact");
+  assert.equal(actions[0]?.type, "begin-shortcut-trial");
+  const staleDispatch = await client.execute({ ...begin, requestId: "trial-stale-source", sourceRevision: begin.sourceRevision - 1,
+    expected: { providerEpoch: client.current().providerEpoch, revision: client.current().revision } });
+  assert.equal(staleDispatch.status, "refused", "trial admission must match the current producer revision");
+  facts.revision++;
+  facts.shortcutTrial = { state: "reserved", sourceEpoch: facts.providerEpoch, sourceRevision: 1, bindingId: "binding-1", effectiveBinding: "Ctrl+Shift+R",
+    reservationId: "reservation-1", expiresAt: "2026-01-01T00:01:00Z" };
+  const reservedSnapshot = client.current();
+  assert.equal((await client.execute({ type: "refresh", requestId: "trial-reservation-readback", expected: { providerEpoch: reservedSnapshot.providerEpoch, revision: reservedSnapshot.revision } })).status, "accepted");
+  assert.equal(client.current().shortcutTrial?.state, "reserved");
+  const unrelatedCancel = await client.execute({ type: "cancel-shortcut-trial", requestId: "trial-cancel-unrelated", reservationId: "different-request-reservation",
+    expected: { providerEpoch: client.current().providerEpoch, revision: client.current().revision } });
+  assert.equal(unrelatedCancel.status, "refused", "a different request cannot consume this reservation");
+  const cancelAccepted = await client.execute({ type: "cancel-shortcut-trial", requestId: "trial-cancel-dispatch", reservationId: "reservation-1",
+    expected: { providerEpoch: client.current().providerEpoch, revision: client.current().revision } });
+  assert.equal(cancelAccepted.status, "accepted");
+  assert.equal(client.current().shortcutTrial?.state, "reserved", "accepted cancellation is not a terminal cancellation fact");
+  facts.revision++;
+  facts.shortcutTrial = { state: "observed", sourceEpoch: facts.providerEpoch, sourceRevision: 1, bindingId: "binding-1", effectiveBinding: "Ctrl+Shift+R",
+    reservationId: "reservation-1", pressId: "physical-pair-1", pressedAt: "2026-01-01T00:00:01Z", releasedAt: "2026-01-01T00:00:01.100Z" };
+  const refresh = client.current();
+  const result = await client.execute({ type: "refresh", requestId: "trial-readback", expected: { providerEpoch: refresh.providerEpoch, revision: refresh.revision } });
+  assert.equal(result.status, "accepted");
+  assert.equal(client.current().shortcutTrial?.state, "observed");
+
+  facts.revision++;
+  facts.shortcut = { ...facts.shortcut, bindingId: "binding-2", effective: "Alt+R", label: "Alt R" };
+  const changed = await client.execute({ type: "refresh", requestId: "trial-binding-change", expected: { providerEpoch: client.current().providerEpoch, revision: client.current().revision } });
+  assert.equal(changed.status, "accepted");
+  assert.equal(client.current().shortcutTrial?.state, "unknown", "binding changes invalidate the old reservation without erasing its identity");
+  const cancel = await client.execute({ type: "cancel-shortcut-trial", requestId: "trial-cancel-stale", reservationId: "reservation-1", expected: { providerEpoch: client.current().providerEpoch, revision: client.current().revision } });
+  assert.equal(cancel.status, "refused", "a stale-binding trial cannot be cancelled as though it still owns the current shortcut");
+  client.detach();
+
+  const malformedFacts = nativeFacts();
+  malformedFacts.shortcut.bindingId = "binding-1";
+  malformedFacts.shortcutTrial = { state: "observed", sourceEpoch: malformedFacts.providerEpoch, sourceRevision: 1, bindingId: "binding-1", effectiveBinding: "Ctrl+Shift+R",
+    reservationId: "reservation-1", pressId: "press-1", pressedAt: "2026-01-01T00:00:02Z", releasedAt: "2026-01-01T00:00:01Z" };
+  const malformed = createRecordCapabilityProvider({ runtime, native: { readFacts: async () => structuredClone(malformedFacts) }, providerEpoch: "provider-trial-malformed" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(malformed.current().shortcutTrial, { state: "unavailable" }, "release before press is not a physical trial observation");
+  malformed.detach();
+
+  const editingFacts = nativeFacts();
+  editingFacts.shortcut = { ...editingFacts.shortcut, bindingId: "binding-1", draft: { sessionId: "edit-1", value: "Alt+R" } };
+  editingFacts.shortcutTrial = { state: "idle", sourceEpoch: editingFacts.providerEpoch, sourceRevision: editingFacts.revision, bindingId: "binding-1", effectiveBinding: "Ctrl+Shift+R" };
+  const editing = createRecordCapabilityProvider({ runtime: runtimeFixture().runtime, native: { readFacts: async () => structuredClone(editingFacts), dispatch: async () => "accepted" }, providerEpoch: "provider-trial-editing" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(editing.current().shortcutTrial, { state: "unavailable" }, "an active draft does not expose an admissible effective shortcut trial");
+  const editingSnapshot = editing.current();
+  assert.equal((await editing.execute({ type: "begin-shortcut-trial", requestId: "trial-during-edit", reservationId: "trial-edit", bindingId: "binding-1", effectiveBinding: "Ctrl+Shift+R",
+    sourceEpoch: editingFacts.providerEpoch, sourceRevision: editingFacts.revision, expiresAt: "2026-01-01T00:01:00Z", expected: { providerEpoch: editingSnapshot.providerEpoch, revision: editingSnapshot.revision } })).status, "refused");
+  editing.detach();
+
+  const staleEpochFacts = nativeFacts();
+  staleEpochFacts.shortcut.bindingId = "binding-1";
+  staleEpochFacts.shortcutTrial = { state: "reserved", sourceEpoch: staleEpochFacts.providerEpoch, sourceRevision: 1, bindingId: "binding-1", effectiveBinding: "Ctrl+Shift+R",
+    reservationId: "reservation-old-epoch", expiresAt: "2026-01-01T00:01:00Z" };
+  const staleEpoch = createRecordCapabilityProvider({ runtime: runtimeFixture().runtime, native: { readFacts: async () => structuredClone(staleEpochFacts) }, providerEpoch: "provider-trial-reconnect" });
+  await new Promise(resolve => setImmediate(resolve));
+  staleEpochFacts.providerEpoch = "native-epoch-2";
+  staleEpochFacts.revision = 1;
+  const reconnectSnapshot = staleEpoch.current();
+  await staleEpoch.execute({ type: "refresh", requestId: "trial-after-reconnect", expected: { providerEpoch: reconnectSnapshot.providerEpoch, revision: reconnectSnapshot.revision } });
+  assert.equal(staleEpoch.current().shortcutTrial?.state, "unknown", "a reservation from another producer epoch stays unknown after reconnect");
+  staleEpoch.detach();
+});
+
+test("provider preserves cursor-qualified note receipts but refuses malformed cursors or note content", async () => {
+  const practice = (): RecordCaptureFacts => ({ ...outputFacts(), captures: [{ captureId: "practice-one", delivery: "unknown", phase: "recording", outcomes: [
+    { kind: "note-save", at: "2026-01-01T00:00:03Z", ok: true, noteId: "opaque-note", receiptId: "opaque-receipt", screenStrokeBarrier: { historyId: "screen-history-1", sequence: 8 } },
+    { kind: "accepted-stroke", at: "2026-01-01T00:00:02Z", ok: true, surface: "screen", strokeId: "opaque-stroke", cursor: { historyId: "screen-history-1", sequence: 9 } },
+  ] }] });
+  const output = practice();
+  const { runtime } = runtimeFixture();
+  const client = createRecordCapabilityProvider({ runtime, captureFacts: { readFacts: async () => structuredClone(output) }, providerEpoch: "provider-practice" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(client.current().captures[0]?.outcomes, output.captures[0]?.outcomes, "cursor sequence, not timestamp or array arrival order, carries causality");
+  client.detach();
+
+  const invalidFrames = [
+    (() => { const value = practice(); value.captures[0]!.outcomes[1] = { ...value.captures[0]!.outcomes[1]!, cursor: { historyId: "screen-history-1", sequence: 0 } } as never; return value; })(),
+    (() => { const value = practice(); value.captures[0]!.outcomes.push(structuredClone(value.captures[0]!.outcomes[1])); return value; })(),
+    (() => { const value = practice(); value.captures[0]!.outcomes[0] = { ...value.captures[0]!.outcomes[0]!, privateText: "/private/note.txt" } as never; return value; })(),
+    (() => { const value = practice(); value.captures[0]!.outcomes[0] = { ...value.captures[0]!.outcomes[0]!, noteId: "   " } as never; return value; })(),
+    (() => { const value = practice(); value.captures[0]!.outcomes[0] = { ...value.captures[0]!.outcomes[0]!, at: "not-a-time" } as never; return value; })(),
+  ];
+  for (const [index, invalid] of invalidFrames.entries()) {
+    const fixture = runtimeFixture();
+    const rejected = createRecordCapabilityProvider({ runtime: fixture.runtime, captureFacts: { readFacts: async () => invalid }, providerEpoch: `provider-invalid-practice-${index}` });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(rejected.current().captures, [], "invalid or duplicate cursor and malformed note payload cannot publish scoped practice facts");
+    rejected.detach();
+  }
+  assert.equal(createRecordFixture("practice-note-cancelled").driver.current().captures[0]?.outcomes[0]?.kind, "note-save");
+});
+
+test("retired output epochs cannot restore old note or stroke receipts", async () => {
+  const { runtime } = runtimeFixture();
+  let facts = outputFacts();
+  const client = createRecordCapabilityProvider({ runtime, providerEpoch: "provider-practice-retired", captureFacts: { readFacts: async () => structuredClone(facts) } });
+  await new Promise(resolve => setImmediate(resolve));
+  facts = { ...outputFacts(), providerEpoch: "output-epoch-2", revision: 1 };
+  let current = client.current();
+  await client.execute({ type: "refresh", requestId: "practice-new-epoch", expected: { providerEpoch: current.providerEpoch, revision: current.revision } });
+  facts = { ...outputFacts(), providerEpoch: "output-epoch-1", revision: 99, captures: [{ captureId: "retired-note", delivery: "unknown", phase: "recording", outcomes: [
+    { kind: "note-save", at: "2026-01-01T00:00:03Z", ok: true, noteId: "opaque-note", receiptId: "opaque-receipt", screenStrokeBarrier: { historyId: "screen-history-1", sequence: 8 } },
+  ] }] };
+  current = client.current();
+  await client.execute({ type: "refresh", requestId: "practice-retired-epoch", expected: { providerEpoch: current.providerEpoch, revision: current.revision } });
+  assert.deepEqual(client.current().captures, [], "retired producer epochs cannot restore scoped practice facts");
   client.detach();
 });
 

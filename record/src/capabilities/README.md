@@ -52,6 +52,42 @@ unavailable/unknown; never invent a consumed event. No production shortcut
 reservation producer exists yet. The fixture defaults to `unavailable` and refuses
 arm/cancel until its driver publishes a supported state.
 
+## Onboarding evidence contracts
+
+`shortcutTrial` is separate from `nextShortcutAdmission`: it represents a
+request-scoped physical shortcut test and never starts capture. Its binding
+includes the producer epoch/revision, opaque registration identity and exact
+effective shortcut. `idle` is valid only at that exact source revision;
+reservations retain an opaque identity through `reserved`, `pressing`,
+`observed`, `expired`, `cancelled` or `unknown`. `observed` requires a physical
+press/release pair. A `begin-shortcut-trial` result of `accepted` is dispatch
+only and cannot produce that observation. Binding or epoch changes invalidate
+the prior reservation; stale reservation identity is retained as `unknown`.
+When the native port omits this producer, the provider publishes `unavailable`
+and refuses trial commands. The existing arm-next-shortcut command is not a
+physical trial and must not be substituted.
+
+A successful `note-save` outcome means a trusted producer has durably saved a
+nonempty note. It exposes only opaque note and receipt IDs plus a
+`screenStrokeBarrier` cursor; note content and paths are not part of the
+capability. Draft, empty, failed and cancelled outcomes are non-success facts.
+Screen accepted-stroke outcomes may carry the durable cursor
+`{ historyId, sequence }`. A stroke is causally after a note only when it belongs to the same
+capture, has the same history incarnation and a sequence strictly greater than
+the note's barrier. Event timestamps and receipt arrival order do not establish
+this relation. Missing cursors remain unavailable for causal comparisons.
+
+These are public additive contracts, not claims that the producers exist.
+Production currently has no physical shortcut-trial producer, durable practice
+note receipt/barrier producer, or screen-stroke history cursor producer. Their
+host owners must supply authoritative scoped facts (and guarded begin/cancel
+dispatch for trial) before these capabilities can become available. Fixtures
+are synthetic controlled facts only; they establish no native effect or durable
+save. The fixtures cover physical pair/no event, unrelated request, stale
+epoch/binding, expiry/cancellation/unknown/reconnect and note draft/empty/
+failure/cancellation, pre/post-barrier strokes, unrelated history/capture and
+late receipts/finalization.
+
 `@apparent/record/fixtures` exports `createRecordFixture`, `fixtureScenarios` and
 test-only driver types. Instantiate separately for each consumer test:
 
@@ -80,9 +116,10 @@ stale frames return false.
 Use `disconnect`/`reconnect` for connection/epoch changes. Retired epochs return
 false. Each accepted publication reaches observers; listener failures are isolated.
 Script transport uncertainty/refusal/cancellation with `setNextResult`.
-The seven named scenarios cover permission relaunch, external shortcut refusal,
-pen failure, unrelated capture, saved history after reconnect, ambiguous control
-and unsubscribe during recording. They make no native/local-only proof claim.
+The named scenarios include permission relaunch, external shortcut refusal,
+pen failure, unrelated capture, saved history after reconnect, ambiguous control,
+unsubscribe during recording and the synthetic onboarding evidence cases above.
+They make no native/local-only proof claim.
 
 Unsubscribe and `detach()` never issue Stop/Cancel; the owning host keeps capture
 alive and handles shutdown safely. Record stores general facts only. Consumers

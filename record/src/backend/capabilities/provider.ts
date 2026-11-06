@@ -1,7 +1,7 @@
 import type { RecordCapture2StartPort, RecordHostRuntimePort } from "../host/runtime.js";
 import type {
   CapabilitySnapshot, CaptureFact, CommandResult, NativeRequirement, PenColor,
-  PenPreference, RecordClient, RecordCommand,
+  PenPreference, RecordClient, RecordCommand, ScreenStrokeCursor, ShortcutTrialFact,
 } from "../../capabilities/index.js";
 
 /**
@@ -15,6 +15,8 @@ export interface RecordNativeFacts {
   revision: number;
   readiness: NativeRequirement[];
   shortcut: CapabilitySnapshot["shortcut"];
+  /** Omit until a trusted physical press/release producer is available. */
+  shortcutTrial?: ShortcutTrialFact;
 }
 
 /** Authenticated Record output facts; raw Engine v1 saved material is not enough. */
@@ -29,7 +31,8 @@ export interface RecordCaptureFacts {
 export type NativeAction = Extract<RecordCommand,
   { type: "request-permission" | "open-system-settings" | "request-safe-relaunch" |
     "shortcut-begin-edit" | "shortcut-submit" | "shortcut-save" | "shortcut-cancel" |
-    "shortcut-reset" | "shortcut-open-desktop-config" | "copy-local" | "open-capture" }>;
+    "shortcut-reset" | "shortcut-open-desktop-config" | "copy-local" | "open-capture" |
+    "begin-shortcut-trial" | "cancel-shortcut-trial" }>;
 export type CaptureAction = Extract<RecordCommand, { type: "arm-next-shortcut" | "cancel-next-shortcut" }>;
 
 export interface RecordNativePort {
@@ -94,6 +97,7 @@ const unavailableNative = (): RecordNativeFacts => ({
   version: 1, providerEpoch: "unavailable", revision: 0,
   readiness: [{ id: "native-host", required: true, status: "unavailable", usableNow: false, relaunchNeeded: false, allowedRepairActions: [] }],
   shortcut: { effective: null, label: null, registration: "unknown", externallyManaged: false, draft: null },
+  shortcutTrial: { state: "unavailable" },
 });
 const unavailableCaptureFacts = (): RecordCaptureFacts => ({ version: 1, providerEpoch: "unavailable", revision: 0, captures: [], nextShortcutAdmission: { state: "unavailable" } });
 const engineRequirement = (ready: boolean): NativeRequirement => ({
@@ -101,6 +105,30 @@ const engineRequirement = (ready: boolean): NativeRequirement => ({
   usableNow: ready, relaunchNeeded: false, allowedRepairActions: [],
 });
 const isPenColor = (value: unknown): value is PenColor => value === "coral" || value === "purple" || value === "blue" || value === "green";
+const opaqueId = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && value.length <= 256 && !/[\\/\p{Cc}]/u.test(value) && value !== "." && value !== "..";
+function validCursor(value: unknown, allowZero = false): value is ScreenStrokeCursor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const cursor = value as Record<string, unknown>;
+  return opaqueId(cursor.historyId) && Number.isSafeInteger(cursor.sequence) && Number(cursor.sequence) >= (allowZero ? 0 : 1) &&
+    Object.keys(cursor).sort().join(",") === "historyId,sequence";
+}
+function validShortcutTrial(value: unknown): value is ShortcutTrialFact {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const trial = value as Record<string, unknown>;
+  if (trial.state === "unavailable") return Object.keys(trial).join(",") === "state";
+  const base = opaqueId(trial.sourceEpoch) && Number.isSafeInteger(trial.sourceRevision) && Number(trial.sourceRevision) >= 0 &&
+    opaqueId(trial.bindingId) && typeof trial.effectiveBinding === "string" && !!trial.effectiveBinding.trim();
+  if (!base) return false;
+  if (trial.state === "idle") return Object.keys(trial).sort().join(",") === "bindingId,effectiveBinding,sourceEpoch,sourceRevision,state";
+  if (trial.state === "reserved" || trial.state === "pressing") return opaqueId(trial.reservationId) && typeof trial.expiresAt === "string" && Number.isFinite(Date.parse(trial.expiresAt)) &&
+    Object.keys(trial).sort().join(",") === "bindingId,effectiveBinding,expiresAt,reservationId,sourceEpoch,sourceRevision,state";
+  if (trial.state === "observed") return opaqueId(trial.reservationId) && opaqueId(trial.pressId) && typeof trial.pressedAt === "string" && Number.isFinite(Date.parse(trial.pressedAt)) &&
+    typeof trial.releasedAt === "string" && Number.isFinite(Date.parse(trial.releasedAt)) && Date.parse(trial.releasedAt) >= Date.parse(trial.pressedAt) &&
+    Object.keys(trial).sort().join(",") === "bindingId,effectiveBinding,pressId,pressedAt,releasedAt,reservationId,sourceEpoch,sourceRevision,state";
+  if (trial.state === "expired" || trial.state === "cancelled" || trial.state === "unknown") return opaqueId(trial.reservationId) &&
+    Object.keys(trial).sort().join(",") === "bindingId,effectiveBinding,reservationId,sourceEpoch,sourceRevision,state";
+  return false;
+}
 function validNativeFacts(value: unknown): value is RecordNativeFacts {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const facts = value as Record<string, unknown>;
@@ -111,12 +139,50 @@ function validNativeFacts(value: unknown): value is RecordNativeFacts {
     Array.isArray(item.allowedRepairActions) && item.allowedRepairActions.every((action: unknown) => ["request-permission", "open-system-settings", "request-safe-relaunch"].includes(String(action))));
   const shortcut = facts.shortcut as Record<string, unknown> | undefined;
   const validShortcut = !!shortcut && (shortcut.configured === undefined || shortcut.configured === null || typeof shortcut.configured === "string") &&
+    (shortcut.bindingId === undefined || opaqueId(shortcut.bindingId)) &&
     (shortcut.effective === null || typeof shortcut.effective === "string") &&
     (shortcut.label === null || typeof shortcut.label === "string") &&
     ["registered", "unregistered", "externally-managed", "unknown", "unavailable"].includes(String(shortcut.registration)) &&
     typeof shortcut.externallyManaged === "boolean" && (shortcut.draft === null || (!!shortcut.draft && typeof shortcut.draft === "object" &&
       typeof (shortcut.draft as Record<string, unknown>).sessionId === "string" && typeof (shortcut.draft as Record<string, unknown>).value === "string"));
-  return validRequirements && validShortcut;
+  return validRequirements && validShortcut && (facts.shortcutTrial === undefined || validShortcutTrial(facts.shortcutTrial));
+}
+
+function projectedShortcutTrial(facts: RecordNativeFacts): ShortcutTrialFact {
+  const trial = facts.shortcutTrial;
+  if (!trial || trial.state === "unavailable") return { state: "unavailable" };
+  const bindingMatches = trial.sourceEpoch === facts.providerEpoch &&
+    (trial.state === "idle" ? trial.sourceRevision === facts.revision : trial.sourceRevision <= facts.revision) &&
+    facts.shortcut.registration === "registered" && !facts.shortcut.externallyManaged &&
+    facts.shortcut.draft === null &&
+    facts.shortcut.bindingId === trial.bindingId && facts.shortcut.effective === trial.effectiveBinding;
+  if (bindingMatches) return clone(trial);
+  if ("reservationId" in trial) return { state: "unknown", sourceEpoch: trial.sourceEpoch, sourceRevision: trial.sourceRevision,
+    bindingId: trial.bindingId, effectiveBinding: trial.effectiveBinding, reservationId: trial.reservationId };
+  return { state: "unavailable" };
+}
+
+function validPracticeOutcome(value: unknown, cursorKeys: Set<string>, noteReceipts: Set<string>): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const outcome = value as Record<string, unknown>;
+  if (outcome.kind === "note-save") {
+    if (typeof outcome.at !== "string" || !Number.isFinite(Date.parse(outcome.at))) return false;
+    if (outcome.ok === false) return ["draft", "empty", "failed", "cancelled"].includes(String(outcome.reason)) &&
+      Object.keys(outcome).sort().join(",") === "at,kind,ok,reason";
+    if (outcome.ok !== true || !opaqueId(outcome.noteId) || !opaqueId(outcome.receiptId) || !validCursor(outcome.screenStrokeBarrier, true) ||
+        Object.keys(outcome).sort().join(",") !== "at,kind,noteId,ok,receiptId,screenStrokeBarrier") return false;
+    if (noteReceipts.has(outcome.receiptId)) return false;
+    noteReceipts.add(outcome.receiptId);
+    return true;
+  }
+  if (outcome.kind === "accepted-stroke" && outcome.ok === true && outcome.cursor !== undefined) {
+    if (outcome.surface !== "screen" || !validCursor(outcome.cursor)) return false;
+    const cursor = outcome.cursor as ScreenStrokeCursor;
+    const key = `${cursor.historyId}:${cursor.sequence}`;
+    if (cursorKeys.has(key)) return false;
+    cursorKeys.add(key);
+  }
+  return true;
 }
 
 function validRecordCaptureFacts(value: unknown): value is RecordCaptureFacts {
@@ -135,16 +201,18 @@ function validRecordCaptureFacts(value: unknown): value is RecordCaptureFacts {
     const item = capture as Record<string, unknown>;
     if (typeof item.captureId !== "string" || !["local-only", "host-default", "unknown"].includes(String(item.delivery)) ||
       !["starting", "recording", "processing", "saved", "cancelled", "failed", "unknown"].includes(String(item.phase)) || !Array.isArray(item.outcomes)) return false;
+    const cursorKeys = new Set<string>(), noteReceipts = new Set<string>();
     const validOutcomes = item.outcomes.every(outcome => {
       if (!outcome || typeof outcome !== "object") return false;
       const fact = outcome as Record<string, unknown>;
       if (typeof fact.at !== "string" || typeof fact.ok !== "boolean") return false;
+      if (fact.kind === "note-save") return validPracticeOutcome(fact, cursorKeys, noteReceipts);
       if (fact.kind === "picker") return fact.ok
         ? fact.surface === "screen" && ["display", "area", "window"].includes(String(fact.target))
         : ["cancelled", "failed", "unavailable"].includes(String(fact.reason));
       if (fact.kind === "accepted-stroke") return fact.ok
-        ? ["screen", "whiteboard"].includes(String(fact.surface)) && typeof fact.strokeId === "string"
-        : ["screen", "whiteboard"].includes(String(fact.surface)) && ["rejected", "failed"].includes(String(fact.reason));
+        ? ["screen", "whiteboard"].includes(String(fact.surface)) && opaqueId(fact.strokeId) && validPracticeOutcome(fact, cursorKeys, noteReceipts)
+        : ["screen", "whiteboard"].includes(String(fact.surface)) && ["rejected", "failed"].includes(String(fact.reason)) && validPracticeOutcome(fact, cursorKeys, noteReceipts);
       if (fact.kind === "copy" && "evidence" in fact) return fact.ok === true && fact.evidence === "native-write-readback" &&
         typeof fact.artifactId === "string" && !!fact.artifactId.trim() && typeof fact.requestId === "string" && !!fact.requestId.trim() && typeof fact.digest === "string" && /^[0-9a-f]{64}$/u.test(fact.digest) &&
         Number.isSafeInteger(fact.byteLength) && Number(fact.byteLength) > 0;
@@ -277,6 +345,7 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
       shortcut: clone(nativeFacts.shortcut), pen: clone(pen),
       captures: [...merged.values()].map(clone),
       nextShortcutAdmission: clone(outputFacts.nextShortcutAdmission),
+      shortcutTrial: projectedShortcutTrial(nativeFacts),
     };
   };
   const publish = () => {
@@ -413,6 +482,28 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
     if (command.type === "arm-next-shortcut" && command.delivery === "local-only") return refuse(command, "local-only enforcement unavailable");
     if (command.type === "cancel-next-shortcut" && (outputFacts.nextShortcutAdmission.state !== "armed" || outputFacts.nextShortcutAdmission.admissionId !== command.admissionId))
       return refuse(command, outputFacts.nextShortcutAdmission.state === "unavailable" ? "shortcut reservation producer unavailable" : "matching next-shortcut admission is not armed");
+    if (command.type === "begin-shortcut-trial" || command.type === "cancel-shortcut-trial") {
+      const trial = current.shortcutTrial ?? { state: "unavailable" as const };
+      if (!options.native?.dispatch) return refuse(command, "physical shortcut trial producer unavailable");
+      if (command.type === "begin-shortcut-trial") {
+        if (!opaqueId(command.reservationId) || !opaqueId(command.bindingId) || !opaqueId(command.sourceEpoch) ||
+            !Number.isSafeInteger(command.sourceRevision) || !Number.isFinite(Date.parse(command.expiresAt)) ||
+            trial.state !== "idle" || command.sourceEpoch !== nativeFacts.providerEpoch || command.sourceRevision !== nativeFacts.revision ||
+            command.sourceEpoch !== trial.sourceEpoch || command.sourceRevision !== trial.sourceRevision ||
+            command.bindingId !== trial.bindingId || command.effectiveBinding !== trial.effectiveBinding ||
+            nativeFacts.shortcut.bindingId !== command.bindingId || nativeFacts.shortcut.effective !== command.effectiveBinding ||
+            nativeFacts.shortcut.registration !== "registered" || nativeFacts.shortcut.externallyManaged || nativeFacts.shortcut.draft !== null)
+          return refuse(command, "physical shortcut trial binding or source revision changed");
+      } else if ((trial.state !== "reserved" && trial.state !== "pressing") || trial.reservationId !== command.reservationId ||
+          trial.sourceEpoch !== nativeFacts.providerEpoch || trial.bindingId !== nativeFacts.shortcut.bindingId || trial.effectiveBinding !== nativeFacts.shortcut.effective)
+        return refuse(command, "matching physical shortcut trial reservation is unavailable");
+      usedRequests.add(command.requestId);
+      try {
+        const status = await options.native.dispatch(command, { providerEpoch: nativeFacts.providerEpoch, revision: nativeFacts.revision });
+        await refresh();
+        return response(status);
+      } catch { await refresh(); return response("outcome-unknown"); }
+    }
     if (command.type === "arm-next-shortcut" || command.type === "cancel-next-shortcut") {
       if (!options.captureFacts?.dispatch) return refuse(command, "shortcut reservation producer unavailable");
       usedRequests.add(command.requestId);
