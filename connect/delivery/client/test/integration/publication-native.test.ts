@@ -15,6 +15,7 @@ import test, { after } from "node:test";
 import * as ed25519 from "@noble/ed25519";
 import { encodeArchive, encryptAge, generateAgeIdentity, signEnvelope, splitAgeStream, type Context } from "../../src/recipient/crypto.ts";
 import { runRecipientCommandFromState } from "../../src/cli/recipient-state.ts";
+import { runRecipientHost } from "../../src/cli/recipient-host.ts";
 import { parseRecipientCommand, runRecipientCommand } from "../../src/cli/recipient.ts";
 import { publishRecipientCapture, RecipientPublicationError } from "../../src/recipient/publication.ts";
 import { readCredentialSnapshot, assertCredentialSnapshotCurrent, CredentialSnapshotError, type NamespaceResources } from "../../src/state/namespace.ts";
@@ -43,7 +44,7 @@ async function packedResourceSdk() {
     publish(parent: import("node:fs/promises").FileHandle, source: string, destination: string, options?: { signal?: AbortSignal }): Promise<{ state: "published" | "destination_exists" | "refused" | "publication_uncertain" }>;
   };
   return { ...root, ...installed } as {
-  createInstalledNativeResources(options: { artifactDirectory: string; trustedManifestSha256: string; expectedSourceSha: string; target: string }): Promise<Ports & { close(): Promise<void>; readonly executable: string }>;
+  createInstalledNativeResources(options: { artifactDirectory: string; trustedManifestSha256: string; expectedSourceSha: string; target: string }): Promise<Ports & { close(): Promise<void>; readonly executable: string; readonly protocol: 1; readonly target: "linux-x64" | "macos-x64"; readonly sourceSha: string; readonly manifestSha256: string }>;
   NativeResources: new (provider: { executable: string; protocol: 1; target: string; sha256: string }) => Ports;
   validateResourceArtifact(directory: string, expectedTarget: string): { sourceSha: string; target: string; executable: string; sha256: string; protocol: number };
 };
@@ -281,21 +282,7 @@ test("recipient requests use the actual sole writer for due renewal, one GET ret
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   const address = server.address(); assert(address && typeof address !== "string");
   const origin = `http://127.0.0.1:${address.port}`, credentialFile = path.join(state, "read.credential");
-  const renewRead: RecipientRenewalOwner = async (request, signal) => {
-    const child = spawn(writer, [], { env: { ...process.env, APPARENT_CONFIG: config }, stdio: ["pipe", "pipe", "pipe"] });
-    const output: Buffer[] = []; let size = 0;
-    child.stdout.on("data", (chunk: Buffer) => { size += chunk.length; if (size > 4096) child.kill("SIGKILL"); else output.push(chunk); });
-    child.stderr.resume();
-    const cancel = () => child.kill("SIGTERM"); signal?.addEventListener("abort", cancel, { once: true });
-    const timer = setTimeout(() => child.kill("SIGKILL"), 35_000);
-    try {
-      if (signal?.aborted) cancel();
-      child.stdin.on("error", () => {}); child.stdin.end(JSON.stringify(request));
-      const [code] = await once(child, "close");
-      if (size > 4096) return { state: "state_unavailable" };
-      return decodeRecipientRenewalReply(Buffer.concat(output), typeof code === "number" ? code : -1, request.operation.kind);
-    } finally { clearTimeout(timer); signal?.removeEventListener("abort", cancel); }
-  };
+  const renewRead = writerFixtureOwner(writer, config);
   try {
     await writeFile(credentialFile, JSON.stringify({ server: origin, scope: "read", token: access, refreshToken: refresh,
       generation: "a".repeat(32), grantId: "reader", expiresAt: 1, refreshExpiresAt: Math.floor(Date.now() / 1000) + 7200 }), { mode: 0o600 });
@@ -641,4 +628,81 @@ test("native renewal coordinator reloads a real cooperating recovery winner betw
   if (result.state === "credential") { assert.equal(result.source, "other_writer"); assert.equal(result.credential.token, "synthetic-new-access"); }
   await assert.rejects(lstat(path.join(f.state, "read.response")), { code: "ENOENT" });
   assert.equal(JSON.parse(await readFile(path.join(f.state, "read.credential"), "utf8")).expiresAt, 2060);
+}));
+
+function writerFixtureOwner(writer: string, config: string): RecipientRenewalOwner {
+  return async (request, signal) => {
+    const child = spawn(writer, [], { env: { ...process.env, APPARENT_CONFIG: config }, stdio: ["pipe", "pipe", "pipe"] });
+    const output: Buffer[] = []; let size = 0;
+    child.stdout.on("data", (chunk: Buffer) => { size += chunk.length; if (size > 4096) child.kill("SIGKILL"); else output.push(chunk); });
+    child.stderr.resume();
+    const cancel = () => child.kill("SIGTERM"); signal?.addEventListener("abort", cancel, { once: true });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 35_000);
+    try {
+      if (signal?.aborted) cancel();
+      child.stdin.on("error", () => {}); child.stdin.end(JSON.stringify(request));
+      const [code] = await once(child, "close");
+      if (size > 4096) return { state: "state_unavailable" };
+      return decodeRecipientRenewalReply(Buffer.concat(output), typeof code === "number" ? code : -1, request.operation.kind);
+    } finally { clearTimeout(timer); signal?.removeEventListener("abort", cancel); }
+  };
+}
+
+test("recipient host joins admitted installed resources with the existing Rust writer fixture", {
+  skip: !installedResources || !process.env.APPARENT_RECIPIENT_WRITER_BIN,
+}, async () => fixture(async root => {
+  const writer = absoluteEnv("APPARENT_RECIPIENT_WRITER_BIN", process.env.APPARENT_RECIPIENT_WRITER_BIN);
+  assert.equal(digest(await readFile(writer)), process.env.APPARENT_RECIPIENT_WRITER_SHA256);
+  const state = path.join(root, "hosted"), config = path.join(root, "config.json"), id = "2".repeat(32);
+  const configBytes = '{"unknown":"retained","cloud":{"enabled":false,"uploadConsent":false}}', uploadBytes = '{"unrelated":"retained"}';
+  await mkdir(state, { mode: 0o700 }); await writeFile(config, configBytes, { mode: 0o600 });
+  await writeFile(path.join(state, "upload.credential"), uploadBytes, { mode: 0o600 });
+  const assets = new Map([["summary.md", Buffer.from("synthetic host inspection\n")], ["apparent.json", Buffer.from("{}")], ["contact-sheet.png", Buffer.from([1, 2, 3])]]);
+  const files = [...assets].map(([path, bytes]) => ({ path, size: bytes.length, sha256: digest(bytes) }));
+  let refreshes = 0, providers = 0, inspection = 0;
+  let inspected: { json: boolean; summary: string; evidenceMarker: boolean } | undefined;
+  let inspectionError: unknown;
+  const server = createServer(async (request, response) => {
+    const route = request.url?.replace(/^\/connect(?=\/)/, "");
+    if (route === "/v1/token/refresh") {
+      assert.equal(request.method, "POST"); assert.equal(request.headers.authorization, undefined);
+      let body = ""; for await (const chunk of request) body += chunk;
+      assert.deepEqual(JSON.parse(body), { refreshToken: "synthetic-refresh" }); refreshes++;
+      response.end(JSON.stringify({ scope: "read", grantId: "read-grant", accessToken: "synthetic-new-access", refreshToken: "synthetic-new-refresh", expiresIn: 3600, refreshExpiresIn: 7200 })); return;
+    }
+    assert.equal(request.headers.authorization, "Bearer synthetic-new-access"); assert.equal(request.headers.cookie, undefined);
+    if (route === `/v1/captures/${id}`) response.end(JSON.stringify({ id, status: "ready", files }));
+    else if (route?.startsWith(`/v1/captures/${id}/files/`) && assets.has(route.slice(`/v1/captures/${id}/files/`.length))) response.end(assets.get(route.slice(`/v1/captures/${id}/files/`.length)));
+    else response.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    const address = server.address(); assert.ok(address && typeof address === "object");
+    const origin = `http://127.0.0.1:${address.port}/connect`;
+    await writeFile(path.join(state, "read.credential"), JSON.stringify({ server: origin, scope: "read", token: "synthetic-old-access", generation: "b".repeat(32),
+      refreshToken: "synthetic-refresh", grantId: "read-grant", expiresAt: 1, refreshExpiresAt: Math.floor(Date.now() / 1000) + 7200 }), { mode: 0o600 });
+    const result = await runRecipientHost(["inspect", id, "--json"], {
+      cwd: root,
+      resolveRemote: async () => ({ directory: state, approvedServer: origin, allowLegacyPlaintext: true,
+        admission: { artifactDirectory: artifact, trustedManifestSha256: trustedManifestSha256!, expectedSourceSha: expectedSource!, target: target as "linux-x64" | "macos-x64" },
+        writer: { directory: state, approvedServer: origin, renewRead: writerFixtureOwner(writer, config) } }),
+      async openResources(admission) { providers++; return nativeModule.createInstalledNativeResources(admission); },
+      async inspect(source, options) {
+        inspection++;
+        try {
+          const marker = await lstat(path.join(source, ".evidence-only.json")).catch(error => {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error;
+          });
+          inspected = { json: options.json, summary: await readFile(path.join(source, "summary.md"), "utf8"), evidenceMarker: marker !== null };
+        } catch (error) { inspectionError = error; throw error; }
+        return { stdout: "synthetic Agent output\n", stderr: "" };
+      },
+    });
+    assert.equal(result.receipt.exitCode, 0, JSON.stringify({ receipt: result.receipt, inspectionError: String(inspectionError) })); assert.equal(result.receipt.stdout, "synthetic Agent output\n");
+    assert.equal(result.provider.state, "retired"); assert.equal(result.receipt.publication?.state, "committed");
+    assert.equal(refreshes, 1); assert.equal(providers, 1); assert.equal(inspection, 1);
+    assert.deepEqual(inspected, { json: true, summary: "synthetic host inspection\n", evidenceMarker: false });
+    assert.equal(await readFile(config, "utf8"), configBytes); assert.equal(await readFile(path.join(state, "upload.credential"), "utf8"), uploadBytes);
+    assert.equal(JSON.parse(await readFile(path.join(state, "read.credential"), "utf8")).token, "synthetic-new-access");
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 }));

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { APP_SHELL_API, REACT_VERSION, parseStreamManifest } from '@apparent/app-contracts';
+import { verifyNativeModes, type NativeFileModes } from './native-modes.ts';
 
 export const digest = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
 export async function readRegular(path: string): Promise<Buffer> {
@@ -36,7 +37,7 @@ export async function readStream(directory: string) {
 }
 export const shellFiles = ['main.cjs', 'owner-binding.mjs', 'preload.cjs', 'renderer.js', 'index.html', 'style.css', 'package.json',
   'vendor/react.js', 'vendor/jsx.js', 'vendor/dom.js'];
-export type ShellManifest = { schemaVersion: 1; shellApi: 1; reactVersion: string; files: Record<string, string> };
+export type ShellManifest = { schemaVersion: 1; shellApi: 1; reactVersion: string; files: Record<string, string>; nativeFiles?: NativeFileModes };
 export async function readShell(directory: string): Promise<ShellManifest> {
   let hasConfigHost = false;
   try { hasConfigHost = (await lstat(join(directory, 'native/apparent-config-host'))).isFile(); }
@@ -49,10 +50,12 @@ export async function readShell(directory: string): Promise<ShellManifest> {
   if (ownerAssetStates.some(Boolean) && !ownerAssetStates.every(Boolean)) throw new Error('Incomplete Onboarding assets');
   const hasOwnerAssets = ownerAssetStates.every(Boolean);
   assert.equal(hasOwnerAssets, hasConfigHost, 'Onboarding binding and its native helper/assets must be assembled together');
-  const expectedNames = [...shellFiles, ...(hasConfigHost ? ['native/apparent-config-host'] : []), ...(hasOwnerAssets ? ownerAssets : []), 'manifest.json'];
-  await exactFiles(directory, expectedNames);
   const manifest = JSON.parse((await readRegular(join(directory, 'manifest.json'))).toString()) as ShellManifest;
-  assert.deepEqual(Object.keys(manifest).sort(), ['files', 'reactVersion', 'schemaVersion', 'shellApi']);
+  const hasNative = Object.hasOwn(manifest, 'nativeFiles');
+  if (hasNative) await verifyNativeModes(directory, manifest.nativeFiles!);
+  const expectedNames = [...shellFiles, ...Object.keys(manifest.nativeFiles ?? {}), ...(hasConfigHost ? ['native/apparent-config-host'] : []), ...(hasOwnerAssets ? ownerAssets : []), 'manifest.json'];
+  await exactFiles(directory, expectedNames);
+  assert.deepEqual(Object.keys(manifest).sort(), ['files', ...(hasNative ? ['nativeFiles'] : []), 'reactVersion', 'schemaVersion', 'shellApi']);
   assert.equal(manifest.schemaVersion, 1, 'Unsupported shell manifest');
   assert.equal(manifest.shellApi, APP_SHELL_API, 'Incompatible shell API');
   assert.equal(manifest.reactVersion, REACT_VERSION, 'Incompatible React runtime');

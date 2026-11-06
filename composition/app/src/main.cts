@@ -24,11 +24,11 @@ app.whenReady().then(async () => {
   let recordHost: RecordHostServices | undefined;
   try {
     const ownerBinding = await import(pathToFileURL(join(__dirname, 'owner-binding.mjs')).href) as {
-      createRecordHostServices?: (input: { profilePath: string }) => Promise<RecordHostServices>;
+      createRecordHostServices?: (input: { profilePath: string; nativeRoot: string }) => Promise<RecordHostServices>;
       createOnboardingProgressStore?: (input: { configPath: string; configHostPath: string }) => Promise<typeof host>;
     };
     if (typeof ownerBinding.createRecordHostServices === 'function') {
-      recordHost = await ownerBinding.createRecordHostServices({ profilePath: app.getPath('userData') });
+      recordHost = await ownerBinding.createRecordHostServices({ profilePath: app.getPath('userData'), nativeRoot: join(__dirname, 'native-record') });
       recordBound = true;
     } else if (typeof ownerBinding.createOnboardingProgressStore === 'function') {
       try {
