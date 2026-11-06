@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { lstatSync, readFileSync, readdirSync, statSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, relative, resolve, sep } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
@@ -8,6 +9,22 @@ import test from 'node:test'
 const root = resolve(dirname(new URL(import.meta.url).pathname), '..', 'dist')
 const manifestFile = resolve(root, 'manifest.json')
 const artifactAvailable = (() => { try { return statSync(manifestFile).isFile() } catch { return false } })()
+test('capture entry forwards only normal or exact nonce-bound recovery argv', () => {
+  const root = mkdtempSync(resolve(realpathSync(tmpdir()), 'engine-capture-argv-'))
+  try {
+    mkdirSync(resolve(root, 'libexec')); mkdirSync(resolve(root, 'private runtime'), { mode: 0o700 })
+    const entry = resolve(root, 'apparent-engine-capture-launch')
+    writeFileSync(entry, readFileSync(new URL('../src/launch.sh', import.meta.url)), { mode: 0o755 })
+    writeFileSync(resolve(root, 'libexec/apparent-engine-capture'), '#!/bin/sh\nprintf "%s\\n" "$@"\n', { mode: 0o755 })
+    const args = ['--runtime-directory', resolve(root, 'private runtime'), '--capture-channel', 'capture', '--capture-protocol-version', '2']
+    for (const suffix of [[], ['--recovery-peer-v1', 'a'.repeat(32)]]) {
+      const result = spawnSync(entry, [...args, ...suffix], { encoding: 'utf8' })
+      assert.equal(result.status, 0, result.stderr)
+      assert.deepEqual(result.stdout.trimEnd().split('\n'), [...args, ...suffix])
+    }
+    for (const suffix of [['--recovery-peer-v1'], ['--recovery-peer-v2', 'a'.repeat(32)], ['--recovery-peer-v1', 'A'.repeat(32)], ['--recovery-peer-v1', 'a'.repeat(31)]]) assert.equal(spawnSync(entry, [...args, ...suffix]).status, 2)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 test('capture artifact inventory and absolute SDK launch contract', { skip: !artifactAvailable }, () => {
   const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'))
   assert.equal(manifest.schema, 1)

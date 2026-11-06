@@ -46,6 +46,11 @@ test('Mac entry forwards both published channels and rejects unsupported version
       const args = ['--media-runtime-directory', resolve(root, 'private runtime'), '--media-channel', 'media', '--media-protocol-version', version]
       const actual = execFileSync(entry, args, { encoding: 'utf8', env: { ...process.env, DYLD_LIBRARY_PATH: '/untrusted/ambient' } })
       assert.deepEqual(actual.trimEnd().split('\n'), args)
+      const recovery = [...args, '--recovery-peer-v1', 'a'.repeat(32)]
+      if (version === '2') {
+        assert.deepEqual(execFileSync(entry, recovery, { encoding: 'utf8' }).trimEnd().split('\n'), recovery)
+        for (const invalid of [['--recovery-peer-v1'], ['--recovery-peer-v2', 'a'.repeat(32)], ['--recovery-peer-v1', 'A'.repeat(32)], ['--recovery-peer-v1', 'a'.repeat(31)]]) assert.throws(() => execFileSync(entry, [...args, ...invalid], { stdio: 'pipe' }), { status: 2 })
+      } else assert.throws(() => execFileSync(entry, recovery, { stdio: 'pipe' }), { status: 2 })
     }
     assert.throws(() => execFileSync(entry, ['--media-runtime-directory', resolve(root, 'private runtime'), '--media-channel', 'media', '--media-protocol-version', '3'], { stdio: 'pipe' }), { status: 2 })
   } finally { rmSync(root, { recursive: true, force: true }) }

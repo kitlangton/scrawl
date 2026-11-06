@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
 import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import { BASELINE_LIBRARIES, REQUIRED_PLUGINS, validateArtifact } from '../src/contract.ts'
 
 function artifact() {
@@ -20,6 +21,23 @@ function artifact() {
   return root
 }
 import { readFileSync as requireBytes } from 'node:fs'
+
+test('Linux entry forwards recovery only for media2 and refuses malformed nonce/version', () => {
+  const root = mkdtempSync(resolve(realpathSync(tmpdir()), 'engine-media-argv-'))
+  try {
+    mkdirSync(resolve(root, 'libexec')); mkdirSync(resolve(root, 'private runtime'), { mode: 0o700 })
+    const entry = resolve(root, 'apparent-engine-frames')
+    writeFileSync(entry, requireBytes(new URL('../src/launch.sh', import.meta.url)), { mode: 0o755 })
+    writeFileSync(resolve(root, 'libexec/apparent-engine-frames'), '#!/bin/sh\nprintf "%s\\n" "$@"\n', { mode: 0o755 })
+    const args = ['--media-runtime-directory', resolve(root, 'private runtime'), '--media-channel', 'media', '--media-protocol-version', '2']
+    const suffix = ['--recovery-peer-v1', 'a'.repeat(32)]
+    const result = spawnSync(entry, [...args, ...suffix], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(result.stdout.trimEnd().split('\n'), [...args, ...suffix])
+    assert.equal(spawnSync(entry, [...args.slice(0, -1), '1', ...suffix]).status, 2)
+    for (const invalid of [['--recovery-peer-v1'], ['--recovery-peer-v2', 'a'.repeat(32)], ['--recovery-peer-v1', 'A'.repeat(32)], ['--recovery-peer-v1', 'a'.repeat(31)]]) assert.equal(spawnSync(entry, [...args, ...invalid]).status, 2)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 
 test('strict runtime inventory accepts only listed regular in-root files and detects tampering', () => {
   const root = artifact()
