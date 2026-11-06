@@ -135,6 +135,8 @@ pub fn decide(state: &State, action: Action, id: &str) -> Outcome {
 
 pub struct Request {
     pub action: Option<(Action, String)>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub native_host: Option<super::native_host::Admitted>,
     pub reply: std::sync::mpsc::SyncSender<String>,
     pub deadline_ms: u64,
 }
@@ -148,7 +150,7 @@ impl Request {
 
 /// libuv hrtime uses mach_continuous_time on macOS. Keep Storage separate from
 /// the legacy Rust-client CLOCK_MONOTONIC timeline.
-pub(super) fn storage_clock_ms() -> u64 {
+pub(crate) fn storage_clock_ms() -> u64 {
     #[cfg(target_os = "macos")]
     {
         let mut time: libc::timespec = unsafe { std::mem::zeroed() };
@@ -294,6 +296,7 @@ enum Wire {
     Microphone(super::notes::audio::Request),
     Connect(u64),
     ConnectBackend(u64),
+    NativeHost(super::native_host::Admitted),
 }
 
 // A single rendezvous worker handles the two bounded Settings contracts. A
@@ -368,6 +371,11 @@ impl ErrorReportingRequest {
 }
 
 fn parse_request(line: &str) -> Option<Wire> {
+    if line.starts_with('{')
+        && let Some(request) = super::native_host::parse(line, storage_clock_ms())
+    {
+        return Some(Wire::NativeHost(request));
+    }
     if let Some(deadline) = super::connect_settings::backend_opening_deadline(line) {
         return Some(Wire::ConnectBackend(deadline.min(storage_clock_ms() + 3000)));
     }
@@ -563,6 +571,21 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
                 let response = if valid_frame {
                     if let Some(wire) = parse_request(line.trim()) {
                         let (action, deadline_ms) = match wire {
+                            Wire::NativeHost(request) => {
+                                let id = request.id.clone();
+                                let deadline_ms = clock_ms() + request.deadline.saturating_sub(storage_clock_ms()).min(3000);
+                                let (reply, receive) = std::sync::mpsc::sync_channel(1);
+                                if tx.try_send(Request { action: None, native_host: Some(request), reply, deadline_ms }).is_ok() {
+                                    let result = receive.recv_timeout(Duration::from_millis(deadline_ms.saturating_sub(clock_ms())))
+                                        .unwrap_or_else(|_| r#"{"status":"outcome-unknown"}"#.into());
+                                    let result = serde_json::from_str::<serde_json::Value>(&result)
+                                        .unwrap_or_else(|_| serde_json::json!({"status":"outcome-unknown"}));
+                                    let _ = writeln!(stream, "{}", serde_json::json!({"protocol":1,"id":id,"result":result}));
+                                } else {
+                                    let _ = writeln!(stream, "{}", serde_json::json!({"protocol":1,"id":id,"result":{"status":"refused","reason":"busy"}}));
+                                }
+                                continue;
+                            }
                             wire @ (Wire::Connect(_) | Wire::ConnectBackend(_)) => {
                                 let (backend, deadline) = match wire {
                                     Wire::Connect(deadline) => (false, deadline),
@@ -613,6 +636,8 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
                         if tx
                             .try_send(Request {
                                 action,
+                                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                                native_host: None,
                                 reply,
                                 deadline_ms,
                             })
@@ -1004,6 +1029,95 @@ mod tests {
         assert!(!path.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn native_host_socket_roundtrip_is_owner_bound_and_correlated() {
+        let (path, stale) = transport_fixture();
+        drop(stale);
+        let directory = path.parent().unwrap().to_owned();
+        let config = directory.join("config.json");
+        let receiver = listen_at_config(path.clone(), config).unwrap();
+        let id = "native-host-test-01";
+        let deadline = storage_clock_ms() + 2500;
+        let request = serde_json::json!({
+            "protocol":1,"id":id,"owner":"record","operation":"readSnapshot","deadline":deadline
+        });
+        let client_path = path.clone();
+        let client = std::thread::spawn(move || {
+            let mut stream = UnixStream::connect(client_path).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            writeln!(stream, "{request}").unwrap();
+            let mut response = String::new();
+            BufReader::new(stream).read_line(&mut response).unwrap();
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()
+        });
+        let admitted = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        let native = admitted.native_host.as_ref().expect("native host request stays distinct from capture actions");
+        assert_eq!(native.id, id);
+        assert!(matches!(&native.operation, super::super::native_host::Operation::ReadSnapshot));
+        assert!(admitted.action.is_none());
+        admitted.reply.send(r#"{"api":1,"scope":"running-desktop-process"}"#.into()).unwrap();
+        let response = client.join().unwrap();
+        assert_eq!(response["protocol"], 1);
+        assert_eq!(response["id"], id);
+        assert_eq!(response["result"]["scope"], "running-desktop-process");
+        drop(receiver);
+        for _ in 0..50 { if !path.exists() { break; } std::thread::sleep(Duration::from_millis(20)); }
+        assert!(!path.exists(), "owned control listener did not clean up");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn native_host_public_node_client_gets_unknown_for_admitted_lost_mutation_reply() {
+        let home = std::env::temp_dir().join(format!("nh-{}", &new_id().unwrap()[..8]));
+        let config_dir = home.join(".config");
+        let apparent_dir = config_dir.join("apparent");
+        let directory = apparent_dir.join("agent-control");
+        std::fs::create_dir_all(&directory).unwrap();
+        for path in [&home, &config_dir, &apparent_dir, &directory] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let config = apparent_dir.join("config.json");
+        let path = directory.join("capture.sock");
+        let receiver = listen_at_config(path.clone(), config).unwrap();
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("composition/native-host/test/rust-roundtrip.ts");
+        let client_home = home.clone();
+        let client = std::thread::spawn(move || {
+            std::process::Command::new("node")
+                .env("HOME", &client_home)
+                .arg("--experimental-strip-types")
+                .arg(script)
+                .output()
+                .unwrap()
+        });
+
+        let read = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(matches!(read.native_host.as_ref().unwrap().operation, super::super::native_host::Operation::ReadSnapshot));
+        let snapshot = serde_json::json!({
+            "api":1,"processEpoch":"rust-fixture","revision":0,
+            "scope":"running-desktop-process","freshness":"cached-gui-observation",
+            "permissions":[],"shortcuts":{
+                "record":{"configured":null,"effective":null,"registration":"unknown","canValidate":true,"canSave":false},
+                "paste":{"configured":null,"effective":null,"registration":"unknown","canValidate":true,"canSave":false}
+            }
+        });
+        read.reply.send(snapshot.to_string()).unwrap();
+
+        let save = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(matches!(save.native_host.as_ref().unwrap().operation, super::super::native_host::Operation::SaveRecordShortcut(_)));
+        assert!(save.action.is_none(), "native host mutation must not become a capture action");
+        drop(save.reply); // Simulate a dispatched mutation whose reply was lost.
+        let output = client.join().unwrap();
+        drop(receiver);
+        for _ in 0..50 { if !path.exists() { break; } std::thread::sleep(Duration::from_millis(20)); }
+        assert!(!path.exists(), "owned control listener did not clean up");
+        assert!(output.status.success(), "Node client: {}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("preserve an admitted lost-reply outcome"));
+        std::fs::remove_dir_all(home).unwrap();
+    }
     #[test]
     fn reporting_socket_is_typed_private_and_rechecks_admission_after_config_lock() {
         let (path, stale) = transport_fixture();
@@ -1215,6 +1329,8 @@ mod tests {
         let (reply, _) = std::sync::mpsc::sync_channel(1);
         let request = Request {
             action,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            native_host: None,
             reply,
             deadline_ms,
         };
