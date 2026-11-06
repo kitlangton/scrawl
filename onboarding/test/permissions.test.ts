@@ -48,6 +48,7 @@ test("permission presentation names supported IDs, safely labels future IDs, and
   assert.equal(permissionName("screen-recording"), "Screen Recording");
   assert.equal(permissionName("speech-recognition"), "Speech Recognition");
   assert.equal(permissionName("future-internal-id"), "Access");
+  for (const id of ["constructor", "__proto__", "toString", "hasOwnProperty"]) assert.equal(permissionName(id), "Access");
   assert.equal(permissionStatus(undefined), "Unavailable");
   assert.equal(permissionStatus(requirement("camera", { status: "granted", usableNow: false })), "Granted · not ready");
   assert.equal(permissionStatus(requirement("camera", { status: "granted", usableNow: true })), "Ready");

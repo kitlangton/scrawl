@@ -10,7 +10,7 @@ const names: Record<string, string> = {
 };
 
 /** Friendly labels for known provider IDs; unknown IDs never become user-facing copy. */
-export function permissionName(id: string): string { return names[id] ?? "Access"; }
+export function permissionName(id: string): string { return Object.hasOwn(names, id) ? names[id] : "Access"; }
 
 /** Describe provider facts without treating permission acceptance as usable readiness. */
 export function permissionStatus(requirement: NativeRequirement | undefined): string {

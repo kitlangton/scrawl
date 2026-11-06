@@ -53,6 +53,8 @@ The signed Preview 0.12.2 source at `cbaa8f74c65e0d5951138501977f684b03790e09` i
 
 Remove the donor only after typed Record capabilities, truthful local-only admission, production artifact-open evidence, transactional progress writer, host contribution/preload, shared UI checks and affected native seams are verified; existing resume/defer/completion state is preserved; and every source/build/package consumer has moved. A passing fixture package is not installed adoption or native proof.
 
+Lesson titles and drawing, processing, copied and Locate guidance also follow that donor. Platform-neutral shortcut/menu wording, local-only admission, explicit manual paste confirmation and exact-artifact confirmation remain necessary adaptations to this contribution's public contracts. The mounted full-lesson test checks the approved titles while exercising those factual gates. Unknown permission names use an own-property lookup, including for prototype-like IDs.
+
 ## Full-scope acceptance inventory
 
 - **Implemented owner behavior:** branded frog/pen journey with approved Preview 0.12.2 icon/copy/artwork; human-readable factual permission rows; Later/defer and saved-step resume; permissions/relaunch and effective shortcut facts; local-only practice association; typed drawing, save/copy and artifact-open facts; explicit manual paste confirmation. Controller and mounted lesson are verified against the packed Record fixture.
