@@ -44,7 +44,9 @@ test('edits validate returned candidate, cancel does not save, and stale host re
   await until(() => client.current().shortcut.configured === '⌥⇧S');
   const resBegin = await command(client, 'shortcut-begin-edit'); assert.equal(resBegin.status, 'accepted'); await until(() => !!client.current().shortcut.draft);
   const session = client.current().shortcut.draft!.sessionId;
-  const invalid = await command(client, 'shortcut-submit', { sessionId: session, value: 'Ctrl++R' }); assert.equal(invalid.status, 'refused'); assert.deepEqual(calls, []);
+  for (const value of ['Ctrl++R','constructor+R','__proto__+R','toString+R']) {
+    const invalid = await command(client, 'shortcut-submit', { sessionId: session, value }); assert.equal(invalid.status, 'refused'); assert.deepEqual(calls, []);
+  }
   await command(client, 'shortcut-submit', { sessionId: session, value: 'Alt+Shift+R' });
   await until(() => calls.length === 1);
   // Validation result keycode and label are used verbatim; cancel never writes.
@@ -202,4 +204,25 @@ test('changed facts at the same native token cannot become hidden effect authori
   const fresh=await native.readFacts();
   assert.equal(await native.dispatch!(action,fresh),'accepted'); assert.equal(effects,1);
   native.dispose!();
+});
+
+
+test('malformed runtime snapshots disable direct adapter effects until a valid observation', async () => {
+  let supplied: unknown=snap(); let effects=0;
+  const port=supportedPort(async()=>supplied as Awaited<ReturnType<NativeHostPortInput['readSnapshot']>>);
+  port.openSystemSettings=async()=>{effects++;return{status:'accepted'};};
+  const native=createRecordNativePort(port,{requiredPermissionIds:[]}); const original=await native.readFacts();
+  const malformed=[
+    {...snap(4),permissions:[{...snap(4).permissions[0],actions:'open-system-settings'}]},
+    {...snap(4),permissions:[{...snap(4).permissions[0],status:'not-a-status'}]},
+    {...snap(4),shortcuts:{...snap(4).shortcuts,record:{...snap(4).shortcuts.record,canValidate:'yes'}}},
+    {...snap(4),permissions:[...snap(4).permissions,...snap(4).permissions]},
+  ];
+  const action={type:'open-system-settings' as const,requirementId:'microphone',requestId:'malformed',expected:{providerEpoch:'record',revision:0}};
+  for(const value of malformed){
+    supplied=value; await assert.rejects(native.readFacts(),/unavailable/);
+    assert.equal(await native.dispatch!(action,original),'refused'); assert.equal(effects,0);
+  }
+  supplied=snap(); const valid=await native.readFacts();
+  assert.equal(await native.dispatch!(action,valid),'accepted'); assert.equal(effects,1); native.dispose!();
 });
