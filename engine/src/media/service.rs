@@ -173,7 +173,7 @@ pub fn run(runtime_path: &Path) -> Result<()> {
             reply(
                 &r.rpc,
                 Ok(
-                    json!({"channel":"media","protocolVersion":1,"implementation":"native","capabilities":{"decodeFrames":cfg!(target_os = "linux")}}),
+                    json!({"channel":"media","protocolVersion":1,"implementation":"native","capabilities":{"decodeFrames":super::job::decode_available()}}),
                 ),
             )?;
             continue;

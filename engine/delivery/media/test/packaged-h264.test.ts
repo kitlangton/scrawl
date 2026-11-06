@@ -15,7 +15,8 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
   const runtime = join(root, 'runtime'); const bundle = join(root, 'synthetic.apparent')
   await mkdir(runtime, { mode: 0o700 }); await mkdir(bundle, { mode: 0o700 })
   const video = join(bundle, 'recording.mp4')
-  execFileSync(process.env.APPARENT_FFMPEG ?? 'ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=10:duration=2', '-an', '-c:v', 'libx264', '-threads', '1', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', video], { timeout: 15000 })
+  if (process.env.APPARENT_MEDIA_FIXTURE) await copyFile(resolve(process.env.APPARENT_MEDIA_FIXTURE), video)
+  else execFileSync(process.env.APPARENT_FFMPEG ?? 'ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=10:duration=2', '-an', '-c:v', 'libx264', '-threads', '1', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', video], { timeout: 15000 })
   await chmod(video, 0o600)
   await writeFile(join(bundle, 'apparent.json'), JSON.stringify({ version: 1, id: 'synthetic', durationMs: 2250, video: 'recording.mp4', videoOffsetMs: 250 }), { mode: 0o600 })
   const m = await stat(video, { bigint: true })
@@ -32,6 +33,11 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
     assert.deepEqual(result.frames.map(f => f.clampedToStart), [false, true, false, false])
     assert.deepEqual(result.frames.map(f => f.clampedToEnd), [false, false, true, false])
     assert.ok(result.frames[2].actualVideoMs! < result.frames[2].effectiveVideoMs)
+    if (process.platform === 'darwin') {
+      assert.equal(result.frames[2].actualVideoMs, 1900, 'the 2-second 10-fps fixture clamps to its final sample')
+      const last = await client.decode({ ...input, jobId: createMediaJobId(), outputDirectory: join(root, 'last-frame'), requestedBundleMs: [2150] })
+      assert.equal(result.frames[2].sha256, last.frames[0].sha256, 'end clamp must preserve the last frame pixels')
+    }
     for (const frame of result.frames) { const bytes = await readFile(frame.path); assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a'); assert.equal(frame.sha256, createHash('sha256').update(bytes).digest('hex')); assert.equal(bytes.readUInt32BE(16), 320); assert.equal(bytes.readUInt32BE(20), 180) }
     assert.equal(result.frames[0].sha256, result.frames[3].sha256); assert.notEqual(result.frames[0].sha256, result.frames[1].sha256)
     const evidence = process.env.APPARENT_MEDIA_EVIDENCE

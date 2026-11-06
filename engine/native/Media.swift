@@ -570,11 +570,7 @@ enum Media {
         if start >= end { continue }
         let sliceReq = Array(requested[start..<end])
         group.addTask {
-          let generator = AVAssetImageGenerator(asset: asset)
-          generator.appliesPreferredTrackTransform = true
-          if maxEdge > 0 { generator.maximumSize = CGSize(width: maxEdge, height: maxEdge) }
-          generator.requestedTimeToleranceBefore = tolerance
-          generator.requestedTimeToleranceAfter = tolerance
+          let generator = frameGenerator(asset: asset, maxEdge: maxEdge, before: tolerance, after: tolerance)
           let sliceTimes = sliceReq.map { CMTime(value: CMTimeValue($0), timescale: 1000) }
           var local: [(Int, [String: Any])] = []
           var offset = 0
@@ -604,7 +600,20 @@ enum Media {
 
   private static let srgbSpace = CGColorSpace(name: CGColorSpace.sRGB)!
 
+  static func frameGenerator(asset: AVAsset, maxEdge: Int, before: CMTime, after: CMTime) -> AVAssetImageGenerator {
+    let generator = AVAssetImageGenerator(asset: asset)
+    generator.appliesPreferredTrackTransform = true
+    if maxEdge > 0 { generator.maximumSize = CGSize(width: maxEdge, height: maxEdge) }
+    generator.requestedTimeToleranceBefore = before
+    generator.requestedTimeToleranceAfter = after
+    return generator
+  }
+
   private static func writeRGBA(_ image: CGImage, to url: URL) throws {
+    try rgbaPixels(image).write(to: url)
+  }
+
+  static func rgbaPixels(_ image: CGImage) throws -> Data {
     let width = image.width, height = image.height
     var pixels = Data(count: width * height * 4)
     let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
@@ -616,7 +625,7 @@ enum Media {
       return true
     }
     guard drawn else { throw HelperError("Could not convert frame") }
-    try pixels.write(to: url)
+    return pixels
   }
 
   /// Re-encodes a movie's video to HEVC with its long edge at most `maxEdge`, copying every audio
