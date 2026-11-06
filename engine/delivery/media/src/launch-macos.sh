@@ -2,7 +2,7 @@
 set -eu
 case "$0" in /*) entry_dir=${0%/*} ;; *) echo 'media entry must be absolute' >&2; exit 126 ;; esac
 root=$(CDPATH= cd -- "$entry_dir" && pwd -P)
-if [ "$#" -ne 6 ] || [ "$1" != --media-runtime-directory ] || [ "$3" != --media-channel ] || [ "$4" != media ] || [ "$5" != --media-protocol-version ] || [ "$6" != 1 ]; then
+if [ "$#" -ne 6 ] || [ "$1" != --media-runtime-directory ] || [ "$3" != --media-channel ] || [ "$4" != media ] || [ "$5" != --media-protocol-version ] || { [ "$6" != 1 ] && [ "$6" != 2 ]; }; then
   echo 'invalid media launch arguments' >&2
   exit 2
 fi

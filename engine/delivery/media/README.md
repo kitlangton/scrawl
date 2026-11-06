@@ -59,10 +59,15 @@ pipe terminates the helper when the job disappears. Darwin memory enforcement
 checks the worker/helper combined physical footprint every 10 ms against 1536
 MiB and fails closed if usage cannot be read; this is a sampled physical budget,
 not Linux's instantaneous virtual-address limit. Hard frame/pixel, CPU, file-size,
-descriptor and deadline bounds remain. Neither decoder starts capture or accesses an audio device. The Mac adapter does
-not implement retained-material media/2. Linux additionally accepts the explicit
-protocol 2 argv recorded in `media2Launch`, using the same private runtime root as
-capture/2. Its supervised job binds native frames and a caller-planned contact
+descriptor and deadline bounds remain. Neither decoder starts capture or accesses an audio device.
+The retained-material adapter uses the same AVFoundation bridge and shared Core
+PNG/receipt preparation; its owned re-exec also monitors its physical footprint
+through pinning, sheet assembly and receipt publication. Both target producers
+record the explicit protocol 2 argv in `media2Launch`, using the same private
+runtime root as capture/2. Cold authenticated inspect/cancel remain available
+when the decoder helper is unavailable; new derivation requires decoder readiness.
+Native Mac media/2 package qualification and exact archive admission remain
+required before consumer adoption; Mac capture/2 remains unavailable. Its supervised job binds native frames and a caller-planned contact
 sheet to authenticated retained materials. Failed partial files remain private
 and unpublished; no recursive caller-directory cleanup is claimed. Media/1 argv
 and completed-bundle behavior remain unchanged.
