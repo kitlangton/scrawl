@@ -1,0 +1,189 @@
+import { randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, realpath } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { performance } from 'node:perf_hooks';
+import { CaptureClient, launchCaptureEngine } from '@apparent/engine-sdk/capture';
+import type { Capture2Host, Capture2Receipt } from '@apparent/record/host/capture2';
+
+export type Capture2Clock = { now(): number; sleep(ms: number): Promise<void> };
+const systemClock: Capture2Clock = { now: () => performance.now(), sleep: ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms)) };
+export type Capture2HostFactory = (paths: { controlRoot: string; destinationRoot: string; runtime: string; executable: string }) => Promise<{ host: Capture2Host; close(): Promise<string> }>;
+
+async function defaultHostFactory(paths: Parameters<Capture2HostFactory>[0]) {
+  const storeRoot = `${paths.controlRoot}/record-control-v2`;
+  await mkdir(storeRoot, { recursive: true, mode: 0o700 });
+  const [{ AbsentDestinationAllocator, SqliteCaptureMappingStore }, { createCapture2Host }] = await Promise.all([
+    import('@apparent/record/host'), import('@apparent/record/host/capture2'),
+  ]);
+  const client = new CaptureClient(launchCaptureEngine(paths.executable, paths.runtime, 3000));
+  try {
+    const host = createCapture2Host({ client, mappings: new SqliteCaptureMappingStore(storeRoot), destinations: new AbsentDestinationAllocator(storeRoot, paths.destinationRoot) });
+    return { host, close: () => client.close() };
+  } catch (error) { await client.close(); throw error; }
+}
+
+async function loadPublicIdentity(controlRoot: string, requestId: string): Promise<string> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(requestId)) throw new Error('Expected an Agent capture/2 request ID');
+  if (await realpath(controlRoot).catch(() => '') !== controlRoot) throw new Error('Agent capture/2 control directory is unavailable');
+  const directory = resolve(controlRoot, 'capture2-requests-v1');
+  for (const path of [controlRoot, directory]) {
+    const info = await lstat(path).catch(() => undefined);
+    if (!info?.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) throw new Error('Agent capture/2 control directory is unavailable');
+  }
+  const file = await open(resolve(directory, `${requestId}.json`), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    .catch(() => { throw new Error('No retained Agent capture/2 request has this ID'); });
+  try {
+    const info = await file.stat();
+    if (!info.isFile() || info.size > 8192 || info.nlink !== 1 || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) throw new Error('Invalid Agent capture/2 identity metadata');
+    const bytes = await file.readFile();
+    const entry = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    if (Object.keys(entry).some(key => !['schema', 'requestId', 'destinationPath', 'createdAtMs'].includes(key)) || entry.schema !== 'apparent.agent-capture2-request/1' || entry.requestId !== requestId || !Number.isSafeInteger(entry.createdAtMs) || typeof entry.destinationPath !== 'string' || !isAbsolute(entry.destinationPath) || resolve(entry.destinationPath) !== entry.destinationPath || !entry.destinationPath.endsWith('.apparent')) throw new Error('Invalid Agent capture/2 identity metadata');
+    return entry.destinationPath as string;
+  } finally { await file.close(); }
+}
+
+async function retainPublicIdentity(controlRoot: string, requestId: string, destinationPath: string): Promise<void> {
+  const directory = resolve(controlRoot, 'capture2-requests-v1');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  for (const path of [controlRoot, directory]) {
+    const info = await lstat(path);
+    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
+      throw new Error('Agent capture/2 control directory must be private and owned by the current user');
+  }
+  const path = resolve(directory, `${requestId}.json`);
+  const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    await file.writeFile(JSON.stringify({ schema: 'apparent.agent-capture2-request/1', requestId, destinationPath, createdAtMs: Date.now() }));
+    await file.sync();
+  } finally { await file.close(); }
+  const parent = await open(directory, constants.O_RDONLY);
+  try { await parent.sync(); } finally { await parent.close(); }
+}
+
+/** V2 remains explicit until an installed capture/2 native provider is available. */
+export function parseCapture2RecordArgs(args: string[]): { durationSeconds: number; out: string; sourceId: string } {
+  let duration: number | undefined, out: string | undefined, sourceId: string | undefined, protocol = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--protocol' && !protocol && args[i + 1] === 'capture2') { protocol = true; i++; continue; }
+    if (arg === '--duration' && duration === undefined) duration = Number(args[++i]);
+    else if (arg === '--out' && out === undefined) out = args[++i];
+    else if (arg === '--source' && sourceId === undefined) sourceId = args[++i];
+    else throw new Error(`Unknown, duplicate, or invalid capture/2 record option: ${arg}`);
+  }
+  if (!protocol || !Number.isFinite(duration) || duration! <= 0 || duration! > 3600 || !out || !sourceId)
+    throw new Error('record --protocol capture2 requires --duration (greater than 0 and at most 3600 seconds), --out, and an exact discovered --source ID');
+  if (!isAbsolute(out!) || resolve(out!) !== out || !out!.endsWith('.apparent') || out!.endsWith('/.apparent'))
+    throw new Error('--out must be a normalized absolute .apparent destination');
+  if (!sourceId || sourceId.startsWith('-') || sourceId.length > 4096) throw new Error('--source requires an exact discovered source ID');
+  return { durationSeconds: duration!, out: out!, sourceId: sourceId! };
+}
+
+export async function recordWithCapture2(
+  args: string[],
+  config: { executable?: string; runtime?: string; controlRoot?: string; factory?: Capture2HostFactory; clock?: Capture2Clock; interrupted?: () => boolean } = {},
+): Promise<number> {
+  const parsed = parseCapture2RecordArgs(args);
+  const executable = config.executable ?? process.env.APPARENT_ENGINE_CAPTURE_EXECUTABLE;
+  const runtime = config.runtime ?? process.env.APPARENT_ENGINE_RUNTIME;
+  const controlRoot = config.controlRoot ?? process.env.APPARENT_AGENT_CONTROL_ROOT ?? resolve(homedir(), '.local/share/apparent/agent');
+  const destinationRoot = resolve(parsed.out, '..');
+  if (!executable || !runtime || !isAbsolute(executable) || resolve(executable) !== executable || !isAbsolute(runtime) || resolve(runtime) !== runtime)
+    throw new Error('Capture/2 requires APPARENT_ENGINE_CAPTURE_EXECUTABLE and APPARENT_ENGINE_RUNTIME as normalized absolute paths; no protocol fallback is attempted');
+  if (!isAbsolute(controlRoot) || resolve(controlRoot) !== controlRoot || controlRoot === parsed.out || parsed.out.startsWith(`${controlRoot}/`) || controlRoot.startsWith(`${parsed.out}/`))
+    throw new Error('Agent capture/2 control root must be normalized, absolute, and separate from the output destination');
+  await mkdir(controlRoot, { recursive: true, mode: 0o700 });
+  const rootInfo = await lstat(controlRoot);
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || rootInfo.uid !== process.getuid?.() || (rootInfo.mode & 0o077) !== 0 || await realpath(controlRoot).catch(() => '') !== controlRoot)
+    throw new Error('Agent capture/2 control root must be private and owned by the current user');
+  const composed = await (config.factory ?? defaultHostFactory)({ controlRoot, destinationRoot, runtime, executable });
+  const clock = config.clock ?? systemClock;
+  let signalRequested = false;
+  const signal = () => { signalRequested = true; };
+  const interrupted = () => signalRequested || config.interrupted?.() === true;
+  process.on('SIGINT', signal); process.on('SIGTERM', signal);
+  let savedPath = false;
+  let confirmedClose = false;
+  let finalPhase: Capture2Receipt['phase'] = 'unknown';
+  let requestId: string | undefined;
+  try {
+    const ready = await composed.host.readiness();
+    if (!ready.ready) throw new Error(`Capture/2 provider unavailable: ${ready.reason ?? 'not ready'}`);
+    const discovery = await composed.host.discoverSources();
+    const matches = discovery.sources.filter(source => source.id === parsed.sourceId);
+    if (discovery.state !== 'available' || matches.length !== 1) throw new Error(matches.length ? 'Discovered source ID is ambiguous' : 'Source ID was not present in current capture/2 discovery');
+    if (interrupted()) throw new Error('Interrupted before capture start; no request was submitted');
+    requestId = randomUUID();
+    await retainPublicIdentity(controlRoot, requestId, parsed.out);
+    process.stderr.write(`Capture/2 request ID: ${requestId}\n`);
+    let receipt = await composed.host.start({ requestId, source: matches[0], options: { audio: 'none', localOnly: true }, invocation: { invocationId: randomUUID(), observedAtMs: Date.now(), kind: 'explicit' }, destinationPath: parsed.out });
+    const startupBy = clock.now() + 30_000;
+    while (receipt.phase === 'starting' && clock.now() < startupBy && !interrupted()) {
+      await clock.sleep(200); receipt = await composed.host.inspect(requestId);
+    }
+    if (receipt.phase === 'starting' && !interrupted()) receipt = await composed.host.cancel(requestId);
+    if (receipt.phase === 'recording') {
+      const stopAt = clock.now() + parsed.durationSeconds * 1000;
+      while (clock.now() < stopAt && !interrupted()) {
+        await clock.sleep(Math.min(250, Math.max(1, stopAt - clock.now())));
+        receipt = await composed.host.inspect(requestId);
+        if (receipt.phase !== 'recording') break;
+      }
+      if (receipt.phase === 'recording') receipt = await composed.host.stop(requestId);
+    } else if (interrupted() && ['starting', 'submitted-unknown', 'unknown'].includes(receipt.phase)) {
+      receipt = await composed.host.cancel(requestId);
+    }
+    const finishBy = clock.now() + 60_000;
+    while (!['failed', 'cancelled', 'unknown'].includes(receipt.phase) && clock.now() < finishBy) {
+      const publication = receipt.publication;
+      if (publication && publication.bundlePath === parsed.out && publication.artifactProvenance === 'native' && publication.artifactVersion === 1) {
+        savedPath = true; break;
+      }
+      if (receipt.phase === 'materials-ready' || receipt.phase === 'processing') break;
+      await clock.sleep(200); receipt = await composed.host.inspect(requestId);
+    }
+    finalPhase = receipt.phase;
+  } finally {
+    process.removeListener('SIGINT', signal); process.removeListener('SIGTERM', signal);
+    composed.host.dispose();
+    const closed = await composed.close();
+    confirmedClose = ['already-exited', 'eof-exited', 'exit-observed'].includes(closed);
+    if (!['already-exited', 'eof-exited', 'exit-observed'].includes(closed)) process.stderr.write(`Capture/2 transport close is uncertain (${closed}); retain the request identity for reconciliation.\n`);
+  }
+  if (savedPath && confirmedClose) { process.stdout.write(`${parsed.out}\n`); return 0; }
+  const outcome = savedPath ? 'saved-close-unverified' : finalPhase === 'failed' ? 'failed' : finalPhase === 'cancelled' ? 'cancelled' : finalPhase === 'unknown' ? 'uncertain' : 'pending';
+  process.stdout.write(`${JSON.stringify({ ...(requestId ? { requestId } : {}), state: finalPhase, outcome })}\n`);
+  return ['failed', 'cancelled'].includes(finalPhase) ? 1 : 3;
+}
+
+export async function controlCapture2(args: string[], config: { executable?: string; runtime?: string; controlRoot?: string; factory?: Capture2HostFactory } = {}): Promise<number> {
+  const [method, requestId] = args;
+  if (args.length !== 2 || !['inspect', 'stop', 'cancel'].includes(method)) throw new Error('capture2 requires inspect, stop or cancel and an Agent capture/2 request ID');
+  const executable = config.executable ?? process.env.APPARENT_ENGINE_CAPTURE_EXECUTABLE;
+  const runtime = config.runtime ?? process.env.APPARENT_ENGINE_RUNTIME;
+  const controlRoot = config.controlRoot ?? process.env.APPARENT_AGENT_CONTROL_ROOT ?? resolve(homedir(), '.local/share/apparent/agent');
+  if (!executable || !runtime || !isAbsolute(executable) || resolve(executable) !== executable || !isAbsolute(runtime) || resolve(runtime) !== runtime || !isAbsolute(controlRoot) || resolve(controlRoot) !== controlRoot)
+    throw new Error('Capture/2 control requires explicit normalized absolute provider, runtime, and control-root paths');
+  const destinationPath = await loadPublicIdentity(controlRoot, requestId);
+  const info = await lstat(controlRoot);
+  if (info.isSymbolicLink() || !info.isDirectory() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0 || await realpath(controlRoot).catch(() => '') !== controlRoot)
+    throw new Error('Agent capture/2 control root must be private and owned by the current user');
+  const composed = await (config.factory ?? defaultHostFactory)({ controlRoot, destinationRoot: resolve(destinationPath, '..'), runtime, executable });
+  let receipt: Capture2Receipt;
+  let closeVerified = false;
+  try {
+    receipt = await composed.host[method as 'inspect' | 'stop' | 'cancel'](requestId);
+  } finally {
+    composed.host.dispose();
+    const closed = await composed.close();
+    closeVerified = ['already-exited', 'eof-exited', 'exit-observed'].includes(closed);
+    if (!closeVerified) process.stderr.write(`Capture/2 transport close is uncertain (${closed}); retain the request identity for reconciliation.\n`);
+  }
+  const published = receipt.publication?.bundlePath === destinationPath && receipt.publication.artifactProvenance === 'native' && receipt.publication.artifactVersion === 1;
+  if (closeVerified && published) { process.stdout.write(`${destinationPath}\n`); return 0; }
+  const outcome = !closeVerified ? 'close-unverified' : receipt.phase === 'unknown' ? 'uncertain' : receipt.phase === 'failed' ? 'failed' : receipt.phase === 'cancelled' ? 'cancelled' : 'pending';
+  process.stdout.write(`${JSON.stringify({ requestId, state: receipt.phase, outcome })}\n`);
+  return ['failed', 'cancelled'].includes(receipt.phase) ? (receipt.phase === 'cancelled' && method === 'cancel' && closeVerified ? 0 : 1) : 3;
+}
