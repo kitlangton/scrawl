@@ -59,3 +59,11 @@ this codec family. This FFmpeg fixture covers completed, nonfragmented
 MOV with `stsd`/`stts`/`stsc`/`stsz`/`stco`, not every sample-table variant
 Apple might emit, HEVC shrink output, native capture or native playback.
 Production publication still checks structure/extents, not codec decoding.
+
+## Publication PNG
+
+`frame.png` preserves the 982-byte synthetic PNG fixture previously read from
+`record/test/fixtures/take.apparent/frames/frame-01.png`, byte for byte. Engine
+publication tests own this copy so native producer checks do not import Record
+implementation or depend on its test-input closure. Its SHA-256 is
+`d71f1e8f554e73d8774980d2dc39e1dc589810ad5c14a387ed65db76e9d81467`. Record retains its independently required fixture.

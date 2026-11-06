@@ -12,6 +12,12 @@ Launch with `--runtime-directory DIR --capture-channel capture
 --capture-protocol-version 2`. Provision a persistent private 0700 runtime root.
 No PATH lookup, Node, npm or Cargo is needed at runtime.
 
+The build executes a headless public SDK publication/reconnect check through the
+closed release entry, with display and session-bus variables removed. It uses
+Engine-owned synthetic media and caller-attested images. This checks the actual
+packaged publication route, not real capture or native derivative provenance;
+the separate Record/native-media and guest checks retain those gates.
+
 Cold inspect/stop/cancel now use the existing Core metadata transaction plus a
 per-capture anchored owner lock. They do not infer owner death from global live
 capture admission or new source readiness. Stop/cancel are journaled for the

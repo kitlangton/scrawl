@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { CaptureClient, CaptureRpcError, launchCaptureEngine, type MaterialsDocument, type SealedFile } from "../sdk/src/capture.ts";
+import { CaptureClient, CaptureRpcError, launchCaptureEngine, type MaterialsDocument } from "../sdk/src/capture.ts";
+
+type SealedFile = MaterialsDocument["manifest"]["payloadFile"];
 
 const id = () => randomBytes(16).toString("hex");
 const token = () => randomBytes(32).toString("hex");
@@ -99,7 +101,7 @@ function createFixture() {
     payload,
   } as MaterialsDocument;
 
-  const frameBytes = readFileSync(resolve("record/test/fixtures/take.apparent/frames/frame-01.png"));
+  const frameBytes = readFileSync(resolve("engine/core/tests/fixtures/frame.png"));
   privateFile(join(stagingRoot, "summary.md"), Buffer.from("# Capture\n"));
   privateFile(join(stagingRoot, "frame.png"), frameBytes);
   privateFile(join(stagingRoot, "contact-sheet.png"), frameBytes);
@@ -189,6 +191,38 @@ function createFixture() {
     materials, planBytes, planFile, manifestFile, input, expectation,
   };
 }
+
+test("SDK packaged publication validates Saved and cold inspection", { skip: !binary }, async () => {
+  const f = createFixture();
+  let client: CaptureClient | undefined;
+  try {
+    client = new CaptureClient(launchCaptureEngine(resolve(binary!), f.runtime, 40_000));
+    const hello = await client.handshake(5000);
+    assert.equal(hello.implementation, "native");
+    assert.equal(hello.capabilities.publication, true);
+    const saved = await client.publish(f.input, 20_000);
+    assert.equal(saved.state, "saved");
+    assert.equal(saved.publication?.manifestSha256, f.manifestFile.sha256);
+    assert.equal(hash(readFileSync(join(f.bundlePath, "apparent.json"))), f.manifestFile.sha256);
+    assert.equal(hash(readFileSync(join(f.bundlePath, "recording.mp4"))), f.materials.payload.files[0].sha256);
+    assert.throws(() => statSync(join(f.bundlePath, "publication-plan.json")), { code: "ENOENT" });
+    await client.close();
+    client = undefined;
+    rmSync(f.stagingRoot, { recursive: true });
+    rmSync(f.materialRoot, { recursive: true });
+    client = new CaptureClient(launchCaptureEngine(resolve(binary!), f.runtime, 40_000));
+    await client.handshake(5000);
+    const recovered = await client.inspectPublication({
+      ownerToken: f.ownerToken, captureId: f.captureId, publicationId: f.publicationId,
+      planSha256: f.planFile.sha256, expected: f.expectation,
+    }, 5000);
+    assert.deepEqual(recovered.publication, saved.publication);
+    assert.equal(recovered.state, "saved");
+  } finally {
+    await client?.close();
+    rmSync(f.base, { recursive: true, force: true });
+  }
+});
 
 test("SDK JSONL publish stays cancellable and inspectable during native snapshot", { skip: !binary }, async () => {
   const f = createFixture();
