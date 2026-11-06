@@ -765,14 +765,16 @@ export function launchMediaWorker(
     shutdownTimeoutMs,
   );
 }
-export class MediaChildProcessTransport implements MediaTransport {
+/** The framing/lifetime implementation is shared by negotiated media versions.
+ * Existing callers retain the strict media/1 defaults. */
+export class MediaProcessTransport<Request extends { rpcId: string } = MediaRequest, Response = MediaResponse> {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly shutdownMs: number;
   private bytes = Buffer.alloc(0);
   private readonly pending = new Map<
     string,
     {
-      resolve: (value: MediaResponse) => void;
+      resolve: (value: Response) => void;
       reject: (error: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
@@ -783,8 +785,11 @@ export class MediaChildProcessTransport implements MediaTransport {
   private closePromise?: Promise<MediaCloseOutcome>;
   private stdoutEnded = false;
   private queuedBytes = 0;
-  constructor(child: ChildProcessWithoutNullStreams, shutdownMs = 3000) {
+  private readonly protocol?: { version: number; encode: (request: Request) => string; maxLine: number };
+  constructor(child: ChildProcessWithoutNullStreams, shutdownMs = 3000, protocol?: { version: number; encode: (request: Request) => string; maxLine: number }) {
     timeout(shutdownMs);
+    if (protocol && ((!Number.isInteger(protocol.version) || protocol.version < 1 || protocol.version > 2) || !Number.isSafeInteger(protocol.maxLine) || protocol.maxLine < 1 || protocol.maxLine > 1024 * 1024 || typeof protocol.encode !== "function")) throw new RangeError("invalid bounded media protocol binding");
+    this.protocol = protocol ? { ...protocol } : undefined;
     this.child = child;
     this.shutdownMs = shutdownMs;
     child.stdout.on("data", (chunk: Buffer) => this.onData(Buffer.from(chunk)));
@@ -814,12 +819,12 @@ export class MediaChildProcessTransport implements MediaTransport {
   private onData(chunk: Buffer) {
     if (this.terminal) return;
     this.bytes = Buffer.concat([this.bytes, chunk]);
-    if (this.bytes.length > MAX_LINE && this.bytes.indexOf(10) < 0)
+    if (this.bytes.length > this.lineLimit && this.bytes.indexOf(10) < 0)
       return this.fail(new Error("media response exceeds protocol limit"));
     while (true) {
       const nl = this.bytes.indexOf(10);
       if (nl < 0) break;
-      if (nl > MAX_LINE)
+      if (nl > this.lineLimit)
         return this.fail(new Error("media response exceeds protocol limit"));
       let line = this.bytes.subarray(0, nl);
       this.bytes = this.bytes.subarray(nl + 1);
@@ -841,7 +846,7 @@ export class MediaChildProcessTransport implements MediaTransport {
         );
         if (
           x.channel !== MEDIA_CHANNEL ||
-          x.protocolVersion !== MEDIA_PROTOCOL_VERSION ||
+          x.protocolVersion !== (this.protocol?.version ?? MEDIA_PROTOCOL_VERSION) ||
           typeof x.rpcId !== "string" ||
           !hex(x.rpcId)
         )
@@ -850,16 +855,17 @@ export class MediaChildProcessTransport implements MediaTransport {
         if (!pending) continue;
         clearTimeout(pending.timer);
         this.pending.delete(x.rpcId);
-        pending.resolve(x as unknown as MediaResponse);
+        pending.resolve(x as unknown as Response);
       } catch {
         this.fail(new Error("incompatible media peer or protocol version"));
         return;
       }
     }
-    if (this.bytes.length > MAX_LINE)
+    if (this.bytes.length > this.lineLimit)
       this.fail(new Error("media response exceeds protocol limit"));
   }
-  request(request: MediaRequest, timeoutMs = 5000): Promise<MediaResponse> {
+  private get lineLimit() { return this.protocol?.maxLine ?? MAX_LINE; }
+  request(request: Request, timeoutMs = 5000): Promise<Response> {
     timeout(timeoutMs);
     if (this.closed || this.closing || this.terminal)
       return Promise.reject(
@@ -867,7 +873,7 @@ export class MediaChildProcessTransport implements MediaTransport {
       );
     if (this.pending.size >= 32)
       return Promise.reject(new Error("media worker RPC limit reached"));
-    const line = encodeMediaRequest(request);
+    const line = this.protocol ? this.protocol.encode(request) : encodeMediaRequest(request as unknown as MediaRequest);
     if (
       this.queuedBytes + Buffer.byteLength(line) > MAX_QUEUED_BYTES ||
       this.child.stdin.writableLength + Buffer.byteLength(line) >
@@ -958,4 +964,9 @@ export class MediaChildProcessTransport implements MediaTransport {
     });
     return this.closePromise;
   }
+}
+
+/** Preserve the existing media/1 constructor and reflected instance type. */
+export class MediaChildProcessTransport extends MediaProcessTransport<MediaRequest, MediaResponse> {
+  constructor(child: ChildProcessWithoutNullStreams, shutdownMs = 3000) { super(child, shutdownMs); }
 }
