@@ -208,7 +208,7 @@ contain the new hook. Server-side policy is separate.
 ## PR verification reuse
 
 The Engine SDK Linux lane, native Engine/media Linux/Intel Mac lanes and App Shell
-Linux/Intel Mac lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
+Linux/Intel Mac lanes and Config Linux/Intel Mac lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
 merged PR candidate. Admission authenticates the merged PR, exact workflow/run and
 successful attempt jobs (including contracts and runtime audit), then checks the
 synthetic merge commit's base/head parents and requires its complete Git tree to
@@ -259,6 +259,14 @@ successful PR archive. Both platform PR producers continue their real staged
 H264/SDK checks. Embedded build manifests and all archived runtime bytes remain
 unchanged; main retains original build provenance. Capture is not enabled for PR
 reuse by this media slice.
+
+Config uses the same actual native compiler/SDK/flag identity and conservative
+whole-tree admission on both supported targets. Supported native candidates
+install Rust before admission; unsupported native lanes keep fresh-only setup.
+The Config helper, its embedded source SHA and protocol manifest are promoted
+byte-for-byte with original build provenance. Its workflow retains fresh staged
+helper/client integration tests on PRs. No config writer, permission, activation,
+installed routing or native-helper implementation changes in this reuse slice.
 
 ## Checks and artifact identity
 

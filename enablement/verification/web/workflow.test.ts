@@ -217,3 +217,11 @@ test('App Shell PR retention follows packaged Electron verification and main can
   assert.match(component, /steps\.candidate-support\.outputs\.supported == 'true'/)
   assert.match(section(entry('app-shell'), 'stream'), /pull-requests: read/)
 })
+
+
+test('supported native candidates qualify Rust before admission, while Config main can authenticate PRs', () => {
+  const firstRust = component.indexOf('uses: dtolnay/rust-toolchain@stable')
+  assert(firstRust < component.indexOf('id: admit'))
+  assert.match(component.slice(firstRust, component.indexOf('id: admit')), /inputs\.language == 'native' && steps\.candidate-support\.outputs\.supported == 'true'/)
+  assert.match(section(entry('platform-config'), 'stream'), /pull-requests: read/)
+})
