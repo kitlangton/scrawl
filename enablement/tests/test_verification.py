@@ -1029,6 +1029,9 @@ class SelectionTests(unittest.TestCase):
         legacy = verification.select(["capture/engine/runtime/recording/recorder.rs"])
         self.assertTrue(legacy["root"])
         self.assertTrue(legacy["engine"])
+        moved_native = verification.select(["engine/native/Export.swift"])
+        self.assertTrue(moved_native["root"])
+        self.assertTrue(moved_native["engine"])
 
     def test_engine_package_source_and_metadata_get_fast_feedback_and_root_when_needed(self):
         for path in ("engine/core/src/session.rs", "engine/core/src/lib.rs"):

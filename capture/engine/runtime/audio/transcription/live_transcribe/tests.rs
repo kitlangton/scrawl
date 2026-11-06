@@ -514,7 +514,7 @@ fn native_source_converter_and_completion_seams() {
     let status = Command::new("python3")
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/capture/engine/native/tests/live-transcribe.py"
+            "/engine/native/tests/live-transcribe.py"
         ))
         .status()
         .unwrap();

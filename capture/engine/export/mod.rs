@@ -1,6 +1,6 @@
 //! `apparent export`: a bundle's recording as one shareable `.mp4` (H.264 or HEVC, AAC audio).
 //!
-//! Rust decides everything about the picture and the helper (`capture/engine/native/Export.swift`) renders it:
+//! Rust decides everything about the picture and the helper (`engine/native/Export.swift`) renders it:
 //!
 //! - `crop`: the part of the recording kept (`--crop`, default the whole recording);
 //! - `camera`: unless `--no-zoom`, a camera rectangle per frame from the bundle's events, so the
