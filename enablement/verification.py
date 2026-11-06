@@ -14,6 +14,7 @@ import re
 import stat
 import signal
 import sys
+import tempfile
 from pathlib import Path
 import subprocess
 from contextlib import contextmanager
@@ -117,6 +118,20 @@ CONNECT_CLIENT_TYPESCRIPT = "connect/delivery/client/"
 CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
     CONNECT_CLIENT_TYPESCRIPT + name
     for name in ("package.json", "package-lock.json", "tsconfig.json")
+}
+
+# Exact standalone resource package inventory reviewed from the held producer
+# source commit. Unknown additions stay in the broad root lane until assessed.
+PLATFORM_RESOURCES_FILES = {
+    "shared/resources/" + path for path in (
+        ".gitignore", "README.md", "delivery/README.md", "delivery/delivery.json",
+        "delivery/package-lock.json", "delivery/package.json", "delivery/src/build.ts",
+        "delivery/test/contract.test.ts", "delivery/tsconfig.json", "native/Cargo.lock",
+        "native/Cargo.toml", "native/src/main.rs", "package-lock.json", "package.json",
+        "src/artifact.ts", "src/index.ts", "src/process.ts", "test/artifact.test.ts",
+        "test/client.test.ts", "test/helpers.ts", "test/native.test.ts", "test/peer.ts",
+        "tsconfig.json",
+    )
 }
 
 # App Shell foundation is an independent TypeScript package. Its complete
@@ -287,10 +302,18 @@ def select(paths, history_known=True):
     app_shell = False
     record = not history_known or record_typescript_selected(paths)
     delivery = False
+    platform_resources = False
     agent = agent_tests_selected(paths)
     onboarding_package = not history_known or onboarding_package_selected(paths)
     reasons = []
     for path in paths:
+        if path in PLATFORM_RESOURCES_FILES:
+            platform_resources = True
+            continue
+        if path.startswith("shared/resources/"):
+            broad = True
+            reasons.append(path)
+            continue
         if path in ONBOARDING_PACKAGE_INPUTS - ONBOARDING_PACKAGE_BUILD_INPUTS:
             continue
         if isolated_agent_input(path):
@@ -346,6 +369,7 @@ def select(paths, history_known=True):
     return {"root": broad, "engine": broad or engine, "browser": browser, "agent": agent,
             "app_shell": app_shell or not history_known or not paths,
             "record": record,
+            "platform_resources": platform_resources,
             "onboarding_package": onboarding_package,
             "delivery": delivery or not history_known or not paths,
             "public_site": public_site or not history_known or not paths,
@@ -448,6 +472,8 @@ def run_pr_checks(selection=None):
         run_onboarding_package_check()
     if (selection or {}).get("delivery", delivery_tests_selected(paths)):
         run_delivery_tests()
+    if (selection or {}).get("platform_resources"):
+        run_platform_resources_tests()
     if connect_client_typescript_selected(paths):
         run_connect_client_typescript_tests()
     if directory_width_contract_selected(paths):
@@ -575,6 +601,30 @@ def run_delivery_tests():
         raise RuntimeError("Delivery checks need composition/delivery/*.test.ts; the hook never installs dependencies")
     subprocess.run(["node", "--experimental-strip-types", "--test",
                     *[str(test.relative_to(ROOT)) for test in tests]], cwd=ROOT, check=True)
+
+
+def run_platform_resources_tests():
+    """Run reviewed TS entrypoints without npm hooks; native checks belong to the producer."""
+    package = ROOT / "shared/resources"
+    controls = ("package.json", "package-lock.json", "tsconfig.json")
+    if any(not (package / name).is_file() for name in controls):
+        raise RuntimeError("Platform resources check inputs are missing; restore the registered package")
+    if not (package / "node_modules/typescript/bin/tsc").is_file():
+        raise RuntimeError("Platform resources checks need installed locked dependencies: run npm ci in shared/resources; the hook never installs dependencies")
+    tests = ("test/client.test.ts", "test/artifact.test.ts")
+    if any(not (package / name).is_file() for name in tests):
+        raise RuntimeError("Platform resources TypeScript test entrypoints are missing")
+    with tempfile.TemporaryDirectory(prefix="apparent-resources-no-native-") as directory:
+        for tool in ("cargo", "rustc"):
+            shim = Path(directory) / tool
+            shim.write_text("#!/bin/sh\necho 'Native compilation belongs to the resource producer' >&2\nexit 97\n")
+            shim.chmod(0o755)
+        environment = {**os.environ, "PATH": directory + os.pathsep + os.environ.get("PATH", "")}
+        environment.pop("APPARENT_RESOURCE_HOST_BIN", None)
+        subprocess.run(["node", str(package / "node_modules/typescript/bin/tsc")],
+                       cwd=package, env=environment, check=True)
+        subprocess.run(["node", "--experimental-strip-types", "--test", *tests],
+                       cwd=package, env=environment, check=True)
 
 
 def run_connect_client_typescript_tests():
@@ -898,6 +948,8 @@ def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_ro
         run_app_shell_check()
     if selection.get("delivery"):
         run_delivery_tests()
+    if selection.get("platform_resources"):
+        run_platform_resources_tests()
     cargo = ["cargo"]
     if subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
         cargo = ["taskpolicy", "-c", "utility", "cargo"]

@@ -17,7 +17,7 @@ const registrations: Record<string, string> = {
   'app-shell': 'composition/app/delivery.json', record: 'record/delivery.json',
   'connect-browser': 'connect/tooling/hosting/delivery.json', 'connect-client': 'connect/delivery.json', engine: 'engine/delivery.json',
   'engine-native': 'engine/delivery/native/delivery.json', 'engine-capture-native': 'engine/delivery/capture/delivery.json', 'engine-media-native': 'engine/delivery/media/delivery.json',
-  'platform-config': 'composition/config/native/delivery.json', onboarding: 'onboarding/delivery.json',
+  'platform-config': 'composition/config/native/delivery.json', 'platform-resources': 'shared/resources/delivery/delivery.json', onboarding: 'onboarding/delivery.json',
   agent: 'agent/delivery.json', public: 'public/delivery.json',
 }
 const owners = Object.keys(registrations)
@@ -43,7 +43,9 @@ test('owner entrypoints select only their stream and shared delivery inputs', ()
     assert(sourcePaths.includes('composition/architecture/**'))
     for (const actionPath of sharedActions) assert(sourcePaths.includes(actionPath))
     if (name === 'public') assert(sourcePaths.includes('enablement/verification/web/**'))
-    const registration = JSON.parse(readFileSync(new URL(`../../../${registrations[name]}`, import.meta.url), 'utf8'))
+    const registration = name === 'platform-resources'
+      ? { id: name, kind: 'directory', stage: 'library', package: 'shared/resources/delivery', targets: ['linux-x64', 'macos-x64'], inputs: ['shared/resources/', '.cargo/'] }
+      : JSON.parse(readFileSync(new URL(`../../../${registrations[name]}`, import.meta.url), 'utf8'))
     const matrix = JSON.parse(source.match(/^\s+matrix: (.+)$/m)![1]).include
     assert.deepEqual(matrix.map((row: any) => row.id), matrix.map(() => name))
     assert.deepEqual([...matrix.map((row: any) => row.target)].sort(), [...registration.targets].sort())
@@ -52,6 +54,21 @@ test('owner entrypoints select only their stream and shared delivery inputs', ()
     for (const input of registration.inputs) assert(sourcePaths.includes(`${input.replace(/\/$/, '')}/**`), `${name} workflow misses declared input ${input}`)
     for (const input of registration.files ?? []) assert(sourcePaths.includes(input), `${name} workflow misses declared file input ${input}`)
   }
+})
+
+test('platform resources workflow retains literal receipt names, full Cargo closure and only public targets', () => {
+  const workflow = entry('platform-resources')
+  const sourcePaths = paths(workflow)
+  assert(sourcePaths.includes('shared/resources/**'))
+  assert(sourcePaths.includes('.cargo/**'))
+  assert.match(workflow, /name: deliver \/ Delivery contracts/)
+  assert.match(workflow, /name: deliver \/ Workflow runtime budget/)
+  assert.match(workflow, /name: deliver \/ stream \(\$\{\{ matrix\.id \}\}, \$\{\{ matrix\.target \}\}\)/)
+  assert.match(workflow, /"id":"platform-resources","target":"linux-x64"/)
+  assert.match(workflow, /"id":"platform-resources","target":"macos-x64"/)
+  assert.doesNotMatch(workflow, /macos-arm64/)
+  assert.match(workflow, /APPARENT_DELIVERY_WORKFLOW_PATH: '\.github\/workflows\/stream-platform-resources\.yml'/)
+  assert.match(workflow, /id: \$\{\{ matrix\.id \}\}[\s\S]*?target: \$\{\{ matrix\.target \}\}[\s\S]*?publish: 'false'/)
 })
 
 test('shared composite actions hold steps while owner workflows own jobs and receipt identities', () => {

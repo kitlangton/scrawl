@@ -307,6 +307,69 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(verification.delivery_tests_selected(["composition/app/src/main.tsx"]))
         self.assertTrue(verification.delivery_tests_selected([]))
 
+    def test_platform_resources_source_selects_owner_lane_without_root_rust_and_connect_stays_conservative(self):
+        selected = verification.select(["shared/resources/native/src/main.rs", "shared/resources/src/index.ts"])
+        self.assertTrue(selected["platform_resources"])
+        self.assertFalse(selected["root"])
+        self.assertFalse(selected["engine"])
+        unknown = verification.select(["shared/resources/src/new-unreviewed.ts"])
+        self.assertTrue(unknown["root"])
+        self.assertFalse(unknown["platform_resources"])
+        connect = verification.select(["connect/delivery/client/src/index.ts"])
+        self.assertFalse(connect["platform_resources"])
+        self.assertTrue(connect["root"])
+
+    def test_platform_resources_owner_feedback_uses_reviewed_typescript_commands_without_npm_hooks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "shared/resources"
+            compiler = package / "node_modules/typescript/bin/tsc"
+            compiler.parent.mkdir(parents=True)
+            compiler.touch()
+            for name in ("package.json", "package-lock.json", "tsconfig.json"):
+                (package / name).touch()
+            (package / "package.json").write_text('{"scripts":{"pretest":"cargo build","test":"cargo test"}}')
+            for name in ("client.test.ts", "artifact.test.ts"):
+                target = package / "test" / name
+                target.parent.mkdir(exist_ok=True)
+                target.touch()
+            def check(command, **options):
+                self.assertNotIn("APPARENT_RESOURCE_HOST_BIN", options["env"])
+                guard = Path(options["env"]["PATH"].split(os.pathsep)[0])
+                for tool in ("cargo", "rustc"):
+                    self.assertIn("exit 97", (guard / tool).read_text())
+            with patch.object(verification, "ROOT", Path(directory)), patch.dict(os.environ, {"APPARENT_RESOURCE_HOST_BIN": "/ambient/helper"}), patch.object(verification.subprocess, "run", side_effect=check) as run:
+                verification.run_platform_resources_tests()
+            self.assertEqual(run.call_args_list[0].args[0], ["node", str(compiler)])
+            self.assertEqual(run.call_args_list[1].args[0], ["node", "--experimental-strip-types", "--test", "test/client.test.ts", "test/artifact.test.ts"])
+            self.assertEqual(run.call_count, 2)
+
+    def test_platform_resources_typescript_tests_cannot_spawn_ambient_rust(self):
+        real_run = subprocess.run
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "shared/resources"
+            compiler = package / "node_modules/typescript/bin/tsc"
+            compiler.parent.mkdir(parents=True)
+            compiler.touch()
+            (package / "package.json").write_text('{"type":"module"}')
+            for name in ("package-lock.json", "tsconfig.json"):
+                (package / name).write_text("{}")
+            (package / "test").mkdir()
+            (package / "test/client.test.ts").write_text("import { execFileSync } from 'node:child_process'; execFileSync('cargo', ['--version']);")
+            (package / "test/artifact.test.ts").touch()
+            ambient = root / "ambient-bin"
+            ambient.mkdir()
+            marker = root / "native-invoked"
+            (ambient / "cargo").write_text('#!/bin/sh\ntouch "$CARGO_TEST_MARKER"\n')
+            (ambient / "cargo").chmod(0o755)
+            def captured(*args, **kwargs):
+                return real_run(*args, **kwargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            with patch.object(verification, "ROOT", root), patch.dict(os.environ, {"PATH": str(ambient) + os.pathsep + os.environ["PATH"], "CARGO_TEST_MARKER": str(marker)}), patch.object(verification.subprocess, "run", side_effect=captured):
+                with self.assertRaises(subprocess.CalledProcessError) as failure:
+                    verification.run_platform_resources_tests()
+            self.assertIn(b"Native compilation belongs to the resource producer", failure.exception.stdout + failure.exception.stderr)
+            self.assertFalse(marker.exists())
+
     def test_delivery_feature_check_runs_node_tests_without_installing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
