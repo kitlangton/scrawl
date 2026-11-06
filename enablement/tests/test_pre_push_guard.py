@@ -118,6 +118,14 @@ class PrePushGuardTests(unittest.TestCase):
         theme.mkdir(parents=True)
         for name in ("check-theme.py", "check-theme.ts", "legacy-colors.json"):
             shutil.copy2(SELECTOR.parents[1] / "shared/ui/scripts" / name, theme / name)
+        # This hook fixture stubs package execution (npm/Cargo) rather than
+        # reproducing all owner sources. Architecture behavior has a separate
+        # real cross-owner regression in test_verification.py.
+        architecture = self.repo / "composition/architecture"
+        (architecture / "src").mkdir(parents=True)
+        (architecture / "node_modules/typescript").mkdir(parents=True)
+        (architecture / ".gitignore").write_text("node_modules/\n")
+        (architecture / "src/cli.ts").write_text("// Hook fixture package boundary; actual scanner is tested separately.\n")
         run("git", "add", ".", cwd=self.repo)
         run("git", "commit", "-qm", "original", cwd=self.repo)
         self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
