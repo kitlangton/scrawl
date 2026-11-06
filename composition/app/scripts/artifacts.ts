@@ -26,9 +26,12 @@ export async function exactFiles(directory: string, expected: string[]) {
   assert.deepEqual(actual.sort(), [...expected].sort(), 'Unexpected or missing artifact files');
 }
 export async function readStream(directory: string) {
-  await exactFiles(directory, ['manifest.json', 'index.js']);
   const manifest = parseStreamManifest(JSON.parse((await readRegular(join(directory, 'manifest.json'))).toString()));
+  await exactFiles(directory, ['manifest.json', 'index.js', ...Object.keys(manifest.assets ?? {})]);
   assert.equal(digest(await readRegular(join(directory, manifest.entry))), manifest.sha256, 'Stream checksum mismatch');
+  for (const [name, hash] of Object.entries(manifest.assets ?? {})) {
+    assert.equal(digest(await readRegular(join(directory, name))), hash, 'Stream asset checksum mismatch');
+  }
   return manifest;
 }
 export const shellFiles = ['main.cjs', 'owner-binding.mjs', 'preload.cjs', 'renderer.js', 'index.html', 'style.css', 'package.json',
