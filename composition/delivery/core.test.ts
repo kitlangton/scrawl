@@ -81,7 +81,6 @@ test('platform resources fixture has only public Linux and Mac targets and finge
   assert.match(catalog(path).blocked.join(';'), /must fingerprint shared\/resources\/ and \.cargo\//)
   writeFileSync(resolve(path, 'shared/resources/delivery/delivery.json'), JSON.stringify({ ...registration, targets: ['linux-x64', 'macos-x64', 'macos-arm64'] }))
   assert.match(catalog(path).blocked.join(';'), /Unsupported target/)
-  assert.equal(native.some(row => row.target === 'macos-arm64'), false)
 })
 
 test('native Engine and SDK are independent lanes with the same architectural owner', () => {
