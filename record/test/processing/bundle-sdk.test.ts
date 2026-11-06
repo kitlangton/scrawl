@@ -296,6 +296,22 @@ test("private staging prepares SDK-validated plan without touching destination o
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("legacy staging namespaces replay without a derivative/2 marker field", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-stage-legacy-"));
+  const destinationPath = join(root, "final.apparent");
+  try {
+    const assembly = assemblyForDestination(input, destinationPath);
+    const request = stagingInput(input, assembly, root, "1".repeat(32), destinationPath);
+    const prepared = await prepareRecordPublication(request);
+    const markerPath = join(request.stagingRoot, request.publicationId, ".record-publication");
+    const marker = JSON.parse(await readFile(markerPath, "utf8"));
+    // This field did not exist in apparent.record-staging/1 before derivative/2.
+    assert.equal(Object.hasOwn(marker, "derivatives2Sha256"), false);
+    assert.equal((await prepareRecordPublication(request)).input.planFile.planSha256, prepared.input.planFile.planSha256);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("derivative/2 keeps duplicate request times in ordered one-based frame slots", async () => {
   const input = await fixture();
   const document = derivative2For(input, [1000, 1000]);
@@ -313,7 +329,7 @@ test("derivative/2 staging maps native frame and sheet seals to final paths and 
     const assembly = assemblyForDestination(input, destinationPath);
     const derivatives2 = [derivative2For(input)];
     const derivative2Artifacts = {
-      "frames/frame-01.png": { receiptId: "8".repeat(32), selector: { kind: "frame" as const, requestIndex: 1 } },
+      "frames/frame-01.png": { receiptId: "8".repeat(32), selector: { requestIndex: 1, kind: "frame" as const } },
       "contact-sheet.png": { receiptId: "8".repeat(32), selector: { kind: "contact-sheet" as const } },
     };
     const prepared = await prepareRecordPublication({ ...stagingInput(input, assembly, root, "1".repeat(32), destinationPath), derivatives2, derivative2Artifacts });
@@ -349,7 +365,7 @@ test("derivative/2 staging maps native frame and sheet seals to final paths and 
       ["length", (assemblyCopy) => { assemblyCopy.inventory.entries.find(entry => entry.path === "frames/frame-01.png")!.byteLength++; }],
       ["identity", (assemblyCopy) => { assemblyCopy.inventory.entries.find(entry => entry.path === "frames/frame-01.png")!.identity!.inode = "other-native-file"; }],
       ["layout", (_assembly, document) => { document.layoutBytes![0] ^= 1; }],
-      ["unknown path", (_assembly, _document, bindings) => { bindings["unknown.png"] = bindings["frames/frame-01.png"]!; }],
+      ["unknown path", (_assembly, _document, bindings) => { Object.assign(bindings, { "unknown.png": bindings["frames/frame-01.png"]! }); }],
     ];
     for (const [name, mutate] of mismatches) {
       const stagingRoot = join(root, `refuse-${name}`);
@@ -357,7 +373,7 @@ test("derivative/2 staging maps native frame and sheet seals to final paths and 
       const document = structuredClone(derivatives2[0]!);
       const bindings = structuredClone(derivative2Artifacts);
       mutate(assemblyCopy, document, bindings);
-      await assert.rejects(prepareRecordPublication({ ...stagingInput(input, assemblyCopy, stagingRoot, `${name.length}`.repeat(32), destinationPath), derivatives2: [document], derivative2Artifacts: bindings }));
+      await assert.rejects(prepareRecordPublication({ ...stagingInput(input, assemblyCopy, stagingRoot, "4".repeat(32), destinationPath), derivatives2: [document], derivative2Artifacts: bindings }));
       await assertAbsent(stagingRoot);
     }
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -582,15 +598,31 @@ test("ambiguous composed publication reconciles the same durable binding after r
   const input = await fixture();
   const root = await mkdtemp(join(tmpdir(), "record-composition-reconcile-"));
   const destinationPath = join(root, "final.apparent");
-  assemblyForDestination(input, destinationPath);
+  const assembly = assemblyForDestination(input, destinationPath);
+  const derivatives2 = [derivative2For(input)];
+  const derivative2Artifacts = {
+    "frames/frame-01.png": { receiptId: "8".repeat(32), selector: { kind: "frame" as const, requestIndex: 1 } },
+    "contact-sheet.png": { receiptId: "8".repeat(32), selector: { kind: "contact-sheet" as const } },
+  };
   let dispatches = 0, inspections = 0;
-  let expectedPublicationId = "";
+  let expectedPublicationId = "", expectedPlanSha256 = "";
   const sdk = {
     async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
-    async publish() { dispatches++; throw new Error("ambiguous SDK reply"); },
-    async inspectPublication(request: { captureId: string; publicationId: string; planSha256: string }) {
+    async publish(request: Parameters<CaptureClient["publish"]>[0]) {
+      dispatches++;
+      expectedPlanSha256 = request.planFile.planSha256;
+      assert.deepEqual(request.derivatives2, derivatives2);
+      const plan = JSON.parse(new TextDecoder().decode(request.planBytes));
+      assert.equal(plan.entries.find((entry: { role: string }) => entry.role === "frame").input.kind, "derivative2");
+      throw new Error("ambiguous SDK reply");
+    },
+    async inspectPublication(request: Parameters<CaptureClient["inspectPublication"]>[0]) {
       inspections++;
       assert.equal(request.publicationId, expectedPublicationId);
+      assert.equal(request.planSha256, expectedPlanSha256);
+      assert.deepEqual(request.expected.materials, input.manifest.key);
+      assert.equal(request.expected.bundlePath, destinationPath);
+      assert.equal(request.expected.manifestSha256, sha(assembly.apparentJson));
       return { captureId: request.captureId, state: "publishing", publicationId: request.publicationId, planSha256: request.planSha256 };
     },
   } as unknown as CaptureClient;
@@ -598,12 +630,13 @@ test("ambiguous composed publication reconciles the same durable binding after r
   expectedPublicationId = publicationId;
   const request = {
     status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
-    assembly: input, ownerToken, publicationId, stagingRoot: join(root, "staging"), destinationPath,
+    assembly: input, ownerToken, publicationId, stagingRoot: join(root, "staging"), destinationPath, derivatives2, derivative2Artifacts,
   };
   try {
     const first = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
     await assert.rejects(first.publishCompletedCapture(request), /outcome is unknown/u);
     assert.equal(dispatches, 1);
+    await rm(request.stagingRoot, { recursive: true });
     const reopened = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
     const conflictingRoot = join(root, "conflicting-staging");
     await assert.rejects(reopened.publishCompletedCapture({ ...request, publicationId: "b".repeat(32),

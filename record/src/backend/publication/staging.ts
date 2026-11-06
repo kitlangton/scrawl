@@ -77,15 +77,15 @@ async function prepare(input: PreparePublicationInput): Promise<PreparedRecordPu
       throw new Error(`Record derivative/2 selection does not match assembled role, hash, length, and original file identity for ${item.path}`);
     const artifact = input.artifactBytes[item.path];
     if (!artifact || hash(artifact) !== item.sha256 || artifact.byteLength !== item.byteLength) throw new Error(`Record derivative/2 bytes differ from the original assembled artifact ${item.path}`);
-    const selectorKey = `${binding.receiptId}:${JSON.stringify(binding.selector)}`;
+    const selectorKey = `${binding.receiptId}:${binding.selector.kind === "frame" ? `frame:${binding.selector.requestIndex}` : "contact-sheet"}`;
     if (usedDerivative2Bindings.has(selectorKey)) throw new Error("Record derivative/2 selector cannot be bound to multiple final paths");
     usedDerivative2Bindings.add(selectorKey);
     resolvedDerivative2.set(item.path, { receipt: receipt.envelope, selector: binding.selector });
   }
   if (input.derivative2Artifacts) {
     const expected = new Set([...derivative2ByReceipt].flatMap(([receiptId, { envelope }]) => [
-      ...envelope.payload.frames.map(frame => `${receiptId}:${JSON.stringify({ kind: "frame", requestIndex: frame.requestIndex })}`),
-      ...(envelope.payload.contactSheet ? [`${receiptId}:${JSON.stringify({ kind: "contact-sheet" })}`] : []),
+      ...envelope.payload.frames.map(frame => `${receiptId}:frame:${frame.requestIndex}`),
+      ...(envelope.payload.contactSheet ? [`${receiptId}:contact-sheet`] : []),
     ]));
     for (const key of expected) if (!usedDerivative2Bindings.has(key)) throw new Error("Record derivative/2 documents contain an unused output");
   }
@@ -116,7 +116,7 @@ async function prepare(input: PreparePublicationInput): Promise<PreparedRecordPu
     artifactsSha256: hash(new TextEncoder().encode(JSON.stringify(Object.entries(input.artifactBytes).map(([path, bytes]) => [path, hash(bytes)]).sort()))),
     apparentJsonSha256:hash(input.assembly.apparentJson), summarySha256:hash(input.assembly.summaryMd),
     derivativesSha256:hash(new TextEncoder().encode(JSON.stringify(input.derivatives??[]))),
-    derivatives2Sha256:hash(new TextEncoder().encode(JSON.stringify(derivative2Fingerprint(input.derivatives2, input.derivative2Artifacts)))) };
+    ...(input.derivatives2 === undefined ? {} : { derivatives2Sha256:hash(new TextEncoder().encode(JSON.stringify(derivative2Fingerprint(input.derivatives2, input.derivative2Artifacts)))) }) };
   const markerBytes = new TextEncoder().encode(JSON.stringify({ schema: "apparent.record-staging/1", ...markerBinding }));
   await writeExclusiveOrMatch(marker, markerBytes);
   const entries: PublicationEntry[] = [];
