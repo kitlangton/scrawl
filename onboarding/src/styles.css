@@ -1,6 +1,7 @@
 /* The composition host supplies canonical tokens and controls; donor guide tokens map locally. */
 @import "./guides/control-guide.css";
 @import "./guides/gesture-guide.css";
+.onboarding-guide-example { font-size: .8rem; line-height: 1.5; }
 .onboarding-shell { --font-sans: "Host Grotesk", system-ui, sans-serif; --apparent-paper:var(--apparent-background); --apparent-carbon:var(--apparent-foreground); --apparent-stock:var(--apparent-surface); --apparent-lilac:var(--apparent-ring); --apparent-pen-coral:#d94c44; --apparent-pen-purple:#7a58c7; --apparent-pen-blue:#3b79bd; --apparent-pen-green:#397b61; position: relative; display:flex; flex-direction:column; height:100vh; overflow:hidden; padding:0; color:var(--apparent-foreground); background:var(--apparent-background); font:18px/1.5 var(--font-sans); border:1px solid var(--apparent-border); border-radius:15px; }
 .onboarding-shell header,.onboarding-shell footer { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:16px; padding:8px 16px; border-bottom:1px solid var(--apparent-border); }
 .onboarding-shell header { min-height:56px; }

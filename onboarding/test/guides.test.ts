@@ -14,6 +14,8 @@ test("donor control and gesture guides render as illustrations with an injected 
   const whiteboard = renderToStaticMarkup(createElement(ControlGuide, { kind: "whiteboard", Button }));
   assert.match(whiteboard, /Example: click Screen, then choose Whiteboard/);
   assert.match(whiteboard, /Replay Screen and Whiteboard guide/);
+  const finish = renderToStaticMarkup(createElement(ControlGuide, { kind: "finish", Button }));
+  assert.match(finish, /<figcaption[^>]*>Example — Finish and copy<\/figcaption>/);
   const shortcut = renderToStaticMarkup(createElement(GestureGuide, { kind: "record", shortcut: "Ctrl+Shift+R", Button }));
   assert.match(shortcut, /Shortcut key illustration/);
   assert.match(shortcut, /<kbd[^>]*>Ctrl<\/kbd>/);
