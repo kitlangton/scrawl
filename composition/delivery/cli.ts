@@ -25,6 +25,9 @@ function ghPages<T>(repo: string, endpoint: string): T[] {
   }
   throw new Error('GitHub history exceeds bounded pagination')
 }
+function ghBytes(repo: string, endpoint: string): Buffer {
+  return execFileSync('gh', ['api', endpoint], { encoding: 'buffer', maxBuffer: 1024 * 1024 * 1024, env: { ...process.env, GH_REPO: repo } })
+}
 function ownerFor(id: string): Owner {
   const result = catalog(root)
   const blocked = result.blocked.find(value => value.startsWith(`${id}:`))
@@ -88,6 +91,39 @@ async function main(args: string[]) {
   if (args.length === 3 && args[0] === 'candidate-support') {
     output({ supported: supportsPrCandidate(args[1], args[2]) }); return
   }
+  if ((args.length === 4 || args.length === 5) && args[0] === 'consume') {
+    const { handoff } = await import('./consumer/handoff.ts')
+    const owner = ownerFor(args[1]); const target = targetArg(args[2]); const sourceSha = args[3]
+    if (!/^[0-9a-f]{40}$/.test(sourceSha)) throw new Error('Producer commit must be a full 40-character SHA')
+    const repo = 'tryapparent/apparent'
+    const workflow = gh<{ id: number; path: string }>(repo, `repos/${repo}/actions/workflows/${basename(workflowPathFor(owner.id))}`)
+    if (workflow.path !== workflowPathFor(owner.id)) throw new Error('Producer workflow API identity mismatch')
+    const runs: Array<{ id: number; run_attempt: number; head_sha: string; head_branch: string; event: string; conclusion: string | null; path: string }> = []
+    let totalRuns = 0
+    for (let page = 1; page <= 20; page++) {
+      const response = gh<{ workflow_runs: typeof runs; total_count: number }>(repo, `repos/${repo}/actions/workflows/${workflow.id}/runs?branch=main&event=push&head_sha=${sourceSha}&per_page=100&page=${page}`)
+      if (!Array.isArray(response.workflow_runs) || runs.length + response.workflow_runs.length > response.total_count) throw new Error('Incomplete producer workflow history')
+      totalRuns = response.total_count
+      runs.push(...response.workflow_runs.map(run => ({ ...run, path: workflowPathFor(owner.id) })))
+      if (runs.length >= response.total_count || response.workflow_runs.length === 0) break
+    }
+    if (runs.length < totalRuns) throw new Error('Producer history exceeds bounded pagination; retry after narrowing or retaining the exact producer run')
+    const api = {
+      runs: async () => runs,
+      jobs: async (run: { id: number; run_attempt: number }) => ghPages<{ name: string; status: string; conclusion: string | null }>(repo, `repos/${repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`),
+      artifacts: async (run: { id: number }) => ghPages<{ id: number; name: string; expired: boolean }>(repo, `repos/${repo}/actions/runs/${run.id}/artifacts`),
+      download: async (artifactId: number) => ghBytes(repo, `repos/${repo}/actions/artifacts/${artifactId}/zip`),
+      attest: async (path: string, _owner: Owner, _target: Target, sha: string, runId: number, attempt: number) => {
+        const output = execFileSync('gh', ['attestation', 'verify', path, '--repo', repo, '--signer-workflow', `${repo}/${workflowPathFor(owner.id)}`, '--source-digest', sha, '--source-ref', 'refs/heads/main', '--format', 'json'], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GH_REPO: repo } })
+        const attestations = JSON.parse(output) as Array<{ verificationResult?: { statement?: { subject?: Array<{ digest?: { sha256?: string } }>; predicate?: { runDetails?: { metadata?: { invocationId?: string } } } } } }>
+        const expectedRun = `/actions/runs/${runId}/attempts/${attempt}`
+        if (!attestations.some(entry => entry.verificationResult?.statement?.predicate?.runDetails?.metadata?.invocationId?.includes(expectedRun))) throw new Error('Verified attestation does not identify the admitted producer run and attempt')
+      },
+    }
+    const result = await handoff(root, owner, target, sourceSha, api, (runs, jobs, artifacts, exactDigest) => assessPrior(root, owner, target, sourceSha, repo, runs, jobs, artifacts, sourceSha, exactDigest), args[4])
+    console.log(JSON.stringify(result))
+    return
+  }
   if (args.length === 5 && args[0] === 'candidate') {
     const owner = ownerFor(args[1]); const target = targetArg(args[2])
     assertBuildWorkflowIdentity(env, owner.id)
@@ -106,6 +142,6 @@ async function main(args: string[]) {
     console.log(JSON.stringify(reusePayload(root, ownerFor(args[1]), targetArg(args[2]), args[3], args[4], args[5], args[6], args[7], args[8], args[9])))
     return
   }
-  throw new Error('Usage: node --experimental-strip-types composition/delivery/cli.ts plan | admit ID TARGET | build ID TARGET OUTPUT_DIR | seal ID TARGET INPUT_DIR OUTPUT_DIR INPUT_DIGEST')
+  throw new Error('Usage: node --experimental-strip-types composition/delivery/cli.ts plan | admit ID TARGET | consume ID TARGET PRODUCER_SHA [EMPTY_DESTINATION] | build ID TARGET OUTPUT_DIR | seal ID TARGET INPUT_DIR OUTPUT_DIR INPUT_DIGEST')
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) main(process.argv.slice(2)).catch(error => { console.error(`Delivery error: ${error instanceof Error ? error.message : 'operation failed'}`); process.exitCode = 1 })
