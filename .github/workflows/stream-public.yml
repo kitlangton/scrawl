@@ -15,7 +15,6 @@ on:
       - '.github/workflows/stream-public.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
-      - '.github/workflows/stream-admission.yml'
       - '.github/actions/delivery-contracts/**'
       - '.github/actions/delivery-component/**'
       - '.github/actions/runtime-budget/**'
@@ -37,7 +36,6 @@ on:
       - '.github/workflows/stream-public.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
-      - '.github/workflows/stream-admission.yml'
       - '.github/actions/delivery-contracts/**'
       - '.github/actions/delivery-component/**'
       - '.github/actions/runtime-budget/**'
@@ -200,7 +198,7 @@ jobs:
         working-directory: public/site
         run: |
           bun install --frozen-lockfile
-          ./node_modules/.bin/playwright-core install --with-deps chromium firefox
+          node --experimental-strip-types scripts/browser-setup/install.ts
           echo "CHROME_PATH=$(node --input-type=module -e 'import {chromium} from "playwright-core"; console.log(chromium.executablePath())')" >> "$GITHUB_ENV"
       - name: Consume verified immutable Connect browser artifact
         env:

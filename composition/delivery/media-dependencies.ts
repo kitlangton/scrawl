@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { installUbuntuDependencies, type UbuntuSetup } from './ubuntu-dependencies.ts'
+import { installUbuntuDependencies, type UbuntuSetup } from './runtime/ubuntu-dependencies.ts'
 
 export const mediaPackages = [
   'ffmpeg', 'pkg-config', 'libgstreamer1.0-dev', 'libgstreamer-plugins-base1.0-dev',

@@ -137,3 +137,57 @@ fn device_login_site_and_read_server_guards_preserve_existing_state() {
         old_generation
     );
 }
+
+#[test]
+fn device_start_uses_mounted_base_through_real_transport() {
+    use std::net::TcpListener;
+    let f = Fixture::new();
+    let before = fs::read(&f.client.config).ok();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = format!("http://{}/connect", listener.local_addr().unwrap());
+    let worker = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "client never reached mounted endpoint");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("synthetic listener: {error}"),
+            }
+        };
+        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut request = Vec::new();
+        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+            let mut bytes = [0; 1024];
+            let count = stream.read(&mut bytes).unwrap();
+            assert!(count > 0 && request.len() < 16_384);
+            request.extend_from_slice(&bytes[..count]);
+        }
+        let header_end = request.windows(4).position(|bytes| bytes == b"\r\n\r\n").unwrap() + 4;
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let length: usize = headers.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse().unwrap())
+        }).unwrap();
+        assert!(length < 131_072);
+        while request.len() < header_end + length {
+            let mut bytes = [0; 1024];
+            let count = stream.read(&mut bytes).unwrap();
+            assert!(count > 0);
+            request.extend_from_slice(&bytes[..count]);
+        }
+        assert!(request.starts_with(b"POST /connect/v1/device/start HTTP/1.1\r\n"));
+        let response = br#"{"deviceCode":"synthetic-mounted-device"}"#;
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", response.len()).unwrap();
+        stream.write_all(response).unwrap();
+    });
+    let login = f.client.begin_device_login(&server, "upload", true, Arc::new(|| true)).unwrap();
+    assert_eq!(login.server(), server);
+    assert_eq!(login.start().unwrap()["deviceCode"], "synthetic-mounted-device");
+    worker.join().unwrap();
+    assert_eq!(fs::read(&f.client.config).ok(), before, "start is not approval or credential publication");
+    assert!(!f.client.state.join("upload.credential").exists());
+}

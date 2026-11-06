@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 
 const socket = createServer()
 await new Promise(r => socket.listen(0, '127.0.0.1', r))
-const origin = `http://127.0.0.1:${socket.address().port}`
+const origin = `http://127.0.0.1:${socket.address().port}/connect`
 await new Promise(r => socket.close(r))
 function run(command, args, env = {}) {
   const result = spawnSync(command, args, { stdio: 'inherit', env: { ...process.env, ...env } })

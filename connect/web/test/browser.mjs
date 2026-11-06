@@ -86,7 +86,12 @@ const server = createServer(async (req, res) => {
 await new Promise(r => server.listen(Number(process.env.HOSTED_FIXTURE_PORT || 0), '127.0.0.1', r))
 uiOrigin = `http://127.0.0.1:${server.address().port}`
 const apiOrigin = process.env.HOSTED_TEST_API_ORIGIN || ''
-const apiServer = apiOrigin ? createServer(server.listeners('request')[0]) : null
+const apiServer = apiOrigin ? createServer((req, res) => {
+  const mount = new URL(apiOrigin).pathname.replace(/\/$/, '')
+  if (mount && req.url.startsWith(mount + '/')) req.url = req.url.slice(mount.length)
+  else if (mount && req.url === mount) req.url = '/'
+  server.listeners('request')[0](req, res)
+}) : null
 if (apiServer) await new Promise(r => apiServer.listen(Number(new URL(apiOrigin).port), '127.0.0.1', r))
 console.log(`Synthetic hosted fixture at http://127.0.0.1:${server.address().port}/hosted/`)
 if (process.env.HOSTED_FIXTURE_ONLY) await new Promise(() => {})

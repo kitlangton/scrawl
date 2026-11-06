@@ -19,6 +19,15 @@ test("public recipient boundary accepts v1 Rust-ordered compatible envelope", as
   assert.deepEqual(await validateRecipientEnvelope(envelope, context, key), envelope);
 });
 
+test("recipient boundary accepts the canonical mounted transport base and pins it exactly", async () => {
+  const ctx = { ...context, origin: "https://app.tryapparent.com/connect" };
+  const signed: Signed = { version: 1, context: ctx, chunks: [chunk] };
+  const envelope = { signed, signature: await signEnvelope(seed, signed) };
+  const key = await ed25519.getPublicKeyAsync(seed);
+  assert.deepEqual(await validateRecipientEnvelope(envelope, ctx, key), envelope);
+  await assert.rejects(validateRecipientEnvelope(envelope, { ...ctx, origin: "https://app.tryapparent.com" }, key), { category: "encrypted_context_mismatch" });
+});
+
 test("recipient boundary rejects context mismatch, tampering, unknown fields and unsafe chunk sequences", async () => {
   const envelope = await fixture();
   const key = await ed25519.getPublicKeyAsync(seed);
@@ -48,6 +57,8 @@ for (const [name, change, category] of [
   ["noncanonical origin", (e: any) => { e.signed.context.origin += "/"; }, "invalid_encryption_context"],
   ["URL credentials", (e: any) => { e.signed.context.origin = "https://user@connect.test"; }, "invalid_encryption_context"],
   ["invalid port", (e: any) => { e.signed.context.origin += ":65536"; }, "invalid_encryption_context"],
+  ["arbitrary transport path", (e: any) => { e.signed.context.origin = "https://connect.test/api"; }, "invalid_encryption_context"],
+  ["near canonical transport path", (e: any) => { e.signed.context.origin = "https://connect.test/connect/v1"; }, "invalid_encryption_context"],
   ["invalid capture", (e: any) => { e.signed.context.captureId = "../capture"; }, "invalid_encryption_context"],
   ["invalid group", (e: any) => { e.signed.context.group = "other"; }, "invalid_encryption_context"],
   ["JSON byte cap", (e: any) => { e.signature = "a".repeat(131072); }, "invalid_encryption_envelope"],

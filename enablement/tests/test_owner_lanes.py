@@ -24,6 +24,8 @@ class OwnerTests(unittest.TestCase):
             'capture/desktop/ui/frontend/src/App.tsx': {'desktop-ui', 'capture'},
             'capture/desktop/settings.rs': {'capture', 'engine-staged', 'desktop-ui'},
             'capture/engine/bundle/mod.rs': {'capture', 'engine-staged'},
+            'engine/core/src/secure.rs': {'capture', 'engine-staged'},
+            'engine/src/capture.rs': {'capture', 'engine-staged'},
             'shared/ui/src/index.ts': {'desktop-ui', 'connect-service', 'capture'},
         }
         for path, expected in cases.items():

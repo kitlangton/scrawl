@@ -75,10 +75,10 @@ const files = [
 ]
 const owner: Owner = {
   schema: 1, id: 'connect-browser', kind: 'directory', package: 'connect/tooling/hosting',
-  inputs: ['connect/tooling/hosting/', 'connect/web/', 'shared/ui/', 'shared/analytics/'],
+  inputs: ['connect/tooling/hosting/', 'connect/service/', 'connect/web/', 'shared/ui/', 'shared/analytics/'],
   verify: [], build: 'verify:artifact', targets: ['web'], stage: 'website', language: 'typescript',
   artifactPath: '.output', packageManager: 'npm', files,
-  environment: ['PUBLIC_POSTHOG_ENABLED', 'PUBLIC_POSTHOG_TOKEN', 'PUBLIC_POSTHOG_HOST', 'PUBLIC_POSTHOG_ENVIRONMENT', 'VITE_HOSTED_API_ORIGIN'],
+  environment: ['PUBLIC_POSTHOG_ENABLED', 'PUBLIC_POSTHOG_TOKEN', 'PUBLIC_POSTHOG_HOST', 'PUBLIC_POSTHOG_ENVIRONMENT', 'VITE_HOSTED_API_ORIGIN', 'API_ORIGIN', 'SITE_ORIGIN'],
 }
 function git(cwd: string, ...args: string[]) { execFileSync('git', args, { cwd, stdio: 'ignore' }) }
 function makeRepo(name: string) {
@@ -121,18 +121,22 @@ test('Connect browser digest covers its declared source, assets, and build envir
   }
   change('connect/delivery/client/client.ts', 'unrelated client')
   assert.equal(inputDigest(root, owner), initial, 'client-only changes do not invalidate browser artifact reuse')
-  for (const path of ['.github/workflows/stream-connect-browser.yml', 'connect/tooling/hosting/src/worker.ts', 'connect/web/browser.ts', 'shared/ui/button.ts', 'shared/analytics/client.ts', ...files]) {
+  for (const path of ['.github/workflows/stream-connect-browser.yml', 'connect/tooling/hosting/src/index.ts', 'connect/service/src/worker.ts', 'connect/web/browser.ts', 'shared/ui/button.ts', 'shared/analytics/client.ts', ...files]) {
     change(path, path)
     assert.notEqual(inputDigest(root, owner), initial, `${path} must invalidate reuse`)
   }
   const beforeEnv = inputDigest(root, owner)
   const oldOrigin = process.env.VITE_HOSTED_API_ORIGIN
+  const oldApiOrigin = process.env.API_ORIGIN
   try {
-    process.env.VITE_HOSTED_API_ORIGIN = 'https://changed.example.invalid'
+    process.env.VITE_HOSTED_API_ORIGIN = 'https://app.tryapparent.com/connect'
+    process.env.API_ORIGIN = 'https://changed.example.invalid/connect'
     assert.notEqual(inputDigest(root, owner), beforeEnv, 'build environment changes invalidate reuse')
   } finally {
     if (oldOrigin === undefined) delete process.env.VITE_HOSTED_API_ORIGIN
     else process.env.VITE_HOSTED_API_ORIGIN = oldOrigin
+    if (oldApiOrigin === undefined) delete process.env.API_ORIGIN
+    else process.env.API_ORIGIN = oldApiOrigin
   }
 })
 
@@ -145,7 +149,6 @@ test('Connect browser installs pinned Bun through the shared action on fresh mai
     assert.match(lane, /id: \$\{\{ matrix.id \}\}/)
   }
   assert.match(component, /uses: oven-sh\/setup-bun@v2\n\s+if: [^\n]*inputs.id == 'connect-browser'[\s\S]*?bun-version: '1\.3\.10'/)
-  assert.match(readFileSync(resolve(repoRoot, '.github/workflows/stream-admission.yml'), 'utf8'), /      - Connect browser delivery\n/)
   assert.match(readFileSync(resolve(repoRoot, '.github/actions/delivery-contracts/action.yml'), 'utf8'), /stream-connect-browser\.yml/)
 })
 

@@ -101,7 +101,7 @@ test('Connect producer and client retain separate invocation and path ownership'
   assert(paths(entry('connect-client')).includes('connect/delivery/client/**'))
   assert(paths(entry('connect-client')).includes('connect/delivery.json'))
   assert(!paths(entry('connect-client')).includes('connect/web/**'))
-  const streamWorkflows = readdirSync(root).filter(name => name.endsWith('.yml') && name.startsWith('stream-') && name !== 'stream-admission.yml')
+  const streamWorkflows = readdirSync(root).filter(name => name.endsWith('.yml') && name.startsWith('stream-'))
   assert.deepEqual(streamWorkflows.sort(), owners.map(name => `stream-${name}.yml`).sort())
 })
 
@@ -136,17 +136,8 @@ test('owner component checks are fresh on PRs; only main producer jobs admit, at
   }
 })
 
-test('admission is event-driven and other non-stream workflows remain manual or reusable', () => {
+test('non-stream workflows remain manual or reusable', () => {
   const files = readdirSync(root).filter(name => /\.ya?ml$/.test(name))
-  if (files.includes('stream-admission.yml')) {
-    const admission = readFileSync(new URL('stream-admission.yml', root), 'utf8')
-    assert.match(admission, /pull_request_target:/)
-    assert.match(admission, /workflow_run:/)
-    assert.match(admission, /checks: write/)
-    assert.match(admission, /ref: \$\{\{ github.event.repository.default_branch \}\}/)
-    assert.doesNotMatch(admission, /ref: .*pull_request.head|ref: .*workflow_run.head_sha/)
-    assert.doesNotMatch(admission, /id-token: write|attestations: write|secrets: inherit/)
-  }
   for (const file of files.filter(name => !name.startsWith('stream-'))) {
     const source = readFileSync(new URL(file, root), 'utf8')
     const triggers = source.split('\non:\n')[1]?.split(/\n[^\s#]/)[0] ?? ''

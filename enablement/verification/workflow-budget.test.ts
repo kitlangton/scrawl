@@ -165,11 +165,6 @@ test('every supported root workflow waits for all payload jobs before auditing',
   const folder = new URL('../../.github/workflows/', import.meta.url)
   for (const name of readdirSync(folder)) {
     const text = readFileSync(new URL(name, folder), 'utf8')
-    if (name === 'stream-admission.yml') {
-      assert.match(text, /timeout-minutes: 5/)
-      assert.doesNotMatch(text, /delivery-component|publish-pages|attest-build-provenance/)
-      continue // Control-only status receipt; owner workloads retain their own audits.
-    }
     if (name === 'release-windows.yml' || name === 'runtime-budget.yml') continue
     if (name.startsWith('stream-')) continue
     // Only root workflows: callable platform verification is covered by caller.

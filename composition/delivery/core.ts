@@ -94,7 +94,7 @@ function trackedInputs(root: string, owner: Owner, revision = 'HEAD'): { digest:
   const registration = roots.find(x => x.id === owner.id)?.registration
   if (!registration) throw new Error('Owner has no registered source identity')
   const inputRoots = [...new Set([...owner.inputs, ...mandatoryInputs, ...(owner.id === 'public' ? ['enablement/verification/web/'] : [])])].sort()
-  const files = [...(owner.files ?? []), workflowPathFor(owner.id), '.github/workflows/stream-admission.yml', '.github/actions/delivery-contracts/', '.github/actions/delivery-component/', '.github/actions/runtime-budget/', 'enablement/verification/workflow-budget.ts', 'LICENSE', registration]
+  const files = [...(owner.files ?? []), workflowPathFor(owner.id), '.github/actions/delivery-contracts/', '.github/actions/delivery-component/', '.github/actions/runtime-budget/', 'enablement/verification/workflow-budget.ts', 'LICENSE', registration]
   const paths = new Set<string>()
   for (const pathspec of [...inputRoots, ...files]) {
     const result = git(root, ['ls-tree', '-r', '-z', '--full-tree', revision, '--', pathspec])
@@ -172,7 +172,7 @@ export function buildOwner(root: string, owner: Owner, target: Target, outputPat
     cpSync(actual, resolve(output, 'payload'), { recursive: true, dereference: false, verbatimSymlinks: true })
     return
   }
-  const manifest = JSON.parse(readFileSync(resolve(root, owner.package, 'package.json'), 'utf8')) as { name?: string; exports?: Record<string, unknown> }
+  const manifest = JSON.parse(readFileSync(resolve(root, owner.package, 'package.json'), 'utf8')) as { name?: string; exports?: Record<string, unknown>; peerDependencies?: Record<string, unknown>; peerDependenciesMeta?: Record<string, { optional?: boolean }>; devDependencies?: Record<string, unknown> }
   if (!manifest.name || !/^@?[a-z0-9][a-z0-9._/-]*$/.test(manifest.name)) throw new Error('Invalid npm package name')
   const packed = execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', output], { cwd: resolve(root, owner.package), encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, CI: 'true' } })
   const result = JSON.parse(packed) as Array<{ filename?: string }>
@@ -181,11 +181,32 @@ export function buildOwner(root: string, owner: Owner, target: Target, outputPat
   const consumer = resolve(output, '.consumer')
   mkdirSync(consumer)
   try {
-    execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', consumer, tarball], { cwd: consumer, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+    // This consumer exercises every export, including optional UI entrypoints.
+    // Install their declared host peers here, never in the staged library artifact.
+    execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', consumer, tarball, ...optionalVerificationPeers(manifest, resolve(root, owner.package))], { cwd: consumer, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
     const publicPaths = Object.keys(manifest.exports ?? {}).filter(key => key === '.' || key.startsWith('./'))
     if (publicPaths.some(key => key.includes('*'))) throw new Error('Wildcard exports require an explicit consumer verification contract')
     verifyPublicExports(consumer, manifest.name, publicPaths.length ? publicPaths : ['.'])
   } finally { rmSync(consumer, { recursive: true, force: true }) }
+}
+
+/** Host peers required by the all-exports verifier, not by headless consumers. */
+export function optionalVerificationPeers(manifest: { peerDependencies?: Record<string, unknown>; peerDependenciesMeta?: Record<string, { optional?: boolean }>; devDependencies?: Record<string, unknown> }, packageRoot?: string): string[] {
+  return Object.entries(manifest.peerDependencies ?? {}).sort(([a], [b]) => a.localeCompare(b)).flatMap(([name, version]) => {
+    if (manifest.peerDependenciesMeta?.[name]?.optional !== true) return [];
+    if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(name) || typeof version !== 'string' || !version.trim() || version.includes('\0'))
+      throw new Error('Invalid optional verification peer');
+    const supplied = manifest.devDependencies?.[name];
+    if (typeof supplied === 'string' && supplied.startsWith('file:')) {
+      if (!packageRoot) throw new Error('Local verification peer requires its package root');
+      const path = resolve(packageRoot, supplied.slice(5));
+      const rel = relative(realpathSync(packageRoot), realpathSync(path));
+      if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) || !path.endsWith('.tgz') || !lstatSync(path).isFile())
+        throw new Error('Local verification peer must be a contained package tarball');
+      return [path];
+    }
+    return [`${name}@${version}`];
+  })
 }
 
 /** Exercise packed JS exports and inspect declared stylesheet assets as files. */

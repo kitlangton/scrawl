@@ -66,6 +66,16 @@ test('server normalization follows the native origin validator and rejects inval
   }
   assert.equal(deriveLocalState(facts({cloud:{server:'http://localhost:8787',enabled:true,uploadConsent:true},
     upload:grant('upload',{server:'http://localhost:8787'})}),1000).snapshot?.connected,true);
+  const mounted='https://app.tryapparent.com/connect';
+  const mountedState=deriveLocalState(facts({cloud:{server:mounted,enabled:true,uploadConsent:true},
+    upload:grant('upload',{server:mounted}),sharedLinksUrl:'https://app.tryapparent.com/connect/shares'}),1000);
+  assert.equal(mountedState.snapshot?.server,mounted);
+  assert.equal(mountedState.snapshot?.connected,true);
+  assert.equal(mountedState.sharedLinksUrl,'https://app.tryapparent.com/connect/shares');
+  for(const server of ['https://app.tryapparent.com/connect/v1','https://app.tryapparent.com/other/connect',
+    'https://app.tryapparent.com/connect?x=1','https://app.tryapparent.com/%2fconnect']) {
+    assert.equal(deriveLocalState(facts({cloud:{server,enabled:true,uploadConsent:true}}),1000).error,'invalid-server');
+  }
 });
 
 test('malformed optional account initial drops alone and private or unknown fields never project',()=>{

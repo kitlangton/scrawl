@@ -320,20 +320,18 @@ def select(paths, history_known=True):
         if public_site_build_selected([path]):
             public_site = True
             continue
-        # The extracted Rust package is a real standalone Cargo workspace.
-        # Its src/tests/manifest/lock inputs run package checks; only src/tests
-        # are isolated from the root app, while manifest/lock changes may
-        # affect shared build resolution and therefore stay broad.
-        if path.startswith(("capture/engine/src/", "capture/engine/tests/")):
+        # The standalone Engine package and reusable core are checked outside
+        # the root app. Legacy capture runtime/bundle/native modules remain
+        # root application inputs and retain the broad root checks.
+        if path.startswith(("engine/core/", "engine/src/", "engine/tests/", "engine/delivery/")):
             engine = True
-            if path.startswith("capture/engine/src/"):
-                broad = True  # root production modules still consume this code
+        elif path.startswith("capture/engine/"):
+            if not path.startswith("capture/engine/docs/"):
+                broad = True
                 reasons.append(path)
-        elif path in {"capture/engine/Cargo.toml", "capture/engine/Cargo.lock"}:
+        elif path in {"engine/Cargo.toml", "engine/Cargo.lock", "engine/core/Cargo.toml", "engine/core/Cargo.lock"}:
             engine = True
-            broad = True
-            reasons.append(path)
-        elif path == "capture/engine/README.md":
+        elif path in {"engine/README.md", "engine/README-media.md", "engine/core/README.md"}:
             engine = True
         elif path in BROWSER_FILES:
             browser = True
@@ -900,16 +898,17 @@ def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_ro
     jobs = os.environ.get("T3_BUILD_JOBS", "3")
     dependency_mode = "--offline" if offline else "--locked"
     diagnostics = ["--timings"] if cargo_timings else []
-    # The standalone Engine package is a smaller consumer than the root app.
-    # Run it first when both lanes are selected so package-local compiler or
-    # test failures stop before the broader application compile. Root checks
-    # still run for every source change because production remains a root module.
+    # The standalone core and provider are smaller consumers than the root app.
+    # Run both first when selected so package-local compiler or test failures
+    # stop before the broader application compile. Legacy capture code remains
+    # in the root app and still selects those checks independently.
     if selection["engine"]:
-        for command in ("build", "test"):
-            args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + diagnostics
-            if command == "test":
-                args += ["--", "--test-threads=2"]
-            subprocess.run(args, cwd=ROOT, check=True)
+        for manifest in ("engine/core/Cargo.toml", "engine/Cargo.toml"):
+            for command in ("build", "test"):
+                args = cargo + [command, "--manifest-path", manifest, "-j", jobs, dependency_mode] + diagnostics
+                if command == "test":
+                    args += ["--", "--test-threads=2"]
+                subprocess.run(args, cwd=ROOT, check=True)
     if selection["root"]:
         if selection.get("focused"):
             for test_filter in selection["focused"]:

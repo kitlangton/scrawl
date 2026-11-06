@@ -5,6 +5,7 @@ import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { chromium } from "playwright-core"
 import { parseStatus } from "../../src/features.ts"
+import { browserAnalyticsDefinitions } from "../../../../shared/analytics/config.ts"
 
 const site = join(dirname(fileURLToPath(import.meta.url)), "../..")
 const publicDir = process.env.SITE_ARTIFACT ? resolve(process.env.SITE_ARTIFACT) : join(site, "dist-apparent")
@@ -153,6 +154,7 @@ test("source homepage preserves accepted responsive layout and interactions", as
   })
   await new Promise<void>(done => server.listen(0, "127.0.0.1", done))
   const origin = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`
+  const analyticsEnabled = browserAnalyticsDefinitions(process.env).__APPARENT_ANALYTICS_ENABLED__ === "true"
   const receipts = []
   try {
     for (const engine of [chromium, firefox]) {
@@ -160,6 +162,25 @@ test("source homepage preserves accepted responsive layout and interactions", as
       try {
         for (const width of [1280, 768, 390, 320]) {
           const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: "reduce" })
+          // Reproduce late consent arrival over the mobile frog: the original
+          // flow could lose pointer-up after pointer-down had reached the frog.
+          if (analyticsEnabled && width === 320) await page.addInitScript(() => {
+            const append = Element.prototype.append
+            let held: (Node | string)[] | undefined
+            const release = () => { if (held) { append.apply(document.body, held); held = undefined } }
+            Element.prototype.append = function (...nodes) {
+              if (nodes.some(node => node instanceof Element && node.matches('aside[aria-label="Analytics preferences"]'))) {
+                held = nodes
+                Element.prototype.append = append
+                window.setTimeout(release, 2000)
+                return
+              }
+              append.apply(this, nodes)
+            }
+            document.addEventListener("pointerdown", event => {
+              if ((event.target as Element)?.closest(".pond-cover-frog")) release()
+            }, true)
+          })
           const errors: string[] = []
           page.on("pageerror", error => errors.push(error.message))
           page.on("console", message => { if (message.type() === "error" && /React|hydrat/i.test(message.text())) errors.push(message.text()) })
@@ -173,6 +194,16 @@ test("source homepage preserves accepted responsive layout and interactions", as
           await page.goto(origin)
           await page.evaluate(() => document.fonts.ready)
           await page.waitForFunction(() => customElements.get("apparent-footer"))
+          // The notice loads independently of React. Resolve the visitor's
+          // choice before it can intercept a homepage interaction mid-click.
+          const refuseAnalytics = page.getByRole("button", { name: "No thanks", exact: true })
+          const suppressed = await page.evaluate(() => navigator.doNotTrack === "1" ||
+            (navigator as Navigator & { globalPrivacyControl?: boolean }).globalPrivacyControl === true)
+          if (analyticsEnabled && !suppressed) await refuseAnalytics.waitFor()
+          if (await refuseAnalytics.isVisible()) {
+            await refuseAnalytics.click()
+            await page.getByRole("button", { name: "Analytics settings", exact: true }).waitFor()
+          }
           assert.equal(await page.locator(".feature-grid-card").count(), 4)
           assert.equal(await page.locator(".feature-grid-section").count(), 1)
           assert.equal(await page.locator(".pond-purpose:visible, #team:visible").count(), 0)
@@ -199,13 +230,6 @@ test("source homepage preserves accepted responsive layout and interactions", as
           }
           await page.locator(".photo-story").scrollIntoViewIfNeeded()
           await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>(".cutout-person img")].every(image => image.complete && image.naturalWidth > 0))
-          // Production enables the consent notice; exercise refusal rather than
-          // bypassing an overlay or granting consent to test an unrelated footer.
-          const refuseAnalytics = page.getByRole("button", { name: "No thanks", exact: true })
-          if (await refuseAnalytics.isVisible()) {
-            await refuseAnalytics.click()
-            await page.getByRole("button", { name: "Analytics settings", exact: true }).waitFor()
-          }
           await page.locator(".footer-hi").click()
           const dialog = page.locator("dialog[data-dialog=social]")
           assert.equal(await dialog.evaluate((element: HTMLDialogElement) => element.open), true)

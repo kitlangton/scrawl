@@ -4,7 +4,7 @@ Each source owner registers `delivery.json` beside its package. Schema 1 names t
 
 The isolated TypeScript architecture checker in `composition/architecture` rejects cross-owner source imports, undeclared private package paths, reversed dependencies and alias escapes. `Delivery contracts` tests the checker and scans common shared/composition code; component jobs scan their own owner before artifact admission. An unrelated product violation fails its own lane. A successful shared contract job is required before any prior component can be admitted, and checker inputs are part of every component fingerprint. Before merging owner changes, install the checker's locked dependencies and run its typecheck, tests and repository check as documented there. This guard covers static dependency boundaries, not arbitrary runtime behavior or native effects.
 
-`engine-native` consumes `engine/delivery/native/delivery.json` independently of the SDK slot. That native lane installs Rust and produces the exact executable/manifest inventory through the Engine-owned producer. Its inputs include `engine/`, `capture/engine/` and inherited `.cargo/` settings. The current executable reports capture unavailable; packaging does not enable installed routing or prove screen capture.
+`engine-native` consumes `engine/delivery/native/delivery.json` independently of the SDK slot. That native lane installs Rust and produces the exact executable/manifest inventory through the Engine-owned producer. Its inputs include `engine/` and inherited `.cargo/` settings. The separate `engine-media-native` producer also fingerprints `capture/engine/` because its Linux media worker still uses that legacy implementation. Packaging does not enable installed routing.
 
 `engine-media-native` consumes `engine/delivery/media/delivery.json` as a separate
 native `linux-x64` slot owned architecturally by Engine. Its fresh build installs
@@ -43,7 +43,7 @@ node --experimental-strip-types composition/delivery/cli.ts seal record linux-x6
 
 On reuse the workflow downloads the admitted artifact by its numeric ID. `reuse ID TARGET ZIP OUTPUT_DIR INPUT_DIGEST PRIOR_SHA ARTIFACT_ID PRIOR_RUN_ID PRIOR_ATTEMPT` checks the ZIP inventory, receipt identity and archive hash/size without extracting application files. It republishes the exact component bytes with a current-run receipt retaining the prior artifact/source identity. Failed retrieval or validation removes partial output and falls through to a fresh owner build; a failed fresh build still blocks admission. Both fresh and reused components receive provenance attestations and a current-run artifact.
 
-`build` runs the registered npm verification scripts and build. npm owners are packed without lifecycle scripts rerunning, installed into a fresh consumer with scripts disabled, and imported through their public package root. App-shell output copies the built app, shell and fixtures; a future `directory` owner can copy a declared package-contained artifact directory, including a native-language producer whose owner script owns its toolchain invocation. The parent workflow owns OS setup and uploads `stream-ID-TARGET-DIGEST` with `component.tar.gz` and `receipt.json`. `seal` only archives a controlled prebuilt staging directory and records source, digest, archive hash/size and Actions run identity; it does not build or publish. Main-only canonical workflow identity is required. Symlinks are allowed only when relative and contained by the staging root. App artifacts are development staging output; this protocol does not publish stable releases or create an updater.
+`build` runs the registered npm verification scripts and build. npm owners are packed without lifecycle scripts rerunning, installed into a fresh consumer with scripts disabled, and checked through every public export. That all-exports verifier explicitly provisions declared optional host peers (such as React for UI entrypoints) inside its disposable consumer only; they are not added to the staged library artifact or made mandatory for headless installations. Owner checks still verify their separate headless and UI profiles. App-shell output copies the built app, shell and fixtures; a future `directory` owner can copy a declared package-contained artifact directory, including a native-language producer whose owner script owns its toolchain invocation. The parent workflow owns OS setup and uploads `stream-ID-TARGET-DIGEST` with `component.tar.gz` and `receipt.json`. `seal` only archives a controlled prebuilt staging directory and records source, digest, archive hash/size and Actions run identity; it does not build or publish. Main-only canonical workflow identity is required. Symlinks are allowed only when relative and contained by the staging root. App artifacts are development staging output; this protocol does not publish stable releases or create an updater.
 
 ## Public web artifacts
 
@@ -71,19 +71,6 @@ resource/privacy/browser seams, seals the final candidate and publishes under it
 existing controls. It never recompiles Public or Connect. Enabled synthetic Public
 analytics fixtures stay private to the producer and are never uploaded.
 
-## Pull request admission
 
-`stream-admission.yml` publishes the `value-stream admission` check for the current
-PR head. It reads owner path filters and target matrices from trusted default-branch
-workflows, then requires the selected owners' contracts, every PR target and runtime
-audits. PR events start the receipt; owner start/completion events refresh it without
-polling. Missing results stay pending; failed or uncertain evidence cannot pass.
-The write-capable receipt workflow checks out only the trusted default branch and
-never executes PR code. It runs no owner builds and gates no main deployments.
-Its control job has a five-minute timeout; owner workloads retain their own audits.
-Repository rulesets are separate: this change does not configure required checks.
-
-The receipt summarizes GitHub's PR-defined CI results; it does not attest that a
-PR preserved its workflow implementation or replace independent review of CI
-changes. A PR can change its own tests/workflows, as with ordinary required checks.
-The trusted receipt code never executes those changes with its write-capable token.
+PR readiness is established from the affected owner workflows directly. Each owner
+retains its own checks, builds, permissions and publication gates.

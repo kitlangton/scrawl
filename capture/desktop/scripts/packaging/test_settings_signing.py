@@ -34,10 +34,11 @@ class SigningTests(unittest.TestCase):
     def test_one_fresh_build_stages_both_surfaces_and_propagates_failures(self):
         # Run the real popup stager against disposable generated output; only
         # dependency installation/build and the OS are synthetic here.
-        for failure in (None, "standalone", "build", "popup"):
+        for failure in (None, "standalone", "producer", "build", "popup"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary) / "repo"
                 frontend = root / "capture/desktop/ui/frontend"
+                record = root / "record"
                 script = root / "capture/desktop/scripts/packaging/stage-settings.py"
                 script.parent.mkdir(parents=True)
                 for name in ("electron/runtime.cjs", "electron/notes/main.cjs", "electron/share/main.cjs",
@@ -57,11 +58,23 @@ class SigningTests(unittest.TestCase):
                              frontend / "scripts/popup-entries.mjs")
                 destination = Path(temporary) / "settings"
                 popups = Path(temporary) / "popups"
+                destination.mkdir()
+                existing = destination / "existing"
+                existing.write_text("prior staged output")
                 real_run = subprocess.run
                 calls = []
 
                 def run(command, **kwargs):
                     calls.append(command)
+                    if command[:3] == ["npm", "--prefix", str(record)]:
+                        self.assertFalse((record / "dist").exists(), "producer must build from absent dist")
+                        if failure == "producer":
+                            raise subprocess.CalledProcessError(1, command)
+                        (record / "dist/ui").mkdir(parents=True)
+                        (record / "dist/ui/index.js").write_text("producer output")
+                    if command[:2] == ["npm", "ci"] and command[1] == "ci":
+                        self.assertTrue((record / "dist/ui/index.js").is_file(),
+                                        "Record producer must finish before frontend install")
                     if command[:3] == ["npm", "run", "build"] and failure == "build":
                         raise subprocess.CalledProcessError(1, command)
                     if command[:2] == ["node", "--input-type=module"]:
@@ -76,10 +89,10 @@ class SigningTests(unittest.TestCase):
                      patch.object(stage.sys, "platform", "linux"), \
                      patch.object(stage.sys, "argv", argv), \
                      patch.object(stage.subprocess, "run", side_effect=run):
-                    if failure in ("build", "popup"):
+                    if failure in ("producer", "build", "popup"):
                         with self.assertRaises(subprocess.CalledProcessError):
                             stage.main()
-                        self.assertFalse(destination.exists())
+                        self.assertEqual(existing.read_text(), "prior staged output")
                     else:
                         stage.main()
                         self.assertTrue((destination / "app/dist/settings.html").is_file())
@@ -91,8 +104,13 @@ class SigningTests(unittest.TestCase):
                                              (frontend / "electron/runtime.cjs").read_bytes())
                             self.assertTrue((popups / "electron/share/main.cjs").is_file())
                             self.assertFalse((popups / "electron/share/main.cts").exists())
-                self.assertEqual(sum(c[:2] == ["npm", "ci"] for c in calls), 1)
-                self.assertEqual(sum(c == ["npm", "run", "build"] for c in calls), 1)
+                producer = ["npm", "--prefix", str(record), "ci", "--no-audit", "--no-fund"]
+                self.assertEqual(calls[0], producer)
+                self.assertEqual(sum(c == producer for c in calls), 1)
+                self.assertEqual(sum(c[:2] == ["npm", "ci"] for c in calls),
+                                 0 if failure == "producer" else 1)
+                self.assertEqual(sum(c == ["npm", "run", "build"] for c in calls),
+                                 0 if failure == "producer" else 1)
 
     def test_principal_executables_wait_for_nested_code(self):
         with tempfile.TemporaryDirectory() as temporary:
