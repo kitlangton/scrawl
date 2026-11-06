@@ -35,6 +35,30 @@ filesystem safety and production transfer lifecycle remain migration work.
 Existing Rust callers remain authoritative; this module is not installed in a
 production recipient path and does not replace the active Rust client.
 
+## Authenticated recipient retrieval
+
+`retrieveRecipientCapture` reads a capture through the real bearer-only HTTP
+transport. The caller supplies a current read credential and endpoint identity.
+It checks the authenticated peer registry against that local identity, resolves
+the signed sender only from approved upload peers, pins account/origin/capture/
+group independently, checks wire hashes before decryption, and rechecks current
+sender authorization before returning verified in-memory files. Grouped
+evidence-only retrieval skips media bytes. Legacy plaintext requires explicit
+`allowLegacyPlaintext: true`; no automatic downgrade or token renewal occurs.
+
+Requests never follow redirects, send cookies or include private data in error
+messages. JSON/file byte limits and per-request deadlines cover response bodies;
+`waitSeconds` bounds only readiness polling (0–900 seconds). Transfer requests
+have 60-second deadlines individually, so callers should supply an AbortSignal
+for an overall workflow deadline. Server bases retain the native client's HTTPS
+or IPv4/localhost HTTP profile and exact root or `/connect` signed identity.
+
+This API does not read or write credential files, refresh tokens, mutate config,
+run a worker, or publish directories. Its caller remains responsible for the
+single durable writer and private atomic no-overwrite publication; evidence-only
+publication must retain the existing `.evidence-only.json` receipt. Installed
+CLI/fetch paths still use the Rust implementation until those seams are adopted.
+
 ## Account Settings adoption
 
 `settings-controller.cts` owns explicit consent, confirmation, asynchronous
@@ -95,6 +119,21 @@ frontend to consume a changed controller there, against an unchanged native
 backend. `prepack` builds the exported runtime/declarations. `package-lock.json`
 pins the direct and transitive npm graph.
 
+The optional local service integration proof uses the actual built Worker with
+isolated Miniflare D1/R2, real synthetic device approval/peer registration, signed
+encrypted upload, retrieval on root and mounted origins, and revocation. From the
+repository root, install/build the service before running it:
+
+```sh
+npm --prefix connect/service ci
+npm --prefix connect/service run build
+npm --prefix connect/delivery/client run test:service
+```
+
+This separate proof uses service development dependencies. It is outside the
+independent client stream's default `typecheck`/`test` CI; those commands test the
+bounded HTTP and recipient behavior without building the service or Rust.
+
 ## Dependency provenance and bridge evidence
 
 - `age-encryption@0.3.1` is the upstream FiloSottile TypeScript age implementation: <https://github.com/FiloSottile/typage>. Its README documents Node.js 20+, binary `Uint8Array` streams and age CLI interoperability.
@@ -124,11 +163,11 @@ install/build/test/pack commands above do not. The fixture does not certify
 production TypeScript transport, filesystem publication, account enrollment or
 grouped evidence/media consumers, which remain migration work. The envelope
 validator is exercised on the production Rust multipart envelope in this lane,
-alongside synthetic context, bounds, signature and mutation cases. Next adoption requires
-a real recipient caller to supply bounded strict decoding, current
-authorization-derived sender key and pinned expected context, then retain Rust
-unpack/native publication and authorization gates until those consumers are
-independently verified.
+alongside synthetic context, bounds, signature and mutation cases. Authenticated
+retrieval now supplies bounded decoding and current authorization-derived
+context/key facts in TypeScript. Retain the active Rust caller and native
+publication gates until installed consumers and safe publication are independently
+verified.
 
 ## Canonical API base compatibility
 

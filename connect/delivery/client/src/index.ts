@@ -12,3 +12,7 @@ export function validateRecipientEnvelopeBytes(bytes: Uint8Array, expected: Cont
 }
 export { openRecipientArchive, RecipientArchiveError } from "./recipient/archive.ts";
 export type { RecipientArchiveInput, OpenedRecipientArchive } from "./recipient/archive.ts";
+export { retrieveRecipientCapture, RecipientRetrievalError } from "./recipient/retrieve.ts";
+export type { RetrieveRecipientInput, RetrievedRecipientCapture, RecipientReadCredential, RecipientRetrievalFailure } from "./recipient/retrieve.ts";
+export { RecipientTransport, RecipientTransportError } from "./recipient/transport.ts";
+export type { RecipientTransportCategory } from "./recipient/transport.ts";

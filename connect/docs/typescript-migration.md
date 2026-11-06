@@ -20,8 +20,12 @@ slices must adopt those callers, preserve one writer and retire replaced donors.
 The TypeScript recipient boundary now decodes bounded raw JSON without duplicate
 keys, validates signed envelopes, decrypts bounded age streams through final EOF,
 and checks inner manifests, content hashes and bundle references. This is an
-in-memory integrity capability, not a credential store, current service
-authorization check or filesystem publisher. The migration-only Rust producer
+in-memory integrity capability. The authenticated recipient retrieval API now
+uses bounded bearer-only HTTP, resolves the current read identity and approved
+upload sender from the service peer registry, pins context, verifies downloaded
+bytes and rechecks sender authorization after decryption. It has explicit legacy
+plaintext opt-in and supports grouped evidence-only reads. It is not a credential
+store or filesystem publisher. The migration-only Rust producer
 interop lane exercises the same boundary; installed retrieval still uses the
 Rust client until transport, durable state and safe publication are adopted.
 
