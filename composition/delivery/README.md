@@ -50,7 +50,29 @@ node --experimental-strip-types composition/delivery/cli.ts plan
 node --experimental-strip-types composition/delivery/cli.ts admit record linux-x64
 node --experimental-strip-types composition/delivery/cli.ts build record linux-x64 /controlled/payload
 node --experimental-strip-types composition/delivery/cli.ts seal record linux-x64 /controlled/payload /controlled/sealed "$INPUT_DIGEST"
+node --experimental-strip-types composition/delivery/cli.ts consume engine linux-x64 "$PRODUCER_COMMIT" /controlled/empty-consumer-dir
 ```
+
+`consume ID TARGET PRODUCER_SHA [EMPTY_DESTINATION]` admits only that exact
+canonical main producer commit through the existing admission rules for owner
+job, contracts, runtime audit, exact artifact name/expiry and receipt identity.
+The producer receipt's input digest must match that exact artifact name and its
+tracked source digest must match the requested commit. It verifies the GitHub build provenance attestation for the component
+archive and checks its exact producer run/attempt before caching bytes. It never
+selects a different commit or starts a producer. Without a destination it prints
+JSON containing the immutable component archive and receipt paths; with a
+destination it stages those two files into an empty directory. Consumers remain
+responsible for their owner checks and any paired component contract. No package
+or native dependency is installed automatically.
+
+The private cache is `${XDG_CACHE_HOME:-~/.cache}/apparent/delivery`, with
+owner-only directories/files. Its content key includes repository, owner,
+target, source commit, input digest and authenticated archive hash. Cold handoff
+downloads once; warm and concurrent calls reuse the content after checking its
+receipt/hash, current producer admission, tar inventory and online attestation.
+Corrupt cache entries are discarded and fetched again; unavailable or failed
+GitHub/attestation checks fail closed. The consumer validates archive paths and
+rejects links/special entries without extracting them.
 
 `plan` remains a local diagnostic and reports registrations; owner workflows contain checked-in target matrices, so a run cannot schedule unrelated owners. Package source must be covered by a declared input root. `admit` runs on a hosted runner with its `ImageOS` and `ImageVersion` identity set. It looks only at push runs on main from the exact owner workflow path, with the historical owner stream job, `Delivery contracts` and runtime audit all terminal-success, an ancestor source SHA and a matching unexpired artifact. API/auth/identity uncertainty causes a rebuild. Fingerprints use Git tree mode, path and blob IDs for all owner input roots, registration, `LICENSE`, the delivery core, owner workflow and shared component action, and runtime budget checker/action, and include Node, runner image, OS/architecture and exact target identities.
 

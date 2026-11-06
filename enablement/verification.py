@@ -158,6 +158,7 @@ MACHINERY_TEST_INPUTS["test_pre_push_guard.py"].update({
     "composition/delivery/core.ts", "composition/delivery/cli.ts",
     "composition/delivery/core.test.ts", "composition/delivery/runtime/pr-candidate.ts",
     "composition/delivery/runtime/pr-candidate.test.ts",
+    "composition/delivery/consumer/handoff.ts", "composition/delivery/consumer/handoff.test.ts",
     ".githooks/pre-commit", "enablement/directory-width/check.py",
     "enablement/directory-width/tests/test_hook.py",
     "enablement/file-length/check.ts", "enablement/file-length/check.test.ts",

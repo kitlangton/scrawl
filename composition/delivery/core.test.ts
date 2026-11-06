@@ -1,4 +1,5 @@
 import './runtime/pr-candidate.test.ts'
+import './consumer/handoff.test.ts'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -229,6 +230,24 @@ test('admission requires canonical repo, exact workflow, owner job, audit and un
   git(path, 'add', '-A'); git(path, 'commit', '-qm', 'change after candidate')
   current = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path, encoding: 'utf8' }).trim()
   assert.equal(assess(run, goodJobs, [{ id: 11, name: `stream-record-linux-x64-${inputDigest(path, owner)}`, expired: false }]).reuse, false)
+})
+
+test('exact-commit handoff admits only the producer receipt digest without a hosted runner identity', () => {
+  const path = resolve(temp, 'exact-admit-repo'); const sha = newRepo(path)
+  const exactDigest = 'b'.repeat(64)
+  const run = { id: 77, run_attempt: 1, head_sha: sha, head_branch: 'main', event: 'push', conclusion: 'success', path: workflowPathFor(owner.id) }
+  const jobs = [{ name: 'deliver / stream (record, linux-x64)', status: 'completed', conclusion: 'success' }, { name: 'deliver / Delivery contracts', status: 'completed', conclusion: 'success' }, { name: 'deliver / Workflow runtime budget', status: 'completed', conclusion: 'success' }]
+  const artifacts = [{ id: 88, name: `stream-record-linux-x64-${exactDigest}`, expired: false }]
+  const imageOS = process.env.ImageOS, imageVersion = process.env.ImageVersion
+  try {
+    delete process.env.ImageOS; delete process.env.ImageVersion
+    const accepted = assessPrior(path, owner, 'linux-x64', sha, 'tryapparent/apparent', [run], () => jobs, () => artifacts, sha, exactDigest)
+    assert.equal(accepted.reuse, true)
+    assert.throws(() => assessPrior(path, owner, 'linux-x64', sha, 'tryapparent/apparent', [run], () => jobs, () => artifacts, 'f'.repeat(40), exactDigest), /same explicit source commit/)
+  } finally {
+    if (imageOS) process.env.ImageOS = imageOS
+    if (imageVersion) process.env.ImageVersion = imageVersion
+  }
 })
 
 test('sealing only archives contained payloads under canonical main identity', () => {
