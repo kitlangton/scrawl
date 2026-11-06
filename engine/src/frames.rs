@@ -6,6 +6,9 @@ mod job;
 #[cfg(target_os = "linux")]
 #[path = "media/linux.rs"]
 mod linux;
+#[cfg(target_os = "macos")]
+#[path = "media/macos.rs"]
+mod macos;
 #[path = "media/protocol.rs"]
 mod protocol;
 #[path = "media/service.rs"]

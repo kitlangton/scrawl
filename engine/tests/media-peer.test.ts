@@ -19,7 +19,8 @@ async function fixture() {
   await mkdir(runtime, { mode: 0o700 }); await mkdir(bundle, { mode: 0o700 });
   const video = join(bundle, 'recording.mov');
   // Fixture generation only. Production decoding never invokes FFmpeg.
-  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=10:duration=2', '-an', '-c:v', 'mjpeg', '-q:v', '3', '-threads', '1', video], { timeout: 10000 });
+  if (process.env.APPARENT_MEDIA_FIXTURE) await copyFile(resolve(process.env.APPARENT_MEDIA_FIXTURE), video);
+  else execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=10:duration=2', '-an', '-c:v', 'mjpeg', '-q:v', '3', '-threads', '1', video], { timeout: 10000 });
   await chmod(video, 0o600);
   await writeFile(join(bundle, 'apparent.json'), JSON.stringify({ version: 1, id: 'synthetic', durationMs: 2250, video: 'recording.mov', videoOffsetMs: 250 }), { mode: 0o600 });
   const metadata = await stat(video, { bigint: true });
@@ -56,6 +57,11 @@ test('native media/1 decodes actual ordered PNGs, offsets, duplicates and end cl
     assert.deepEqual(result.frames.map(r => r.clampedToStart), [false, true, false, false]);
     assert.deepEqual(result.frames.map(r => r.clampedToEnd), [false, false, true, false]);
     assert.ok(result.frames[2].actualVideoMs! < result.frames[2].effectiveVideoMs);
+    if (process.platform === 'darwin') {
+      assert.equal(result.frames[2].actualVideoMs, 1900, 'the 2-second 10-fps fixture clamps to its final sample');
+      const last = await f.client.decode({ ...f.input, jobId: createMediaJobId(), outputDirectory: join(f.root, 'last-frame'), requestedBundleMs: [2150] });
+      assert.equal(result.frames[2].sha256, last.frames[0].sha256, 'end clamp returns the same pixels as the fixture last decodable frame');
+    }
     for (const frame of result.frames) {
       const bytes = await readFile(frame.path);
       assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
@@ -72,7 +78,14 @@ test('native media/1 decodes actual ordered PNGs, offsets, duplicates and end cl
     await assert.rejects(f.client.decode(f.input), code('busy'));
     await assert.rejects(f.client.decode({ ...f.input, requestedBundleMs: [0] }), code('identity_conflict'));
     const keep = process.env.APPARENT_MEDIA_EVIDENCE;
-    if (keep) { await mkdir(keep, { recursive: true, mode: 0o700 }); await copyFile(result.frames[0].path, join(keep, 'sample.png')); await writeFile(join(keep, 'native-result.json'), JSON.stringify(result, null, 2), { mode: 0o600 }); }
+    if (keep) {
+      await mkdir(keep, { recursive: true, mode: 0o700 });
+      for (const [index, frame] of result.frames.entries()) await copyFile(frame.path, join(keep, `frame-${index + 1}.png`));
+      await copyFile(result.frames[0].path, join(keep, 'sample.png'));
+      await copyFile(f.video, join(keep, 'recording.mov'));
+      await copyFile(join(f.bundle, 'apparent.json'), join(keep, 'apparent.json'));
+      await writeFile(join(keep, 'native-result.json'), JSON.stringify(result, null, 2), { mode: 0o600 });
+    }
   } finally { await f.close(); }
 });
 
@@ -160,6 +173,10 @@ test('independent workers cannot both claim the same empty output', { skip: !bin
   const other = new MediaClient(launchMediaWorker(resolve(binary!), f.runtime));
   try {
     await other.handshake();
+    // Bootstrap the shared lease anchors before racing output admission. Core
+    // deliberately fails closed if a contender sees an incomplete first anchor;
+    // its separate cross-process bootstrap tests cover that boundary.
+    await f.client.decode({ ...f.input, jobId: createMediaJobId(), outputDirectory: join(f.root, 'warmup'), requestedBundleMs: [0] });
     await mkdir(f.input.outputDirectory, { mode: 0o700 });
     const outcomes = await Promise.allSettled([f.client.decode(f.input), other.decode({ ...f.input, jobId: createMediaJobId() })]);
     const winners = outcomes.filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<MediaClient['decode']>>> => r.status === 'fulfilled');
@@ -195,12 +212,15 @@ test('native media rejects foreign channels/versions, duplicate RPCs and oversiz
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('forced supervisor death stops its pinned decoder and leaves only private unmanifested reservations', { skip: !binary || process.platform !== 'linux' }, async () => {
+test('forced supervisor death stops its pinned decoder and leaves only private unmanifested reservations', { skip: !binary }, async () => {
   const f = await fixture();
   await f.client.close();
   const child = spawn(resolve(binary!), ['--media-runtime-directory', f.runtime, '--media-channel', 'media', '--media-protocol-version', '1'], { stdio: ['pipe', 'pipe', 'pipe'] });
   const client = new MediaClient(new MediaChildProcessTransport(child));
   let decoderPid: number | undefined;
+  let nativePid: number | undefined;
+  const macProcesses = () => execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,state=,command='], { encoding: 'utf8' })
+    .split('\n').flatMap(line => { const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/); return m ? [{ pid: Number(m[1]), parent: Number(m[2]), state: m[3], command: m[4] }] : [] });
   let safeCleanup = false;
   try {
     await client.handshake();
@@ -208,12 +228,19 @@ test('forced supervisor death stops its pinned decoder and leaves only private u
     const decoded = client.decode(input).then(() => 'complete', () => 'worker lost');
     assert.equal((await client.inspect(input)).state, 'decoding');
     const until = Date.now() + 2000;
-    while (!decoderPid && Date.now() < until) {
-      const children = await readFile(`/proc/${child.pid}/task/${child.pid}/children`, 'utf8');
-      decoderPid = Number(children.trim().split(/\s+/)[0]) || undefined;
-      if (!decoderPid) await pause(2);
+    while ((!decoderPid || (process.platform === 'darwin' && !nativePid)) && Date.now() < until) {
+      if (process.platform === 'darwin') {
+        const rows = macProcesses();
+        decoderPid ??= rows.find(row => row.parent === child.pid && row.command.endsWith('--decode-pinned-job'))?.pid;
+        nativePid ??= rows.find(row => row.parent === decoderPid && row.command.endsWith('--decode-pinned-frames'))?.pid;
+      } else {
+        const children = await readFile(`/proc/${child.pid}/task/${child.pid}/children`, 'utf8');
+        decoderPid = Number(children.trim().split(/\s+/)[0]) || undefined;
+      }
+      await pause(2);
     }
     assert.ok(decoderPid, 'owned decoder was not observed');
+    if (process.platform === 'darwin') assert.ok(nativePid, 'owned AVFoundation bridge was not observed');
     const closed = new Promise<void>(r => child.once('close', () => r()));
     child.kill('SIGKILL'); await closed;
     assert.equal(await decoded, 'worker lost');
@@ -221,7 +248,10 @@ test('forced supervisor death stops its pinned decoder and leaves only private u
     let stopped = false;
     const exitDeadline = Date.now() + 3000;
     while (!stopped && Date.now() < exitDeadline) {
-      try { stopped = (await readFile(`/proc/${decoderPid}/stat`, 'utf8')).split(') ')[1].startsWith('Z'); }
+      if (process.platform === 'darwin') {
+        const rows = macProcesses();
+        stopped = [decoderPid, nativePid].every(pid => !rows.some(row => row.pid === pid && !row.state.startsWith('Z')));
+      } else try { stopped = (await readFile(`/proc/${decoderPid}/stat`, 'utf8')).split(') ')[1].startsWith('Z'); }
       catch (e) { if (['ENOENT', 'ESRCH'].includes((e as NodeJS.ErrnoException).code ?? '')) stopped = true; else throw e; }
       if (!stopped) await pause(10);
     }

@@ -4,6 +4,8 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BASELINE_LIBRARIES, inventory, REQUIRED_PLUGINS, sha256, validateArtifact, type MediaManifest } from './contract.ts'
 
+if (process.platform === 'darwin') { await import('./build-macos.ts'); process.exit(0) }
+
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: pkg, encoding: 'utf8' }).trim()
 const output = resolve(pkg, 'dist')
