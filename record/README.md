@@ -60,7 +60,7 @@ verified tarball SHA-256 is
 `62b1b2e103a585dbf10b848c9538ddcf888b3643b85d7eb89db8c1a61647066c`.
 
 The SDK `/observations` subpath exposes `readFrameVisualObservations` and its
-public input/result/source types. Record supplies the original validated
+public input/result/source types. Reader callers supply the original validated
 materials, completed derivative/2 document, 1-based request index, exact sealed
 PNG bytes, and explicit byte budget. The typed result is either unavailable
 (profile absent or unsupported) or measured against the decoded derivative
@@ -101,7 +101,9 @@ assembly returns an exact unsupported error. This API is fixture-ready only;
 it does not decode raw materials, choose frames/marks, produce contact sheets,
 or establish native provenance/full-profile acceptance.
 
-`@apparent/record/processing/media2-consumer` exports `RecordMedia2Job` over the published SDK 0.4.2 client. It durably binds the original retained-material request, layout and hash before dispatch; ambiguous jobs inspect the same identity, and cancellation remains explicit. A packed Linux Xvfb qualification now exercises that job against the admitted native Media/2 worker using retained Capture/2 materials, then reads its sealed frames/contact sheet into canonical assembly and a prepared staging plan. Selection times/layout are explicit caller input; validated derivatives remain processing inputs, never Saved. The producer has no publication capability, and this proof does not authenticate a published bundle or establish copy.
+`@apparent/record/processing/media2-consumer` exports `RecordMedia2Job` over the published SDK 0.4.2 client. It durably binds the original retained-material request, layout and hash before dispatch; ambiguous jobs inspect the same identity, and cancellation remains explicit.
+
+The retained packed Linux Xvfb qualification used SDK 0.4.1 and the admitted `0570f775` native Media/2 worker with retained Capture/2 materials, then read its sealed frames/contact sheet into canonical assembly and a prepared staging plan. SDK 0.4.2's capture, media/1 and media/2 core client modules are byte-identical, so that interface evidence is reused; this dependency upgrade did not run a new native Record observation/selection qualification. Selection times/layout in that proof were explicit caller input; validated derivatives were processing inputs, never Saved. That earlier producer had no publication capability. The later authenticated publication continuation is tracked below; the staged-plan proof alone does not authenticate a published bundle or establish copy.
 
 The publication subpath has an optional SDK peer: hosts using it supply the
 published SDK. Other Record consumers do not need to install that peer. Source
