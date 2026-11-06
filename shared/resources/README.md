@@ -116,6 +116,45 @@ and cannot satisfy callers requiring it. No credential or queue writer is added.
 Lock descriptors and publication parent/source descriptors also refuse Darwin ACL
 grants immediately before native effects. Ancestor validation remains caller-owned.
 
+## Installed provider lifetime
+
+Privileged composition imports `createInstalledNativeResources` from
+`@apparent/native-resources/installed`. Supply an absolute canonical admitted
+artifact directory, `trustedManifestSha256`, `expectedSourceSha`, and registered
+`target` (`linux-x64` or `macos-x64`). These identities must come from protected
+producer admission, not a manifest selected by untrusted input. The constructor
+verifies the exact manifest and executable, then stages a private immutable copy.
+It does not download, build, sign, notarize or activate an installed caller.
+
+The result is a `NativeResources` instance and can be passed directly to the
+public Connect consumer. Its read-only `executable`, `sha256`, `target`,
+`protocol`, `sourceSha`, and `manifestSha256` describe the actual staged provider.
+Keep the instance alive throughout the consumer operation and explicitly call
+`close()` afterward. Close refuses pending calls or live leases; callers must
+finish their existing work and release leases themselves. It never cancels a
+lease, retries publication or writes Connect state. After retirement every method
+refuses before spawning, while still consuming the supplied descriptor.
+
+`replaceFile` delegates the qualified public SDK operation under the same
+admission and pending-operation guard. Close refuses while replacement is in
+flight; calls after retirement consume the descriptor and refuse locally without
+dispatch. Results and uncertainty are preserved without retry. Use an admitted
+helper supporting replacement; this wrapper does not qualify arbitrary older
+artifacts or implement Connect's cooperative lock/writer policy. Connect writer
+adoption remains separate.
+SDK surface coverage requires every public operation to have an explicit
+installed override, so an additive method cannot silently bypass this boundary.
+
+This assembly contract is not an installed locator or adoption switch. A host
+must provide admitted bytes and protect the returned lifetime. Native producer
+and joined-consumer evidence remain separate from protocol-peer tests; macOS
+signing/publication requirements still apply.
+
+The owner-local `macos-arm64` producer retains its existing native-adapter tests;
+it does not support this installed-provider API or run its installed lifetime test.
+Registered Linux x64 and Intel Mac producers build the public JavaScript package
+before testing the compiled installed provider against their exact staged helper.
+
 ## Locked file replacement prerequisite
 
 `replaceFile(parent, sourceBasename, destinationBasename, expected, options)`
