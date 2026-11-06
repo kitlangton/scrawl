@@ -111,6 +111,27 @@ never removed implicitly. The returned input remains fixture/packed-consumer
 support: it does not establish native authority, filesystem/profile acceptance,
 or production capture availability.
 
+`createCompletedCapturePublisher` composes the existing APIs for a host that has
+an observed SDK `materials-ready` status and the original materials manifest and
+payload bytes. `publishCompletedCapture` checks the observed capture/materials/lease
+binding against explicit Record admission before assembly. It assembles the bundle,
+checks existing durable publication ownership before staging, then calls the private
+stager and recovery publisher. `reconcile` accepts the caller's persisted capture,
+publication, materials, lease, bundle, and destination binding and delegates to
+recovery without rerunning assembly or staging. Returned values are SDK recovery
+statuses; the owner token is never returned. This is a composition seam only:
+selected frames/images remain caller-attested, and it does not authenticate
+native provenance, supply capture/2 lifecycle, release materials, or prove
+production publication.
+
+Binary inputs are fingerprinted by digest and length. Supplied derivative receipts
+are forwarded to the existing stager and SDK validation without asserting provenance.
+Once a durable binding exists, a new composition refuses before staging; use
+`reconcile` with the original binding. A reserved plan that never reached dispatch
+can be resumed through the existing recovery publisher with its original prepared
+input. Concurrent first-time publishers still rely on the journal's atomic dispatch
+admission; losing staging files are private and preserved, never implicitly deleted.
+
 ```ts
 import { preflightCapturePublication } from "@apparent/engine-sdk/capture";
 import { createRecordPublicationRecovery } from "@apparent/record/publication";
@@ -206,7 +227,7 @@ fallback route remains authoritative.
 | Next-shortcut admission and local-only admission | Explicitly unavailable | Current capture-v1 has neither reservation enforcement nor local-only enforcement. Record refuses local-only starts and refuses arm when the producer reports unavailable; it never infers enforcement from intent. A future producer must publish reservation consumption/cancellation/expiry and effective per-capture delivery readback. Engine committed parent-thread notification when usable native capabilities land. |
 | Transcript association | Implemented in the headless package | `associateTranscriptWithSelectedFrames` partitions supplied word/segment facts across existing selected frames using measured clause/anchor rules. Source-derived Rust parity tests cover Unicode whitespace, punctuation, gaps and boundary timing. This does not select images or supply missing native visual metrics. |
 | Semantic processing assembly and frame decode | Consumer implemented; installed adoption partial | PR #704 (main `7c2afd5`) added the formatter and decoder seam; this slice adds durable job ownership and real PNG decode proof against the retained Linux `media/1` artifact. It does not implement frame selection, native final publication, default output selection or installed handoff adoption. |
-| Capture material to Record bundle assembly and authenticated publication | Document assembly, private staging and publication recovery implemented; native producer unavailable | `assembleCanonicalBundle` maps validated facts and explicit policy into documents/inventory. `prepareRecordPublication` stages exact bytes privately with SDK0.3.1 preflight; images remain caller-attested. Recovery persists the original publication binding and reconciles through the SDK. Native authority, final publication, material release, raw-material decode and capture/2 remain unavailable. Engine retains its committed usable-capability return. |
+| Capture material to Record bundle assembly and authenticated publication | Record composition implemented; native authority and installed adoption unavailable | `createCompletedCapturePublisher` validates an observed materials-ready status against original SDK-validated materials and explicit admission, then composes `assembleCanonicalBundle`, `prepareRecordPublication`, and durable recovery. Reconnect uses the same caller-persisted capture/owner binding without rerunning assembly/staging. Controlled SDK method-port fixtures cover composition/recovery; packed SDK preflight is tested by package consumer checks. Selected frames/images remain caller-attested. Native capture2/media2 lifecycle, selection, publication authority, final filesystem acceptance, material release, and installed adoption remain open. This does not claim v2 start/stop/materials recovery. |
 | Keyframes, transcript, bundle contents, warnings and default output | Partially implemented; full adoption blocked | Record formats supplied semantic inputs, including target/session context, interaction labels/marks and processing warnings; default keyframe selection, native final bundle publication and installed handoff are still unadopted. Provider maps Engine v1 `saved` to Record `processing`; only authenticated Record output facts may publish `saved` or a successful save outcome. |
 | Clipboard copy, link and artifact open | Local prompt policy implemented; native effects and receipts blocked | `formatLocalHandoff` preserves semantic context, warnings and the timed request, with access instructions first and no clipboard/publication effect. Copy/open actions may be dispatched through the native port, but dispatch is not success. Copy needs a clipboard receipt; link needs the existing link producer; artifact open needs the exact-artifact viewer acknowledgement or supported OS observation. No such production receipts are synthesized here. |
 | Pill/runtime installed binding | Existing UI and runtime adopted through current fallback | Reusable pill and injected workflow host are packaged. This capability provider is owner-local and does not install an Electron main/preload route or switch routing. |
