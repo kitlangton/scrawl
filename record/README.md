@@ -201,6 +201,11 @@ jobs retain their original journals and are never redispatched by inspection.
 Issue observations are reconstructed during startup; Saved facts still have only
 the publication store as authority. Await `dispose()` before deleting owned private
 control data; it drains coordinator work without cancelling or closing SDK clients.
+Hosts coordinating shutdown may call `shutdown()` first: it closes coordinator
+admission, drains already admitted calls, and returns native/durable ownership
+items separately from local drain completion. Pending or unknown items are not
+idle proof; this coordinator does not produce next-shortcut admission facts.
+Await `shutdown()` and then `dispose()` before closing caller-owned SDK clients.
 
 Binary inputs are fingerprinted by digest and length. Supplied derivative receipts
 are forwarded to the existing stager and SDK validation without asserting provenance.
