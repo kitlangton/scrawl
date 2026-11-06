@@ -172,7 +172,7 @@ fn publication_rejects_external_and_symlinked_movies_before_decoder_callback() {
             "recording.mp4",
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/capture/engine/bundle/bundle_processing/publication/fixtures/tiny.mp4"
+                "/engine/core/tests/fixtures/tiny.mp4"
             )),
         )
         .unwrap();
@@ -265,7 +265,7 @@ fn publication_recovery_reconciles_only_durable_typed_notes_before_journal_valid
     publication::write(
         &root,
         "recording.mp4",
-        include_bytes!("publication/fixtures/tiny.mp4"),
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/engine/core/tests/fixtures/tiny.mp4")),
     )
     .unwrap();
     publication::write(&root, "microphone-off", b"").unwrap();

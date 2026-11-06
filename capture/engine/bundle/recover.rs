@@ -543,7 +543,7 @@ mod tests {
             VIDEO,
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/capture/engine/bundle/bundle_processing/publication/fixtures/tiny.mp4"
+                "/engine/core/tests/fixtures/tiny.mp4"
             )),
         )
         .unwrap();

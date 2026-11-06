@@ -67,7 +67,7 @@ fn data(file: &File, atom: Atom) -> Result<Vec<u8>> {
     read(file, atom.start, usize::try_from(atom.end - atom.start)?)
 }
 
-pub fn validate(file: &File) -> Result<()> {
+pub fn validate_movie(file: &File) -> Result<()> {
     let top = atoms(file, 0, file.metadata()?.len())?;
     let moovs: Vec<_> = top.iter().filter(|a| &a.kind == b"moov").collect();
     ensure!(moovs.len() == 1, "movie has no unique completed moov");
