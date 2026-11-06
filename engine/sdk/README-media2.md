@@ -1,8 +1,9 @@
 # Retained-material derivative/2 contract
 
-Public SDK export: `@apparent/engine-sdk/media2` (SDK 0.4.0). This slice publishes
-types and offline validators for Record's additive staging adapter. It supplies
-no transport, native job authority, launch route or decoder availability claim.
+Public SDK export: `@apparent/engine-sdk/media2`. SDK0.4.0 froze the types and
+offline validators for Record's additive staging adapter. SDK0.4.1 adds an
+explicitly negotiated client and process transport. This supplies no native job
+authority, qualified runtime artifact or decoder availability by itself.
 Capture/2, media/1 and derivative/1 retain their existing shapes. Do not dispatch
 derivative2 plans to a producer until its concrete media/2/publication handoff
 establishes support; capture/2's publication bit alone does not establish it.
@@ -95,3 +96,38 @@ relative to the native derivative root. Record can stage copies for assembly but
 must emit these selectors, not reclassify native outputs as assembled authority.
 `preflightCapturePublication` validates this before Record reserves dispatch; its
 existing original publication expectation and ambiguous-dispatch rules remain.
+
+## Negotiated media/2 client
+
+SDK0.4.1 adds `Media2Client` and `launchMedia2Worker(absoluteExecutable,
+privateRuntimeDirectory)`. It uses the existing media process transport and
+shutdown/resource-lifetime handling, with protocol version2, a bounded1MiB
+metadata line and no fallback to media/1. Launch has the same six arguments,
+ending `--media-protocol-version`, `2`. Native artifacts must independently
+advertise and qualify this channel before consumers dispatch; old media/1
+artifacts do not implement it.
+For retained materials, use the same private Engine runtime root that owns the
+capture/2 journal. Media/2 must not search other runtimes or infer authority from
+caller file paths. Sharing that root does not acquire the live-capture slot.
+
+`preflightMedia2Dispatch({ownerToken,request,materials}, timeoutMs)` validates
+local input before reserving dispatch. The client shares that exact preflight;
+local rejection has `dispatched:false`. `derive`, `inspect` and `cancel` accept
+that original input and return an observation bound to jobId/requestSha256.
+Derive needs native retainedFrames/contactSheet/nativeJobAuthority capabilities;
+cold inspect/cancel remain callable when decoding is unavailable. Explicit test
+peer opt-in never permits a native derivative receipt. Transport uncertainty has
+`dispatched:"unknown"`; it never cancels or chooses a new job identity.
+
+Wire channel is `media`, protocolVersion2, clientId/rpcId lowercase32hex.
+Handshake result has implementation and exact retainedFrames/contactSheet/
+nativeJobAuthority boolean capabilities. Derive adds captureId/ownerToken/jobId/
+requestSha256 and `requestJson` (the exact canonical UTF-8 request represented
+as a JSON string). Inspect/cancel carry the same authority/job/hash, without
+requestJson. Native authenticates before lookup. Responses carry exactly result
+or a structured error code; arbitrary errors/metadata are not forwarded.
+Job observations have jobId/requestSha256 and state running, cancelled, failed
+with error, or complete with `{derivative:{envelope,receiptJson}}`. ReceiptJson
+contains exact detached metadata bytes, never PNG/media bytes. Complete is
+validated against the caller's restored original request/layout and returns a
+Derivative2DocumentInput ready for publication preflight. It does not mean Saved.
