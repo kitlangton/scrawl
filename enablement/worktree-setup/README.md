@@ -4,17 +4,19 @@
 
 The command checks Node >=22.18.0, Python >=3.9.0 and npm >=9.0.0; Bun owners additionally require the repository-pinned Bun 1.3.10. It checks the already-installed state first, runs only the selected locked package installs when needed, then reuses `enablement/verification.py`'s read-only dependency preflight and existing package freshness checks. npm uses `ci --prefer-offline --no-audit --no-fund`; Bun uses `install --frozen-lockfile --prefer-offline`. A cache miss can use the ordinary configured network path. Lockfiles are never written by this tool. Package-manager errors, absent or unsupported tools, stale copied package inputs and failed imports exit nonzero with the original diagnostic visible. Rerunning after a rebase rechecks current lock and source state; valid installs are left untouched.
 
-The shared baseline is deliberately small. Owner selection is explicit because a new checkout has no Git diff from which to infer future task scope. The command installs no Rust toolchains or crates, does not compile, open a GUI, package, publish, activate, or rent a machine. It never copies another checkout's `target/`, `node_modules/` or absolute build paths. npm and Bun reuse their integrity-checked download caches; this is not a compiled-artifact cache.
+The shared baseline is deliberately small. Owner selection is explicit because a new checkout has no Git diff from which to infer future task scope. npm lifecycle scripts remain enabled: selected owners may compile TypeScript during installation, and App Shell prepares shared/contracts before installing its consumer. The command installs no Rust toolchains or crates and does not open a GUI, publish, activate, or rent a machine. It never copies another checkout's `target/`, `node_modules/` or absolute build paths. npm and Bun reuse their integrity-checked download caches; this is not a compiled-artifact cache. Bun owners always run their frozen install to validate the installed graph, since existing Bun preflights do not establish lock freshness.
+
+Automatic and explicit preparation serialize on a worktree-local `.apparent-worktree-prepare.lock` directory. A competing invocation waits up to two minutes, then reports the exact lock and recovery prerequisite. Errors release the current invocation's lock. After a crash, verify that no preparation is running before removing its empty lock directory; the tool never deletes a competing lock.
 
 ## T3 project setup integration
 
-For project `mcp:c63c1e72-12e4-40e0-9f78-10c3728e66ad` (`/home/simon/Projects/scrawl`), append the following script to the current empty `scripts` array. If the project already has scripts when applying the change, preserve each one and append this entry; do not replace the array.
+For project `mcp:c63c1e72-12e4-40e0-9f78-10c3728e66ad` (`/home/simon/Projects/scrawl`), append the following script to the latest `scripts` array, preserving existing entries. The guard allows a worktree deliberately based on an older commit to start with an explicit unprepared warning; update that branch before relying on this setup command.
 
 ```json
 {
   "id": "apparent-worktree-prepare",
   "name": "Prepare Apparent worktree",
-  "command": "node --experimental-strip-types enablement/worktree-setup/prepare.ts",
+  "command": "if test -f enablement/worktree-setup/prepare.ts; then node --experimental-strip-types enablement/worktree-setup/prepare.ts; else echo 'Apparent setup unavailable on this older commit; dependencies are not prepared.' >&2; fi",
   "icon": "configure",
   "runOnWorktreeCreate": true,
   "async": false

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, rmdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,7 +39,7 @@ export function parseArgs(args: string[]): { owners: Owner[]; help: boolean } {
 const packages: Record<Owner | 'baseline', string[]> = {
   baseline: ['composition/architecture'],
   agent: ['agent'],
-  'app-shell': ['composition/app'],
+  'app-shell': ['shared/contracts', 'composition/app'],
   record: ['record', 'capture/desktop/ui/frontend'],
   onboarding: ['onboarding'],
   resources: ['shared/resources'],
@@ -56,6 +56,7 @@ const importChecks: Partial<Record<Owner | 'baseline', [string, string][]>> = {
   resources: [['shared/resources', 'typescript']],
   'connect-client': [['connect/delivery/client', 'typescript']],
   'public-site': [['public/site', 'vite']],
+  browser: [['connect/web', 'vite']],
 };
 
 function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): void {
@@ -131,11 +132,30 @@ function verifyImports(root: string, owner: Owner | 'baseline'): void {
   }
 }
 
-export function prepare(root: string, selected: Owner[]): void {
+/** A crashed holder requires explicit recovery; never delete another process's lock. */
+export function withPreparationLock(root: string, action: () => void, timeoutMs = 120_000): void {
+  const lock = resolve(root, '.apparent-worktree-prepare.lock');
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      mkdirSync(lock, { mode: 0o700 });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (Date.now() >= deadline) throw new Error(`Preparation is already locked at ${lock}. Wait for the existing setup terminal; after a crash, verify no preparation is running before removing this empty lock directory.`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
+  try { action(); } finally { rmdirSync(lock); }
+}
+
+function prepareUnlocked(root: string, selected: Owner[]): void {
   for (const owner of ['baseline', ...selected] as const) {
     console.log(`\n[prepare] ${owner}: checking locked install and existing freshness guards`);
     checkToolchain(root, owner);
-    if (preflight(root, owner)) {
+    // Existing Bun preflights check prerequisites, not installed lock freshness.
+    // Let Bun validate its frozen graph on every selected browser preparation.
+    if (owner !== 'browser' && owner !== 'public-site' && preflight(root, owner)) {
       console.log(`[prepare] ${owner}: already prepared; no installation needed`);
       verifyImports(root, owner);
       continue;
@@ -146,6 +166,10 @@ export function prepare(root: string, selected: Owner[]): void {
     verifyImports(root, owner);
     console.log(`[prepare] ${owner}: prepared and verified`);
   }
+}
+
+export function prepare(root: string, selected: Owner[]): void {
+  withPreparationLock(root, () => prepareUnlocked(root, selected));
 }
 
 function main(): void {
