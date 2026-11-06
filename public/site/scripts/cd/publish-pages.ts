@@ -70,7 +70,7 @@ function isPublicOutputPath(name: string): boolean {
   if (name === 'wrangler.jsonc') return true
   if (!name.startsWith('dist-apparent/')) return false
   const path = name.slice('dist-apparent/'.length)
-  if (['index.html', '404.html', '_routes.json', '_worker.js', '_headers', '_redirects', 'robots.txt', 'sitemap.xml', 'icon.svg', 'apparent-wordmark.svg', 'social-preview-v1.png', 'Apparent-ghost-demo-v4-lilac-poster.jpg', 'HostGrotesk-Variable.ttf', 'footer-theatre.webp', 'frog-air-cohesive.png', 'frog-lounge-cohesive.png', 'frog-rest-cohesive.png', 'frog-wave-cohesive.png', 'lily-clean.png', 'olivia-dog-cutout.png', 'simon-cutout.png'].includes(path)) return true
+  if (['pond/apparent-qr.svg', 'index.html', '404.html', '_routes.json', '_worker.js', '_headers', '_redirects', 'robots.txt', 'sitemap.xml', 'icon.svg', 'apparent-wordmark.svg', 'social-preview-v1.png', 'Apparent-ghost-demo-v4-lilac-poster.jpg', 'HostGrotesk-Variable.ttf', 'footer-theatre.webp', 'frog-air-cohesive.png', 'frog-lounge-cohesive.png', 'frog-rest-cohesive.png', 'frog-wave-cohesive.png', 'lily-clean.png', 'olivia-dog-cutout.png', 'simon-cutout.png'].includes(path)) return true
   if (movie.chunks.some(chunk => path === chunkPath(chunk).slice(1))) return true
   if (/(?:^|[\/._-])(connect|hosted)(?:[\/._-]|$)/i.test(path)) return false
   return /^(assets\/[^/]+\.(?:js|css)|feature-demos\/(?:anywhere|handoff|how-it-works|timeline)\/(?:index\.html|\.local-media\/[^/]+\.(?:png|jpe?g|webp|mp4))|pond\/(?:belief\/[^/]+\.(?:png|jpe?g|webp)|[^/]+\.(?:png|jpe?g|webp))|team\/[^/]+\.(?:svg|png|jpe?g|webp))$/.test(path)
