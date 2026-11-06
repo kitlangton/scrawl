@@ -14,10 +14,10 @@ TypeScript adapter tests. The registration must fingerprint both
 incomplete closure. This wiring does not enable or publish the helper by itself.
 
 `engine-media-native` consumes `engine/delivery/media/delivery.json` as a separate
-native `linux-x64` and `macos-x64` slot owned architecturally by Engine. Its Linux fresh build installs
+native `linux-x64` and `macos-x64` slot owned architecturally by Engine. Its Linux qualification installs
 the GStreamer development libraries, base/good/libav plugins, and FFmpeg fixture
-tool on the Linux runner; this setup is skipped for successful artifact reuse and every
-other owner. PR and main use the same installer with isolated signed Ubuntu
+tool on the Linux runner before admission, including reuse hits; other owners do not
+run this setup. PR and main use the same installer with isolated signed Ubuntu
 archive/security sources over HTTPS, 20-second acquisition timeouts, one retry,
 and process-group deadlines of 60 seconds for metadata and 180 seconds for
 installation, inside the five-minute setup step. This avoids the stalled Azure
@@ -26,7 +26,7 @@ The producer uses the installed runtime and refuses plugin-source
 overrides in CI. The catalog fingerprints `engine/`, `capture/engine/` and
 `.cargo/`; packaged-media verification remains inside the owner producer.
 The Mac lane runs on native `macos-26-intel`, qualifies Swift 6.2+/SDK 26+,
-and skips Linux apt setup. Fresh Mac builds ensure fixture-only FFmpeg is
+and skips Linux apt setup. Mac qualification ensures fixture-only FFmpeg is
 available, using a bounded Homebrew bottle install when absent. Its producer builds thin x86_64 Rust and Swift helpers
 and runs packaged public SDK/H264 tests. Receipts and discovery retain the same
 owner ID with a distinct target fingerprint. The compilation minimum of macOS 15
@@ -60,7 +60,7 @@ On reuse the workflow downloads the admitted artifact by its numeric ID. `reuse 
 
 ## PR verification reuse
 
-The Engine SDK Linux lane, native Engine Linux/Intel Mac lanes and App Shell
+The Engine SDK Linux lane, native Engine/media Linux/Intel Mac lanes and App Shell
 Linux/Intel Mac lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
 merged PR candidate. Admission authenticates the merged PR, exact workflow/run and
 successful attempt jobs (including contracts and runtime audit), then checks the
@@ -79,7 +79,7 @@ behavior; production configuration and platform/native acceptance remain require
 These Engine exceptions supersede the general statement that PR jobs do not archive
 artifacts. Changed-tree or per-component PR matching is deliberately not enabled.
 
-Native Engine admission installs Rust before fingerprinting on PRs and main,
+Native Engine and media admission install Rust before fingerprinting on PRs and main,
 including reuse hits. Its digest additionally covers actual rustc/Cargo/C compiler
 versions, macOS SDK/Clang where applicable, and compiler/linker environment
 overrides. Empty/missing identities and unknown Rust compiler wrappers fail closed.
@@ -100,6 +100,18 @@ retained in `buildSourceSha`. The shared TypeScript allowlist selects retention,
 sealing and admission consistently for enabled owner/target pairs. Both existing
 platform PR lanes keep their fresh checks; main authenticates only its own owner
 workflow and target. No new Desktop GUI/native behavior is introduced.
+
+Media qualifies its dependencies before admission even on a reuse hit: the
+existing bounded signed Ubuntu installer on Linux, and existing Swift/SDK/FFmpeg
+qualification on Intel Mac. The media digest adds the installed Linux package
+versions, GStreamer version/link flags and glibc, or Mac Swift and OS version,
+plus FFmpeg and relevant media loader/pkg-config overrides. Version or override
+changes invalidate reuse; missing identity fails closed. Qualification setup is
+retained, while compilation and packaged media tests are reused from the exact
+successful PR archive. Both platform PR producers continue their real staged
+H264/SDK checks. Embedded build manifests and all archived runtime bytes remain
+unchanged; main retains original build provenance. Capture is not enabled for PR
+reuse by this media slice.
 
 ## Public web artifacts
 
