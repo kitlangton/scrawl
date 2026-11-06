@@ -82,7 +82,7 @@ export interface RecordCaptureCoordinator {
   /** Explicitly reconciles capture, media and publication using only stored identities. */
   reconcile(): Promise<void>;
   /** Detaches observers/timers; never cancels or closes caller-owned SDK operations. */
-  dispose(): void;
+  dispose(): Promise<void>;
 }
 
 interface StoredPlan {
@@ -127,6 +127,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
   const pending = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
+  let disposal: Promise<void> | undefined;
 
   const schedule = () => {
     if (disposed || timer || !pending.size) return;
@@ -158,11 +159,12 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
   const run = async (requestId: string): Promise<void> => {
     pending.delete(requestId);
     const mapping = await mappings!.getByRequestId(requestId);
-    if (!mapping?.capture2Intent) return;
+    if (disposed || !mapping?.capture2Intent) return;
     const publicIdentity = publicMapping(mapping);
 
     // Publication ownership is checked first. Saved handoff never rereads source materials.
     const binding = await store.get(mapping.captureId);
+    if (disposed) return;
     if (binding) {
       if (binding.bundleId !== mapping.bundleId || binding.bundlePath !== mapping.bundlePath)
         throw new Error("Publication bundle identity conflicts with its capture mapping");
@@ -303,13 +305,14 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
   const reconcile = async () => {
     if (disposed) return;
     await runtime.reconcileStartup();
+    if (disposed) return;
     const ids = await mappings!.listRequestIds("capture2");
     if (!disposed) await Promise.all(ids.map(requestId => advance(requestId)));
   };
 
   // Startup recovery runs detached so callers can still issue Stop/Cancel while
   // retained media or publication RPCs are in flight. Explicit reconcile awaits it.
-  void reconcile().catch(() => undefined);
+  const startupRecovery = reconcile().catch(() => undefined);
 
   return {
     runtime,
@@ -319,7 +322,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
     createProvider(providerOptions) { return createRecordCapabilityProvider({ ...providerOptions, runtime, capture2Start: runtime, captureFacts: output.captureFacts }); },
     async reconcile() { await reconcile(); },
     dispose() {
-      if (disposed) return;
+      if (disposal) return disposal;
       disposed = true;
       if (timer) clearTimeout(timer);
       timer = undefined;
@@ -327,6 +330,8 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
       subscriber();
       runtime.dispose();
       host.dispose();
+      disposal = Promise.allSettled([startupRecovery, ...flights.values()]).then(() => undefined);
+      return disposal;
     },
   };
 }

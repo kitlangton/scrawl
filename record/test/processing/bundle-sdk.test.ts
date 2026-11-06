@@ -1178,15 +1178,15 @@ test("capture coordinator advances one retained request through synthetic media,
       assert.equal(JSON.stringify(await new SqlitePublicationBindingStore(controlRoot).listProcessing()).includes(ownerToken), false);
       assert.equal(publishes, 1, "the original assembled plan is published once");
       await rm(materialRoot, { recursive: true, force: true });
-      coordinator.dispose();
+      await coordinator.dispose();
       const reopened = await createRecordCaptureCoordinator(options as never);
       try {
         assert.equal((await reopened.resolveHandoff({ captureId: requestId, artifactId: bundleId }))?.handoff.savedBundle.bundlePath, bundlePath);
         assert.equal(derives, 1, "restart resolves Saved without rereading deleted retained materials or deriving again");
         assert.equal(selections, 1, "restart does not reconstruct processing policy from caller glue");
         assert.equal(publishes, 1, "restart reconciles the same publication binding without redispatch");
-      } finally { reopened.dispose(); }
-    } finally { coordinator.dispose(); }
+      } finally { await reopened.dispose(); }
+    } finally { await coordinator.dispose(); }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
