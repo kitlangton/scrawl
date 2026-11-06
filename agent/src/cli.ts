@@ -128,7 +128,7 @@ async function demo(args:string[]) {
     else if(arg==='--clipboard'&&!clipboard)clipboard=true;
     else throw new Error(`Unknown or duplicate demo option: ${arg}`);
   }
-  if(out!==undefined&&!isAbsolute(out))throw new Error('--out requires a fresh absolute .apparent directory');
+  if(out!==undefined&&(!isAbsolute(out)||resolve(out)!==out||out.includes('\0')))throw new Error('--out requires a fresh canonical absolute .apparent directory');
   if(clipboard) {
     try { await createNativeHostPort().readSnapshot(); }
     catch { throw new Error('demo --clipboard unavailable: a compatible running Apparent GUI is required; no bundle was generated.'); }
