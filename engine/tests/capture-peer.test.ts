@@ -18,6 +18,61 @@ const xsetrootCommand = process.env.APPARENT_XSETROOT ?? "xsetroot";
 const ffprobeCommand = process.env.APPARENT_FFPROBE ?? "ffprobe";
 const ffmpegCommand = process.env.APPARENT_FFMPEG ?? "ffmpeg";
 
+// Ask Xvfb to reserve its own display, then probe that exact endpoint. A free
+// lock-file observation and a fixed sleep do not prove our server is ready.
+async function readyXvfb(command = xvfbCommand, prefix: string[] = []) {
+  let diagnostics = "";
+  let announcement = "";
+  let launchError: Error | undefined;
+  const server = spawn(command, [...prefix, "-displayfd", "3", "-screen", "0", "1366x768x24", "-nolisten", "tcp"], { stdio: ["ignore", "ignore", "pipe", "pipe"] });
+  server.on("error", (error) => { launchError = error; });
+  server.stderr?.on("data", (chunk: Buffer) => { diagnostics = (diagnostics + chunk.toString()).slice(-8192); });
+  server.stdio[3]?.on("data", (chunk: Buffer) => { announcement = (announcement + chunk.toString()).slice(0, 128); });
+  const deadline = Date.now() + 10_000;
+  try {
+    while (Date.now() < deadline) {
+      if (launchError) throw launchError;
+      if (server.exitCode !== null || server.signalCode !== null) throw new Error(`server exited: ${server.exitCode}/${server.signalCode}`);
+      const match = /^(\d+)\n/.exec(announcement);
+      if (match) {
+        const display = `:${match[1]}`;
+        try {
+          execFileSync(xsetrootCommand, ["-solid", "#cc2211"], { env: { ...process.env, DISPLAY: display }, stdio: "pipe", timeout: 500 });
+          return { server, display, diagnostics: () => diagnostics };
+        } catch (error) { diagnostics = (diagnostics + `\nendpoint probe: ${String(error)}`).slice(-8192); }
+      }
+      await delay(50);
+    }
+    throw new Error("endpoint readiness deadline exceeded");
+  } catch (error) {
+    if (server.exitCode === null && server.signalCode === null && server.pid) {
+      server.kill("SIGTERM");
+      await Promise.race([new Promise<void>((done) => server.once("close", () => done())), delay(1_000)]);
+    }
+    throw new Error(`private Xvfb startup failed: ${String(error)}; ${diagnostics.trim() || "no Xvfb stderr"}`);
+  }
+}
+
+test("private Xvfb readiness waits beyond the former fixed delay and diagnoses launch failure", { skip: !binary }, async () => {
+  const fixture = mkdtempSync(join(tmpdir(), "capture-xvfb-readiness-"));
+  const wrapper = join(fixture, "delayed-xvfb.sh");
+  writeFileSync(wrapper, '#!/bin/sh\nsleep 1\nexec "$@"\n', { mode: 0o700 });
+  let ready: Awaited<ReturnType<typeof readyXvfb>> | undefined;
+  try {
+    const began = Date.now();
+    ready = await readyXvfb(wrapper, [xvfbCommand]);
+    assert.ok(Date.now() - began >= 750, "the fixture actually starts later than the former 500ms sleep");
+    execFileSync(xsetrootCommand, ["-solid", "#228844"], { env: { ...process.env, DISPLAY: ready.display }, timeout: 500 });
+    await assert.rejects(readyXvfb(join(fixture, "missing-xvfb")), /private Xvfb startup failed:.*ENOENT/);
+  } finally {
+    if (ready) {
+      ready.server.kill("SIGTERM");
+      await Promise.race([new Promise<void>((done) => ready!.server.once("close", () => done())), delay(1_000)]);
+    }
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 // Optional extension of this existing real capture scenario. Producer/guest
 // qualification supplies the separate packaged media entry explicitly.
 async function deriveRetainedFrames(runtime: string, ownerToken: string, materials: ReturnType<typeof validateMaterialsDocument>) {
@@ -217,17 +272,7 @@ function capturePeerClient(runtime: string) {
 }
 
 test("SDK capture/2 records a selected X11 output, seals materials, and releases only by owner", { skip: !binary }, async () => {
-  let displayNumber = 91 + Math.floor(Math.random() * 80);
-  let foundFreeDisplay = false;
-  for (let attempt = 0; attempt < 80; attempt++) {
-    try { statSync(`/tmp/.X${displayNumber}-lock`); displayNumber = 91 + ((displayNumber - 90) % 80); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") { foundFreeDisplay = true; break; } throw error; }
-  }
-  assert.ok(foundFreeDisplay, "an unused private Xvfb display must be available");
-  const display = `:${displayNumber}`;
-  let xserverDiagnostics = "";
-  const xserver = spawn(xvfbCommand, [display, "-screen", "0", "1366x768x24", "-nolisten", "tcp"], { stdio: ["ignore", "ignore", "pipe"] });
-  xserver.stderr?.on("data", (chunk: Buffer) => { xserverDiagnostics = (xserverDiagnostics + chunk.toString()).slice(-8192); });
+  const { server: xserver, display, diagnostics: xserverDiagnostics } = await readyXvfb();
   const oldDisplay = process.env.DISPLAY;
   const oldWayland = process.env.WAYLAND_DISPLAY;
   const oldGstDebug = process.env.GST_DEBUG;
@@ -251,8 +296,6 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
   let scenarioPassed = false;
   let preserveCancelRuntime = false;
   try {
-    await delay(500);
-    execFileSync(xsetrootCommand, ["-solid", "#cc2211"]);
     process.stderr.write("capture peer: Xvfb endpoint verified before starting Engine worker\n");
     client = capturePeerClient(runtime);
     let hello;
@@ -267,10 +310,10 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
         for (const name of ["gstreamer.log", "capture-v2/journal.json"]) {
           try { copyFileSync(join(runtime, name), join(diagnostic, name.replaceAll("/", "-"))); } catch {}
         }
-        writeFileSync(join(diagnostic, "xserver.stderr"), xserverDiagnostics, { mode: 0o600 });
+        writeFileSync(join(diagnostic, "xserver.stderr"), xserverDiagnostics(), { mode: 0o600 });
         writeFileSync(join(diagnostic, "worker.stderr-note"), `${String(error)}\n`, { mode: 0o600 });
       }
-      throw new Error(`capture handshake failed; Xvfb=${xserver.exitCode ?? "running"}; ${xserverDiagnostics.trim() || "no Xvfb stderr"}; ${String(error)}`);
+      throw new Error(`capture handshake failed; Xvfb=${xserver.exitCode ?? "running"}; ${xserverDiagnostics().trim() || "no Xvfb stderr"}; ${String(error)}`);
     }
     assert.equal(hello.implementation, "native");
     assert.equal(hello.readiness, "ready");
@@ -612,7 +655,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
         copyFileSync(join(runtime, "gstreamer.log"), join(evidence, "gstreamer.log"));
         const diagnostic = join(evidence, "startup-diagnostics");
         mkdirSync(diagnostic, { recursive: true, mode: 0o700 });
-        writeFileSync(join(diagnostic, "xserver.stderr"), xserverDiagnostics, { mode: 0o600 });
+        writeFileSync(join(diagnostic, "xserver.stderr"), xserverDiagnostics(), { mode: 0o600 });
         writeFileSync(join(diagnostic, "xserver-exit.json"), `${JSON.stringify({ exitCode: xserver.exitCode, signalCode: xserver.signalCode })}\n`, { mode: 0o600 });
       } catch { /* no diagnostic file was produced */ }
     }
