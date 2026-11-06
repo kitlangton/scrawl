@@ -63,6 +63,19 @@ reservations retain an opaque identity through `reserved`, `pressing`,
 press/release pair. A `begin-shortcut-trial` result of `accepted` is dispatch
 only and cannot produce that observation. Binding or epoch changes invalidate
 the prior reservation; stale reservation identity is retained as `unknown`.
+`shortcutTrialBeginBinding` is a separate optional fresh selector view. It is
+available only from a coherent current idle or raw terminal producer fact and a
+currently registered effective binding with no edit draft. Idle begins omit
+`replaces`; a terminal rearm supplies `replaces` with the exact prior
+`{ sourceEpoch, sourceRevision, bindingId, effectiveBinding, reservationId }`
+identity and a different new reservation ID. The command's source selectors
+must match `shortcutTrialBeginBinding`, which may have newer epoch, revision or
+binding values than the retained terminal identity. Provider-projected
+`unknown` from a raw `reserved`/`pressing` trial never exposes fresh rearm
+selectors. The native producer must atomically compare the predecessor identity,
+current GUI revision and current registration, retain predecessor correlation,
+and keep accepted/ambiguous dispatch distinct from later physical readback; the
+Record provider does not reset terminal state or retry a lost request.
 When the native port omits this producer, the provider publishes `unavailable`
 and refuses trial commands. The existing arm-next-shortcut command is not a
 physical trial and must not be substituted.

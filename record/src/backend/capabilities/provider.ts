@@ -1,7 +1,7 @@
 import type { RecordCapture2StartPort, RecordHostRuntimePort } from "../host/runtime.js";
 import type {
   CapabilitySnapshot, CaptureFact, CommandResult, NativeRequirement, PenColor,
-  PenPreference, RecordClient, RecordCommand, ScreenStrokeCursor, ShortcutTrialFact,
+  PenPreference, RecordClient, RecordCommand, ScreenStrokeCursor, ShortcutTrialBinding, ShortcutTrialFact, ShortcutTrialReservationIdentity,
 } from "../../capabilities/index.js";
 
 /**
@@ -128,6 +128,30 @@ function validShortcutTrial(value: unknown): value is ShortcutTrialFact {
   if (trial.state === "expired" || trial.state === "cancelled" || trial.state === "unknown") return opaqueId(trial.reservationId) &&
     Object.keys(trial).sort().join(",") === "bindingId,effectiveBinding,reservationId,sourceEpoch,sourceRevision,state";
   return false;
+}
+function validTrialReservationIdentity(value: unknown): value is ShortcutTrialReservationIdentity {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const identity = value as Record<string, unknown>;
+  return Object.keys(identity).sort().join(",") === "bindingId,effectiveBinding,reservationId,sourceEpoch,sourceRevision" &&
+    opaqueId(identity.sourceEpoch) && Number.isSafeInteger(identity.sourceRevision) && Number(identity.sourceRevision) >= 0 &&
+    opaqueId(identity.bindingId) && typeof identity.effectiveBinding === "string" && !!identity.effectiveBinding.trim() && opaqueId(identity.reservationId);
+}
+function terminalTrialIdentity(trial: ShortcutTrialFact | undefined): ShortcutTrialReservationIdentity | undefined {
+  if (!trial || !["observed", "expired", "cancelled", "unknown"].includes(trial.state) || !("reservationId" in trial)) return undefined;
+  return { sourceEpoch: trial.sourceEpoch, sourceRevision: trial.sourceRevision, bindingId: trial.bindingId,
+    effectiveBinding: trial.effectiveBinding, reservationId: trial.reservationId };
+}
+function currentTrialBeginBinding(facts: RecordNativeFacts): ShortcutTrialBinding | undefined {
+  const trial = facts.shortcutTrial;
+  const shortcut = facts.shortcut;
+  if (!trial || trial.state === "unavailable" || trial.state === "reserved" || trial.state === "pressing" ||
+      !opaqueId(shortcut.bindingId) || typeof shortcut.effective !== "string" || !shortcut.effective.trim() ||
+      shortcut.registration !== "registered" || shortcut.externallyManaged || shortcut.draft !== null) return undefined;
+  if (trial.state === "idle") {
+    if (trial.sourceEpoch !== facts.providerEpoch || trial.sourceRevision !== facts.revision ||
+        trial.bindingId !== shortcut.bindingId || trial.effectiveBinding !== shortcut.effective) return undefined;
+  } else if (trial.sourceEpoch === facts.providerEpoch && trial.sourceRevision > facts.revision) return undefined;
+  return { sourceEpoch: facts.providerEpoch, sourceRevision: facts.revision, bindingId: shortcut.bindingId, effectiveBinding: shortcut.effective };
 }
 function validNativeFacts(value: unknown): value is RecordNativeFacts {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -366,6 +390,7 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
       merged.set(live.captureId, combined);
     }
     const ready = engineReady();
+    const trialBeginBinding = currentTrialBeginBinding(nativeFacts);
     return {
       version: 2, providerEpoch: options.providerEpoch, revision,
       connection: detached ? "disconnected" : "connected",
@@ -374,6 +399,7 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
       captures: [...merged.values()].map(clone),
       nextShortcutAdmission: clone(outputFacts.nextShortcutAdmission),
       shortcutTrial: projectedShortcutTrial(nativeFacts),
+      ...(trialBeginBinding ? { shortcutTrialBeginBinding: clone(trialBeginBinding) } : {}),
     };
   };
   const publish = () => {
@@ -514,14 +540,36 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
       const trial = current.shortcutTrial ?? { state: "unavailable" as const };
       if (!options.native?.dispatch) return refuse(command, "physical shortcut trial producer unavailable");
       if (command.type === "begin-shortcut-trial") {
-        if (!opaqueId(command.reservationId) || !opaqueId(command.bindingId) || !opaqueId(command.sourceEpoch) ||
-            !Number.isSafeInteger(command.sourceRevision) || !Number.isFinite(Date.parse(command.expiresAt)) ||
-            trial.state !== "idle" || command.sourceEpoch !== nativeFacts.providerEpoch || command.sourceRevision !== nativeFacts.revision ||
-            command.sourceEpoch !== trial.sourceEpoch || command.sourceRevision !== trial.sourceRevision ||
-            command.bindingId !== trial.bindingId || command.effectiveBinding !== trial.effectiveBinding ||
-            nativeFacts.shortcut.bindingId !== command.bindingId || nativeFacts.shortcut.effective !== command.effectiveBinding ||
-            nativeFacts.shortcut.registration !== "registered" || nativeFacts.shortcut.externallyManaged || nativeFacts.shortcut.draft !== null)
+        const rawTrial = nativeFacts.shortcutTrial;
+        const beginBinding = currentTrialBeginBinding(nativeFacts);
+        const replacesPresent = Object.hasOwn(command, "replaces");
+        const previous = terminalTrialIdentity(rawTrial);
+        const replacementMatches = previous && validTrialReservationIdentity(command.replaces) &&
+          previous.sourceEpoch === command.replaces.sourceEpoch && previous.sourceRevision === command.replaces.sourceRevision &&
+          previous.bindingId === command.replaces.bindingId && previous.effectiveBinding === command.replaces.effectiveBinding &&
+          previous.reservationId === command.replaces.reservationId;
+        const freshSelectorsMatch = !!beginBinding && command.sourceEpoch === beginBinding.sourceEpoch &&
+          command.sourceRevision === beginBinding.sourceRevision && command.bindingId === beginBinding.bindingId &&
+          command.effectiveBinding === beginBinding.effectiveBinding;
+        const commonValid = opaqueId(command.reservationId) && Number.isFinite(Date.parse(command.expiresAt)) && freshSelectorsMatch;
+        const idleAdmission = rawTrial?.state === "idle" && !replacesPresent && commonValid && trial.state === "idle";
+        const terminalRearm = !!previous && replacesPresent && !!replacementMatches && commonValid &&
+          command.reservationId !== previous.reservationId;
+        if (!idleAdmission && !terminalRearm)
           return refuse(command, "physical shortcut trial binding or source revision changed");
+        const action = {
+          type: command.type, requestId: command.requestId,
+          expected: { providerEpoch: command.expected.providerEpoch, revision: command.expected.revision },
+          reservationId: command.reservationId, bindingId: command.bindingId, effectiveBinding: command.effectiveBinding,
+          sourceEpoch: command.sourceEpoch, sourceRevision: command.sourceRevision, expiresAt: command.expiresAt,
+          ...(terminalRearm ? { replaces: structuredClone(command.replaces!) } : {}),
+        } as Extract<NativeAction, { type: "begin-shortcut-trial" }>;
+        usedRequests.add(command.requestId);
+        try {
+          const status = await options.native.dispatch(action, { providerEpoch: nativeFacts.providerEpoch, revision: nativeFacts.revision });
+          await refresh();
+          return response(status);
+        } catch { await refresh(); return response("outcome-unknown"); }
       } else if ((trial.state !== "reserved" && trial.state !== "pressing") || trial.reservationId !== command.reservationId ||
           trial.sourceEpoch !== nativeFacts.providerEpoch || trial.bindingId !== nativeFacts.shortcut.bindingId || trial.effectiveBinding !== nativeFacts.shortcut.effective)
         return refuse(command, "matching physical shortcut trial reservation is unavailable");

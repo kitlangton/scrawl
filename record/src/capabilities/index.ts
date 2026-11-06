@@ -32,6 +32,10 @@ export interface ShortcutTrialBinding {
   bindingId: string;
   effectiveBinding: string;
 }
+/** Exact retained terminal reservation identity used for a guarded new trial. */
+export interface ShortcutTrialReservationIdentity extends ShortcutTrialBinding {
+  reservationId: string;
+}
 export type ShortcutTrialFact =
   | { state: "unavailable" }
   | ({ state: "idle" } & ShortcutTrialBinding)
@@ -108,6 +112,8 @@ export interface CapabilitySnapshot {
   nextShortcutAdmission: ShortcutAdmissionFact;
   /** Optional for v2 compatibility; providers publish `unavailable` when no trusted producer exists. */
   shortcutTrial?: ShortcutTrialFact;
+  /** Fresh current registration/source selectors for a guarded begin or terminal rearm. */
+  shortcutTrialBeginBinding?: ShortcutTrialBinding;
 }
 
 export type ShortcutAdmissionFact =
@@ -134,7 +140,7 @@ export type RecordCommand = CommandBase & (
   | { type: "start-capture"; delivery: "local-only" | "host-default" }
   | { type: "arm-next-shortcut"; admissionId: string; delivery: "local-only" | "host-default"; expiresAt: string }
   | { type: "cancel-next-shortcut"; admissionId: string }
-  | { type: "begin-shortcut-trial"; reservationId: string; bindingId: string; effectiveBinding: string; sourceEpoch: string; sourceRevision: number; expiresAt: string }
+  | { type: "begin-shortcut-trial"; reservationId: string; bindingId: string; effectiveBinding: string; sourceEpoch: string; sourceRevision: number; expiresAt: string; replaces?: ShortcutTrialReservationIdentity }
   | { type: "cancel-shortcut-trial"; reservationId: string }
   | { type: "stop-capture"; captureId: string }
   | { type: "cancel-capture"; captureId: string }
