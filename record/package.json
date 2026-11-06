@@ -73,7 +73,7 @@
     "test:contracts": "tsc --noEmit --allowImportingTsExtensions --module NodeNext --target ES2022 --strict --types node test/native-host/adapter.types.ts"
   },
   "peerDependencies": {
-    "@apparent/engine-sdk": "^0.3.1",
+    "@apparent/engine-sdk": "^0.3.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
@@ -101,7 +101,7 @@
     "tailwind-merge": "^3.3.1",
     "esbuild": "0.25.12",
     "@tailwindcss/cli": "4.1.17",
-    "@apparent/engine-sdk": "file:vendor/engine-sdk-0.3.1.tgz",
+    "@apparent/engine-sdk": "file:vendor/engine-sdk-0.3.2.tgz",
     "@apparent/app-contracts": "file:vendor/app-contracts-0.1.0-a8194a4.tgz",
     "react": "19.2.0",
     "react-dom": "19.2.0"
