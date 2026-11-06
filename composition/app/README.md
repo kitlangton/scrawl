@@ -221,6 +221,27 @@ compatibility; then complete delivery/adoption under existing explicit gates.
 This Record-only slice does not include Onboarding factory, journey, adoption or
 activation work.
 
+The trusted Record build may additionally provide `nativeArtifacts`, containing
+the Linux x64 Capture/2, Media/2 and config-helper payload directories, each with
+its externally admitted manifest SHA-256 and original build source SHA. Use the
+canonical delivery consumer to establish provenance and receipt admission first;
+the build does not turn an arbitrary local manifest into an admitted artifact.
+It snapshots and validates all three complete inventories before writing their
+bytes beneath `native-record/{capture,media,config}`. Undeclared files, aliases,
+changed bytes, unsupported protocols/targets and altered modes are refused.
+The shell and assembly receipts seal every native file and its executable mode;
+packaging rechecks both. No owner source or native compiler runs during assembly.
+
+`createRecordHostServices` receives `{ profilePath, nativeRoot }` from privileged
+main. `nativeRoot` is fixed inside this packaged application, never selected by
+the renderer. The binding must use absolute entries beneath it and one persistent
+private Capture/2 runtime for both Capture/2 and Media/2; it retains SDK/process
+shutdown ownership. A build without native artifacts retains the previous
+development-shell behavior. This route supports Linux x64 only because the
+Capture/2 and Media/2 producers are unavailable on Mac. It does not start those
+producers automatically, select capture sources, retire legacy writers, activate
+the installed route or clear the native pill/exclusion gates.
+
 Stream manifests may additionally seal `style.css` and at most nine font files
 under `fonts/` (TTF or WOFF2). These precompiled assets are copied and checked with
 the stream entry during assembly and packaged verification; undeclared files,
