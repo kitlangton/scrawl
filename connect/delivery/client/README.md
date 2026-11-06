@@ -349,3 +349,24 @@ only the factory-owned snapshot. Missing or unsupported installed inputs fail
 closed. The retained direct fixture is not an installed fallback. Linux x64
 joined-consumer proof does not establish Mac joined proof or ARM admission;
 installed routing and the sole-writer cutover remain separate gates.
+
+The internal `state/renewal-commit` phase can commit an exact-base completed
+legacy renewal response in isolated writer preparation. It shares the existing
+namespace admission, private readers and lock checks; takes scope then queue;
+rechecks the full stored credential, cancellation, intent and evidence identities;
+and uses private native replacement plus verified readback. Only then may it
+check the consumed evidence stamps, unlink their paths and sync the parent.
+Cleanup relies on relevant writers honoring the legacy scope/queue protocol in
+the admitted private namespace. The stamp check and unlink are separate calls;
+a same-UID process bypassing those locks can replace a name between them. This
+follows the existing directory admission and legacy `clear_renewal` trust boundary,
+and does not promise atomic inode-conditional deletion against such a process.
+It preserves
+the original issue time and leaves other scopes and config untouched. Possible
+effects, failed acknowledgements, cancellation or cleanup/lease failures report
+uncertainty without retry or restoration. It has no production caller or package
+export and must not write live state alongside Rust. Isolated Linux protected-
+wrapper and Mac direct-adapter cases cover both scopes, scope contention and
+evidence substitution under the cooperative protocol. They do not establish
+installed Mac or ARM admission. Active request preparation, response persistence,
+full writer ownership and production caller adoption remain separate gates.
