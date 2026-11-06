@@ -177,6 +177,35 @@ The active native caller remains authoritative migration debt. This source chang
 
 ## Queue and command adoption boundaries
 
+`./sender-upload/encrypted` transfers an already sealed root or grouped
+evidence/media snapshot. Discriminated profile options prevent mixed layouts.
+Before reservation it verifies envelope hashes, signatures, exact signed context
+and ordered chunk metadata. Every request pins the current caller-supplied account,
+sender grant and selected recipient membership to the saved spool facts; these
+facts and the trusted public signing key must come from current service authority.
+A signature does not establish authorization or prove AGE recipient membership.
+Current facts describe the pinned selection, so unrelated new peers need not
+invalidate an existing spool. Readback requires the exact encrypted format,
+delivery profile and unique complete manifest. Both senders reuse the same private
+HTTP, cancellation and byte-lifetime mechanism. This API does not encrypt, create
+or regenerate spools, refresh credentials, write state, run a worker or switch
+installed routes. Spool admission, durable ownership and caller adoption remain
+with the parent migration; no plaintext fallback is added.
+
+The `./sender-upload` export uploads an already prepared, consented plaintext
+snapshot through reservation, bounded asset PUTs, completion and exact ready-state
+manifest readback. It reuses the recipient asset validator and bounded transport
+reader. The caller supplies the stable snapshot, persisted manifest, fresh active
+guard, approved upload authorization and provider lifetime. Callback references,
+signal, identifier and manifest are detached before asynchronous work; returned
+asset bytes remain caller-owned. Each request runs once, refuses redirects, and
+exposes fixed error categories. Waiting for snapshot reads is cancellation/deadline
+bounded; the callback must honor its signal and own cleanup until its work settles.
+A failed operation may have left server-side effects; it does not roll them back.
+This is explicitly plaintext protocol preparation, with no encryption fallback,
+credential refresh/401 retry, filesystem snapshot, queue write, worker or installed
+route. Those adoption responsibilities remain with the parent migration.
+
 The `./local-status` export composes `readLocalStatus` from the existing private
 credential and queue readers under one queue lease. The caller supplies admitted
 fresh settings, approved server context, time and the resource provider lifetime.
@@ -200,6 +229,14 @@ returns an empty queue; a missing directory is an admission failure. It may crea
 the stable empty lock file, but never writes queue JSON. This library reader does
 not route installed status commands. Renewal-journal recovery and production state adoption remain with the
 parent migration; Rust remains the sole active writer.
+
+`projectUploadFailure` maps bounded structured root/descendant error facts to the
+existing queue transition codes and allowlisted diagnostic stage/reason values.
+Root and cause precedence match the donor. It never returns source messages;
+only the existing optional `sizeFailure` queue field retains its asset path.
+The caller supplies error facts; this function does not traverse arbitrary errors,
+persist a result, log diagnostics or run a worker. `completeUpload` remains the
+existing owner of guarded retry, waiting and terminal transition proposals.
 
 The `./recipient-command` export prepares headless fetch/remote-inspect behavior
 and invokes the verified retrieval API through injected credential/publication

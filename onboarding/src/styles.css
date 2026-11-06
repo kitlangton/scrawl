@@ -6,8 +6,8 @@
 .onboarding-shell header,.onboarding-shell footer { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:16px; padding:8px 16px; border-bottom:1px solid var(--apparent-border); }
 .onboarding-shell header { min-height:56px; }
 .onboarding-shell footer { min-height:80px; margin-top:auto; padding:16px; border-top:1px solid var(--apparent-border); border-bottom:0; }
-.onboarding-shell section { min-height:0; overflow:auto; padding:24px 32px; flex:1; overscroll-behavior:contain; }
-.onboarding-shell section.onboarding-pen-picker { display:flex; flex-direction:column; align-items:center; justify-content:safe center; text-align:center; }
+.onboarding-shell section { min-height:0; overflow:auto; padding:32px; flex:1; overscroll-behavior:contain; }
+.onboarding-shell section.onboarding-pen-picker { display:flex; flex-direction:column; align-items:center; justify-content:safe center; padding-block:24px; text-align:center; }
 .onboarding-pen-content { width:100%; }
 .onboarding-shell section.onboarding-pen-picker h1 { margin-bottom:16px; }
 .onboarding-shell section.onboarding-practice { position:relative; display:block; flex:0 1 auto; max-width:332px; width:min(332px,calc(100% - 48px)); margin:62px 24px 24px auto; padding:30px 24px 18px; border:1px solid var(--apparent-border); border-radius:24px 24px 24px 6px; background:var(--apparent-surface); box-shadow:0 1px 3px var(--apparent-shadow),0 12px 30px var(--apparent-shadow); overflow:visible; }
@@ -15,6 +15,12 @@
 .onboarding-coach-frog { position:absolute; top:-43px; left:-5px; width:80px; height:55px; object-fit:contain; pointer-events:none; animation:onboarding-coach-arrive .42s cubic-bezier(.2,.7,.3,1); }
 .onboarding-coach-label { font-size:1rem; font-weight:500; margin:0; }
 .onboarding-shell section.onboarding-practice h1 { font-size:1.125rem; font-weight:700; line-height:1.5; margin:13px 0 8px; }
+.onboarding-shell section.onboarding-shortcut-setup { display:flex; flex-direction:column; }
+.onboarding-shortcut-setup h1 { text-align:center; }
+.onboarding-shortcut { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:24px; margin:0; text-align:center; }
+.onboarding-shortcut > p { margin:0; }
+.onboarding-shortcut .onboarding-fact { max-width:65ch; padding:0; background:transparent; overflow-wrap:anywhere; }
+.onboarding-shortcut-recorder { width:min(100%, 420px); }
 .onboarding-shell section.onboarding-practice p { font-size:1.125rem; line-height:1.5; margin:0 0 16px; }
 .onboarding-coach-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .onboarding-coach-note { flex:1; color:var(--apparent-muted-foreground); font-size:.875rem; line-height:1.35; }
@@ -35,7 +41,7 @@
 .onboarding-complete-frog img { width:176px; max-width:100%; object-fit:contain; }
 .onboarding-eyebrow { margin:0 0 12px; font-size:1rem; }
 .onboarding-fact { padding:12px; background:var(--apparent-muted); }
-.onboarding-pencils { display:flex; flex-wrap:wrap; justify-content:center; gap:16px; max-width:100%; margin:32px 0 16px; }
+.onboarding-pencils { display:flex; flex-wrap:wrap; justify-content:center; gap:16px; max-width:100%; margin:24px 0 8px; }
 .onboarding-pencils button { display:flex; align-items:center; flex-direction:column; padding:16px 16px 24px; background:none; border:2px solid transparent; }
 .onboarding-pencils button span { position:relative; flex:0 0 95px; width:25px; height:95px; background:var(--pencil); border-radius:4px 4px 1px 1px; box-shadow:inset -7px 0 var(--apparent-shadow); }
 .onboarding-pencils button span:after { position:absolute; bottom:-17px; left:0; border-right:12.5px solid transparent; border-top:18px solid var(--apparent-foreground); border-left:12.5px solid transparent; content:""; }
@@ -53,6 +59,7 @@
 .onboarding-pen-footer button:first-child { justify-self:start; }
 .onboarding-pen-footer button:last-child { grid-column:2; justify-self:center; }
 .onboarding-later { display:block; align-self:flex-start; margin:12px 16px 8px; }
+.onboarding-pen-picker .onboarding-later { margin:8px 16px 0; }
 .onboarding-permissions { margin-top:24px; border:1px solid var(--apparent-border); background:var(--apparent-surface); }
 .onboarding-requirement { display:flex; align-items:center; justify-content:space-between; gap:24px; padding:16px; border-bottom:1px solid var(--apparent-border); }
 .onboarding-requirement:last-child { border-bottom:0; }
@@ -72,6 +79,9 @@
 .onboarding-shortcut-recorder:focus-visible { outline:2px solid var(--apparent-ring); outline-offset:3px; }
 .onboarding-shortcut-recorder p { margin:0; }
 .onboarding-shortcut-recorder kbd { font:500 1.25rem/1.5 var(--font-sans); overflow-wrap:anywhere; }
+.onboarding-trackpad-hint { margin:16px 0; padding:16px; border:1px solid var(--apparent-border); border-radius:18px 18px 18px 5px; background:var(--apparent-surface); }
+.onboarding-trackpad-hint strong { display:block; margin-bottom:8px; font-weight:700; text-wrap:balance; }
+.onboarding-trackpad-hint p { margin:0; text-wrap:balance; }
 @keyframes onboarding-coach-arrive { 0%{transform:translate(-28px,12px) rotate(-10deg);opacity:.3} 55%{transform:translate(-10px,-18px) rotate(6deg);opacity:1} 100%{transform:none} }
 @keyframes onboarding-pen-hop { 0%{transform:translate(0,0) scale(1)} 15%{transform:translate(0,5px) scale(1.08,.85)} 45%{transform:translate(85px,-72px) rotate(9deg)} 70%{transform:translate(165px,50px) scale(1.14,.75)} 84%{transform:translate(165px,28px) scale(.95,1.05)} 100%{transform:translate(165px,50px) scale(1)} }
 @keyframes onboarding-pen-splash { 0%{opacity:.8;transform:scale(.4)} 100%{opacity:0;transform:scale(1.6)} }

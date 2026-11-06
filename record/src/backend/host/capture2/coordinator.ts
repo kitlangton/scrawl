@@ -81,6 +81,26 @@ export interface RecordCaptureProcessingIssue {
   at: string;
 }
 
+export type RecordCaptureShutdownWorkState = "active" | "pending" | "unknown" | "failed";
+export interface RecordCaptureShutdownWork {
+  owner: "capture" | "media" | "publication" | "coordinator" | "storage";
+  state: RecordCaptureShutdownWorkState;
+  requestId?: string;
+  captureId?: string;
+  publicationId?: string;
+  reason: string;
+}
+export interface RecordCaptureCoordinatorShutdownReport {
+  /** Clearance covers this coordinator, not other owners sharing the SDK/runtime. */
+  scope: "record-coordinator";
+  admission: "closed";
+  localDrain: "complete";
+  runtimeClearance: "clear" | "unresolved" | "unknown";
+  /** This coordinator has no next-shortcut producer; unavailable does not mean idle. */
+  nextShortcutAdmission: { state: "unsupported"; reason: string };
+  work: readonly RecordCaptureShutdownWork[];
+}
+
 export interface RecordCaptureCoordinator {
   runtime: RecordHostRuntimePort & RecordCapture2StartPort;
   capture2Start: RecordCapture2StartPort;
@@ -93,6 +113,8 @@ export interface RecordCaptureCoordinator {
   observeProcessingIssues(listener: () => void): () => void;
   /** Explicitly reconciles capture, media and publication using only stored identities. */
   reconcile(): Promise<void>;
+  /** Closes admission, drains local calls, then snapshots native/durable ownership without dispatching work. */
+  shutdown(): Promise<RecordCaptureCoordinatorShutdownReport>;
   /** Detaches observers/timers; never cancels or closes caller-owned SDK operations. */
   dispose(): Promise<void>;
 }
@@ -137,12 +159,20 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
   const store = new SqlitePublicationBindingStore(options.privateControlRoot);
   const flights = new Map<string, Promise<void>>();
   const projections = new Set<Promise<unknown>>();
+  const operations = new Set<Promise<unknown>>();
   const pending = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let admissionClosed = false;
   let disposed = false;
-  let disposal: Promise<void> | undefined;
+  let shutdownPromise: Promise<RecordCaptureCoordinatorShutdownReport> | undefined;
+  let startupRecovery: Promise<void> = Promise.resolve();
+  const trackOperation = <T>(operation: Promise<T>): Promise<T> => {
+    operations.add(operation);
+    void operation.then(() => operations.delete(operation), () => operations.delete(operation));
+    return operation;
+  };
   const project = <T>(read: () => Promise<T>): Promise<T> => {
-    if (disposed) return Promise.reject(new Error("Record capture coordinator is disposed"));
+    if (admissionClosed || disposed) return Promise.reject(new Error("Record capture coordinator is closing"));
     const operation = read();
     projections.add(operation);
     void operation.then(() => projections.delete(operation), () => projections.delete(operation));
@@ -188,7 +218,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
 
 
   const schedule = () => {
-    if (disposed || timer || !pending.size) return;
+    if (admissionClosed || disposed || timer || !pending.size) return;
     timer = setTimeout(() => {
       timer = undefined;
       for (const requestId of [...pending]) void advance(requestId).catch(() => undefined);
@@ -198,14 +228,14 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
   };
 
   const subscriber = host.subscribe(event => {
-    if (event.type === "capture-changed" && (event.receipt.phase === "materials-ready" || event.receipt.phase === "processing"))
+    if (!admissionClosed && event.type === "capture-changed" && (event.receipt.phase === "materials-ready" || event.receipt.phase === "processing"))
       void advance(event.receipt.requestId).catch(() => undefined);
   });
 
   const advance = (requestId: string): Promise<void> => {
-    if (disposed || !requestId) return Promise.resolve();
     const existing = flights.get(requestId);
     if (existing) return existing;
+    if (admissionClosed || disposed || !requestId) return Promise.resolve();
     const work = run(requestId).catch(error => {
       if (!issues.has(requestId)) report(requestId, "failed", "processing-failed");
       throw error;
@@ -233,6 +263,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
       const saved = binding.state === "saved" && await output.resolveHandoff({ captureId: binding.output?.requestId ?? "", artifactId: binding.bundleId });
       if (saved) { clearIssue(requestId); return; }
       if (!/^[0-9a-f]{64}$/u.test(mapping.ownerToken)) return;
+      if (admissionClosed) { pending.add(requestId); return; }
       try {
         await output.reconcile({ captureId: mapping.captureId, ownerToken: mapping.ownerToken, publicationId: binding.publicationId,
           materials: binding.materials, leaseId: binding.leaseId, bundleId: binding.bundleId, bundlePath: binding.bundlePath });
@@ -300,6 +331,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
       const manifest = plan.materialsManifest;
       materialsRead = await readCaptureMaterials({ manifest, expected: { key: planRecord.materials, leaseId: planRecord.leaseId, bundleId: planRecord.bundleId },
         trustedRoot: plan.trustedMaterialsRoot, limits: plan.materialsLimits });
+      if (admissionClosed) { pending.add(requestId); return; }
       job = await RecordMedia2Job.create(options.mediaClient, jobPath, { ownerToken: mapping.ownerToken, request: plan.request, materials: materialsRead.materials });
     }
     if (disposed) return;
@@ -315,6 +347,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
       try { await job.inspect(mapping.ownerToken, operationTimeoutMs); } catch { report(requestId, "outcome-unknown", "media-outcome-unknown"); }
       if (["submitted", "running", "cancelling", "unknown"].includes(job.state)) { pending.add(requestId); return; }
     } else if (job.state === "ready") {
+      if (admissionClosed) { pending.add(requestId); return; }
       try { await job.derive(mapping.ownerToken, operationTimeoutMs); } catch { report(requestId, job.state === "ready" || job.state === "unavailable" ? "unavailable" : "outcome-unknown",
         job.state === "ready" || job.state === "unavailable" ? "media-unavailable" : "media-outcome-unknown"); }
       if (["submitted", "running", "cancelling", "unknown"].includes(job.state)) {
@@ -360,6 +393,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
     };
     if (disposed) return;
     try {
+      if (admissionClosed) { pending.add(requestId); return; }
       const result = await output.publish({ status: sdkStatus, assembly: assemblyInput, ownerToken: mapping.ownerToken, publicationId: plan.publicationId,
         stagingRoot: plan.stagingRoot, destinationPath: mapping.bundlePath, derivatives2: [job.derivative], derivative2Artifacts: retained.derivative2Artifacts,
         requestId, requestVideoProof: plan.requestVideoProof });
@@ -385,31 +419,198 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
 
   // Startup recovery runs detached so callers can still issue Stop/Cancel while
   // retained media or publication RPCs are in flight. Explicit reconcile awaits it.
-  const startupRecovery = reconcile().catch(() => { if (!issues.size) report(undefined, "failed", "startup-recovery-failed"); });
+  startupRecovery = reconcile().catch(() => { if (!issues.size) report(undefined, "failed", "startup-recovery-failed"); });
+
+  const shutdown = (): Promise<RecordCaptureCoordinatorShutdownReport> => {
+    if (shutdownPromise) return shutdownPromise;
+    // Close admission synchronously; already-started calls and request flights remain owned and are drained below.
+    admissionClosed = true;
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    shutdownPromise = (async () => {
+      while (true) {
+        const active = [...operations, ...flights.values(), ...projections, startupRecovery];
+        await Promise.allSettled(active);
+        if (!operations.size && !flights.size && !projections.size) break;
+      }
+
+      const work: RecordCaptureShutdownWork[] = [];
+      const addWork = (item: RecordCaptureShutdownWork) => {
+        const key = `${item.owner}\0${item.requestId ?? ""}\0${item.captureId ?? ""}\0${item.publicationId ?? ""}\0${item.reason}`;
+        if (!work.some(value => `${value.owner}\0${value.requestId ?? ""}\0${value.captureId ?? ""}\0${value.publicationId ?? ""}\0${value.reason}` === key))
+          work.push(Object.freeze(item));
+      };
+      try { await runtime.reconcileStartup(); }
+      catch { addWork({ owner: "capture", state: "unknown", reason: "native-capture-reconciliation-failed-during-shutdown" }); }
+
+      const ownership = runtime.unresolvedOwnership();
+      const captureStates = new Map<string, string>();
+      try {
+        for (const state of runtime.captures?.() ?? []) {
+          if (!("captureId" in state)) continue;
+          captureStates.set(state.captureId, state.phase);
+          if (["starting", "recording", "stopping", "cancelling", "stop-failed"].includes(state.phase))
+            addWork({ owner: "capture", state: "active", requestId: state.captureId, reason: `native-capture-${state.phase}` });
+          else if (state.phase === "uncertain")
+            addWork({ owner: "capture", state: "unknown", requestId: state.captureId, reason: "native-capture-state-uncertain" });
+        }
+      } catch { addWork({ owner: "capture", state: "unknown", reason: "native-capture-snapshot-unavailable" }); }
+      // Stop native observation before the remaining durable reads. Its cached
+      // snapshot remains available, and no later poll can change this report.
+      runtime.dispose();
+      await runtime.drainObservation();
+      host.dispose();
+      if (ownership.storageUnavailable) addWork({ owner: "storage", state: "unknown", reason: "capture-mapping-storage-unavailable" });
+      if (ownership.reconciliation !== "complete")
+        addWork({ owner: "coordinator", state: "unknown", reason: `capture-startup-reconciliation-${ownership.reconciliation}` });
+      for (const requestId of ownership.requestIds)
+        if (!captureStates.has(requestId)) addWork({ owner: "capture", state: "unknown", requestId, reason: "native-capture-ownership-has-no-current-state" });
+
+      let requestIds: string[] = [];
+      const mappingsByRequest = new Map<string, CaptureMapping>();
+      try {
+        requestIds = await mappings!.listRequestIds("capture2");
+        for (const requestId of requestIds) {
+          try {
+            const mapping = await mappings!.getByRequestId(requestId);
+            if (!mapping?.capture2Intent) addWork({ owner: "storage", state: "unknown", requestId, reason: "capture-mapping-is-missing-or-not-capture2" });
+            else mappingsByRequest.set(requestId, mapping);
+            if (!captureStates.has(requestId)) addWork({ owner: "capture", state: "unknown", requestId, captureId: mapping?.captureId,
+              reason: "durable-capture-mapping-has-no-native-inspection-result" });
+          } catch { addWork({ owner: "storage", state: "unknown", requestId, reason: "capture-mapping-read-failed" }); }
+        }
+      } catch { addWork({ owner: "storage", state: "unknown", reason: "capture-mapping-list-failed" }); }
+
+      let processingRecords: ProcessingCoordinatorRecord[] = [];
+      try { processingRecords = await store.listProcessing(); }
+      catch { addWork({ owner: "storage", state: "unknown", reason: "processing-plan-store-read-failed" }); }
+      let publicationBindings: Awaited<ReturnType<SqlitePublicationBindingStore["list"]>> = [];
+      try { publicationBindings = await store.list(); }
+      catch { addWork({ owner: "storage", state: "unknown", reason: "publication-binding-store-read-failed" }); }
+      const publicationsByCapture = new Map(publicationBindings.map(binding => [binding.captureId, binding]));
+
+      for (const binding of publicationBindings) {
+        const requestId = binding.output?.requestId ?? [...mappingsByRequest.values()].find(value => value.captureId === binding.captureId)?.requestId;
+        if (binding.state === "reserved") addWork({ owner: "publication", state: "pending", requestId, captureId: binding.captureId,
+          publicationId: binding.publicationId, reason: "publication-reserved-before-dispatch" });
+        else if (binding.state === "dispatching") addWork({ owner: "publication", state: "unknown", requestId, captureId: binding.captureId,
+          publicationId: binding.publicationId, reason: "publication-dispatch-may-have-reached-engine" });
+        else if (binding.state === "publishing") addWork({ owner: "publication", state: "active", requestId, captureId: binding.captureId,
+          publicationId: binding.publicationId, reason: "native-publication-remains-pending" });
+      }
+
+      const plansByCapture = new Map(processingRecords.map(record => [record.captureId, record]));
+      for (const record of processingRecords) {
+        const mapping = mappingsByRequest.get(record.requestId);
+        if (!mapping || mapping.captureId !== record.captureId) {
+          addWork({ owner: "storage", state: "unknown", requestId: record.requestId, captureId: record.captureId, reason: "processing-plan-has-no-matching-capture-mapping" });
+          continue;
+        }
+        const plan = record.plan as StoredPlan;
+        if (!plan || plan.schema !== 1 || !plan.request || !plan.materialsManifest) {
+          addWork({ owner: "media", state: "unknown", requestId: record.requestId, captureId: record.captureId, reason: "persisted-processing-plan-is-invalid" });
+          continue;
+        }
+        const jobPath = join(options.privateControlRoot, "media2-jobs", `${record.captureId}.sqlite`);
+        try { await lstat(jobPath); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT")
+            addWork({ owner: "media", state: "pending", requestId: record.requestId, captureId: record.captureId, reason: "processing-plan-exists-without-a-retained-media-journal" });
+          else addWork({ owner: "media", state: "unknown", requestId: record.requestId, captureId: record.captureId, reason: "retained-media-journal-stat-failed" });
+          continue;
+        }
+        try {
+          const job = await RecordMedia2Job.reopenRetained(options.mediaClient, jobPath, mapping.ownerToken, {
+            request: plan.request, materials: record.materials, leaseId: record.leaseId, bundleId: record.bundleId,
+          });
+          if (["submitted", "running", "cancelling"].includes(job.state))
+            addWork({ owner: "media", state: "active", requestId: record.requestId, captureId: record.captureId, reason: `retained-media-${job.state}-requires-native-inspection` });
+          else if (job.state === "unknown")
+            addWork({ owner: "media", state: "unknown", requestId: record.requestId, captureId: record.captureId, reason: "retained-media-dispatch-outcome-is-unknown" });
+          else if (job.state === "ready" || job.state === "unavailable")
+            addWork({ owner: "media", state: "pending", requestId: record.requestId, captureId: record.captureId, reason: `retained-media-${job.state}-has-no-dispatch-receipt` });
+          else if (job.state === "complete" && !publicationsByCapture.has(record.captureId))
+            addWork({ owner: "publication", state: "pending", requestId: record.requestId, captureId: record.captureId, reason: "completed-media-has-no-durable-publication-binding" });
+          else if (job.state === "failed" || job.state === "cancelled")
+            addWork({ owner: "media", state: "failed", requestId: record.requestId, captureId: record.captureId, reason: `retained-media-${job.state}` });
+        } catch { addWork({ owner: "media", state: "unknown", requestId: record.requestId, captureId: record.captureId, reason: "retained-media-journal-could-not-be-validated" }); }
+      }
+
+      for (const requestId of pending) addWork({ owner: "coordinator", state: "pending", requestId, reason: "automatic-record-recovery-remains-pending" });
+      for (const issue of issues.values()) {
+        const mapping = issue.requestId ? mappingsByRequest.get(issue.requestId) : undefined;
+        const binding = mapping ? publicationsByCapture.get(mapping.captureId) : undefined;
+        // Durable reserved/publishing states respectively prove pre-dispatch
+        // ownership or a confirmed pending native publication. A stale issue
+        // cannot turn either known state into unknown ownership.
+        if (issue.code === "publication-outcome-unknown" && (binding?.state === "reserved" || binding?.state === "publishing")) continue;
+        addWork({ owner: "coordinator", state: issue.state === "failed" ? "failed" : issue.state === "unavailable" ? "pending" : "unknown",
+          ...(issue.requestId ? { requestId: issue.requestId } : {}), reason: `record-processing-${issue.code}` });
+      }
+      for (const requestId of requestIds) {
+        if (captureStates.get(requestId) === "processing" && !plansByCapture.has(mappingsByRequest.get(requestId)?.captureId ?? "") &&
+            !publicationsByCapture.has(mappingsByRequest.get(requestId)?.captureId ?? ""))
+          addWork({ owner: "coordinator", state: "pending", requestId, captureId: mappingsByRequest.get(requestId)?.captureId,
+            reason: "materials-ready-capture-has-no-durable-processing-plan" });
+      }
+
+      const clearance: RecordCaptureCoordinatorShutdownReport["runtimeClearance"] = work.some(item => item.state === "unknown") ? "unknown"
+        : work.some(item => item.state === "active" || item.state === "pending") ? "unresolved" : "clear";
+      const snapshot = Object.freeze({ scope: "record-coordinator" as const, admission: "closed" as const, localDrain: "complete" as const, runtimeClearance: clearance,
+        nextShortcutAdmission: Object.freeze({ state: "unsupported" as const, reason: "Capture/2 coordinator has no next-shortcut reservation producer" }),
+        work: Object.freeze([...work]) });
+      disposed = true;
+      subscriber();
+      detachOutput();
+      listeners.clear();
+      pending.clear();
+      return snapshot;
+    })();
+    return shutdownPromise;
+  };
+
+  const coordinatedRuntime: RecordHostRuntimePort & RecordCapture2StartPort = {
+    get startup() { return runtime.startup; },
+    get state() { return runtime.state; },
+    subscribe(listener) { return admissionClosed ? () => undefined : runtime.subscribe(listener); },
+    dispatch(command) {
+      if (admissionClosed) return Promise.reject(new Error("Record capture coordinator is closing"));
+      return trackOperation(runtime.dispatch(command));
+    },
+    startCapture(requestId) {
+      if (admissionClosed) return Promise.resolve({ state: runtime.state, outcome: "refused" });
+      return trackOperation(runtime.startCapture(requestId));
+    },
+    reconcileStartup() {
+      if (admissionClosed) return Promise.reject(new Error("Record capture coordinator is closing"));
+      return trackOperation(runtime.reconcileStartup());
+    },
+    unresolvedOwnership() { return runtime.unresolvedOwnership(); },
+    // Runtime consumers may detach independently; only the coordinator owner
+    // closes admission through shutdown()/dispose().
+    dispose() { return runtime.dispose(); },
+    captures() { return runtime.captures?.() ?? []; },
+    completionEligibleCaptureIds() { return runtime.completionEligibleCaptureIds?.() ?? []; },
+    canStartCapture() { return !admissionClosed && (runtime.canStartCapture?.() ?? false); },
+  };
 
   return {
-    runtime,
-    capture2Start: runtime,
+    runtime: coordinatedRuntime,
+    capture2Start: coordinatedRuntime,
     captureFacts,
     processingIssues: () => structuredClone([...issues.values()]),
     observeProcessingIssues(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     resolveHandoff: identity => project(() => output.resolveHandoff(structuredClone(identity))),
-    createProvider(providerOptions) { return createRecordCapabilityProvider({ ...providerOptions, runtime, capture2Start: runtime, captureFacts }); },
-    async reconcile() { await reconcile(); },
-    dispose() {
-      if (disposal) return disposal;
-      disposed = true;
-      if (timer) clearTimeout(timer);
-      timer = undefined;
-      pending.clear();
-      subscriber();
-      detachOutput();
-      listeners.clear();
-      runtime.dispose();
-      host.dispose();
-      disposal = Promise.allSettled([startupRecovery, ...flights.values(), ...projections]).then(() => undefined);
-      return disposal;
+    createProvider(providerOptions) {
+      if (admissionClosed) throw new Error("Record capture coordinator is closing");
+      return createRecordCapabilityProvider({ ...providerOptions, runtime: coordinatedRuntime, capture2Start: coordinatedRuntime, captureFacts });
     },
+    async reconcile() {
+      if (admissionClosed) throw new Error("Record capture coordinator is closing");
+      await trackOperation(reconcile());
+    },
+    shutdown,
+    async dispose() { await shutdown(); },
   };
 }
 
