@@ -43,7 +43,7 @@ Current operation limits:
   refusal where possible. Config compensation compares the value written by
   this request before restoring it, preserving a concurrent external edit.
 
-This client does not implement safe relaunch, capture readiness, pen settings,
+This client does not implement safe relaunch, capture readiness, pen selection UI,
 pickers, strokes, clipboard, or capture admission. It is not injected into an
 installed route or Preview. Onboarding adoption must use
 `adoptOnboardingProgress` from #731; host-held legacy journey-writer quiescence
@@ -52,7 +52,13 @@ presence does not prove quiescence, and this slice performs no adoption or
 cutover. The existing repair UI/factory remains Onboarding-owned.
 
 Record's native pen producer is separately exported as `@apparent/native-host/pen`.
-It accepts only an exact 8-bit sRGB tuple or `null` plus the observed top-level
+`readStrokeColor()` returns only the running process epoch/scope and the actual
+telemetry getter value. It sends no expected-state or mutation fields and reads no
+configuration. `rgb: null` is the unknown legacy default; `[0,0,0]` is explicit
+black. Call it to inspect startup state or reconcile an unknown apply result; the
+facade does not automatically retry either operation. Apply still uses the
+existing `NativeHostPort.readSnapshot()` epoch/revision alongside the exact
+legacy value. It accepts only an exact 8-bit sRGB tuple or `null` plus the observed top-level
 `penColor` presence/value and current GUI epoch/revision. It sends raw channels;
 palette-name mapping and defaults remain Record-owned. The GUI compares the exact
 persisted legacy value while holding the existing config writer lock, then invokes

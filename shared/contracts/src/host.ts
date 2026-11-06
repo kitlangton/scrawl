@@ -148,6 +148,14 @@ export interface NativeHostPort {
 /** Narrow Record-owned pen effect. RGB is exact 8-bit sRGB; null selects the legacy default. */
 export interface NativePenPort {
   applyStrokeColor(rgb: [number, number, number] | null, expectedPenColor: LegacyConfigValue, expected: { processEpoch: string; revision: number }): Promise<NativePenResult>;
+  /** Reads the running GUI's telemetry getter; it never reads config or changes the effect. */
+  readStrokeColor(): Promise<NativePenSnapshot>;
+}
+export interface NativePenSnapshot {
+  api: 1;
+  processEpoch: string;
+  scope: 'running-desktop-process';
+  rgb: [number, number, number] | null;
 }
 export type NativePenResult =
   | { status: 'applied'; rgb: [number, number, number] | null }

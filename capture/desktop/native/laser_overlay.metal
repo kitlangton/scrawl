@@ -85,6 +85,7 @@ fragment float4 laser_fragment(
 
     float3 laser_red = float3(1.0, 0.16, 0.19);
     float3 laser_color = laser_red;
+    float laser_color_weight = 0.0;
     float3 laser_hot = float3(1.0, 0.97, 0.97);
 
     float laser_core_cov = 0.0;
@@ -123,10 +124,14 @@ fragment float4 laser_fragment(
                 float body = smoothstep(body_r + 0.85, max(0.0, body_r - 0.85), d) * pow(w, 0.40);
                 float core = smoothstep(core_r + 0.75, max(0.0, core_r - 0.75), d) * pow(w, 0.72);
                 float glow = exp(-(d * d) / (glow_sigma * glow_sigma)) * pow(w, 0.92);
-                if (body > laser_body_cov) {
-                    laser_body_cov = body;
+                // The bloom reaches beyond the body. Choose hue from the full
+                // optical contribution, including pixels with no body coverage.
+                float color_weight = glow * 0.42 + body * 0.88 + core * 0.95;
+                if (color_weight > laser_color_weight) {
+                    laser_color_weight = color_weight;
                     laser_color = seg.rgb != 0u ? recorded_srgb(seg.rgb) : laser_red;
                 }
+                laser_body_cov = max(laser_body_cov, body);
                 laser_core_cov = max(laser_core_cov, core);
                 laser_glow_cov = max(laser_glow_cov, glow);
             }

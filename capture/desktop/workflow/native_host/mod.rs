@@ -70,6 +70,7 @@ pub(crate) enum Operation {
     ValidateRecordShortcut(String, u32),
     SaveRecordShortcut(Shortcut),
     ApplyStrokeColor(Option<[u8; 3]>, ExpectedPenColor),
+    ReadStrokeColor,
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +94,53 @@ pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
         return None;
     }
     let request: Request = serde_json::from_str(line).ok()?;
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let object = value.as_object()?;
+    let fields: &[&str] = match request.operation.as_str() {
+        "readSnapshot" | "readStrokeColor" => &["protocol", "id", "owner", "operation", "deadline"],
+        "requestPermission" | "openSystemSettings" => &[
+            "protocol",
+            "id",
+            "owner",
+            "operation",
+            "deadline",
+            "expected",
+            "permissionId",
+        ],
+        "validateRecordShortcut" => &[
+            "protocol",
+            "id",
+            "owner",
+            "operation",
+            "deadline",
+            "expected",
+            "key",
+            "modifiers",
+        ],
+        "saveRecordShortcut" => &[
+            "protocol",
+            "id",
+            "owner",
+            "operation",
+            "deadline",
+            "expected",
+            "shortcut",
+        ],
+        "applyStrokeColor" => &[
+            "protocol",
+            "id",
+            "owner",
+            "operation",
+            "deadline",
+            "expected",
+            "rgb",
+            "expectedPenColor",
+        ],
+        _ => return None,
+    };
+    if object.len() != fields.len() || object.keys().any(|key| !fields.contains(&key.as_str())) {
+        return None;
+    }
     if request.protocol != 1
         || request.owner != "record"
         || request.id.len() > 64
@@ -117,6 +165,17 @@ pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
                 && request.expected_pen_color.is_none() =>
         {
             Operation::ReadSnapshot
+        }
+        "readStrokeColor"
+            if request.expected.is_none()
+                && request.permission_id.is_none()
+                && request.key.is_none()
+                && request.modifiers.is_none()
+                && request.shortcut.is_none()
+                && matches!(&request.rgb, Field::Missing)
+                && request.expected_pen_color.is_none() =>
+        {
+            Operation::ReadStrokeColor
         }
         "requestPermission"
             if request.expected.is_some()
@@ -255,6 +314,10 @@ mod tests {
             parse(&req("readSnapshot", ""), 1000).unwrap().operation,
             Operation::ReadSnapshot
         ));
+        assert!(matches!(
+            parse(&req("readStrokeColor", ""), 1000).unwrap().operation,
+            Operation::ReadStrokeColor
+        ));
         let pen = req(
             "applyStrokeColor",
             r#", "expected":{"processEpoch":"epoch-a","revision":4},"rgb":[0,0,0],"expectedPenColor":{"present":false,"value":null}"#,
@@ -274,6 +337,17 @@ mod tests {
         for line in [
             req("readSnapshot", r#","path":"/tmp""#),
             req("readSnapshot", r#","owner":"desktop""#),
+            req(
+                "readStrokeColor",
+                r#","expected":{"processEpoch":"epoch-a","revision":4}"#,
+            ),
+            req("readStrokeColor", r#","expected":null"#),
+            req("readStrokeColor", r#","rgb":null"#),
+            req(
+                "readStrokeColor",
+                r#","expectedPenColor":{"present":false,"value":null}"#,
+            ),
+            req("readStrokeColor", r#","permissionId":null"#),
             req("readSnapshot", r#","protocol":2"#),
             req(
                 "requestPermission",

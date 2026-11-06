@@ -193,6 +193,53 @@ test('typed pen facade sends raw exact RGB and distinguishes applied readback, c
   await assert.rejects(port.applyStrokeColor([1, 2, 3], { present: false, value: 'must-be-null' }, expected), /Invalid pen request/);
 });
 
+test('read-only pen snapshots carry actual scoped telemetry, preserve None versus black, and never retry', async () => {
+  for (const rgb of [null, [0, 0, 0]]) {
+    await withSocket(request => {
+      assert.equal(request.operation, 'readStrokeColor');
+      assert.deepEqual(Object.keys(request).sort(), ['deadline', 'id', 'operation', 'owner', 'protocol']);
+      return { api: 1, processEpoch: 'epoch-read', scope: 'running-desktop-process', rgb };
+    }, async () => {
+      assert.deepEqual(await createNativePenPort().readStrokeColor(), {
+        api: 1, processEpoch: 'epoch-read', scope: 'running-desktop-process', rgb,
+      });
+    });
+  }
+  for (const malformed of [
+    { api: 1, processEpoch: 'epoch', scope: 'config', rgb: null },
+    { api: 1, processEpoch: '../epoch', scope: 'running-desktop-process', rgb: null },
+    { api: 1, processEpoch: 'epoch', scope: 'running-desktop-process', rgb: [1, 2, 256] },
+    { api: 1, processEpoch: 'epoch', scope: 'running-desktop-process', rgb: [0, 0, 0, 0] },
+    { api: 1, processEpoch: 'epoch', scope: 'running-desktop-process', rgb: null, extra: true },
+  ]) await withSocket(() => malformed, async () => {
+    await assert.rejects(createNativePenPort().readStrokeColor(), /Native host unavailable/);
+  });
+  let dispatches = 0;
+  await withSocket(() => { dispatches++; return DROP; }, async () => {
+    await assert.rejects(createNativePenPort().readStrokeColor(), /Native host unavailable/);
+  });
+  assert.equal(dispatches, 1, 'read reconciliation sends once and has no implicit retry');
+});
+
+test('pen snapshot reads cap pending sockets process-wide', async () => {
+  let release!: () => void, eighth!: () => void, dispatches = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { eighth = resolve; });
+  await withSocket(async () => {
+    dispatches++;
+    if (dispatches === 8) eighth();
+    await gate;
+    return { api: 1, processEpoch: 'epoch', scope: 'running-desktop-process', rgb: null };
+  }, async () => {
+    const reads = Array.from({ length: 8 }, () => createNativePenPort().readStrokeColor());
+    await started;
+    await assert.rejects(createNativePenPort().readStrokeColor(), /Native host unavailable/);
+    release();
+    await Promise.all(reads);
+    assert.equal(dispatches, 8);
+  });
+});
+
 test('pen facade admits one process-wide effect and reports excess work unavailable without dispatch', async () => {
   let release!: () => void, dispatched!: () => void, dispatches = 0;
   const gate = new Promise<void>(resolve => { release = resolve; });

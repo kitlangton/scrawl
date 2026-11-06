@@ -3,7 +3,7 @@ import { lstat } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { join, normalize } from 'node:path';
-import type { NativeHostPort, NativeHostSnapshot, NativeHostRefusal, NativeMutationResult, NativePenPort, NativePenResult, LegacyConfigValue } from '@apparent/app-contracts/host';
+import type { NativeHostPort, NativeHostSnapshot, NativeHostRefusal, NativeMutationResult, NativePenPort, NativePenResult, NativePenSnapshot, LegacyConfigValue } from '@apparent/app-contracts/host';
 
 const MAX_FRAME = 4096;
 const TIMEOUT_MS = 3000;
@@ -187,15 +187,36 @@ function validLegacy(value: unknown): value is LegacyConfigValue {
   catch { return false; }
 }
 let penEffectInFlight = false;
+let penReadsInFlight = 0;
+const MAX_PEN_READS = 8;
 function validRgb(value: unknown): value is [number, number, number] | null {
   return value === null || (Array.isArray(value) && value.length === 3
     && value.every(channel => Number.isInteger(channel) && channel >= 0 && channel <= 255));
+}
+function penSnapshot(value: unknown): NativePenSnapshot {
+  if (!exact(value, ['api', 'processEpoch', 'scope', 'rgb']) || value.api !== 1
+    || typeof value.processEpoch !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(value.processEpoch)
+    || value.scope !== 'running-desktop-process' || !validRgb(value.rgb)) {
+    throw new Error('Native host unavailable');
+  }
+  return value as unknown as NativePenSnapshot;
 }
 
 /** Privileged typed pen facade. Renderer composition should pass this only to Record. */
 export function createNativePenPort(): NativePenPort {
   const target = endpoint();
   return {
+    async readStrokeColor() {
+      if (penReadsInFlight >= MAX_PEN_READS) throw new Error('Native host unavailable');
+      penReadsInFlight++;
+      try {
+        return penSnapshot(await request(target, 'readStrokeColor'));
+      } catch {
+        throw new Error('Native host unavailable');
+      } finally {
+        penReadsInFlight--;
+      }
+    },
     async applyStrokeColor(rgb, expectedPenColor, state) {
       if (!validRgb(rgb) || !validLegacy(expectedPenColor)) throw new TypeError('Invalid pen request');
       if (typeof state?.processEpoch !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(state.processEpoch)

@@ -596,6 +596,17 @@ impl ApparentCoordinator {
             return Some(refusal("unavailable"));
         }
         if self.native_host_epoch.is_empty() { return Some(refusal("unavailable")); }
+        if matches!(&request.operation, Operation::ReadStrokeColor) {
+            if crate::capture::desktop::workflow::agent_capture::storage_clock_ms() >= request.deadline {
+                return Some(refusal("unavailable"));
+            }
+            return Some(serde_json::json!({
+                "api": 1,
+                "processEpoch": self.native_host_epoch,
+                "scope": "running-desktop-process",
+                "rgb": self.telemetry.stroke_rgb(),
+            }));
+        }
         let observation = self.native_host_observation();
         self.refresh_native_host_revision(&observation.fingerprint);
         if !matches!(&request.operation, Operation::ReadSnapshot) {
@@ -716,6 +727,7 @@ impl ApparentCoordinator {
                 }
                 return None;
             }
+            Operation::ReadStrokeColor => unreachable!("pen read was handled before config observation"),
             Operation::SaveRecordShortcut(value) => self.native_host_save_shortcut(value, &observation, request.deadline),
         })
     }
@@ -1491,5 +1503,45 @@ impl ApparentCoordinator {
         if self.is_recording() {
             self.show_reveal(cx);
         }
+    }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+mod native_pen_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn read_stroke_color_returns_process_telemetry_without_changing_it() {
+        use crate::capture::desktop::workflow::native_host::{Admitted, Operation};
+
+        let (sender, _receiver) = flume::unbounded();
+        let telemetry = std::sync::Arc::new(crate::capture::engine::runtime::SharedCaptureTelemetry::new(sender));
+        let mut coordinator = ApparentCoordinator::new(std::sync::Arc::clone(&telemetry), None);
+        let read = |coordinator: &mut ApparentCoordinator| {
+            let (reply, _receive) = std::sync::mpsc::sync_channel(1);
+            coordinator.native_host_request(
+                &Admitted {
+                    id: "read-1".into(),
+                    deadline: crate::capture::desktop::workflow::agent_capture::storage_clock_ms() + 1000,
+                    expected: None,
+                    operation: Operation::ReadStrokeColor,
+                },
+                false,
+                reply,
+            ).expect("read returns synchronously")
+        };
+
+        telemetry.set_stroke_rgb(Some([59, 121, 189]));
+        assert_eq!(read(&mut coordinator), serde_json::json!({
+            "api":1,"processEpoch":coordinator.native_host_epoch,
+            "scope":"running-desktop-process","rgb":[59,121,189]
+        }));
+        assert_eq!(telemetry.stroke_rgb(), Some([59, 121, 189]));
+
+        telemetry.set_stroke_rgb(None);
+        assert_eq!(read(&mut coordinator)["rgb"], serde_json::Value::Null);
+        telemetry.set_stroke_rgb(Some([0, 0, 0]));
+        assert_eq!(read(&mut coordinator)["rgb"], serde_json::json!([0, 0, 0]));
+        assert_eq!(telemetry.stroke_rgb(), Some([0, 0, 0]));
     }
 }

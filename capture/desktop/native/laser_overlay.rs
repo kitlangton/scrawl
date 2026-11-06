@@ -1062,6 +1062,41 @@ mod tests {
             "explicit sRGB channels should reach BGRA8Unorm in display order: {:?}", &blue[i..i + 4]);
     }
 
+    #[test]
+    fn colored_laser_bloom_keeps_its_hue_outside_the_body() {
+        let size = 64_u64;
+        let blue = PathSegment {
+            a: [8.0, 16.0], b: [56.0, 16.0], w0: 1.0, w1: 1.0,
+            kind: 0.0, width: 3.0, rgb: packed_rgb(Some([0, 0, 255])),
+        };
+        let green = PathSegment {
+            a: [8.0, 48.0], b: [56.0, 48.0],
+            rgb: packed_rgb(Some([0, 255, 0])), ..blue
+        };
+        let uniforms = LaserUniforms {
+            resolution: [size as f32, size as f32], scale: 1.0, now_sec: 1.0,
+            tail_duration: 1.0, segment_count: 2,
+            target_rect: [0.0, 0.0, size as f32, size as f32],
+            tile_cols: 2, tile_rows: 2, tile_size: TILE_PT, ..Default::default()
+        };
+        let Some(pixels) = render_offscreen(Shader::Picked, &uniforms, &[blue, green], &[PinMarker::default()]) else { return; };
+        let pixel = |y: u64| {
+            let i = ((y * size + 32) * 4) as usize;
+            &pixels[i..i + 4]
+        };
+        // At 5.5 points from the segment, body/core are zero but bloom remains.
+        let b = pixel(21);
+        assert!(b[0] > 3 && b[1] <= 1 && b[2] <= 1 && b[3] > 10, "blue bloom became another hue: {b:?}");
+        let g = pixel(53);
+        assert!(g[1] > 3 && g[0] <= 1 && g[2] <= 1 && g[3] > 10, "green bloom became another hue: {g:?}");
+        let weak = PathSegment { w0: 0.5, w1: 0.5, rgb: 0, ..blue };
+        let strong = PathSegment { rgb: packed_rgb(Some([0, 255, 0])), ..blue };
+        let Some(overlap) = render_offscreen(Shader::Picked, &uniforms, &[weak, strong], &[PinMarker::default()]) else { return; };
+        let i = ((21 * size + 32) * 4) as usize;
+        let p = &overlap[i..i + 4];
+        assert!(p[1] > 3 && p[0] <= 1 && p[2] <= 1, "dominant green bloom inherited legacy red: {p:?}");
+    }
+
     /// The real shader draws a pin's pulse as a faint ring with nothing inside it, and draws
     /// nothing once the pulse is over.
     #[test]
