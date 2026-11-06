@@ -1,20 +1,36 @@
 //! Text and PNG through X11 selections, except on KDE Wayland and Hyprland: neither reliably
 //! bridges a background XWayland owner's selection to native apps. There we use wl-copy's
 //! data-control protocol (bundled in the AppImage). Both backends keep an owner alive to serve
-//! the data.
+//! the data. Verified text writes on native Wayland use this module's existing in-process owner
+//! protocol and exact wl-paste readback, but always return outcome-unknown: the Wayland clipboard
+//! API used here has no owner-identity query, so a foreign owner offering identical bytes cannot
+//! be distinguished from our still-live owner. Never infer applied from bytes plus liveness.
 
 use std::io::{BufRead as _, Read as _, Write as _};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result, anyhow};
 use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
 
 static CLIPBOARD: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
+static VERIFIED_TEXT_OWNER: std::sync::OnceLock<Option<std::sync::mpsc::SyncSender<VerifiedTextOwnerRequest>>> = std::sync::OnceLock::new();
 const MAX_MIME_TYPES: usize = 32;
 const MAX_MIME_BYTES: usize = 256;
 const MAX_CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
 const OWNER_ARGUMENT: &str = "--internal-wayland-clipboard-owner";
+
+enum VerifiedTextOwnerBackend {
+    X11(std::path::PathBuf),
+    Wayland(std::path::PathBuf, std::ffi::OsString),
+}
+
+struct VerifiedTextOwnerRequest {
+    text: String,
+    deadline: std::time::Instant,
+    backend: VerifiedTextOwnerBackend,
+    reply: std::sync::mpsc::SyncSender<VerifiedTextWrite>,
+}
 
 fn with<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>) -> Result<T> {
     let mut slot = CLIPBOARD
@@ -45,13 +61,10 @@ fn owner_backend_ready() -> bool {
     else {
         return false;
     };
-    Command::new("timeout")
-        .arg("3s")
-        .arg(executable)
-        .args([OWNER_ARGUMENT, "--check"])
-        .env("WAYLAND_DISPLAY", display)
-        .output()
-        .is_ok_and(|output| output.status.success() && output.stdout == b"READY\n")
+    let mut command = Command::new(executable);
+    command.args([OWNER_ARGUMENT, "--check"]).env("WAYLAND_DISPLAY", display);
+    run_bounded_command(command, std::time::Instant::now() + std::time::Duration::from_secs(3), 1024)
+        .is_ok_and(|(status, stdout)| status.success() && stdout == b"READY\n")
 }
 
 fn owner_executable() -> std::io::Result<std::path::PathBuf> {
@@ -190,7 +203,12 @@ fn copy_multi_wayland_with(
     display: std::ffi::OsString,
     timeout: std::time::Duration,
 ) -> Result<()> {
-    copy_multi_wayland_checked(entries, executable, display, timeout, still_ours)
+    let child = copy_multi_wayland_checked(entries, executable, display, timeout, still_ours)?;
+    std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 fn copy_multi_wayland_checked(
@@ -199,7 +217,7 @@ fn copy_multi_wayland_checked(
     display: std::ffi::OsString,
     timeout: std::time::Duration,
     mut owns: impl FnMut(&str, &[u8]) -> Result<bool>,
-) -> Result<()> {
+) -> Result<Child> {
     validate_entries(entries)?;
     let deadline = std::time::Instant::now() + timeout;
     let mut child = Command::new(executable)
@@ -207,7 +225,9 @@ fn copy_multi_wayland_checked(
         .env("WAYLAND_DISPLAY", display)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        // The helper's bounded protocol errors contain operation state only,
+        // never clipboard text. Keep them with the owning GUI's diagnostics.
+        .stderr(Stdio::inherit())
         .spawn()
         .context("Starting the native Wayland clipboard owner")?;
     let stdin = child.stdin.take().context("No clipboard owner input")?;
@@ -237,6 +257,7 @@ fn copy_multi_wayland_checked(
         }
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
             stop_owner(&mut child);
+            let _ = write_receiver.recv_timeout(std::time::Duration::from_millis(100));
             anyhow::bail!("Rich clipboard owner input timed out")
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -258,24 +279,41 @@ fn copy_multi_wayland_checked(
         receiver.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
     if !matches!(confirmation, Ok((Ok(_), line)) if line == "READY\n") {
         stop_owner(&mut child);
+        let _ = receiver.recv_timeout(std::time::Duration::from_millis(100));
         anyhow::bail!("Rich clipboard restore was not confirmed");
     }
-    let offered = (|| -> Result<bool> {
-        for (mime, bytes) in entries {
-            if !owns(mime, bytes)? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    })();
-    if !matches!(offered, Ok(true)) {
+    if !wait_for_offered_until(entries, deadline, &mut owns) {
         stop_owner(&mut child);
         anyhow::bail!("Rich clipboard restore did not own the expected data");
     }
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    if std::time::Instant::now() >= deadline {
+        stop_owner(&mut child);
+        anyhow::bail!("Rich clipboard owner confirmation exceeded its deadline");
+    }
+    Ok(child)
+}
+
+/// The owner protocol queues its selection request before serving starts. A
+/// readback may briefly report an empty selection until the server dispatches
+/// that request, so confirm only by bounded readback polling. This does not
+/// establish owner identity; callers must keep Wayland results conservative.
+fn wait_for_offered_until(
+    entries: &[(String, Vec<u8>)],
+    deadline: std::time::Instant,
+    owns: &mut impl FnMut(&str, &[u8]) -> Result<bool>,
+) -> bool {
+    loop {
+        let exact = entries
+            .iter()
+            .all(|(mime, bytes)| matches!(owns(mime, bytes), Ok(true)));
+        if exact {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 fn stop_owner(child: &mut std::process::Child) {
@@ -363,6 +401,7 @@ fn read_owner_entries(mut input: impl std::io::Read) -> Result<Vec<(String, Vec<
 
 /// Internal entry point used by this process as the lifetime owner for a rich Wayland offer.
 pub fn run_owner_protocol() -> Result<()> {
+    install_parent_death_signal()?;
     let entries = read_owner_entries(std::io::stdin().lock())?;
     let sources = entries
         .into_iter()
@@ -397,47 +436,28 @@ fn clear_wayland() -> Result<()> {
 }
 
 pub fn still_ours(mime: &str, expected: &[u8]) -> Result<bool> {
-    let offered = read_wayland(&["--list-types"], 8192)?;
+    still_ours_until(mime, expected, std::time::Instant::now() + std::time::Duration::from_secs(3))
+}
+
+fn still_ours_until(mime: &str, expected: &[u8], deadline: std::time::Instant) -> Result<bool> {
+    let offered = read_wayland_until(&["--list-types"], 8192, deadline)?;
     let offered = std::str::from_utf8(&offered).context("Invalid clipboard types")?;
     if !offered.lines().any(|item| item == mime) {
         return Ok(false);
     }
-    Ok(read_wayland(&["--no-newline", "--type", mime], 16 * 1024 * 1024)? == expected)
+    Ok(read_wayland_until(&["--no-newline", "--type", mime], 16 * 1024 * 1024, deadline)? == expected)
 }
 
 fn read_wayland(args: &[&str], limit: usize) -> Result<Vec<u8>> {
-    let bundled = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("wl-paste")))
-        .filter(|path| path.is_file());
-    let mut child = Command::new("timeout")
-        .arg("3s")
-        .arg(bundled.unwrap_or_else(|| "wl-paste".into()))
-        .args(args)
-        .env(
-            "WAYLAND_DISPLAY",
-            super::super::wayland_display().context("No Wayland display")?,
-        )
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("Native Wayland clipboard needs wl-paste and timeout")?;
-    let mut bytes = Vec::new();
-    let read = child
-        .stdout
-        .take()
-        .context("No clipboard output")?
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes);
-    if bytes.len() > limit || read.is_err() {
-        let _ = child.kill();
-    }
-    let status = child.wait().context("Waiting for wl-paste")?;
-    read.context("Reading clipboard")?;
-    anyhow::ensure!(
-        bytes.len() <= limit,
-        "Clipboard too large to restore safely"
-    );
+    read_wayland_until(args, limit, std::time::Instant::now() + std::time::Duration::from_secs(3))
+}
+
+fn read_wayland_until(args: &[&str], limit: usize, deadline: std::time::Instant) -> Result<Vec<u8>> {
+    let executable = clipboard_tool("wl-paste").context("Native Wayland clipboard needs bundled wl-paste or wl-paste on PATH")?;
+    let display = super::super::wayland_display().context("No Wayland display")?;
+    let mut command = Command::new(executable);
+    command.args(args).env("WAYLAND_DISPLAY", display);
+    let (status, bytes) = run_bounded_command(command, deadline, limit)?;
     if args == ["--list-types"] && status.code() == Some(1) && bytes.is_empty() {
         return Ok(bytes);
     }
@@ -448,11 +468,354 @@ fn read_wayland(args: &[&str], limit: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn run_bounded_command(
+    mut command: Command,
+    deadline: std::time::Instant,
+    stdout_limit: usize,
+) -> Result<(std::process::ExitStatus, Vec<u8>)> {
+    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+    let stdout = child.stdout.take().context("No clipboard command output")?;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.take(stdout_limit as u64 + 1).read_to_end(&mut bytes);
+        let _ = tx.send((result, bytes));
+    });
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                stop_owner(&mut child);
+                let _ = rx.recv_timeout(std::time::Duration::from_millis(100));
+                return Err(error.into());
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            stop_owner(&mut child);
+            let _ = rx.recv_timeout(std::time::Duration::from_millis(100));
+            anyhow::bail!("Clipboard command deadline expired");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let (read, bytes) = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        .context("Clipboard command output did not close")?;
+    read.context("Reading clipboard command output")?;
+    anyhow::ensure!(bytes.len() <= stdout_limit, "Clipboard output exceeds limit");
+    Ok((status, bytes))
+}
+
 pub fn set_text(text: &str) -> Result<()> {
     if native_wayland_clipboard() {
         return copy_wayland("text/plain;charset=utf-8", text.as_bytes());
     }
     with(|c| c.set_text(text.to_owned()))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifiedTextWrite {
+    Applied,
+    Unavailable,
+    OutcomeUnknown,
+}
+
+/// Writes through the existing clipboard backend and confirms both its owner and exact text.
+/// The text is never returned or logged. Unknown leaves whatever owner currently has the
+/// selection untouched.
+pub fn set_text_verified_until(text: &str, deadline: std::time::Instant) -> VerifiedTextWrite {
+    if text.contains('\0') {
+        return VerifiedTextWrite::Unavailable;
+    }
+    if std::time::Instant::now() >= deadline {
+        return VerifiedTextWrite::Unavailable;
+    }
+    let executable = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(_) => return VerifiedTextWrite::Unavailable,
+    };
+    let backend = if native_wayland_clipboard() {
+        let Some(display) = super::super::wayland_display() else {
+            return VerifiedTextWrite::Unavailable;
+        };
+        if clipboard_tool("wl-paste").is_none() {
+            return VerifiedTextWrite::Unavailable;
+        }
+        VerifiedTextOwnerBackend::Wayland(executable, display)
+    } else {
+        VerifiedTextOwnerBackend::X11(executable)
+    };
+    submit_verified_text_owner(text, deadline, backend)
+}
+
+#[cfg(target_os = "linux")]
+fn install_parent_death_signal() -> Result<()> {
+    let parent = unsafe { libc::getppid() };
+    let result = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
+    anyhow::ensure!(result == 0, "Could not bind clipboard owner to GUI lifetime");
+    anyhow::ensure!(unsafe { libc::getppid() } == parent && parent != 1, "Clipboard owner parent exited during startup");
+    Ok(())
+}
+
+fn clipboard_tool(name: &str) -> Option<std::path::PathBuf> {
+    clipboard_tool_from(name, std::env::current_exe().ok()?.parent()?, std::env::var_os("PATH").as_deref())
+}
+
+fn clipboard_tool_from(
+    name: &str,
+    bundled_directory: &std::path::Path,
+    path: Option<&std::ffi::OsStr>,
+) -> Option<std::path::PathBuf> {
+    let bundled = bundled_directory.join(name);
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+    std::env::split_paths(path?)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+}
+
+fn submit_verified_text_owner(
+    text: &str,
+    deadline: std::time::Instant,
+    backend: VerifiedTextOwnerBackend,
+) -> VerifiedTextWrite {
+    use std::sync::mpsc::{TrySendError, sync_channel};
+
+    let Some(sender) = verified_text_owner_worker() else {
+        return VerifiedTextWrite::Unavailable;
+    };
+    let (reply, receiver) = sync_channel(1);
+    let request = VerifiedTextOwnerRequest {
+        text: text.to_owned(),
+        deadline,
+        backend,
+        reply,
+    };
+    match sender.try_send(request) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+            return VerifiedTextWrite::Unavailable;
+        }
+    }
+    receiver
+        .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        .unwrap_or(VerifiedTextWrite::OutcomeUnknown)
+}
+
+/// The persistent owner lane spawns clipboard helpers from a thread that lives
+/// for the GUI process. Linux PR_SET_PDEATHSIG is thread-scoped, so spawning
+/// from the request's short-lived deadline worker would kill the selection
+/// owner as soon as that request returned.
+fn verified_text_owner_worker() -> Option<&'static std::sync::mpsc::SyncSender<VerifiedTextOwnerRequest>> {
+    VERIFIED_TEXT_OWNER
+        .get_or_init(|| {
+            use std::sync::mpsc::sync_channel;
+            let (sender, receiver) = sync_channel(1);
+            std::thread::Builder::new()
+                .name("apparent-clipboard-owner".into())
+                .spawn(move || verified_text_owner_loop(receiver))
+                .ok()
+                .map(|_| sender)
+        })
+        .as_ref()
+}
+
+fn verified_text_owner_loop(receiver: std::sync::mpsc::Receiver<VerifiedTextOwnerRequest>) {
+    let mut owner: Option<Child> = None;
+    while let Ok(request) = receiver.recv() {
+        let result = if std::time::Instant::now() >= request.deadline {
+            VerifiedTextWrite::Unavailable
+        } else {
+            match request.backend {
+                VerifiedTextOwnerBackend::X11(executable) => {
+                    set_text_x11_verified(&request.text, request.deadline, executable, &mut owner)
+                }
+                VerifiedTextOwnerBackend::Wayland(executable, display) => {
+                    set_text_wayland_verified(
+                        &request.text,
+                        request.deadline,
+                        executable,
+                        display,
+                        &mut owner,
+                    )
+                }
+            }
+        };
+        let _ = request.reply.send(result);
+    }
+    if let Some(mut owner) = owner {
+        stop_owner(&mut owner);
+    }
+}
+
+fn set_text_x11_verified(
+    text: &str,
+    deadline: std::time::Instant,
+    executable: std::path::PathBuf,
+    owner: &mut Option<Child>,
+) -> VerifiedTextWrite {
+    use std::io::Write as _;
+
+    let mut child = match Command::new(executable)
+        .arg("--internal-native-clipboard-text-owner")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return VerifiedTextWrite::Unavailable,
+    };
+    let Some(mut input) = child.stdin.take() else {
+        stop_owner(&mut child);
+        return VerifiedTextWrite::OutcomeUnknown;
+    };
+    let bytes = text.as_bytes().to_vec();
+    let (write_tx, write_rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let result = input.write_all(&bytes);
+        drop(input);
+        let _ = write_tx.send(result);
+    });
+    if !matches!(write_rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())), Ok(Ok(()))) {
+        stop_owner(&mut child);
+        let _ = write_rx.recv_timeout(std::time::Duration::from_millis(100));
+        return VerifiedTextWrite::OutcomeUnknown;
+    }
+    let Some(mut stdout) = child.stdout.take() else {
+        stop_owner(&mut child);
+        return VerifiedTextWrite::OutcomeUnknown;
+    };
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let result = std::io::BufRead::read_line(&mut std::io::BufReader::new(&mut stdout), &mut line);
+        let _ = tx.send((result, line));
+    });
+    let response = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
+    match response {
+        Ok((Ok(_), line)) if line == "APPLIED\n" && std::time::Instant::now() < deadline => {
+            if let Some(mut previous) = owner.replace(child) { stop_owner(&mut previous); }
+            VerifiedTextWrite::Applied
+        }
+        Ok((Ok(_), line)) if line == "UNAVAILABLE\n" => {
+            let _ = child.wait();
+            VerifiedTextWrite::Unavailable
+        }
+        _ => {
+            stop_owner(&mut child);
+            let _ = rx.recv_timeout(std::time::Duration::from_millis(100));
+            VerifiedTextWrite::OutcomeUnknown
+        }
+    }
+}
+
+pub fn run_x11_text_owner(text: &str) -> Result<()> {
+    install_parent_death_signal()?;
+    anyhow::ensure!(!native_wayland_clipboard(), "X11 helper is unavailable on native Wayland");
+    if !x11_resource_available() {
+        println!("UNAVAILABLE");
+        std::io::stdout().flush()?;
+        return Ok(());
+    }
+    if with(|clipboard| clipboard.set_text(text.to_owned())).is_err() {
+        println!("UNKNOWN");
+        std::io::stdout().flush()?;
+        return Ok(());
+    }
+    let pid = std::process::id();
+    let owner_before = x11_clipboard_owner_pid();
+    let exact = with(|clipboard| clipboard.get_text().map(|actual| actual == text)).unwrap_or(false);
+    let owner_after = x11_clipboard_owner_pid();
+    if !x11_write_confirmed(owner_before, exact, owner_after, pid) {
+        println!("UNKNOWN");
+        std::io::stdout().flush()?;
+        return Ok(());
+    }
+    println!("APPLIED");
+    std::io::stdout().flush()?;
+    while x11_clipboard_owner_pid() == Some(pid) {
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
+    Ok(())
+}
+
+fn set_text_wayland_verified(
+    text: &str,
+    deadline: std::time::Instant,
+    executable: std::path::PathBuf,
+    display: std::ffi::OsString,
+    owner: &mut Option<Child>,
+) -> VerifiedTextWrite {
+    if std::time::Instant::now() >= deadline { return VerifiedTextWrite::Unavailable; }
+    let entries = vec![("text/plain;charset=utf-8".to_owned(), text.as_bytes().to_vec())];
+    let child = match copy_multi_wayland_checked(
+        &entries,
+        executable,
+        display,
+        deadline.saturating_duration_since(std::time::Instant::now()),
+        |mime, bytes| still_ours_until(mime, bytes, deadline),
+    ) {
+        Ok(child) => child,
+        Err(_) => return VerifiedTextWrite::OutcomeUnknown,
+    };
+    if std::time::Instant::now() >= deadline {
+        let mut child = child;
+        stop_owner(&mut child);
+        return VerifiedTextWrite::OutcomeUnknown;
+    }
+    let mut child = child;
+    if !matches!(child.try_wait(), Ok(None)) {
+        stop_owner(&mut child);
+        return VerifiedTextWrite::OutcomeUnknown;
+    }
+    if let Some(mut previous) = owner.replace(child) {
+        stop_owner(&mut previous);
+    }
+    // Wayland has no supported selection-owner identity query. The owner helper's READY event
+    // proves acquisition and wl-paste proves bytes, but an identical-content foreign owner can
+    // replace it before the helper processes the loss event. Never upgrade that to Applied.
+    wayland_verified_result(true, true)
+}
+
+fn x11_write_confirmed(owner_before: Option<u32>, exact_readback: bool, owner_after: Option<u32>, pid: u32) -> bool {
+    owner_before == Some(pid) && exact_readback && owner_after == Some(pid)
+}
+
+fn wayland_verified_result(_acquisition_acknowledged: bool, _exact_readback: bool) -> VerifiedTextWrite {
+    VerifiedTextWrite::OutcomeUnknown
+}
+
+fn x11_resource_available() -> bool {
+    use x11rb::{
+        connection::Connection,
+        protocol::{res::{ClientIdMask, ClientIdSpec, ConnectionExt as _}, xproto::ConnectionExt as _},
+    };
+    let Ok((connection, _)) = x11rb::connect(None) else { return false; };
+    if !connection.query_extension(b"X-Resource").ok()
+        .and_then(|reply| reply.reply().ok()).is_some_and(|reply| reply.present) {
+        return false;
+    }
+    let client = connection.setup().resource_id_base;
+    connection.res_query_client_ids(&[ClientIdSpec { client, mask: ClientIdMask::LOCAL_CLIENT_PID }]).ok()
+        .and_then(|reply| reply.reply().ok())
+        .is_some_and(|reply| reply.ids.into_iter().any(|id|
+            id.spec.client == client && id.spec.mask == ClientIdMask::LOCAL_CLIENT_PID
+                && id.value.as_slice() == [std::process::id()]))
+}
+
+fn x11_clipboard_owner_pid() -> Option<u32> {
+    use x11rb::{
+        protocol::{res::{ClientIdMask, ClientIdSpec, ConnectionExt as _}, xproto::ConnectionExt as _},
+    };
+    let (connection, _) = x11rb::connect(None).ok()?;
+    let atom = connection.intern_atom(false, b"CLIPBOARD").ok()?.reply().ok()?.atom;
+    let owner = connection.get_selection_owner(atom).ok()?.reply().ok()?.owner;
+    if owner == 0 { return None; }
+    let spec = ClientIdSpec { client: owner, mask: ClientIdMask::LOCAL_CLIENT_PID };
+    connection.res_query_client_ids(&[spec]).ok()?.reply().ok()?.ids.into_iter()
+        .find(|id| id.spec.client == owner && id.spec.mask == ClientIdMask::LOCAL_CLIENT_PID)?
+        .value.into_iter().next()
 }
 
 pub fn set_png(png_bytes: &[u8]) -> Result<()> {
@@ -529,6 +892,39 @@ fn copy_wayland(mime: &str, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verified_text_requires_our_live_x11_selection_owner_and_exact_readback() {
+        assert!(x11_write_confirmed(Some(42), true, Some(42), 42));
+        assert!(!x11_write_confirmed(Some(42), false, Some(42), 42));
+        assert!(!x11_write_confirmed(Some(42), true, Some(99), 42));
+        assert!(!x11_write_confirmed(Some(42), true, None, 42));
+        assert_eq!(wayland_verified_result(true, true), VerifiedTextWrite::OutcomeUnknown);
+        assert_eq!(wayland_verified_result(true, false), VerifiedTextWrite::OutcomeUnknown);
+        assert_eq!(wayland_verified_result(false, true), VerifiedTextWrite::OutcomeUnknown);
+    }
+
+    #[test]
+    fn bundled_wayland_tool_resolution_works_without_path() {
+        let root = std::env::temp_dir().join(format!("apparent-clipboard-tools-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let bundled = root.join("wl-paste");
+        std::fs::write(&bundled, b"tool").unwrap();
+        assert_eq!(clipboard_tool_from("wl-paste", &root, None).as_deref(), Some(bundled.as_path()));
+        assert_eq!(clipboard_tool_from("timeout", &root, None), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bounded_child_timeout_kills_and_reaps_process() {
+        let started = std::time::Instant::now();
+        let mut command = Command::new("/bin/sleep");
+        command.arg("5");
+        let result = run_bounded_command(command, started + std::time::Duration::from_millis(75), 64);
+        assert!(result.is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
 
     #[test]
     fn snapshot_preserves_each_mime_once_when_the_owner_advertises_duplicates() {
@@ -690,6 +1086,42 @@ mod tests {
     }
 
     #[test]
+    fn wayland_owner_confirmation_waits_for_selection_readback_after_ready() {
+        let mut attempts = 0;
+        let confirmed = wait_for_offered_until(
+            &fixture_offer(),
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            &mut |_, _| {
+                attempts += 1;
+                match attempts {
+                    1 => Err(anyhow!("selection not dispatched yet")),
+                    2 => Ok(false),
+                    _ => Ok(true),
+                }
+            },
+        );
+        assert!(confirmed);
+        assert_eq!(attempts, 3);
+    }
+
+    #[test]
+    fn wayland_owner_confirmation_times_out_without_exact_readback() {
+        let started = std::time::Instant::now();
+        let mut attempts = 0;
+        let confirmed = wait_for_offered_until(
+            &fixture_offer(),
+            started + std::time::Duration::from_millis(45),
+            &mut |_, _| {
+                attempts += 1;
+                Ok(false)
+            },
+        );
+        assert!(!confirmed);
+        assert!(attempts > 1);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
     fn restore_leaves_selection_loss_after_handoff_untouched() {
         let snapshot = TextSnapshot {
             entries: vec![("text/plain".into(), b"original".to_vec())],
@@ -774,6 +1206,21 @@ mod tests {
             .unwrap(),
             b"newer synthetic clipboard"
         );
+    }
+
+    #[test]
+    fn isolated_wayland_verified_owner_survives_the_request_thread() {
+        if std::env::var_os("APPARENT_TEST_WAYLAND_CLIPBOARD").is_none() {
+            return;
+        }
+        let text = "synthetic clipboard owner thread lifetime";
+        let result = std::thread::spawn(move || {
+            set_text_verified_until(text, std::time::Instant::now() + std::time::Duration::from_secs(3))
+        })
+        .join()
+        .unwrap();
+        assert_eq!(result, VerifiedTextWrite::OutcomeUnknown);
+        assert!(still_ours("text/plain;charset=utf-8", text.as_bytes()).unwrap());
     }
 
     #[test]

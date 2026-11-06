@@ -1,9 +1,9 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { join, normalize } from 'node:path';
-import type { NativeHostPort, NativeHostSnapshot, NativeHostRefusal, NativeMutationResult, NativePenPort, NativePenResult, NativePenSnapshot, LegacyConfigValue } from '@apparent/app-contracts/host';
+import { MAX_SERIALIZED_FRAME_BYTES, MAX_UTF8_TEXT_BYTES, type NativeClipboardPort, type NativeClipboardWriteResult, type NativeHostPort, type NativeHostSnapshot, type NativeHostRefusal, type NativeMutationResult, type NativePenPort, type NativePenResult, type NativePenSnapshot, type LegacyConfigValue } from '@apparent/app-contracts/host';
 
 const MAX_FRAME = 4096;
 const TIMEOUT_MS = 3000;
@@ -76,12 +76,15 @@ function snapshot(value: unknown): NativeHostSnapshot {
   return value as unknown as NativeHostSnapshot;
 }
 
+class RequestFrameTooLarge extends Error {}
+
 async function request(target: ReturnType<typeof endpoint>, operation: string, fields: Record<string, unknown> = {}): Promise<unknown> {
   const { path } = target;
   const id = randomUUID();
   const deadline = Number(process.hrtime.bigint() / 1_000_000n) + TIMEOUT_MS;
   const frame = Buffer.from(`${JSON.stringify({ protocol: 1, id, owner: 'record', operation, ...fields, deadline })}\n`);
-  if (frame.length > MAX_FRAME) throw new TypeError('Native host request exceeds limit');
+  const maxFrame = operation === 'writeClipboardText' ? MAX_SERIALIZED_FRAME_BYTES : MAX_FRAME;
+  if (frame.length > maxFrame) throw new RequestFrameTooLarge('Native host request exceeds limit');
   const identity = await verifySocket(target);
   return await new Promise((resolve, reject) => {
     const socket = connect(path);
@@ -200,6 +203,62 @@ function penSnapshot(value: unknown): NativePenSnapshot {
     throw new Error('Native host unavailable');
   }
   return value as unknown as NativePenSnapshot;
+}
+
+function exactUtf8(text: unknown): { bytes: Buffer } | { reason: 'invalid-text' | 'too-large' } {
+  if (typeof text !== 'string') return { reason: 'invalid-text' };
+  for (let index = 0; index < text.length; index++) {
+    const unit = text.charCodeAt(index);
+    if (unit === 0) return { reason: 'invalid-text' };
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (Number.isNaN(next) || next < 0xdc00 || next > 0xdfff) return { reason: 'invalid-text' };
+      index++;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) return { reason: 'invalid-text' };
+  }
+  const bytes = Buffer.from(text, 'utf8');
+  return bytes.length > MAX_UTF8_TEXT_BYTES ? { reason: 'too-large' } : { bytes };
+}
+
+function clipboardResult(value: unknown, expectedBytes: number, expectedDigest: string): NativeClipboardWriteResult {
+  if (exact(value, ['status', 'digest', 'byteLength']) && value.status === 'applied'
+    && typeof value.digest === 'string' && value.digest === expectedDigest
+    && Number.isSafeInteger(value.byteLength) && value.byteLength === expectedBytes) {
+    return { status: 'applied', digest: value.digest, byteLength: expectedBytes };
+  }
+  if (exact(value, ['status', 'reason']) && value.status === 'refused'
+    && ['stale', 'busy', 'unavailable', 'invalid-text', 'too-large'].includes(String(value.reason))) {
+    return { status: 'refused', reason: value.reason as Extract<NativeClipboardWriteResult, { status: 'refused' }>['reason'] };
+  }
+  if (exact(value, ['status']) && value.status === 'outcome-unknown') return { status: 'outcome-unknown' };
+  return { status: 'outcome-unknown' };
+}
+
+let clipboardWriteInFlight = false;
+
+/** Privileged typed clipboard facade. It exposes no read or arbitrary host operation. */
+export function createNativeClipboardPort(): NativeClipboardPort {
+  const target = endpoint();
+  return {
+    async writeText(text, observed) {
+      const encoded = exactUtf8(text);
+      if ('reason' in encoded) return { status: 'refused', reason: encoded.reason };
+      const epoch = observed?.processEpoch, revision = observed?.revision;
+      if (typeof epoch !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(epoch)
+        || !Number.isSafeInteger(revision) || revision < 0) throw new TypeError('Invalid native host revision');
+      if (clipboardWriteInFlight) return { status: 'refused', reason: 'busy' };
+      clipboardWriteInFlight = true;
+      try {
+        const value = await request(target, 'writeClipboardText', {
+          observed: { processEpoch: epoch, revision }, text,
+        });
+        return clipboardResult(value, encoded.bytes.length, createHash('sha256').update(encoded.bytes).digest('hex'));
+      } catch (error) {
+        if (error instanceof RequestFrameTooLarge) return { status: 'refused', reason: 'too-large' };
+        return { status: 'outcome-unknown' };
+      } finally { clipboardWriteInFlight = false; }
+    },
+  };
 }
 
 /** Privileged typed pen facade. Renderer composition should pass this only to Record. */

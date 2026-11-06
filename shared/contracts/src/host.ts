@@ -167,6 +167,18 @@ export type NativePenResult =
   | { status: 'conflict'; current: LegacyConfigValue }
   | { status: 'unavailable' | 'outcome-unknown' };
 
+/** Clipboard text limit accounts for worst-case JSON escaping (6 wire bytes per text byte). */
+export const MAX_UTF8_TEXT_BYTES = 21_800;
+/** Clipboard request line limit includes its terminating LF; other host operations retain 4096 bytes. */
+export const MAX_SERIALIZED_FRAME_BYTES = 131_072;
+export interface NativeClipboardPort {
+  writeText(text: string, observed: { processEpoch: string; revision: number }): Promise<NativeClipboardWriteResult>;
+}
+export type NativeClipboardWriteResult =
+  | { status: 'applied'; digest: string; byteLength: number }
+  | { status: 'refused'; reason: 'stale' | 'busy' | 'unavailable' | 'invalid-text' | 'too-large' }
+  | { status: 'outcome-unknown' };
+
 /** Record's narrow compatibility access to its compiled `penColor` config key. */
 export interface RecordPenColorConfig {
   read(): Promise<LegacyConfigValue>;

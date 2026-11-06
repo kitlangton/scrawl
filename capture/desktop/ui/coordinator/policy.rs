@@ -1,6 +1,8 @@
 use super::*;
 
 static NATIVE_PEN_EFFECT_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NATIVE_CLIPBOARD_EFFECT_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NATIVE_HOST_REVISION_FOR_WORKER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 struct NativeHostObservation {
@@ -70,6 +72,7 @@ impl ApparentCoordinator {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let native_host_epoch = crate::capture::desktop::workflow::agent_capture::new_id()
             .unwrap_or_else(|_| format!("process-{}", std::process::id()));
+        NATIVE_HOST_REVISION_FOR_WORKER.store(0, std::sync::atomic::Ordering::Release);
         Self {
             telemetry,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -618,6 +621,60 @@ impl ApparentCoordinator {
         if crate::capture::desktop::workflow::agent_capture::storage_clock_ms() >= request.deadline {
             return Some(refusal("unavailable"));
         }
+        if let Operation::WriteClipboardText(text) = &request.operation {
+            use std::sync::atomic::Ordering;
+            use sha2::{Digest, Sha256};
+            if let Some(reason) = crate::capture::desktop::workflow::native_host::clipboard_text_refusal(text) {
+                return Some(refusal(reason));
+            }
+            let Some(expected) = request.expected.as_ref() else { return Some(refusal("unavailable")); };
+            if expected.process_epoch != self.native_host_epoch || expected.revision != self.native_host_revision {
+                return Some(refusal("stale"));
+            }
+            if NATIVE_CLIPBOARD_EFFECT_BUSY.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+                return Some(refusal("busy"));
+            }
+            let text = text.clone();
+            let deadline = request.deadline;
+            let expected_revision = expected.revision;
+            let deadline_instant = std::time::Instant::now()
+                + std::time::Duration::from_millis(deadline.saturating_sub(crate::capture::desktop::workflow::agent_capture::storage_clock_ms()));
+            let reply = reply.clone();
+            let worker = std::thread::Builder::new().name("apparent-native-clipboard-write".into()).spawn(move || {
+                struct ReleaseClipboardLane;
+                impl Drop for ReleaseClipboardLane {
+                    fn drop(&mut self) {
+                        NATIVE_CLIPBOARD_EFFECT_BUSY.store(false, Ordering::Release);
+                    }
+                }
+                let _lane = ReleaseClipboardLane;
+                let refused = |reason: &str| serde_json::json!({"status":"refused","reason":reason});
+                let result = if crate::capture::desktop::workflow::agent_capture::storage_clock_ms() >= deadline {
+                    refused("unavailable")
+                } else if NATIVE_HOST_REVISION_FOR_WORKER.load(Ordering::Acquire) != expected_revision {
+                    refused("stale")
+                } else {
+                    match crate::shared::handoff::copy_string_to_clipboard_verified_until(&text, deadline_instant) {
+                        crate::shared::handoff::VerifiedClipboardTextWrite::Applied
+                            if crate::capture::desktop::workflow::agent_capture::storage_clock_ms() < deadline => {
+                                let digest = Sha256::digest(text.as_bytes());
+                                serde_json::json!({"status":"applied","digest":format!("{digest:x}"),"byteLength":text.len()})
+                            }
+                        crate::shared::handoff::VerifiedClipboardTextWrite::Unavailable
+                            if crate::capture::desktop::workflow::agent_capture::storage_clock_ms() < deadline => refused("unavailable"),
+                        _ => serde_json::json!({"status":"outcome-unknown"}),
+                    }
+                };
+                let _ = reply.send(result.to_string());
+            });
+            return match worker {
+                Ok(_) => None,
+                Err(_) => {
+                    NATIVE_CLIPBOARD_EFFECT_BUSY.store(false, Ordering::Release);
+                    Some(refusal("unavailable"))
+                }
+            };
+        }
         Some(match &request.operation {
             Operation::ReadSnapshot => self.native_host_snapshot(&observation),
             Operation::RequestPermission(id) | Operation::OpenSystemSettings(id) => {
@@ -728,6 +785,7 @@ impl ApparentCoordinator {
                 return None;
             }
             Operation::ReadStrokeColor => unreachable!("pen read was handled before config observation"),
+            Operation::WriteClipboardText(_) => unreachable!("clipboard write was dispatched to its bounded worker"),
             Operation::SaveRecordShortcut(value) => self.native_host_save_shortcut(value, &observation, request.deadline),
         })
     }
@@ -783,6 +841,7 @@ impl ApparentCoordinator {
         if self.native_host_fingerprint.as_ref().is_some_and(|previous| previous != fingerprint) {
             self.native_host_revision = self.native_host_revision.saturating_add(1);
         }
+        NATIVE_HOST_REVISION_FOR_WORKER.store(self.native_host_revision, std::sync::atomic::Ordering::Release);
         self.native_host_fingerprint = Some(fingerprint.to_owned());
     }
 
@@ -868,6 +927,7 @@ impl ApparentCoordinator {
             return serde_json::json!({"status":"outcome-unknown"});
         }
         self.native_host_revision = self.native_host_revision.saturating_add(1);
+        NATIVE_HOST_REVISION_FOR_WORKER.store(self.native_host_revision, std::sync::atomic::Ordering::Release);
         let (effective, _) = self.telemetry.shortcuts();
         if effective != validated || crate::capture::engine::runtime::shortcut_registration_status(&self.telemetry) != "registered" {
             return serde_json::json!({"status":"outcome-unknown"});
@@ -1091,7 +1151,10 @@ impl ApparentCoordinator {
             progress.save();
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        if self.grants.as_ref() != Some(grants) { self.native_host_revision = self.native_host_revision.saturating_add(1); }
+        if self.grants.as_ref() != Some(grants) {
+            self.native_host_revision = self.native_host_revision.saturating_add(1);
+            NATIVE_HOST_REVISION_FOR_WORKER.store(self.native_host_revision, std::sync::atomic::Ordering::Release);
+        }
         self.grants = Some(grants.clone());
     }
 
