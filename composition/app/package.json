@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/assembly.test.ts tests/host.test.ts tests/onboarding-progress-bridge.test.ts",
+    "test": "node --experimental-strip-types --test tests/assembly.test.ts tests/host.test.ts tests/onboarding-progress-bridge.test.ts tests/host-lifecycle.test.ts tests/record/*.test.ts",
     "check": "npm --prefix ../../shared/contracts run build && npm --prefix ../../shared/contracts run typecheck && npm --prefix ../../shared/contracts test && node scripts/check-installed.ts && npm run typecheck && npm test",
     "build:shell": "node scripts/build.ts shell",
     "assemble": "node scripts/assemble.ts dist/shell dist/app",
@@ -14,8 +14,9 @@
     "prestart": "npm run prepare:electron",
     "start": "electron dist/app",
     "package": "node scripts/package.ts dist/app dist/packages",
-    "test:electron": "node --experimental-strip-types --test tests/electron.test.ts",
-    "test:electron:onboarding": "node --experimental-strip-types --test tests/onboarding-bridge.electron.test.ts"
+    "test:electron": "node --experimental-strip-types --test --test-concurrency=1 tests/electron.test.ts tests/record-bridge.electron.test.ts",
+    "test:electron:onboarding": "node --experimental-strip-types --test tests/onboarding-bridge.electron.test.ts",
+    "test:electron:record": "node --experimental-strip-types --test tests/record-bridge.electron.test.ts"
   },
   "dependencies": {
     "@apparent/app-contracts": "file:../../shared/contracts",
@@ -31,7 +32,8 @@
     "@types/react-dom": "19.2.0",
     "electron": "45.2.1",
     "esbuild": "0.25.12",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "@apparent/record": "file:vendor/record-0.1.0-1d200774.tgz"
   },
   "overrides": {
     "minimatch": "11.0.1"

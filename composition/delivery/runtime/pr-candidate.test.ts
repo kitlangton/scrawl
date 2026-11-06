@@ -4,7 +4,7 @@ import { admitPrCandidate } from './pr-candidate.ts'
 const landed = 'a'.repeat(40), head = 'b'.repeat(40), base = 'c'.repeat(40), tested = 'd'.repeat(40), tree = 'e'.repeat(40), digest = 'f'.repeat(64)
 function fixture(ownerId = 'engine', target = 'linux-x64') {
   const repo = 'tryapparent/apparent'
-  const workflow = ownerId === 'app-shell' ? 'stream-app-shell.yml' : 'stream-engine.yml'
+  const workflow = ownerId === 'app-shell' ? 'stream-app-shell.yml' : ownerId === 'platform-config' ? 'stream-platform-config.yml' : 'stream-engine.yml'
   const data: Record<string, any> = {
     [`repos/${repo}/commits/${landed}/pulls?per_page=100`]: [{ number: 9, merged_at: '2026-11-06', merge_commit_sha: landed, head: { sha: head, repo: { full_name: repo } } }],
     [`repos/${repo}/actions/workflows/${workflow}/runs?event=pull_request&head_sha=${head}&per_page=100`]: { workflow_runs: [{ id: 10, run_attempt: 2, event: 'pull_request', path: `.github/workflows/${workflow}`, conclusion: 'success', head_sha: head, head_repository: { full_name: repo }, pull_requests: [{ number: 9, head: { sha: head }, base: { sha: base } }] }] },
@@ -55,7 +55,7 @@ test('native Engine targets require their own successful PR job and candidate ar
     wrongTarget.jobs.jobs[1].name = 'verify-pr / pr-stream (engine-native, unsupported)'
     assert.equal(wrongTarget.assess(), undefined)
   }
-  for (const [id, target] of [['engine', 'macos-x64'], ['engine-native', 'macos-arm64'], ['platform-config', 'linux-x64']]) {
+  for (const [id, target] of [['engine', 'macos-x64'], ['engine-native', 'macos-arm64'], ['platform-resources', 'linux-x64']]) {
     assert.equal(admitPrCandidate(() => { throw Error('Unsupported lane must not query GitHub') }, landed, tree, digest, id, target), undefined)
   }
 })
@@ -74,4 +74,32 @@ test('App Shell candidates require their exact workflow, platform job and packag
     skipped.jobs.jobs[1].conclusion = 'skipped'
     assert.equal(skipped.assess(), undefined)
   }
+})
+
+
+test('media candidates are qualified independently for Linux and Intel Mac', () => {
+  for (const target of ['linux-x64', 'macos-x64']) {
+    const f = fixture('engine-media-native', target)
+    assert.equal(f.assess()?.reuse, true)
+    f.artifact.name = f.artifact.name.replace('engine-media-native', 'engine-native')
+    assert.equal(f.assess(), undefined)
+    const wrongTarget = fixture('engine-media-native', target)
+    wrongTarget.jobs.jobs[1].name = 'verify-pr / pr-stream (engine-media-native, unavailable)'
+    assert.equal(wrongTarget.assess(), undefined)
+    assert.equal(admitPrCandidate(() => { throw Error('Unsupported target') }, landed, tree, digest, 'engine-media-native', 'macos-arm64'), undefined)
+  }
+})
+
+
+test('Config candidates require the Config workflow and exact staged-helper target', () => {
+  for (const target of ['linux-x64', 'macos-x64']) {
+    const f = fixture('platform-config', target)
+    assert.equal(f.assess()?.reuse, true)
+    f.run.path = '.github/workflows/stream-engine.yml'
+    assert.equal(f.assess(), undefined)
+    const wrong = fixture('platform-config', target)
+    wrong.jobs.jobs[1].name = 'verify-pr / pr-stream (engine-native, ' + target + ')'
+    assert.equal(wrong.assess(), undefined)
+  }
+  assert.equal(admitPrCandidate(() => { throw Error('Unsupported Config target') }, landed, tree, digest, 'platform-config', 'web'), undefined)
 })

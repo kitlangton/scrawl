@@ -99,18 +99,25 @@ export async function hasMicrophoneSamples(bundlePath: string, reference: unknow
   } catch { return false; }
 }
 
-export async function configuredAgentContext(): Promise<boolean> {
+export const configuredAgentContext = () => configuredExperiment('agentContext');
+
+export async function configuredExperiment(name: 'agentContext' | 'agentDemoVideo'): Promise<boolean> {
+  const fallback = name === 'agentDemoVideo';
   try {
     const raw = await readRegular(join(homedir(), '.config', 'apparent', 'config.json'), 1024 * 1024);
     const config = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(raw));
     const experiments = config && typeof config === 'object' && !Array.isArray(config) ? config.experiments : undefined;
-    if (!experiments || typeof experiments !== 'object' || Array.isArray(experiments)) return false;
-    const v = experiments.agentContext;
+    if (!experiments || typeof experiments !== 'object' || Array.isArray(experiments)) return fallback;
+    const v = experiments[name];
     if (typeof v === 'boolean') return v;
     if (typeof v === 'number' && Number.isFinite(v)) return v !== 0;
-    if (typeof v === 'string') return ['true','yes','on','1'].includes(v.trim().toLowerCase());
+    if (typeof v === 'string') {
+      const text = v.trim().toLowerCase();
+      if (['true','yes','on','1'].includes(text)) return true;
+      if (['false','no','off','0'].includes(text)) return false;
+    }
   } catch { /* Invalid config is ignored, matching the local CLI's lenient read. */ }
-  return false;
+  return fallback;
 }
 
 export async function readManifest(path: string): Promise<{ raw: Buffer; value: Record<string, any> }> {

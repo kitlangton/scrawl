@@ -67,6 +67,20 @@ pub struct TrustedSource {
     pub seal: SealedFile,
 }
 
+/// Restore every field from the caller's original durable admission binding,
+/// after owner authentication. Never derive this expectation from an observed
+/// Saved receipt. Recovery needs no original source or caller-staging files.
+#[derive(Clone, Debug)]
+pub struct PublicationRecoveryBinding {
+    pub publication_id: String,
+    pub plan_sha256: String,
+    pub materials: MaterialsKey,
+    pub lease_id: String,
+    pub bundle_id: String,
+    pub destination: String,
+    pub manifest_sha256: String,
+}
+
 /// Context the provider may construct only after authenticating owner and capture,
 /// verifying retained material key/revision/root/lease, and holding read/source
 /// ownership through `prepare` or `commit`. Core never authenticates user IDs.
@@ -326,6 +340,59 @@ impl PublicationBackend {
         committed_destination(&publication, &journal, &plan, context, true)
     }
 
+    /// Reconcile only a committed destination using Core's durable original
+    /// plan/journal and an authenticated original expectation. This never
+    /// resumes a snapshot or opens caller staging/material/derivative paths.
+    pub fn inspect_committed(
+        &self,
+        original: &PublicationRecoveryBinding,
+        destination_parent: Arc<Store>,
+    ) -> Result<Option<PublicationEvidence>> {
+        validate_id(&original.publication_id)?;
+        validate_id(&original.materials.capture_id)?;
+        validate_id(&original.materials.materials_id)?;
+        validate_id(&original.lease_id)?;
+        validate_bundle_id(&original.bundle_id)?;
+        ensure!(
+            is_hash(&original.plan_sha256)
+                && is_hash(&original.manifest_sha256)
+                && is_hash(&original.materials.revision),
+            "invalid original recovery digests"
+        );
+        let (namespace, _lock) = self.locked(&original.publication_id)?;
+        let publication = namespace.child(&original.publication_id)?;
+        if !publication.entry_exists("journal.json")? {
+            return Ok(None);
+        }
+        let bytes = read_file(&publication.file("plan.json", false)?, PLAN_LIMIT as u64)?;
+        ensure!(
+            hash(&bytes) == original.plan_sha256,
+            "durable plan differs from original binding"
+        );
+        let recorded: Plan = serde_json::from_slice(&bytes)?;
+        // Only the staging-root string is recovered from the hash-bound original
+        // plan. This source-free context is never passed to prepare or commit.
+        let context = TrustedPublicationContext {
+            publication_id: original.publication_id.clone(),
+            materials: original.materials.clone(),
+            lease_id: original.lease_id.clone(),
+            bundle_id: original.bundle_id.clone(),
+            staging_root: recorded.staging_root,
+            destination: original.destination.clone(),
+            material_files: vec![],
+            sources: vec![],
+            destination_parent,
+        };
+        let plan = checked_plan_shape(&context, &bytes, &original.plan_sha256)?;
+        ensure!(
+            find_entry(&plan, "apparent.json")?.sha256 == original.manifest_sha256,
+            "manifest differs from original binding"
+        );
+        let journal = read_journal(&publication)?;
+        check_journal(&journal, &plan, &context, &original.plan_sha256)?;
+        committed_destination(&publication, &journal, &plan, &context, true)
+    }
+
     fn locked(&self, publication_id: &str) -> Result<(Arc<Store>, Lock)> {
         validate_id(publication_id)?;
         let namespace = self.control.child("publication-v1")?;
@@ -336,6 +403,42 @@ impl PublicationBackend {
 }
 
 fn checked_plan(context: &TrustedPublicationContext, bytes: &[u8], digest: &str) -> Result<Plan> {
+    let plan = checked_plan_shape(context, bytes, digest)?;
+    let mut sources = BTreeSet::new();
+    let mut material_paths = BTreeSet::new();
+    for seal in &context.material_files {
+        validate_sealed(seal)?;
+        ensure!(
+            material_paths.insert(seal.relative_path.as_str()),
+            "duplicate path in trusted materials inventory"
+        );
+    }
+    for source in &context.sources {
+        ensure!(
+            sources.insert(source.source_key.as_str()),
+            "duplicate pinned publication source key"
+        );
+    }
+    for entry in &plan.entries {
+        let source = source_for(entry, context)?;
+        ensure!(
+            source.seal.sha256 == entry.sha256 && source.seal.identity.size == entry.byte_length,
+            "entry differs from sealed source"
+        );
+        check_identity(&source.file, &source.seal)?;
+    }
+    ensure!(
+        context.material_files.len() <= ENTRY_LIMIT,
+        "materials file inventory exceeds bound"
+    );
+    Ok(plan)
+}
+
+fn checked_plan_shape(
+    context: &TrustedPublicationContext,
+    bytes: &[u8],
+    digest: &str,
+) -> Result<Plan> {
     ensure!(
         bytes.len() <= PLAN_LIMIT && !bytes.is_empty(),
         "publication plan exceeds bound"
@@ -413,21 +516,6 @@ fn checked_plan(context: &TrustedPublicationContext, bytes: &[u8], digest: &str)
         "publication aggregate snapshot exceeds byte limit"
     );
     let mut paths = BTreeSet::new();
-    let mut sources = BTreeSet::new();
-    let mut material_paths = BTreeSet::new();
-    for seal in &context.material_files {
-        validate_sealed(seal)?;
-        ensure!(
-            material_paths.insert(seal.relative_path.as_str()),
-            "duplicate path in trusted materials inventory"
-        );
-    }
-    for source in &context.sources {
-        ensure!(
-            sources.insert(source.source_key.as_str()),
-            "duplicate pinned publication source key"
-        );
-    }
     for entry in &plan.entries {
         validate_relative(&entry.relative_path)?;
         ensure!(
@@ -489,12 +577,6 @@ fn checked_plan(context: &TrustedPublicationContext, bytes: &[u8], digest: &str)
             ),
             _ => {}
         }
-        let source = source_for(entry, context)?;
-        ensure!(
-            source.seal.sha256 == entry.sha256 && source.seal.identity.size == entry.byte_length,
-            "entry differs from sealed source"
-        );
-        check_identity(&source.file, &source.seal)?;
     }
     for path in &paths {
         let mut parent = Path::new(path).parent();
@@ -513,10 +595,6 @@ fn checked_plan(context: &TrustedPublicationContext, bytes: &[u8], digest: &str)
         find_entry(&plan, "apparent.json")?.role == "manifest"
             && find_entry(&plan, "summary.md")?.role == "summary",
         "profile lacks manifest or summary"
-    );
-    ensure!(
-        context.material_files.len() <= ENTRY_LIMIT,
-        "materials file inventory exceeds bound"
     );
     Ok(plan)
 }
@@ -1401,6 +1479,87 @@ mod tests {
         }
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn committed_recovery_uses_original_binding_without_caller_sources() {
+        let root = temp();
+        let (control, output, context, bytes, digest) = fixture(&root);
+        let backend = PublicationBackend::new(control.clone());
+        backend.prepare(&context, &bytes, &digest).unwrap();
+        let expected = PublicationRecoveryBinding {
+            publication_id: context.publication_id.clone(),
+            plan_sha256: digest.clone(),
+            materials: context.materials.clone(),
+            lease_id: context.lease_id.clone(),
+            bundle_id: context.bundle_id.clone(),
+            destination: context.destination.clone(),
+            manifest_sha256: find_entry(
+                &serde_json::from_slice::<Plan>(&bytes).unwrap(),
+                "apparent.json",
+            )
+            .unwrap()
+            .sha256
+            .clone(),
+        };
+        assert!(
+            backend
+                .inspect_committed(&expected, output.clone())
+                .unwrap()
+                .is_none()
+        );
+        backend.commit(&context, &bytes, &digest).unwrap();
+        drop(context);
+        fs::remove_dir_all(root.join("source")).unwrap();
+        fs::remove_file(root.join("plan.bin")).unwrap();
+        // Emulate the process dying after rename but before the receipt journal
+        // update. Its recorded stage inode still has to identify the destination.
+        let namespace = control.child("publication-v1").unwrap();
+        let publication = namespace.child(&expected.publication_id).unwrap();
+        let mut journal = read_journal(&publication).unwrap();
+        journal.state = "prepared".into();
+        persist_journal(&publication, &journal).unwrap();
+        let evidence = backend
+            .inspect_committed(&expected, output.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(evidence.plan_sha256, digest);
+        assert!(evidence.reconciled);
+        let mut wrong_cases = Vec::new();
+        let mut wrong = expected.clone();
+        wrong.manifest_sha256 = "0".repeat(64);
+        wrong_cases.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.plan_sha256 = "0".repeat(64);
+        wrong_cases.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.lease_id = "0".repeat(32);
+        wrong_cases.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.materials.capture_id = "0".repeat(32);
+        wrong_cases.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.materials.materials_id = "0".repeat(32);
+        wrong_cases.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.materials.revision = "0".repeat(64);
+        wrong_cases.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.bundle_id = "foreign-bundle".into();
+        wrong_cases.push(wrong);
+        let mut wrong = expected.clone();
+        wrong.destination = root.join("bundles/other.apparent").to_string_lossy().into();
+        wrong_cases.push(wrong);
+        for wrong in wrong_cases {
+            assert!(backend.inspect_committed(&wrong, output.clone()).is_err());
+        }
+        fs::write(
+            Path::new(&expected.destination).join("summary.md"),
+            b"changed",
+        )
+        .unwrap();
+        assert!(backend.inspect_committed(&expected, output).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn wav_bytes(tag: u16, bits: u16, samples: &[u8]) -> Vec<u8> {
         let channels = 1u16;
         let rate = 16_000u32;

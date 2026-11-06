@@ -53,6 +53,10 @@
       "types": "./dist/backend/processing/media-consumer.d.ts",
       "import": "./dist/backend/processing/media-consumer.js"
     },
+    "./processing/media2-consumer": {
+      "types": "./dist/backend/processing/media2-consumer.d.ts",
+      "import": "./dist/backend/processing/media2-consumer.js"
+    },
     "./publication": {
       "types": "./dist/backend/publication/index.d.ts",
       "import": "./dist/backend/publication/index.js"
@@ -78,7 +82,7 @@
     "test:contracts": "tsc --noEmit --allowImportingTsExtensions --module NodeNext --target ES2022 --strict --types node test/native-host/adapter.types.ts"
   },
   "peerDependencies": {
-    "@apparent/engine-sdk": "^0.4.0",
+    "@apparent/engine-sdk": "^0.4.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
@@ -106,7 +110,7 @@
     "tailwind-merge": "^3.3.1",
     "esbuild": "0.25.12",
     "@tailwindcss/cli": "4.1.17",
-    "@apparent/engine-sdk": "file:vendor/engine-sdk-0.4.0.tgz",
+    "@apparent/engine-sdk": "file:vendor/engine-sdk-0.4.1.tgz",
     "@apparent/app-contracts": "file:vendor/app-contracts-0.1.0-33f9521.tgz",
     "react": "19.2.0",
     "react-dom": "19.2.0"

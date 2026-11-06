@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { constants as C } from "node:fs";
-import { link, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { FileHandle } from "node:fs/promises";
-import { readCredentialSnapshot, assertCredentialSnapshotCurrent, CredentialSnapshotError, type NamespaceResources } from "../../src/state/namespace.ts";
+import { readCredentialSnapshot, readCredentialRecoverySnapshot, assertCredentialSnapshotCurrent, CredentialSnapshotError, type NamespaceResources } from "../../src/state/namespace.ts";
 import { readStoredCredentialHandle, CredentialReadError } from "../../src/credentials/private-read.ts";
 
 const context = { scope: "read" as const, approvedServer: "https://sync.example" };
@@ -196,5 +196,40 @@ test("saved snapshot credentials are immutable before a later currentness check"
     await assertCredentialSnapshotCurrent(f.dir, saved, resources().port);
     await f.put("read.credential", credential("f".repeat(32)));
     await category(assertCredentialSnapshotCurrent(f.dir, saved, resources().port), "stale_snapshot");
+  } finally { await f.close(); }
+});
+
+
+test("completed rotating replies recover after the old refresh deadline without modifying JSON", async () => {
+  const f = await fixture();
+  try {
+    const base = credential();
+    const journal = { base, issued: 100, completed: true };
+    const response = { scope: "read", grantId: "grant", accessToken: "rotated", refreshToken: "rotated-refresh", expiresIn: 200, refreshExpiresIn: 300 };
+    await f.put("read.renewal", journal); await f.put("read.response", response);
+    const names = ["read.credential", "read.renewal", "read.response"];
+    const before = await Promise.all(names.map(n => readFile(path.join(f.dir, n))));
+    const result = await readCredentialRecoverySnapshot(f.dir, context, resources().port);
+    assert.equal(result.recovery, "completed_response");
+    assert.equal(result.snapshot.credential.token, "access"); assert.equal(result.credential.token, "rotated");
+    assert.equal(result.credential.expiresAt, 300); assert.equal(result.credential.refreshExpiresAt, 400);
+    await assertCredentialSnapshotCurrent(f.dir, result.snapshot, resources().port);
+    assert.deepEqual(await Promise.all(names.map(n => readFile(path.join(f.dir, n)))), before);
+  } finally { await f.close(); }
+});
+
+test("incomplete or mismatched journals cannot use an orphan reply; bad completed replies fail closed", async () => {
+  const f = await fixture();
+  try {
+    await f.put("read.response", "not json");
+    for (const journal of [{ base: credential(), issued: 100, completed: false }, { base: credential("b".repeat(32)), issued: 100, completed: true }, { broken: true }]) {
+      await f.put("read.renewal", journal);
+      const result = await readCredentialRecoverySnapshot(f.dir, context, resources().port);
+      assert.equal(result.recovery, "stored"); assert.equal(result.credential.token, "access");
+    }
+    await f.put("read.renewal", { base: credential(), issued: 100, completed: true });
+    await category(readCredentialRecoverySnapshot(f.dir, context, resources().port), "invalid_credential");
+    await unlink(path.join(f.dir, "read.response"));
+    await category(readCredentialRecoverySnapshot(f.dir, context, resources().port), "invalid_credential");
   } finally { await f.close(); }
 });

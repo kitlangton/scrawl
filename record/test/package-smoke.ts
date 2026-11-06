@@ -84,18 +84,21 @@ try {
   process.stdout.write(runtime.stdout);
 
   // The canonical bundle subpath uses only the packed public SDK contract.
-  const sdkArtifact = process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root, 'vendor/engine-sdk-0.4.0.tgz');
+  const sdkArtifact = process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root, 'vendor/engine-sdk-0.4.1.tgz');
   const sdkBytes = await readFile(sdkArtifact);
-  assert.equal(createHash('sha256').update(sdkBytes).digest('hex'), '7f64b8bba34b9c323d51b78d6e6f33aaac48971fd43c15347212190da5e51068');
+  assert.equal(createHash('sha256').update(sdkBytes).digest('hex'), 'f0c4b9777033bcde0463e0442074e5af714cddaed1c45452802012e66d21c156');
   await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact], { cwd: bundle });
   const bundleDeclarations = path.join(bundle, 'consumer.ts');
   await writeFile(bundleDeclarations, `
+    import { RecordMedia2Job, type RecordMedia2JobState } from '@apparent/record/processing/media2-consumer';
+    import { Media2Client, preflightMedia2Dispatch, type Media2JobInput } from '@apparent/engine-sdk/media2';
     import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators, type CanonicalStroke } from '@apparent/record/processing/bundle';
     import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts, type StrokeRgb } from '@apparent/engine-sdk/capture';
     import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
     import {createCapture2RecordRuntime, type Capture2RecordRuntimeOptions} from '@apparent/record/host/capture2-runtime';
     declare const capture2RuntimeOptions: Capture2RecordRuntimeOptions;
     void createCapture2RecordRuntime(capture2RuntimeOptions);
+    const createMedia2Job = (client: Media2Client, input: Media2JobInput) => RecordMedia2Job.create(client, '/tmp/record-media2-job.json', input);
     const validators: BundleValidators = { materials: validateMaterialsDocument, fact: validateFactFile };
     const consume = (input: BundleAssemblyInput) => assembleCanonicalBundle(input, validators);
     const loadAndAssemble = async (input: CaptureMaterialsInput, policy: Omit<BundleAssemblyInput, 'manifest' | 'payloadBytes' | 'facts'>) => {
@@ -104,19 +107,27 @@ try {
     };
     const rgb: StrokeRgb = [12, 34, 56];
     const canonical: CanonicalStroke = { id: 'record-mapping', t0: 0, t1: 1, fw: 1, fh: 1, pts: [0, 0, 0], rgb };
+    declare const media2Input: Media2JobInput;
+    const media2State: RecordMedia2JobState = 'ready';
+    void [RecordMedia2Job, Media2Client, preflightMedia2Dispatch, media2Input, media2State, createMedia2Job];
     void canonical; void loadAndAssemble; void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
   `);
   const bundleTsc = path.join(root, 'node_modules/typescript/bin/tsc');
   await run(process.execPath, [bundleTsc, '--noEmit', '--strict', '--types', 'node', '--typeRoots', path.join(root, 'node_modules/@types'), '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', bundleDeclarations], { cwd: bundle });
   const bundleRuntime = await run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
+    import {createRequire} from 'node:module';
     import { assembleCanonicalBundle } from '@apparent/record/processing/bundle';
+    import { RecordMedia2Job } from '@apparent/record/processing/media2-consumer';
     import { validateMaterialsDocument, validateFactFile } from '@apparent/engine-sdk/capture';
+    import { Media2Client, preflightMedia2Dispatch } from '@apparent/engine-sdk/media2';
     const {readCaptureMaterials} = await import('@apparent/record/host/materials');
     assert.equal(typeof readCaptureMaterials, 'function');
     assert.equal(typeof assembleCanonicalBundle, 'function');
     assert.equal(typeof validateMaterialsDocument, 'function');
     assert.equal(typeof validateFactFile, 'function');
+    for (const name of ['react','react-dom','electron']) assert.throws(()=>createRequire(import.meta.url).resolve(name));
+    assert.deepEqual([RecordMedia2Job, Media2Client, preflightMedia2Dispatch].map(value => typeof value), ['function','function','function']);
     console.log('packed canonical bundle runtime and SDK consumer passed');
   `], { cwd: bundle });
   process.stdout.write(bundleRuntime.stdout);
@@ -139,7 +150,7 @@ try {
   process.stdout.write(uiResult.stdout);
   // The publication profile explicitly supplies the published SDK; it is not
   // installed for the other headless or UI consumers.
-  const sdkTarball = path.join(scratch, 'engine-sdk-0.4.0.tgz'); await copyFile(sdkArtifact, sdkTarball);
+  const sdkTarball = path.join(scratch, 'engine-sdk-0.4.1.tgz'); await copyFile(sdkArtifact, sdkTarball);
   await run('npm', ['install', '--no-audit', '--no-fund', sdkTarball, tarball], { cwd: publication });
   const publicationResult = await run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';

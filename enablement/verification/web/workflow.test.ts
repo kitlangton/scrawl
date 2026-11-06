@@ -179,7 +179,7 @@ test('Engine has one workflow containing exactly its registered component target
     ['engine-media-native', 'linux-x64'], ['engine-media-native', 'macos-x64'], ['engine-capture-native', 'linux-x64'],
   ].sort())
 })
-test('media native targets use the same producer with platform-specific fresh setup', () => {
+test('media native targets qualify their actual runtime before reuse admission', () => {
   const workflow = entry('engine-media-native');
   const matrices = [...workflow.matchAll(/^\s+matrix: (.+)$/gm)].map(match => JSON.parse(match[1]).include);
   assert.equal(matrices.length, 2);
@@ -188,7 +188,10 @@ test('media native targets use the same producer with platform-specific fresh se
   assert.match(linux, /inputs.target == 'linux-x64'/);
   const mac = component.split('    - name: Qualify native Intel Mac media toolchain')[1].split('    - name:')[0];
   assert.match(mac, /inputs.target == 'macos-x64'/);
-  assert.match(mac, /steps.admit.outputs.reuse != 'true'/);
+  assert.doesNotMatch(mac, /steps.admit.outputs.reuse/);
+  assert(component.indexOf('name: Install Engine media runtime') < component.indexOf('id: admit'));
+  assert(component.indexOf('name: Qualify native Intel Mac media toolchain') < component.indexOf('id: admit'));
+  assert.doesNotMatch(linux, /steps.admit.outputs.reuse/);
   assert.match(mac, /process.arch !== 'x64'/);
   assert.match(mac, /Swift 6.2\+ and SDK 26\+ required/);
   assert.doesNotMatch(mac, /apt-get|--target/);
@@ -213,4 +216,12 @@ test('App Shell PR retention follows packaged Electron verification and main can
   assert.match(component, /cli\.ts candidate-support/)
   assert.match(component, /steps\.candidate-support\.outputs\.supported == 'true'/)
   assert.match(section(entry('app-shell'), 'stream'), /pull-requests: read/)
+})
+
+
+test('supported native candidates qualify Rust before admission, while Config main can authenticate PRs', () => {
+  const firstRust = component.indexOf('uses: dtolnay/rust-toolchain@stable')
+  assert(firstRust < component.indexOf('id: admit'))
+  assert.match(component.slice(firstRust, component.indexOf('id: admit')), /inputs\.language == 'native' && steps\.candidate-support\.outputs\.supported == 'true'/)
+  assert.match(section(entry('platform-config'), 'stream'), /pull-requests: read/)
 })

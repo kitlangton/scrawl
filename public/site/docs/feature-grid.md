@@ -24,3 +24,7 @@ The fourth example is an illustrative agent walkthrough inside a chat interface.
 `homepage-revision.css` retains the accepted sequential layout and handwritten
 photo annotations. Photo markup lives in `PhotoStory.tsx`; social dialog markup
 and interaction live in `src/footer/`. All are part of the normal source build.
+
+## Greeting frog Easter egg
+
+Two activations within 420ms trigger the greeting frog’s backflip, belly-flop, water ripples and QR reveal. The QR encodes `https://app.tryapparent.com/` and is a link for same-device use. Single activation retains the wave. Escape or Back to the pond restores focus and scrolling; reduced motion skips the flight and ripples. The mounted frog owns a React portal dialog with explicit reveal stages. Its effect cleans timers, animation frames and temporary page filters on dismissal, pagehide or unmount. Design tracked in #709.

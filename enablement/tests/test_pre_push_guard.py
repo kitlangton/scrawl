@@ -55,6 +55,15 @@ class PrePushGuardTests(unittest.TestCase):
                     (artifact / "package.json").write_text(json.dumps({"version": version}))
         (package / "node_modules/.package-lock.json").write_text(json.dumps(installed))
 
+    @classmethod
+    def setUpClass(cls):
+        # Verify the real width matrix once, not inside every nested hook.
+        result = run("python3", "-m", "unittest", "discover", "-s",
+                     "enablement/directory-width/tests", "-p", "test_*.py",
+                     cwd=HOOK.parents[1])
+        if result.returncode:
+            raise RuntimeError(result.stdout + result.stderr)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix=".pf-", dir=Path.home())
         self.addCleanup(self.tmp.cleanup)
@@ -144,10 +153,17 @@ class PrePushGuardTests(unittest.TestCase):
             destination = self.repo / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(HOOK.parents[1] / name, destination)
+        # The outer verifier already runs the real file-length suite once.
+        # Nested hook invocations test command admission, not the scanner again:
+        # rerunning its Git fixtures for every push scenario exhausts the hook budget.
+        (self.repo / "enablement/file-length/check.test.ts").write_text(
+            'import test from "node:test"; import assert from "node:assert/strict";\n'
+            'test("hook fixture", () => assert.ok(true));\n'
+        )
         width_tests = self.repo / "enablement/directory-width/tests"
         width_tests.mkdir(parents=True)
-        shutil.copy2(HOOK.parents[1] / "enablement/directory-width/tests/test_hook.py",
-                     width_tests / "test_hook.py")
+        # setUpClass runs the real matrix; this nested suite is an admission marker.
+        (width_tests / "test_hook.py").write_text(fixture_test)
         # The real verifier now runs the shared frontend color guard. Preserve
         # its actual dependency closure in this disposable hook repository.
         theme = self.repo / "shared/ui/scripts"
