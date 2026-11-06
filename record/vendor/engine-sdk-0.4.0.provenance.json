@@ -1,7 +1,0 @@
-{
-  "package": "@apparent/engine-sdk",
-  "version": "0.4.0",
-  "artifact": "engine-sdk-0.4.0.tgz",
-  "sha256": "7f64b8bba34b9c323d51b78d6e6f33aaac48971fd43c15347212190da5e51068",
-  "source": "frozen SDK 0.4.0 archive for derivative/2 offline validation and publication selectors"
-}
