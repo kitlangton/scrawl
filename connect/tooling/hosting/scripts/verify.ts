@@ -5,6 +5,7 @@ import { resolve, join } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
 const web = resolve(root, '../../web')
+const service = resolve(root, '../../service')
 const evidence = mkdtempSync(join(tmpdir(), 'connect-hosting-proof-'))
 // PR jobs inherit a synthetic analytics key. The publishable graph must never
 // contain it; production main retains its actual, fingerprinted configuration.
@@ -20,4 +21,7 @@ run('bun', ['install', '--frozen-lockfile'], web, { NODE_ENV: 'development' })
 run(process.execPath, ['--experimental-strip-types', 'scripts/playwright-runtime.ts'], web)
 run('npm', ['test'], web, artifactEnvironment)
 run('npm', ['test'], root, { ...artifactEnvironment, VITE_HOSTED_API_ORIGIN: 'https://app.tryapparent.com/connect', API_ORIGIN: 'https://app.tryapparent.com/connect', SITE_ORIGIN: 'https://app.tryapparent.com' })
+// Initiation alone cannot prove that the mounted callback resolves or issues a session.
+run('npm', ['run', 'build'], service, artifactEnvironment)
+run(process.execPath, ['--test', '--test-concurrency=1', 'test/access/oauth.test.mjs', 'test/access/mounted-base.test.ts'], service, artifactEnvironment)
 console.log(`Synthetic browser evidence retained privately: ${evidence}`)
