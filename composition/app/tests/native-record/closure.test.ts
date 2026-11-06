@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmod, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, open, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readShell } from '../../scripts/artifacts.ts';
 import { stageRecordNative } from '../../scripts/record-native.ts';
@@ -53,4 +53,27 @@ test('Record-bound shell and assembled copy seal all native bytes and modes', { 
   await chmod(worker, 0o755);
   await writeFile(worker, 'changed');
   await assert.rejects(verifyAssembly(assembly), /checksum mismatch/);
+});
+
+test('mode changed after handle validation cannot repair an invalid source snapshot', async t => {
+  const f = await fixture(); t.after(() => rm(f.work, { recursive: true, force: true }));
+  const worker = join(f.input.capture.directory, 'libexec/worker');
+  await chmod(worker, 0o644);
+  const inode = (await stat(worker)).ino;
+  const probe = await open(worker, 'r');
+  const prototype = Object.getPrototypeOf(probe);
+  await probe.close();
+  const original = prototype.stat;
+  let observations = 0;
+  // Place the concurrent chmod exactly after the open handle's second stat,
+  // before pathname validation. The old separate lstat accepted the new 0755
+  // although the buffered bytes were observed from the invalid 0644 snapshot.
+  t.mock.method(prototype, 'stat', async function (this: unknown, ...args: unknown[]) {
+    const value = await original.apply(this, args);
+    if (value.ino === inode && ++observations === 2) await chmod(worker, 0o755);
+    return value;
+  });
+  await assert.rejects(stageRecordNative(f.output, f.input), /changed during read|mode mismatch/);
+  assert.equal(observations, 2, 'the actual read/validation boundary was exercised');
+  await assert.rejects(stat(join(f.output, 'native-record')), { code: 'ENOENT' });
 });

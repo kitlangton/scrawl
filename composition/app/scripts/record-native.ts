@@ -19,7 +19,7 @@ export interface RecordNativeArtifacts {
   config: AdmittedRecordArtifact;
 }
 
-async function bytes(path: string, maximum: number): Promise<Buffer> {
+async function bytes(path: string, maximum: number): Promise<{ data: Buffer; mode: number }> {
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = await file.stat();
@@ -35,10 +35,11 @@ async function bytes(path: string, maximum: number): Promise<Buffer> {
     const after = await file.stat();
     const current = await lstat(path);
     assert(length === before.size && before.dev === after.dev && before.ino === after.ino
-      && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs
-      && !current.isSymbolicLink() && current.dev === after.dev && current.ino === after.ino,
+      && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs && before.mode === after.mode
+      && !current.isSymbolicLink() && current.dev === after.dev && current.ino === after.ino
+      && current.mode === after.mode && current.ctimeMs === after.ctimeMs,
     'Native artifact changed during read');
-    return value.subarray(0, length);
+    return { data: value.subarray(0, length), mode: before.mode & 0o7777 };
   } finally { await file.close(); }
 }
 
@@ -57,7 +58,8 @@ export async function stageRecordNative(output: string, input: RecordNativeArtif
     assert.equal(await realpath(artifact.directory), artifact.directory, 'Native artifact directory must be canonical');
     const directory = await lstat(artifact.directory);
     assert(directory.isDirectory() && !(directory.mode & 0o7022), 'Unsafe native artifact directory');
-    const raw = await bytes(join(artifact.directory, 'manifest.json'), 1024 * 1024);
+    const manifestFile = await bytes(join(artifact.directory, 'manifest.json'), 1024 * 1024);
+    const raw = manifestFile.data;
     assert.equal(digest(raw), artifact.manifestSha256, 'Native manifest differs from admitted digest');
     const manifest = JSON.parse(raw.toString());
     assert(manifest.schema === 1 && manifest.sourceSha === artifact.sourceSha && manifest.target === inputs.target,
@@ -81,9 +83,10 @@ export async function stageRecordNative(output: string, input: RecordNativeArtif
     }
     await exactFiles(artifact.directory, ['manifest.json', ...files.map(file => file.path)]);
     for (const file of [...files, { path: 'manifest.json', sha256: artifact.manifestSha256, mode: 0o644 }]) {
-      const data = file.path === 'manifest.json' ? raw : await bytes(join(artifact.directory, file.path), 128 * 1024 * 1024);
+      const snapshot = file.path === 'manifest.json' ? manifestFile : await bytes(join(artifact.directory, file.path), 128 * 1024 * 1024);
+      const { data } = snapshot;
       assert.equal(digest(data), file.sha256, 'Native runtime checksum mismatch');
-      assert.equal((await lstat(join(artifact.directory, file.path))).mode & 0o7777, file.mode, 'Native runtime mode mismatch');
+      assert.equal(snapshot.mode, file.mode, 'Native runtime mode mismatch');
       total += data.length;
       assert(total <= 512 * 1024 * 1024, 'Native Record closure exceeds assembly limit');
       staged.push({ path: `native-record/${slot}/${file.path}`, data, mode: file.mode as 0o644 | 0o755 });
