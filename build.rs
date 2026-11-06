@@ -284,9 +284,9 @@ fn compile_helper() {
     // Sort the merged list by basename to preserve the former helper/*.swift compiler order.
     let owner_sources: &[&[&str]] = &[
         &[
-            "capture/engine/native/Export.swift",
-            "capture/engine/native/LiveTranscribe.swift",
-            "capture/engine/native/Media.swift",
+            "engine/native/Export.swift",
+            "engine/native/LiveTranscribe.swift",
+            "engine/native/Media.swift",
             "capture/engine/native/Mirror.swift",
             "capture/engine/native/PlaybackVolume.swift",
             "capture/engine/native/ScreenProbe.swift",
