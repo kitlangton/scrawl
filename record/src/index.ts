@@ -7,5 +7,7 @@ export { assembleProcessingOutput, decodeSelectedFrames } from "./backend/proces
 export type { DecodeSelection, ProcessingInput, ProcessingOutput, PublishedMediaClient, SelectedFrame, SemanticFrameText, TranscriptSegment } from "./backend/processing/index.js";
 export { associateTranscriptWithSelectedFrames } from "./backend/selection/transcript-association.js";
 export type { AssociatedFrame, SelectedFrameReference, TimedTranscriptUnit, TranscriptFacts } from "./backend/selection/transcript-association.js";
+export { selectVisualKeyframes, visualKeyframeBudget } from "./backend/selection/visual-keyframes.js";
+export type { SelectedVisualKeyframe, VisualKeyframeReason, VisualSelectionSample } from "./backend/selection/visual-keyframes.js";
 export { formatLocalHandoff } from "./backend/handoff/index.js";
 export type { LocalHandoffInput, LocalHandoffOutput } from "./backend/handoff/index.js";
