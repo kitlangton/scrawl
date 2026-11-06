@@ -22,7 +22,8 @@ export type RecipientCliDependencies = {
   resolveIdentity?: () => Promise<{ age: string; signing: Uint8Array }>;
   authorize?: RecipientAuthorization;
 };
-export type RecipientCliResult = { ok: true; path: string } | { ok: false; error: CliFailure };
+export type RecipientCommittedPublication = Readonly<{ state: "committed"; path: string }>;
+export type RecipientCliResult = { ok: true; path: string } | { ok: false; error: CliFailure; publication?: RecipientCommittedPublication };
 
 function invalid(message: string): never { throw new CliArgumentError(message); }
 export class CliArgumentError extends Error { readonly category = "invalid_arguments"; }
@@ -44,15 +45,18 @@ export function parseRecipientCommand(args: readonly string[]): RecipientCommand
   if (!args.length) invalid("expected fetch or inspect");
   const [verb, ...rest] = args;
   if (verb === "fetch") {
-    let id: string | undefined, out: string | undefined, waitSeconds = 0, media = false, seenWait = false;
+    let id: string | undefined, out: string | undefined, waitSeconds = 0, media = false, seenWait = false, positionalOnly = false;
     for (let i = 0; i < rest.length; i++) {
       const arg = rest[i]!;
-      if (arg === "--media") { if (media) invalid("duplicate --media"); media = true; }
-      else if (arg === "--out" || arg === "--wait") {
-        const value = rest[++i]; if (value === undefined || value.startsWith("--")) invalid(`missing value for ${arg}`);
-        if (arg === "--out") { if (out !== undefined) invalid("duplicate --out"); out = value; }
-        else { if (seenWait) invalid("duplicate --wait"); seenWait = true; if (!/^(0|[1-9][0-9]*)$/.test(value)) invalid("invalid --wait"); waitSeconds = Number(value); }
-      } else if (arg.startsWith("-") || id !== undefined) invalid("unexpected fetch argument");
+      if (!positionalOnly && arg === "--") { positionalOnly = true; continue; }
+      const option = !positionalOnly && (arg === "--out" || arg.startsWith("--out=") ? "--out" : arg === "--wait" || arg.startsWith("--wait=") ? "--wait" : undefined);
+      if (!positionalOnly && arg === "--media") { if (media) invalid("duplicate --media"); media = true; }
+      else if (option) {
+        const inline = arg.startsWith(`${option}=`), value = inline ? arg.slice(option.length + 1) : rest[++i];
+        if (value === undefined || !inline && value.length > 1 && value.startsWith("-")) invalid(`missing value for ${option}`);
+        if (option === "--out") { if (out !== undefined) invalid("duplicate --out"); out = value; }
+        else { if (seenWait) invalid("duplicate --wait"); seenWait = true; if (!/^\+?[0-9]+$/.test(value)) invalid("invalid --wait"); waitSeconds = Number(value); }
+      } else if (!positionalOnly && arg.length > 1 && arg.startsWith("-") || id !== undefined) invalid("unexpected fetch argument");
       else id = arg;
     }
     if (!id || !ID.test(id)) invalid("capture ID must be 32 lowercase hexadecimal characters");
@@ -61,9 +65,10 @@ export function parseRecipientCommand(args: readonly string[]): RecipientCommand
     return { kind: "fetch", id, out, waitSeconds, media };
   }
   if (verb === "inspect") {
-    let source = "latest", seen = false;
+    let source = "latest", seen = false, positionalOnly = false;
     for (const arg of rest) {
-      if (arg.startsWith("-") || seen) invalid("unexpected inspect argument");
+      if (!positionalOnly && arg === "--") { positionalOnly = true; continue; }
+      if (!positionalOnly && arg.length > 1 && arg.startsWith("-") || seen || !arg) invalid("unexpected inspect argument");
       source = arg; seen = true;
     }
     // Match the legacy adapter: only a bare exact canonical ID is remote.
@@ -122,7 +127,9 @@ export async function publishVerified(
   const evidenceOnly = capture.evidenceOnly;
   const publication = await publish(capture, destination);
   if (publication.state !== "committed") return { ok: false, error: { category: "publication_uncertain", message: "publication outcome is uncertain; inspect the destination before taking further action" } };
-  if (evidenceOnly && publication.evidenceOnlyReceipt !== true) return { ok: false, error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" } };
+  if (evidenceOnly && publication.evidenceOnlyReceipt !== true) return { ok: false,
+    error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" },
+    publication: Object.freeze({ state: "committed", path: publication.path }) };
   return { ok: true, path: publication.path };
 }
 

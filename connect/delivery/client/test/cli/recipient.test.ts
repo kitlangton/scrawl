@@ -59,7 +59,8 @@ test("publication uncertainty and missing evidence receipt never project success
   const uncertain = await publishVerified(capture, "./out", async () => { calls++; return { state: "publication-uncertain" }; });
   assert.deepEqual(uncertain, { ok: false, error: { category: "publication_uncertain", message: "publication outcome is uncertain; inspect the destination before taking further action" } });
   const missingReceipt = await publishVerified(capture, "./out", async () => ({ state: "committed", path: "./out" }));
-  assert.deepEqual(missingReceipt, { ok: false, error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" } });
+  assert.deepEqual(missingReceipt, { ok: false, error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" },
+    publication: { state: "committed", path: "./out" } });
   assert.equal(calls, 1);
 });
 
