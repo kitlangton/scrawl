@@ -3,10 +3,15 @@ import { createRoot } from 'react-dom/client';
 import { Button } from '@apparent/ui/button';
 import { parseStreamManifest, type StreamModule, type StreamManifest } from '@apparent/app-contracts';
 import type { OnboardingProgressPort } from '@apparent/app-contracts/host';
+import type { RecordRendererPort } from './record/wire.js';
 
-declare global { interface Window { apparent: { onboardingProgress: OnboardingProgressPort } } }
+declare global { interface Window { apparent: { onboardingProgress: OnboardingProgressPort; record: RecordRendererPort } } }
 
 type Loaded = { manifest: StreamManifest; module: StreamModule };
+function bindRecord(module: StreamModule, port: RecordRendererPort): StreamModule {
+  const Screen = module.Screen as React.ComponentType<{ port: RecordRendererPort }>;
+  return { ...module, Screen: () => <Screen port={port} /> };
+}
 // Composition owns this optional injection adapter; the shared stream ABI stays
 // a no-props module and other streams never receive Onboarding capabilities.
 type OnboardingProps = { hostDependencies?: { onboarding: { progress: OnboardingProgressPort } } };
@@ -59,6 +64,7 @@ async function start() {
     if (!module || module.id !== manifest.id || typeof module.Screen !== 'function' || typeof module.Settings !== 'function') {
       throw new Error('Invalid stream exports');
     }
+    if (manifest.id === 'record') return { manifest, module: bindRecord(module, window.apparent.record) };
     return { manifest, module: manifest.id === 'onboarding' ? bindOnboarding(module, window.apparent.onboardingProgress) : module };
   }));
   createRoot(document.getElementById('root')!).render(<Shell streams={streams} />);
