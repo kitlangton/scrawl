@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import { isAbsolute, join, parse, resolve, sep } from 'node:path';
@@ -63,7 +63,7 @@ async function defaultHostFactory(paths: Parameters<Capture2HostFactory>[0]) {
   const [{ AbsentDestinationAllocator, SqliteCaptureMappingStore }, { createCapture2Host }] = await Promise.all([
     import('@apparent/record/host'), import('@apparent/record/host/capture2'),
   ]);
-  const client = new CaptureClient(launchCaptureEngine(paths.executable, paths.runtime, 3000));
+  const client = new CaptureClient(launchCaptureEngine(paths.executable, paths.runtime, 40_000));
   try {
     const host = createCapture2Host({ client, mappings: new SqliteCaptureMappingStore(storeRoot), destinations: new AbsentDestinationAllocator(storeRoot, paths.destinationRoot) });
     return { host, close: () => client.close() };
@@ -131,7 +131,7 @@ export function parseCapture2ControlArgs(args: string[]): { method: 'inspect' | 
   return { method: method as 'inspect' | 'stop' | 'cancel', requestId };
 }
 
-/** V2 remains explicit until an installed capture/2 native provider is available. */
+/** Capture/2 stays explicit; native readiness depends on the separately installed provider. */
 export function parseCapture2RecordArgs(args: string[]): { durationSeconds: number; out: string; sourceId: string } {
   let duration: number | undefined, out: string | undefined, sourceId: string | undefined, protocol = false;
   for (let i = 0; i < args.length; i++) {
@@ -187,7 +187,7 @@ export async function recordWithCapture2(
     await (config.persistIdentity ?? retainPublicIdentity)(controlRoot, requestId, parsed.out);
     if (interrupted()) throw new Error(`Interrupted after retaining capture/2 request ${requestId}; no start was dispatched`);
     process.stderr.write(`Capture/2 request ID: ${requestId}\n`);
-    let receipt = await composed.host.start({ requestId, source: matches[0], options: { audio: 'none', localOnly: true }, invocation: { invocationId: randomUUID(), observedAtMs: Date.now(), kind: 'explicit' }, destinationPath: parsed.out });
+    let receipt = await composed.host.start({ requestId, source: matches[0], options: { audio: 'none', localOnly: true }, invocation: { invocationId: randomBytes(16).toString('hex'), observedAtMs: Date.now(), kind: 'explicit' }, destinationPath: parsed.out });
     const startupBy = clock.now() + 30_000;
     while (receipt.phase === 'starting' && clock.now() < startupBy && !interrupted()) {
       await clock.sleep(200); receipt = await composed.host.inspect(requestId);
