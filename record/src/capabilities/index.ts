@@ -10,9 +10,11 @@ export interface NativeRequirement {
   allowedRepairActions: RepairAction[];
 }
 export interface ShortcutBinding {
+  /** Configured native value, distinct from the binding actually in effect. */
+  configured?: string | null;
   effective: string | null;
   label: string | null;
-  registration: "registered" | "unregistered" | "externally-managed" | "unknown";
+  registration: "registered" | "unregistered" | "externally-managed" | "unknown" | "unavailable";
   externallyManaged: boolean;
   draft: null | { sessionId: string; value: string; error?: string };
 }
