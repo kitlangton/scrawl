@@ -16,10 +16,13 @@ const bytes = (s: string) => new TextEncoder().encode(s);
 
 test("headless fetch and remote inspect retrieve authenticated groups before committed publication", async () => {
   const id = "a".repeat(32), routes = new Map<string, unknown>(), hits: string[] = [];
+  let expectedToken = "synthetic", denyNextCapture: (() => Promise<void>) | undefined;
   let beforeResponse: ((url: string) => Promise<void>) | undefined;
   const http = createServer(async (req, res) => {
-    assert.equal(req.headers.authorization, "Bearer synthetic"); assert.equal(req.headers.cookie, undefined);
-    hits.push(req.url!); await beforeResponse?.(req.url!); const body = routes.get(req.url!);
+    assert.equal(req.method, "GET"); assert.equal(req.headers.authorization, `Bearer ${expectedToken}`); assert.equal(req.headers.cookie, undefined);
+    hits.push(req.url!);
+    if (denyNextCapture && req.url === `/v1/captures/${id}`) { const update = denyNextCapture; denyNextCapture = undefined; await update(); res.writeHead(401).end(); return; }
+    await beforeResponse?.(req.url!); const body = routes.get(req.url!);
     if (body === undefined) { res.writeHead(404).end(); return; }
     res.end(body instanceof Uint8Array ? body : JSON.stringify(body));
   });
@@ -84,6 +87,22 @@ test("headless fetch and remote inspect retrieve authenticated groups before com
       const refused = await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", path.join(root, "cancelled.apparent")]), options);
       assert.deepEqual(refused, { ok: false, error: { category: "stale_snapshot", message: "stale_snapshot" } });
       await assert.rejects(readFile(path.join(root, "cancelled.apparent", "summary.md")));
+      beforeResponse = undefined;
+      const stored = JSON.parse(await readFile(path.join(state, "read.credential"), "utf8"));
+      denyNextCapture = async () => {
+        expectedToken = "writer-rotated";
+        await writeFile(path.join(state, "read.credential"), JSON.stringify({ ...stored, token: expectedToken }), { mode: 0o600 });
+      };
+      let prior = hits.filter(url => url === `/v1/captures/${id}`).length;
+      const rotatedOut = path.join(root, "rotated.apparent");
+      assert.deepEqual(await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", rotatedOut]), options), { ok: true, path: rotatedOut });
+      assert.equal(hits.filter(url => url === `/v1/captures/${id}`).length - prior, 2);
+      denyNextCapture = async () => {};
+      prior = hits.filter(url => url === `/v1/captures/${id}`).length;
+      assert.deepEqual(await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", path.join(root, "unchanged.apparent")]), options),
+        { ok: false, error: { category: "renewal_required", message: "renewal_required" } });
+      assert.equal(hits.filter(url => url === `/v1/captures/${id}`).length - prior, 1);
+
     } finally { beforeResponse = undefined; await rm(root, { recursive: true, force: true }); }
 
   } finally { http.close(); http.closeAllConnections(); await once(http, "close"); }

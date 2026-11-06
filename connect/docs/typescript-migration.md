@@ -41,16 +41,22 @@ Stored credential wire decoding, private-descriptor reading and queue-locked
 credential snapshots are TypeScript capabilities with Linux/Mac native consumer
 proof. Directory admission, inode/ACL checks, cancellation, revocation and local
 login-incarnation fences preserve the legacy lock protocol; stored facts do not
-authorize transport or clear `authRequired`. Renewal journals, token expiry and
-service authorization policy, installed caller adoption and writer cutover remain
-parent integration work. Rust remains the sole credential and queue JSON writer.
+authorize transport or clear `authRequired`. Completed legacy renewal responses
+can now be read under the same queue lock when the full journal base matches;
+recovery uses the original issue time and leaves all durable files unchanged.
+Active renewal and durable journal publication, service authorization policy,
+installed caller adoption and writer cutover remain parent integration work.
+Rust remains the sole credential and queue JSON writer.
 
 The state-backed recipient command now joins these read capabilities with the
 legacy `<login-id>.identity` format, authenticated retrieval and native private
 publication. It checks local credential lifetime, lazily reads keys only for
 encrypted manifests and rechecks the local snapshot before publication. Explicit
 legacy plaintext policy remains separate. Expired renewable access reports
-`renewal_required`; durable renewal/recovery and installed routing remain open.
+`renewal_required` unless a matching completed response supplies a usable token.
+A 401 permits one reload/retry only if writer state supplies a different token in
+the same login. No refresh request or durable write occurs; active renewal and
+installed routing remain open.
 The package API has Linux/Mac native joined-consumer proof, not installed CLI
 adoption or writer-cutover proof.
 

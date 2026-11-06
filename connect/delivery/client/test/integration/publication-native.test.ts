@@ -205,6 +205,17 @@ test("recipient CLI retrieves a synthetic encrypted capture and publishes throug
     });
     assert.deepEqual(stateResult, { ok: true, path: stateDestination });
     assert.equal(await readFile(path.join(stateDestination, "summary.md"), "utf8"), "synthetic CLI handoff\n");
+    const credentialFile = path.join(state, "read.credential");
+    const base = { ...JSON.parse(await readFile(credentialFile, "utf8")), token: "consumed-access", expiresAt: 1, refreshExpiresAt: 1 };
+    await writeFile(credentialFile, JSON.stringify(base), { mode: 0o600 });
+    await writeFile(path.join(state, "read.renewal"), JSON.stringify({ base, issued: Math.floor(Date.now() / 1000), completed: true }), { mode: 0o600 });
+    await writeFile(path.join(state, "read.response"), JSON.stringify({ scope: "read", grantId: "reader", accessToken: token, refreshToken: "rotated-refresh", expiresIn: 3600, refreshExpiresIn: 7200 }), { mode: 0o600 });
+    const beforeRecovery = await readFile(credentialFile), recoveredDestination = path.join(root, "recovered-cli.apparent");
+    assert.deepEqual(await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", recoveredDestination]), {
+      directory: state, approvedServer: origin, resources, inspectLocal: async source => source,
+    }), { ok: true, path: recoveredDestination });
+    assert.deepEqual(await readFile(credentialFile), beforeRecovery);
+
 
   } finally { server.closeAllConnections(); server.close(); await once(server, "close"); }
 }));
