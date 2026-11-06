@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react"
 import { LatestDownload } from "../download/LatestDownload"
 
+import { installFrogSplash } from "./frog-splash/frog-splash"
+import "./frog-splash/frog-splash.css"
+
 const ART = "/pond"
 // A prior 404 for this path is cached at the Cloudflare edge.
 const LILY = `${ART}/lily-clean.png?v=1`
@@ -8,6 +11,10 @@ const LILY = `${ART}/lily-clean.png?v=1`
 type Position = { x: number; y: number }
 
 export function FrogPond() {
+  const lounge = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (lounge.current) return installFrogSplash(lounge.current)
+  }, [])
   const hero = useRef<HTMLElement>(null)
   const frog = useRef<HTMLButtonElement>(null)
   const landing = useRef<HTMLImageElement>(null)
@@ -123,7 +130,7 @@ export function FrogPond() {
     </div>
     <div className="pond-scene">
       <img className="pond-pad pond-left-pad" src={LILY} alt="" />
-      <button type="button" className="pond-lounging-frog" onClick={greet} aria-label="Wave to the lounging frog" data-waves={waves}><img src={`${ART}/frog-lounge-cohesive.png`} alt="" className={wavePose ? "pond-hidden" : ""} /><img src={`${ART}/frog-wave-cohesive.png`} alt="" className={wavePose ? "" : "pond-hidden"} /><span className="pond-hello" aria-hidden="true" data-visible={greeting}>hi!</span></button>
+      <button ref={lounge} type="button" className="pond-lounging-frog" onClick={greet} aria-label="Wave to the lounging frog" data-waves={waves}><img src={`${ART}/frog-lounge-cohesive.png`} alt="" className={wavePose ? "pond-hidden" : ""} /><img src={`${ART}/frog-wave-cohesive.png`} alt="" className={wavePose ? "" : "pond-hidden"} /><span className="pond-hello" aria-hidden="true" data-visible={greeting}>hi!</span></button>
       <img ref={landing} className="pond-pad pond-right-pad" src={LILY} alt="" />
     </div>
   </section>

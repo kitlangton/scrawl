@@ -217,6 +217,48 @@ test("source homepage preserves accepted responsive layout and interactions", as
           assert.equal(await frog.getAttribute("aria-label"), "Jump to the other lily")
           await page.locator(".pond-lounging-frog").click()
           assert.equal(await page.locator(".pond-lounging-frog").getAttribute("data-waves"), "1")
+          // Two activations retain the first greeting and open the QR Easter egg.
+          const lounge = page.locator(".pond-lounging-frog")
+          await page.waitForTimeout(450)
+          await lounge.dblclick({ delay: 80 })
+          const splash = page.locator(".frog-splash-dialog")
+          await page.waitForFunction(() => document.querySelector(".frog-splash-dialog")?.getAttribute("data-stage") === "reveal")
+          assert.equal(await splash.locator(".splash-destination").getAttribute("href"), "https://app.tryapparent.com/")
+          await page.waitForFunction(() => {
+            const image = document.querySelector<HTMLImageElement>(".splash-destination img")
+            return image?.complete && image.naturalWidth > 0
+          })
+          await page.keyboard.press("Escape")
+          assert.equal(await splash.count(), 0)
+          assert.equal(await lounge.evaluate(element => element === document.activeElement), true)
+          assert.equal(await page.evaluate(() => document.documentElement.style.overflow), "")
+          if (width === 1280) {
+            await lounge.press("Enter")
+            await lounge.press("Enter")
+            await splash.locator(".splash-close").click()
+            assert.equal(await splash.count(), 0)
+          }
+          if (width === 390) {
+            await page.emulateMedia({ reducedMotion: "no-preference" })
+            await lounge.dblclick({ delay: 80 })
+            await page.waitForFunction(() => document.querySelector(".frog-splash-dialog")?.getAttribute("data-stage") === "ripple")
+            assert.equal(await page.locator(".pond-page").evaluate(element => (element as HTMLElement).style.filter), "url(\"#pond-water-refraction\")")
+            await page.keyboard.press("Escape")
+            assert.equal(await page.locator(".pond-page").evaluate(element => (element as HTMLElement).style.filter), "")
+            assert.equal(await page.evaluate(() => document.documentElement.style.overflow), "")
+            await page.emulateMedia({ reducedMotion: "reduce" })
+            await page.setViewportSize({ width: 568, height: 320 })
+            await lounge.dblclick({ delay: 80 })
+            await page.waitForFunction(() => document.querySelector(".frog-splash-dialog")?.getAttribute("data-stage") === "reveal")
+            const fits = await splash.locator(".splash-message").evaluate(element => [...element.querySelectorAll("a,button,img")].every(child => {
+              const r = child.getBoundingClientRect()
+              return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth
+            }))
+            assert.equal(fits, true, "QR and dismissal fit a short landscape viewport")
+            await splash.locator(".splash-close").click()
+            await page.setViewportSize({ width, height: 900 })
+          }
+
           for (const card of await page.locator(".feature-grid-card").all()) {
             await card.scrollIntoViewIfNeeded()
             await card.locator("iframe").waitFor()
