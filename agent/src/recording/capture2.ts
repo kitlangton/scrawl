@@ -34,7 +34,7 @@ async function defaultRecoveryCoordinatorFactory(paths: Parameters<RecoveryCoord
   const [{ createRecordCaptureCoordinator }, { SqliteCaptureMappingStore, AbsentDestinationAllocator }] = await Promise.all([
     import('@apparent/record/host/capture2-coordinator'), import('@apparent/record/host'),
   ]);
-  const captureClient = new CaptureClient(launchCaptureEngine(paths.captureExecutable, paths.runtime, 5_000));
+  const captureClient = new CaptureClient(launchCaptureEngine(paths.captureExecutable, paths.runtime, 40_000));
   const mediaClient = new Media2Client(launchMedia2Worker(paths.mediaExecutable, paths.runtime, 5_000));
   try {
     const coordinator = await createRecordCaptureCoordinator({
