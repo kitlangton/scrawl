@@ -113,15 +113,11 @@ impl Client {
         timeout: Duration,
         allowed: &dyn Fn() -> bool,
     ) -> Result<()> {
-        let server = server_url(server)?;
-        ensure!(
-            route.starts_with("/v1/") && !route.contains(['\r', '\n', '"']),
-            "Invalid API route"
-        );
+        let url = api_url(server, route)?;
         ensure!(allowed(), "cancelled");
         let mut config = format!(
             "url = \"{}\"\nrequest = \"{method}\"\n",
-            config_escape(&format!("{server}{route}"))?
+            config_escape(&url)?
         );
         if let Some(token) = token {
             config.push_str(&format!(

@@ -254,11 +254,8 @@ fn hex_digest(s: &str) -> bool {
 }
 
 fn validate_share_url(server: &str, url: &str) -> Result<()> {
-    ensure!(
-        url.strip_prefix(&format!("{server}/s/"))
-            .is_some_and(hex_digest),
-        "Invalid share URL"
-    );
+    let prefix = format!("{server}/s/");
+    ensure!(url.strip_prefix(&prefix).is_some_and(hex_digest), "Invalid share URL");
     Ok(())
 }
 
@@ -340,13 +337,14 @@ fn server_url(raw: &str) -> Result<String> {
                 || b"\"'\\?#@".contains(&b)),
         "Invalid server URL"
     );
-    let authority = raw
+    let endpoint = raw
         .strip_prefix("https://")
         .or_else(|| raw.strip_prefix("http://"))
         .context("Server must use HTTPS")?;
+    let (authority, path) = endpoint.split_once('/').unwrap_or((endpoint, ""));
     ensure!(
-        !authority.is_empty() && !authority.contains('/'),
-        "Server must be an origin without a path"
+        !authority.is_empty() && (path.is_empty() || path == "connect"),
+        "Server must be an origin or the canonical /connect base"
     );
     let host = authority.split(':').next().unwrap_or("");
     ensure!(
@@ -367,6 +365,15 @@ fn server_url(raw: &str) -> Result<String> {
         "Plain HTTP is allowed only on loopback"
     );
     Ok(raw.to_owned())
+}
+
+fn api_url(server: &str, route: &str) -> Result<String> {
+    let server = server_url(server)?;
+    ensure!(
+        route.starts_with("/v1/") && !route.contains(['\r', '\n', '"']),
+        "Invalid API route"
+    );
+    Ok(format!("{server}{route}"))
 }
 
 // Reject symlinks at every component. State directories are private and owned by this uid.
@@ -1781,6 +1788,25 @@ fn publish_noreplace(from: &Path, to: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn canonical_connect_base_is_a_transport_base_and_share_prefix() {
+        for server in ["https://app.tryapparent.com", "https://app.tryapparent.com/connect"] {
+            assert_eq!(server_url(server).unwrap(), server);
+            validate_share_url(server, &format!("{server}/s/{}", "a".repeat(64))).unwrap();
+        }
+        assert_eq!(api_url("https://app.tryapparent.com/connect", "/v1/device/start").unwrap(),
+            "https://app.tryapparent.com/connect/v1/device/start");
+        for server in ["https://app.tryapparent.com/connect/suffix", "https://app.tryapparent.com/other/connect",
+            "https://app.tryapparent.com/connect/v1", "https://app.tryapparent.com/connect?x=1",
+            "https://app.tryapparent.com/connect#x", "https://user@app.tryapparent.com/connect",
+            "https://app.tryapparent.com/%2fconnect"] {
+            assert!(server_url(server).is_err(), "accepted {server}");
+        }
+        assert!(validate_share_url("https://app.tryapparent.com/connect",
+            "https://app.tryapparent.com/s/".to_owned().as_str()).is_err());
+        assert!(validate_share_url("https://app.tryapparent.com/connect",
+            &format!("https://app.tryapparent.com/connect/s/{}", "a".repeat(64))).is_ok());
+    }
     #[test]
     fn recipient_login_defaults_and_overrides() {
         use clap::Parser;
