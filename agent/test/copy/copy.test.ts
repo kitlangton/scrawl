@@ -78,3 +78,15 @@ test('compiled demo clipboard preflights, writes exact Record text once with a f
     for(const failure of ['refused','lost'] as const){mode=failure;snapshots=0;const failedOut=join(root,`${failure}.apparent`);const error=await run(process.execPath,[cli,'demo','--out',failedOut,'--clipboard',...(failure==='lost'?['--json']:[])],{env:{...process.env,HOME:root},timeout:15000}).then(()=>null,(caught:any)=>caught);assert.equal(error.code,failure==='lost'?3:2);assert.equal(snapshots,2);assert.equal(writes,failure==='lost'?4:3);if(failure==='lost'){const json=JSON.parse(error.stdout);assert.equal(json.path,failedOut);assert.deepEqual(json.clipboardResult,{status:'outcome-unknown'});}else{assert.match(error.stdout,/Synthetic demo bundle:/);assert(error.stdout.includes(failedOut));}assert.doesNotMatch(error.stdout,/Copied demo text to clipboard/);assert.match(error.stderr,/retained at/);const manifest=JSON.parse(await readFile(join(failedOut,'apparent.json'),'utf8'));assert.equal(manifest.synthetic,true);assert.equal(manifest.provenance.kind,'synthetic-demo');assert.deepEqual((await readFile(join(failedOut,'contact-sheet.png'))).subarray(0,8),Buffer.from([137,80,78,71,13,10,26,10]));}
   }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));await rm(root,{recursive:true,force:true});}
 });
+
+test('local copy preserves legacy context clear values at the typed Record boundary', async () => {
+  const root=await mkdtemp(join(tmpdir(),'agent-copy-context-'));
+  const bundle=join(root,'context.apparent');await mkdir(bundle);
+  const raw=await readFile(new URL('../fixtures/semantic.json',import.meta.url),'utf8');
+  await writeFile(join(bundle,'apparent.json'),raw);
+  try {
+    const text=await localCopyText(bundle);
+    assert.match(text,/tab → Preview/);assert.match(text,/tab cleared/);
+    assert.equal(await readFile(join(bundle,'apparent.json'),'utf8'),raw);
+  } finally { await rm(root,{recursive:true,force:true}); }
+});
