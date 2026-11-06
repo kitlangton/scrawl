@@ -207,8 +207,8 @@ contain the new hook. Server-side policy is separate.
 
 ## PR verification reuse
 
-The Engine SDK Linux lane and native Engine Linux/Intel Mac lanes retain
-seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
+The Engine SDK Linux lane, native Engine Linux/Intel Mac lanes and App Shell
+Linux/Intel Mac lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
 merged PR candidate. Admission authenticates the merged PR, exact workflow/run and
 successful attempt jobs (including contracts and runtime audit), then checks the
 synthetic merge commit's base/head parents and requires its complete Git tree to
@@ -236,6 +236,17 @@ build SHA in `buildSourceSha`, plus original-run provenance; promotion never
 rewrites native bytes or their embedded manifest. Prior fingerprints lacking this
 identity rebuild once. Native runtime, GUI routes and deployment authority do not
 change; existing native producer checks run fresh on both supported PR targets.
+
+App Shell candidates are archived only after the exact packaged Electron app
+passes the existing platform tests. Promotion retains the complete package and
+its archive hash; it does not repackage or change installed routing, bridge
+contracts, Electron versions or package layout. Its fingerprint additionally
+covers Electron/npm overrides and Node options/environment; locked Electron and
+packager inputs remain in the source closure. The original package source is
+retained in `buildSourceSha`. The shared TypeScript allowlist selects retention,
+sealing and admission consistently for enabled owner/target pairs. Both existing
+platform PR lanes keep their fresh checks; main authenticates only its own owner
+workflow and target. No new Desktop GUI/native behavior is introduced.
 
 ## Checks and artifact identity
 

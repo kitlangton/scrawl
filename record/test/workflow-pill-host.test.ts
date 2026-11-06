@@ -284,3 +284,59 @@ test("RecordClient pill retires old provider epochs after reconnect", async () =
   assert.equal(fixture.commands[0]?.type === "stop-capture" && fixture.commands[0].captureId, "new-capture");
   disposeWorkflowPillHost(host);
 });
+
+test("RecordClient pill copies the visible authenticated saved artifact and recognizes its command receipt", async () => {
+  const fixture = recordClientFixture();
+  let requests = 0;
+  const host = createRecordClientPillHost(fixture.client, { createRequestId: () => `copy-${++requests}` });
+  fixture.emit({ ...fixture.value(), revision: 4, captures: [
+    { captureId: "saved-visible", artifactId: "artifact-visible", delivery: "unknown", phase: "saved", outcomes: [{ kind: "save", at: "now", ok: true }] },
+    { captureId: "path-only-history", delivery: "unknown", phase: "saved", outcomes: [{ kind: "save", at: "now", ok: true }] },
+  ] });
+  fixture.client.execute = async command => {
+    fixture.commands.push(command);
+    assert.equal(command.type, "copy-local");
+    assert.equal(command.type === "copy-local" && command.captureId, "saved-visible");
+    fixture.emit({ ...fixture.value(), revision: 5, captures: fixture.value().captures.map(capture => capture.captureId === "saved-visible" ? { ...capture, outcomes: [...capture.outcomes,
+      { kind: "copy", at: "now", ok: true, evidence: "native-write-readback", artifactId: "artifact-visible", requestId: command.requestId, digest: "a".repeat(64), byteLength: 42 },
+    ] } : capture) });
+    return { status: "applied", requestId: command.requestId, snapshot: fixture.value() };
+  };
+  const before = (await host.read())!;
+  assert.equal(before.actions.find(action => action.id === "copy")?.label, "Copy handoff");
+  assert.equal(before.notice, "Saved locally");
+  await host.act(before.revision, "copy");
+  assert.equal((await host.read())!.notice, "Handoff copied");
+  assert.equal(fixture.commands.length, 1);
+  fixture.emit({ ...fixture.value(), revision: 6, captures: [{ ...fixture.value().captures[0]!, artifactId: "replacement-artifact" }] });
+  assert.equal((await host.read())!.notice, "Saved locally", "prior artifact receipt does not prove replacement copied");
+  await host.act(before.revision, "copy");
+  assert.equal(fixture.commands.length, 1, "stale view cannot dispatch another copy");
+  disposeWorkflowPillHost(host);
+  assert.equal(fixture.isDetached(), false);
+});
+
+test("RecordClient pill never presents accepted, refused or unknown copy as a fresh confirmed effect", async () => {
+  for (const status of ["accepted", "refused", "outcome-unknown", "throw"] as const) {
+    const fixture = recordClientFixture();
+    const host = createRecordClientPillHost(fixture.client, { createRequestId: () => "fresh-copy" });
+    fixture.emit({ ...fixture.value(), revision: 4, captures: [{ captureId: "saved", artifactId: "artifact", delivery: "unknown", phase: "saved", outcomes: [
+      { kind: "save", at: "then", ok: true },
+      { kind: "copy", at: "then", ok: true, evidence: "native-write-readback", artifactId: "artifact", requestId: "past-copy", digest: "a".repeat(64), byteLength: 42 },
+    ] }] });
+    fixture.client.execute = async command => {
+      fixture.commands.push(command);
+      if (status === "throw") throw new Error("private path should stay private");
+      return status === "refused" ? { status, reason: "unavailable", requestId: command.requestId, snapshot: fixture.value() }
+        : { status, requestId: command.requestId, snapshot: fixture.value() };
+    };
+    const view = (await host.read())!;
+    await host.act(view.revision, "copy");
+    const after = (await host.read())!;
+    assert.equal(after.warning, status === "refused" ? "Copy unavailable" : "Copy outcome unknown");
+    assert.equal(after.notice, null);
+    assert.equal(fixture.commands.length, 1, "no automatic retry");
+    assert.doesNotMatch(JSON.stringify(after), /private path/);
+    disposeWorkflowPillHost(host);
+  }
+});

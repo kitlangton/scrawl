@@ -50,12 +50,12 @@ Capture/2 requires separately staged, admitted Linux x64 capture artifacts, with
 
 ```sh
 apparent-agent capture --protocol capture2 sources --json
-apparent-agent record --protocol capture2 --source '<exact-discovered-id>' --duration 5 --out '/absolute/fresh.apparent'
+apparent-agent record --protocol capture2 --source '<exact-discovered-id>' --duration 5 --out '/absolute/fresh.apparent' # or omit --out for configured capture storage
 apparent-agent capture --protocol capture2 inspect '<reported-request-id>'
 apparent-agent capture --protocol capture2 stop '<reported-request-id>'
 apparent-agent capture --protocol capture2 cancel '<reported-request-id>'
 ```
 
-Discovery is read-only and returns currently advertised display and half-area sources; it does not start capture. `record` rechecks the exact source and reserves the requested absent destination through Record. Its parent directory must already exist. Capture is explicit, silent and local-only; context, interaction events, transcript and strokes are unavailable. Retain the reported public request ID and the same private runtime/control roots for cold recovery. Materials-ready or processing returns exit 3 and pending: it is not Saved and does not produce the requested final bundle. A confirmed cancellation is not a saved recording either. Do not fabricate a completed bundle from retained materials or feed those raw materials to media/1, which accepts completed bundles. Standard processing and publication remain producer gates.
+Discovery is read-only and returns currently advertised display and half-area sources; it does not start capture. `record` rechecks the exact source and asks Record to allocate an absent destination in configured capture storage when `--out` is omitted, or reserves the exact requested absent destination when supplied. Its parent directory must already exist. Capture is explicit, silent and local-only; context, interaction events, transcript and strokes are unavailable. Retain the reported public request ID and the same private runtime/control roots for cold recovery. Materials-ready or processing returns exit 3 and pending: it is not Saved and does not produce the requested final bundle. A confirmed cancellation is not a saved recording either. Do not fabricate a completed bundle from retained materials or feed those raw materials to media/1, which accepts completed bundles. Standard processing and publication remain producer gates.
 
 The original V1 recording adapter retains its separate private control-token journal. For that protocol, use `apparent-agent capture inspect <capture-id>` with the same runtime; `stop` and `cancel` are also available. Do not copy, print, upload or delete private authority records until recovery is resolved. Never switch protocols or retry a new capture after an ambiguous outcome. A stop acceptance is not proof that a bundle was saved.

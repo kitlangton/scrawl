@@ -12,7 +12,7 @@ const AGENT_VERSION = '0.1.0';
 // New minor lines and prereleases require a separate compatibility assessment.
 function supportedMediaSdkVersion(value: unknown): value is string {
   if (typeof value !== 'string') return false;
-  const match = /^0\.(?:2|3)\.(0|[1-9][0-9]*)$/.exec(value);
+  const match = /^0\.(?:2|3|4)\.(0|[1-9][0-9]*)$/.exec(value);
   return match !== null && Number.isSafeInteger(Number(match[1]));
 }
 const SHA256 = /^[a-f0-9]{64}$/;

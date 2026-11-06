@@ -4,12 +4,12 @@ import {StickyNote} from '@apparent/ui/icons';
 import './style.css';
 import {UploadPocket} from './UploadPocket.js';
 import type {PillHost, PillView} from './types.js';
-import {Check,Circle,ClipboardPaste,Link,LoaderCircle,Monitor,PenLine,Scan,ScanEye,Smartphone,Square,X,type LucideIcon} from 'lucide-react';
+import {Check,Circle,ClipboardPaste,Copy,Link,LoaderCircle,Monitor,PenLine,Scan,ScanEye,Smartphone,Square,X,type LucideIcon} from 'lucide-react';
 
 const actionIcons:Record<string,LucideIcon>={
  'select-area':Scan,'switch-area':Scan,'select-screen':Monitor,'switch-screen':Monitor,
  'select-iphone':Smartphone,'switch-iphone':Smartphone,record:Circle,whiteboard:PenLine,
- finish:Square,paste:ClipboardPaste,'copy-link':Link,inspect:ScanEye,cancel:X,dismiss:X,
+ finish:Square,paste:ClipboardPaste,copy:Copy,'copy-link':Link,inspect:ScanEye,cancel:X,dismiss:X,
 };
 
 /** Existing Electron pill presentation, driven only by the injected host contract. */

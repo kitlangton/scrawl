@@ -34,6 +34,10 @@ runs:
         node-version: '22.23.4'
         cache: npm
         cache-dependency-path: composition/architecture/package-lock.json
+    - name: Select PR candidate retention
+      id: candidate-support
+      shell: bash
+      run: node --experimental-strip-types composition/delivery/cli.ts candidate-support "$OWNER_ID" "$OWNER_TARGET"
     - name: Install the owner architecture checker
       if: inputs.architecture_owner != ''
       shell: bash
@@ -165,11 +169,11 @@ runs:
         fi
     - name: Retain the verified PR candidate
       id: candidate
-      if: inputs.publish != 'true' && ((inputs.id == 'engine' && inputs.target == 'linux-x64') || (inputs.id == 'engine-native' && (inputs.target == 'linux-x64' || inputs.target == 'macos-x64'))) && github.event_name == 'pull_request'
+      if: inputs.publish != 'true' && steps.candidate-support.outputs.supported == 'true' && github.event_name == 'pull_request'
       shell: bash
       run: node --experimental-strip-types composition/delivery/cli.ts candidate "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload" "$RUNNER_TEMP/pr-candidate"
     - uses: actions/upload-artifact@v4
-      if: inputs.publish != 'true' && ((inputs.id == 'engine' && inputs.target == 'linux-x64') || (inputs.id == 'engine-native' && (inputs.target == 'linux-x64' || inputs.target == 'macos-x64'))) && github.event_name == 'pull_request'
+      if: inputs.publish != 'true' && steps.candidate-support.outputs.supported == 'true' && github.event_name == 'pull_request'
       with:
         name: ${{ steps.candidate.outputs.candidate_name }}
         path: ${{ runner.temp }}/pr-candidate/
