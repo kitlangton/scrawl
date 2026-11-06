@@ -27,6 +27,33 @@ test('allows public APIs and owner-local internals', () => fixture({
   'record/src/local.ts': 'export const y = 1;',
 }, root => assert.deepEqual(checkArchitecture(root), [])));
 
+test('Agent consumes the published public Record package while private paths and reverse edges stay blocked', () => {
+  const recordPackage = JSON.stringify({ name: '@apparent/record', exports: {
+    '.': './dist/index.js', './host': './dist/backend/host/index.js',
+    './host/capture2': './dist/backend/host/capture2.js',
+  } });
+  const agentPackage = JSON.stringify({ name: '@apparent/agent', dependencies: {
+    '@apparent/record': 'file:vendor/record-0.1.0-89fcd0a.tgz',
+  } });
+  const source = "import '@apparent/record'; import '@apparent/record/host'; import '@apparent/record/host/capture2';";
+  fixture({ 'record/package.json': recordPackage, 'agent/package.json': agentPackage,
+    'agent/src/index.ts': source }, root => assert.deepEqual(checkArchitecture(root, ['agent']), []));
+  fixture({ 'record/package.json': recordPackage, 'agent/package.json': agentPackage,
+    'agent/src/index.ts': source + " import '@apparent/record/src/private.js';" }, root => {
+    assert(checkArchitecture(root, ['agent']).some(error => error.includes('private or undeclared')));
+  });
+  fixture({ 'record/package.json': recordPackage, 'agent/package.json': agentPackage,
+    'agent/src/index.ts': "import '../../record/src/private.js';", 'record/src/private.ts': 'export {};',
+  }, root => assert(checkArchitecture(root, ['agent']).some(error => error.includes('cross-owner path agent -> record'))));
+  fixture({ 'record/package.json': recordPackage, 'agent/package.json': agentPackage,
+    'agent/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '..', paths: { '@apparent/record': ['record/src/private.ts'] } } }),
+    'agent/src/index.ts': "import '@apparent/record';", 'record/src/private.ts': 'export {};',
+  }, root => assert(checkArchitecture(root, ['agent']).some(error => error.includes('tsconfig alias crosses agent -> record'))));
+  fixture({ 'record/package.json': JSON.stringify({ name: '@apparent/record', dependencies: { '@apparent/agent': '0.1.0' } }),
+    'agent/package.json': agentPackage,
+  }, root => assert(checkArchitecture(root, ['record']).some(error => error.includes('dependency @apparent/agent violates record -> agent'))));
+});
+
 test('Connect client cannot import Record private implementation', () => fixture({
   'connect/delivery/client/package.json': JSON.stringify({ name: '@apparent/connect-client', exports: { '.': './dist/index.js' } }),
   'connect/delivery/client/src/index.ts': "import '../../../../record/src/private.js';",
