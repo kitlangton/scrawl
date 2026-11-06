@@ -24,7 +24,7 @@ fn cvt(fd: i32) -> io::Result<File> {
         Ok(unsafe { File::from_raw_fd(fd) })
     }
 }
-pub(crate) fn directory(path: &Path) -> io::Result<File> {
+pub fn directory(path: &Path) -> io::Result<File> {
     walk_directory(path, false)
 }
 /// Output paths must descend through root/current-user-owned, non-writable
@@ -71,12 +71,44 @@ fn walk_directory(path: &Path, trusted: bool) -> io::Result<File> {
     }
     Ok(dir)
 }
-pub(crate) struct Store {
+pub struct Store {
     dir: File,
     path: PathBuf,
     parent: Option<std::sync::Arc<Store>>,
 }
 impl Store {
+    /// Open or provision one 0700 directory beneath an already existing parent.
+    pub fn ensure(path: &Path) -> io::Result<Self> {
+        Self::provision(path, false)
+    }
+    pub fn create(path: &Path) -> io::Result<Self> {
+        Self::provision(path, true)
+    }
+    fn provision(path: &Path, exclusive: bool) -> io::Result<Self> {
+        let parent_path = path.parent().ok_or_else(invalid)?;
+        let parent = directory(parent_path)?;
+        let leaf = name(
+            path.file_name()
+                .ok_or_else(invalid)?
+                .to_str()
+                .ok_or_else(invalid)?,
+        )?;
+        let rc = unsafe { libc::mkdirat(parent.as_raw_fd(), leaf.as_ptr(), 0o700) };
+        let created = rc == 0;
+        if rc != 0 {
+            let error = io::Error::last_os_error();
+            if exclusive || error.kind() != io::ErrorKind::AlreadyExists {
+                return Err(error);
+            }
+        }
+        let store = Self::open(path)?;
+        store.check()?;
+        if created {
+            store.dir.sync_all()?;
+            parent.sync_all()?;
+        }
+        Ok(store)
+    }
     /// The caller provisions the one stable runtime directory; never chmod unsafe state.
     pub fn open(path: &Path) -> io::Result<Self> {
         let dir = directory(path)?;
@@ -132,6 +164,15 @@ impl Store {
         }
         Ok(())
     }
+    /// Clone the pinned directory descriptor after revalidating its path identity.
+    pub fn directory_file(&self) -> io::Result<File> {
+        self.check()?;
+        self.dir.try_clone()
+    }
+    pub fn directory_metadata(&self) -> io::Result<std::fs::Metadata> {
+        self.check()?;
+        self.dir.metadata()
+    }
     pub fn file(&self, key: &str, create: bool) -> io::Result<File> {
         self.check()?;
         let key = name(key)?;
@@ -177,6 +218,100 @@ impl Store {
             return Err(io::Error::last_os_error());
         }
         self.dir.sync_all()
+    }
+    /// Publish a new record atomically. Existing names are never replaced.
+    pub fn write_new(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
+        self.check()?;
+        let tmp = format!("tmp-{}", crate::identity::random_hex(16)?);
+        let from = name(&tmp)?;
+        let _to = name(key)?;
+        let mut f = self.file(&tmp, true)?;
+        let result = (|| {
+            f.write_all(bytes)?;
+            f.sync_all()?;
+            self.link(&tmp, key)?;
+            let rc = unsafe { libc::unlinkat(self.dir.as_raw_fd(), from.as_ptr(), 0) };
+            if rc != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            self.dir.sync_all()
+        })();
+        if result.is_err() {
+            if let (Ok(expected), Ok(candidate)) = (f.metadata(), self.file(&tmp, false)) {
+                if candidate.metadata().is_ok_and(|actual| {
+                    actual.dev() == expected.dev() && actual.ino() == expected.ino()
+                }) {
+                    unsafe { libc::unlinkat(self.dir.as_raw_fd(), from.as_ptr(), 0) };
+                }
+            }
+        }
+        result
+    }
+    /// Replace a journal only if the currently named inode is the one observed by
+    /// `read`; Linux exchange lets us verify the displaced identity before unlink.
+    #[cfg(target_os = "linux")]
+    pub fn replace_checked(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        self.check()?;
+        let old = self.file(key, false)?;
+        if old.metadata()?.nlink() != 1 {
+            return Err(invalid());
+        }
+        let before = old.metadata()?;
+        let tmp = format!("tmp-{}", crate::identity::random_hex(16)?);
+        let (from, to) = (name(&tmp)?, name(key)?);
+        let mut new = self.file(&tmp, true)?;
+        let result = (|| {
+            new.write_all(bytes)?;
+            new.sync_all()?;
+            let rc = unsafe {
+                libc::syscall(
+                    libc::SYS_renameat2,
+                    self.dir.as_raw_fd(),
+                    from.as_ptr(),
+                    self.dir.as_raw_fd(),
+                    to.as_ptr(),
+                    2u32,
+                )
+            };
+            if rc != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let displaced = self.file(&tmp, false)?;
+            let after = displaced.metadata()?;
+            if before.dev() != after.dev() || before.ino() != after.ino() {
+                unsafe {
+                    libc::syscall(
+                        libc::SYS_renameat2,
+                        self.dir.as_raw_fd(),
+                        from.as_ptr(),
+                        self.dir.as_raw_fd(),
+                        to.as_ptr(),
+                        2u32,
+                    );
+                }
+                return Err(invalid());
+            }
+            let published = self.file(key, false)?.metadata()?;
+            let created = new.metadata()?;
+            if published.dev() != created.dev() || published.ino() != created.ino() {
+                return Err(invalid());
+            }
+            if unsafe { libc::unlinkat(self.dir.as_raw_fd(), from.as_ptr(), 0) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            self.dir.sync_all()
+        })();
+        if result.is_err() {
+            if let (Ok(expected), Ok(candidate)) = (new.metadata(), self.file(&tmp, false)) {
+                if candidate.metadata().is_ok_and(|actual| {
+                    actual.dev() == expected.dev() && actual.ino() == expected.ino()
+                }) {
+                    unsafe { libc::unlinkat(self.dir.as_raw_fd(), from.as_ptr(), 0) };
+                }
+            }
+        }
+        result
     }
     pub fn read(&self, key: &str) -> io::Result<Option<Vec<u8>>> {
         match self.file(key, false) {
@@ -228,5 +363,70 @@ impl Store {
             let _ = self.dir.sync_all();
         }
         result
+    }
+}
+impl AsRawFd for Store {
+    fn as_raw_fd(&self) -> i32 {
+        self.dir.as_raw_fd()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Store;
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+
+    fn temp() -> PathBuf {
+        // macOS may spell its temporary root through the /var symlink.
+        // Resolve the fixture root; Store must still reject aliased paths.
+        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "apparent-secure-{}",
+            crate::identity::new_id().unwrap()
+        ));
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+
+    #[test]
+    fn store_new_record_is_bounded_private_and_non_replacing() {
+        let path = temp();
+        let store = Store::open(&path).unwrap();
+        store.write_new("record.json", b"first").unwrap();
+        assert!(store.write_new("record.json", b"second").is_err());
+        assert_eq!(
+            store.read("record.json").unwrap().as_deref(),
+            Some(&b"first"[..])
+        );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn checked_replace_preserves_symlink_and_hardlink_targets() {
+        let path = temp();
+        let store = Store::open(&path).unwrap();
+        store.write_new("record.json", b"first").unwrap();
+        store.replace_checked("record.json", b"second").unwrap();
+        assert_eq!(
+            store.read("record.json").unwrap().as_deref(),
+            Some(&b"second"[..])
+        );
+        fs::hard_link(path.join("record.json"), path.join("alias.json")).unwrap();
+        assert!(store.replace_checked("record.json", b"third").is_err());
+        assert_eq!(fs::read(path.join("alias.json")).unwrap(), b"second");
+        fs::remove_file(path.join("alias.json")).unwrap();
+        let outside = path.join("outside");
+        fs::write(&outside, b"outside").unwrap();
+        fs::remove_file(path.join("record.json")).unwrap();
+        std::os::unix::fs::symlink(&outside, path.join("record.json")).unwrap();
+        assert!(store.replace_checked("record.json", b"third").is_err());
+        assert!(
+            fs::symlink_metadata(path.join("record.json"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_dir_all(path).unwrap();
     }
 }

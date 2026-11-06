@@ -34,6 +34,42 @@ pub struct Probe {
     pub fps: f64,
 }
 
+/// Timing from a complete decode of an already-pinned movie. The caller retains
+/// source/lease authority; this routine never resolves a caller-supplied path.
+pub struct VideoTiming {
+    pub duration_ms: u64,
+    pub first_pts_ns: u64,
+}
+
+pub fn validate_file(file: &std::fs::File) -> Result<VideoTiming> {
+    use std::os::fd::AsRawFd;
+    let path = std::path::PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+    let video = VideoReader::open(&path, 0)?;
+    video.pipeline.set_state(gst::State::Playing)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut first = None::<u64>;
+    let mut end = 0u64;
+    loop {
+        ensure!(std::time::Instant::now() < deadline, "Movie validation deadline exceeded");
+        if let Some(sample) = video.sink.try_pull_sample(gst::ClockTime::from_mseconds(50)) {
+            let buffer = sample.buffer().context("Decoded sample has no buffer")?;
+            let pts = buffer.pts().context("Decoded sample has no timestamp")?.nseconds();
+            first = Some(first.map_or(pts, |prior| prior.min(pts)));
+            end = end.max(pts.saturating_add(buffer.duration().map_or(0, gst::ClockTime::nseconds)));
+        } else {
+            if let Some(bus) = video.pipeline.bus() {
+                if let Some(message) = bus.pop_filtered(&[gst::MessageType::Error]) {
+                    anyhow::bail!("Movie decode failed: {:?}", message.type_());
+                }
+            }
+            if video.sink.is_eos() { break; }
+        }
+    }
+    let start = first.context("Movie has no decoded frames")?;
+    ensure!(end > start, "Movie has no positive frame duration");
+    Ok(VideoTiming { duration_ms: (end - start).saturating_add(999_999) / 1_000_000, first_pts_ns: start })
+}
+
 struct VideoReader {
     pipeline: gst::Pipeline,
     sink: gst_app::AppSink,

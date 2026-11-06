@@ -46,7 +46,7 @@ pub fn new_owner_token() -> io::Result<String> {
 pub fn new_id() -> io::Result<String> {
     random_hex(16)
 }
-pub(crate) fn equal_secret(a: &str, b: &str) -> bool {
+pub fn equal_secret(a: &str, b: &str) -> bool {
     a.len() == b.len()
         && a.bytes()
             .zip(b.bytes())
