@@ -3,7 +3,7 @@ import { appendFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { supportsPrCandidate, assessPrior, buildOwner, catalog, inputDigest, makePlan, reusePayload, sealPayload, type Owner, type Target, workflowPathFor } from './core.ts'
+import { prInputsMatch, supportsPrCandidate, assessPrior, buildOwner, catalog, inputDigest, makePlan, reusePayload, sealPayload, type Owner, type Target, workflowPathFor } from './core.ts'
 
 const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
 function output(values: Record<string, string | boolean | number | null>) {
@@ -37,6 +37,16 @@ function ownerFor(id: string): Owner {
   return owner
 }
 function targetArg(value: string): Target { if (value !== 'linux-x64' && value !== 'macos-x64' && value !== 'web') throw new Error('Invalid target'); return value }
+export function matchPrCandidateInputs(checkout: string, owner: Owner, testedSha: string, testedBase: string, landedBase: string): boolean {
+  // Full main history does not necessarily contain GitHub's synthetic merge.
+  // Fetch only the authenticated candidate object, without changing refs/worktree.
+  if (![testedSha, testedBase, landedBase].every(sha => /^[a-f0-9]{40}$/.test(sha))) return false
+  try {
+    try { execFileSync('git', ['cat-file', '-e', `${testedSha}^{commit}`], { cwd: checkout, stdio: 'ignore' }) }
+    catch { execFileSync('git', ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', testedSha], { cwd: checkout, stdio: 'pipe', timeout: 30000 }) }
+    return prInputsMatch(checkout, owner, testedSha, testedBase, landedBase)
+  } catch { return false }
+}
 export function assertBuildWorkflowIdentity(env: NodeJS.ProcessEnv, ownerId: string) {
   if (env.GITHUB_EVENT_NAME !== 'pull_request') return
   const pullRef = /^refs\/pull\/([1-9][0-9]*)\/merge$/.exec(env.GITHUB_REF ?? '')
@@ -74,7 +84,8 @@ async function main(args: string[]) {
         run => ghPages<{ name: string; status: string; conclusion: string | null }>(repo, `repos/${repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`),
         run => ghPages<{ id: number; name: string; expired: boolean }>(repo, `repos/${repo}/actions/runs/${run.id}/artifacts`))
       if (!result.reuse && supportsPrCandidate(owner.id, target)) {
-        result = admitPrCandidate(endpoint => gh(repo, endpoint), execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(), result.input_digest, owner.id, target) ?? result
+        result = admitPrCandidate(endpoint => gh(repo, endpoint), execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), result.input_digest,
+          (testedSha, testedBase, landedBase) => matchPrCandidateInputs(root, owner, testedSha, testedBase, landedBase), owner.id, target) ?? result
       }
     } catch { result = { reuse: false, reason: 'GitHub identity or artifact history could not be established; rebuilding', input_digest: inputDigest(root, owner, target), prior_artifact_id: null, prior_source_sha: null, prior_run_id: null, prior_run_attempt: null } }
     output({ reuse: result.reuse, input_digest: result.input_digest, prior_artifact_id: result.prior_artifact_id ?? '', prior_source_sha: result.prior_source_sha ?? '', prior_run_id: result.prior_run_id ?? '', prior_run_attempt: result.prior_run_attempt ?? '' })

@@ -9,8 +9,8 @@ import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
-import { assertBuildWorkflowIdentity } from './cli.ts'
-import { mediaBuildIdentity, supportsPrCandidate, packageBuildEnvironment, nativeBuildIdentity, assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
+import { matchPrCandidateInputs, assertBuildWorkflowIdentity } from './cli.ts'
+import { prInputsMatch, sourceDigest, mediaBuildIdentity, supportsPrCandidate, packageBuildEnvironment, nativeBuildIdentity, assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
 // accidentally use the hook caller's index, object database or worktree.
@@ -363,6 +363,10 @@ test('PR SDK candidates use separate names and canonical PR identity, then reiss
   assert.throws(() => sealPayload(repo, sdk, 'linux-x64', input, resolve(temp, 'not-pr'), receipt.inputDigest, { ...prEnv, GITHUB_EVENT_NAME: 'workflow_dispatch' }, true), /canonical/)
   assert.throws(() => sealPayload(repo, owner, 'linux-x64', input, resolve(temp, 'not-sdk'), receipt.inputDigest, prEnv, true), /canonical/)
   assert.throws(() => sealPayload(repo, sdk, 'linux-x64', input, resolve(temp, 'not-main'), receipt.inputDigest, prEnv), /canonical/)
+  writeFileSync(resolve(candidateDir, 'receipt.json'), JSON.stringify({ ...receipt, sourceDigest: '0'.repeat(64) }))
+  const wrongSource = resolve(temp, 'sdk-wrong-source.zip')
+  execFileSync('zip', ['-q', wrongSource, 'component.tar.gz', 'receipt.json'], { cwd: candidateDir })
+  assert.throws(() => reusePayload(repo, sdk, 'linux-x64', wrongSource, resolve(temp, 'sdk-reject-source'), receipt.inputDigest, receipt.sourceSha, '88', '555', '2', mainEnv), /Component source changed/)
 })
 
 
@@ -547,5 +551,59 @@ test('Onboarding promotion retains its verified npm package and build provenance
     const next = reusePayload(repo, onboarding, target, zip, promoted, receipt.inputDigest, receipt.sourceSha, '99', '1001', '1', { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-onboarding.yml@refs/heads/main', GITHUB_RUN_ID: '1002' })
     assert.equal(next.buildSourceSha, receipt.sourceSha); assert.equal(next.reusedFrom.runId, '1001')
     assert.deepEqual(readFileSync(resolve(promoted, 'component.tar.gz')), readFileSync(resolve(sealed, 'component.tar.gz')))
+  }
+})
+
+test('PR input equivalence survives unrelated main advances but rejects changed inputs and divergent bases', () => {
+  const root = resolve(temp, 'advanced-main'); const base = newRepo(root)
+  const rev = (name: string) => execFileSync('git', ['rev-parse', name], { cwd: root, encoding: 'utf8' }).trim()
+  git(root, 'checkout', '-qb', 'candidate')
+  writeFileSync(resolve(root, 'record/index.ts'), 'PR change'); git(root, 'add', '.'); git(root, 'commit', '-qm', 'PR')
+  const head = rev('HEAD')
+  const tested = execFileSync('git', ['commit-tree', rev('HEAD^{tree}'), '-p', base, '-p', head, '-m', 'tested merge'], { cwd: root, encoding: 'utf8' }).trim()
+  git(root, 'checkout', '-qB', 'main', base)
+  writeFileSync(resolve(root, 'unrelated.txt'), 'main advanced'); git(root, 'add', '.'); git(root, 'commit', '-qm', 'unrelated main')
+  const landedBase = rev('HEAD')
+  git(root, 'merge', '--no-ff', '-qm', 'land PR', head)
+  git(root, 'update-ref', 'refs/pull/9/merge', tested)
+  const receiver = resolve(temp, 'main-only-receiver')
+  git(temp, 'clone', '--no-local', '--single-branch', '--branch', 'main', root, receiver)
+  assert.throws(() => execFileSync('git', ['cat-file', '-e', tested], { cwd: receiver, stdio: 'ignore' }))
+  const receiverHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: receiver, encoding: 'utf8' }).trim()
+  assert.equal(matchPrCandidateInputs(receiver, owner, tested, base, landedBase), true)
+  assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: receiver, encoding: 'utf8' }).trim(), receiverHead)
+  assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: receiver, encoding: 'utf8' }), '')
+  git(receiver, 'remote', 'set-url', 'origin', resolve(temp, 'missing-origin'))
+  assert.equal(matchPrCandidateInputs(receiver, owner, '0'.repeat(40), base, landedBase), false)
+  assert.notEqual(rev('HEAD^{tree}'), rev(tested + '^{tree}'))
+  assert.equal(prInputsMatch(root, owner, tested, base, landedBase), true)
+  assert.equal(prInputsMatch(root, owner, tested, head, landedBase), false)
+  assert.equal(prInputsMatch(root, owner, tested, base, head), true)
+  assert.equal(prInputsMatch(root, owner, tested, base, '0'.repeat(40)), false)
+  assert.equal(prInputsMatch(root, owner, 'missing', base, landedBase), false)
+  git(root, 'checkout', '--orphan', 'divergent'); git(root, 'commit', '-qm', 'disconnected history')
+  assert.equal(prInputsMatch(root, owner, tested, base, rev('HEAD')), false)
+  git(root, 'checkout', 'main')
+  for (const name of ['record/index.ts', 'shared/ui/theme.ts', 'composition/delivery/core.ts', 'composition/architecture/guard.ts', workflowPathFor(owner.id), 'enablement/verification/workflow-budget.ts', 'LICENSE', 'record/delivery.json']) {
+    writeFileSync(resolve(root, name), 'changed relevant input'); git(root, 'add', '.'); git(root, 'commit', '-qm', 'relevant change')
+    assert.equal(prInputsMatch(root, owner, tested, base, landedBase), false, name)
+    git(root, 'reset', '--hard', 'HEAD^')
+  }
+  for (const change of [() => git(root, 'mv', 'record/index.ts', 'record/renamed.ts'), () => git(root, 'rm', 'record/index.ts'), () => chmodSync(resolve(root, 'record/index.ts'), 0o755)]) {
+    change(); git(root, 'add', '-A'); git(root, 'commit', '-qm', 'inventory change')
+    assert.equal(prInputsMatch(root, owner, tested, base, landedBase), false)
+    git(root, 'reset', '--hard', 'HEAD^')
+  }
+})
+
+test('App Shell fingerprints its external verification inputs', () => {
+  const root = resolve(temp, 'app-shell-external-inputs'); newRepo(root)
+  const app = catalog(repo).owners.find(item => item.id === 'app-shell')!
+  for (const name of ['enablement/native/owned-processes.ts', '.github/workflows/verification-platform.yml']) {
+    assert(app.files?.includes(name))
+    const before = sourceDigest(root, app)
+    mkdirSync(resolve(root, name, '..'), { recursive: true }); writeFileSync(resolve(root, name), 'verification input')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'external verification input')
+    assert.notEqual(sourceDigest(root, app), before, name)
   }
 })

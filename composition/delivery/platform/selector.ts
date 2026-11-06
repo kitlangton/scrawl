@@ -16,7 +16,7 @@ export function selectComponents(paths: string[] | null): string[] {
     if (path === 'LICENSE' || path === 'enablement/verification/workflow-budget.ts' || ['.github/workflows/stream-platform.yml', '.github/workflows/stream-platform-config.yml', '.github/workflows/stream-platform-resources.yml', '.github/workflows/stream-app-shell.yml'].includes(path) || starts(path, allPrefixes)) return [...COMPONENTS]
     if (starts(path, config)) selected.add('platform-config')
     if (starts(path, resources)) selected.add('platform-resources')
-    if (starts(path, shell)) selected.add('app-shell')
+    if (['enablement/native/owned-processes.ts', '.github/workflows/verification-platform.yml'].includes(path) || starts(path, shell)) selected.add('app-shell')
   }
   return COMPONENTS.filter(component => selected.has(component))
 }

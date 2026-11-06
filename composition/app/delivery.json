@@ -12,6 +12,7 @@
   "verify": [
     "check"
   ],
+  "files": ["enablement/native/owned-processes.ts", ".github/workflows/verification-platform.yml"],
   "build": "build",
   "targets": [
     "linux-x64",

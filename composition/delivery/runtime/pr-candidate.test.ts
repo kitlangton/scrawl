@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { admitPrCandidate } from './pr-candidate.ts'
 const landed = 'a'.repeat(40), head = 'b'.repeat(40), base = 'c'.repeat(40), tested = 'd'.repeat(40), tree = 'e'.repeat(40), digest = 'f'.repeat(64)
 function fixture(ownerId = 'engine', target = 'linux-x64') {
+  let matches = true
   const repo = 'tryapparent/apparent'
   const workflow = ['app-shell', 'platform-config'].includes(ownerId) ? 'stream-platform.yml' : ownerId === 'onboarding' ? 'stream-onboarding.yml' : 'stream-engine.yml'
   const data: Record<string, any> = {
@@ -14,7 +15,7 @@ function fixture(ownerId = 'engine', target = 'linux-x64') {
   }
   const values = Object.values(data)
   data[`repos/${repo}/git/commits/${landed}`] = { sha: landed, parents: [{ sha: base }] }
-  return { data, pull: values[0][0], run: values[1].workflow_runs[0], jobs: values[2], artifact: values[3].artifacts[0], commit: values[4], assess: () => admitPrCandidate(<T>(endpoint: string) => { assert(endpoint in data, `Unexpected API: ${endpoint}`); return data[endpoint] as T }, landed, tree, digest, ownerId, target) }
+  return { data, pull: values[0][0], run: values[1].workflow_runs[0], jobs: values[2], artifact: values[3].artifacts[0], commit: values[4], rejectInputs: () => { matches = false }, assess: () => admitPrCandidate(<T>(endpoint: string) => { assert(endpoint in data, `Unexpected API: ${endpoint}`); return data[endpoint] as T }, landed, digest, (sha, testedBase, landedBase) => matches && sha === tested && testedBase === base && landedBase === base, ownerId, target) }
 }
 test('same tested tree with different SHA qualifies through canonical authenticated API identities', () => {
   const f = fixture(); f.run.pull_requests = [] // GitHub clears associations on merged runs.
@@ -22,9 +23,9 @@ test('same tested tree with different SHA qualifies through canonical authentica
   assert.equal(result.reuse, true); assert.equal(result.prior_source_sha, tested)
   assert.equal(result.prior_run_attempt, 2); assert.equal(result.prior_run_id, 10)
 })
-test('main changes, wrong merge parents and untrusted/incomplete producers never qualify', () => {
+test('changed inputs, wrong merge parents and untrusted/incomplete producers never qualify', () => {
   const mutations = [
-    (f: ReturnType<typeof fixture>) => { f.commit.tree.sha = '0'.repeat(40) },
+    (f: ReturnType<typeof fixture>) => { f.rejectInputs() },
     (f: ReturnType<typeof fixture>) => { f.commit.parents[0].sha = head },
     (f: ReturnType<typeof fixture>) => { f.commit.parents[1].sha = base },
     (f: ReturnType<typeof fixture>) => { f.pull.merge_commit_sha = tested },
@@ -56,7 +57,7 @@ test('native Engine targets require their own successful PR job and candidate ar
     assert.equal(wrongTarget.assess(), undefined)
   }
   for (const [id, target] of [['engine', 'macos-x64'], ['engine-native', 'macos-arm64'], ['platform-resources', 'linux-x64']]) {
-    assert.equal(admitPrCandidate(() => { throw Error('Unsupported lane must not query GitHub') }, landed, tree, digest, id, target), undefined)
+    assert.equal(admitPrCandidate(() => { throw Error('Unsupported lane must not query GitHub') }, landed, digest, () => true, id, target), undefined)
   }
 })
 
@@ -86,7 +87,7 @@ test('media candidates are qualified independently for Linux and Intel Mac', () 
     const wrongTarget = fixture('engine-media-native', target)
     wrongTarget.jobs.jobs[1].name = 'verify-pr / pr-stream (engine-media-native, unavailable)'
     assert.equal(wrongTarget.assess(), undefined)
-    assert.equal(admitPrCandidate(() => { throw Error('Unsupported target') }, landed, tree, digest, 'engine-media-native', 'macos-arm64'), undefined)
+    assert.equal(admitPrCandidate(() => { throw Error('Unsupported target') }, landed, digest, () => true, 'engine-media-native', 'macos-arm64'), undefined)
   }
 })
 
@@ -101,7 +102,7 @@ test('Config candidates require the Config workflow and exact staged-helper targ
     wrong.jobs.jobs[1].name = 'verify-pr / pr-stream (engine-native, ' + target + ')'
     assert.equal(wrong.assess(), undefined)
   }
-  assert.equal(admitPrCandidate(() => { throw Error('Unsupported Config target') }, landed, tree, digest, 'platform-config', 'web'), undefined)
+  assert.equal(admitPrCandidate(() => { throw Error('Unsupported Config target') }, landed, digest, () => true, 'platform-config', 'web'), undefined)
 })
 
 
@@ -115,5 +116,11 @@ test('Onboarding candidates require their own package workflow and exact platfor
     wrong.artifact.name = wrong.artifact.name.replace('onboarding', 'app-shell')
     assert.equal(wrong.assess(), undefined)
   }
-  assert.equal(admitPrCandidate(() => { throw Error('Unsupported package target') }, landed, tree, digest, 'onboarding', 'web'), undefined)
+  assert.equal(admitPrCandidate(() => { throw Error('Unsupported package target') }, landed, digest, () => true, 'onboarding', 'web'), undefined)
+})
+
+test('different whole trees qualify only after committed-input and base ancestry verification', () => {
+  const f = fixture(); f.commit.tree.sha = '0'.repeat(40)
+  assert.equal(f.assess()?.reuse, true)
+  f.rejectInputs(); assert.equal(f.assess(), undefined)
 })
