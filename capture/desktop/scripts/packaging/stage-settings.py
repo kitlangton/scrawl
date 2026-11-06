@@ -59,6 +59,11 @@ def main():
     frontend = root / "capture/desktop/ui/frontend"
     env = os.environ.copy()
     env.pop("ELECTRON_SKIP_BINARY_DOWNLOAD", None)
+    # The frontend's file dependency resolves @apparent/record exports from
+    # record/dist. npm ci runs the package's existing prepare build from its
+    # lockfile, so produce those exports before installing/building the consumer.
+    subprocess.run(["npm", "--prefix", str(root / "record"), "ci", "--no-audit", "--no-fund"],
+                   cwd=root, env=env, check=True)
     subprocess.run(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], cwd=frontend, env=env, check=True)
     subprocess.run(["node", "node_modules/electron/install.js"], cwd=frontend, env=env, check=True)
     subprocess.run(["npm", "run", "build"], cwd=frontend, env=env, check=True)
