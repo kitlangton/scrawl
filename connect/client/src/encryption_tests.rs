@@ -334,6 +334,16 @@ fn roundtrip_multiple_recipients_preserves_exact_private_assets() {
 #[test]
 #[ignore = "requires the production TypeScript crypto interop script and Node 22"]
 fn production_typescript_crypto_interop() {
+    production_typescript_crypto_interop_for("https://api.example.com");
+}
+
+#[test]
+#[ignore = "requires the production TypeScript crypto interop script and Node 22"]
+fn production_typescript_crypto_interop_mounted() {
+    production_typescript_crypto_interop_for("https://app.tryapparent.com/connect");
+}
+
+fn production_typescript_crypto_interop_for(origin: &str) {
     let node = std::env::var_os("APPARENT_CONNECT_INTEROP_NODE")
         .expect("set APPARENT_CONNECT_INTEROP_NODE to the absolute Node 22 executable");
     let script = PathBuf::from(
@@ -346,7 +356,8 @@ fn production_typescript_crypto_interop() {
     );
     assert!(script.is_absolute(), "interop script path must be absolute");
 
-    let f = Fixture::new();
+    let mut f = Fixture::new();
+    f.context.origin = origin.into();
     // Force the TypeScript side to exercise multiple bounded transport parts.
     let summary: Vec<u8> = (0..33 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
     fs::write(f.stage.join("summary.md"), &summary).unwrap();
