@@ -5,6 +5,7 @@ import { isAbsolute, join, parse, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { CaptureClient, launchCaptureEngine, type CaptureTransport } from '@apparent/engine-sdk/capture';
+import { DEFAULT_RECORD_DURATION_SECONDS } from '../recording.js';
 import type { Capture2Host, Capture2Receipt } from '@apparent/record/host/capture2';
 
 export type Capture2Clock = { now(): number; sleep(ms: number): Promise<void> };
@@ -133,21 +134,22 @@ export function parseCapture2ControlArgs(args: string[]): { method: 'inspect' | 
 
 /** Capture/2 stays explicit; its admitted production provider is Linux X11 only. */
 export function parseCapture2RecordArgs(args: string[]): { durationSeconds: number; out: string; sourceId: string } {
-  let duration: number | undefined, out: string | undefined, sourceId: string | undefined, protocol = false;
+  let duration: number | undefined, durationSeen = false, out: string | undefined, sourceId: string | undefined, protocol = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--protocol' && !protocol && args[i + 1] === 'capture2') { protocol = true; i++; continue; }
-    if (arg === '--duration' && duration === undefined) duration = Number(args[++i]);
+    if (arg === '--duration' && !durationSeen) { durationSeen = true; duration = Number(args[++i]); }
     else if (arg === '--out' && out === undefined) out = args[++i];
     else if (arg === '--source' && sourceId === undefined) sourceId = args[++i];
     else throw new Error(`Unknown, duplicate, or invalid capture/2 record option: ${arg}`);
   }
-  if (!protocol || !Number.isFinite(duration) || duration! <= 0 || duration! > 3600 || !out || !sourceId)
-    throw new Error('record --protocol capture2 requires --duration (greater than 0 and at most 3600 seconds), --out, and an exact discovered --source ID');
+  const durationSeconds = duration ?? DEFAULT_RECORD_DURATION_SECONDS;
+  if (!protocol || !Number.isFinite(durationSeconds) || durationSeconds <= 0 || durationSeconds > 3600 || !out || !sourceId)
+    throw new Error('record --protocol capture2 requires --out, an exact discovered --source ID, and a --duration greater than 0 and at most 3600 seconds when supplied');
   if (!isAbsolute(out!) || resolve(out!) !== out || !out!.endsWith('.apparent') || out!.endsWith('/.apparent'))
     throw new Error('--out must be a normalized absolute .apparent destination');
   if (!sourceId || sourceId.startsWith('-') || sourceId.length > 4096) throw new Error('--source requires an exact discovered source ID');
-  return { durationSeconds: duration!, out: out!, sourceId: sourceId! };
+  return { durationSeconds, out: out!, sourceId: sourceId! };
 }
 
 export async function recordWithCapture2(
