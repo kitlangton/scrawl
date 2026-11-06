@@ -26,6 +26,7 @@ mod ingest_http;
 mod keyframes;
 #[cfg(target_os = "macos")]
 mod laser_overlay;
+mod live_audio;
 mod live_transcribe;
 mod mic;
 mod model;

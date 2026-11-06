@@ -156,6 +156,7 @@ struct SettingsState: Decodable, Equatable {
     SettingsShortcut(kind: "paste", title: "Paste last capture", label: "⌥⇧V", key: "V", clearable: true),
   ]
   var microphone = SettingsMicrophone()
+  var liveAudio = false
   var transcriber = SettingsTranscriber()
   var videoExport = false
   var lowerPlayback = false
@@ -379,7 +380,8 @@ final class KeyClock: ObservableObject {
 /// Sizes: 16 titles, 14 rows, 13 keycaps, 12 captions.
 enum SettingsMetrics {
   static let width: CGFloat = 620
-  static let height: CGFloat = 448
+  /// Tall enough for the Recording pane's longest state (Hex, or a note under the microphone).
+  static let height: CGFloat = 492
   static let sidebar: CGFloat = 210
   static let titlebar: CGFloat = 52
   static let inset: CGFloat = 20
@@ -958,6 +960,10 @@ struct SettingsView: View {
         if mic.meter != nil {
           SettingsSeparator()
           SettingsRow(title: "Input level") { LevelMeter(meter: model.meter) }
+        }
+        SettingsSeparator()
+        SettingsRow(title: "Show live audio while recording") {
+          SettingsSwitch(on: state.liveAudio) { model.set("liveAudio", $0) }
         }
       }
       if let note = mic.note {
@@ -1653,6 +1659,8 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     )
     var micNotAllowed = base
     micNotAllowed.microphone.meter = nil
+    var liveAudio = base
+    liveAudio.liveAudio = true
     let samples: [(String, SettingsPane, SettingsState)] = [
       ("general", .general, base),
       ("general-held", .general, base),
@@ -1671,6 +1679,7 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
       ("recording-mic-chosen", .recording, micChosen),
       ("recording-mic-missing", .recording, micMissing),
       ("recording-mic-not-allowed", .recording, micNotAllowed),
+      ("recording-live-audio", .recording, liveAudio),
       ("recording-downloading", .recording, downloading),
       ("recording-ready", .recording, ready),
       ("recording-language", .recording, language),

@@ -29,6 +29,7 @@ use crate::ui::SelectionMode;
 pub const ATLAS_W: u32 = 1024;
 pub const ATLAS_H: u32 = 512;
 
+pub const WEIGHT_REGULAR: f64 = 0.0;
 pub const WEIGHT_MEDIUM: f64 = 0.23;
 pub const WEIGHT_SEMIBOLD: f64 = 0.30;
 
@@ -111,6 +112,11 @@ pub fn measure_text_pt(text: &str, size_pt: f32, weight: f64, monospaced_digits:
     } else {
         (text.chars().count() as f32 * size_pt * 0.58).ceil()
     }
+}
+
+/// How wide the live words' `text` is, in points.
+pub fn measure_caption(text: &str) -> f32 {
+    measure_text_pt(text, HUD_TEXT, WEIGHT_REGULAR, false)
 }
 
 /// Measures all standard capsule strings with CoreText to build a `Metrics` table.
@@ -300,6 +306,9 @@ pub struct GlyphAtlas {
     /// Reserved rows for the Completed island's session chips (`y = 424, 468`).
     route_text: [String; 2],
     pub route_sprites: [Sprite; 2],
+    caption_text: Vec<String>,
+    /// The live words, a line each (`CAPTION_LINES`), drawn in slots of their own.
+    pub caption_sprites: Vec<Sprite>,
 }
 
 /// The tallest a changing label's sprite may be, in pixels, so the reserved rows don't overlap.
@@ -344,6 +353,8 @@ impl GlyphAtlas {
             completed_sprite: Sprite::default(),
             route_text: [String::new(), String::new()],
             route_sprites: [Sprite::default(); 2],
+            caption_text: Vec::new(),
+            caption_sprites: Vec::new(),
         };
 
         for (kind, size_pt) in [
@@ -482,6 +493,41 @@ impl GlyphAtlas {
             ],
         };
         self.completed_sprite
+    }
+
+    /// Draws the live words' lines (at most `CAPTION_LINES`) into their slots below the labels;
+    /// lines that didn't change aren't drawn again.
+    pub fn update_caption(&mut self, lines: &[String]) {
+        let lines = &lines[..lines.len().min(super::model::CAPTION_LINES)];
+        self.caption_sprites.truncate(lines.len());
+        self.caption_text.truncate(lines.len());
+        for (index, text) in lines.iter().enumerate() {
+            if self.caption_text.get(index) == Some(text) {
+                continue;
+            }
+            let (w, h, size_pt, bytes) =
+                rasterize_text(text, HUD_TEXT, WEIGHT_REGULAR, false, self.scale);
+            let (x, y) = (4_u32, 200_u32 + 44 * index as u32);
+            let w = w.min(ATLAS_W - x - 4);
+            let h = h.min(SLOT_H);
+            self.upload_at(x, y, w, h, &bytes);
+            let sprite = Sprite {
+                size_pt: [w as f32 / self.scale, size_pt[1]],
+                uv: [
+                    x as f32 / ATLAS_W as f32,
+                    y as f32 / ATLAS_H as f32,
+                    (x + w) as f32 / ATLAS_W as f32,
+                    (y + h) as f32 / ATLAS_H as f32,
+                ],
+            };
+            if index < self.caption_sprites.len() {
+                self.caption_sprites[index] = sprite;
+                self.caption_text[index] = text.clone();
+            } else {
+                self.caption_sprites.push(sprite);
+                self.caption_text.push(text.clone());
+            }
+        }
     }
 
     pub fn route_text(&self, index: usize) -> &str {

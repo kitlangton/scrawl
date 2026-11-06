@@ -4,7 +4,7 @@
 //   scrawl-helper mirror --out FILE.mov [--device ID] [--microphone UID --microphone-name NAME]
 //                                                       live mirror window + native recording (JSON lines)
 //   scrawl-helper transcribe FILE [--locale ID]          SpeechAnalyzer transcript with word timings
-//   scrawl-helper transcribe-stream [--locale ID]        the same while recording: PCM on stdin, JSON lines (LiveTranscribe.swift)
+//   scrawl-helper transcribe-stream [--locale ID] [--volatile [--fast]]   the same while recording: PCM on stdin, JSON lines (LiveTranscribe.swift)
 //   scrawl-helper speech-model [--install] [--locale ID] the speech model's status; install it (JSON lines)
 //   scrawl-helper frames MOVIE --out-dir DIR (--every MS | --at MS,MS…) [--max-edge PX]
 //   scrawl-helper audio MOVIE OUT.wav                   16 kHz mono PCM of every audio track, mixed
@@ -120,7 +120,9 @@ case "transcribe":
   guard arguments.count >= 2 else { fail("transcribe needs a file") }
   runAsync { emit(try await Transcriber.transcribe(URL(filePath: arguments[1]), preferred: option("--locale", in: arguments))) }
 case "transcribe-stream":
-  runAsync { try await LiveTranscriber.run(preferred: option("--locale", in: arguments)) }
+  let volatile = arguments.contains("--volatile")
+  let fast = arguments.contains("--fast")
+  runAsync { try await LiveTranscriber.run(preferred: option("--locale", in: arguments), volatile: volatile, fast: fast) }
 case "speech-model":
   let install = arguments.contains("--install")
   runAsync { await SpeechModel.run(install: install, preferred: option("--locale", in: arguments)) }
