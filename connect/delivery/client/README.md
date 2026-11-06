@@ -192,3 +192,14 @@ This is not an installed CLI route or a filesystem publisher. A boolean receipt
 from a fixture does not establish native publication. Actual credential loading,
 renewal, private staging/no-overwrite publication and installed composition must
 be adopted and verified before removing the Rust donor or enabling this path.
+
+The `./credentials` export provides a private stored-wire decoder and pure renewal
+reply merge. Its expected server must already have passed the caller's approved
+origin boundary; matching that string does not approve a server. It preserves
+legacy lifecycle tuples and pins renewal scope/grant and the original issue time.
+Unknown fields are ignored as in the donor reader. A successful in-memory merge
+is not a durable commit or permission to restore credentials after logout. The
+parent's authoritative reader/writer must enforce private-file safety, renewal
+journal ordering and fresh cancellation/generation checks before publication.
+This API performs no file or HTTP access and must not be exposed to renderers or
+used to serialize private values into CLI output or diagnostics.
