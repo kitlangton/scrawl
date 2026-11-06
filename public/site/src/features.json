@@ -236,6 +236,21 @@
       "docs": ["public/site/docs/feature-grid.md"]
     },
     {
+      "id": "site-frog-water-qr",
+      "group": "install",
+      "name": "Homepage frog water QR Easter egg",
+      "says": "Two quick clicks, taps or keyboard activations on the greeting frog trigger a backflip, belly-flop and water ripple QR reveal for app.tryapparent.com. A single click still waves. Escape and Back to the pond restore focus and scrolling. Reduced motion reveals the QR immediately.",
+      "status": "main",
+      "added": "2026-11-06",
+      "platforms": [
+        "mac",
+        "linux"
+      ],
+      "docs": [
+        "public/site/docs/feature-grid.md"
+      ]
+    },
+    {
       "id": "site-frog-footer",
       "group": "install",
       "name": "Homepage feedback footer",
