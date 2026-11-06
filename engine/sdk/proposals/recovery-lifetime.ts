@@ -21,6 +21,10 @@ export interface ProposedRecoveryPeerFacts {
 export interface ProposedRecoveryPeerRelease {
   scope: "client-connection";
   peerId: string;
+  /** Positive local guarantee even when the native EOF observation is lost:
+   * SDK-owned process/stdio handles, pending-RPC timers and lifecycle timers no
+   * longer keep the caller's Node event loop alive. Not native process exit.
+   */
   connection: "released";
   /** Unknown is not permission to kill/cancel native work or allocate a new tuple. */
   inputClosure: "confirmed" | "unconfirmed" | "peer-exit-observed";
@@ -38,6 +42,8 @@ export interface ProposedRecoveryPeer<Client> {
   /** Call after Record shutdown has closed local admission and drained its local
    * operations. This releases connection ownership only; it neither changes nor
    * overrides Record runtimeClearance, NativeSaved or any job outcome.
+   * A peer never injected into a coordinator may be released directly. A failed
+   * shutdown or unknown local drain does not establish this caller precondition.
    *
    * Bound: a fixed documented release deadline (proposed <=5s), never dependent
    * on media/publication completion. No timeout-as-cancel, TERM/KILL escalation,
@@ -45,6 +51,11 @@ export interface ProposedRecoveryPeer<Client> {
    * Native finite work retains its existing owner, leases, deadlines and durable
    * original identity, then the existing native process exits when work ends.
    * A response lost during release remains unconfirmed, not runtime-clear.
+   * Idempotent and concurrent-call safe: callers receive one stable outcome.
+   * New client operations reject locally once release begins, before writing.
+   * Pending response loss remains original-tuple uncertainty, never cancellation.
+   * The operation always performs local resource release within the bound; an
+   * unconfirmed inputClosure cannot conceal retained caller event-loop handles.
    */
   release(): Promise<ProposedRecoveryPeerRelease>;
 }
@@ -53,6 +64,11 @@ export interface ProposedRecoveryPeer<Client> {
  * seam. Native startup must confirm the exact peer nonce/role before exposing a
  * usable client. An old artifact is unsupported, never silently safe-closeable.
  * No new job/capture/selection is created by these factories.
+ * Startup has a fixed <=5s negotiation bound. Failed negotiation cleans up only
+ * the newly launched, never-exposed process/connection, to which no operation
+ * was dispatched. It cannot call legacy close on an earlier successful peer.
+ * If a second launch or coordinator construction fails, the caller releases any
+ * earlier returned peer handle directly, without an artificial shutdown report.
  */
 export declare function proposedLaunchCaptureRecoveryPeer(
   executable: string,
@@ -70,6 +86,8 @@ export declare function proposedLaunchMedia2RecoveryPeer(
  * - Capture recovery role rejects Start before binding/admission; EOF never stops
  *   another peer's live capture. Recovery may inspect/control original captures
  *   and resume only already-authorized finite processing/publication operations.
+ *   Its normal CaptureClient handshake also reports fresh-start readiness
+ *   unavailable and screenCapture=false; role metadata alone is insufficient.
  * - Media EOF drains admitted work under its original deadline and supervision,
  *   rather than manufacturing owner_lost because the observer disconnected.
  * - Publication retains original auth/material/plan bindings and held resources
@@ -85,6 +103,8 @@ export declare function proposedLaunchMedia2RecoveryPeer(
  * Record's existing default-host SDK ownership rule stays intact: unresolved
  * owning clients cannot use legacy close. A recovery-peer release is a distinct
  * native ownership handoff, not permission to report runtimeClearance='clear'.
+ * Calling the returned client.close() refuses locally without signaling native
+ * work, including after release; only peer.release() owns this connection.
  *
  * OPEN: prove bounded public release and process exit without consumer hacks,
  * active capture unaffected, finite jobs/publication retained, lost ACK handling,

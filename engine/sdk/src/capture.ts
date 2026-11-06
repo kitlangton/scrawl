@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { releaseLocalRequests } from "./recovery/local.ts";
 import type {
   MaterialsDocument,
   MaterialsKey,
@@ -1113,6 +1114,11 @@ export class ChildProcessCaptureTransport implements CaptureTransport {
       p.reject(e);
     }
     this.pending.clear();
+  }
+  [releaseLocalRequests](): void {
+    this.closing = true;
+    this.bytes = Buffer.alloc(0);
+    this.fail(new Error("recovery connection released; operation outcome remains unknown"));
   }
   close(): Promise<CaptureCloseOutcome> {
     if (this.closePromise) return this.closePromise;

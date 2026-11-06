@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { releaseLocalRequests } from "./recovery/local.ts";
 
 export const MEDIA_CHANNEL = "media" as const;
 export const MEDIA_PROTOCOL_VERSION = 1 as const;
@@ -916,6 +917,11 @@ export class MediaProcessTransport<Request extends { rpcId: string } = MediaRequ
       p.reject(error);
     }
     this.pending.clear();
+  }
+  [releaseLocalRequests](): void {
+    this.closing = true;
+    this.bytes = Buffer.alloc(0);
+    this.fail(new Error("recovery connection released; operation outcome remains unknown"));
   }
   close(): Promise<MediaCloseOutcome> {
     if (this.closePromise) return this.closePromise;
