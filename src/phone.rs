@@ -53,6 +53,9 @@ pub struct PhoneSession {
     session_epoch_ms: u64,
     /// Held while the mirror records (not while it only previews).
     busy: Option<crate::retention::Recording>,
+    /// The Mac's microphone again while recording, only for the capsule's live waveform and words:
+    /// the helper records the narration into the movie, where Scrawl can't hear it until the end.
+    listen: Option<crate::audio::AudioRecorder>,
 }
 
 pub struct PhoneRecording {
@@ -265,6 +268,10 @@ impl PhoneSession {
             cancelled,
             started_at: Instant::now(),
             session_epoch_ms,
+            listen: recording
+                .is_some()
+                .then(crate::audio::AudioRecorder::listen)
+                .flatten(),
             busy: recording,
         })
     }
@@ -275,6 +282,7 @@ impl PhoneSession {
         self.session_epoch_ms = crate::now_epoch_ms();
         self.busy
             .get_or_insert_with(crate::retention::Recording::start);
+        self.listen = crate::audio::AudioRecorder::listen();
         {
             let mut state = self.lock();
             state.recording_epoch_ms = None;
@@ -378,6 +386,7 @@ impl PhoneSession {
 
     /// Stops recording and waits for the helper to finalize the movie.
     pub fn stop(mut self) -> Result<PhoneRecording> {
+        self.listen.take();
         self.send("stop");
         self.wait(Duration::from_secs(15));
         let state = std::mem::take(&mut *self.lock());

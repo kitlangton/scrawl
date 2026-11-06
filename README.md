@@ -197,7 +197,8 @@ narration uses the same microphone.
 the timer while you record, so you can see the microphone is hearing you: dim dots are silence,
 and a flat red line means the microphone is sending nothing at all. With Apple Speech on macOS 26,
 the capsule also grows a row under the controls with the words as you say them, about a second
-behind. It's only for you: the transcript is still made from the finished recording. From the terminal, `scrawl mic list` shows the inputs and the
+behind. It's only for you: the transcript is still made from the finished recording. It shows for a
+cabled iPhone too. From the terminal, `scrawl mic list` shows the inputs and the
 one recordings will use, `scrawl mic set <id|default>` chooses, and `scrawl mic watch` prints the
 list again on every change.
 

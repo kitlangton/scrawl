@@ -29,6 +29,22 @@ pub struct AudioRecorder {
 
 impl AudioRecorder {
     pub fn start() -> Result<Self> {
+        Self::open(true)
+    }
+
+    /// The microphone only for the capsule's waveform and words, while something else records the
+    /// narration (the iPhone mirror records it into its movie). `None` when live audio is off.
+    pub fn listen() -> Option<Self> {
+        if !crate::live_audio::wanted() {
+            return None;
+        }
+        Self::open(false)
+            .inspect_err(|error| crate::capture::scrawl_log(format!("Live audio: {error:#}")))
+            .ok()
+    }
+
+    /// `recording`: this is the capture's own audio, so the live transcription experiment runs on it.
+    fn open(recording: bool) -> Result<Self> {
         let started = std::time::Instant::now();
         let samples = Arc::new(Mutex::new(Vec::new()));
         let error = Arc::new(Mutex::new(None));
@@ -42,7 +58,9 @@ impl AudioRecorder {
                     Self::open_stream(worker_samples, worker_error).inspect_err(|error| {
                         crate::capture::scrawl_log(format!("Microphone startup failed: {error:#}"));
                     })?;
-                crate::ui::start_metric("audio_ready_ms", started);
+                if recording {
+                    crate::ui::start_metric("audio_ready_ms", started);
+                }
                 // Stream never crosses threads. Disconnect also stops abandoned recorders.
                 let _ = stop_receiver.recv();
                 drop(stream);
@@ -56,7 +74,7 @@ impl AudioRecorder {
             crate::capture::scrawl_log(format!("Live transcription: {error:#}"));
         };
         // The experiment's stream shows the words too; without it, one only for showing them.
-        let (live, preview) = if crate::live_transcribe::wanted() {
+        let (live, preview) = if recording && crate::live_transcribe::wanted() {
             let live = crate::live_transcribe::Live::start(Arc::clone(&samples), caption.clone());
             (live.map_err(log).ok(), None)
         } else {
