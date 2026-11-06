@@ -23,7 +23,7 @@ test('native registration preserves the SDK lane and covers inherited Cargo conf
   const registration = JSON.parse(readFileSync(new URL('../delivery.json', import.meta.url), 'utf8'))
   assert.equal(registration.id, 'engine-native')
   assert.equal(registration.language, 'native')
-  assert.deepEqual(registration.inputs, ['engine/', 'capture/engine/', '.cargo/'])
+  assert.deepEqual(registration.inputs, ['engine/', '.cargo/'])
   assert.equal(registration.artifactPath, 'dist')
   const sdk = JSON.parse(readFileSync(new URL('../../../delivery.json', import.meta.url), 'utf8'))
   assert.equal(sdk.package, 'engine/sdk')

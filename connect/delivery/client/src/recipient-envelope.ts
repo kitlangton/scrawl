@@ -39,9 +39,10 @@ function contextValid(value: unknown): value is Context {
   if (typeof origin !== "string" || origin.length > 2048 || /[^\x00-\x7f]/.test(origin)) return false;
   const trimmed = origin.replace(/\/+$/, "");
   if (trimmed !== origin || !/^https?:\/\//.test(origin) || /[\x00-\x20\x7f"'\\?#@]/.test(origin)) return false;
-  const authority = origin.replace(/^https?:\/\//, "");
+  const endpoint = origin.replace(/^https?:\/\//, "");
+  const [authority, ...path] = endpoint.split("/");
   const host = authority.split(":", 1)[0]!;
-  if (!host || !/^[A-Za-z0-9.-]+$/.test(host) || authority.includes("/")) return false;
+  if (!host || !/^[A-Za-z0-9.-]+$/.test(host) || path.length > 1 || path.length === 1 && path[0] !== "connect") return false;
   if (authority.includes(":")) {
     const port = authority.slice(authority.indexOf(":") + 1);
     if (!/^\+?\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) return false;

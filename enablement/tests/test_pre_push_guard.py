@@ -444,8 +444,10 @@ class PrePushGuardTests(unittest.TestCase):
         result = self.push()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text().splitlines(), [
-            "-c utility cargo build --manifest-path capture/engine/Cargo.toml -j 3 --offline",
-            "-c utility cargo test --manifest-path capture/engine/Cargo.toml -j 3 --offline -- --test-threads=2",
+            "-c utility cargo build --manifest-path engine/core/Cargo.toml -j 3 --offline",
+            "-c utility cargo test --manifest-path engine/core/Cargo.toml -j 3 --offline -- --test-threads=2",
+            "-c utility cargo build --manifest-path engine/Cargo.toml -j 3 --offline",
+            "-c utility cargo test --manifest-path engine/Cargo.toml -j 3 --offline -- --test-threads=2",
             "-c utility cargo test -j 3 --offline -- --test-threads=2",
             "-c utility cargo build -j 3 --offline",
         ])
@@ -459,8 +461,10 @@ class PrePushGuardTests(unittest.TestCase):
         result = self.push(env=dict(self.env, T3_BUILD_JOBS="7"))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text().splitlines(), [
-            "-c utility cargo build --manifest-path capture/engine/Cargo.toml -j 7 --offline",
-            "-c utility cargo test --manifest-path capture/engine/Cargo.toml -j 7 --offline -- --test-threads=2",
+            "-c utility cargo build --manifest-path engine/core/Cargo.toml -j 7 --offline",
+            "-c utility cargo test --manifest-path engine/core/Cargo.toml -j 7 --offline -- --test-threads=2",
+            "-c utility cargo build --manifest-path engine/Cargo.toml -j 7 --offline",
+            "-c utility cargo test --manifest-path engine/Cargo.toml -j 7 --offline -- --test-threads=2",
             "-c utility cargo test -j 7 --offline -- --test-threads=2",
             "-c utility cargo build -j 7 --offline",
         ])
@@ -490,7 +494,7 @@ class PrePushGuardTests(unittest.TestCase):
 
     def test_engine_only_push_does_not_build_root(self):
         run("git", "update-ref", "refs/remotes/origin/main", self.head, cwd=self.repo)
-        tests = self.repo / "capture" / "engine" / "tests"
+        tests = self.repo / "engine" / "core" / "tests"
         tests.mkdir(parents=True)
         (tests / "process.rs").write_text("// Engine-only change\n")
         run("git", "add", ".", cwd=self.repo)
@@ -499,8 +503,10 @@ class PrePushGuardTests(unittest.TestCase):
         result = self.push()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text().splitlines(), [
-            "-c utility cargo build --manifest-path capture/engine/Cargo.toml -j 3 --offline",
-            "-c utility cargo test --manifest-path capture/engine/Cargo.toml -j 3 --offline -- --test-threads=2",
+            "-c utility cargo build --manifest-path engine/core/Cargo.toml -j 3 --offline",
+            "-c utility cargo test --manifest-path engine/core/Cargo.toml -j 3 --offline -- --test-threads=2",
+            "-c utility cargo build --manifest-path engine/Cargo.toml -j 3 --offline",
+            "-c utility cargo test --manifest-path engine/Cargo.toml -j 3 --offline -- --test-threads=2",
         ])
 
     def test_browser_only_push_runs_existing_package_checks_not_rust(self):
@@ -532,7 +538,7 @@ class PrePushGuardTests(unittest.TestCase):
         result = run(*args, cwd=self.repo, env=self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
         commands = self.log.read_text().splitlines()
-        self.assertEqual(len(commands), 4)
+        self.assertEqual(len(commands), 6)
         self.assertTrue(all("--locked" in line and "--offline" not in line for line in commands))
         self.log.unlink()
         result = run(*args, cwd=self.repo, env=dict(self.env, MOCK_STATUS="1"))

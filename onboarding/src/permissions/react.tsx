@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentType } from "react";
 import type { RepairState } from "./controller.js";
 import { PermissionRepairController } from "./controller.js";
+import { permissionName, permissionStatus } from "./presentation.js";
 
 export type PermissionRepairContributionProps = {
   controller: PermissionRepairController;
@@ -9,15 +10,6 @@ export type PermissionRepairContributionProps = {
   close(): void;
   /** Owner factory controls suspend/resume; unmount must not imply a repair cancellation. */
   manageLifecycle?: boolean;
-};
-
-const names: Record<string, string> = {
-  "screen-capture": "Screen Recording",
-  "screen-recording": "Screen Recording",
-  microphone: "Microphone",
-  accessibility: "Accessibility",
-  camera: "Camera",
-  "speech-recognition": "Speech Recognition",
 };
 
 export function PermissionRepairContribution({ controller, requestedIds, Button, close, manageLifecycle = true }: PermissionRepairContributionProps) {
@@ -46,14 +38,13 @@ export function PermissionRepairContribution({ controller, requestedIds, Button,
       {disconnected && <p className="onboarding-fact" role="status">Access status is unavailable. Reconnect and check again.</p>}
       {!disconnected && state.requestedIds.map(id => {
         const row = snapshot.readiness.requirements.find(item => item.id === id);
-        const usable = row?.status === "granted" && row.usableNow && !row.relaunchNeeded;
         const command = controller.availableAction(id);
         const action = command === "request-permission" ? "Request access" : command === "open-system-settings" ? "Open System Settings" : command === "request-safe-relaunch" ? "Reopen Apparent" : null;
         return <div className="permission-repair-row onboarding-requirement" key={id}>
-          <strong>{names[id] ?? "Access"}</strong>
-          <span>{!row ? "Unavailable" : row.relaunchNeeded ? "Reopen Apparent to use this access" : usable ? "Ready" : row.status === "denied" ? "Not allowed" : row.status === "not-determined" ? "Not set up" : "Not ready"}</span>
+          <strong>{permissionName(id)}</strong>
+          <span>{permissionStatus(row)}</span>
           {!row && <span role="status">Access information is unavailable right now.</span>}
-          {row && !usable && action && <Button variant="outline" disabled={state.pendingRequirementId === id} onClick={() => void controller.repair(id)}>{state.pendingRequirementId === id ? "Checking…" : action}</Button>}
+          {row && action && <Button variant="outline" disabled={state.pendingRequirementId === id} onClick={() => void controller.repair(id)}>{state.pendingRequirementId === id ? "Checking…" : action}</Button>}
         </div>;
       })}
       {state.phase === "checking" && <p role="status">Checking access…</p>}

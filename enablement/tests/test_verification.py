@@ -533,7 +533,7 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(any('cargo' in command for command in commands), cargo)
                 self.assertEqual(any(command[0] == 'bun' for command in commands), browser)
                 self.assertEqual(['node', 'scripts/test-browser.mjs'] in commands, browser)
-                self.assertEqual(any('capture/engine/Cargo.toml' in command for command in commands), cargo)
+                self.assertEqual(any('engine/core/Cargo.toml' in command for command in commands), cargo)
                 self.assertEqual(app_check.call_count, 1 if suite == 'all' else 0)
 
     def test_receipt_wrapper_preserves_explicit_suite(self):
@@ -631,11 +631,15 @@ class SelectionTests(unittest.TestCase):
         with patch.object(verification.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
             verification.run_selected_checks(selection, offline=False, cargo_timings=True)
         commands = [call.args[0] for call in run.call_args_list if 'cargo' in call.args[0]]
-        self.assertEqual(len(commands), 4)
+        self.assertEqual(len(commands), 6)
         self.assertEqual([next(c for c in command if c in ('build', 'test')) for command in commands],
-                         ['build', 'test', 'test', 'build'])
-        self.assertTrue(all('capture/engine/Cargo.toml' in command for command in commands[:2]))
-        self.assertTrue(all('capture/engine/Cargo.toml' not in command for command in commands[2:]))
+                         ['build', 'test', 'build', 'test', 'test', 'build'])
+        self.assertEqual([next(value for value in command if value.endswith('Cargo.toml'))
+                          for command in commands[:4]],
+                         ['engine/core/Cargo.toml', 'engine/core/Cargo.toml',
+                          'engine/Cargo.toml', 'engine/Cargo.toml'])
+        self.assertTrue(all('engine/core/Cargo.toml' not in command and 'engine/Cargo.toml' not in command
+                            for command in commands[4:]))
         for command in commands:
             self.assertEqual(command.count('--timings'), 1)
             self.assertIn('--locked', command)
@@ -947,7 +951,7 @@ class SelectionTests(unittest.TestCase):
                     if 'cargo' in command:
                         commands.append(command)
                         self.assertTrue(kwargs['check'])
-                        if 'capture/engine/Cargo.toml' not in command and failure in command:
+                        if 'engine/core/Cargo.toml' not in command and 'engine/Cargo.toml' not in command and failure in command:
                             raise subprocess.CalledProcessError(7, command)
                     return subprocess.CompletedProcess(command, 0, stdout='test result: ok. 2 passed; 0 failed\n')
                 with self.subTest(focused=focused, failure=failure), patch.object(
@@ -955,12 +959,14 @@ class SelectionTests(unittest.TestCase):
                     with self.assertRaises(subprocess.CalledProcessError):
                         verification.run_selected_checks({'root': True, 'engine': True,
                                                           'browser': False, 'focused': focused})
-                self.assertEqual(len(commands), 3 if failure == 'test' else 4)
-                self.assertTrue(all('capture/engine/Cargo.toml' in command for command in commands[:2]))
-                self.assertIn('test', commands[2])
+                self.assertEqual(len(commands), 5 if failure == 'test' else 6)
+                self.assertTrue(all('engine/core/Cargo.toml' in command or 'engine/Cargo.toml' in command
+                                    for command in commands[:4]))
+                self.assertIn('test', commands[4])
                 if failure == 'build':
-                    self.assertIn('build', commands[3])
-                self.assertFalse(any('capture/engine/Cargo.toml' in c for c in commands[2:]))
+                    self.assertIn('build', commands[5])
+                self.assertFalse(any('engine/core/Cargo.toml' in c or 'engine/Cargo.toml' in c
+                                     for c in commands[4:]))
 
     def test_explicit_platform_suites_execute_even_when_changed_tree_has_no_matching_inputs(self):
         for suite in ('rust', 'browser'):
@@ -973,27 +979,30 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(['node', 'scripts/test-browser.mjs'] in commands, suite == 'browser')
                 self.assertEqual(any('cargo' in command for command in commands), suite == 'rust')
 
-    def test_engine_tests_compile_and_test_package(self):
-        result = verification.select(["capture/engine/tests/process.rs"])
-        self.assertFalse(result["root"])
-        self.assertTrue(result["engine"])
+    def test_engine_core_tests_and_legacy_capture_sources_select_their_owners(self):
+        core = verification.select(["engine/core/tests/process.rs"])
+        self.assertFalse(core["root"])
+        self.assertTrue(core["engine"])
+        legacy = verification.select(["capture/engine/runtime/recording/recorder.rs"])
+        self.assertTrue(legacy["root"])
+        self.assertTrue(legacy["engine"])
 
     def test_engine_package_source_and_metadata_get_fast_feedback_and_root_when_needed(self):
-        for path in ("capture/engine/src/session.rs", "capture/engine/src/lib.rs"):
+        for path in ("engine/core/src/session.rs", "engine/core/src/lib.rs"):
             with self.subTest(path=path):
                 result = verification.select([path])
-                self.assertTrue(result["root"])
+                self.assertFalse(result["root"])
                 self.assertTrue(result["engine"])
-        for path in ("capture/engine/Cargo.toml", "capture/engine/Cargo.lock"):
+        for path in ("engine/core/Cargo.toml", "engine/core/Cargo.lock", "engine/Cargo.toml", "engine/Cargo.lock"):
             with self.subTest(path=path):
                 result = verification.select([path])
-                self.assertTrue(result["root"])
+                self.assertFalse(result["root"])
                 self.assertTrue(result["engine"])
 
     def test_engine_deletions_and_unrelated_owners_select_conservatively(self):
         # The selector consumes both sides of a deletion/rename diff, so a
         # deleted package test still keeps the standalone package route.
-        self.assertTrue(verification.select(["capture/engine/tests/process.rs"])["engine"])
+        self.assertTrue(verification.select(["engine/core/tests/process.rs"])["engine"])
         unrelated = verification.select(["README.md"])
         self.assertFalse(unrelated["root"])
         self.assertFalse(unrelated["engine"])
@@ -1005,25 +1014,25 @@ class SelectionTests(unittest.TestCase):
         def fail_engine(command, **kwargs):
             if cargo_command(command):
                 commands.append(command)
-            if cargo_command(command) and "capture/engine/Cargo.toml" in command:
+            if cargo_command(command) and "engine/core/Cargo.toml" in command:
                 raise subprocess.CalledProcessError(1, command)
             return subprocess.CompletedProcess(command, 0)
         with patch.object(verification.subprocess, "run", side_effect=fail_engine):
             with self.assertRaises(subprocess.CalledProcessError):
-                verification.run_selected_checks(verification.select(["capture/engine/tests/process.rs"]))
+                verification.run_selected_checks(verification.select(["engine/core/tests/process.rs"]))
         self.assertEqual(len(commands), 1)
-        self.assertIn("capture/engine/Cargo.toml", commands[0])
+        self.assertIn("engine/core/Cargo.toml", commands[0])
 
     def test_engine_source_failure_stops_before_selected_root_compile(self):
         commands = []
-        selection = verification.select(["capture/engine/src/session.rs"])
-        self.assertTrue(selection["root"])
+        selection = verification.select(["engine/core/src/session.rs"])
+        self.assertFalse(selection["root"])
         self.assertTrue(selection["engine"])
 
         def fail_package(command, **kwargs):
             if command[0] == "cargo":
                 commands.append(command)
-            if "cargo" in command and "capture/engine/Cargo.toml" in command:
+            if "cargo" in command and "engine/core/Cargo.toml" in command:
                 if command not in commands:
                     commands.append(command)
                 raise subprocess.CalledProcessError(9, command)
@@ -1034,7 +1043,7 @@ class SelectionTests(unittest.TestCase):
                 verification.run_selected_checks(selection)
         self.assertEqual(failure.exception.returncode, 9)
         self.assertEqual(len(commands), 1)
-        self.assertIn("capture/engine/Cargo.toml", commands[0])
+        self.assertIn("engine/core/Cargo.toml", commands[0])
         self.assertNotIn("--", commands[0])
 
     def test_directory_width_hook_contracts_follow_their_input_closure(self):
@@ -1067,7 +1076,7 @@ class SelectionTests(unittest.TestCase):
     def test_unknown_shared_build_security_lifecycle_and_tooling_broaden(self):
         for path in ["new-owner/foo.rs", "Cargo.toml", "Cargo.lock", "build.rs",
                      "assets/icon.png", "src/ui/recording_completion.rs", "src/handoff.rs",
-                     "capture/engine/src/session.rs", "capture/desktop/native/Settings.swift",
+                     "capture/engine/runtime/recording/recorder.rs", "capture/desktop/native/Settings.swift",
                      "enablement/verification.py", ".githooks/pre-push",
                      ".github/workflows/verification.yml", "connect/service/src/auth.ts"]:
             with self.subTest(path=path):
@@ -1186,7 +1195,7 @@ class SelectionTests(unittest.TestCase):
             commands = [call.args[0] for call in run.call_args_list]
             self.assertTrue(any("build" in c for c in commands))
             self.assertTrue(any("capture::" in c for c in commands))
-            self.assertFalse(any("capture/engine/Cargo.toml" in c for c in commands))
+            self.assertFalse(any("engine/core/Cargo.toml" in c or "engine/Cargo.toml" in c for c in commands))
             self.assertFalse(any("test" in c and "capture::" not in c for c in commands))
         result.stdout = "test result: ok. 0 passed; 0 failed; 90 filtered out\n"
         with patch.object(verification.subprocess, "run", return_value=result):
