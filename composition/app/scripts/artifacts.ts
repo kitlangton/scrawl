@@ -31,18 +31,30 @@ export async function readStream(directory: string) {
   assert.equal(digest(await readRegular(join(directory, manifest.entry))), manifest.sha256, 'Stream checksum mismatch');
   return manifest;
 }
-export const shellFiles = ['main.cjs', 'renderer.js', 'index.html', 'style.css', 'package.json',
+export const shellFiles = ['main.cjs', 'owner-binding.mjs', 'preload.cjs', 'renderer.js', 'index.html', 'style.css', 'package.json',
   'vendor/react.js', 'vendor/jsx.js', 'vendor/dom.js'];
 export type ShellManifest = { schemaVersion: 1; shellApi: 1; reactVersion: string; files: Record<string, string> };
 export async function readShell(directory: string): Promise<ShellManifest> {
-  await exactFiles(directory, [...shellFiles, 'manifest.json']);
+  let hasConfigHost = false;
+  try { hasConfigHost = (await lstat(join(directory, 'native/apparent-config-host'))).isFile(); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  const ownerAssets = ['assets/apparent-app-icon.svg', 'assets/frog.png'];
+  const ownerAssetStates = await Promise.all(ownerAssets.map(async name => {
+    try { await lstat(join(directory, name)); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; return false; }
+  }));
+  if (ownerAssetStates.some(Boolean) && !ownerAssetStates.every(Boolean)) throw new Error('Incomplete Onboarding assets');
+  const hasOwnerAssets = ownerAssetStates.every(Boolean);
+  assert.equal(hasOwnerAssets, hasConfigHost, 'Onboarding binding and its native helper/assets must be assembled together');
+  const expectedNames = [...shellFiles, ...(hasConfigHost ? ['native/apparent-config-host'] : []), ...(hasOwnerAssets ? ownerAssets : []), 'manifest.json'];
+  await exactFiles(directory, expectedNames);
   const manifest = JSON.parse((await readRegular(join(directory, 'manifest.json'))).toString()) as ShellManifest;
   assert.deepEqual(Object.keys(manifest).sort(), ['files', 'reactVersion', 'schemaVersion', 'shellApi']);
   assert.equal(manifest.schemaVersion, 1, 'Unsupported shell manifest');
   assert.equal(manifest.shellApi, APP_SHELL_API, 'Incompatible shell API');
   assert.equal(manifest.reactVersion, REACT_VERSION, 'Incompatible React runtime');
-  assert.deepEqual(Object.keys(manifest.files).sort(), [...shellFiles].sort(), 'Invalid shell file inventory');
-  for (const name of shellFiles) {
+  assert.deepEqual(Object.keys(manifest.files).sort(), expectedNames.filter(name => name !== 'manifest.json').sort(), 'Invalid shell file inventory');
+  for (const name of expectedNames.filter(name => name !== 'manifest.json')) {
     assert.equal(digest(await readRegular(join(directory, name))), manifest.files[name], 'Shell checksum mismatch');
   }
   return manifest;

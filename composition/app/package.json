@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/assembly.test.ts tests/host.test.ts",
+    "test": "node --experimental-strip-types --test tests/assembly.test.ts tests/host.test.ts tests/onboarding-progress-bridge.test.ts",
     "check": "npm --prefix ../../shared/contracts run build && npm --prefix ../../shared/contracts run typecheck && npm --prefix ../../shared/contracts test && node scripts/check-installed.ts && npm run typecheck && npm test",
     "build:shell": "node scripts/build.ts shell",
     "assemble": "node scripts/assemble.ts dist/shell dist/app",
@@ -14,7 +14,8 @@
     "prestart": "npm run prepare:electron",
     "start": "electron dist/app",
     "package": "node scripts/package.ts dist/app dist/packages",
-    "test:electron": "node --experimental-strip-types --test tests/electron.test.ts"
+    "test:electron": "node --experimental-strip-types --test tests/electron.test.ts",
+    "test:electron:onboarding": "node --experimental-strip-types --test tests/onboarding-bridge.electron.test.ts"
   },
   "dependencies": {
     "@apparent/app-contracts": "file:../../shared/contracts",
