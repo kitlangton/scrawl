@@ -8,7 +8,7 @@ test("homepage header links to the repository with an honest star-count fallback
   const header = html.match(/<header\b[^>]*>([\s\S]*?)<\/header>/)?.[1] ?? ""
   assert.match(header, /class="github-stars"/)
   assert.match(header, /href="https:\/\/github.com\/tryapparent\/apparent"/)
-  assert.match(header, /aria-label="Star Apparent on GitHub"/)
+  assert.match(header, /aria-label="Star apparent on GitHub"/)
   assert.match(header, />GitHub<\/span>/)
   assert.doesNotMatch(header, />0<\/span>/, "unknown counts must not pretend to be zero")
 })
