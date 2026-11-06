@@ -9,8 +9,8 @@ const args = new Set(process.argv.slice(2))
 for (const arg of args) if (!['--installed', '--install-browser'].includes(arg)) throw new Error(`Unknown argument: ${arg}`)
 const cwd = fileURLToPath(new URL('../../', import.meta.url))
 const env: NodeJS.ProcessEnv = { ...process.env, APPARENT_PUBLIC_SITE: '1' }
-function run(command: string, commandArgs: string[]): void {
-  const result = spawnSync(command, commandArgs, { cwd, env, stdio: 'inherit' })
+function run(command: string, commandArgs: string[], extraEnv: Record<string, string> = {}): void {
+  const result = spawnSync(command, commandArgs, { cwd, env: { ...env, ...extraEnv }, stdio: 'inherit' })
   if (result.error) throw result.error
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
@@ -23,6 +23,9 @@ if (args.has('--install-browser')) env.CHROME_PATH = await installPublicBrowsers
 
 run('npm', ['run', 'build'])
 run('node', ['scripts/site-build/package-apparent.ts'])
+run('node', ['../../shared/ui/test/appearance.mjs'], {
+  PUBLIC_THEME_ARTIFACT: 'public/site/dist-apparent', THEME_SURFACES: 'public',
+})
 run('npm', ['run', 'build:pages-worker'])
 env.PAGES_WORKER = 'dist-apparent/_worker.js'
 run('node', ['--test', 'scripts/pages/test-pages-video-runtime.ts'])

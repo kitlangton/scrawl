@@ -152,6 +152,15 @@ function fingerprint(root: string, owner: Owner, target: Target, revision = 'HEA
   return createHash('sha256').update(JSON.stringify({ source, environment: environmentDigest(owner), node: process.version, imageOS, imageVersion, platform: platform(), arch: arch(), target, ...(supportsPrCandidate(owner.id, target) && owner.language === 'native' ? { native: nativeBuildIdentity() } : {}), ...(['app-shell', 'onboarding'].includes(owner.id) ? { packaging: packageBuildEnvironment(process.env, owner.id === 'app-shell') } : {}), ...(owner.id === 'engine-media-native' ? { media: mediaBuildIdentity() } : {}) })).digest('hex')
 }
 export function sourceDigest(root: string, owner: Owner, revision = 'HEAD'): string { return trackedInputs(root, owner, revision).digest }
+/** Compare committed inputs, never a checkout or an artifact-supplied digest alone. */
+export function prInputsMatch(root: string, owner: Owner, testedSha: string, testedBase: string, landedBase: string): boolean {
+  try {
+    if (![testedSha, testedBase, landedBase].every(sha => /^[a-f0-9]{40}$/.test(sha))) return false
+    if (git(root, ['rev-parse', `${testedSha}^1`]).trim() !== testedBase) return false
+    git(root, ['merge-base', '--is-ancestor', testedBase, landedBase])
+    return sourceDigest(root, owner, testedSha) === sourceDigest(root, owner)
+  } catch { return false }
+}
 export function environmentDigest(owner: Owner, env = process.env): string { return createHash('sha256').update(JSON.stringify([...(owner.environment ?? [])].sort().map(key => [key, env[key] ?? '']))).digest('hex') }
 export function inputDigest(root: string, owner: Owner, target: Target = owner.targets[0]): string { return fingerprint(root, owner, target) }
 export function makePlan(root: string) {
@@ -320,6 +329,7 @@ export function reusePayload(root: string, owner: Owner, target: Target, zip: st
   const original = JSON.parse(execFileSync('unzip', ['-p', zip, 'receipt.json'], { encoding: 'utf8', maxBuffer: 16384 }))
   if (!/^[1-9][0-9]*$/.test(priorRunId) || !/^[1-9][0-9]*$/.test(priorAttempt) || original.runId !== priorRunId || original.runAttempt !== priorAttempt) throw new Error('Prior receipt run does not match admission')
   if (original.schema !== 1 || original.id !== owner.id || original.target !== target || original.stage !== owner.stage || original.inputDigest !== digest || original.sourceSha !== priorSha || !/^[0-9a-f]{64}$/.test(original.sha256) || !Number.isSafeInteger(original.size) || original.size <= 0) throw new Error('Prior receipt does not match admission')
+  if (supportsPrCandidate(owner.id, target) && original.sourceDigest !== sourceDigest(root, owner)) throw new Error('Component source changed since admission')
   if (owner.stage === 'website' && (original.sourceDigest !== sourceDigest(root, owner) || original.environmentDigest !== environmentDigest(owner, env))) throw new Error('Website source or environment changed since admission')
   const output = outsideCheckout(root, outputDir)
   mkdirSync(output, { recursive: true }); requireNoSymlink(output)

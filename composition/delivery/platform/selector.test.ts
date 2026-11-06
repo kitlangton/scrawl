@@ -14,7 +14,7 @@ test('maps owned inputs, shared inputs, broad inputs and unknown paths', () => {
   assert.deepEqual(selectComponents(null), ['platform-config', 'platform-resources', 'app-shell'])
   assert.deepEqual(selectComponents(['composition/config/a.ts']), ['platform-config'])
   assert.deepEqual(selectComponents(['shared/resources/a.ts']), ['platform-resources'])
-  assert.deepEqual(selectComponents(['composition/app/a.ts']), ['app-shell'])
+  for (const path of ['composition/app/a.ts', 'enablement/native/owned-processes.ts', '.github/workflows/verification-platform.yml']) assert.deepEqual(selectComponents([path]), ['app-shell'])
   assert.deepEqual(selectComponents(['shared/contracts/a.ts']), ['platform-config', 'app-shell'])
   assert.deepEqual(selectComponents(['.cargo/config.toml']), ['platform-config', 'platform-resources'])
   assert.deepEqual(selectComponents(['shared/ui/button.tsx']), ['app-shell'])
