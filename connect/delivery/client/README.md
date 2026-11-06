@@ -201,6 +201,14 @@ the stable empty lock file, but never writes queue JSON. This library reader doe
 not route installed status commands. Renewal-journal recovery and production state adoption remain with the
 parent migration; Rust remains the sole active writer.
 
+`projectUploadFailure` maps bounded structured root/descendant error facts to the
+existing queue transition codes and allowlisted diagnostic stage/reason values.
+Root and cause precedence match the donor. It never returns source messages;
+only the existing optional `sizeFailure` queue field retains its asset path.
+The caller supplies error facts; this function does not traverse arbitrary errors,
+persist a result, log diagnostics or run a worker. `completeUpload` remains the
+existing owner of guarded retry, waiting and terminal transition proposals.
+
 The `./recipient-command` export prepares headless fetch/remote-inspect behavior
 and invokes the verified retrieval API through injected credential/publication
 boundaries. Explicit local sources remain local. Successful results require a

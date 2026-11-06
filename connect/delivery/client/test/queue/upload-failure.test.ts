@@ -46,6 +46,18 @@ test("stage and reason overwrite in outer-to-inner order; IO is only an unclassi
   assert.equal(projectUploadFailure(facts("x", [
     { message: "Invalid asset reference", ioKind: "not_found" },
   ])).diagnostic.reason, "asset_reference");
+  assert.deepEqual(projectUploadFailure(facts("private-path token", [], { ioKind: "permission_denied" })).diagnostic,
+    { stage: "upload", reason: "io_permission" });
+});
+
+test("diagnostic maps refuse inherited property names and include the root error", () => {
+  for (const message of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    assert.deepEqual(projectUploadFailure(facts(message, [{ message }])).diagnostic,
+      { stage: "upload", reason: "unclassified" });
+  }
+  assert.deepEqual(projectUploadFailure(facts("encryption_snapshot_failed")).diagnostic,
+    { stage: "snapshot", reason: "unclassified" });
+  assert.equal(projectUploadFailure(facts("unsupported_asset encryption_snapshot_failed")).error, "unsupported_asset");
 });
 
 test("result classification preserves donor precedence and never returns source messages", () => {

@@ -19,9 +19,8 @@ export type DiagnosticReason =
 
 export interface UploadCauseFact { message: string; ioKind?: "permission_denied" | "not_found" | "invalid_input" | "other" }
 export interface SizeFailureFact { path: string; size: number; limit: number }
-export interface UploadErrorFacts {
-  message: string;
-  /** Causes are ordered outermost to innermost, matching Error.cause traversal. */
+export interface UploadErrorFacts extends UploadCauseFact {
+  /** Descendant causes, outermost to innermost. The root is `message` above. */
   causes: readonly UploadCauseFact[];
   sizeFailure?: SizeFailureFact;
 }
@@ -64,7 +63,7 @@ function malformed(): never { throw new Error("invalid_upload_error_facts"); }
 
 function validate(facts: UploadErrorFacts): void {
   if (!facts || typeof facts !== "object" || !text(facts.message) || !Array.isArray(facts.causes) || facts.causes.length > MAX_CAUSES) malformed();
-  for (const cause of facts.causes) {
+  for (const cause of [facts, ...facts.causes]) {
     if (!cause || typeof cause !== "object" || !text(cause.message) ||
       (cause.ioKind !== undefined && !["permission_denied", "not_found", "invalid_input", "other"].includes(cause.ioKind))) malformed();
   }
@@ -77,7 +76,7 @@ function validate(facts: UploadErrorFacts): void {
 
 function resultCode(f: UploadErrorFacts): UploadErrorCode {
   if (f.sizeFailure !== undefined) return "file_too_large";
-  if (f.causes.some(c => c.message.startsWith("unsupported_asset"))) return "unsupported_asset";
+  if (f.message.startsWith("unsupported_asset") || f.causes.some(c => c.message.startsWith("unsupported_asset"))) return "unsupported_asset";
   const message = f.message;
   if (message.includes("encryption_pending_recipient")) return "encryption_pending_recipient";
   if (message.includes("encryption_") || message.includes("encrypted_")) return "encryption_action_required";
@@ -91,9 +90,9 @@ function resultCode(f: UploadErrorFacts): UploadErrorCode {
 function diagnostic(f: UploadErrorFacts): { stage: DiagnosticStage; reason: DiagnosticReason } {
   let stage: DiagnosticStage = "upload";
   let reason: DiagnosticReason = "unclassified";
-  for (const cause of f.causes) {
-    stage = stages[cause.message] ?? stage;
-    reason = reasons[cause.message] ?? reason;
+  for (const cause of [f, ...f.causes]) {
+    if (Object.hasOwn(stages, cause.message)) stage = stages[cause.message]!;
+    if (Object.hasOwn(reasons, cause.message)) reason = reasons[cause.message]!;
     if (reason === "unclassified" && cause.ioKind) {
       reason = ({ permission_denied: "io_permission", not_found: "io_not_found", invalid_input: "io_invalid_input", other: "io_other" } as const)[cause.ioKind];
     }
