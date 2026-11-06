@@ -14,10 +14,11 @@
     "dev": "tsc --watch",
     "prepack": "npm run build",
     "pretest": "npm run build",
-    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts test/recipient/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "pack": "npm pack --dry-run"
+    "pack": "npm pack --dry-run",
+    "test:service": "node --experimental-strip-types --test test/integration/service.test.ts"
   },
   "dependencies": {
     "age-encryption": "0.3.1",

@@ -8,9 +8,9 @@ import { AbsentDestinationAllocator, SqliteCaptureMappingStore } from '@apparent
 import type { Capture2Host, Capture2Receipt } from '@apparent/record/host/capture2';
 import { createCapture2Host } from '@apparent/record/host/capture2';
 import type { CaptureRequest, CaptureResponse, CaptureTransport } from '@apparent/engine-sdk/capture';
-import { controlCapture2, parseCapture2ControlArgs, parseCapture2RecordArgs, recordWithCapture2, retainPublicIdentity, type Capture2Clock, type Capture2HostFactory } from '../src/recording/capture2.ts';
+import { controlCapture2, discoverCapture2Sources, parseCapture2ControlArgs, parseCapture2RecordArgs, parseCapture2SourcesArgs, recordWithCapture2, retainPublicIdentity, type Capture2Clock, type Capture2HostFactory } from '../src/recording/capture2.ts';
 
-const source = { id: 'display-actual', generation: 'generation-1', kind: 'display' as const, displayId: 0, bounds: { x: 0, y: 0, width: 800, height: 600, scale: 1 } };
+const source = { id: 'display-actual', generation: 'a'.repeat(32), kind: 'display' as const, displayId: 0, bounds: { x: 0, y: 0, width: 800, height: 600, scale: 1 } };
 const args = (out: string, ...extra: string[]) => ['--protocol', 'capture2', '--duration', '1', '--out', out, '--source', source.id, ...extra];
 function fixtureHost(out: string, outcome: 'publication-processing' | 'publication-materials-ready' | 'materials-ready' | 'unavailable' | 'unknown-source' | 'start-fails' = 'publication-processing', sleepHook?: () => void, closeOutcome = 'eof-exited') {
   const calls: Array<{ method: string; input?: unknown }> = [];
@@ -49,6 +49,37 @@ test('capture/2 requires explicit protocol, exact destination and source selecto
   assert.deepEqual(parseCapture2ControlArgs(['--protocol', 'capture2', 'inspect', 'id']), { method: 'inspect', requestId: 'id' });
   for (const invalid of [['inspect', 'id'], ['--protocol', 'capture-v1', 'inspect', 'id'], ['--protocol', 'capture2', '--protocol', 'capture2'], ['--protocol', 'capture2', 'inspect', 'id', '--protocol']])
     assert.throws(() => parseCapture2ControlArgs(invalid));
+});
+
+test('capture/2 source args reject invalid options before transport creation', () => {
+  assert.deepEqual(parseCapture2SourcesArgs([]), { json: false });
+  assert.deepEqual(parseCapture2SourcesArgs(['--json']), { json: true });
+  for (const invalid of [['--bad'], ['--json', '--json'], ['source'], ['--out', '/tmp/a']]) assert.throws(() => parseCapture2SourcesArgs(invalid));
+});
+
+test('capture/2 sources uses the validated SDK handshake/discovery and closes without Record authority', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-capture2-sources-'));
+  try {
+    const runtime = join(root, 'runtime'), executable = join(root, 'engine');
+    await mkdir(runtime, { mode: 0o700 }); await writeFile(executable, 'fixture', { mode: 0o700 });
+    const requests: string[] = []; let closed = false;
+    const transport = {
+      async request(request: { method: string; rpcId: string }) {
+        requests.push(request.method);
+        const result = request.method === 'handshake'
+          ? { channel: 'capture', protocolVersion: 2, implementation: 'native', readiness: 'ready', capabilities: { sourceDiscovery: true, displayCapture: true, areaCapture: false, audioCapture: false, contextFacts: false, interactionFacts: false, candidates: false, transcript: false, strokes: false, publication: false, retainedMaterials: true } }
+          : { state: 'available', sources: [source] };
+        return { channel: 'capture', protocolVersion: 2, rpcId: request.rpcId, result };
+      },
+      async close() { closed = true; return 'eof-exited' as const; },
+    };
+    const output: string[] = [], originalWrite = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array) => { output.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString()); return true; }) as typeof process.stdout.write;
+    try { assert.equal(await discoverCapture2Sources(['--json'], { executable, runtime, transportFactory: () => transport }), 0); }
+    finally { process.stdout.write = originalWrite; }
+    assert.deepEqual(requests, ['handshake', 'discoverSources']); assert.equal(closed, true);
+    assert.deepEqual(JSON.parse(output.join('')), { state: 'available', sources: [source], transportClose: 'eof-exited' });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('capture/2 readiness and fresh source discovery fail before start', async () => {

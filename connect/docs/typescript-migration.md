@@ -10,10 +10,24 @@ remain the hosted runtime. Cross-module consumers use published contracts.
 
 The first replacement checkpoint moves the adopted account/crypto package to
 `connect/delivery/client` and registers its independent value-stream artifact.
-Desktop still consumes the same emitted controller. The hosted service, viewer,
-remaining Rust state/queue/CLI and their production consumers remain migration
-work; this checkpoint does not establish whole-Connect independence. Subsequent
+Desktop still consumes the same emitted controller. The service, viewer and
+independent browser delivery are TypeScript; the canonical combined Worker at
+`app.tryapparent.com/connect` has verified live sign-in and shared-link management.
+The remaining Rust state/queue/CLI and their production consumers remain migration
+work; this does not establish whole-Connect independence. Subsequent
 slices must adopt those callers, preserve one writer and retire replaced donors.
+
+The TypeScript recipient boundary now decodes bounded raw JSON without duplicate
+keys, validates signed envelopes, decrypts bounded age streams through final EOF,
+and checks inner manifests, content hashes and bundle references. This is an
+in-memory integrity capability. The authenticated recipient retrieval API now
+uses bounded bearer-only HTTP, resolves the current read identity and approved
+upload sender from the service peer registry, pins context, verifies downloaded
+bytes and rechecks sender authorization after decryption. It has explicit legacy
+plaintext opt-in and supports grouped evidence-only reads. It is not a credential
+store or filesystem publisher. The migration-only Rust producer
+interop lane exercises the same boundary; installed retrieval still uses the
+Rust client until transport, durable state and safe publication are adopted.
 
 
 Read with [hosted-client.md](hosted-client.md), [hosted-api.md](hosted-api.md),

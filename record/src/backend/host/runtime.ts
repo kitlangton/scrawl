@@ -35,6 +35,19 @@ export interface RecordHostRuntime {
   dispose(): OwnershipReport;
 }
 
+/** Structural runtime seam shared by the existing v1 runtime and host adapters. */
+export interface RecordHostRuntimePort extends Pick<RecordHostRuntime,
+  "startup" | "state" | "subscribe" | "dispatch" | "reconcileStartup" | "unresolvedOwnership" | "dispose"> {
+  /** Optional adapter facts for runtimes that can retain multiple public requests. */
+  captures?(): readonly RecordState[];
+  completionEligibleCaptureIds?(): readonly string[];
+  canStartCapture?(): boolean;
+}
+export type RecordStartOutcome = "accepted" | "refused" | "outcome-unknown";
+export interface RecordCapture2StartPort {
+  startCapture(requestId: string): Promise<{ state: RecordState; outcome: RecordStartOutcome }>;
+}
+
 /** Composes Record host storage around an SDK client constructed and owned by its caller. */
 export async function createRecordHostRuntime(
   sdk: EngineSdkPort,
