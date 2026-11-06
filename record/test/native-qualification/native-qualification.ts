@@ -16,7 +16,7 @@ export async function runBounded(command: string, args: string[], timeoutMs: num
     child.once('error', reject);
     child.once('close', (code, signal) => { if (timedOut) return; code === 0 ? resolve() : reject(new Error(`${command} failed (${signal ?? code}): ${stderr}`)); });
   });
-  let timer: ReturnType<typeof setTimeout>;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       timedOut = true;
@@ -58,10 +58,39 @@ export async function reconcileAndCancel(mappings: any, client: any, deadline: n
       await client.cancel(owned);
       while (Date.now() < deadline) {
         status = await client.inspect(owned);
-        if (['cancelled', 'saved', 'failed'].includes(status.state)) break;
+        if (['cancelled', 'saved', 'failed', 'materials-ready'].includes(status.state)) break;
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       if (!['cancelled', 'saved', 'materials-ready'].includes(status.state)) throw new Error('capture cancellation did not reach authoritative terminal state');
     }
+  }
+}
+
+/** Linux qualification owns a process group so its hard deadline also covers descendants. */
+export async function runQualification(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }): Promise<{ stdout: string; stderr: string }> {
+  const child = spawn(command, args, { cwd: options.cwd, env: options.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '', failure: Error | undefined;
+  const signal = (value: NodeJS.Signals) => {
+    if (!child.pid) return;
+    try { process.kill(-child.pid, value); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+  };
+  let escalation: ReturnType<typeof setTimeout> | undefined;
+  const abort = (error: Error) => {
+    failure ??= error;
+    signal('SIGTERM');
+    escalation ??= setTimeout(() => signal('SIGKILL'), 500);
+  };
+  const timer = setTimeout(() => abort(new Error('native qualification deadline exceeded')), options.timeout);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.stdout.setEncoding('utf8').on('data', value => { stdout += value; if (stdout.length > 8 * 1024 * 1024) abort(new Error('qualification output limit')); });
+      child.stderr.setEncoding('utf8').on('data', value => { stderr += value; if (stderr.length > 8 * 1024 * 1024) abort(new Error('qualification output limit')); });
+      child.once('error', reject);
+      child.once('close', code => failure ? reject(failure) : code === 0 ? resolve() : reject(new Error('native qualification failed: ' + stderr)));
+    });
+    return { stdout, stderr };
+  } finally {
+    clearTimeout(timer); clearTimeout(escalation);
+    signal('SIGKILL'); // Includes descendants left after an early parent exit.
   }
 }

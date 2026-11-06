@@ -35,3 +35,24 @@ test('hung media probe fails within its deadline and terminates its child', asyn
   await assert.rejects(runBounded('sleep', ['30'], 50), /deadline exceeded/);
   assert.ok(Date.now() - started < 2000);
 });
+
+test('qualification hard deadline terminates a TERM-resistant descendant group', async t => {
+  if (process.platform !== 'linux') { t.skip('Linux Xvfb process-group qualification'); return; }
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { runQualification } = await import('./native-qualification.ts');
+  const root = await mkdtemp(join(tmpdir(), 'record-deadline-'));
+  const pidFile = join(root, 'child.pid');
+  try {
+    const descendant = 'require("node:fs").writeFileSync(process.argv[1], String(process.pid));process.on("SIGTERM",()=>{});setInterval(()=>{},1000)';
+    const supervisor = 'require("node:child_process").spawn(process.execPath,["-e",process.argv[1],process.argv[2]],{stdio:"ignore"});process.on("SIGTERM",()=>{});setInterval(()=>{},1000)';
+    await assert.rejects(runQualification(execPath, ['-e', supervisor, descendant, pidFile], { cwd: root, env: process.env, timeout: 1000 }), /deadline exceeded/);
+    const pid = Number(await readFile(pidFile, 'utf8'));
+    const status = await readFile('/proc/' + pid + '/stat', 'utf8').catch(error => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    assert.ok(status === undefined || status.slice(status.lastIndexOf(')') + 2).startsWith('Z'), 'owned descendant must be exited, not running');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { runQualification } from './native-qualification/native-qualification.ts';
 
 const run = promisify(execFile);
 const scratch = await mkdtemp(path.join(tmpdir(), 'record-packed-'));
@@ -178,7 +179,7 @@ try {
     const capture2 = path.join(scratch, 'capture2');
     await initConsumer(capture2);
     await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact], { cwd: capture2 });
-    const capture2Result = await run(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
+    const capture2Result = await runQualification(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
       import assert from 'node:assert/strict';
       import {createHash} from 'node:crypto';
       import {spawn} from 'node:child_process';
@@ -331,7 +332,7 @@ try {
           if(previousWayland===undefined)delete process.env.WAYLAND_DISPLAY;else process.env.WAYLAND_DISPLAY=previousWayland;
         }
       }
-    `], { cwd: capture2, timeout: 240000, killSignal: 'SIGTERM', env: { ...process.env, APPARENT_CAPTURE2_PAYLOAD: admittedPayload, APPARENT_CAPTURE2_ARCHIVE: archive, APPARENT_QUALIFICATION_HELPERS: path.join(root, 'test/native-qualification/native-qualification.ts') } });
+    `], { cwd: capture2, timeout: 240000, env: { ...process.env, APPARENT_CAPTURE2_PAYLOAD: admittedPayload, APPARENT_CAPTURE2_ARCHIVE: archive, APPARENT_QUALIFICATION_HELPERS: path.join(root, 'test/native-qualification/native-qualification.ts') } });
     process.stdout.write(capture2Result.stdout);
   }
   const sdkDeclarations = path.join(publication, 'consumer.ts');
