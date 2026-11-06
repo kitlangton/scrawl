@@ -121,9 +121,12 @@ try {
     import {CaptureClient, preflightCapturePublication} from '@apparent/engine-sdk/capture';
     import {ReferenceCapturePeer} from '@apparent/engine-sdk/capture/testing';
     import {createRecordPublicationRecovery, createCompletedCapturePublisher, prepareRecordPublication} from '@apparent/record/publication';
+    import {createCapture2Host} from '@apparent/record/host/capture2';
     const client = new CaptureClient(new ReferenceCapturePeer(), {allowTestDouble:true});
+    assert.equal((await client.handshake()).readiness, 'unavailable');
     const recovery = createRecordPublicationRecovery(client, process.cwd() + '/unused-private-root', preflightCapturePublication);
     assert.equal(typeof recovery.publish, 'function');
+    assert.equal(typeof createCapture2Host, 'function');
     assert.equal(typeof prepareRecordPublication, 'function');
     assert.equal(typeof createCompletedCapturePublisher, 'function');
     assert.equal(typeof createCompletedCapturePublisher(client, process.cwd() + '/unused-private-root', preflightCapturePublication).publishCompletedCapture, 'function');
@@ -135,15 +138,19 @@ try {
   const sdkDeclarations = path.join(publication, 'consumer.ts');
   await writeFile(sdkDeclarations, `
     import {preflightCapturePublication, type CaptureClient} from '@apparent/engine-sdk/capture';
+    import {createCapture2Host, type Capture2Host, type Capture2StartIntent} from '@apparent/record/host/capture2';
     import {createCompletedCapturePublisher, createRecordPublicationRecovery, prepareRecordPublication, type CompletedCapturePublisher, type PublishCompletedCaptureInput, type ReconcileCompletedCaptureInput} from '@apparent/record/publication';
     declare const client: CaptureClient;
+    declare const host: Capture2Host;
+    declare const intent: Capture2StartIntent;
+    const capture: ReturnType<Capture2Host['start']> = host.start(intent);
     const recovery = createRecordPublicationRecovery(client, '/private/control', preflightCapturePublication);
     const result: ReturnType<CaptureClient['publish']> = recovery.publish({} as Parameters<CaptureClient['publish']>[0]);
     const stage: (input: Parameters<typeof prepareRecordPublication>[0]) => Promise<import('@apparent/record/publication').PreparedRecordPublication> = prepareRecordPublication;
     const publisher = createCompletedCapturePublisher(client, '/private/control', preflightCapturePublication);
     const publish: (input: PublishCompletedCaptureInput) => ReturnType<CompletedCapturePublisher['publishCompletedCapture']> = publisher.publishCompletedCapture;
     const reconcile: (input: ReconcileCompletedCaptureInput) => ReturnType<CompletedCapturePublisher['reconcile']> = publisher.reconcile;
-    void result; void stage; void publish; void reconcile;
+    void result; void stage; void publish; void reconcile; void capture;
   `);
   await run(process.execPath, [tsc, '--noEmit', '--strict', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', sdkDeclarations], { cwd: publication });
 } finally {

@@ -65,7 +65,7 @@ export async function createRecordHostRuntime(
     reconciliation = "pending";
     const work = (async (): Promise<HostStartupState> => {
       let requestIds: string[];
-      try { requestIds = await mappings.listRequestIds(); }
+      try { requestIds = await mappings.listRequestIds("v1"); }
       catch {
         const blocked = freezeStartup({ state: "blocked", knownRequestIds: startup.knownRequestIds,
           unresolved: startup.knownRequestIds.map(requestId => ({ requestId, state: "unknown" })), storageUnavailable: true });

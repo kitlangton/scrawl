@@ -63,7 +63,7 @@ export interface SdkReceipt {
  */
 export interface CaptureMappingStore {
   /** Lists public Record identities only; SDK IDs and owner tokens stay private. */
-  listRequestIds(): Promise<string[]>;
+  listRequestIds(protocol?: "v1" | "capture2"): Promise<string[]>;
   getByRequestId(requestId: string): Promise<CaptureMapping | undefined>;
   getByCaptureId(captureId: string): Promise<CaptureMapping | undefined>;
   putIfAbsent(mapping: CaptureMapping): Promise<CaptureMapping>;
@@ -75,6 +75,8 @@ export interface CaptureMapping {
   ownerToken: string;
   bundleId: string;
   bundlePath: string;
+  /** Immutable capture/2 intent; absent on legacy v1 rows. */
+  capture2Intent?: string;
 }
 
 export interface BundleAllocation {
@@ -282,7 +284,7 @@ export class EngineSdkAdapter implements RecordEngineClient {
   #remember(mapping: CaptureMapping, requestId: string): CaptureMapping {
     if (mapping.requestId !== requestId ||
       !idPattern.test(mapping.captureId) ||
-      !tokenPattern.test(mapping.ownerToken) || !mapping.bundleId || !mapping.bundlePath)
+      !tokenPattern.test(mapping.ownerToken) || !mapping.bundleId || !mapping.bundlePath || mapping.capture2Intent !== undefined)
       throw new Error("invalid mapping");
     const prior = this.#mappingByCaptureId.get(mapping.captureId);
     const priorRequest = this.#mappingByRequestId.get(requestId);
