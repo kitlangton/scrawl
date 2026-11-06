@@ -54,7 +54,7 @@ function fixture(options: {
       return { status: "applied" as const, rgb: structuredClone(rgb) };
     },
   };
-  const nativeHost = { async readSnapshot() { return { api: 1, processEpoch: options.snapshotEpoch ?? epoch,
+  const nativeHost = { async readSnapshot() { return { api: 1 as const, processEpoch: options.snapshotEpoch ?? epoch,
     revision: options.snapshotRevision ?? revision, scope: "running-desktop-process" as const }; } };
   return {
     port: createRecordPenConfigPort({ config: configPort, nativePen, nativeHost }),
