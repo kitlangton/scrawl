@@ -220,3 +220,38 @@ composition; qualify native window and clipboard boundaries and legacy-writer
 compatibility; then complete delivery/adoption under existing explicit gates.
 This Record-only slice does not include Onboarding factory, journey, adoption or
 activation work.
+
+## Privileged Record provider assembly
+
+`createRecordNativeBindings` in `src/record/native-bindings.ts` composes the
+published NativeHost, NativePen, NativeClipboard and Record-owned config adapters.
+Trusted composition supplies the admitted config helper path/hash, the same
+config path used by the running native GUI, required permission IDs from Record
+policy, and a resolver for an exact authenticated Saved capture/artifact pair.
+It fixes the clipboard limit to the active public producer constant. It never
+starts the GUI, chooses permission policy, formats handoff text, creates a second
+config writer or treats a clipboard dispatch as success. Closing this binding
+only closes its own config backend.
+
+`createRecordProviderHost` in `src/record/provider-host.ts` constructs the real
+Record capability provider around those ports and the caller's published Record
+runtime. Its `RecordHostServices` result plugs directly into the trusted
+`createRecordHostServices` build binding. The caller transfers exclusive runtime
+command/observation ownership on success and supplies an idempotent cleanup for
+its owned Engine resources. Authenticated output facts remain supplied by Record;
+omitting them leaves output unavailable.
+
+The host counts queued and in-flight commands and atomically closes admission
+before cleanup. Both the native ownership report (complete reconciliation,
+readable storage, no unresolved IDs) and Record's authoritative capture and
+shortcut-reservation facts must allow shutdown. It never derives clearance from
+a renderer snapshot. Cleanup advances by named stages; uncertain provider
+disposal blocks further release, and failed Engine cleanup cannot claim closure.
+Observation-only client detach does not dispose the runtime or cancel capture.
+Configured output-fact producers are reread before close admission; pending,
+unavailable or active facts cannot be cleared by the provider's initial snapshot.
+The packaged provider test uses the real public Record provider and synthetic
+native/Engine producers to verify reconciliation refusal, renderer refresh and
+ordered one-time cleanup through the shipped Electron bridge on both CI targets.
+These assembly APIs do not select an installed executable, authenticate a Saved
+artifact, enable an installed route or clear native product acceptance gates.

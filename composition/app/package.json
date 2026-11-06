@@ -14,9 +14,9 @@
     "prestart": "npm run prepare:electron",
     "start": "electron dist/app",
     "package": "node scripts/package.ts dist/app dist/packages",
-    "test:electron": "node --experimental-strip-types --test --test-concurrency=1 tests/electron.test.ts tests/record-bridge.electron.test.ts",
+    "test:electron": "node --experimental-strip-types --test --test-concurrency=1 tests/electron.test.ts tests/record-bridge.electron.test.ts tests/record-provider.electron.test.ts",
     "test:electron:onboarding": "node --experimental-strip-types --test tests/onboarding-bridge.electron.test.ts",
-    "test:electron:record": "node --experimental-strip-types --test tests/record-bridge.electron.test.ts"
+    "test:electron:record": "node --experimental-strip-types --test --test-concurrency=1 tests/record-bridge.electron.test.ts tests/record-provider.electron.test.ts"
   },
   "dependencies": {
     "@apparent/app-contracts": "file:../../shared/contracts",
@@ -33,9 +33,14 @@
     "electron": "45.2.1",
     "esbuild": "0.25.12",
     "typescript": "5.9.3",
-    "@apparent/record": "file:vendor/record-0.1.0-1d200774.tgz"
+    "@apparent/record": "file:vendor/record-0.1.0-1d200774.tgz",
+    "@apparent/native-host": "file:vendor/native-host-0.1.0-713f1591.tgz",
+    "@apparent/config-host": "file:../config"
   },
   "overrides": {
     "minimatch": "11.0.1"
+  },
+  "engines": {
+    "node": ">=22.18"
   }
 }
