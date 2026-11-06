@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { deflateSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 import { PNG } from 'pngjs';
 import { annotateZoomFrame, findPhraseMs, markWindow, parseZoomTime, runZoom, sampleTimes, zoomWindow, makeDecoder } from '../dist/zoom/zoom.js';
 
@@ -203,6 +204,14 @@ test('recorded stroke RGB reaches plain ink, pin fills and timed laser ink while
   assert.deepEqual(pixel(200,90),[17,203,81,230]);
   assert.deepEqual(pixel(207,150),[0,0,255,255]);
   assert.deepEqual(pixel(200,225),[255,255,0,150]);
+
+  // Frozen pre-RGB renderer output for all three styles, including pin glyphs.
+  const legacyAll = structuredClone(bundle);
+  for (const stroke of legacyAll.strokes) delete stroke.rgb;
+  const legacyAllImage = new PNG({width:400,height:300});
+  annotateZoomFrame(legacyAllImage,legacyAll,1200,[0,0,1,1]);
+  assert.equal(createHash('sha256').update(legacyAllImage.data).digest('hex'),
+    '18b07e378e430dffda1a31a2ca6721e8ec860dd1984e71c2d2ff6450875f748b');
 
   const legacy=new PNG({width:400,height:300});
   const defaults=manifest();defaults.events=[];defaults.marks=[];
