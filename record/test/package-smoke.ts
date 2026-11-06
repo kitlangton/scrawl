@@ -100,15 +100,16 @@ try {
   process.stdout.write(runtime.stdout);
 
   // The canonical bundle subpath uses only the packed public SDK contract.
-  const sdkArtifact = process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root, 'vendor/engine-sdk-0.4.1.tgz');
+  const sdkArtifact = process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root, 'vendor/engine-sdk-0.4.2.tgz');
   const sdkBytes = await readFile(sdkArtifact);
-  assert.equal(createHash('sha256').update(sdkBytes).digest('hex'), 'f0c4b9777033bcde0463e0442074e5af714cddaed1c45452802012e66d21c156');
+  assert.equal(createHash('sha256').update(sdkBytes).digest('hex'), '62b1b2e103a585dbf10b848c9538ddcf888b3643b85d7eb89db8c1a61647066c');
   await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact], { cwd: bundle });
   const bundleDeclarations = path.join(bundle, 'consumer.ts');
   await writeFile(bundleDeclarations, `
     import { RecordMedia2Job, type RecordMedia2JobState } from '@apparent/record/processing/media2-consumer';
     import { readRetainedDerivativeArtifacts, type ReadRetainedDerivativeArtifactsInput } from '@apparent/record/processing/retained-artifacts';
     import { Media2Client, preflightMedia2Dispatch, type Media2JobInput } from '@apparent/engine-sdk/media2';
+    import { readFrameVisualObservations, type FrameVisualObservationInput, type FrameVisualObservation, type VisualObservationSource } from '@apparent/engine-sdk/observations';
     import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators, type CanonicalStroke } from '@apparent/record/processing/bundle';
     import type { PreparePublicationInput } from '@apparent/record/publication';
     import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts, type StrokeRgb } from '@apparent/engine-sdk/capture';
@@ -144,7 +145,19 @@ try {
     const canonical: CanonicalStroke = { id: 'record-mapping', t0: 0, t1: 1, fw: 1, fh: 1, pts: [0, 0, 0], rgb };
     declare const media2Input: Media2JobInput;
     const media2State: RecordMedia2JobState = 'ready';
-    void [RecordMedia2Job, Media2Client, preflightMedia2Dispatch, media2Input, media2State, createMedia2Job, consumeRetainedArtifacts, createRecordCaptureCoordinator, factsPort, handoffResolver, processingSelection];
+    declare const visualInput: FrameVisualObservationInput;
+    const visualObservation: FrameVisualObservation = readFrameVisualObservations(visualInput);
+    const visualSource: VisualObservationSource = visualObservation.source;
+    if (visualObservation.state === 'measured') {
+      const thumbnailCell: number = visualObservation.thumbnail.cells[0]!;
+      const regionCell: number = visualObservation.regions.cells[0]!;
+      void [visualObservation.schema, visualObservation.algorithm, thumbnailCell, regionCell];
+    } else {
+      const unavailableReason: 'observation-profile-absent' | 'observation-profile-unsupported' = visualObservation.reason;
+      void unavailableReason;
+    }
+    void [visualInput.document, visualInput.materials, visualInput.requestIndex, visualInput.pngBytes, visualInput.maxFileBytes, visualSource.materials, visualSource.requestSha256, visualSource.file];
+    void [RecordMedia2Job, Media2Client, preflightMedia2Dispatch, media2Input, media2State, createMedia2Job, consumeRetainedArtifacts, createRecordCaptureCoordinator, factsPort, handoffResolver, processingSelection, readFrameVisualObservations];
     void canonical; void loadAndAssemble; void consume; void retainedVideo; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
   `);
   const bundleTsc = path.join(root, 'node_modules/typescript/bin/tsc');
@@ -157,13 +170,14 @@ try {
     import { readRetainedDerivativeArtifacts } from '@apparent/record/processing/retained-artifacts';
     import { validateMaterialsDocument, validateFactFile } from '@apparent/engine-sdk/capture';
     import { Media2Client, preflightMedia2Dispatch } from '@apparent/engine-sdk/media2';
+    import { readFrameVisualObservations } from '@apparent/engine-sdk/observations';
     const {readCaptureMaterials} = await import('@apparent/record/host/materials');
     assert.equal(typeof readCaptureMaterials, 'function');
     assert.equal(typeof assembleCanonicalBundle, 'function');
     assert.equal(typeof validateMaterialsDocument, 'function');
     assert.equal(typeof validateFactFile, 'function');
     for (const name of ['react','react-dom','electron']) assert.throws(()=>createRequire(import.meta.url).resolve(name));
-    assert.deepEqual([RecordMedia2Job, readRetainedDerivativeArtifacts, Media2Client, preflightMedia2Dispatch].map(value => typeof value), ['function','function','function','function']);
+    assert.deepEqual([RecordMedia2Job, readRetainedDerivativeArtifacts, Media2Client, preflightMedia2Dispatch, readFrameVisualObservations].map(value => typeof value), ['function','function','function','function','function']);
     console.log('packed canonical bundle runtime and SDK consumer passed');
   `], { cwd: bundle });
   process.stdout.write(bundleRuntime.stdout);
@@ -186,7 +200,7 @@ try {
   process.stdout.write(uiResult.stdout);
   // The publication profile explicitly supplies the published SDK; it is not
   // installed for the other headless or UI consumers.
-  const sdkTarball = path.join(scratch, 'engine-sdk-0.4.1.tgz'); await copyFile(sdkArtifact, sdkTarball);
+  const sdkTarball = path.join(scratch, 'engine-sdk-0.4.2.tgz'); await copyFile(sdkArtifact, sdkTarball);
   await run('npm', ['install', '--no-audit', '--no-fund', sdkTarball, tarball], { cwd: publication });
   const publicationResult = await run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
