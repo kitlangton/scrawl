@@ -9,7 +9,7 @@ are verified. A source package or producer build does not establish adoption.
 
 | Scoped capability | Current standalone state | Required acceptance / consumer return condition |
 | --- | --- | --- |
-| Installable runtime and discovery | The capture-v1 producer remains unavailable. The packaged Linux media/1 runtime and discovery were delivered at PR722 (`463f0053`), with exact-artifact handoff to Record and Agent. SDK0.3.2 retains capture/2 preflight and adds optional stroke RGB. The capture/2 producer and native integration were merged in PR788 (`main` at `4ad3cb9239d5559ab6a209d266d01e6860c11b2e`); registration/admission and broader platform gates remain open. | Preserve published packages/contracts. Capture/2 installed adoption and platform gates remain open. |
+| Installable runtime and discovery | The capture-v1 producer remains unavailable. The packaged Linux media/1 runtime and discovery were delivered at PR722 (`463f0053`), with exact-artifact handoff to Record and Agent. SDK0.3.2 retains capture/2 preflight and adds optional stroke RGB. The capture/2 producer and native integration merged in PR788 (`4ad3cb923`); Platform registered its separate Linux producer in PR794 (`5ed32afd4`). Exact archive admission and consumer adoption remain separate gates. | Preserve published packages/contracts. Platform retains the admitted-artifact return; Engine retains consumer capability handoffs and broader platform acceptance. |
 | Real capture and readiness | Capture-v1 remains unavailable. PR788 moved Recorder/Source and Store into Core for real X11 display/preset-area capture, first-frame readiness, cold authenticated controls, retained sealed materials and crash/EOF reconciliation. Linux synthetic guest proof passed; broader platform/product adoption remains open. | Real first-frame readiness, authoritative permission/source facts, authenticated start/inspect/stop/cancel, durable valid native artifact, EOF/crash reconciliation and consumer integration on macOS/Linux. Never substitute a reference-peer receipt. |
 | Native input, picker, drawing and capture exclusion | No standalone published capability. Platform owns the existing permission/shortcut Host transport; Record owns workflow and local-only/pen policy. | Publish actual input/geometry/exclusion facts and enforced native operations, with explicit unavailable methods. Coordinate existing Host mechanics rather than duplicate them. A stored preference or admission lock is not shortcut reservation, accepted drawing or local-only proof. |
 | Frame decoding and media measurements | SDK 0.2 `media/1` and Linux worker are implemented; macOS decoder is absent. | Installable Linux runtime/discovery plus real conformance; separate macOS implementation/proof. Preserve source identity, ordering/clocks, leases, bounded jobs, cancellation and durable PNG references. Visual measurements needed by Record policy remain unpublished. |
@@ -20,9 +20,9 @@ are verified. A source package or producer build does not establish adoption.
 ## Extraction and donor removal
 
 Move existing native execution into top-level `engine/`, with minimal adapters;
-do not retain a permanent Engine dependency on `capture/`. The immediate slice
-moves the existing core crate and tests byte-for-byte (except documentation).
-Unmerged capture/2 repairs and their evidence are preserved separately. No native
+do not retain a permanent Engine dependency on `capture/`. The core crate and tests
+have moved, and capture/2 now consumes its recorder and storage primitives.
+The current slice removes the media worker's duplicate decoder. No native
 reuse percentage is claimed. Published SDK and Record output ownership remain.
 
 | Donor | Move/reuse destination and unavoidable boundary | Verification / removal condition |
