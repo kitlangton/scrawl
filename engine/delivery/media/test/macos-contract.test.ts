@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import test from 'node:test'
-import { inventory } from '../src/contract.ts'
+import { inventory, VISUAL_OBSERVATIONS } from '../src/contract.ts'
 import { MAC_FILES, validateMacArtifact, type MacManifest } from '../src/macos-contract.ts'
 
 test('Mac manifest binds helper inventory, native architecture and system closure', () => {
@@ -16,9 +16,14 @@ test('Mac manifest binds helper inventory, native architecture and system closur
     const manifest: MacManifest = { schema: 1, sourceSha: 'a'.repeat(40), target: 'macos-x64', rustTriple: 'x86_64-apple-darwin', capabilities: ['media/1'], launch: { entry: MAC_FILES[0], worker: MAC_FILES[1], nativeHelper: MAC_FILES[2], argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1'], pathLookup: false, runtimeBuilds: false }, environment: { architecture: 'x86_64', minimumMacOS: '15.0', osRelease: 'fixture', sdk: 'fixture', swift: 'fixture', rustc: 'fixture', cargo: 'fixture', systemLibraries: ['/usr/lib/libSystem.B.dylib'] }, runtimeFiles: inventory(root) }
     const save = () => writeFileSync(resolve(root, 'manifest.json'), JSON.stringify(manifest))
     save(); assert.equal(validateMacArtifact(root).target, 'macos-x64')
+    manifest.visualObservations = VISUAL_OBSERVATIONS; save()
+    assert.throws(() => validateMacArtifact(root), /visual observation/)
     manifest.capabilities = ['media/1', 'media/2']
     manifest.media2Launch = { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'], sharesCaptureRuntime: true }
     save(); assert.equal(validateMacArtifact(root).media2Launch?.sharesCaptureRuntime, true)
+    manifest.visualObservations = { ...VISUAL_OBSERVATIONS, chunkType: 'wrong' } as unknown as typeof VISUAL_OBSERVATIONS; save()
+    assert.throws(() => validateMacArtifact(root), /visual observation/)
+    manifest.visualObservations = VISUAL_OBSERVATIONS; save()
     manifest.media2Launch.argv[5] = '1'; save()
     assert.throws(() => validateMacArtifact(root), /retained-media launch/)
     manifest.media2Launch.argv[5] = '2'; save()
