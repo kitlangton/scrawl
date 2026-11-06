@@ -1,9 +1,10 @@
-# Record capabilities: fixture-ready contract, not production-ready
+# Record capability contract
 
 Import `RecordClient`, `CapabilitySnapshot`, `RecordCommand` and `CommandResult`
 from `@apparent/record/capabilities`. A consumer accepts an injected `RecordClient`;
-its application logic imports neither Electron nor Engine. The shell must supply
-an authorized narrow preload adapter. No production adapter is shipped here.
+its application logic imports neither Electron nor Engine. The capture/2 host can
+be injected through the owner-local runtime adapter; native permission facts and
+other host capabilities still require their authorized producer ports.
 
 `observe` immediately supplies a complete snapshot, then complete replacements.
 The snapshot contract is version 2. Version 1 snapshots must be migrated by
@@ -28,9 +29,11 @@ capture readiness remain distinct; a granted permission may still need relaunch.
 `start-capture` with `delivery: "local-only"` is a request only. The matching
 `CaptureFact.delivery` is the provider's readback of effective enforced policy:
 `local-only`, `host-default` or `unknown`. A command result, including `accepted`,
-does not set it. A production provider must refuse local-only capture if it cannot
-enforce that policy; it must never silently downgrade to host defaults. This
-package implements no such enforcement.
+does not set it. The capture/2 integration refuses a local-only Record request
+because native `localOnly` does not enforce the complete Record processing and
+delivery path. It accepts `host-default` when the injected worker is ready, while
+the resulting delivery fact remains `unknown` until a complete policy producer
+can authenticate it.
 
 Picker success has a typed `surface: "screen"` and `target` (`display`, `area` or
 `window`); picker cancellation/failure has no fabricated target. Accepted strokes

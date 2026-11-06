@@ -106,6 +106,48 @@ exact descriptor from current discovery, and `options` and `invocation` follow
 the SDK 0.3.2 public types. Start returns a lifecycle receipt, not a Saved
 claim.
 
+To inject this host into the existing public Record client, import
+`createCapture2RecordRuntime` from `@apparent/record/host/capture2-runtime` and pass
+the same returned runtime as both `runtime` and `capture2Start` to
+`createRecordCapabilityProvider`. Its required `createStartIntent(requestId,
+discovery)` callback must select a source from the supplied fresh discovery and
+provide SDK options, invocation and exact destination. Record checks the
+descriptor against that discovery result; the capture2 host rechecks it against
+its current discovery generation before durable reservation. There is no default
+screen inference, picker, shortcut or legacy Engine import. The public request ID
+is persisted and returned unchanged; private SDK IDs remain inside the existing
+capture2 mapping store.
+
+The adapter reconciles the existing capture2 host before fresh admission, blocks
+new starts for active or unknown ownership, and keeps stop/cancel/inspect controls
+available for an owned request. A bounded nonoverlapping observer inspects active
+requests to receive lifecycle transitions. Detaching Record clears only its
+listener and timer; the caller still owns and may inspect or dispose the capture2
+host and SDK. Native readiness comes from the capture2 handshake. Native
+materials-ready and SDK saved receipts map to Record processing until a separate
+authenticated Record output producer supplies a matched Saved fact. The host
+retains material lease references; this adapter does not release them or fabricate
+a bundle.
+
+```ts
+import { createRecordCapabilityProvider } from "@apparent/record/capabilities";
+import { createCapture2RecordRuntime } from "@apparent/record/host/capture2-runtime";
+
+const runtime = await createCapture2RecordRuntime({
+  host,
+  createStartIntent(requestId, discovery) {
+    if (discovery.state !== "available" || !discovery.sources[0]) throw new Error("Choose a discovered source");
+    return {
+      source: discovery.sources[0],
+      options: { audio: "none", localOnly: true },
+      invocation: { invocationId, observedAtMs: Date.now(), kind: "explicit" },
+      destinationPath: destinationFor(requestId),
+    };
+  },
+});
+const record = createRecordCapabilityProvider({ runtime, capture2Start: runtime, providerEpoch });
+```
+
 Native adapter conformance runs in `npm run test:contracts` against the declared
 `@apparent/app-contracts/host` package export. Its development-only tarball is
 pinned to the public package source at `a8194a4` (provenance in `vendor/`).

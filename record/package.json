@@ -33,6 +33,10 @@
       "types": "./dist/backend/host/capture2.d.ts",
       "import": "./dist/backend/host/capture2.js"
     },
+    "./host/capture2-runtime": {
+      "types": "./dist/backend/host/capture2/runtime.d.ts",
+      "import": "./dist/backend/host/capture2/runtime.js"
+    },
     "./host/native": {
       "types": "./dist/backend/host/native/index.d.ts",
       "import": "./dist/backend/host/native/index.js"

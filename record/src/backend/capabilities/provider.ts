@@ -1,4 +1,4 @@
-import type { RecordHostRuntime } from "../host/runtime.js";
+import type { RecordCapture2StartPort, RecordHostRuntimePort } from "../host/runtime.js";
 import type {
   CapabilitySnapshot, CaptureFact, CommandResult, NativeRequirement, PenColor,
   PenPreference, RecordClient, RecordCommand,
@@ -59,7 +59,9 @@ export interface RecordPenConfigPort {
 }
 
 export interface RecordCapabilityProviderOptions {
-  runtime: RecordHostRuntime;
+  runtime: RecordHostRuntimePort;
+  /** Capture/2 adapters may provide explicit refusal versus ambiguous start outcomes. */
+  capture2Start?: RecordCapture2StartPort;
   /** Undefined means the Platform host binding is not installed. */
   native?: RecordNativePort;
   /** Undefined until captured material has passed Record assembly and authenticated publication. */
@@ -186,7 +188,7 @@ function mergeCapture(previous: CaptureFact | undefined, next: CaptureFact): Cap
   return { ...previous, ...clone(next), outcomes };
 }
 
-function captureFromRuntime(state: RecordHostRuntime["state"], observedAt: Map<string, string>): CaptureFact | undefined {
+function captureFromRuntime(state: RecordHostRuntimePort["state"], observedAt: Map<string, string>): CaptureFact | undefined {
   if (!("captureId" in state)) return undefined;
   const phase: CaptureFact["phase"] = state.phase === "ready" ? "processing"
     : state.phase === "stop-failed" || state.phase === "uncertain" ? "unknown"
@@ -231,14 +233,24 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
   const snapshot = (): CapabilitySnapshot => {
     const live = captureFromRuntime(options.runtime.state, runtimeObservedAt);
     const merged = new Map<string, CaptureFact>();
+    const completionEligible = new Set(options.runtime.completionEligibleCaptureIds?.() ??
+      (options.runtime.state.phase === "ready" ? [options.runtime.state.captureId] : []));
     for (const item of outputFacts.captures) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
     for (const item of captures.values()) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
+    for (const runtimeCapture of options.runtime.captures?.() ?? []) {
+      const fact = captureFromRuntime(runtimeCapture, runtimeObservedAt);
+      if (fact) {
+        const output = merged.get(fact.captureId);
+        const mayComplete = completionEligible.has(fact.captureId) && output?.phase === "saved";
+        merged.set(fact.captureId, mayComplete ? mergeCapture(fact, output!) : mergeCapture(output, fact));
+      }
+    }
     if (live) {
       const output = merged.get(live.captureId);
       const combined = output ? mergeCapture(live, output) : live;
       // Only stopped native materials can be completed by assembled output.
       // Retained output must never hide live or unresolved runtime ownership.
-      if (options.runtime.state.phase !== "ready") combined.phase = live.phase;
+      if (!completionEligible.has(live.captureId) || output?.phase !== "saved") combined.phase = live.phase;
       merged.set(live.captureId, combined);
     }
     const ready = engineReady();
@@ -308,11 +320,16 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
       if (options.runtime.startup.state !== "ready") return refuse(command, "Engine runtime startup reconciliation is unresolved");
       if (outputFacts.nextShortcutAdmission.state === "armed") return refuse(command, "capture reserved for next shortcut");
       if (current.readiness.requirements.some(requirement => requirement.required && (!requirement.usableNow || requirement.relaunchNeeded))) return refuse(command, "capture requirements unavailable");
-      if (current.captures.some(capture => ["starting", "recording", "processing", "unknown"].includes(capture.phase))) return refuse(command, "capture active or unresolved");
+      if (options.runtime.canStartCapture ? !options.runtime.canStartCapture() : current.captures.some(capture => ["starting", "recording", "processing", "unknown"].includes(capture.phase))) return refuse(command, "capture active or unresolved");
       usedRequests.add(command.requestId);
       try {
-        const state = await options.runtime.dispatch({ type: "start", requestId: command.requestId });
+        const result = options.capture2Start
+          ? await options.capture2Start.startCapture(command.requestId)
+          : { state: await options.runtime.dispatch({ type: "start", requestId: command.requestId }), outcome: undefined };
+        const state = result.state;
         publish();
+        if (result.outcome === "refused") return response("refused");
+        if (result.outcome === "outcome-unknown") return response("outcome-unknown");
         if (!("captureId" in state) || state.captureId !== command.requestId) return response("refused");
         if (state.phase === "uncertain") return response("outcome-unknown");
         return response("accepted");
