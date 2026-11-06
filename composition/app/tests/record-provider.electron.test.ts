@@ -30,8 +30,15 @@ test('packaged Record provider retains unresolved runtime and closes only after 
   await writeFile(binding, `
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { CaptureClient, preflightCapturePublication } from '@apparent/engine-sdk/capture';
+import { createRecordPublicationOutput } from '@apparent/record/publication';
 import { createRecordProviderHost } from ${JSON.stringify(join(root, 'src/record/provider-host.ts'))};
 export async function createRecordHostServices({profilePath}) {
+  let outputDispatches = 0;
+  const sdk = new CaptureClient({async request() { outputDispatches++; throw new Error('No native operation admitted'); }, async close() {return 'already-exited';}});
+  const output = createRecordPublicationOutput(sdk,join(profilePath,'publication-output'),preflightCapturePublication);
+  await writeFile(join(profilePath,'public-output.json'),JSON.stringify({facts:await output.captureFacts.readFacts(),handoff:await output.resolveHandoff({captureId:'unknown-request',artifactId:'unknown-bundle'}),outputDispatches}));
+  await sdk.close();
   let reconciliation = 'pending';
   const counts = { dispatch: 0, dispose: 0, engine: 0, native: 0 };
   const listeners = new Set();
@@ -75,6 +82,11 @@ export async function createRecordHostServices({profilePath}) {
   await page.evaluate(() => { (window as any).apparent.host.observeCloseRefusal((reason: string) => { document.body.dataset.closeReason = reason; }); });
   const initial = await page.evaluate(() => (window as any).apparent.record.read());
   assert.equal(initial.connection, 'connected');
+  const publicOutput = JSON.parse(await readFile(join(profile, 'public-output.json'), 'utf8'));
+  assert.deepEqual(publicOutput.facts.captures, []);
+  assert.deepEqual(publicOutput.facts.nextShortcutAdmission, { state: 'unavailable' });
+  assert.equal(publicOutput.handoff, null);
+  assert.equal(publicOutput.outputDispatches, 0);
   await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].close(); });
   await expect(page.locator('body')).toHaveAttribute('data-close-reason', 'ownership-unresolved');
   assert.equal(await readFile(join(profile, 'closed.json')).then(() => true, () => false), false);

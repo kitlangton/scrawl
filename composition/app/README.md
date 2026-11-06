@@ -256,6 +256,16 @@ ordered one-time cleanup through the shipped Electron bridge on both CI targets.
 These assembly APIs do not select an installed executable, authenticate a Saved
 artifact, enable an installed route or clear native product acceptance gates.
 
+The pinned public Record package additionally supplies
+`createRecordPublicationOutput` from `@apparent/record/publication`; its admitted
+SDK peer is packaged beside it. Trusted assembly injects `output.captureFacts`
+and uses `output.resolveHandoff` for the native clipboard adapter. That port owns
+the existing durable publication authority; composition adds no Saved-facts store
+or substitute resolver. It does not provide shortcut-reservation authority:
+`nextShortcutAdmission: unavailable` still blocks host shutdown until the trusted
+assembly can establish authoritative clearance. Automatic processing orchestration
+and installed legacy-transition clearance remain separate prerequisites.
+
 Stream manifests may additionally seal `style.css` and at most nine font files
 under `fonts/` (TTF or WOFF2). These precompiled assets are copied and checked with
 the stream entry during assembly and packaged verification; undeclared files,
