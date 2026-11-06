@@ -173,3 +173,5 @@ synthetic account/device/share states, analytics, no-JS loading HTML and
 artifact/resource closure. Neither lane logs in or accesses private recordings.
 The local Worker run does not establish zone route activation, live cookies,
 OAuth, provider configuration, or deployment.
+
+Legacy `https://hosted.tryapparent.com/s/<capability>` HTML document requests (GET/HEAD) redirect temporarily to `https://app.tryapparent.com/connect/s/<capability>`, with no-store/no-referrer/noindex and query preservation. Metadata and file endpoints under the old link remain service requests for existing clients, not redirects. Existence and authorization are checked by the canonical destination; a redirect does not prove that a recording exists or is ready.
