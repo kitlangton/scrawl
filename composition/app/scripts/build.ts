@@ -31,6 +31,8 @@ export async function buildShell(output: string) {
   }
   await build({ entryPoints: [join(root, 'src/main.cts')], bundle: true, platform: 'node',
     format: 'cjs', target: 'node22', external: ['electron'], outfile: join(output, 'main.cjs') });
+  await build({ entryPoints: [join(root, 'src/preload.cts')], bundle: true, platform: 'node',
+    format: 'cjs', target: 'node22', external: ['electron'], outfile: join(output, 'preload.cjs') });
   let html = await readFile(join(root, 'src/index.html'), 'utf8');
   const importmap = html.match(/<script type="importmap">([^<]+)<\/script>/)![1];
   // CSP permits only this exact inline import map; no unsafe-inline or eval.

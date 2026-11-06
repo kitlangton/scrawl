@@ -31,7 +31,7 @@ export async function readStream(directory: string) {
   assert.equal(digest(await readRegular(join(directory, manifest.entry))), manifest.sha256, 'Stream checksum mismatch');
   return manifest;
 }
-export const shellFiles = ['main.cjs', 'renderer.js', 'index.html', 'style.css', 'package.json',
+export const shellFiles = ['main.cjs', 'preload.cjs', 'renderer.js', 'index.html', 'style.css', 'package.json',
   'vendor/react.js', 'vendor/jsx.js', 'vendor/dom.js'];
 export type ShellManifest = { schemaVersion: 1; shellApi: 1; reactVersion: string; files: Record<string, string> };
 export async function readShell(directory: string): Promise<ShellManifest> {

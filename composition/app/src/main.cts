@@ -16,7 +16,8 @@ app.whenReady().then(() => {
   });
   const window = new BrowserWindow({
     title: 'Apparent Foundation', width: 900, height: 620,
-    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
+      preload: join(__dirname, 'preload.cjs') },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => { if (url !== entry) event.preventDefault(); });
