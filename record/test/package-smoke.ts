@@ -115,9 +115,12 @@ try {
     import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts, type StrokeRgb } from '@apparent/engine-sdk/capture';
     import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
     import {createCapture2RecordRuntime, type Capture2RecordRuntimeOptions} from '@apparent/record/host/capture2-runtime';
-    import {createRecordCaptureCoordinator, type RecordCaptureCoordinator, type RecordCaptureCoordinatorShutdownReport, type RecordCaptureProcessingSelection} from '@apparent/record/host/capture2-coordinator';
+    import {createStandardRecordCaptureCoordinator, type StandardRecordCaptureCoordinatorOptions, createRecordCaptureCoordinator, type RecordCaptureCoordinator, type RecordCaptureCoordinatorShutdownReport, type RecordCaptureProcessingSelection} from '@apparent/record/host/capture2-coordinator';
     declare const capture2RuntimeOptions: Capture2RecordRuntimeOptions;
     void createCapture2RecordRuntime(capture2RuntimeOptions);
+    declare const standardOptions: StandardRecordCaptureCoordinatorOptions;
+    const standardFlow: Promise<RecordCaptureCoordinator> = createStandardRecordCaptureCoordinator(standardOptions);
+    void standardFlow;
     declare const coordinator: RecordCaptureCoordinator;
     const factsPort = coordinator.captureFacts;
     const processingIssues = coordinator.processingIssues();
@@ -211,7 +214,7 @@ try {
     import {prepareMedia2Request, encodeContactSheetLayout, validateDerivative2Document, selectDerivative2Artifact} from '@apparent/engine-sdk/media2';
     import {createCapture2Host} from '@apparent/record/host/capture2';
     import {createCapture2RecordRuntime} from '@apparent/record/host/capture2-runtime';
-    import {createRecordCaptureCoordinator} from '@apparent/record/host/capture2-coordinator';
+    import {createRecordCaptureCoordinator, createStandardRecordCaptureCoordinator} from '@apparent/record/host/capture2-coordinator';
     const client = new CaptureClient(new ReferenceCapturePeer(), {allowTestDouble:true});
     assert.equal((await client.handshake()).readiness, 'unavailable');
     const recovery = createRecordPublicationRecovery(client, process.cwd() + '/unused-private-root', preflightCapturePublication);
@@ -219,6 +222,7 @@ try {
     assert.equal(typeof createCapture2Host, 'function');
     assert.equal(typeof createCapture2RecordRuntime, 'function');
     assert.equal(typeof createRecordCaptureCoordinator, 'function');
+    assert.equal(typeof createStandardRecordCaptureCoordinator, 'function');
     assert.equal(typeof prepareRecordPublication, 'function');
     assert.equal(typeof createCompletedCapturePublisher, 'function');
     assert.equal(typeof createCompletedCapturePublisher(client, process.cwd() + '/unused-private-root', preflightCapturePublication).publishCompletedCapture, 'function');
