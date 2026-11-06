@@ -49,7 +49,9 @@ export function readQueueSnapshot(directoryPath: string, context: { scope: "read
       try {
         const before = await opened.stat({ bigint: true });
         const named = await lstat(file, { bigint: true });
-        if (!named.isFile() || named.isSymbolicLink() || identity(named) !== identity(before) || before.nlink !== 1n) fail("unsafe_file");
+        // Data hardlinks are permitted by the donor reader; only the lock must
+        // have a single link. Stability and private metadata still apply.
+        if (!named.isFile() || named.isSymbolicLink() || identity(named) !== identity(before)) fail("unsafe_file");
         const fd = opened; handle = undefined; consumed = true;
         let job!: Job;
         try {
@@ -77,6 +79,3 @@ export function readQueueSnapshot(directoryPath: string, context: { scope: "read
     throw new QueueStoreError("unavailable");
   });
 }
-
-/** Compatibility name for consumers that need only the decoded records. */
-export const readQueueJobs = readQueueSnapshot;

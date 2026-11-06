@@ -1,12 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { constants as C } from "node:fs";
-import { lstat, mkdir, mkdtemp, readFile, realpath, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, readFile, realpath, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { FileHandle } from "node:fs/promises";
 import { readQueueSnapshot, QueueStoreError } from "../../src/queue/store.ts";
-import type { Job } from "../../src/queue/job.ts";
 import type { NamespaceResources } from "../../src/state/namespace.ts";
 
 const context = { scope: "read" as const, approvedServer: "https://sync.example" };
@@ -79,5 +77,27 @@ test("lock acquisition failures redact private diagnostics", async () => {
   const f = await fixture(); try {
     const r = resources(); r.port.lock = async handle => { await handle.close(); throw Error("token=super-secret /private/path"); };
     await assert.rejects(readQueueSnapshot(f.dir, context, r.port), e => { assert.equal(String(e), "QueueStoreError: unavailable"); return e instanceof QueueStoreError; });
+  } finally { await f.close(); }
+});
+
+test("retains donor data-hardlink compatibility without relaxing the lock inode rule", async () => {
+  const f = await fixture(); try {
+    await f.put(`${id}.job`, legacy);
+    await link(path.join(f.dir, `${id}.job`), path.join(f.dir, "saved-record"));
+    assert.equal((await readQueueSnapshot(f.dir, context, resources().port))[0]!.id, id);
+    await link(path.join(f.dir, "queue.lock"), path.join(f.dir, "saved-lock"));
+    await assert.rejects(readQueueSnapshot(f.dir, context, resources().port), category("unsafe_file"));
+  } finally { await f.close(); }
+});
+
+test("accepts exactly 100 records and refuses an overfull queue as a whole", async () => {
+  const f = await fixture(); try {
+    for (let i = 0; i < 100; i++) {
+      const next = i.toString(16).padStart(32, "0");
+      await f.put(`${next}.job`, { ...legacy, id: next });
+    }
+    assert.equal((await readQueueSnapshot(f.dir, context, resources().port)).length, 100);
+    await f.put(`${id}.job`, legacy);
+    await assert.rejects(readQueueSnapshot(f.dir, context, resources().port), category("invalid_queue_record"));
   } finally { await f.close(); }
 });
