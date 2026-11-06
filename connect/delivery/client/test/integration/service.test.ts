@@ -17,6 +17,7 @@ import {
 import { retrieveRecipientCapture } from "../../src/recipient/retrieve.ts";
 import { RecipientTransportError } from "../../src/recipient/transport.ts";
 import { uploadPreparedPlainCapture } from "../../src/sender/transport.ts";
+import { uploadPreparedEncryptedCapture, type PreparedEncryptedGroup } from "../../src/sender/encrypted-transport.ts";
 
 const serviceDir = resolve(fileURLToPath(new URL("../../../../service/", import.meta.url)));
 const captureId = "a981426be1254f37938214f960aed501";
@@ -130,6 +131,7 @@ async function uploadEncryptedCapture(
   reader: { identity: string; recipient: string },
   upload: DeviceCredential,
   uploadSeed: Uint8Array,
+  profile: "root" | "evidence-first-v1",
 ) {
   const context: Context = {
     origin, accountId: account.id, captureId, senderGrantId: upload.grantId,
@@ -139,37 +141,46 @@ async function uploadEncryptedCapture(
     { path: "apparent.json", bytes: encoder.encode("{}") },
     { path: "contact-sheet.png", bytes: Uint8Array.of(4, 5, 6, 7) },
   ];
-  const innerFiles = contents.map(file => ({ path: file.path, size: file.bytes.length, sha256: digest(file.bytes) }));
-  const archive = encodeArchive({ version: 1, context, files: innerFiles }, contents.map(file => file.bytes));
-  const ciphertext = await encryptAge(archive, [reader.recipient]);
-  const chunks = splitAgeStream(ciphertext).map((bytes, index) => ({
-    path: `sealed/part-${String(index).padStart(6, "0")}.age`, bytes,
-  }));
-  const chunkAssets = chunks.map(({ path, bytes }) => ({ path, size: bytes.length, sha256: digest(bytes) }));
-  const signed = { version: 1, context, chunks: chunkAssets };
-  const envelope = encoder.encode(JSON.stringify({ signed, signature: await signEnvelope(uploadSeed, signed) }));
-  const transportFiles = [
-    { path: "envelope.json", bytes: envelope },
-    ...chunks,
-  ];
-  const assets = transportFiles.map(({ path, bytes }) => ({ path, size: bytes.length, sha256: digest(bytes) }));
-  const path = `/v1/captures/${captureId}`;
-  const reserved = await service.call(path, {
-    token: upload.accessToken, method: "POST", body: { format: "apparent-encrypted-v1", files: assets },
-  });
-  assert.equal(reserved.status, 200, "the real Worker reserves the encrypted capture");
-  for (const file of transportFiles) {
-    const put = await service.call(`${path}/files/${file.path}`, {
-      token: upload.accessToken, method: "PUT", raw: file.bytes,
-    });
-    assert.equal(put.status, 200, `the real Worker stores ${file.path}`);
+  if (profile === "evidence-first-v1") contents.push({ path: "audio.wav", bytes: Uint8Array.of(7, 8, 9) });
+  const groups: PreparedEncryptedGroup[] = [], transport = new Map<string, Uint8Array>();
+  for (const group of profile === "root" ? [undefined] : ["evidence", "media"] as const) {
+    const bound: Context = { ...context, ...(group ? { group } : {}) };
+    const selected = group ? contents.filter(file => (file.path === "audio.wav") === (group === "media")) : contents;
+    const files = selected.map(file => ({ path: file.path, size: file.bytes.length, sha256: digest(file.bytes) }));
+    const archive = encodeArchive({ version: 1, context: bound, files }, selected.map(file => file.bytes));
+    const ciphertext = await encryptAge(archive, [reader.recipient]);
+    const parts = splitAgeStream(ciphertext);
+    const chunks = parts.map((bytes, index) => ({ path: `sealed/part-${String(index).padStart(6, "0")}.age`, size: bytes.length, sha256: digest(bytes) }));
+    const signed = { version: 1, context: bound, chunks };
+    const envelopeBytes = encoder.encode(JSON.stringify({ signed, signature: await signEnvelope(uploadSeed, signed) }));
+    const prefix = group ? `${group}/` : "";
+    const envelope = { path: prefix + "envelope.json", size: envelopeBytes.length, sha256: digest(envelopeBytes) };
+    transport.set(envelope.path, envelopeBytes);
+    chunks.forEach((chunk, index) => transport.set(prefix + chunk.path, parts[index]!));
+    groups.push({ context: bound, envelope, chunks: chunks.map(chunk => ({ ...chunk, path: prefix + chunk.path })) });
   }
-  const completed = await service.call(`${path}/complete`, { token: upload.accessToken, method: "POST" });
-  assert.equal(completed.status, 200, "the real Worker completes the capture");
+  // The fixture uses actual Worker peer facts, never a successful signature as authorization.
+  const peerFacts = async () => {
+    const response = await service.call("/v1/encryption/peers", { token: upload.accessToken });
+    assert.equal(response.status, 200);
+    return await response.json() as { accountId: string; grantId: string; devices: { grantId: string; scope: string }[] };
+  };
+  const recipientGrantIds = (await peerFacts()).devices.filter(device => device.scope === "read").map(device => device.grantId);
+  const options = { server: origin, captureId, context, recipientGrantIds, trustedSenderSigningKey: await ed25519.getPublicKeyAsync(uploadSeed),
+    active: () => true, readAsset: async (name: string) => transport.get(name)!,
+    authorize: async (approvedServer: string, scope: "upload") => {
+      const current = await peerFacts();
+      return { approvedServer, scope, token: upload.accessToken, accountId: current.accountId, senderGrantId: current.grantId,
+        recipientGrantIds: recipientGrantIds.filter(id => current.devices.some(device => device.grantId === id)) };
+    } };
+  const prepared = profile === "root" ? { ...options, profile, envelope: groups[0]!.envelope, chunks: groups[0]!.chunks }
+    : { ...options, profile, groups };
+  await uploadPreparedEncryptedCapture(prepared);
+  await uploadPreparedEncryptedCapture(prepared); // Existing ready captures still require verified readback.
   return contents;
 }
 
-async function exerciseProfile(mount: "" | "/connect") {
+async function exerciseProfile(mount: "" | "/connect", profile: "root" | "evidence-first-v1") {
   const server = `${mount}`;
   await proxy(mount, async ({ origin, request, service }) => {
     const serviceOrigin = origin + server;
@@ -180,7 +191,7 @@ async function exerciseProfile(mount: "" | "/connect") {
     const senderSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 91);
     const readCredential = await authorize(service, account, "read", reader, readerSeed);
     const uploadCredential = await authorize(service, account, "upload", sender, senderSeed);
-    const contents = await uploadEncryptedCapture(service, serviceOrigin, account, reader, uploadCredential, senderSeed);
+    const contents = await uploadEncryptedCapture(service, serviceOrigin, account, reader, uploadCredential, senderSeed, profile);
     const result = await retrieveRecipientCapture({
       credential: {
         server: serviceOrigin,
@@ -192,9 +203,13 @@ async function exerciseProfile(mount: "" | "/connect") {
     });
     assert.equal(result.server, serviceOrigin);
     assert.equal(result.captureId, captureId);
-    assert.deepEqual(result.files.map(file => file.path), contents.map(file => file.path));
-    for (let index = 0; index < contents.length; index++) {
-      assert.deepEqual(result.files[index]!.bytes, contents[index]!.bytes);
+    assert.deepEqual(result.files.map(file => file.path).sort(), contents.map(file => file.path).sort());
+    for (const file of result.files) assert.deepEqual(file.bytes, contents.find(entry => entry.path === file.path)!.bytes);
+    if (profile === "evidence-first-v1") {
+      const evidence = await retrieveRecipientCapture({ credential: { server: serviceOrigin, token: readCredential.accessToken,
+        grantId: readCredential.grantId, identity: { age: reader.identity, signing: readerSeed } }, captureId, evidenceOnly: true });
+      assert.equal(evidence.evidenceOnly, true);
+      assert.ok(evidence.files.every(file => file.path !== "audio.wav"));
     }
 
     const revoked = await request(`${server}/v1/token/revoke`, {
@@ -217,8 +232,10 @@ async function exerciseProfile(mount: "" | "/connect") {
 }
 
 test("retrieves through real local Workers on root and /connect origins and rejects revoked credentials", async () => {
-  await exerciseProfile("");
-  await exerciseProfile("/connect");
+  for (const profile of ["root", "evidence-first-v1"] as const) {
+    await exerciseProfile("", profile);
+    await exerciseProfile("/connect", profile);
+  }
 });
 
 test("prepared plaintext sender reserves, uploads and verifies through real Workers on both bases", async () => {
