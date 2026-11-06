@@ -6,6 +6,17 @@ GStreamer runtime; Mac reuses the moved AVFoundation implementation. Registratio
 does not activate or route an application. Each target requires its actual native
 producer verification and Platform artifact admission before consumer adoption.
 
+New media/2 frame PNGs include the sealed optional `apOB` raw visual-observation
+profile; the manifest advertises `visualObservations` separately from channel
+capabilities. SDK0.4.2 `@apparent/engine-sdk/observations` validates and reads it
+offline against the original derivative/material/request tuple. Old artifacts
+without that advertisement remain valid, and old frame outputs return unavailable.
+These are measurements of the final sized derivative pixels, not a native frame
+selector or a claim of parity with unscaled input. Record owns selection policy.
+The existing packaged media/2 H.264 peer checks profile seals and dimensions on
+each native target. Capture candidates remain unavailable; installed routing and
+macOS15 runtime qualification are separate gates.
+
 The Linux build requires Node 22.6+, Rust 1.96+, an x86_64 host, GStreamer development
 libraries discoverable through `pkg-config`, `ldd`, and FFmpeg only to generate
 synthetic test fixtures. From this directory run `npm ci`, `npm run verify`,
