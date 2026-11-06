@@ -59,7 +59,7 @@ function validShortcut(value: unknown): value is NativeShortcutInput {
 }
 function validShortcutFact(value: unknown): value is NativeShortcutFactInput {
   return object(value) && (value.configured === null || validShortcut(value.configured)) && (value.effective === null || validShortcut(value.effective)) &&
-    ['registered','unregistered','externally-managed','unknown','unavailable'].includes(String(value.registration)) &&
+    typeof value.registration === 'string' && ['registered','unregistered','externally-managed','unknown','unavailable'].includes(value.registration) &&
     typeof value.canValidate === 'boolean' && typeof value.canSave === 'boolean' && (!value.canSave || value.registration === 'registered');
 }
 function validSnapshot(value: unknown): value is NativeHostSnapshotInput {
@@ -68,11 +68,11 @@ function validSnapshot(value: unknown): value is NativeHostSnapshotInput {
       !Array.isArray(value.permissions) || value.permissions.length > permissionIds.size || !object(value.shortcuts) ||
       !validShortcutFact(value.shortcuts.record) || !validShortcutFact(value.shortcuts.paste)) return false;
   const ids = new Set<string>();
-  return value.permissions.every(item => {
+  return Array.from(value.permissions).every(item => {
     if (!object(item) || typeof item.id !== 'string' || !permissionIds.has(item.id) || ids.has(item.id) ||
-        !['granted','denied','not-determined','unavailable'].includes(String(item.status)) || typeof item.usableNow !== 'boolean' || typeof item.relaunchNeeded !== 'boolean' ||
+        typeof item.status !== 'string' || !['granted','denied','not-determined','unavailable'].includes(item.status) || typeof item.usableNow !== 'boolean' || typeof item.relaunchNeeded !== 'boolean' ||
         !Array.isArray(item.actions) || item.actions.length > 2 || new Set(item.actions).size !== item.actions.length ||
-        !item.actions.every(action => action === 'request-permission' || action === 'open-system-settings')) return false;
+        !Array.from(item.actions).every(action => action === 'request-permission' || action === 'open-system-settings')) return false;
     ids.add(item.id); return true;
   });
 }

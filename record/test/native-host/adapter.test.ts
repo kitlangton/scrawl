@@ -217,6 +217,9 @@ test('malformed runtime snapshots disable direct adapter effects until a valid o
     {...snap(4),permissions:[{...snap(4).permissions[0],status:'not-a-status'}]},
     {...snap(4),shortcuts:{...snap(4).shortcuts,record:{...snap(4).shortcuts.record,canValidate:'yes'}}},
     {...snap(4),permissions:[...snap(4).permissions,...snap(4).permissions]},
+    {...snap(4),permissions:[{...snap(4).permissions[0],status:Object('granted')}]},
+    {...snap(4),shortcuts:{...snap(4).shortcuts,record:{...snap(4).shortcuts.record,registration:Object('externally-managed')}}},
+    {...snap(4),permissions:Array(1)},
   ];
   const action={type:'open-system-settings' as const,requirementId:'microphone',requestId:'malformed',expected:{providerEpoch:'record',revision:0}};
   for(const value of malformed){
