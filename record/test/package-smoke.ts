@@ -84,9 +84,9 @@ try {
   process.stdout.write(runtime.stdout);
 
   // The canonical bundle subpath uses only the packed public SDK contract.
-  const sdkArtifact = process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root, 'vendor/engine-sdk-0.3.2.tgz');
+  const sdkArtifact = process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root, 'vendor/engine-sdk-0.4.0.tgz');
   const sdkBytes = await readFile(sdkArtifact);
-  assert.equal(createHash('sha256').update(sdkBytes).digest('hex'), '3b539f7d978d692a5d7fca9f358047bc197d415f6764c33707cff5a710119d01');
+  assert.equal(createHash('sha256').update(sdkBytes).digest('hex'), '7f64b8bba34b9c323d51b78d6e6f33aaac48971fd43c15347212190da5e51068');
   await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact], { cwd: bundle });
   const bundleDeclarations = path.join(bundle, 'consumer.ts');
   await writeFile(bundleDeclarations, `
@@ -139,7 +139,7 @@ try {
   process.stdout.write(uiResult.stdout);
   // The publication profile explicitly supplies the published SDK; it is not
   // installed for the other headless or UI consumers.
-  const sdkTarball = path.join(scratch, 'engine-sdk-0.3.2.tgz'); await copyFile(sdkArtifact, sdkTarball);
+  const sdkTarball = path.join(scratch, 'engine-sdk-0.4.0.tgz'); await copyFile(sdkArtifact, sdkTarball);
   await run('npm', ['install', '--no-audit', '--no-fund', sdkTarball, tarball], { cwd: publication });
   const publicationResult = await run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
@@ -147,6 +147,7 @@ try {
     import {CaptureClient, preflightCapturePublication} from '@apparent/engine-sdk/capture';
     import {ReferenceCapturePeer} from '@apparent/engine-sdk/capture/testing';
     import {createRecordPublicationRecovery, createCompletedCapturePublisher, prepareRecordPublication} from '@apparent/record/publication';
+    import {prepareMedia2Request, encodeContactSheetLayout, validateDerivative2Document, selectDerivative2Artifact} from '@apparent/engine-sdk/media2';
     import {createCapture2Host} from '@apparent/record/host/capture2';
     import {createCapture2RecordRuntime} from '@apparent/record/host/capture2-runtime';
     const client = new CaptureClient(new ReferenceCapturePeer(), {allowTestDouble:true});
@@ -158,6 +159,7 @@ try {
     assert.equal(typeof prepareRecordPublication, 'function');
     assert.equal(typeof createCompletedCapturePublisher, 'function');
     assert.equal(typeof createCompletedCapturePublisher(client, process.cwd() + '/unused-private-root', preflightCapturePublication).publishCompletedCapture, 'function');
+    assert.deepEqual([prepareMedia2Request, encodeContactSheetLayout, validateDerivative2Document, selectDerivative2Artifact].map(value => typeof value), ['function','function','function','function']);
     for (const name of ['react','react-dom','electron','@apparent/ui']) assert.throws(()=>createRequire(import.meta.url).resolve(name));
     await client.close();
     console.log('packed publication profile passed without UI peers');
@@ -364,6 +366,7 @@ try {
   const sdkDeclarations = path.join(publication, 'consumer.ts');
   await writeFile(sdkDeclarations, `
     import {preflightCapturePublication, type CaptureClient, type SourceDescriptor, type CaptureOptions, type InvocationFact} from '@apparent/engine-sdk/capture';
+    import {type Derivative2DocumentInput, type Derivative2Selector} from '@apparent/engine-sdk/media2';
     import {createCapture2Host, type Capture2Host, type Capture2StartIntent} from '@apparent/record/host/capture2';
     import {createCompletedCapturePublisher, createRecordPublicationRecovery, prepareRecordPublication, type CompletedCapturePublisher, type PublishCompletedCaptureInput, type ReconcileCompletedCaptureInput} from '@apparent/record/publication';
     declare const client: CaptureClient;
@@ -381,7 +384,10 @@ try {
     const publisher = createCompletedCapturePublisher(client, '/private/control', preflightCapturePublication);
     const publish: (input: PublishCompletedCaptureInput) => ReturnType<CompletedCapturePublisher['publishCompletedCapture']> = publisher.publishCompletedCapture;
     const reconcile: (input: ReconcileCompletedCaptureInput) => ReturnType<CompletedCapturePublisher['reconcile']> = publisher.reconcile;
-    void result; void stage; void publish; void reconcile; void capture; void exactReceipt;
+    declare const documents: readonly Derivative2DocumentInput[];
+    declare const selector: Derivative2Selector;
+    const media2Input: PublishCompletedCaptureInput = { status: {} as never, assembly: {} as never, ownerToken: 'a'.repeat(64), publicationId: 'b'.repeat(32), stagingRoot: '/private/staging', destinationPath: '/bundle', derivatives2: documents, derivative2Artifacts: {'frames/renamed.png': {receiptId:'receipt', selector}} };
+    void result; void stage; void publish; void reconcile; void capture; void exactReceipt; void media2Input;
   `);
   await run(process.execPath, [tsc, '--noEmit', '--strict', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', sdkDeclarations], { cwd: publication });
 } finally {

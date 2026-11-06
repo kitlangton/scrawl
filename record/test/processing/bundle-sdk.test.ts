@@ -11,6 +11,7 @@ import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublic
 import { createRecordPublicationRecovery } from "../../dist/backend/publication/recovery.js";
 import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
 import { SqlitePublicationBindingStore } from "../../dist/backend/publication/store.js";
+import { encodeContactSheetLayout, prepareMedia2Request, selectDerivative2Artifact, validateDerivative2Document, type Derivative2DocumentInput } from "@apparent/engine-sdk/media2";
 
 const identity = { captureId: "a".repeat(32), materialsId: "b".repeat(32) };
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
@@ -88,6 +89,30 @@ function assemblyForDestination(input: BundleAssemblyInput, destinationPath: str
   input.admission.bundlePath = destinationPath;
   for (const frame of input.frames) frame.absolutePath = join(destinationPath, frame.artifactPath);
   return assembleCanonicalBundle(input);
+}
+
+function derivative2For(input: BundleAssemblyInput, requestedBundleMs = [1000]): Derivative2DocumentInput {
+  const materials = validateMaterialsDocument(input.manifest, input.payloadBytes);
+  const layout = { schema: "apparent.contact-sheet-layout/1" as const, width: 400, height: 300, backgroundRgb: [0, 0, 0] as [number, number, number], fit: "stretch" as const, sampling: "legacy-bilinear" as const, clipping: "reject" as const, tiles: [{ requestIndex: 1, x: 0, y: 0, width: 400, height: 300 }] };
+  const request = prepareMedia2Request({ schema: "apparent.retained-frame-request/1", materials: materials.manifest.key, leaseId: materials.payload.leaseId,
+    jobId: "9".repeat(32), outputDirectory: "/private/sdk-output/derivative-job", requestedBundleMs,
+    limits: { maxFrames: 2, maxEdge: 4096, maxTotalPixels: 64_000_000, deadlineMs: 10_000 }, contactSheet: layout }, materials).request;
+  const sourceFrame = input.artifacts.find(artifact => artifact.role === "frame")!;
+  const sourceSheet = input.artifacts.find(artifact => artifact.role === "contact-sheet")!;
+  const frameFiles = requestedBundleMs.map((_, index) => ({ relativePath: `native/frame-${index + 1}.png`,
+    identity: index === 0 ? sourceFrame.identity : { ...sourceFrame.identity, inode: `native-frame-${index + 1}` }, sha256: sourceFrame.sha256 }));
+  const sheetFile = { relativePath: "native/sheet.png", identity: sourceSheet.identity, sha256: sourceSheet.sha256 };
+  const payload = { schema: "apparent.media-derivative-payload/2", materials: materials.manifest.key, leaseId: materials.payload.leaseId,
+    jobId: request.jobId, receiptId: "8".repeat(32), root: request.outputDirectory,
+    requestSha256: prepareMedia2Request(request, materials).sha256,
+    frames: requestedBundleMs.map((requested, index) => ({ requestIndex: index + 1, requestedBundleMs: requested, effectiveVideoMs: Math.max(0, requested - 125), actualVideoMs: Math.max(0, requested - 125), clampedToStart: false, clampedToEnd: false,
+      width: 800, height: 600, encoding: "png", byteLength: sourceFrame.byteLength, file: frameFiles[index] })),
+    contactSheet: { encoding: "png", byteLength: sourceSheet.byteLength, file: sheetFile, width: 400, height: 300,
+      layoutSha256: sha(encodeContactSheetLayout(layout)), layout } };
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  const receiptFile = { relativePath: "receipt.json", identity: { device: "1", inode: "native-receipt", size: bytes.byteLength, modifiedNs: "3" }, sha256: sha(bytes) };
+  return { envelope: { schema: "apparent.media-derivative/2", materials: materials.manifest.key, leaseId: materials.payload.leaseId, jobId: request.jobId,
+    receiptId: payload.receiptId, root: payload.root, requestSha256: payload.requestSha256, receiptFile, payload }, bytes, request, layoutBytes: encodeContactSheetLayout(layout) };
 }
 const assertAbsent = (path: string) => assert.rejects(lstat(path), { code: "ENOENT" });
 
@@ -258,6 +283,7 @@ test("private staging prepares SDK-validated plan without touching destination o
       materialsManifest: input.manifest, materialsPayloadBytes: input.payloadBytes, assembly,
       artifactBytes: Object.fromEntries(input.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
     };
+
     const winner = prepareRecordPublication(concurrent);
     const conflicting = prepareRecordPublication({ ...concurrent, artifactBytes: { ...concurrent.artifactBytes, "frames/frame-01.png": new Uint8Array([1, 2, 3]) } });
     const losing = assert.rejects(conflicting, /in-flight staging binding/u);
@@ -267,6 +293,73 @@ test("private staging prepares SDK-validated plan without touching destination o
     assert.match(summary, /hello there/u);
     assert.ok(summary.includes(destinationPath), "assembled summary retains the bound absolute bundle path");
     assert.match(new TextDecoder().decode(assembly.apparentJson), /contact-sheet\.png/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("derivative/2 keeps duplicate request times in ordered one-based frame slots", async () => {
+  const input = await fixture();
+  const document = derivative2For(input, [1000, 1000]);
+  const materials = validateMaterialsDocument(input.manifest, input.payloadBytes);
+  const receipt = validateDerivative2Document(document, materials);
+  assert.deepEqual(receipt.payload.frames.map(frame => [frame.requestIndex, frame.requestedBundleMs]), [[1, 1000], [2, 1000]]);
+  assert.equal(selectDerivative2Artifact(receipt, { kind: "frame", requestIndex: 2 }).file.relativePath, "native/frame-2.png");
+});
+
+test("derivative/2 staging maps native frame and sheet seals to final paths and keeps native selectors", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-stage-media2-"));
+  const destinationPath = join(root, "final.apparent");
+  try {
+    const assembly = assemblyForDestination(input, destinationPath);
+    const derivatives2 = [derivative2For(input)];
+    const derivative2Artifacts = {
+      "frames/frame-01.png": { receiptId: "8".repeat(32), selector: { kind: "frame" as const, requestIndex: 1 } },
+      "contact-sheet.png": { receiptId: "8".repeat(32), selector: { kind: "contact-sheet" as const } },
+    };
+    const prepared = await prepareRecordPublication({ ...stagingInput(input, assembly, root, "1".repeat(32), destinationPath), derivatives2, derivative2Artifacts });
+    assert.equal(prepared.plan.entries.find(entry => entry.role === "frame")?.input.kind, "derivative2");
+    assert.equal(prepared.plan.entries.find(entry => entry.role === "contact-sheet")?.input.kind, "derivative2");
+    assert.equal(prepared.plan.entries.find(entry => entry.role === "frame")?.relativePath, "frames/frame-01.png");
+    assert.equal(prepared.input.derivatives2?.length, 1);
+    await assertAbsent(destinationPath);
+    const exactReplay = await prepareRecordPublication({ ...stagingInput(input, assembly, root, "1".repeat(32), destinationPath), derivatives2, derivative2Artifacts });
+    assert.equal(exactReplay.input.planFile.planSha256, prepared.input.planFile.planSha256);
+    const changedDocument = structuredClone(derivatives2[0]!);
+    changedDocument.bytes = new Uint8Array([...changedDocument.bytes, 0x20]);
+    const changedEnvelope = changedDocument.envelope as { receiptFile: { sha256: string; identity: { size: number } } };
+    changedEnvelope.receiptFile.sha256 = sha(changedDocument.bytes);
+    changedEnvelope.receiptFile.identity.size = changedDocument.bytes.byteLength;
+    await assert.rejects(prepareRecordPublication({ ...stagingInput(input, assembly, root, "1".repeat(32), destinationPath), derivatives2: [changedDocument], derivative2Artifacts }), /replay conflicts/u);
+
+    const missing = { ...stagingInput(input, assembly, join(root, "missing"), "2".repeat(32), destinationPath), derivatives2, derivative2Artifacts: { "frames/frame-01.png": derivative2Artifacts["frames/frame-01.png"] } };
+    await assert.rejects(prepareRecordPublication(missing), /mapping is required/u);
+    await assertAbsent(join(root, "missing"));
+    const changedRequest = structuredClone(derivatives2[0]!);
+    (changedRequest.request as { limits: { deadlineMs: number } }).limits.deadlineMs++;
+    await assert.rejects(prepareRecordPublication({ ...stagingInput(input, assembly, join(root, "changed"), "3".repeat(32), destinationPath), derivatives2: [changedRequest], derivative2Artifacts }), /request binding mismatch/u);
+    await assertAbsent(join(root, "changed"));
+
+    const mismatches: Array<[string, (assemblyCopy: ReturnType<typeof assembleCanonicalBundle>, document: Derivative2DocumentInput, bindings: typeof derivative2Artifacts) => void]> = [
+      ["lease", (_assembly, document) => { (document.request as { leaseId: string }).leaseId = "4".repeat(32); }],
+      ["job", (_assembly, document) => { (document.request as { jobId: string }).jobId = "5".repeat(32); }],
+      ["materials", (_assembly, document) => { (document.request as { materials: { captureId: string } }).materials.captureId = "6".repeat(32); }],
+      ["selector", (_assembly, _document, bindings) => { bindings["frames/frame-01.png"]!.selector = { kind: "frame", requestIndex: 2 }; }],
+      ["role", (assemblyCopy) => { assemblyCopy.inventory.entries.find(entry => entry.path === "frames/frame-01.png")!.role = "contact-sheet"; }],
+      ["hash", (assemblyCopy) => { assemblyCopy.inventory.entries.find(entry => entry.path === "frames/frame-01.png")!.sha256 = "0".repeat(64); }],
+      ["length", (assemblyCopy) => { assemblyCopy.inventory.entries.find(entry => entry.path === "frames/frame-01.png")!.byteLength++; }],
+      ["identity", (assemblyCopy) => { assemblyCopy.inventory.entries.find(entry => entry.path === "frames/frame-01.png")!.identity!.inode = "other-native-file"; }],
+      ["layout", (_assembly, document) => { document.layoutBytes![0] ^= 1; }],
+      ["unknown path", (_assembly, _document, bindings) => { bindings["unknown.png"] = bindings["frames/frame-01.png"]!; }],
+    ];
+    for (const [name, mutate] of mismatches) {
+      const stagingRoot = join(root, `refuse-${name}`);
+      const assemblyCopy = structuredClone(assembly);
+      const document = structuredClone(derivatives2[0]!);
+      const bindings = structuredClone(derivative2Artifacts);
+      mutate(assemblyCopy, document, bindings);
+      await assert.rejects(prepareRecordPublication({ ...stagingInput(input, assemblyCopy, stagingRoot, `${name.length}`.repeat(32), destinationPath), derivatives2: [document], derivative2Artifacts: bindings }));
+      await assertAbsent(stagingRoot);
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -407,6 +500,11 @@ test("completed-capture composition stages the assembled bytes, isolates inputs,
   const root = await mkdtemp(join(tmpdir(), "record-composition-success-"));
   const destinationPath = join(root, "final.apparent");
   assemblyForDestination(input, destinationPath);
+  const derivatives2 = [derivative2For(input)];
+  const derivative2Artifacts = {
+    "frames/frame-01.png": { receiptId: "8".repeat(32), selector: { kind: "frame" as const, requestIndex: 1 } },
+    "contact-sheet.png": { receiptId: "8".repeat(32), selector: { kind: "contact-sheet" as const } },
+  };
   let dispatched: { ownerToken: string; planBytes: Uint8Array } | undefined;
   const sdk = {
     async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
@@ -423,7 +521,7 @@ test("completed-capture composition stages the assembled bytes, isolates inputs,
   const request = {
     status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
     assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
-    stagingRoot: join(root, "staging"), destinationPath,
+    stagingRoot: join(root, "staging"), destinationPath, derivatives2, derivative2Artifacts,
   };
   try {
     const pending = publisher.publishCompletedCapture(request);
@@ -434,6 +532,10 @@ test("completed-capture composition stages the assembled bytes, isolates inputs,
     assert.equal("ownerToken" in status, false);
     assert.equal(dispatched?.ownerToken, "c".repeat(64));
     assert.ok(dispatched?.planBytes.byteLength);
+    const plan = JSON.parse(new TextDecoder().decode(dispatched!.planBytes));
+    assert.equal(plan.entries.find((entry: { role: string }) => entry.role === "frame").input.kind, "derivative2");
+    assert.equal(plan.entries.find((entry: { role: string }) => entry.role === "contact-sheet").input.kind, "derivative2");
+    assert.equal(plan.entries.find((entry: { role: string }) => entry.role === "frame").input.selector.requestIndex, 1);
     assert.equal(binaryJSONCalls, 0, "publication must hash binary values before JSON traversal");
     await assertAbsent(destinationPath);
   } finally {

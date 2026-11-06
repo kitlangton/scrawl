@@ -1,8 +1,0 @@
-{
-  "package": "@apparent/engine-sdk",
-  "version": "0.3.2",
-  "source": "verified public SDK artifact from exact main build 13477078422 of 42161991547, based on Engine PR #784 commit bfafe7b5ea011a5498545515210767d5668fe9bd",
-  "artifact": "engine-sdk-0.3.2.tgz",
-  "sha256": "3b539f7d978d692a5d7fca9f358047bc197d415f6764c33707cff5a710119d01",
-  "registryPublication": false
-}

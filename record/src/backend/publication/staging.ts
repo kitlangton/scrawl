@@ -7,15 +7,19 @@ import { preflightCapturePublication, type CapturePublishInput } from "@apparent
 import type { BundleAssembly } from "../processing/bundle/index.js";
 import type { MaterialsDocument, PublicationPlan, PublishEnvelope } from "@apparent/engine-sdk/capture";
 import { validateMaterialsDocument } from "@apparent/engine-sdk/capture";
+import { selectDerivative2Artifact, validateDerivative2Document, type Derivative2DocumentInput, type Derivative2Selector } from "@apparent/engine-sdk/media2";
 type DerivativeDocumentInput = NonNullable<CapturePublishInput["derivatives"]>[number];
 type PublicationEntry = PublicationPlan["entries"][number];
 type SealedFile = { relativePath: string; identity: { device: string; inode: string; size: number; modifiedNs: string }; sha256: string };
+export type Derivative2ArtifactBinding = Readonly<Record<string, { receiptId: string; selector: Derivative2Selector }>>;
 
 export interface PreparePublicationInput {
   ownerToken: string; publicationId: string; stagingRoot: string; destinationPath: string;
   materialsManifest: unknown; materialsPayloadBytes: Uint8Array; assembly: BundleAssembly;
   artifactBytes: Readonly<Record<string, Uint8Array>>;
   derivatives?: readonly DerivativeDocumentInput[];
+  derivatives2?: readonly Derivative2DocumentInput[];
+  derivative2Artifacts?: Derivative2ArtifactBinding;
 }
 /** inventory retains assembly/source metadata; actual staging identities are in plan.entries. */
 export interface PreparedRecordPublication { input: CapturePublishInput; plan: PublicationPlan; inventory: BundleAssembly["inventory"] }
@@ -35,7 +39,8 @@ export async function prepareRecordPublication(input: PreparePublicationInput): 
     materialsManifest:input.materialsManifest, materialsPayloadSha256:hash(input.materialsPayloadBytes),
     apparentJsonSha256:hash(input.assembly.apparentJson), summarySha256:hash(input.assembly.summaryMd),
     artifacts: Object.entries(input.artifactBytes).map(([path, bytes]) => [path, hash(bytes)]).sort(),
-    derivatives: input.derivatives?.map(d => ({envelope:d.envelope,bytesSha256:hash(d.bytes),requestedBundleMs:d.requestedBundleMs})) ?? [] })));
+    derivatives: input.derivatives?.map(d => ({envelope:d.envelope,bytesSha256:hash(d.bytes),requestedBundleMs:d.requestedBundleMs})) ?? [],
+    derivatives2: derivative2Fingerprint(input.derivatives2, input.derivative2Artifacts) })));
   const active = pending.get(input.publicationId);
   if (active) return active.fingerprint === fingerprint ? active.promise.then(result=>structuredClone(result)) : Promise.reject(new Error("Record publication identity conflicts with its in-flight staging binding"));
   const operation = prepare(input).finally(() => pending.delete(input.publicationId));
@@ -47,6 +52,43 @@ async function prepare(input: PreparePublicationInput): Promise<PreparedRecordPu
   const materials = validateMaterialsDocument(input.materialsManifest, input.materialsPayloadBytes);
   if (!id.test(input.publicationId) || !digest.test(input.ownerToken) || !isDeepStrictEqual(input.assembly.materials,materials) ||
       !isDeepStrictEqual(input.assembly.inventory.materials,materials.manifest.key)) throw new Error("Record staging identity differs from validated materials");
+  const derivative2ByReceipt = new Map<string, { input: Derivative2DocumentInput; envelope: ReturnType<typeof validateDerivative2Document> }>();
+  if ((input.derivatives2 === undefined) !== (input.derivative2Artifacts === undefined)) throw new Error("Record derivative/2 documents and artifact bindings must be supplied together");
+  for (const document of input.derivatives2 ?? []) {
+    const envelope = validateDerivative2Document(document, materials);
+    if (derivative2ByReceipt.has(envelope.receiptId)) throw new Error("Record derivative/2 receipt IDs must be unique");
+    derivative2ByReceipt.set(envelope.receiptId, { input: document, envelope });
+  }
+  if (input.derivative2Artifacts) {
+    for (const path of Object.keys(input.derivative2Artifacts)) if (!input.assembly.inventory.entries.some(entry => entry.path === path)) throw new Error(`Record derivative/2 mapping references unknown inventory path ${path}`);
+  }
+  const resolvedDerivative2 = new Map<string, { receipt: ReturnType<typeof validateDerivative2Document>; selector: Derivative2Selector }>();
+  const usedDerivative2Bindings = new Set<string>();
+  for (const item of input.assembly.inventory.entries) {
+    const binding = input.derivative2Artifacts?.[item.path];
+    if (input.derivatives2 && (item.role === "frame" || item.role === "contact-sheet") && !binding) throw new Error(`Record derivative/2 mapping is required for ${item.path}`);
+    if (!binding) continue;
+    if (item.role !== "frame" && item.role !== "contact-sheet") throw new Error(`Record derivative/2 mapping targets unsupported inventory role ${item.role}`);
+    const receipt = derivative2ByReceipt.get(binding.receiptId);
+    if (!receipt) throw new Error(`Record derivative/2 mapping references unknown receipt ${binding.receiptId}`);
+    const selected = selectDerivative2Artifact(receipt.envelope, binding.selector);
+    if (item.role !== (binding.selector.kind === "frame" ? "frame" : "contact-sheet") ||
+        selected.file.sha256 !== item.sha256 || selected.byteLength !== item.byteLength || !isDeepStrictEqual(selected.file.identity, item.identity))
+      throw new Error(`Record derivative/2 selection does not match assembled role, hash, length, and original file identity for ${item.path}`);
+    const artifact = input.artifactBytes[item.path];
+    if (!artifact || hash(artifact) !== item.sha256 || artifact.byteLength !== item.byteLength) throw new Error(`Record derivative/2 bytes differ from the original assembled artifact ${item.path}`);
+    const selectorKey = `${binding.receiptId}:${JSON.stringify(binding.selector)}`;
+    if (usedDerivative2Bindings.has(selectorKey)) throw new Error("Record derivative/2 selector cannot be bound to multiple final paths");
+    usedDerivative2Bindings.add(selectorKey);
+    resolvedDerivative2.set(item.path, { receipt: receipt.envelope, selector: binding.selector });
+  }
+  if (input.derivative2Artifacts) {
+    const expected = new Set([...derivative2ByReceipt].flatMap(([receiptId, { envelope }]) => [
+      ...envelope.payload.frames.map(frame => `${receiptId}:${JSON.stringify({ kind: "frame", requestIndex: frame.requestIndex })}`),
+      ...(envelope.payload.contactSheet ? [`${receiptId}:${JSON.stringify({ kind: "contact-sheet" })}`] : []),
+    ]));
+    for (const key of expected) if (!usedDerivative2Bindings.has(key)) throw new Error("Record derivative/2 documents contain an unused output");
+  }
   const root = input.stagingRoot;
   const destination = input.destinationPath;
   if (!isAbsolute(root) || resolve(root) !== root || !isAbsolute(destination) || resolve(destination) !== destination || root === destination) throw new Error("Record staging and destination paths must be absolute and normalized");
@@ -73,7 +115,8 @@ async function prepare(input: PreparePublicationInput): Promise<PreparedRecordPu
     ownerTokenSha256: hash(new TextEncoder().encode(input.ownerToken)), inventorySha256: hash(new TextEncoder().encode(JSON.stringify(input.assembly.inventory))),
     artifactsSha256: hash(new TextEncoder().encode(JSON.stringify(Object.entries(input.artifactBytes).map(([path, bytes]) => [path, hash(bytes)]).sort()))),
     apparentJsonSha256:hash(input.assembly.apparentJson), summarySha256:hash(input.assembly.summaryMd),
-    derivativesSha256:hash(new TextEncoder().encode(JSON.stringify(input.derivatives??[]))) };
+    derivativesSha256:hash(new TextEncoder().encode(JSON.stringify(input.derivatives??[]))),
+    derivatives2Sha256:hash(new TextEncoder().encode(JSON.stringify(derivative2Fingerprint(input.derivatives2, input.derivative2Artifacts)))) };
   const markerBytes = new TextEncoder().encode(JSON.stringify({ schema: "apparent.record-staging/1", ...markerBinding }));
   await writeExclusiveOrMatch(marker, markerBytes);
   const entries: PublicationEntry[] = [];
@@ -91,6 +134,11 @@ async function prepare(input: PreparePublicationInput): Promise<PreparedRecordPu
       continue;
     }
     // Assembly returns hashes/lengths, not caller-attested image bytes. Re-supply those exact bytes.
+    const derivative2 = resolvedDerivative2.get(item.path);
+    if (derivative2) {
+      entries.push({ relativePath: item.path, sha256: item.sha256, byteLength: item.byteLength, role, input: { kind: "derivative2", receipt: derivative2.receipt, selector: derivative2.selector } });
+      continue;
+    }
     const exactBytes = assembledBytes.get(item.path) ?? input.artifactBytes[item.path];
     if (!exactBytes || hash(exactBytes) !== item.sha256 || exactBytes.byteLength !== item.byteLength) throw new Error(`Record staging requires exact bytes for ${item.path}`);
     const target = join(work, item.path);
@@ -105,12 +153,17 @@ async function prepare(input: PreparePublicationInput): Promise<PreparedRecordPu
   await writeExclusiveOrMatch(planPath, planBytes);
   const planFile = await sealedFile(planPath, work, planBytes);
   const envelope: PublishEnvelope = { stagingRoot: work, planFile, planSha256: planFile.sha256 };
-  const publishInput: CapturePublishInput = { ownerToken: input.ownerToken, captureId: materials.manifest.key.captureId, leaseId: materials.payload.leaseId, publicationId: input.publicationId, planFile: envelope, planBytes, materials, ...(input.derivatives ? { derivatives: input.derivatives } : {}) };
+  const publishInput: CapturePublishInput = { ownerToken: input.ownerToken, captureId: materials.manifest.key.captureId, leaseId: materials.payload.leaseId, publicationId: input.publicationId, planFile: envelope, planBytes, materials, ...(input.derivatives ? { derivatives: input.derivatives } : {}), ...(input.derivatives2 ? { derivatives2: input.derivatives2 } : {}) };
   const checked = preflightCapturePublication(publishInput);
   if (checked.plan.publicationId !== input.publicationId) throw new Error("SDK publication preflight changed publication identity");
   try { await lstat(destination); throw new Error("Record publication destination appeared during staging"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   return { input: publishInput, plan: checked.plan, inventory: input.assembly.inventory };
+}
+
+function derivative2Fingerprint(documents: readonly Derivative2DocumentInput[] | undefined, bindings: Derivative2ArtifactBinding | undefined): unknown {
+  return { documents: documents?.map(document => ({ envelope: document.envelope, bytesSha256: hash(document.bytes), request: document.request,
+    layoutBytesSha256: document.layoutBytes ? hash(document.layoutBytes) : null })) ?? null, bindings: bindings ?? null };
 }
 
 async function ensurePrivateDirectory(path: string): Promise<void> {
