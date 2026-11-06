@@ -235,3 +235,18 @@ generation and expiry facts. A returned credential remains private stored facts;
 reading it does not authorize use or clear `authRequired`. This reader performs
 no credential/queue/config writes or renewal and does not switch installed CLI
 routing. The legacy writer remains authoritative.
+
+
+The `./state` export reads credential snapshots under the legacy `queue.lock`
+and rechecks local login incarnation, cancellation and revocation before a
+caller proceeds. It admits an existing private directory, pins directory/lock
+inodes, and consumes the published native lock lease. The only filesystem
+creation is the stable empty lock file; credential/config/queue JSON remains
+owned by the Rust writer. Locks span short local reads, never network or renewal.
+
+`readCredentialSnapshot` returns private stored facts, including `authRequired`.
+`assertCredentialSnapshotCurrent` allows access/refresh rotation in the same
+login, but refuses changed login identity, cancellation, pending revocation or
+`authRequired`. Neither function renews credentials, checks token expiry or
+establishes service authorization. The caller supplies an already approved
+server and retains the transport/authorization and installed-adoption gates.
