@@ -96,7 +96,24 @@ test("renders the actual React contribution with accessible controls and packed 
   assert.match(welcome, /Welcome\./); assert.match(welcome, /Sign-in is not available yet/); assert.match(welcome, /alt="apparent"/); assert.match(welcome, /assets\/apparent-app-icon\.svg/);
   await f.controller.dispatch("continue");
   const html = renderToStaticMarkup(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} }));
-  assert.match(html, /Pick your pen\./); for (const color of ["coral", "purple", "blue", "green"]) assert.match(html, new RegExp(`aria-label="${color} pen"`)); assert.equal((html.match(/<span aria-hidden="true" style="--pencil:/g) ?? []).length, 4); assert.match(html, /Choose a color for your pen/); assert.doesNotMatch(html, /ink pen|laser pen|cursor pen|Frog guide|A quick setup/); assert.match(html, /Try later/); f.controller.dispose();
+  assert.match(html, /Pick your pen\./); for (const color of ["coral", "purple", "blue", "green"]) assert.match(html, new RegExp(`aria-label="${color} pen"`)); assert.equal((html.match(/<span aria-hidden="true" style="--pencil:/g) ?? []).length, 4); assert.doesNotMatch(html, /Choose a color for your pen|ink pen|laser pen|cursor pen|Frog guide|A quick setup/); assert.match(html, /Try later/); f.controller.dispose();
+});
+
+test("setup presentation uses donor header and truthful three-step progress labels", async () => {
+  const f = fixture(); await f.controller.load();
+  const render = () => renderToStaticMarkup(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} }));
+  assert.match(render(), /apparent · setup/); assert.match(render(), /1 \/ 3/);
+  f.progress.value = { ...initialProgress(), status: "in-progress", stage: "pen" }; await f.controller.load(); assert.match(render(), /Pick your pen\./); assert.doesNotMatch(render(), /1 \/ 3/);
+  f.progress.value = { ...initialProgress(), status: "in-progress", stage: "permissions" }; await f.controller.load(); assert.match(render(), /2 \/ 3/);
+  f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await f.controller.load(); assert.match(render(), /Choose your shortcut\./); assert.match(render(), /3 \/ 3/);
+  f.controller.dispose();
+});
+
+test("screen ink keeps the donor trackpad hint beside the semantic Shift guide", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "screen-ink" }; await f.controller.load();
+  const html = renderToStaticMarkup(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} }));
+  assert.match(html, /Hold Shift and move your pointer to draw/); assert.match(html, /Pressing down on your trackpad\?/); assert.match(html, /No need\. Just hold Shift and glide\./);
+  f.controller.dispose();
 });
 
 test("mounted permission checklist stays compact and reports provider facts without false readiness", async () => {
@@ -252,7 +269,7 @@ test("mounted shortcut action reaches Record and cancellation returns practice t
   const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" }); Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
-  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Choose recording shortcut")!.click(); await Promise.resolve(); });
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => /^(Choose|Change) shortcut$/.test(b.textContent ?? ""))!.click(); await Promise.resolve(); });
   assert.equal(f.driver.commands().at(-1)?.type, "shortcut-begin-edit");
   f.progress.value = { ...f.progress.value, stage: "screen-ink", attemptId: "cancelled-practice" };
   await act(async () => { await f.controller.load(); publish(f.driver, [capture("cancelled-practice", "cancelled", [])]); await new Promise(resolve => setTimeout(resolve, 0)); });
@@ -276,7 +293,7 @@ test("mounted shortcut recorder submits modifier and physical key names, then re
     return { status: command.type === "shortcut-save" ? "applied" as const : "accepted" as const, requestId: command.requestId, snapshot: updated };
   };
   await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
-  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Choose recording shortcut")!.click(); await Promise.resolve(); });
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => /^(Choose|Change) shortcut$/.test(b.textContent ?? ""))!.click(); await Promise.resolve(); });
   const recorder = dom.window.document.querySelector<HTMLElement>("[aria-label='Shortcut recorder']")!;
   await act(async () => { recorder.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "F1", code: "F1", bubbles: true, cancelable: true })); });
   assert.match(dom.window.document.querySelector('[role="alert"]')?.textContent ?? "", /Use a letter or number/);
@@ -288,7 +305,9 @@ test("mounted shortcut recorder submits modifier and physical key names, then re
   assert.equal([...dom.window.document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Save shortcut")?.disabled, false);
   await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Save shortcut")!.click(); await Promise.resolve(); });
   assert.equal(f.controller.state.snapshot?.shortcut.effective, "Ctrl+Shift+R"); assert.equal(f.controller.state.snapshot?.shortcut.registration, "registered");
-  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Choose recording shortcut")!.click(); await Promise.resolve(); });
+  assert.match(dom.window.document.querySelector(".onboarding-fact")?.textContent ?? "", /Current shortcut: Ctrl\+Shift\+R.*Ready to use\./s);
+  assert.ok([...dom.window.document.querySelectorAll("button")].some(button => button.textContent === "Change shortcut"), "the saved effective shortcut is offered as a change, not presented as unselected");
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => /^(Choose|Change) shortcut$/.test(b.textContent ?? ""))!.click(); await Promise.resolve(); });
   await act(async () => { dom.window.document.querySelector<HTMLElement>("[aria-label='Shortcut recorder']")!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true })); await Promise.resolve(); });
   assert.equal(lastShortcutCommand, "shortcut-cancel"); assert.equal(f.driver.current().shortcut.draft, null);
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
