@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@apparent/engine-sdk": "file:../engine/sdk",
-    "@apparent/record": "file:vendor/record-0.1.0-89fcd0a.tgz",
+    "@apparent/record": "file:vendor/record-0.1.0-492ecb2.tgz",
     "@types/node": "22.19.0",
     "pngjs": "^7.0.0"
   },
