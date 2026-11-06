@@ -8,6 +8,7 @@ import * as ed25519 from '@noble/ed25519';
 import {
   signedBytes, signEnvelope, verifyEnvelope, validateRecipientEnvelope, decryptAge, encryptAge,
   decodeArchive, encodeArchive, splitAgeStream, joinAgeParts,
+  openRecipientArchive, validateRecipientEnvelopeBytes,
 } from '../src/index.ts';
 import type { Context, Asset, Signed } from '../src/index.ts';
 
@@ -46,6 +47,18 @@ const rustParts = await Promise.all(envelope.signed.chunks.map(async (chunk: Ass
   assert.equal(digest(bytes), chunk.sha256);
   return bytes;
 }));
+const rawEnvelope = await readFile(join(root, 'spool/envelope.json'));
+assert.deepEqual(await validateRecipientEnvelopeBytes(rawEnvelope, fixture.context, publicKey), envelope);
+const opened = await openRecipientArchive({ envelope: rawEnvelope, parts: rustParts,
+  identity: reader.age, expected: fixture.context, trustedSenderSigningKey: publicKey });
+assert.deepEqual(opened.context, fixture.context);
+assert.equal(opened.files.length, fixture.expected.length);
+for (const file of opened.files) {
+  const expected = fixture.expected.find(item => item.path === file.path);
+  assert.ok(expected);
+  assert.equal(Buffer.from(file.bytes).toString('hex'), expected.hex);
+  assert.equal(digest(file.bytes), file.sha256);
+}
 const ciphertext = joinAgeParts(rustParts);
 const archive = decodeArchive(await decryptAge(ciphertext, reader.age));
 assert.deepEqual(archive.inner.context, fixture.context);
