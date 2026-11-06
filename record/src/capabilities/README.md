@@ -130,11 +130,14 @@ color choices and are not exposed by this preference. Fixtures begin with an
 explicit synthetic stored coral selection, not a claim about product defaults.
 The donor's unnamed legacy red fallback must not be relabelled coral.
 
-The existing `shared/handoff/pen.rs::save` remains the authoritative writer. The
+The historical donor `shared/handoff/pen.rs::save` documents the original
+persist-before-apply semantics; that file is not a current-main writer. The
 published `@apparent/engine-sdk` 0.3.2 capture API, `@apparent/native-host/pen`,
-Record's `PEN_COLOR_RGB` palette, and its `RecordPenColorConfig` adapter are
+Record's `PEN_COLOR_RGB` palette, and its `createRecordPenConfigPort` factory
+(returning `RecordPenConfigPort`) are
 package-level contracts. Platform #779 supplies the top-level `penColor`
-config CAS/read seam, and #786 supplies the guarded pen-effect producer. Record
+config CAS/read seam through the authoritative `shared/config-native` writer,
+and #786 supplies the guarded pen-effect producer. Record
 #799 implements the injected read/CAS/guarded-apply/getter adapter. These source
 and contract seams are implemented, but the installed Platform host binding and
 activation are not established by package availability. Record publishes an
