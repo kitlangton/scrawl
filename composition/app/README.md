@@ -220,3 +220,11 @@ composition; qualify native window and clipboard boundaries and legacy-writer
 compatibility; then complete delivery/adoption under existing explicit gates.
 This Record-only slice does not include Onboarding factory, journey, adoption or
 activation work.
+
+Stream manifests may additionally seal `style.css` and at most nine font files
+under `fonts/` (TTF or WOFF2). These precompiled assets are copied and checked with
+the stream entry during assembly and packaged verification; undeclared files,
+symlinks and changed bytes are refused. The renderer loads the declared local
+stylesheet before mounting the stream, and CSP permits only local fonts. This
+does not grant renderer filesystem access or compile an owner's source during
+assembly.

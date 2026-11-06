@@ -44,6 +44,16 @@ async function start() {
   const registry = await import('./registry.js');
   const streams: Loaded[] = await Promise.all(registry.streams.map(async (input: unknown) => {
     const manifest = parseStreamManifest(input);
+    if (manifest.assets?.['style.css']) {
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = `./streams/${manifest.id}/style.css`;
+      await new Promise<void>((resolve, reject) => {
+        stylesheet.onload = () => resolve();
+        stylesheet.onerror = () => reject(new Error('Stream stylesheet could not load'));
+        document.head.append(stylesheet);
+      });
+    }
     const entry = `./streams/${manifest.id}/index.js`;
     const module = (await import(entry)).default as StreamModule;
     if (!module || module.id !== manifest.id || typeof module.Screen !== 'function' || typeof module.Settings !== 'function') {

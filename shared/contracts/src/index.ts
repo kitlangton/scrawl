@@ -12,6 +12,8 @@ export interface StreamManifest {
   reactVersion: typeof REACT_VERSION;
   entry: 'index.js';
   sha256: string;
+  /** Optional precompiled stylesheet and its font files, each sealed by SHA-256. */
+  assets?: Record<string, string>;
 }
 
 export interface StreamModule {
@@ -34,7 +36,8 @@ export function parseStreamManifest(value: unknown): StreamManifest {
 
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  if (keys.length !== manifestFields.size || keys.some((key) => !manifestFields.has(key))) {
+  if (keys.some(key => !manifestFields.has(key) && key !== 'assets')
+    || [...manifestFields].some(key => !Object.hasOwn(record, key))) {
     throw new TypeError('Stream manifest has missing or unknown fields');
   }
   if (record.schemaVersion !== 1 || record.shellApi !== APP_SHELL_API || record.reactVersion !== REACT_VERSION) {
@@ -55,6 +58,17 @@ export function parseStreamManifest(value: unknown): StreamManifest {
   if (typeof record.sha256 !== 'string' || !sha256Pattern.test(record.sha256)) {
     throw new TypeError('Invalid stream SHA-256');
   }
+  let assets: Record<string, string> | undefined;
+  if (Object.hasOwn(record, 'assets')) {
+    if (!record.assets || typeof record.assets !== 'object' || Array.isArray(record.assets)) throw new TypeError('Invalid stream assets');
+    const entries = Object.entries(record.assets);
+    if (!entries.length || entries.length > 10 || !Object.hasOwn(record.assets, 'style.css')) throw new TypeError('Invalid stream asset inventory');
+    for (const [name, hash] of entries) {
+      if ((name !== 'style.css' && (!/^fonts\/[A-Za-z0-9][A-Za-z0-9._-]{0,95}\.(ttf|woff2)$/.test(name) || name.includes('..')))
+        || typeof hash !== 'string' || !sha256Pattern.test(hash)) throw new TypeError('Invalid stream asset');
+    }
+    assets = Object.fromEntries(entries);
+  }
 
   return {
     schemaVersion: 1,
@@ -65,5 +79,6 @@ export function parseStreamManifest(value: unknown): StreamManifest {
     reactVersion: REACT_VERSION,
     entry: 'index.js',
     sha256: record.sha256,
+    ...(assets ? { assets } : {}),
   };
 }

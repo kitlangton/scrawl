@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmod, mkdtemp, rm, stat, symlink, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, stat, symlink, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { _electron as electron, expect } from '@playwright/test';
 import { buildShell, root } from '../scripts/build.ts';
 import { assemble, verifyAssembly } from '../scripts/assemble.ts';
 import { packageApplication } from '../scripts/package.ts';
 import { buildSyntheticStream } from './synthetic-stream.ts';
+import { digest } from '../scripts/artifacts.ts';
 
 test('packaged Electron composes screens and owner settings, preserves preferences and isolates renderer', { timeout: 120_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'foundation-electron-'));
@@ -69,6 +71,15 @@ test('packaged Electron composes screens and owner settings, preserves preferenc
   await buildSyntheticStream(betaSource, beta, { id: 'beta', label: 'Beta',
     description: 'Synthetic Beta workflow.', setting: { kind: 'select', label: 'Beta detail',
       initial: 'brief', options: ['brief', 'full'] } });
+  const recordCss = createRequire(import.meta.url).resolve('@apparent/record/ui/style.css');
+  const font = await readFile(join(dirname(recordCss), 'HostGrotesk-Variable.ttf'));
+  await mkdir(join(alpha, 'fonts'));
+  await writeFile(join(alpha, 'fonts/record.ttf'), font);
+  const css = '@font-face{font-family:"Host Grotesk";src:url("./fonts/record.ttf") format("truetype")} h2{font-family:"Host Grotesk";color:rgb(19,83,121)}';
+  await writeFile(join(alpha, 'style.css'), css);
+  const manifest = JSON.parse(await readFile(join(alpha, 'manifest.json'), 'utf8'));
+  await writeFile(join(alpha, 'manifest.json'), JSON.stringify({ ...manifest,
+    assets: { 'style.css': digest(css), 'fonts/record.ttf': digest(font) } }));
   const output = await assemble(shell, [alpha, beta], join(directory, 'app'));
   const bundle = await packageApplication(output, join(directory, 'packages'));
   application = await launch(bundle, join(directory, 'profile'));
@@ -78,6 +89,11 @@ test('packaged Electron composes screens and owner settings, preserves preferenc
   page.on('console', message => { if (message.type() === 'error') t.diagnostic(message.text()); });
   try { await expect(page.getByRole('heading', { name: 'Alpha screen' })).toBeVisible(); }
   catch (error) { t.diagnostic(await page.content()); t.diagnostic(errors.join('\n')); throw error; }
+  assert.deepEqual(await page.getByRole('heading', { name: 'Alpha screen' }).evaluate(async heading => {
+    const fonts = await document.fonts.load('18px "Host Grotesk"', 'Alpha screen');
+    return { color: getComputedStyle(heading).color, family: getComputedStyle(heading).fontFamily,
+      loaded: fonts.length > 0 && fonts.every(font => font.status === 'loaded') };
+  }), { color: 'rgb(19, 83, 121)', family: '"Host Grotesk"', loaded: true }, 'Packaged local stylesheet and real Record font load under the shipped CSP');
   await page.getByRole('button', { name: 'Beta', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Beta screen' })).toBeVisible();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();

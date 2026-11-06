@@ -17,6 +17,18 @@ test('parses a valid stream manifest', () => {
   assert.deepEqual(parseStreamManifest(validManifest), validManifest);
 });
 
+test('parses a bounded stylesheet and font inventory without allowing executable or escaping assets', () => {
+  const assets = { 'style.css': 'b'.repeat(64), 'fonts/HostGrotesk-Variable.ttf': 'c'.repeat(64) };
+  assert.deepEqual(parseStreamManifest({ ...validManifest, assets }), { ...validManifest, assets });
+  for (const invalid of [null, [], {}, { 'font.ttf': 'a'.repeat(64) },
+    { '../style.css': 'a'.repeat(64) }, { 'style.css': 'x' }, { 'index.js': 'a'.repeat(64) },
+    { 'style.css': 'a'.repeat(64), 'fonts/../escape.ttf': 'a'.repeat(64) },
+    { 'style.css': 'a'.repeat(64), 'fonts/a%2fttf': 'a'.repeat(64) },
+    { 'style.css': 'a'.repeat(64), ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`fonts/f${i}.ttf`, 'a'.repeat(64)])) }]) {
+    assert.throws(() => parseStreamManifest({ ...validManifest, assets: invalid }));
+  }
+});
+
 test('rejects non-object values', () => {
   for (const value of [null, [], 'manifest', 1]) {
     assert.throws(() => parseStreamManifest(value));
