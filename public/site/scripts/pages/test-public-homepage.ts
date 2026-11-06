@@ -263,6 +263,11 @@ test("source homepage preserves accepted responsive layout and interactions", as
             assert.equal(await page.evaluate(() => document.documentElement.style.overflow), "")
             await page.emulateMedia({ reducedMotion: "reduce" })
             await page.setViewportSize({ width: 568, height: 320 })
+            // Flush resize layout before cancelling its scroll. A pending smooth
+            // scroll can otherwise move the frog between pointer down and up.
+            await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
+            await lounge.evaluate(element => element.scrollIntoView({ behavior: "instant", block: "center" }))
+            await lounge.scrollIntoViewIfNeeded()
             await lounge.dblclick({ delay: 80 })
             await page.waitForFunction(() => document.querySelector(".frog-splash-dialog")?.getAttribute("data-stage") === "reveal")
             const fits = await splash.locator(".splash-message").evaluate(element => [...element.querySelectorAll("a,button,img")].every(child => {
