@@ -16,6 +16,10 @@
     "./host": {
       "types": "./dist/host.d.ts",
       "import": "./dist/host.js"
+    },
+    "./native": {
+      "types": "./dist/native.d.ts",
+      "import": "./dist/native.js"
     }
   },
   "scripts": {
