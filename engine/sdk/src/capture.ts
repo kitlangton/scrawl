@@ -27,6 +27,7 @@ export type {
   CandidateFacts,
   TranscriptFacts,
   StrokeFacts,
+  StrokeRgb,
   PublicationPlan,
   PublishEnvelope,
   InvocationFact,

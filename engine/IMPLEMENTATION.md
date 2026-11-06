@@ -77,6 +77,31 @@ Cold controls use Core's anchored per-capture owner lock and metadata transactio
 a durable v2 cancel bit defaults false when reading earlier journals. This is
 cooperative journal control, not a second capture registry. Core storage
 extensions and durable protocol glue are preserved from the earlier reviewed
-checkpoint, not substituted for Record output policy. Packaged runtime closure,
-real packaged SDK-to-worker execution, isolated guest proof, independent review
-and delivery admission remain open; no installed readiness is claimed.
+checkpoint, not substituted for Record output policy. The closed Linux package
+and SDK peer passed on private Xvfb and in the isolated guest; the guest retained
+its source/worker identity and materials and completed cleanup. Independent
+source review and a real fdsink teardown regression establish borrowed-FD
+ownership. Current-base integration and producer delivery admission remain gates;
+no installed readiness is claimed.
+
+## Recorded stroke color prerequisite
+
+The bounded color addition reuses the existing `shared/model.rs::Stroke`, clip/
+rebase, `capture/engine/export/ink.rs` plans and software/native export renderers.
+`rgb?: [u8;3]` records exact bytes per stroke; absent preserves the unnamed legacy
+renderer defaults and serialized legacy stroke/plan bytes. The legacy telemetry
+setter/getter select one atomic native value and snapshot it at stroke begin (pins
+at acceptance); no Engine palette mapping or config writer is introduced. Platform
+owns process-scoped application/readback and overlays; Record owns canonical
+assembly of optional RGB and settings. Whiteboard UI adaptation is not inferred
+from this screen-stroke boundary. These native donors still need physical moves
+under `engine/`; this compatible prerequisite does not introduce a parallel renderer
+or claim a standalone drawing/export operation or installed adoption.
+
+Focused proof covers exact RGB serialization/rebase/clipping, packed SDK 0.3.2
+imports/types, software PNG pixels, real Linux H.264 export, and the complete
+Swift helper build plus file-only native Mac stroke/pin/laser rendering. Explicit
+RGB uses sRGB on Mac; device RGB otherwise converts through the display profile.
+Absent-color Mac raw output was compared byte-for-byte with the original renderer.
+No screen/microphone capture or installed routing was exercised for this color
+slice; standalone capture/2 accepted-stroke collection remains unavailable.
