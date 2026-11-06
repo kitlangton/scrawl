@@ -41,3 +41,14 @@ test('strict bounded decoder rejects duplicate keys, malformed JSON and oversize
   assert.throws(()=>decodeStoredCredential(new TextEncoder().encode(raw),'upload',server),e=>String(e).includes('Invalid credential')&&!String(e).includes('secret'));
  }
 });
+
+test('a delayed response does not extend expiry beyond original issue time',()=>{
+ const c=read(renewable), merged=mergeRenewalReply(c,reply,100), responseObservedAt=500;
+ assert.equal(merged.expiresAt,160); assert.ok(merged.expiresAt!<responseObservedAt);
+ assert.equal(merged.refreshExpiresAt,400); assert.ok(merged.refreshExpiresAt!<responseObservedAt);
+});
+test('a rotated reply scope is refused without mutating private credential facts',()=>{
+ const c=read({...renewable,encryption_identity:'private-identity'}), before={...c};
+ assert.throws(()=>mergeRenewalReply(c,{...reply,scope:'read'},100),/Invalid credential/);
+ assert.deepEqual(c,before);
+});

@@ -23,7 +23,6 @@ export function decodeStoredCredential(bytes:Uint8Array,expectedScope:string,exp
  try {
  const raw=decodeStrictJson(bytes,32768);if(!obj(raw)||typeof raw.server!=='string'||typeof raw.scope!=='string'||typeof raw.token!=='string'||typeof raw.generation!=='string')bad(); const v=raw as Record<string,unknown>;
  const opt=(k:string)=>optional(v,k);
- for(const k of ['site','refreshToken','expiresAt','refreshExpiresAt','grantId','encryption_identity','accountInitial']) if(opt(k)!==null && opt(k)!==undefined) { /* validated below */ }
  const n=(k:string):number|null=>{const x=opt(k);return x===null||x===undefined?null:typeof x==='number'&&Number.isSafeInteger(x)&&x>=0?x:bad()};
  const str=(k:string):string|null=>{const x=opt(k);return x===null||x===undefined?null:typeof x==='string'?x:bad()};
  return validate({server:v.server as string,scope:v.scope as string,token:v.token as string,generation:v.generation as string,site:str('site'),refreshToken:str('refreshToken'),expiresAt:n('expiresAt'),refreshExpiresAt:n('refreshExpiresAt'),grantId:str('grantId'),authRequired:v.authRequired===undefined?false:v.authRequired as boolean,encryption_identity:str('encryption_identity'),accountInitial:str('accountInitial')},expectedScope,expectedServer);
