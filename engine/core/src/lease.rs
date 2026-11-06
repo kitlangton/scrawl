@@ -14,7 +14,7 @@ pub struct BundleLease {
     store: std::sync::Arc<crate::secure::Store>,
 }
 impl BundleLease {
-    pub(crate) fn check(&self) -> io::Result<()> {
+    pub fn check(&self) -> io::Result<()> {
         self.lock.check(&self.store)
     }
 }
@@ -44,6 +44,23 @@ impl Runtime {
             (store, "identity.lock".into())
         };
         let lock = crate::locking::Lock::open(&store, &key)?;
+        Ok(lock
+            .attempt(&store, !matches!(kind, LeaseKind::Maintenance))?
+            .then_some(BundleLease { lock, store }))
+    }
+
+    /// Acquire a process-independent lease on retained capture materials. These
+    /// anchors are separate from bundle leases; Maintenance is exclusive while
+    /// Read, Write and Finalize retain the existing shared semantics.
+    pub fn material_lease(
+        &self,
+        materials_id: &str,
+        kind: LeaseKind,
+    ) -> io::Result<Option<BundleLease>> {
+        crate::identity::validate(materials_id, 32)?;
+        let _tx = self.transaction()?;
+        let store = self.store.child("capture-material-leases")?;
+        let lock = crate::locking::Lock::open(&store, &format!("materials-{materials_id}.lock"))?;
         Ok(lock
             .attempt(&store, !matches!(kind, LeaseKind::Maintenance))?
             .then_some(BundleLease { lock, store }))

@@ -42,10 +42,6 @@ on:
       - 'enablement/verification/workflow-budget.ts'
       - 'enablement/verification/web/**'
       - 'LICENSE'
-  workflow_run:
-    workflows: [Connect producer]
-    branches: [main]
-    types: [completed]
 permissions:
   contents: read
 env:
@@ -94,7 +90,6 @@ jobs:
       PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
       PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
       PUBLIC_POSTHOG_ENVIRONMENT: production
-      VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
     steps:
       - uses: actions/checkout@v4
         with:
@@ -136,7 +131,6 @@ jobs:
       PUBLIC_POSTHOG_TOKEN: phc_synthetic
       PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
       PUBLIC_POSTHOG_ENVIRONMENT: synthetic
-      VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
     steps:
       - uses: actions/checkout@v4
         with:
@@ -169,12 +163,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      CONNECT_BROWSER_ARTIFACT: ${{ github.workspace }}/.build/connect-browser/dist
       PUBLIC_POSTHOG_ENABLED: ${{ vars.PUBLIC_POSTHOG_ENABLED || 'true' }}
       PUBLIC_POSTHOG_TOKEN: ${{ vars.PUBLIC_POSTHOG_TOKEN }}
       PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
       PUBLIC_POSTHOG_ENVIRONMENT: production
-      VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
     steps:
       - name: Verification runtime budget and ownership
         working-directory: ${{ runner.temp }}
@@ -200,10 +192,6 @@ jobs:
           bun install --frozen-lockfile
           node --experimental-strip-types scripts/browser-setup/install.ts
           echo "CHROME_PATH=$(node --input-type=module -e 'import {chromium} from "playwright-core"; console.log(chromium.executablePath())')" >> "$GITHUB_ENV"
-      - name: Consume verified immutable Connect browser artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node --experimental-strip-types public/site/scripts/connect/artifact.ts .build/connect-browser
       - uses: actions/download-artifact@v4
         with:
           name: ${{ needs.stream.outputs.artifact-name }}
@@ -212,20 +200,19 @@ jobs:
         env:
           PUBLIC_COMPONENT_INPUT_DIGEST: ${{ needs.stream.outputs.input-digest }}
         run: node --experimental-strip-types public/site/scripts/cd/stream-artifact.ts --current .build/public-component .build/public-artifact
-      - name: Compose independently verified Public and Connect bytes
+      - name: Stage the verified Public website
         working-directory: public/site
         run: |
           cp -a "$GITHUB_WORKSPACE/.build/public-artifact" dist-apparent
-          node scripts/connect/compose-connect.ts
       - name: Prepare source-built Pages artifact
         working-directory: public/site
         run: |
-          node --test scripts/connect/artifact*.test.ts scripts/connect/test-compose-connect.ts scripts/pages/test-pages-package.ts scripts/pages/test-pages-video.ts
+          node --test scripts/artifact/public.test.ts scripts/pages/test-pages-package.ts scripts/pages/test-pages-video.ts
           node scripts/pages/prepare-pages.ts
-          COMPOSE_PUBLIC_INPUT="$GITHUB_WORKSPACE/.build/public-artifact" node scripts/site-build/verify-composed.ts
+          PUBLIC_ARTIFACT_INPUT="$GITHUB_WORKSPACE/.build/public-artifact" node scripts/artifact/verify.ts
           PUBLIC_THEME_ARTIFACT=public/site/dist-apparent THEME_SURFACES=public node ../../shared/ui/test/appearance.mjs
           node scripts/pages/prepare-pages-video.ts
-          SITE_ARTIFACT=dist-apparent node --test scripts/pages/test-public-homepage.ts scripts/connect/composed-browser.test.ts
+          SITE_ARTIFACT=dist-apparent node --test scripts/pages/test-public-homepage.ts
           node scripts/cd/publish-pages.ts seal ${{ github.sha }}
       - uses: actions/upload-artifact@v4
         with:
@@ -234,12 +221,6 @@ jobs:
           if-no-files-found: error
           # The checked public demos use .local-media; do not drop their assets.
           include-hidden-files: true
-          retention-days: 90
-      - uses: actions/upload-artifact@v4
-        with:
-          name: website-connect-input-${{ github.sha }}
-          path: .build/connect-browser-receipt.json
-          if-no-files-found: error
           retention-days: 90
       - name: Publish checked main to Cloudflare Pages (never Clanker or the Worker)
         env:

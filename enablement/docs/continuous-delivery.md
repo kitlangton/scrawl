@@ -9,15 +9,17 @@ An owner workflow schedules only its registered targets. Changed owners run fres
 PR checks/builds with read-only permissions and synthetic analytics settings. PR
 jobs do not reuse, seal, attest or publish deployment artifacts; main producer jobs
 may admit verified unchanged artifacts and then seal, attest and upload. Public
-follows successful trusted Connect producer completions and owns the only Pages
-publisher. The independent Worker publisher remains manual under its existing
+owns the only Pages publisher and has no Connect completion trigger. The independent Worker publisher remains manual under its existing
 activation contract. Other standalone workflows remain manual-only.
 This trigger policy supersedes other automatic pipeline descriptions below.
 Existing release admission still rejects diagnostic manual verification receipts;
 manual triggering does not waive publication gates.
 
 Feature-branch pushes without a PR retain inexpensive local selector, push-hook
-and release-admission contracts. Applicable Value-stream PR checks must pass
+and release-admission contracts, plus affected-owner architecture checks. Install
+the architecture checker once with `npm --prefix composition/architecture ci`;
+the hook fails clearly if it is unavailable and never installs packages.
+Applicable Value-stream PR checks must pass
 before merge; standalone Linux/macOS and Connect workflows remain manual-only.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
@@ -28,8 +30,8 @@ providers. Each paths filter includes its owner source, shared consumed inputs,
 registration/build contracts and its own workflow. The registry records each
 owner's supported targets and artifact stage; missing registrations remain
 explicitly pending or blocked. A component artifact does not certify installed
-capture routing or native readiness. Public's website pipeline consumes its
-verified component for composition and publication. Connect retains its separate
+capture routing or native readiness. Public's website pipeline validates and publishes only its
+verified Public component. Connect retains its separate
 browser/Worker producer with explicit manual/reusable invocation; the registered
 Connect client package has its own path-filtered component workflow. Feature-push selection runs the App Shell installed
 check for its package inputs. Changes under `composition/delivery/` run that
@@ -58,16 +60,16 @@ CI is not Apple Silicon runtime proof. An image change must still pass the same
 checks before Mac publication.
 
 Linux delivery triggers only after successful `Linux verification`.
-Public delivery runs in `stream-public.yml` on its main paths and successful
-Connect producer completions. A dedicated `stream (public, web)` job
-runs delivery/shared architecture contracts, then builds or reuses verified Public
-bytes. `deploy (public, web)` needs only that producer, not the other-owner matrix.
-It downloads the same-run component, validates its receipt against producer outputs,
-composes a compatible verified Connect artifact, and runs existing browser/privacy/
-movie checks before sealing and publishing under existing environment/CD/lock gates.
-Unavailable Connect bytes fail closed; successful Connect completion retries Public.
-The old website workflow now follows Connect only for its independent Worker publisher;
-it no longer deploys Pages. Whole-workflow runtime audits remain after terminal jobs.
+Public delivery runs through `stream-public.yml` on matching main pushes.
+Its dedicated producer builds or reuses only the Public website component. Its
+`deploy (public, web)` job needs only that producer, validates the same-run artifact
+and Public-only resource/browser/theme/movie seams, then seals and publishes under
+existing Pages environment/CD/lock/readback gates. It never fetches, composes,
+tests or publishes Connect browser bytes and has no Connect completion trigger.
+Connect independently owns canonical /connect UI, API, authentication, recording
+links and resources through its existing Worker. Its verified live cutover clears
+the former composition dependency. Retain the app Worker routes after Public-only
+publication; restore combined Pages before removing them during rollback.
 Connect's paired browser/Worker producer combines that input selection with existing
 authenticated artifact compatibility checks; missing compatible bytes still requires
 production. Its recipient matrix has an independent cheap selector, so web artifact
@@ -80,12 +82,11 @@ require their real reviewed artifacts and applicable platform acceptance.
 Public and Connect builds invoke the color guard for their own frontend surfaces
 plus shared sources. The default repository-wide color guard still checks all
 owners, including Desktop; no fixed-color allowances or global checks were removed.
-Public consumes immutable independently verified Connect browser artifacts after
-trusted producer/run/digest, candidate input and current build-configuration checks.
-No compatible retained artifact means fail-closed admission, never a Connect rebuild.
-The common Public lane builds/tests/packages Public; its deployment job checks composition/browser seams and publishes the sealed candidate. The separate
-Worker call invokes Connect's reusable publisher after producer completion; it does
-not depend on Public checks. Existing activation/environment gates remain.
+Public produces and publishes only its website artifact. Connect browser bytes,
+route/resource/auth/privacy verification and gateway Worker publication belong to
+Connect. Public neither admits nor republishes Connect artifacts. The separate
+Worker call invokes Connect's reusable publisher through its manual entrypoint;
+it does not depend on Public checks. Existing activation/environment gates remain.
 Pages and Worker publication have independent job locks, respectively
 `website-production-eligible` and `web-delivery-production-eligible`; no caller
 workflow lock nests around the reusable Worker lock.
@@ -191,26 +192,26 @@ contain the new hook. Server-side policy is separate.
 ## Checks and artifact identity
 
 Public's credential-free verification runs its source build, owner tests,
-allowlisted package, Pages movie HTTP tests, immutable Connect artifact composition
-and artifact-only browser/analytics seam tests. Connect's independently verified
+allowlisted package, Public resource graph/byte-preservation checks, Pages movie
+HTTP tests and Public browser/analytics seam tests. Connect's independently verified
 producer owns service workerd/D1/R2, account/device/sharing browser and consent
 product tests. Shared inputs fan out through complete candidate input validation.
 
 Public/common delivery pins Node 22.23.4; Connect retains its declared Node pin.
 Bun 1.3.10 is pinned. Public browser installation and Pages tools
-come from its lockfile. Production uses the existing API origin. Synthetic Public
+come from its lockfile. Public has no Connect API-origin dependency. Synthetic Public
 analytics output stays in private producer temporary directories without Connect;
 it is never uploaded. Pages artifacts include the compiled Function, provider
 configuration and complete checksum manifest outside the served tree, retained
-for 90 days. Source-built Public bytes and Connect resource graphs survive
-composition without overlays. The publisher uses `--no-bundle`, verifies downloaded
+for 90 days. Source-built Public bytes survive metadata preparation without
+overlays. The publisher uses `--no-bundle`, verifies downloaded
 bytes and reads back the immutable and canonical deployment. Older/equal revisions
 cannot replace newer published source. Provider readback and remote errors still
 fail; a superseded Pages candidate reports an intentional successful skip.
 
 ## Website activation: Cloudflare Pages
 
-The `deploy (public, web)` job in the reusable Public delivery execution is the only Public
+The `deploy (public, web)` job in `stream-public.yml` is the only Public
 production entrypoint. The publisher rejects other workflows and job identities.
 It publishes only the sealed source-built `dist-apparent` to the isolated
 `apparent-capture` Pages project, using `public/site/scripts/cd/publish-pages.ts` and

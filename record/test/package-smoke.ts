@@ -42,10 +42,13 @@ try {
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
+    import { createRecordNativePort, type NativeHostPortInput } from '@apparent/record/host/native';
     import { createRecordFixture } from '@apparent/record/fixtures';
     declare const destinations: AbsentDestinationAllocator;
     const exact: Promise<AbsentDestinationBinding> = destinations.reserveExact('request', '/home/user/output/requested.apparent');
-    void [RecordWorkflow, createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, decodeSelectedFrames, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory, createRecordCapabilityProvider, hasConfirmedArtifactOpen, exact];
+    declare const nativePort: NativeHostPortInput;
+    void createRecordNativePort(nativePort, { requiredPermissionIds: ['screen-recording'] });
+    void [RecordWorkflow, createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, decodeSelectedFrames, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory, createRecordCapabilityProvider, createRecordNativePort, hasConfirmedArtifactOpen, exact];
   `);
   const tsc = path.join(root, 'node_modules/typescript/bin/tsc');
   await run(process.execPath, [tsc, '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', declarations], { cwd: headless });
@@ -57,9 +60,10 @@ try {
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
+    import { createRecordNativePort } from '@apparent/record/host/native';
     import { createRecordFixture } from '@apparent/record/fixtures';
     const require = createRequire(import.meta.url);
-    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk']) assert.throws(() => require.resolve(name));
+    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk', '@apparent/app-contracts']) assert.throws(() => require.resolve(name));
     assert.equal(typeof RecordWorkflow, 'function');
     assert.equal(typeof createRecordHostRuntime, 'function');
     const requested = process.cwd() + '/requested.apparent';
@@ -71,6 +75,7 @@ try {
     assert.equal(typeof decodeSelectedFrames, 'function');
     for (const exported of [SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory]) assert.equal(typeof exported, 'function');
     assert.equal(typeof createRecordCapabilityProvider, 'function');
+    assert.equal(typeof createRecordNativePort, 'function');
     assert.equal(typeof hasConfirmedArtifactOpen, 'function');
     assert.equal(hasConfirmedArtifactOpen(createRecordFixture().driver.current(), 'unknown'), false);
     console.log('headless packed runtime and declaration consumer passed');
@@ -78,11 +83,14 @@ try {
   process.stdout.write(runtime.stdout);
 
   // The canonical bundle subpath uses only the packed public SDK contract.
-  await run('npm', ['install', '--no-audit', '--no-fund', tarball, path.join(root, 'vendor/engine-sdk-0.3.1.tgz')], { cwd: bundle });
+  const sdkArtifact = process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root, 'vendor/engine-sdk-0.3.2.tgz');
+  const sdkBytes = await readFile(sdkArtifact);
+  assert.equal(createHash('sha256').update(sdkBytes).digest('hex'), '3b539f7d978d692a5d7fca9f358047bc197d415f6764c33707cff5a710119d01');
+  await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact], { cwd: bundle });
   const bundleDeclarations = path.join(bundle, 'consumer.ts');
   await writeFile(bundleDeclarations, `
-    import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators } from '@apparent/record/processing/bundle';
-    import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts } from '@apparent/engine-sdk/capture';
+    import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators, type CanonicalStroke } from '@apparent/record/processing/bundle';
+    import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts, type StrokeRgb } from '@apparent/engine-sdk/capture';
     import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
     const validators: BundleValidators = { materials: validateMaterialsDocument, fact: validateFactFile };
     const consume = (input: BundleAssemblyInput) => assembleCanonicalBundle(input, validators);
@@ -90,7 +98,9 @@ try {
       const loaded = await readCaptureMaterials(input);
       return assembleCanonicalBundle({ ...policy, manifest: loaded.materials.manifest, payloadBytes: loaded.payloadBytes, facts: loaded.assemblyFacts }, validators);
     };
-    void loadAndAssemble; void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
+    const rgb: StrokeRgb = [12, 34, 56];
+    const canonical: CanonicalStroke = { id: 'record-mapping', t0: 0, t1: 1, fw: 1, fh: 1, pts: [0, 0, 0], rgb };
+    void canonical; void loadAndAssemble; void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
   `);
   const bundleTsc = path.join(root, 'node_modules/typescript/bin/tsc');
   await run(process.execPath, [bundleTsc, '--noEmit', '--strict', '--types', 'node', '--typeRoots', path.join(root, 'node_modules/@types'), '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', bundleDeclarations], { cwd: bundle });
@@ -125,10 +135,7 @@ try {
   process.stdout.write(uiResult.stdout);
   // The publication profile explicitly supplies the published SDK; it is not
   // installed for the other headless or UI consumers.
-  const sdkArtifact = process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root, 'vendor/engine-sdk-0.3.1.tgz');
-  const sdkBytes = await readFile(sdkArtifact);
-  assert.equal(createHash('sha256').update(sdkBytes).digest('hex'), '1b605f06273f9c1a134b68b0ed233605b120813214914ca70ed0c8c5f0346f04');
-  const sdkTarball = path.join(scratch, 'engine-sdk-0.3.1.tgz'); await copyFile(sdkArtifact, sdkTarball);
+  const sdkTarball = path.join(scratch, 'engine-sdk-0.3.2.tgz'); await copyFile(sdkArtifact, sdkTarball);
   await run('npm', ['install', '--no-audit', '--no-fund', sdkTarball, tarball], { cwd: publication });
   const publicationResult = await run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';

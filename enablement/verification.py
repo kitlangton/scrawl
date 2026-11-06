@@ -432,6 +432,7 @@ def run_pr_checks(selection=None):
     subprocess.run(["node", "--experimental-strip-types", "--test", "enablement/file-length/check.test.ts"], cwd=ROOT, check=True)
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
     paths = selection["paths"] if selection else []
+    run_architecture_check(paths)
     if (selection or {}).get("agent", agent_tests_selected(paths)):
         run_agent_tests()
     if (selection or {}).get("app_shell", app_shell_selected(paths)):
@@ -941,6 +942,49 @@ def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_ro
                         ["node", "--test", "test/artifact.test.mjs", "test/closure.test.mjs", "test/routes.test.mjs"],
                         ["node", "scripts/test-browser.mjs"]):
             subprocess.run(command, cwd=browser, check=True)
+
+
+ARCHITECTURE_OWNER_ROOTS = {
+    "engine/": "engine", "record/": "record", "agent/": "agent",
+    "onboarding/": "onboarding", "shared/": "shared", "composition/": "composition",
+    "connect/service/": "connect", "connect/delivery/client/": "connect",
+    "connect/tooling/hosting/": "connect",
+}
+
+
+def architecture_owners(paths):
+    """Return affected owners, empty for unrelated docs, or None when uncertain."""
+    owners = set()
+    for path in paths:
+        if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
+            continue
+        if path.startswith("composition/architecture/") or path.startswith(("shared/contracts/", "shared/ui/")):
+            return None
+        matched = next((owner for prefix, owner in ARCHITECTURE_OWNER_ROOTS.items()
+                        if path.startswith(prefix)), None)
+        if matched is None:
+            # Legacy/native and Public surfaces have separate owner checks;
+            # shared/architecture changes must check every TS owner.
+            if path.startswith(("capture/", "public/", "connect/web/")):
+                continue
+            return None
+        owners.add(matched)
+    return sorted(owners) if owners else ([] if paths else None)
+
+
+def run_architecture_check(paths):
+    owners = architecture_owners(paths)
+    if owners == []:
+        return
+    if not (ROOT / "composition/architecture").is_dir():
+        raise RuntimeError("Architecture check package is missing: restore composition/architecture before pushing")
+    if not (ROOT / "composition/architecture/node_modules/typescript").exists():
+        raise RuntimeError("Architecture check needs installed TypeScript dependencies: run npm ci in composition/architecture; the hook never installs dependencies")
+    command = ["node", "--experimental-strip-types", "composition/architecture/src/cli.ts", "--root", "."]
+    if owners:
+        for owner in owners:
+            command.extend(["--owner", owner])
+    subprocess.run(command, cwd=ROOT, check=True)
 
 
 def hook_budget(seconds, command):

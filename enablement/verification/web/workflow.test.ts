@@ -16,7 +16,7 @@ const section = (source: string, name: string) => source.split(`\n  ${name}:\n`)
 const registrations: Record<string, string> = {
   'app-shell': 'composition/app/delivery.json', record: 'record/delivery.json',
   'connect-browser': 'connect/tooling/hosting/delivery.json', 'connect-client': 'connect/delivery.json', engine: 'engine/delivery.json',
-  'engine-native': 'engine/delivery/native/delivery.json', 'engine-media-native': 'engine/delivery/media/delivery.json',
+  'engine-native': 'engine/delivery/native/delivery.json', 'engine-capture-native': 'engine/delivery/capture/delivery.json', 'engine-media-native': 'engine/delivery/media/delivery.json',
   'platform-config': 'composition/config/native/delivery.json', onboarding: 'onboarding/delivery.json',
   agent: 'agent/delivery.json', public: 'public/delivery.json',
 }
@@ -76,14 +76,19 @@ test('shared composite actions hold steps while owner workflows own jobs and rec
   }
 })
 
-test('Public alone owns Pages deployment and retries after trusted Connect completion', () => {
+test('Public alone owns Pages deployment without Connect inputs or completion triggers', () => {
   const publicEntry = entry('public')
   assert(paths(publicEntry).includes('public/**'))
-  assert.match(publicEntry, /workflow_run:\n\s+workflows: \[Connect producer\]/)
-  assert.match(publicEntry, /workflow_run\.conclusion == 'success'/)
-  assert.match(publicEntry, /head_repository\.full_name == github\.repository/)
+  assert.doesNotMatch(publicEntry, /workflow_run:|Connect producer|VITE_HOSTED_API_ORIGIN|CONNECT_BROWSER_ARTIFACT/)
   assert.match(publicEntry, /name: deploy \(public, web\)/)
-  assert.match(publicEntry, /needs: stream/)
+  const deploy = section(publicEntry, 'deploy')
+  assert.deepEqual([...deploy.matchAll(/^\s+needs: (.+)$/gm)].map(match => match[1]), ['stream'])
+  assert.doesNotMatch(deploy, /scripts\/connect\/|CONNECT_BROWSER_ARTIFACT|COMPOSE_|connect-browser|VITE_HOSTED_API_ORIGIN/)
+  assert.match(deploy, /scripts\/artifact\/verify\.ts/)
+  assert.match(deploy, /node --experimental-strip-types scripts\/browser-setup\/install\.ts/)
+  assert.doesNotMatch(deploy, /playwright-core install --with-deps/)
+  assert.match(deploy, /scripts\/pages\/prepare-pages-video\.ts/)
+  assert.match(deploy, /scripts\/pages\/test-public-homepage\.ts/)
   assert.match(section(publicEntry, 'deploy'), /permissions:\n      contents: read\n      actions: read/)
   assert.match(publicEntry, /stream-artifact\.ts --current/)
   assert.match(publicEntry, /publish-pages\.ts seal/)

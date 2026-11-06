@@ -114,13 +114,25 @@ pub struct ScreenRecording {
 /// display's pixels: a 1x display isn't upscaled, and on Windows frames are pixels already,
 /// `MAX_CAPTURE_SCALE`).
 pub fn capture_size(target: &TargetInfo, long_edge: f64) -> (u32, u32) {
-    let max_dim = target.frame.width.max(target.frame.height).max(1.0);
-    let native = target.frame.scale.clamp(1.0, MAX_CAPTURE_SCALE);
-    let scale = (long_edge / max_dim).min(native);
-    (
-        ((target.frame.width * scale).round() as u32).max(48) & !1,
-        ((target.frame.height * scale).round() as u32).max(48) & !1,
-    )
+    #[cfg(target_os = "linux")]
+    {
+        apparent_capture_engine::capture_dimensions(
+            [target.frame.width, target.frame.height, target.frame.scale],
+            long_edge,
+            MAX_CAPTURE_SCALE,
+        )
+    }
+    // Other legacy callers retain their existing implementation until their native adoption.
+    #[cfg(not(target_os = "linux"))]
+    {
+        let max_dim = target.frame.width.max(target.frame.height).max(1.0);
+        let native = target.frame.scale.clamp(1.0, MAX_CAPTURE_SCALE);
+        let scale = (long_edge / max_dim).min(native);
+        (
+            ((target.frame.width * scale).round() as u32).max(48) & !1,
+            ((target.frame.height * scale).round() as u32).max(48) & !1,
+        )
+    }
 }
 
 /// What the platform's sampler thread records into. It runs until `stopping`, pushes candidate

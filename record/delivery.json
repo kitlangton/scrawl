@@ -11,7 +11,8 @@
   "verify": [
     "typecheck",
     "test",
-    "test:package"
+    "test:package",
+    "test:contracts"
   ],
   "build": "build",
   "targets": [

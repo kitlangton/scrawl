@@ -26,7 +26,9 @@ export function identity(env:Env) {
 function createIdentity(env: Env) {
  if(typeof env.BETTER_AUTH_SECRET!=='string'||env.BETTER_AUTH_SECRET.length<32)fail('auth_unavailable',503);
  return betterAuth({
-  appName:'Apparent Connect',baseURL:apiBase(env),basePath:apiBasePath(env)+'/auth',secret:env.BETTER_AUTH_SECRET,
+  // Better Auth ignores basePath when baseURL itself contains a pathname.
+  // Keep the mount exclusively in basePath so /connect/auth routes resolve.
+  appName:'Apparent Connect',baseURL:new URL(apiBase(env)).origin,basePath:apiBasePath(env)+'/auth',secret:env.BETTER_AUTH_SECRET,
   database:env.DB,
   logger:{disabled:true},
   onAPIError:{throw:true},
