@@ -126,8 +126,19 @@ export function nativeBuildIdentity(env = process.env, os = platform(), probe = 
   return { rustc: read(env.RUSTC || 'rustc', ['-vV']), cargo: read('cargo', ['--version']), cc: read(env.CC || 'cc', ['--version']),
     ...(os === 'darwin' ? { sdk: read('xcrun', ['--show-sdk-version']), clang: read('xcrun', ['clang', '--version']) } : {}), variables }
 }
+/** The signed installed package graph qualifies the Linux media closure;
+ * Mac additionally qualifies its Swift/AVFoundation toolchain and fixture tools. */
+export function mediaBuildIdentity(env = process.env, os = platform(), probe = (command: string, args: string[]) => execFileSync(command, args, { encoding: 'utf8', timeout: 15000 }).trim()) {
+  const read = (command: string, args: string[]) => { const value = probe(command, args).trim(); if (!value) throw new Error('Media runtime identity is unavailable'); return value }
+  const variables = [...new Set(['APPARENT_GST_PLUGIN_SOURCE', 'PKG_CONFIG', 'SWIFT_EXEC', 'SWIFTFLAGS', 'TOOLCHAINS', ...Object.keys(env).filter(key => /^(GST_|GSTREAMER_|GLIB_|GOBJECT_|GIO_|SYSTEM_DEPS_|SWIFT_|PKG_CONFIG_|LD_|DYLD_|FFMPEG_)/.test(key))])].sort().map(key => [key, env[key] ?? ''])
+  const ffmpeg = read('ffmpeg', ['-version'])
+  if (os === 'linux') return { ffmpeg, packages: read('dpkg-query', ['-W', '-f=${binary:Package}=${Version}\n']).split('\n').sort(),
+    gstreamer: read('pkg-config', ['--modversion', 'gstreamer-1.0']), linkFlags: read('pkg-config', ['--cflags', '--libs', 'gstreamer-1.0']), glibc: read('ldd', ['--version']), variables }
+  if (os === 'darwin') return { ffmpeg, swift: read('xcrun', ['swiftc', '--version']), osRelease: read('sw_vers', ['-productVersion']), variables }
+  throw new Error('Media reuse requires Linux or macOS')
+}
 export function supportsPrCandidate(id: string, target: string): boolean {
-  return id === 'engine' ? target === 'linux-x64' : ['engine-native', 'app-shell'].includes(id) && ['linux-x64', 'macos-x64'].includes(target)
+  return id === 'engine' ? target === 'linux-x64' : ['engine-native', 'app-shell', 'engine-media-native', 'platform-config'].includes(id) && ['linux-x64', 'macos-x64'].includes(target)
 }
 export function appShellBuildEnvironment(env = process.env) {
   return [...new Set(['NODE_OPTIONS', 'NODE_ENV', ...Object.keys(env).filter(key => /^(ELECTRON_|npm_config_|NPM_CONFIG_)/.test(key))])].sort().map(key => [key, env[key] ?? ''])
@@ -138,7 +149,7 @@ function fingerprint(root: string, owner: Owner, target: Target, revision = 'HEA
   const imageOS = process.env.ImageOS ?? ''
   const imageVersion = process.env.ImageVersion ?? ''
   if (!imageOS || !imageVersion) throw new Error('Runner image identity is unavailable')
-  return createHash('sha256').update(JSON.stringify({ source, environment: environmentDigest(owner), node: process.version, imageOS, imageVersion, platform: platform(), arch: arch(), target, ...(owner.id === 'engine-native' ? { native: nativeBuildIdentity() } : {}), ...(owner.id === 'app-shell' ? { packaging: appShellBuildEnvironment() } : {}) })).digest('hex')
+  return createHash('sha256').update(JSON.stringify({ source, environment: environmentDigest(owner), node: process.version, imageOS, imageVersion, platform: platform(), arch: arch(), target, ...(supportsPrCandidate(owner.id, target) && owner.language === 'native' ? { native: nativeBuildIdentity() } : {}), ...(owner.id === 'app-shell' ? { packaging: appShellBuildEnvironment() } : {}), ...(owner.id === 'engine-media-native' ? { media: mediaBuildIdentity() } : {}) })).digest('hex')
 }
 export function sourceDigest(root: string, owner: Owner, revision = 'HEAD'): string { return trackedInputs(root, owner, revision).digest }
 export function environmentDigest(owner: Owner, env = process.env): string { return createHash('sha256').update(JSON.stringify([...(owner.environment ?? [])].sort().map(key => [key, env[key] ?? '']))).digest('hex') }

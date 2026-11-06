@@ -2,6 +2,10 @@ import { app, BrowserWindow, session } from 'electron';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { registerOnboardingProgressBridge } from './onboarding-progress-bridge.cts';
+import { registerRecordBridge } from './record/bridge.cts';
+import { bindWindowShutdown } from './host-lifecycle.ts';
+import type { RecordHostServices } from './record/host.ts';
+let recordBound = false;
 let hostShutdown: Promise<void> = Promise.resolve();
 
 // Separate development identity; never touch the installed Apparent profile.
@@ -17,11 +21,16 @@ app.whenReady().then(async () => {
     callback({ cancel: !allowed });
   });
   let host: { store: import('@apparent/app-contracts/host').ProgressStore<unknown>; close(): Promise<void> } | undefined;
+  let recordHost: RecordHostServices | undefined;
   try {
     const ownerBinding = await import(pathToFileURL(join(__dirname, 'owner-binding.mjs')).href) as {
+      createRecordHostServices?: (input: { profilePath: string }) => Promise<RecordHostServices>;
       createOnboardingProgressStore?: (input: { configPath: string; configHostPath: string }) => Promise<typeof host>;
     };
-    if (typeof ownerBinding.createOnboardingProgressStore === 'function') {
+    if (typeof ownerBinding.createRecordHostServices === 'function') {
+      recordHost = await ownerBinding.createRecordHostServices({ profilePath: app.getPath('userData') });
+      recordBound = true;
+    } else if (typeof ownerBinding.createOnboardingProgressStore === 'function') {
       try {
         host = await ownerBinding.createOnboardingProgressStore({
           configPath: join(app.getPath('userData'), 'config.json'),
@@ -38,7 +47,16 @@ app.whenReady().then(async () => {
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => { if (url !== entry) event.preventDefault(); });
   const disposeProgress = host ? registerOnboardingProgressBridge({ window, entryUrl: entry, store: host.store }) : undefined;
-  window.once('closed', () => {
+  if (recordHost) {
+    const ownedHost = recordHost;
+    const disposeRecord = registerRecordBridge({ window, entryUrl: entry, client: ownedHost.record });
+    const lifecycle = bindWindowShutdown({ window,
+      canClose: async () => typeof ownedHost.canClose === 'function' && await ownedHost.canClose() === true,
+      close: () => ownedHost.close(), revoke: disposeRecord,
+      refused: reason => { if (!window.isDestroyed()) window.webContents.send('apparent:host:close-refused', reason); },
+    });
+    window.once('closed', () => { hostShutdown = lifecycle.settled(); });
+  } else window.once('closed', () => {
     disposeProgress?.();
     const closing = host;
     hostShutdown = closing ? Promise.resolve().then(() => closing.close()) : Promise.resolve();
@@ -47,5 +65,6 @@ app.whenReady().then(async () => {
   void window.loadURL(entry);
 });
 app.on('window-all-closed', () => {
-  void hostShutdown.catch(() => {}).finally(() => app.quit());
+  if (recordBound) void hostShutdown.then(() => app.quit()).catch(error => console.error('Record ownership unresolved; refusing quit', error));
+  else void hostShutdown.catch(() => {}).finally(() => app.quit());
 });

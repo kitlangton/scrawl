@@ -82,3 +82,30 @@ test("invalid server and cancellation fail before touching local state", async (
   const signal = new AbortController(); signal.abort();
   await assert.rejects(openRecipientReadSession("/not-read", server, resources, { signal: signal.signal }), category("cancelled"));
 });
+
+
+test("sessions recover only completed writer replies and retain the original incarnation fence", () => fixture(async f => {
+  const base = { ...f.credential, expiresAt: 1, refreshExpiresAt: 1 };
+  await f.put("read.credential", base);
+  await f.put("read.renewal", { base, issued: 90, completed: true });
+  await f.put("read.response", { scope: "read", grantId: "reader", accessToken: "recovered", refreshToken: "recovered-refresh", expiresIn: 100, refreshExpiresIn: 200 });
+  const before = await readFile(path.join(f.state, "read.credential"));
+  const session = await openRecipientReadSession(f.state, server, ports, options);
+  try {
+    assert.equal(session.credential.token, "recovered");
+    await session.assertCurrent(); await session.resolveIdentity();
+    assert.deepEqual(await readFile(path.join(f.state, "read.credential")), before);
+  } finally { session.dispose(); }
+}));
+
+test("unauthorized reload uses another writer's new token but refuses unchanged tokens or a new login", () => fixture(async f => {
+  const session = await openRecipientReadSession(f.state, server, ports, options);
+  try {
+    await assert.rejects(session.reloadAfterUnauthorized(), category("renewal_required"));
+    await f.put("read.credential", { ...f.credential, token: "writer-rotated" });
+    const next = await session.reloadAfterUnauthorized();
+    try { assert.equal(next.credential.token, "writer-rotated"); } finally { next.dispose(); }
+    await f.put("read.credential", { ...f.credential, token: "new-login", generation: "c".repeat(32) });
+    await assert.rejects(session.reloadAfterUnauthorized(), category("stale_snapshot"));
+  } finally { session.dispose(); }
+}));

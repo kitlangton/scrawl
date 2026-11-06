@@ -32,7 +32,7 @@ directory. Record does not discover or activate a production route. The consumer
 has a real Linux native PNG proof using an isolated synthetic completed H.264
 bundle and Engine's retained media artifact from source
 `463f0053908a9c6030d3c5665aacd10089884aa`; this does not claim capture-v1
-readiness, macOS media, or current-main artifact admission. Record retains the
+readiness or current-main artifact admission. A separate completed-bundle media/1 consumer passed on macOS 26.6.2 using the admitted x64 worker under Rosetta on Apple silicon; that is not Intel CPU, macOS 15, or native ARM proof. Record retains the
 same client and job ID after decode rejection/timeout and requires SDK inspect or
 cancel reconciliation before another dispatch or cleanup. Assembly preserves
 supplied transcript, selected frames, typed notes/pins, target/device,
@@ -53,11 +53,11 @@ collection states, plus the validated original materials/fact documents. It
 does not write or publish files, make a Saved claim, copy native materials,
 create a final destination, or perform clipboard/network/cleanup effects.
 
-The headless source install pins SDK 0.4.0 from the committed
-`vendor/engine-sdk-0.4.0.tgz` for development and declares `^0.4.0` as an
+The headless source install pins SDK 0.4.1 from the committed
+`vendor/engine-sdk-0.4.1.tgz` for development and declares `^0.4.1` as an
 optional peer. A host importing the bundle subpath must install that peer. The
 verified tarball SHA-256 is
-`7f64b8bba34b9c323d51b78d6e6f33aaac48971fd43c15347212190da5e51068`.
+`f0c4b9777033bcde0463e0442074e5af714cddaed1c45452802012e66d21c156`.
 
 Assembly requires at least one selected frame, one contact sheet, and exact
 sealed media references. Each artifact declares the exact materials key; media
@@ -88,10 +88,12 @@ assembly returns an exact unsupported error. This API is fixture-ready only;
 it does not decode raw materials, choose frames/marks, produce contact sheets,
 or establish native provenance/full-profile acceptance.
 
+`@apparent/record/processing/media2-consumer` exports `RecordMedia2Job` over the published SDK 0.4.1 client. It durably binds the original retained-material request, layout and hash before dispatch; ambiguous jobs inspect the same identity, and cancellation remains explicit. Validated derivatives remain processing inputs, never Saved. This is an offline-tested consumer contract; the native media/2 service and authenticated derivative production remain unavailable.
+
 The publication subpath has an optional SDK peer: hosts using it supply the
 published SDK. Other Record consumers do not need to install that peer. Source
-checks use the pinned `record/vendor/engine-sdk-0.4.0.tgz` package (SHA256
-`7f64b8bba34b9c323d51b78d6e6f33aaac48971fd43c15347212190da5e51068`),
+checks use the pinned `record/vendor/engine-sdk-0.4.1.tgz` package (SHA256
+`f0c4b9777033bcde0463e0442074e5af714cddaed1c45452802012e66d21c156`),
 without importing or building an adjacent Engine checkout. Publication remains
 separate from the package root.
 
@@ -269,8 +271,8 @@ fallback route remains authoritative.
 | Keyframes, transcript, bundle contents, warnings and default output | Partially implemented; full adoption blocked | Record formats supplied semantic inputs, including target/session context, interaction labels/marks and processing warnings; default keyframe selection, native final bundle publication and installed handoff are still unadopted. Provider maps Engine v1 `saved` to Record `processing`; only authenticated Record output facts may publish `saved` or a successful save outcome. |
 | Clipboard copy, link and artifact open | Exact-text clipboard adapter, provider receipt mapping and pill action implemented; installed adoption and other receipts remain gated | Platform #833 supplies the privileged clipboard write/readback port. `createRecordLocalClipboardPort` from `@apparent/record/host/native` formats the full handoff resolved for the exact authenticated Saved capture/artifact tuple, preflights Unicode and the injected producer byte limit, reads fresh native admission and performs one write. Only an exact digest/UTF-8-length readback becomes a `copy` outcome with `evidence: "native-write-readback"`, artifact and command IDs; dispatch acceptance, refusal and unknown never become copy success. The public client pill offers Copy handoff for a saved artifact and presents unknown/refusal without retry. Native producer Linux X11/Mac seam evidence is separate from this injected consumer and installed host assembly. The resolver does not authenticate publication; full automatic native publication/output/handoff adoption remains Record-owned. Link needs its existing producer; artifact open still needs exact-artifact viewer acknowledgement or supported OS observation. |
 | Pill/runtime installed binding | Runtime and public pill client composition implemented; native installed routing pending | Runtime #803 (`6f62dcb6`) and public `RecordClientPillHost` #807 are merged. The public pill API can compose the client/runtime with the provider; this is package-level integration, not installed renderer/native permissions or proof of full output. The existing fallback-aware route remains authoritative pending platform composition and affected native proof. |
-| Independent packaging and builds | Record TypeScript package and public exports implemented; end-to-end installed adoption incomplete | `record/package.json` exposes the headless host, capture/2 runtime, native host adapter, processing, publication and UI package entrypoints. The Record package build and packed-consumer checks use TypeScript/Node and do not invoke Cargo; SDK 0.4.0 is a published optional peer and is explicitly installed by relevant packed consumers. These package contracts do not establish a production executable selection, installed route, release or complete Desktop/Engine delivery. |
-| Platform proof | Capture/2 Linux X11 native producer admitted; installed-route and other platform gates remain | Engine #788/#794 capture/2 source (`5ed32afd`) and admitted archive (`f1cbdf70…`) establish a bounded Linux X11 producer path for explicit display/advertised half-area start, control, materials and release. Record's public pill/runtime source and an API-level host-to-worker proof cover that bounded consumer path; they do not establish installed renderer/native permission behavior or whole-output acceptance. Mac, Wayland, audio, picker, drawing, shortcut-admission and raw-material decoding/publication proof remain unavailable. V1 remains separately unavailable; do not infer it from capture/2. |
+| Independent packaging and builds | Record TypeScript package and public exports implemented; end-to-end installed adoption incomplete | `record/package.json` exposes the headless host, capture/2 runtime, native host adapter, processing, publication and UI package entrypoints. The Record package build and packed-consumer checks use TypeScript/Node and do not invoke Cargo; SDK 0.4.1 is a published optional peer and is explicitly installed by relevant packed consumers. These package contracts do not establish a production executable selection, installed route, release or complete Desktop/Engine delivery. |
+| Platform proof | Capture/2 Linux X11 native producer admitted; installed-route and other platform gates remain | Engine #788/#794 capture/2 source (`5ed32afd`) and admitted archive (`f1cbdf70…`) establish a bounded Linux X11 producer path for explicit display/advertised half-area start, control, materials and release. Record's public pill/runtime source and an API-level host-to-worker proof cover that bounded consumer path; they do not establish installed renderer/native permission behavior or whole-output acceptance. Completed-bundle media/1 consumption also passed on macOS 26.6.2 under Rosetta with an admitted x64 worker. Mac capture, Wayland capture, audio, picker, drawing, shortcut-admission and raw-material decoding/publication proof remain unavailable. V1 remains separately unavailable; do not infer it from capture/2. |
 | Windows | Excluded | Apparent supports macOS and Linux only. |
 
 The provider is available from `@apparent/record/capabilities` as
