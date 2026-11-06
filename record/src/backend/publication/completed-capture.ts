@@ -4,7 +4,7 @@ import type { CaptureClient, CaptureStatus, MaterialsDocument } from "@apparent/
 import { validateMaterialsDocument } from "@apparent/engine-sdk/capture";
 import { assembleCanonicalBundle, type BundleAssemblyInput } from "../processing/bundle/index.js";
 import { prepareRecordPublication, type PreparePublicationInput } from "./staging.js";
-import { createRecordPublicationRecovery, type PublicationBindingExpectation, type PublicationPreflight } from "./recovery.js";
+import { createRecordPublicationRecoveryInternal, type PublicationBindingExpectation, type PublicationPreflight } from "./recovery.js";
 import { SqlitePublicationBindingStore } from "./store.js";
 
 export interface PublishCompletedCaptureInput {
@@ -18,6 +18,8 @@ export interface PublishCompletedCaptureInput {
   derivatives?: PreparePublicationInput["derivatives"];
   derivatives2?: PreparePublicationInput["derivatives2"];
   derivative2Artifacts?: PreparePublicationInput["derivative2Artifacts"];
+  /** Required only by createRecordPublicationOutput; persisted before publication dispatch. */
+  outputRequest?: { requestId: string; requestVideoProof: boolean };
 }
 
 export interface ReconcileCompletedCaptureInput extends PublicationBindingExpectation {
@@ -36,7 +38,7 @@ export function createCompletedCapturePublisher(
   privateControlRoot: string,
   preflight: PublicationPreflight,
 ): CompletedCapturePublisher {
-  const recovery = createRecordPublicationRecovery(client, privateControlRoot, preflight);
+  const recovery = createRecordPublicationRecoveryInternal(client, privateControlRoot, preflight);
   const bindings = new SqlitePublicationBindingStore(privateControlRoot);
   const inFlight = new Map<string, { fingerprint: string; promise: Promise<CaptureStatus> }>();
 
@@ -54,6 +56,7 @@ export function createCompletedCapturePublisher(
         derivatives: snapshot.derivatives,
         derivatives2: snapshot.derivatives2,
         derivative2Artifacts: snapshot.derivative2Artifacts,
+        outputRequest: snapshot.outputRequest,
       }))).digest("hex");
       const active = inFlight.get(snapshot.status.captureId);
       if (active) {
@@ -91,7 +94,8 @@ export function createCompletedCapturePublisher(
       ...(input.derivatives2 ? { derivatives2: input.derivatives2 } : {}),
       ...(input.derivative2Artifacts ? { derivative2Artifacts: input.derivative2Artifacts } : {}),
     });
-    return recovery.publish(prepared.input);
+    const output = input.outputRequest ? { ...input.outputRequest, processing: assembly.processing } : undefined;
+    return output ? recovery.publishWithOutput(prepared.input, output) : recovery.publish(prepared.input);
   }
 }
 
@@ -109,6 +113,10 @@ function validateObservedMaterials(input: PublishCompletedCaptureInput): Materia
   if (input.status.state !== "materials-ready" || !input.status.materials)
     throw new Error("Record publication requires an observed materials-ready SDK status");
   const materials = validateMaterialsDocument(input.assembly.manifest, input.assembly.payloadBytes);
+  if (input.outputRequest && (typeof input.outputRequest.requestId !== "string" || !input.outputRequest.requestId.trim() ||
+      input.outputRequest.requestId.length > 4096 || input.outputRequest.requestId === input.status.captureId ||
+      typeof input.outputRequest.requestVideoProof !== "boolean"))
+    throw new Error("Record output request identity is invalid");
   if (input.status.captureId !== materials.manifest.key.captureId ||
       !isDeepStrictEqual(input.status.materials, materials.manifest) ||
       input.assembly.admission.captureId !== materials.manifest.key.captureId ||

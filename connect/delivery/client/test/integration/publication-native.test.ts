@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { replacePrivateStateFile, type StateReplacementResources } from "../../src/state/replacement.ts";
 import { commitCompletedRenewal } from "../../src/state/renewal-commit.ts";
+import { persistRenewalExchange } from "../../src/state/renewal-exchange.ts";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { createServer } from "node:http";
@@ -511,4 +512,67 @@ test("native recovery retains substituted evidence after a verified credential e
   assert.equal(JSON.parse(await readFile(path.join(f.state, "read.credential"), "utf8")).token, "synthetic-new-access");
   assert.deepEqual(JSON.parse(await readFile(path.join(f.state, "read.renewal"), "utf8")), { substituted: true });
   assert.ok((await readdir(f.state)).includes("read.response")); assert.equal(calls, 1);
+}));
+
+test("native renewal exchange persists both scopes through real HTTP before recovery", async () => {
+  for (const scope of ["read", "upload"] as const) await fixture(async root => {
+    let requests = 0;
+    const server = createServer(async (req, res) => {
+      try {
+        requests++; assert.equal(req.url, "/connect/v1/token/refresh"); assert.equal(req.method, "POST");
+        assert.equal(req.headers.authorization, undefined); assert.equal(req.headers.cookie, undefined);
+        const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()), { refreshToken: "synthetic-refresh" });
+        const queued = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+        assert.equal(queued.state, "acquired"); if (queued.state === "acquired") await queued.lease.release();
+        const scoped = await resources.lock(await open(path.join(root, `${scope}.renewal.lock`), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+        if (scoped.state === "acquired") await scoped.lease.release(); assert.equal(scoped.state, "busy");
+        const journal = JSON.parse(await readFile(path.join(root, `${scope}.renewal`), "utf8"));
+        assert.equal(journal.completed, false); assert.equal(journal.issued, 2000);
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ scope, accessToken: "synthetic-new-access", refreshToken: "synthetic-new-refresh", grantId: "synthetic-grant", expiresIn: 60, refreshExpiresIn: 300 }));
+      } catch { res.statusCode = 500; res.end(); }
+    });
+    server.listen(0, "127.0.0.1"); await once(server, "listening");
+    try {
+      const address = server.address(); assert.ok(address && typeof address === "object");
+      const context = { scope, approvedServer: `http://127.0.0.1:${address.port}/connect` };
+      const original = { server: context.approvedServer, scope, token: "synthetic-access", generation: "e".repeat(32),
+        refreshToken: "synthetic-refresh", expiresAt: 1900, refreshExpiresAt: 3000, grantId: "synthetic-grant" };
+      await writeFile(path.join(root, `${scope}.credential`), JSON.stringify(original), { mode: 0o600 });
+      const snapshot = await readCredentialSnapshot(root, context, resources);
+      assert.deepEqual(await persistRenewalExchange(root, context, snapshot, resources, { now: () => 2000 }), { state: "completed" });
+      assert.equal(requests, 1); assert.deepEqual(JSON.parse(await readFile(path.join(root, `${scope}.credential`), "utf8")), original);
+      assert.equal((await lstat(path.join(root, `${scope}.response`))).mode & 0o777, 0o600);
+      assert.equal(JSON.parse(await readFile(path.join(root, `${scope}.renewal`), "utf8")).completed, true);
+      assert.equal((await commitCompletedRenewal(root, context, snapshot, resources)).state, "committed");
+      const current = JSON.parse(await readFile(path.join(root, `${scope}.credential`), "utf8"));
+      assert.equal(current.expiresAt, 2060); assert.equal(current.token, "synthetic-new-access");
+      assert.deepEqual((await readdir(root)).sort(), ["queue.lock", `${scope}.credential`, `${scope}.renewal.lock`].sort());
+    } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  });
+});
+
+test("native renewal exchange fences a cooperating cancellation during real HTTP", async () => fixture(async root => {
+  let requests = 0;
+  const server = createServer(async (_req, res) => {
+    requests++;
+    const acquired = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 1000 });
+    if (acquired.state !== "acquired") { res.statusCode = 500; res.end(); return; }
+    try { await writeFile(path.join(root, "cancellation"), JSON.stringify("new-epoch"), { mode: 0o600 }); }
+    finally { await acquired.lease.release(); }
+    res.end(JSON.stringify({ scope: "read", accessToken: "new", refreshToken: "rotated", grantId: "grant", expiresIn: 60, refreshExpiresIn: 300 }));
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    const address = server.address(); assert.ok(address && typeof address === "object");
+    const context = { scope: "read" as const, approvedServer: `http://127.0.0.1:${address.port}/connect` };
+    const base = { server: context.approvedServer, scope: "read", token: "old", generation: "f".repeat(32), refreshToken: "refresh", expiresAt: 1900, refreshExpiresAt: 3000, grantId: "grant" };
+    await writeFile(path.join(root, "read.credential"), JSON.stringify(base), { mode: 0o600 });
+    const snapshot = await readCredentialSnapshot(root, context, resources);
+    assert.deepEqual(await persistRenewalExchange(root, context, snapshot, resources, { now: () => 2000 }), { state: "stopped", phase: "request_sent", reason: "stale_snapshot" });
+    assert.equal(requests, 1); await assert.rejects(lstat(path.join(root, "read.response")), { code: "ENOENT" });
+    assert.deepEqual(JSON.parse(await readFile(path.join(root, "read.credential"), "utf8")), base);
+    assert.equal(JSON.parse(await readFile(path.join(root, "read.renewal"), "utf8")).completed, false);
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 }));

@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, validateMaterialsDocument, type CapturePublishInput, type CaptureStatus } from "@apparent/engine-sdk/capture";
 import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
 import { createRecordPublicationRecovery as createRecovery } from "../../dist/backend/publication/recovery.js";
+import { createRecordPublicationOutput } from "../../dist/backend/publication/output.js";
 import { SqlitePublicationBindingStore } from "../../dist/backend/publication/store.js";
 
 const captureId = "a".repeat(32);
@@ -275,5 +276,70 @@ test("a delayed reconcile cannot return publishing after a newer terminal observ
     first(pending(captureId, publicationId, input.planFile.planSha256));
     await assert.rejects(older, /unresolved/);
     assert.equal((await new SqlitePublicationBindingStore(join(root, "private")).get(captureId))?.state, "cancelled");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a structurally supplied mismatched Saved receipt cannot become durable Saved", async () => {
+  const root = await temp();
+  const input = makeInput(join(root, "final.apparent"));
+  const sdk = {
+    async publish() { throw new Error("ambiguous"); },
+    async inspectPublication(request: { captureId: string; publicationId: string; planSha256: string; expected: { materials: typeof materials.manifest.key; bundleId: string; bundlePath: string; manifestSha256: string } }) {
+      return { captureId: request.captureId, state: "saved", publicationId: request.publicationId, planSha256: request.planSha256,
+        materials: materials.manifest, publication: { captureId: request.captureId, materials: request.expected.materials,
+          publicationId: request.publicationId, planSha256: request.planSha256, bundleId: request.expected.bundleId,
+          bundlePath: request.expected.bundlePath + ".foreign", artifactVersion: 1, artifactProvenance: "native",
+          manifestSha256: request.expected.manifestSha256, inventorySha256: "9".repeat(64) } };
+    },
+  } as unknown as CaptureClient;
+  try {
+    const recovery = createRecordPublicationRecovery(sdk, join(root, "private"));
+    await assert.rejects(recovery.publish(input), /outcome is unknown/u);
+    await assert.rejects(recovery.reconcile(captureId, ownerToken), /outcome remains unresolved/u);
+    const binding = await new SqlitePublicationBindingStore(join(root, "private")).get(captureId);
+    assert.equal(binding?.state, "dispatching");
+    assert.equal(binding?.savedReceipt, undefined);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("legacy saved bindings remain readable but have no guessed public output", async () => {
+  const root = await temp();
+  const privateRoot = join(root, "private");
+  const store = new SqlitePublicationBindingStore(privateRoot);
+  const input = makeInput(join(root, "final.apparent"));
+  const binding = { captureId, publicationId, planSha256: input.planFile.planSha256, materials: materials.manifest.key,
+    leaseId: materials.manifest.leaseId, bundleId: "take.apparent", bundlePath: join(root, "final.apparent"),
+    manifestSha256: "1".repeat(64), state: "reserved" as const };
+  try {
+    await store.reserve(binding);
+    const db = new DatabaseSync(join(privateRoot, "publication-bindings.sqlite"));
+    try { db.prepare("UPDATE publication_binding SET binding_json = ? WHERE capture_id = ?").run(JSON.stringify({ ...binding, state: "saved" }), captureId); }
+    finally { db.close(); }
+    const output = createRecordPublicationOutput({} as CaptureClient, privateRoot, preflightCapturePublication);
+    assert.equal((await store.get(captureId))?.state, "saved");
+    assert.deepEqual((await output.captureFacts.readFacts()).captures, []);
+    assert.equal(await output.resolveHandoff({ captureId, artifactId: binding.bundleId }), null);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test("Saved inspection preserves the first exact receipt and observation time", async () => {
+  const root = await temp();
+  try {
+    const store = new SqlitePublicationBindingStore(join(root, "private"));
+    const input = makeInput(join(root, "final.apparent"));
+    const binding = { captureId, publicationId, planSha256: input.planFile.planSha256, materials: materials.manifest.key,
+      leaseId: materials.manifest.leaseId, bundleId: "take.apparent", bundlePath: join(root, "final.apparent"),
+      manifestSha256: "1".repeat(64), state: "reserved" as const };
+    const receipt = { captureId, publicationId, planSha256: binding.planSha256, materials: binding.materials,
+      bundleId: binding.bundleId, bundlePath: binding.bundlePath, manifestSha256: binding.manifestSha256,
+      artifactVersion: 1 as const, artifactProvenance: "native" as const, inventorySha256: "9".repeat(64) };
+    await store.reserve(binding);
+    assert.equal(await store.observe(binding, "saved", receipt), true);
+    const first = await store.get(captureId);
+    assert.equal(await store.observe(binding, "saved", structuredClone(receipt)), true);
+    assert.deepEqual(await store.get(captureId), first);
+    await assert.rejects(store.observe(binding, "saved", { ...receipt, inventorySha256: "8".repeat(64) }), /storage is unavailable/);
+    assert.deepEqual(await store.get(captureId), first);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
