@@ -184,3 +184,22 @@ test('native refusal remains a complete public RecordClient result', async () =>
   if(result.status==='refused') assert.equal(typeof result.reason,'string');
   assert.equal(client.current().shortcut.draft,null); client.detach();
 });
+
+
+test('changed facts at the same native token cannot become hidden effect authority', async () => {
+  let current=snap(); let effects=0;
+  const port=supportedPort(async()=>current);
+  port.requestPermission=async()=>{effects++;return{status:'accepted'};};
+  const native=createRecordNativePort(port,{requiredPermissionIds:[]});
+  const original=await native.readFacts();
+  current=structuredClone(current); current.permissions[0]!.actions=['request-permission'];
+  await assert.rejects(native.readFacts(),/without a new observation/);
+  const action={type:'request-permission' as const,requirementId:'microphone',requestId:'hidden-authority',expected:{providerEpoch:'record',revision:0}};
+  assert.equal(await native.dispatch!(action,original),'refused'); assert.equal(effects,0);
+  current=snap(); // Returning the old bytes cannot unpoison the reused token.
+  await assert.rejects(native.readFacts(),/inconsistent/);
+  current=snap(4); current.permissions[0]!.actions=['request-permission'];
+  const fresh=await native.readFacts();
+  assert.equal(await native.dispatch!(action,fresh),'accepted'); assert.equal(effects,1);
+  native.dispose!();
+});

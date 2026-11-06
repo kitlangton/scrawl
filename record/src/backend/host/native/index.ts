@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { NativeAction, RecordNativeFacts, RecordNativePort } from '../../capabilities/provider.js';
 
 /** Local structural consumer seam; kept type-only so headless Record has no host-contract dependency. */
@@ -61,6 +62,7 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
   if (required.some(id => !permissionIds.has(id))) throw new TypeError('requiredPermissionIds must name supported native permissions');
   let latest: NativeHostSnapshotInput | undefined;
   let latestFacts: RecordNativeFacts | undefined;
+  let conflictingObservation: NativeState | undefined;
   let candidate: Candidate | undefined;
   let awaitingSaveReadback: { sessionId: string; shortcut: NativeShortcutInput } | undefined;
   const retiredEpochs = new Set<string>();
@@ -89,7 +91,14 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
     if (detached) throw new Error('Record native adapter detached');
     if (retiredEpochs.has(value.processEpoch)) throw new Error('Native host returned a retired process observation');
     if (read === sequence) {
+      if (latest && sameState(latest, value) && !isDeepStrictEqual(latest, value)) {
+        conflictingObservation = {processEpoch: value.processEpoch, revision: value.revision};
+        candidate = undefined; edit = undefined; awaitingSaveReadback = undefined;
+        throw new Error('Native host changed facts without a new observation');
+      }
+      if (sameState(conflictingObservation, value)) throw new Error('Native host observation is inconsistent');
       if (!latest || value.processEpoch !== latest.processEpoch || value.revision >= latest.revision) {
+        if (!latest || !sameState(latest, value)) conflictingObservation = undefined;
         if (latest && value.processEpoch !== latest.processEpoch) retiredEpochs.add(latest.processEpoch);
         if (latest && (value.processEpoch !== latest.processEpoch || value.revision !== latest.revision)) { candidate = undefined; edit = undefined; awaitingSaveReadback = undefined; }
         const saved = awaitingSaveReadback;
@@ -102,6 +111,7 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
         latestFacts = factsFor(latest);
       }
     }
+    if (conflictingObservation) throw new Error('Native host observation is inconsistent');
     if (!latestFacts) throw new Error('Native host snapshot unavailable');
     return structuredClone(latestFacts);
   };
@@ -109,7 +119,7 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
     const command = structuredClone(input);
     const observed = structuredClone(observation);
     const work = queue.then(async (): Promise<'accepted' | 'refused' | 'cancelled' | 'outcome-unknown'> => {
-      if (detached || !latest || !latestFacts || !observed || observed.providerEpoch !== latestFacts.providerEpoch || observed.revision !== latestFacts.revision) return 'refused';
+      if (detached || conflictingObservation || !latest || !latestFacts || !observed || observed.providerEpoch !== latestFacts.providerEpoch || observed.revision !== latestFacts.revision) return 'refused';
       const state = { processEpoch: observed.providerEpoch, revision: observed.revision };
       const permission = command.type === 'request-permission' || command.type === 'open-system-settings' ? latest.permissions.find(item => item.id === command.requirementId) : undefined;
       if (command.type === 'request-permission') {
