@@ -205,6 +205,27 @@ directory with `core.hooksPath` pointing there. Restore the previous hooks path
 to roll that installation back; switch to `.githooks` after all active worktrees
 contain the new hook. Server-side policy is separate.
 
+## PR verification reuse
+
+The Engine SDK Linux lane retains a seven-day PR candidate after its fresh checks
+and build. Main jobs first try existing verified-main reuse, then a same-repository
+merged PR candidate. Admission authenticates the merged PR, exact workflow/run and
+successful attempt jobs (including contracts and runtime audit), then checks the
+synthetic merge commit's base/head parents and requires its complete Git tree to
+equal the landed main tree. Component/environment/Node/runner-image digests and
+archive hash/size/run-attempt checks still apply. Forks, missing metadata, changed
+trees, expired artifacts and failed retrieval/validation fall back to fresh work.
+The run API's head SHA identifies the PR head, not its tested synthetic merge.
+
+Candidates use separate `pr-engine-linux-x64-MERGE_SHA-DIGEST` artifact names;
+retention is not publication authority. Main reissues an exact-main receipt with
+original-run provenance, then attests/uploads through the existing path. Main job
+summaries distinguish reuse from fresh verification. No workflows, skipped jobs or
+cancellation rules are added. Native and other owner lanes retain their existing
+behavior; production configuration and platform/native acceptance remain required.
+This SDK exception supersedes the general statement that PR jobs do not archive
+artifacts. Changed-tree or per-component PR matching is deliberately not enabled.
+
 ## Checks and artifact identity
 
 Public's credential-free verification runs its source build, owner tests,

@@ -161,6 +161,30 @@ runs:
         else
           npm run test:electron
         fi
+    - name: Retain the verified PR SDK candidate
+      id: candidate
+      if: inputs.publish != 'true' && inputs.id == 'engine' && inputs.target == 'linux-x64' && github.event_name == 'pull_request'
+      shell: bash
+      run: node --experimental-strip-types composition/delivery/cli.ts candidate "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload" "$RUNNER_TEMP/pr-candidate"
+    - uses: actions/upload-artifact@v4
+      if: inputs.publish != 'true' && inputs.id == 'engine' && inputs.target == 'linux-x64' && github.event_name == 'pull_request'
+      with:
+        name: ${{ steps.candidate.outputs.candidate_name }}
+        path: ${{ runner.temp }}/pr-candidate/
+        if-no-files-found: error
+        retention-days: 7
+    - name: Report verification source
+      if: inputs.publish == 'true'
+      env:
+        REUSED: ${{ steps.admit.outputs.reuse == 'true' && steps.reuse.outcome == 'success' }}
+        PRIOR_RUN: ${{ steps.admit.outputs.prior_run_id }}
+      shell: bash
+      run: |
+        if [ "$REUSED" = true ]; then
+          printf 'Reused verified %s (%s) from [run %s](https://github.com/%s/actions/runs/%s).\n' "$OWNER_ID" "$OWNER_TARGET" "$PRIOR_RUN" "$GITHUB_REPOSITORY" "$PRIOR_RUN" >> "$GITHUB_STEP_SUMMARY"
+        else
+          printf 'Fresh verification and build: %s (%s); no compatible artifact was successfully retrieved and validated.\n' "$OWNER_ID" "$OWNER_TARGET" >> "$GITHUB_STEP_SUMMARY"
+        fi
     - name: Seal the verified component for downstream assembly
       if: inputs.publish == 'true' && (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success')
       env:

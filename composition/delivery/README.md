@@ -58,6 +58,27 @@ On reuse the workflow downloads the admitted artifact by its numeric ID. `reuse 
 
 `build` runs the registered npm verification scripts and build. npm owners are packed without lifecycle scripts rerunning, installed into a fresh consumer with scripts disabled, and checked through every public export. That all-exports verifier explicitly provisions declared optional host peers (such as React for UI entrypoints) inside its disposable consumer only; they are not added to the staged library artifact or made mandatory for headless installations. Owner checks still verify their separate headless and UI profiles. App-shell output copies the built app, shell and fixtures; a future `directory` owner can copy a declared package-contained artifact directory, including a native-language producer whose owner script owns its toolchain invocation. The parent workflow owns OS setup and uploads `stream-ID-TARGET-DIGEST` with `component.tar.gz` and `receipt.json`. `seal` only archives a controlled prebuilt staging directory and records source, digest, archive hash/size and Actions run identity; it does not build or publish. Main-only canonical workflow identity is required. Symlinks are allowed only when relative and contained by the staging root. App artifacts are development staging output; this protocol does not publish stable releases or create an updater.
 
+## PR verification reuse
+
+The Engine SDK Linux lane retains a seven-day PR candidate after its fresh checks
+and build. Main jobs first try existing verified-main reuse, then a same-repository
+merged PR candidate. Admission authenticates the merged PR, exact workflow/run and
+successful attempt jobs (including contracts and runtime audit), then checks the
+synthetic merge commit's base/head parents and requires its complete Git tree to
+equal the landed main tree. Component/environment/Node/runner-image digests and
+archive hash/size/run-attempt checks still apply. Forks, missing metadata, changed
+trees, expired artifacts and failed retrieval/validation fall back to fresh work.
+The run API's head SHA identifies the PR head, not its tested synthetic merge.
+
+Candidates use separate `pr-engine-linux-x64-MERGE_SHA-DIGEST` artifact names;
+retention is not publication authority. Main reissues an exact-main receipt with
+original-run provenance, then attests/uploads through the existing path. Main job
+summaries distinguish reuse from fresh verification. No workflows, skipped jobs or
+cancellation rules are added. Native and other owner lanes retain their existing
+behavior; production configuration and platform/native acceptance remain required.
+This SDK exception supersedes the general statement that PR jobs do not archive
+artifacts. Changed-tree or per-component PR matching is deliberately not enabled.
+
 ## Public web artifacts
 
 `public/delivery.json` registers Public's `dist-apparent` directory as a `website`
