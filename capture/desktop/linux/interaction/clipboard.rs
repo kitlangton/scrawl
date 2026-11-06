@@ -14,11 +14,23 @@ use anyhow::{Context, Result, anyhow};
 use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
 
 static CLIPBOARD: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
-static VERIFIED_TEXT_OWNER: Mutex<Option<Child>> = Mutex::new(None);
+static VERIFIED_TEXT_OWNER: std::sync::OnceLock<Option<std::sync::mpsc::SyncSender<VerifiedTextOwnerRequest>>> = std::sync::OnceLock::new();
 const MAX_MIME_TYPES: usize = 32;
 const MAX_MIME_BYTES: usize = 256;
 const MAX_CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
 const OWNER_ARGUMENT: &str = "--internal-wayland-clipboard-owner";
+
+enum VerifiedTextOwnerBackend {
+    X11(std::path::PathBuf),
+    Wayland(std::path::PathBuf, std::ffi::OsString),
+}
+
+struct VerifiedTextOwnerRequest {
+    text: String,
+    deadline: std::time::Instant,
+    backend: VerifiedTextOwnerBackend,
+    reply: std::sync::mpsc::SyncSender<VerifiedTextWrite>,
+}
 
 fn with<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>) -> Result<T> {
     let mut slot = CLIPBOARD
@@ -213,7 +225,9 @@ fn copy_multi_wayland_checked(
         .env("WAYLAND_DISPLAY", display)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        // The helper's bounded protocol errors contain operation state only,
+        // never clipboard text. Keep them with the owning GUI's diagnostics.
+        .stderr(Stdio::inherit())
         .spawn()
         .context("Starting the native Wayland clipboard owner")?;
     let stdin = child.stdin.take().context("No clipboard owner input")?;
@@ -268,15 +282,7 @@ fn copy_multi_wayland_checked(
         let _ = receiver.recv_timeout(std::time::Duration::from_millis(100));
         anyhow::bail!("Rich clipboard restore was not confirmed");
     }
-    let offered = (|| -> Result<bool> {
-        for (mime, bytes) in entries {
-            if !owns(mime, bytes)? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    })();
-    if !matches!(offered, Ok(true)) {
+    if !wait_for_offered_until(entries, deadline, &mut owns) {
         stop_owner(&mut child);
         anyhow::bail!("Rich clipboard restore did not own the expected data");
     }
@@ -285,6 +291,29 @@ fn copy_multi_wayland_checked(
         anyhow::bail!("Rich clipboard owner confirmation exceeded its deadline");
     }
     Ok(child)
+}
+
+/// The owner protocol queues its selection request before serving starts. A
+/// readback may briefly report an empty selection until the server dispatches
+/// that request, so confirm only by bounded readback polling. This does not
+/// establish owner identity; callers must keep Wayland results conservative.
+fn wait_for_offered_until(
+    entries: &[(String, Vec<u8>)],
+    deadline: std::time::Instant,
+    owns: &mut impl FnMut(&str, &[u8]) -> Result<bool>,
+) -> bool {
+    loop {
+        let exact = entries
+            .iter()
+            .all(|(mime, bytes)| matches!(owns(mime, bytes), Ok(true)));
+        if exact {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 fn stop_owner(child: &mut std::process::Child) {
@@ -500,10 +529,22 @@ pub fn set_text_verified_until(text: &str, deadline: std::time::Instant) -> Veri
     if std::time::Instant::now() >= deadline {
         return VerifiedTextWrite::Unavailable;
     }
-    if native_wayland_clipboard() {
-        return set_text_wayland_verified(text, deadline);
-    }
-    set_text_x11_verified(text, deadline)
+    let executable = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(_) => return VerifiedTextWrite::Unavailable,
+    };
+    let backend = if native_wayland_clipboard() {
+        let Some(display) = super::super::wayland_display() else {
+            return VerifiedTextWrite::Unavailable;
+        };
+        if clipboard_tool("wl-paste").is_none() {
+            return VerifiedTextWrite::Unavailable;
+        }
+        VerifiedTextOwnerBackend::Wayland(executable, display)
+    } else {
+        VerifiedTextOwnerBackend::X11(executable)
+    };
+    submit_verified_text_owner(text, deadline, backend)
 }
 
 #[cfg(target_os = "linux")]
@@ -533,10 +574,88 @@ fn clipboard_tool_from(
         .find(|path| path.is_file())
 }
 
-fn set_text_x11_verified(text: &str, deadline: std::time::Instant) -> VerifiedTextWrite {
+fn submit_verified_text_owner(
+    text: &str,
+    deadline: std::time::Instant,
+    backend: VerifiedTextOwnerBackend,
+) -> VerifiedTextWrite {
+    use std::sync::mpsc::{TrySendError, sync_channel};
+
+    let Some(sender) = verified_text_owner_worker() else {
+        return VerifiedTextWrite::Unavailable;
+    };
+    let (reply, receiver) = sync_channel(1);
+    let request = VerifiedTextOwnerRequest {
+        text: text.to_owned(),
+        deadline,
+        backend,
+        reply,
+    };
+    match sender.try_send(request) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+            return VerifiedTextWrite::Unavailable;
+        }
+    }
+    receiver
+        .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        .unwrap_or(VerifiedTextWrite::OutcomeUnknown)
+}
+
+/// The persistent owner lane spawns clipboard helpers from a thread that lives
+/// for the GUI process. Linux PR_SET_PDEATHSIG is thread-scoped, so spawning
+/// from the request's short-lived deadline worker would kill the selection
+/// owner as soon as that request returned.
+fn verified_text_owner_worker() -> Option<&'static std::sync::mpsc::SyncSender<VerifiedTextOwnerRequest>> {
+    VERIFIED_TEXT_OWNER
+        .get_or_init(|| {
+            use std::sync::mpsc::sync_channel;
+            let (sender, receiver) = sync_channel(1);
+            std::thread::Builder::new()
+                .name("apparent-clipboard-owner".into())
+                .spawn(move || verified_text_owner_loop(receiver))
+                .ok()
+                .map(|_| sender)
+        })
+        .as_ref()
+}
+
+fn verified_text_owner_loop(receiver: std::sync::mpsc::Receiver<VerifiedTextOwnerRequest>) {
+    let mut owner: Option<Child> = None;
+    while let Ok(request) = receiver.recv() {
+        let result = if std::time::Instant::now() >= request.deadline {
+            VerifiedTextWrite::Unavailable
+        } else {
+            match request.backend {
+                VerifiedTextOwnerBackend::X11(executable) => {
+                    set_text_x11_verified(&request.text, request.deadline, executable, &mut owner)
+                }
+                VerifiedTextOwnerBackend::Wayland(executable, display) => {
+                    set_text_wayland_verified(
+                        &request.text,
+                        request.deadline,
+                        executable,
+                        display,
+                        &mut owner,
+                    )
+                }
+            }
+        };
+        let _ = request.reply.send(result);
+    }
+    if let Some(mut owner) = owner {
+        stop_owner(&mut owner);
+    }
+}
+
+fn set_text_x11_verified(
+    text: &str,
+    deadline: std::time::Instant,
+    executable: std::path::PathBuf,
+    owner: &mut Option<Child>,
+) -> VerifiedTextWrite {
     use std::io::Write as _;
 
-    let Ok(executable) = std::env::current_exe() else { return VerifiedTextWrite::Unavailable; };
     let mut child = match Command::new(executable)
         .arg("--internal-native-clipboard-text-owner")
         .stdin(Stdio::piped())
@@ -576,8 +695,7 @@ fn set_text_x11_verified(text: &str, deadline: std::time::Instant) -> VerifiedTe
     let response = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
     match response {
         Ok((Ok(_), line)) if line == "APPLIED\n" && std::time::Instant::now() < deadline => {
-            let mut slot = VERIFIED_TEXT_OWNER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(mut previous) = slot.replace(child) { stop_owner(&mut previous); }
+            if let Some(mut previous) = owner.replace(child) { stop_owner(&mut previous); }
             VerifiedTextWrite::Applied
         }
         Ok((Ok(_), line)) if line == "UNAVAILABLE\n" => {
@@ -622,16 +740,15 @@ pub fn run_x11_text_owner(text: &str) -> Result<()> {
     Ok(())
 }
 
-fn set_text_wayland_verified(text: &str, deadline: std::time::Instant) -> VerifiedTextWrite {
-    let Some(display) = super::super::wayland_display() else {
-        return VerifiedTextWrite::Unavailable;
-    };
-    let Some(_paste) = clipboard_tool("wl-paste") else {
-        return VerifiedTextWrite::Unavailable;
-    };
+fn set_text_wayland_verified(
+    text: &str,
+    deadline: std::time::Instant,
+    executable: std::path::PathBuf,
+    display: std::ffi::OsString,
+    owner: &mut Option<Child>,
+) -> VerifiedTextWrite {
     if std::time::Instant::now() >= deadline { return VerifiedTextWrite::Unavailable; }
     let entries = vec![("text/plain;charset=utf-8".to_owned(), text.as_bytes().to_vec())];
-    let Ok(executable) = owner_executable() else { return VerifiedTextWrite::Unavailable; };
     let child = match copy_multi_wayland_checked(
         &entries,
         executable,
@@ -647,14 +764,17 @@ fn set_text_wayland_verified(text: &str, deadline: std::time::Instant) -> Verifi
         stop_owner(&mut child);
         return VerifiedTextWrite::OutcomeUnknown;
     }
-    let mut slot = VERIFIED_TEXT_OWNER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(mut previous) = slot.replace(child) {
+    let mut child = child;
+    if !matches!(child.try_wait(), Ok(None)) {
+        stop_owner(&mut child);
+        return VerifiedTextWrite::OutcomeUnknown;
+    }
+    if let Some(mut previous) = owner.replace(child) {
         stop_owner(&mut previous);
     }
     // Wayland has no supported selection-owner identity query. The owner helper's READY event
     // proves acquisition and wl-paste proves bytes, but an identical-content foreign owner can
     // replace it before the helper processes the loss event. Never upgrade that to Applied.
-    if let Some(owner) = slot.as_mut() { let _ = owner.try_wait(); }
     wayland_verified_result(true, true)
 }
 
@@ -966,6 +1086,42 @@ mod tests {
     }
 
     #[test]
+    fn wayland_owner_confirmation_waits_for_selection_readback_after_ready() {
+        let mut attempts = 0;
+        let confirmed = wait_for_offered_until(
+            &fixture_offer(),
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            &mut |_, _| {
+                attempts += 1;
+                match attempts {
+                    1 => Err(anyhow!("selection not dispatched yet")),
+                    2 => Ok(false),
+                    _ => Ok(true),
+                }
+            },
+        );
+        assert!(confirmed);
+        assert_eq!(attempts, 3);
+    }
+
+    #[test]
+    fn wayland_owner_confirmation_times_out_without_exact_readback() {
+        let started = std::time::Instant::now();
+        let mut attempts = 0;
+        let confirmed = wait_for_offered_until(
+            &fixture_offer(),
+            started + std::time::Duration::from_millis(45),
+            &mut |_, _| {
+                attempts += 1;
+                Ok(false)
+            },
+        );
+        assert!(!confirmed);
+        assert!(attempts > 1);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
     fn restore_leaves_selection_loss_after_handoff_untouched() {
         let snapshot = TextSnapshot {
             entries: vec![("text/plain".into(), b"original".to_vec())],
@@ -1050,6 +1206,21 @@ mod tests {
             .unwrap(),
             b"newer synthetic clipboard"
         );
+    }
+
+    #[test]
+    fn isolated_wayland_verified_owner_survives_the_request_thread() {
+        if std::env::var_os("APPARENT_TEST_WAYLAND_CLIPBOARD").is_none() {
+            return;
+        }
+        let text = "synthetic clipboard owner thread lifetime";
+        let result = std::thread::spawn(move || {
+            set_text_verified_until(text, std::time::Instant::now() + std::time::Duration::from_secs(3))
+        })
+        .join()
+        .unwrap();
+        assert_eq!(result, VerifiedTextWrite::OutcomeUnknown);
+        assert!(still_ours("text/plain;charset=utf-8", text.as_bytes()).unwrap());
     }
 
     #[test]
