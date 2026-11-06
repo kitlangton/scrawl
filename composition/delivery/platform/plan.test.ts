@@ -8,6 +8,10 @@ import { join } from 'node:path'
 import { platformPlan } from './plan.ts'
 import { workflowPathFor } from '../core.ts'
 
+// Git exports caller-local repository paths to hooks; temporary fixtures and
+// the planner subprocess must resolve their explicit cwd instead.
+for (const name of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete process.env[name]
+
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const ids = ['platform-config', 'platform-resources', 'app-shell']
 

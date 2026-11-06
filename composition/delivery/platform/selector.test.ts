@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { selectComponents, selectFromEvent } from './selector.ts'
+// Git exports caller-local repository paths to hooks; temporary fixtures and
+// the planner subprocess must resolve their explicit cwd instead.
+for (const name of execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n')) delete process.env[name]
+
 
 test('maps owned inputs, shared inputs, broad inputs and unknown paths', () => {
   assert.deepEqual(selectComponents(null), ['platform-config', 'platform-resources', 'app-shell'])
