@@ -33,6 +33,13 @@ without invoking the callback when the snapshot is stale, or
 errors propagate and are never reported as applied; the operation does not
 write config or roll back any partial native effect.
 
+Bounded host requests must instead call
+`with_pen_color_current_allowed_in(path, expected, allowed, effect)`. Its
+admission predicate controls nonblocking lock acquisition and is rechecked
+immediately before the callback. Expiry before that point never invokes the
+effect. The callback must still bound any effect already in progress; cancellation
+cannot roll back an OS mutation that has started.
+
 The required lock order is config writer lock, then runtime/native resource
 lock. Callbacks must not reenter config access, perform filesystem or network
 work, or wait beyond caller-owned admission/deadline controls. This primitive

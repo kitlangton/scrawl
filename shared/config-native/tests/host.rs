@@ -275,6 +275,51 @@ fn guarded_pen_color_effect_holds_lock_until_interprocess_writer_can_commit() {
 }
 
 #[test]
+fn guarded_pen_color_effect_cancels_while_writer_is_still_held() {
+    use apparent_config_native::{with_pen_color_current_in, with_pen_color_current_allowed_in};
+    use std::sync::{Arc, mpsc, atomic::{AtomicBool, Ordering}};
+    use std::time::Duration;
+
+    let dir = temp(); let path = dir.join("config.json");
+    fs::write(&path, br#"{"penColor":"blue","keep":true}"#).unwrap();
+    let before = fs::read(&path).unwrap();
+    let expected = apparent_config_native::LegacyValue { present: true, value: json!("blue") };
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let holder_path = path.clone(); let holder_expected = expected.clone();
+    let holder = std::thread::spawn(move || with_pen_color_current_in(&holder_path, holder_expected, || {
+        held_tx.send(()).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        Ok(())
+    }));
+    held_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    let admitted = Arc::new(AtomicBool::new(true));
+    let effect_called = Arc::new(AtomicBool::new(false));
+    let (checking_tx, checking_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker_path = path.clone(); let worker_admitted = admitted.clone();
+    let worker_called = effect_called.clone();
+    let worker = std::thread::spawn(move || {
+        let result = with_pen_color_current_allowed_in(&worker_path, expected, &|| {
+            let _ = checking_tx.send(());
+            worker_admitted.load(Ordering::SeqCst)
+        }, || { worker_called.store(true, Ordering::SeqCst); Ok(()) });
+        done_tx.send(result.is_err()).unwrap();
+    });
+    checking_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    admitted.store(false, Ordering::SeqCst);
+    let cancelled_before_release = done_rx.recv_timeout(Duration::from_secs(1));
+    release_tx.send(()).unwrap();
+    holder.join().unwrap().unwrap();
+    worker.join().unwrap();
+    assert_eq!(cancelled_before_release.unwrap(), true, "cancellation must not wait for the holder");
+    assert!(!effect_called.load(Ordering::SeqCst));
+    assert_eq!(fs::read(&path).unwrap(), before);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn guarded_pen_color_effect_failure_and_invalid_paths_never_claim_applied() {
     use apparent_config_native::{PenColorEffectResult, with_pen_color_current_in};
     use std::sync::atomic::{AtomicBool, Ordering};

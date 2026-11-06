@@ -192,13 +192,35 @@ pub fn with_pen_color_current_in<T>(
     expected: LegacyValue,
     effect: impl FnOnce() -> Result<T>,
 ) -> Result<PenColorEffectResult<T>> {
+    pen_color_effect_in(path, expected, None, effect)
+}
+
+/// Bounded hosts must use this variant and retain their admission deadline
+/// through lock acquisition and the final check immediately before the effect.
+/// The callback still owns cancellation/bounding once an effect has started.
+pub fn with_pen_color_current_allowed_in<T>(
+    path: &Path,
+    expected: LegacyValue,
+    allowed: &dyn Fn() -> bool,
+    effect: impl FnOnce() -> Result<T>,
+) -> Result<PenColorEffectResult<T>> {
+    pen_color_effect_in(path, expected, Some(allowed), effect)
+}
+
+fn pen_color_effect_in<T>(
+    path: &Path,
+    expected: LegacyValue,
+    allowed: Option<&dyn Fn() -> bool>,
+    effect: impl FnOnce() -> Result<T>,
+) -> Result<PenColorEffectResult<T>> {
     validate_legacy_value(&expected)?;
-    let writer = ConfigWriter::acquire(path, None)?;
+    let writer = ConfigWriter::acquire(path, allowed)?;
     let config = read_snapshot(&writer, path)?;
     let current = top_level_value(&config, "penColor")?;
     if current != expected {
         return Ok(PenColorEffectResult::Conflict(current));
     }
+    ensure!(allowed.is_none_or(|check| check()), "cancelled");
     let result = effect()?;
     drop(writer);
     Ok(PenColorEffectResult::Applied(result))

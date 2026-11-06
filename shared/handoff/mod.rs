@@ -16,7 +16,7 @@ pub use integration::*;
 pub(crate) use config_store::ConfigPublicationUncertain;
 pub(crate) mod capture_location;
 pub use config_store::{default_config_path, set_config_value_in};
-pub use config_store::{LegacyValue, PenColorEffectResult, with_pen_color_current_in};
+pub use config_store::{LegacyValue, PenColorEffectResult, with_pen_color_current_in, with_pen_color_current_allowed_in};
 pub(crate) use config_store::{update_config_in, update_config_allowed_in};
 #[cfg(test)]
 pub(crate) use config_store::set_config_write_hook;
