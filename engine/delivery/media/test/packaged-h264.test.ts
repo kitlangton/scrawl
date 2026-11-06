@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
@@ -35,7 +35,13 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
     for (const frame of result.frames) { const bytes = await readFile(frame.path); assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a'); assert.equal(frame.sha256, createHash('sha256').update(bytes).digest('hex')); assert.equal(bytes.readUInt32BE(16), 320); assert.equal(bytes.readUInt32BE(20), 180) }
     assert.equal(result.frames[0].sha256, result.frames[3].sha256); assert.notEqual(result.frames[0].sha256, result.frames[1].sha256)
     const evidence = process.env.APPARENT_MEDIA_EVIDENCE
-    if (evidence) { await mkdir(evidence, { recursive: true, mode: 0o700 }); await writeFile(join(evidence, 'packaged-h264-result.json'), JSON.stringify({ result, sourceSha256: createHash('sha256').update(await readFile(video)).digest('hex') }, null, 2), { mode: 0o600 }) }
+    if (evidence) {
+      await mkdir(evidence, { recursive: true, mode: 0o700 })
+      await copyFile(video, join(evidence, 'recording.mp4'))
+      await copyFile(join(bundle, 'apparent.json'), join(evidence, 'apparent.json'))
+      for (const [index, frame] of result.frames.entries()) await copyFile(frame.path, join(evidence, `frame-${index + 1}.png`))
+      await writeFile(join(evidence, 'packaged-h264-result.json'), JSON.stringify({ result, sourceSha256: createHash('sha256').update(await readFile(video)).digest('hex') }, null, 2), { mode: 0o600 })
+    }
   } finally {
     for (const [k, v] of Object.entries(old)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
     await client?.close(); await rm(root, { recursive: true, force: true })
