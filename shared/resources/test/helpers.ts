@@ -12,8 +12,10 @@ export async function provider(executable: string): Promise<ResourceProvider> {
 export async function fixture(scenario = "published") {
   const directory = await mkdtemp(join(tmpdir(), "apparent-resources-")); await chmod(directory, 0o700);
   const executable = join(directory, "apparent-resource-host");
-  await writeFile(executable, `#!/bin/sh\nexec ${quote(process.execPath)} --experimental-strip-types ${quote(fileURLToPath(new URL("./peer.ts", import.meta.url)))} ${quote(scenario)} "$@"\n`, { mode: 0o755 });
+  const marker = join(directory, "peer-count");
+  await writeFile(executable, `#!/bin/sh\nAPPARENT_RESOURCE_PEER_MARKER=${quote(marker)} exec ${quote(process.execPath)} --experimental-strip-types ${quote(fileURLToPath(new URL("./peer.ts", import.meta.url)))} ${quote(scenario)} "$@"\n`, { mode: 0o755 });
   return { directory, executable, provider: await provider(executable),
     handle: async () => open(join(directory, "lock"), "a+", 0o600),
+    marker,
     close: () => rm(directory, { recursive: true, force: true }) };
 }
