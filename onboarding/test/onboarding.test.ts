@@ -194,10 +194,16 @@ test("mounted pen choice commits only on Use this pen and reduced motion advance
   await f.controller.load(); await f.controller.dispatch("continue");
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
+  assert.equal(f.controller.state.progress.stage, "pen", "the existing effective color does not confirm the page");
   await act(async () => { dom.window.document.querySelector<HTMLButtonElement>('[aria-label="purple pen"]')!.click(); });
   assert.equal(f.controller.state.snapshot?.pen.effective, "coral", "choosing a color is not a provider write");
   await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Use this pen")!.click(); await Promise.resolve(); });
   assert.equal(f.controller.state.snapshot?.pen.effective, "purple"); assert.equal(f.controller.state.progress.stage, "permissions");
+  await act(async () => { await f.controller.dispatch("back"); await Promise.resolve(); });
+  assert.equal(f.controller.state.progress.stage, "pen", "returning to a confirmed pen requires another explicit Use this pen action");
+  assert.equal(dom.window.document.querySelector<HTMLButtonElement>('[aria-label="purple pen"]')!.disabled, false);
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Use this pen")!.click(); await Promise.resolve(); });
+  assert.equal(f.controller.state.progress.stage, "permissions");
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
 });
 
