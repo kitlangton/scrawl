@@ -1226,7 +1226,7 @@ class SelectionTests(unittest.TestCase):
     def test_selected_absent_browser_package_fails_closed(self):
         real_run = subprocess.run
         def execute(command, **kwargs):
-            if command[0] in ("python3", "sh"):
+            if command[0] in ("python3", "sh") or "--test" in command:
                 return subprocess.CompletedProcess(command, 0)
             return real_run(command, **kwargs)
         with tempfile.TemporaryDirectory() as tmp, patch.object(verification, "ROOT", Path(tmp)), patch.object(
