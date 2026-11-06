@@ -680,6 +680,87 @@ fn source_for<'a>(
                 seal,
             )
         }
+        "derivative2" => {
+            ensure!(input.len() == 3, "unknown derivative2 input fields");
+            let receipt = input
+                .get("receipt")
+                .and_then(Value::as_object)
+                .context("derivative2 receipt missing")?;
+            let receipt_id = receipt
+                .get("receiptId")
+                .and_then(Value::as_str)
+                .context("derivative2 receipt identity missing")?;
+            let payload = receipt
+                .get("payload")
+                .and_then(Value::as_object)
+                .context("derivative2 payload missing")?;
+            let selector = input
+                .get("selector")
+                .and_then(Value::as_object)
+                .context("derivative2 selector missing")?;
+            let kind = selector
+                .get("kind")
+                .and_then(Value::as_str)
+                .context("derivative2 selector kind missing")?;
+            let (seal_value, source_kind) = match kind {
+                "frame" => {
+                    ensure!(
+                        selector.len() == 2,
+                        "unknown derivative2 frame selector fields"
+                    );
+                    let index = selector
+                        .get("requestIndex")
+                        .and_then(Value::as_u64)
+                        .context("derivative2 frame index missing")?;
+                    ensure!(index > 0, "derivative2 frame index must be one-based");
+                    let frame = payload
+                        .get("frames")
+                        .and_then(Value::as_array)
+                        .and_then(|frames| frames.get((index - 1) as usize))
+                        .and_then(Value::as_object)
+                        .context("derivative2 frame index outside receipt")?;
+                    ensure!(
+                        frame.get("requestIndex").and_then(Value::as_u64) == Some(index),
+                        "derivative2 frame index does not match request slot"
+                    );
+                    (
+                        frame
+                            .get("file")
+                            .cloned()
+                            .context("derivative2 frame seal missing")?,
+                        "frame",
+                    )
+                }
+                "contact-sheet" => {
+                    ensure!(
+                        selector.len() == 1,
+                        "unknown derivative2 sheet selector fields"
+                    );
+                    let sheet = payload
+                        .get("contactSheet")
+                        .and_then(Value::as_object)
+                        .context("derivative2 contact sheet missing")?;
+                    (
+                        sheet
+                            .get("file")
+                            .cloned()
+                            .context("derivative2 sheet seal missing")?,
+                        "contact-sheet",
+                    )
+                }
+                _ => bail!("unknown derivative2 selector kind"),
+            };
+            let seal: SealedFile = serde_json::from_value(seal_value)?;
+            validate_sealed(&seal)?;
+            ensure!(
+                entry.role == source_kind,
+                "derivative2 selector role differs from publication entry"
+            );
+            (
+                format!("derivative:{receipt_id}:{}", seal.relative_path),
+                seal,
+            )
+        }
         _ => bail!("unknown publication input kind"),
     };
     let source = context

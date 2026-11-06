@@ -274,7 +274,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     }
     assert.equal(hello.implementation, "native");
     assert.equal(hello.readiness, "ready");
-    assert.equal(hello.capabilities.publication, false, "the Media2-only candidate does not enable capture publication");
+    assert.equal(hello.capabilities.publication, true, "native publication is available independently of screen readiness");
     assert.equal(hello.capabilities.audioCapture, false);
     const discovery = await client.discoverSources();
     assert.equal(discovery.state, "available");

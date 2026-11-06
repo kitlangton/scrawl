@@ -2,7 +2,7 @@
 
 This owner-local package builds `apparent-engine-capture` from the existing
 Engine recorder and core storage primitives. It does not activate installed
-routing or register a Platform producer. Capture-v1 and media/1 stay separate.
+routing; its existing registration remains owner-local in `delivery.json`. Capture-v1 and media/1 stay separate.
 
 On native Linux x64 with Node 22.6+, Rust 1.96+, GStreamer development libraries
 and the required X11/H.264 plugins, run `npm ci`, `npm run verify`, then
@@ -25,8 +25,11 @@ in the isolated Linux guest. The current-base rebuilt worker has the same hash
 as the guest-tested worker; package metadata changes do not substitute for runtime
 proof. Producer registration/discovery and exact-main delivery admission remain
 open. X11 display and the advertised preset area are the supported sources; general picker/area selection, Wayland, macOS, audio,
-fact collectors, media/2 and publication are unavailable. Materials are never
-Saved. Existing native and installed behavior remains on its current route until
+and fact collectors remain unavailable. The unmerged publication candidate adds
+authenticated publish/inspection and native derivative/2 registry validation.
+Retained materials alone are never Saved; only validated atomic publication can
+return Saved. Fixture and host Xvfb proof do not establish the full Record
+capture-to-Saved path or current-candidate guest/package qualification. Existing native and installed behavior remains on its current route until
 verified consumer adoption.
 
 Use `launchCaptureEngine(executable, runtimeDirectory, 40_000)` for this producer;
