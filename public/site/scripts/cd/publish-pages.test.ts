@@ -99,7 +99,7 @@ test('sealed artifact rejects revision changes, content edits, extra inputs, sym
   writeFileSync(file, 'tampered'); assert.throws(() => verifyArtifact(sha, artifact), /checksum/); writeFileSync(file, original)
   const extra = join(artifact, 'dist-apparent/extra.js'); writeFileSync(extra, 'unexpected'); assert.throws(() => verifyArtifact(sha, artifact), /checksum/); rmSync(extra)
   const manifestPath = join(artifact, 'manifest.json'), originalManifest = readFileSync(manifestPath)
-  for (const path of ['connect/index.html', 'hosted/index.html', 'hosted/app.js', 'assets/connect-private.js']) {
+  for (const path of ['connect/index.html', 'hosted/index.html', 'hosted/app.js', 'assets/connect-private.js', 'pond/unapproved.svg']) {
     const file = join(artifact, 'dist-apparent', path); mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, 'forbidden')
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
     manifest.files['dist-apparent/' + path] = inventory(artifact)['dist-apparent/' + path]
@@ -109,6 +109,19 @@ test('sealed artifact rejects revision changes, content edits, extra inputs, sym
   }
   symlinkSync(root, extra, 'dir'); assert.throws(() => inventory(artifact), /symlink/); rmSync(extra)
   assert.throws(() => seal(sha, root), /EEXIST/)
+}))
+
+test('sealing admits the canonical frog QR asset', () => temp(root => {
+  fixture(root)
+  rmSync(join(root, '.build/website'), { recursive: true, force: true })
+  const qr = readFileSync(new URL('../../public/assets/pond/apparent-qr.svg', import.meta.url))
+  const pond = join(root, 'public/site/dist-apparent/pond')
+  mkdirSync(pond)
+  writeFileSync(join(pond, 'apparent-qr.svg'), qr)
+  seal(sha, root)
+  const artifact = join(root, '.build/website')
+  assert.equal(verifyArtifact(sha, artifact).revision, sha)
+  assert.deepEqual(readFileSync(join(artifact, 'dist-apparent/pond/apparent-qr.svg')), qr)
 }))
 
 test('sealing rejects Connect and hosted outputs from the Public build directory', () => temp(root => {
