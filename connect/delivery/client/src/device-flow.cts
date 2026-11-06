@@ -14,7 +14,11 @@ export class DeviceFlowError extends Error {
   }
 }
 
-type Options = { now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void> };
+type Options = {
+  expectedScope?: 'read' | 'upload';
+  now?: () => number;
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+};
 const safeErrors = new Set<SafeError>([
   'cancelled', 'offline', 'auth-required', 'rejected', 'expired', 'local-state',
   'invalid-server', 'unverified-commit', 'unavailable',
@@ -66,10 +70,13 @@ export async function authorizeDevice(
   onApproval: (value: Approval) => void,
   options: Options = {},
 ): Promise<SafeError | null> {
+  const requestedScope = options.expectedScope;
+  const expectedScope: unknown = requestedScope === undefined ? 'upload' : requestedScope;
   const now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? defaultSleep;
   const checkAbort = () => { if (signal.aborted) throw cancelled(); };
   try {
+    if (expectedScope !== 'read' && expectedScope !== 'upload') throw unavailable();
     checkAbort();
     const started = record(await transport.start());
     checkAbort();
@@ -102,7 +109,7 @@ export async function authorizeDevice(
       if (reply.status === 'rejected') throw new DeviceFlowError('rejected');
       if (reply.status === 'expired') throw new DeviceFlowError('expired');
       if (reply.status !== 'approved') throw new DeviceFlowError('rejected');
-      if (reply.scope !== 'upload' ||
+      if (reply.scope !== expectedScope ||
           !printable(reply.accessToken, 8192) || !printable(reply.refreshToken, 8192) ||
           !printable(reply.grantId, 512) || !positiveSafe(reply.expiresIn) ||
           !positiveSafe(reply.refreshExpiresIn)) throw unavailable();
