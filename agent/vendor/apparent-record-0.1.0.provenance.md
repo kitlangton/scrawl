@@ -1,6 +1,7 @@
 # @apparent/record 0.1.0 vendoring provenance
 
-Accepted combined Record 866 package from source `f4d5f7346298de27230f3fede80e085c20aa7f4b`.
-Main push run 42240344541 passed Record contracts 127969200311, producer 127969586671, and audit 127970253401. Retained component artifact 13513967642; component SHA-256 `b7531d7575405bbba291c69dbbbbee9956ff0f9f076543f94fbb236e02227d8f`.
+Accepted Record publication-output component from source `35b9c76287b2a775c8c0ea114f9c36f0853b2d8e`, main run `42272226233`, artifact `13529856801`. The producer acceptance record adjacent to the retained artifact records a verified attestation and checked source workflow subject; its component SHA-256 is `dcae1e2d7d2d394f67e248477a854fec926769be8fad76cb35cd93d7d7dbbe90`.
 
-The retained tarball was verified against the adjacent acceptance record and SHA-256 `8ed361b1bdbdadb55e44ca1a09febd8edd41f01884a3284eb2773cdb11ee1cf2`. It includes accepted rich semantic frame text API 865; only this API is used by Agent.
+The retained package tarball SHA-256 was independently checked in this checkout as `01a19ce301a8327b429bdf8fbf99f1761acf65b2a0548da50d6640463fefa5ed`, matching the acceptance record. An independent local `gh attestation verify` attempt did not complete because verification stopped at issuer `sigstore.dev`; this checkout does not claim an independent cryptographic re-verification.
+
+The package adds a read-only `createRecordPublicationOutput` projection over Record's existing publication binding SQLite authority. No native effects, automatic coordinator, or installed/rendered route are included.

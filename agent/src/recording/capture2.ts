@@ -4,13 +4,26 @@ import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import { isAbsolute, join, parse, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { performance } from 'node:perf_hooks';
-import { CaptureClient, launchCaptureEngine, type CaptureTransport } from '@apparent/engine-sdk/capture';
+import { CaptureClient, launchCaptureEngine, preflightCapturePublication, type CaptureTransport } from '@apparent/engine-sdk/capture';
 import { DEFAULT_RECORD_DURATION_SECONDS } from '../recording.js';
 import type { Capture2Host, Capture2Receipt } from '@apparent/record/host/capture2';
 
 export type Capture2Clock = { now(): number; sleep(ms: number): Promise<void> };
 const systemClock: Capture2Clock = { now: () => performance.now(), sleep: ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms)) };
-export type Capture2HostFactory = (paths: { controlRoot: string; destinationRoot: string; runtime: string; executable: string }) => Promise<{ host: Capture2Host; allocateDestination(requestId: string, exactPath?: string): Promise<string>; close(): Promise<string> }>;
+export type Capture2PublicOutput = {
+  captureFacts: { readFacts(): Promise<{ captures: readonly { captureId: string; artifactId?: string; phase: string }[] }> };
+  resolveHandoff(identity: Readonly<{ captureId: string; artifactId: string }>): Promise<{
+    captureId: string;
+    artifactId: string;
+    handoff?: { savedBundle?: { status: string; bundlePath: string } };
+  } | null>;
+};
+export type Capture2HostFactory = (paths: { controlRoot: string; destinationRoot: string; runtime: string; executable: string }) => Promise<{
+  host: Capture2Host;
+  allocateDestination(requestId: string, exactPath?: string): Promise<string>;
+  close(): Promise<string>;
+  publicationOutput?: Capture2PublicOutput;
+}>;
 
 async function ensurePrivateStoreRoot(controlRoot: string): Promise<string> {
   if (!isAbsolute(controlRoot) || resolve(controlRoot) !== controlRoot || controlRoot === parse(controlRoot).root) throw new Error('Agent capture/2 control root is invalid');
@@ -61,14 +74,15 @@ async function defaultHostFactory(paths: Parameters<Capture2HostFactory>[0]) {
   const storeRoot = await ensurePrivateStoreRoot(paths.controlRoot);
   await verifyCaptureRuntime(paths.runtime);
   await verifyCaptureExecutable(paths.executable);
-  const [{ AbsentDestinationAllocator, SqliteCaptureMappingStore }, { createCapture2Host }] = await Promise.all([
-    import('@apparent/record/host'), import('@apparent/record/host/capture2'),
+  const [{ AbsentDestinationAllocator, SqliteCaptureMappingStore }, { createCapture2Host }, { createRecordPublicationOutput }] = await Promise.all([
+    import('@apparent/record/host'), import('@apparent/record/host/capture2'), import('@apparent/record/publication'),
   ]);
   const client = new CaptureClient(launchCaptureEngine(paths.executable, paths.runtime, 40_000));
   try {
     const destinations = new AbsentDestinationAllocator(storeRoot, paths.destinationRoot);
     const host = createCapture2Host({ client, mappings: new SqliteCaptureMappingStore(storeRoot), destinations });
-    return { host, allocateDestination: async (requestId: string, exactPath?: string) => exactPath
+    const publicationOutput = createRecordPublicationOutput(client, storeRoot, preflightCapturePublication);
+    return { host, publicationOutput, allocateDestination: async (requestId: string, exactPath?: string) => exactPath
       ? (await destinations.reserveExact(requestId, exactPath)).bundlePath
       : (await destinations.allocate(requestId)).bundlePath, close: () => client.close() };
   } catch (error) { await client.close(); throw error; }
@@ -290,7 +304,27 @@ export async function controlCapture2(args: string[], config: { executable?: str
     closeVerified = ['already-exited', 'eof-exited', 'exit-observed'].includes(closed);
     if (!closeVerified) process.stderr.write(`Capture/2 transport close is uncertain (${closed}); retain the request identity for reconciliation.\n`);
   }
-  const outcome = !closeVerified ? 'close-unverified' : receipt.phase === 'unknown' ? 'uncertain' : receipt.phase === 'failed' ? 'failed' : receipt.phase === 'cancelled' ? 'cancelled' : receipt.phase === 'processing' || receipt.phase === 'materials-ready' ? 'pending-saved-capability-unavailable' : 'pending';
-  process.stdout.write(`${JSON.stringify({ requestId, state: receipt.phase, outcome })}\n`);
+  const savedBundlePath = method === 'inspect' && closeVerified && composed.publicationOutput
+    ? await authenticatedSavedBundlePath(composed.publicationOutput, requestId, destinationPath)
+    : undefined;
+  const outcome = savedBundlePath !== undefined ? 'saved' : !closeVerified ? 'close-unverified' : receipt.phase === 'unknown' ? 'uncertain' : receipt.phase === 'failed' ? 'failed' : receipt.phase === 'cancelled' ? 'cancelled' : receipt.phase === 'processing' || receipt.phase === 'materials-ready' ? 'pending-saved-capability-unavailable' : 'pending';
+  process.stdout.write(`${JSON.stringify({ requestId, state: savedBundlePath === undefined ? receipt.phase : 'saved', outcome, ...(savedBundlePath === undefined ? {} : { bundlePath: savedBundlePath }) })}\n`);
+  if (savedBundlePath !== undefined) return 0;
   return ['failed', 'cancelled'].includes(receipt.phase) ? (receipt.phase === 'cancelled' && method === 'cancel' && closeVerified ? 0 : 1) : 3;
+}
+
+async function authenticatedSavedBundlePath(output: Capture2PublicOutput, requestId: string, expectedPath: string): Promise<string | undefined> {
+  try {
+    const facts = await output.captureFacts.readFacts();
+    const matches = facts.captures.filter(capture => capture.captureId === requestId);
+    if (matches.length !== 1 || matches[0].phase !== 'saved' || typeof matches[0].artifactId !== 'string' || !matches[0].artifactId) return undefined;
+    const artifactId = matches[0].artifactId;
+    const resolution = await output.resolveHandoff({ captureId: requestId, artifactId });
+    const bundle = resolution?.handoff?.savedBundle;
+    if (resolution?.captureId !== requestId || resolution.artifactId !== artifactId || bundle?.status !== 'saved' || bundle.bundlePath !== expectedPath) return undefined;
+    if (await realpath(bundle.bundlePath).catch(() => '') !== expectedPath) return undefined;
+    return expectedPath;
+  } catch {
+    return undefined;
+  }
 }
