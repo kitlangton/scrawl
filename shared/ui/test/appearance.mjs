@@ -63,15 +63,20 @@ try {
       const result=names.map(([foreground,background])=>{probe.style.color=`var(--color-${foreground})`;probe.style.backgroundColor=`var(--color-${background})`;const css=getComputedStyle(probe);return [foreground,css.color,css.backgroundColor]})
       probe.remove();return result
      })
-     const luminance=color=>color.match(/\d+/g).slice(0,3).map(Number).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4).reduce((sum,x,i)=>sum+x*[.2126,.7152,.0722][i],0)
+     const luminance=color=>{
+      // CSS color-mix(in srgb, ...) is computed as color(srgb ...), not rgb().
+      assert(/^(rgb\(|rgba\(|color\(srgb )/.test(color),`Unsupported computed color: ${color}`)
+      const channels=color.match(/[\d.]+/g).slice(0,3).map(Number).map(x=>color.startsWith('color(srgb ')?x:x/255)
+      return channels.map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4).reduce((sum,x,i)=>sum+x*[.2126,.7152,.0722][i],0)
+     }
      for(const [role,fg,bg] of pairs){const a=luminance(fg),b=luminance(bg);assert((Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=4.5,`${name}/${owner} ${mode} ${role} contrast`)}
      if(owner==='connect'||owner==='public'){
       const selection=await page.locator(selector).evaluate(el=>{const css=getComputedStyle(el.querySelector('h1') || el,'::selection');return [css.color,css.backgroundColor]})
       const [a,b]=selection.map(luminance);assert((Math.max(a,b)+.05)/(Math.min(a,b)+.05)>=4.5,`${owner} ${mode} selection contrast`)
      }
      states.push(state)
-     assert.equal(state.background,mode==='dark'?'rgb(32, 27, 36)':'rgb(245, 240, 232)',`${name}/${owner}/${path} ${mode} background`)
-     assert.equal(state.foreground,mode==='dark'?'rgb(245, 240, 232)':owner==='public'&&process.env.PUBLIC_THEME_ARTIFACT?'rgb(2, 1, 2)':'rgb(25, 22, 29)',`${name}/${owner}/${path} ${mode} text`)
+     assert.equal(state.background,mode==='dark'?(owner==='public'?'rgb(2, 1, 2)':'rgb(32, 27, 36)'):'rgb(245, 240, 232)',`${name}/${owner}/${path} ${mode} background`)
+     assert.equal(state.foreground,mode==='dark'?'rgb(245, 240, 232)':owner==='public'?'rgb(2, 1, 2)':'rgb(25, 22, 29)',`${name}/${owner}/${path} ${mode} text`)
      if(owner==='public'&&process.env.PUBLIC_THEME_ARTIFACT){
       const patches=await page.evaluate(()=>{
        const statement=document.querySelector('.preview-statement'), hello=document.querySelector('.pond-hello'), bubble=document.querySelector('.rude-bubble')

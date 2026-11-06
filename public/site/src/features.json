@@ -22,6 +22,22 @@
   ],
   "features": [
     {
+      "id": "public-demo-viewing",
+      "added": "2026-11-06",
+      "group": "agent",
+      "name": "Public recording demo views",
+      "says": "The public homepage has a segmented keyboard-seekable timeline and named chapters. On phones, an enlarged viewport smoothly follows the approved recording’s observed cursor track with captions outside the moving crop. Desktop, reduced-motion and fullscreen playback retain the complete frame. The QR splash wash is 90% opaque while the QR image stays opaque.",
+      "status": "main",
+      "platforms": [
+        "mac",
+        "linux"
+      ],
+      "note": "Public browser presentation only; no desktop capture or platform support change. Local review candidate; not deployment evidence.",
+      "docs": [
+        "public/site/docs/feature-grid.md"
+      ]
+    },
+    {
       "id": "hermes-recording-tools",
       "added": "2026-11-06",
       "group": "cli",
@@ -59,7 +75,7 @@
       "added": "2026-11-02",
       "group": "platforms",
       "name": "System light and dark appearance",
-      "says": "Frontend surfaces share one semantic theme and follow system light/dark appearance while open: Electron frontend, Connect account and recording recipient pages, and public pages. Native legacy surfaces and captured media keep their existing rendering. Browser checks cover Chromium and Firefox; native platform acceptance remains separate.",
+      "says": "Frontend surfaces share one semantic theme and follow system light/dark appearance while open: Electron frontend, Connect account and recording recipient pages, and public pages. Public uses Paper/Carbon with Stock grouped fields in light mode, and Carbon/Paper with muted Lilac/Carbon grouped fields in dark mode. Feature illustration chrome shares those semantic roles; original media keeps its pixels. Native legacy surfaces and captured media keep their existing rendering. Browser checks cover Chromium and Firefox; native platform acceptance remains separate.",
       "status": "main",
       "platforms": [
         "mac",
@@ -135,7 +151,7 @@
       "id": "site-feature-grid",
       "group": "install",
       "name": "Animated homepage feature explanations",
-      "says": "Four illustrative animations after the product video explain whiteboard feedback, the multimedia timeline, clipboard handoff, and an agent showing its changes in a captioned walkthrough. Animations pause offscreen and respect reduced motion.",
+      "says": "Four illustrative explanations after the product video cover whiteboard feedback, the multimedia timeline, clipboard handoff, and an agent showing its changes in a captioned walkthrough. Desktop animations have a visible pause control, pause offscreen and respect reduced motion. Phones use static semantic examples with readable labels instead of scaled desktop canvases.",
       "status": "main",
       "added": "2026-10-30",
       "platforms": [
@@ -265,7 +281,7 @@
       "id": "site-frog-footer",
       "group": "install",
       "name": "Homepage feedback footer",
-      "says": "A compact invitation beneath the photos offers Try apparent and a LinkedIn chooser. Try first attempts apparent://open, then the same button offers an explicit second-click platform download; no installation detection or automatic download. The footer retains its lilac rounded button style. The LinkedIn chooser includes the accepted speech-bubble interaction and does not record or send feedback.",
+      "says": "A playful Try apparent invitation beneath the photos first requests apparent://open, then offers an explicit second-click download using the hero platform/CPU selection. The LinkedIn chooser links directly to both profiles. There is no installation detection, automatic download, capture or feedback submission. Actions use square brand frames.",
       "status": "main",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],

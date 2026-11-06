@@ -167,7 +167,7 @@ try {
     import {createRequire} from 'node:module';
     import {CaptureClient, preflightCapturePublication} from '@apparent/engine-sdk/capture';
     import {ReferenceCapturePeer} from '@apparent/engine-sdk/capture/testing';
-    import {createRecordPublicationRecovery, createCompletedCapturePublisher, prepareRecordPublication} from '@apparent/record/publication';
+    import {createRecordPublicationRecovery, createCompletedCapturePublisher, createRecordPublicationOutput, prepareRecordPublication} from '@apparent/record/publication';
     import {prepareMedia2Request, encodeContactSheetLayout, validateDerivative2Document, selectDerivative2Artifact} from '@apparent/engine-sdk/media2';
     import {createCapture2Host} from '@apparent/record/host/capture2';
     import {createCapture2RecordRuntime} from '@apparent/record/host/capture2-runtime';
@@ -180,9 +180,16 @@ try {
     assert.equal(typeof prepareRecordPublication, 'function');
     assert.equal(typeof createCompletedCapturePublisher, 'function');
     assert.equal(typeof createCompletedCapturePublisher(client, process.cwd() + '/unused-private-root', preflightCapturePublication).publishCompletedCapture, 'function');
+    const outputRoot = process.cwd() + '/output-consumer-private';
+    const output = createRecordPublicationOutput(client, outputRoot, preflightCapturePublication);
+    assert.deepEqual((await output.captureFacts.readFacts()).captures, []);
+    assert.equal(await output.resolveHandoff({captureId:'public-request', artifactId:'bundle'}), null);
+    const injectedResolver = output.resolveHandoff;
+    assert.equal(await injectedResolver({captureId:'public-request', artifactId:'bundle'}), null);
     assert.deepEqual([prepareMedia2Request, encodeContactSheetLayout, validateDerivative2Document, selectDerivative2Artifact].map(value => typeof value), ['function','function','function','function']);
     for (const name of ['react','react-dom','electron','@apparent/ui']) assert.throws(()=>createRequire(import.meta.url).resolve(name));
     await client.close();
+    await (await import('node:fs/promises')).rm(outputRoot, {recursive:true, force:true});
     console.log('packed publication profile passed without UI peers');
   `], { cwd: publication });
   process.stdout.write(publicationResult.stdout);
@@ -575,7 +582,7 @@ try {
     import {preflightCapturePublication, type CaptureClient, type SourceDescriptor, type CaptureOptions, type InvocationFact} from '@apparent/engine-sdk/capture';
     import {type Derivative2DocumentInput, type Derivative2Selector} from '@apparent/engine-sdk/media2';
     import {createCapture2Host, type Capture2Host, type Capture2StartIntent} from '@apparent/record/host/capture2';
-    import {createCompletedCapturePublisher, createRecordPublicationRecovery, prepareRecordPublication, type CompletedCapturePublisher, type PublishCompletedCaptureInput, type ReconcileCompletedCaptureInput} from '@apparent/record/publication';
+    import {createCompletedCapturePublisher, createRecordPublicationOutput, createRecordPublicationRecovery, prepareRecordPublication, type CompletedCapturePublisher, type PublishCompletedCaptureInput, type ReconcileCompletedCaptureInput, type RecordPublicationOutput} from '@apparent/record/publication';
     declare const client: CaptureClient;
     declare const host: Capture2Host;
     declare const intent: Capture2StartIntent;
@@ -589,12 +596,16 @@ try {
     const result: ReturnType<CaptureClient['publish']> = recovery.publish({} as Parameters<CaptureClient['publish']>[0]);
     const stage: (input: Parameters<typeof prepareRecordPublication>[0]) => Promise<import('@apparent/record/publication').PreparedRecordPublication> = prepareRecordPublication;
     const publisher = createCompletedCapturePublisher(client, '/private/control', preflightCapturePublication);
+    const output: RecordPublicationOutput = createRecordPublicationOutput(client, '/private/control', preflightCapturePublication);
+    const factsPromise: ReturnType<RecordPublicationOutput['captureFacts']['readFacts']> = output.captureFacts.readFacts();
+    const resolver: RecordPublicationOutput['resolveHandoff'] = output.resolveHandoff;
+    const handoffPromise: ReturnType<RecordPublicationOutput['resolveHandoff']> = resolver({captureId:'public-request', artifactId:'bundle'});
     const publish: (input: PublishCompletedCaptureInput) => ReturnType<CompletedCapturePublisher['publishCompletedCapture']> = publisher.publishCompletedCapture;
     const reconcile: (input: ReconcileCompletedCaptureInput) => ReturnType<CompletedCapturePublisher['reconcile']> = publisher.reconcile;
     declare const documents: readonly Derivative2DocumentInput[];
     declare const selector: Derivative2Selector;
     const media2Input: PublishCompletedCaptureInput = { status: {} as never, assembly: {} as never, ownerToken: 'a'.repeat(64), publicationId: 'b'.repeat(32), stagingRoot: '/private/staging', destinationPath: '/bundle', derivatives2: documents, derivative2Artifacts: {'frames/renamed.png': {receiptId:'receipt', selector}} };
-    void result; void stage; void publish; void reconcile; void capture; void exactReceipt; void media2Input;
+    void result; void stage; void publish; void reconcile; void capture; void exactReceipt; void media2Input; void factsPromise; void handoffPromise;
   `);
   await run(process.execPath, [tsc, '--noEmit', '--strict', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', sdkDeclarations], { cwd: publication });
 } finally {

@@ -14,7 +14,8 @@
 .splash-close:hover{background:var(--apparent-site-paper)}
 .frog-splash-dialog :focus-visible{outline:3px solid var(--apparent-site-signal);outline-offset:8px}
 .frog-splash-dialog[data-stage=impact] .splash-impact{animation:pond-impact 750ms ease-out both}
-.frog-splash-dialog:is([data-stage=flood],[data-stage=reveal]) .splash-flood{transform:scale(45);opacity:1;filter:blur(0)}
+.frog-splash-dialog:is([data-stage=flood],[data-stage=reveal]) .splash-flood{transform:scale(45);opacity:.9;filter:blur(0)}
+.splash-close{background:var(--apparent-site-lilac)}
 .frog-splash-dialog:is([data-stage=impact],[data-stage=flood]) .splash-drops i{animation:pond-droplet 700ms ease-out both;animation-delay:calc(var(--i)*12ms)}
 .frog-splash-dialog[data-stage=reveal] .splash-message{opacity:1;visibility:visible;transform:translateY(0)}
 @keyframes pond-impact{0%{opacity:1;transform:translate(-50%,-86%) scale(.1,.05)}40%{opacity:1;transform:translate(-50%,-86%) scale(1.1,1)}100%{opacity:0;transform:translate(-50%,-66%) scale(1.4,.55)}}

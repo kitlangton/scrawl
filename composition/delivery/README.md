@@ -87,10 +87,12 @@ Linux/Intel Mac lanes, Config Linux/Intel Mac lanes and Onboarding Linux/Intel M
 lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
 merged PR candidate. Admission authenticates the merged PR, exact workflow/run and
 successful attempt jobs (including contracts and runtime audit), then checks the
-synthetic merge commit's base/head parents and requires its complete Git tree to
-equal the landed main tree. Component/environment/Node/runner-image digests and
-archive hash/size/run-attempt checks still apply. Forks, missing metadata, changed
-trees, expired artifacts and failed retrieval/validation fall back to fresh work.
+synthetic merge commit's PR head parent and authenticates its base as an ancestor
+of the landed main commit's first parent. It fetches the tested commit when absent
+and recomputes its complete registered component source closure against main.
+Unrelated main changes may differ; every tracked component input must match. Component/environment/Node/runner-image digests and
+archive hash/size/run-attempt checks still apply. Forks, missing metadata/commits, divergent bases, changed
+component inputs, expired artifacts and failed retrieval/validation fall back to fresh work.
 The run API's head SHA identifies the PR head, not its tested synthetic merge.
 
 Candidates use separate `pr-ID-TARGET-MERGE_SHA-DIGEST` artifact names;
@@ -100,7 +102,11 @@ summaries distinguish reuse from fresh verification. No workflows, skipped jobs 
 cancellation rules are added. Other owner lanes retain their existing
 behavior; production configuration and platform/native acceptance remain required.
 These Engine exceptions supersede the general statement that PR jobs do not archive
-artifacts. Changed-tree or per-component PR matching is deliberately not enabled.
+artifacts. Component matching includes transitive registered sources, locks/vendor archives,
+shared delivery/architecture code, workflow/actions, license and verification
+inputs. App Shell also tracks the external process-cleanup helper and legacy
+workflow its tests read; changes select its platform jobs. Missing proof falls
+back to fresh verification. Receipt validation independently checks source identity.
 
 Native Engine and media admission install Rust before fingerprinting on PRs and main,
 including reuse hits. Its digest additionally covers actual rustc/Cargo/C compiler
@@ -137,7 +143,7 @@ unchanged; main retains original build provenance. Capture is not enabled for PR
 reuse by this media slice.
 
 Config uses the same actual native compiler/SDK/flag identity and conservative
-whole-tree admission on both supported targets. Supported native candidates
+component-input admission on both supported targets. Supported native candidates
 install Rust before admission; unsupported native lanes keep fresh-only setup.
 The Config helper, its embedded source SHA and protocol manifest are promoted
 byte-for-byte with original build provenance. Its workflow retains fresh staged

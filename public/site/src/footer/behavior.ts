@@ -14,11 +14,10 @@ export function mountFooter(root: HTMLElement): () => void {
   const tryButton = root.querySelector<HTMLButtonElement>('.footer-try')!
   listen(tryButton, 'click', () => {
     if (tryButton.dataset.launchAttempted !== 'true') {
-      // Change the action before leaving the page. Browsers cannot confirm
-      // installation or launch; the next click always downloads by choice.
+      // Keep the playful invitation and an explicit, user-initiated fallback.
       tryButton.dataset.launchAttempted = 'true'
       tryButton.textContent = 'Not installed yet? No worries—click again to download ↗'
-      try { window.location.assign('apparent://open') } catch { /* Keep the download action available. */ }
+      try { window.location.assign('apparent://open') } catch { /* Download remains available. */ }
       return
     }
     // Reuse the actual hero link, including its platform/CPU selection, busy
@@ -94,17 +93,6 @@ export function mountFooter(root: HTMLElement): () => void {
       if (active && !dialogs.some(d => d.open)) returnFocus?.focus()
     })
   }
-  const social = root.querySelector<HTMLDialogElement>('dialog[data-dialog="social"]')!
-  const simon = social.querySelector<HTMLAnchorElement>('a[href*="simon"]')!
-  const bubble = social.querySelector<HTMLElement>('.rude-bubble')!
-  let ready = false
-  listen(simon, 'click', event => {
-    if (ready) { bubble.hidden = true; ready = false; return }
-    event.preventDefault()
-    ready = true
-    bubble.hidden = false
-  })
-  listen(social, 'close', () => { bubble.hidden = true; ready = false })
   fit(); label(); schedule()
   return () => {
     active = false

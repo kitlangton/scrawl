@@ -8,6 +8,8 @@ mod lease;
 #[cfg(all(target_os = "linux", feature = "linux-media"))]
 pub mod linux;
 mod locking;
+#[cfg(all(target_os = "macos", feature = "macos-capture"))]
+pub mod macos;
 #[cfg(feature = "materials-media")]
 pub mod materials_media;
 #[cfg(feature = "publication")]

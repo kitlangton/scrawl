@@ -4,7 +4,7 @@ import { supportsPrCandidate, workflowPathFor, type AdmissionResult } from '../c
 
 const repository = 'tryapparent/apparent'
 type Api = <T>(endpoint: string) => T
-export function admitPrCandidate(api: Api, currentSha: string, currentTree: string, digest: string, ownerId = 'engine', target = 'linux-x64'): AdmissionResult | undefined {
+export function admitPrCandidate(api: Api, currentSha: string, digest: string, matchesInputs: (testedSha: string, testedBase: string, landedBase: string) => boolean, ownerId = 'engine', target = 'linux-x64'): AdmissionResult | undefined {
   if (!supportsPrCandidate(ownerId, target)) return
   const workflow = workflowPathFor(ownerId)
   const pulls = api<Array<{ number: number; merged_at: string | null; merge_commit_sha: string; head: { sha: string; repo: { full_name: string } | null } }>>(`repos/${repository}/commits/${currentSha}/pulls?per_page=100`)
@@ -26,8 +26,9 @@ export function admitPrCandidate(api: Api, currentSha: string, currentTree: stri
         if (!match || match[2] !== digest || artifact.expired || !Number.isSafeInteger(artifact.id) || artifact.id <= 0) continue
         const tested = api<{ sha: string; tree: { sha: string }; parents: Array<{ sha: string }> }>(`repos/${repository}/git/commits/${match[1]}`)
         // Never confuse the run's PR head SHA with the synthetic merge it tested.
-        if (tested.sha !== match[1] || tested.tree.sha !== currentTree || tested.parents.length !== 2 || tested.parents[0].sha !== landed.parents[0].sha || tested.parents[1].sha !== pull.head.sha) continue
-        return { reuse: true, reason: 'verified same-repository PR merge tree matches landed main tree', input_digest: digest, prior_artifact_id: artifact.id, prior_source_sha: tested.sha, prior_run_id: run.id, prior_run_attempt: run.run_attempt }
+        if (tested.sha !== match[1] || tested.parents.length !== 2 || tested.parents[1].sha !== pull.head.sha) continue
+        if (!matchesInputs(tested.sha, tested.parents[0].sha, landed.parents[0].sha)) continue
+        return { reuse: true, reason: 'verified same-repository PR component inputs match main across an ancestor base', input_digest: digest, prior_artifact_id: artifact.id, prior_source_sha: tested.sha, prior_run_id: run.id, prior_run_attempt: run.run_attempt }
       }
     }
   }

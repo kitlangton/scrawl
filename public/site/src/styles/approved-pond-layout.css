@@ -17,6 +17,7 @@
 :root .pond-demo{padding:32px 24px 48px}
 :root .pond-demo>h2,:root .pond-demo>.demo-section{max-width:1072px;margin-left:auto;margin-right:auto}
 :root .pond-demo>h2{font-size:26px;margin-bottom:22px}
+:root .pond-demo>h2 img{display:inline-block;width:120px;height:auto;vertical-align:middle;margin:0 6px}
 :root .pond-copy{padding:52px 310px 52px 24px;min-height:390px}
 :root .pond-copy h1{display:block;position:static;font-size:clamp(34px,3.4vw,48px);max-width:750px}
 :root .pond-copy h1 .pond-word{position:absolute;right:74px;top:50px;margin:0;width:140px;height:105px}
@@ -117,7 +118,34 @@
 :root .github-stars{min-height:44px;border:1px solid var(--color-border)}
 :root :is(a,button,summary,[tabindex]):focus-visible{outline:2px solid var(--color-ring);outline-offset:4px}
 :root :is(.pond-purpose h2,.feature-copy h3,.pond-demo h2){font-weight:700}
-:root .video-demo .overlay-play{background:var(--color-brand);color:var(--color-brand-foreground);backdrop-filter:none;border:1px solid var(--color-border)}
+:root .video-demo :is(.stage-wrap,.track){box-shadow:none;border-radius:0}
+:root .video-demo .stage-wrap{border:1px solid var(--color-border)}
+:root .video-demo :is(.stage-play,.stage-sound-hint,.stage-btn){background:var(--color-primary);color:var(--color-primary-foreground);backdrop-filter:none;-webkit-backdrop-filter:none;border:1px solid var(--color-border);text-shadow:none}
+:root .video-demo .liquid-glass::before,:root .video-demo .liquid-glass::after{display:none}
+:root .video-demo :is(.stage-play,.stage-sound-hint,.stage-btn):hover{background:var(--color-primary);color:var(--color-primary-foreground)}
+
+/* Review candidate: the approved inverse pair for the surrounding page.
+   Public-only mapping preserves the other streams' system appearance contract. */
+@media(prefers-color-scheme:dark){:root{
+  --color-background:var(--apparent-site-carbon);
+  --color-surface:color-mix(in srgb,var(--apparent-site-lilac) 12%,var(--apparent-site-carbon));
+  --color-foreground:var(--apparent-site-paper);
+  --color-muted-foreground:var(--apparent-site-paper);
+  --color-primary:var(--apparent-site-lilac);
+  --color-primary-foreground:var(--apparent-site-carbon);
+  --color-brand:var(--apparent-site-lilac);
+  --color-brand-foreground:var(--apparent-site-carbon);
+  --color-secondary:var(--apparent-site-carbon);
+  --color-secondary-foreground:var(--apparent-site-paper);
+  --color-muted:color-mix(in srgb,var(--apparent-site-lilac) 12%,var(--apparent-site-carbon));
+  --color-accent:var(--apparent-site-lilac);
+  --color-accent-foreground:var(--apparent-site-carbon);
+  --color-ring:var(--apparent-site-lilac);
+  --color-border:color-mix(in srgb,var(--apparent-site-paper) 45%,var(--apparent-site-carbon));
+  --color-input:var(--apparent-site-paper);
+  --color-selection:var(--apparent-site-lilac);
+  --color-selection-foreground:var(--apparent-site-carbon);
+}}
 @media(prefers-reduced-motion:reduce){:root *, :root *::before,:root *::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 
 /* Keep the video-return phrase together on roomy screens; let phones reflow. */

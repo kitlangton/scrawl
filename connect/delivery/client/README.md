@@ -321,3 +321,88 @@ Isolated Linux and Mac consumer tests cover replacement and stale-inode refusal
 under the real queue lease. They do not establish installed acceptance; the
 protected provider, coordinated sole-writer cutover and actual caller tests
 remain required.
+
+The internal `credentials/renewal-request` transport sends one bounded refresh
+POST to the already approved root or `/connect` API base, with no bearer header,
+cookies, redirects or retries. It returns raw reply bytes for durable response
+publication before the existing journal merge; successful HTTP does not establish
+valid renewed credentials. The caller owns journal preparation, locking, expiry,
+currentness, recovery and wiping returned bytes. A failed POST may follow a
+server-side rotation and never authorizes a blind retry. This has no production
+caller and does not change the Rust writer or installed routing.
+
+The internal `credentials/renewal-plan` module proposes renewal actions from
+already decoded, fresh caller facts under the scope lease. It preserves the
+legacy 30-second threshold, changed-token reuse and exact-base completed-response
+precedence using the original issue time. It freezes detached credential/journal
+snapshots and wipes its bounded response copy without changing caller buffers.
+These are in-memory proposals; the caller still owns service approval, fresh
+cancellation/revocation facts, durable journal ordering and sole-writer authority.
+
+The native consumer fixture can exercise the protected installed wrapper with
+`APPARENT_RESOURCE_PROVIDER=installed`. Alongside its admitted SDK, artifact and
+source inputs, it requires `APPARENT_RESOURCE_MANIFEST_SHA256` from the trusted
+producer return; it never derives that admission value from the supplied files.
+This mode runs recipient/state/publication and replacement calls through the
+public `./installed` factory, checks pending-call/lease retention, then retires
+only the factory-owned snapshot. Missing or unsupported installed inputs fail
+closed. The retained direct fixture is not an installed fallback. Linux x64
+joined-consumer proof does not establish Mac joined proof or ARM admission;
+installed routing and the sole-writer cutover remain separate gates.
+
+The internal `state/renewal-commit` phase can commit an exact-base completed
+legacy renewal response in isolated writer preparation. It shares the existing
+namespace admission, private readers and lock checks; takes scope then queue;
+rechecks the full stored credential, cancellation, intent and evidence identities;
+and uses private native replacement plus verified readback. Only then may it
+check the consumed evidence stamps, unlink their paths and sync the parent.
+Cleanup relies on relevant writers honoring the legacy scope/queue protocol in
+the admitted private namespace. The stamp check and unlink are separate calls;
+a same-UID process bypassing those locks can replace a name between them. This
+follows the existing directory admission and legacy `clear_renewal` trust boundary,
+and does not promise atomic inode-conditional deletion against such a process.
+It preserves
+the original issue time and leaves other scopes and config untouched. Possible
+effects, failed acknowledgements, cancellation or cleanup/lease failures report
+uncertainty without retry or restoration. It has no production caller or package
+export and must not write live state alongside Rust. Isolated Linux protected-
+wrapper and Mac direct-adapter cases cover both scopes, scope contention and
+evidence substitution under the cooperative protocol. They do not establish
+installed Mac or ARM admission. Full writer ownership and production caller
+adoption remain separate gates.
+
+The internal `persistRenewalExchange` phase durably prepares the legacy journal,
+sends one bounded refresh POST with the scope lease held and queue lease released,
+then publishes raw response bytes before the completed marker. It shares the
+existing planner, HTTP transport, stamped private readers and replacement path.
+Fresh login, cancellation, intent and evidence fences precede each publication.
+A prepared journal or orphan response can survive a stopped or failed exchange;
+those results never authorize blind HTTP replay. As in the Rust donor, a later
+invocation can replace incomplete evidence and issue a fresh request. An incomplete
+journal does not prove that the server did not rotate its token; the eventual
+writer orchestration must account for that ambiguity rather than add retries.
+Completed raw evidence is
+merged and published separately by `renewal-commit` using the saved issue time.
+This phase does not parse a newly received reply, publish credentials, mark
+`authRequired`, export a writer or switch any installed caller. Rust remains the
+sole live writer. Isolated Linux protected-wrapper tests exercise real HTTP,
+both scopes and cancellation while the queue is available during the request.
+The frozen Mac direct-adapter proof also covers those cases and completed
+recovery/scope contention, with all client tests passing. It uses an owner-local
+Mac ARM helper and does not establish installed ARM or installed Mac adoption.
+Final rejection/renewal orchestration, coordinated writer ownership and production
+adoption remain acceptance gates.
+
+The internal `renewStateCredential` coordinator joins exchange, completed recovery
+and exact-record `authRequired` marking under one deadline. A terminal refresh
+401, missing refresh capability or invalid completed reply can mark only the
+unchanged credential; token rotation or another login cannot be overwritten.
+A cooperating recovery winner between phases is reloaded without another POST.
+Uncertain publication stops immediately, preserving the recovery evidence.
+A returned credential is a stored fact, not an assertion of unexpired access or
+service authorization; request-time checks remain with consumers. Terminal
+rejection changes no token, grant, cancellation state, other scope or
+config. Cancellation before recovery leaves completed evidence for a later call
+using its original issue time. These are isolated writer capabilities, with no
+public writer export or production caller. Rust remains the sole live writer;
+Mac coordinator proof, installed admission and coordinated adoption remain gates.

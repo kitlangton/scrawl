@@ -31,7 +31,7 @@ export async function assemble(shell: string, streams: string[], destination: st
     await writeFile(join(stage, 'registry.js'), 'export const streams = ' + JSON.stringify(manifests) + ';\n');
     const files: Record<string, string> = {};
     const inventory = [...Object.keys(shellManifest.files), 'registry.js', ...manifests.flatMap(manifest =>
-      ['manifest.json', 'index.js'].map(file => `streams/${manifest.id}/${file}`))];
+      ['manifest.json', 'index.js', ...Object.keys(manifest.assets ?? {})].map(file => `streams/${manifest.id}/${file}`))];
     for (const file of inventory) files[file] = digest(await readRegular(join(stage, file)));
     await writeFile(join(stage, 'assembly.json'), JSON.stringify({ schemaVersion: 1,
       shell: digest(JSON.stringify(shellManifest)), streams: manifests, files }, null, 2) + '\n');

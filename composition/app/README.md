@@ -255,3 +255,21 @@ native/Engine producers to verify reconciliation refusal, renderer refresh and
 ordered one-time cleanup through the shipped Electron bridge on both CI targets.
 These assembly APIs do not select an installed executable, authenticate a Saved
 artifact, enable an installed route or clear native product acceptance gates.
+
+Stream manifests may additionally seal `style.css` and at most nine font files
+under `fonts/` (TTF or WOFF2). These precompiled assets are copied and checked with
+the stream entry during assembly and packaged verification; undeclared files,
+symlinks and changed bytes are refused. The renderer loads the declared local
+stylesheet before mounting the stream, and CSP permits only local fonts. This
+does not grant renderer filesystem access or compile an owner's source during
+assembly.
+
+`npm run build:record -- <new-output-directory>` builds the thin Record pill
+contribution from the pinned public UI package, its compiled stylesheet and font.
+Assemble that artifact with a Record-bound shell using the existing assembly
+command. The shell injects only its fixed Record renderer port into this module;
+the module delegates all pill actions and presentation to Record's public API.
+Changing shell surfaces disconnects only the renderer's observations. Record
+Settings are not supplied by this contribution. The default shell remains the
+development foundation; this does not enable installed routing or claim native
+pill placement, focus, stacking, exclusion or capture-to-Saved behavior.

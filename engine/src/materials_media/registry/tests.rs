@@ -20,7 +20,12 @@ fn fixture() -> Fixture {
             .unwrap()
             .as_nanos()
     );
-    let root_path = std::env::temp_dir().join(format!("materials-media-registry-{nonce}"));
+    // Darwin's temporary root can use the /var alias. Resolve the fixture root;
+    // production Store still rejects symlinked ancestors.
+    let root_path = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join(format!("materials-media-registry-{nonce}"));
     std::fs::create_dir(&root_path).unwrap();
     std::fs::set_permissions(&root_path, std::fs::Permissions::from_mode(0o700)).unwrap();
     let runtime = Arc::new(SecureStore::create(&root_path.join("runtime")).unwrap());

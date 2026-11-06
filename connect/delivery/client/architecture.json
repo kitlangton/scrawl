@@ -7,7 +7,8 @@
       "env": "APPARENT_RESOURCE_SDK_CONSUMER",
       "package": "@apparent/native-resources",
       "exports": [
-        "."
+        ".",
+        "./installed"
       ]
     }
   ]

@@ -103,7 +103,7 @@ class PrePushGuardTests(unittest.TestCase):
         self.prepare_npm_install(client, HOOK.parents[1] / "connect/delivery/client")
         app_shell = self.repo / "composition/app"
         source_app_shell = SELECTOR.parents[1] / "composition/app"
-        for name in ("package.json", "package-lock.json", "tsconfig.json", ".gitignore"):
+        for name in ("package.json", "package-lock.json", "tsconfig.json", ".gitignore", "delivery.json"):
             destination = app_shell / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_app_shell / name, destination)

@@ -1,4 +1,4 @@
-#![cfg(all(feature = "media", target_os = "linux"))]
+#![cfg(feature = "media")]
 #![allow(dead_code, unused_imports)]
 
 #[path = "../src/materials_media/mod.rs"]

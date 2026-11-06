@@ -15,7 +15,12 @@ const output = resolve(pkg, 'dist')
 if (existsSync(output)) { if (lstatSync(output).isSymbolicLink() || !lstatSync(output).isDirectory()) throw new Error('unsafe dist'); if (readdirSync(output).length) { validateMacArtifact(output); rmSync(output, { recursive: true }) } }
 mkdirSync(resolve(output, 'libexec'), { recursive: true })
 const cargoTarget = resolve(pkg, '.build/cargo-target')
-execFileSync('cargo', ['build', '--manifest-path', resolve(root, 'engine/Cargo.toml'), '--features', 'media', '--bin', 'apparent-engine-frames', '--release', '--locked', ...(process.env.APPARENT_CARGO_OFFLINE === '1' ? ['--offline'] : []), '--target', 'x86_64-apple-darwin', '--target-dir', cargoTarget], { cwd: root, stdio: 'inherit', env: { ...process.env, CARGO_BUILD_JOBS: process.env.T3_BUILD_JOBS ?? '3', MACOSX_DEPLOYMENT_TARGET: '15.0' } })
+const cargoCommon = ['--manifest-path', resolve(root, 'engine/Cargo.toml'), '--features', 'media', '--locked', ...(process.env.APPARENT_CARGO_OFFLINE === '1' ? ['--offline'] : []), '--target', 'x86_64-apple-darwin', '--target-dir', cargoTarget]
+const cargoOptions = { cwd: root, stdio: 'inherit' as const, env: { ...process.env, CARGO_BUILD_JOBS: process.env.T3_BUILD_JOBS ?? '3', MACOSX_DEPLOYMENT_TARGET: '15.0' } }
+// Exercise the shared durable job/lease journal on Darwin before packaging.
+// Media/2 decode remains unavailable until its native adapter is qualified.
+execFileSync('cargo', ['test', ...cargoCommon, '--test', 'materials_media', '--', '--test-threads=1'], cargoOptions)
+execFileSync('cargo', ['build', ...cargoCommon, '--bin', 'apparent-engine-frames', '--release'], cargoOptions)
 const worker = resolve(output, 'libexec/apparent-engine-frames')
 const helper = resolve(output, 'libexec/apparent-engine-frames-native')
 copyFileSync(resolve(cargoTarget, 'x86_64-apple-darwin/release/apparent-engine-frames'), worker)
