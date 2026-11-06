@@ -101,6 +101,12 @@ fn dispatch_identity(request: &Request, authority: &Authority) -> Result<()> {
     }
     Ok(())
 }
+fn send(value: Value, recovery: bool) -> Result<()> {
+    match transport::send(value, protocol::MAX_LINE) {
+        Err(_) if recovery => Ok(()),
+        result => result,
+    }
+}
 fn handle(
     request: &Request,
     runtime: &Path,
@@ -150,10 +156,13 @@ fn handle(
     status(lookup(registry, authority)?)
 }
 
-pub fn run(runtime: &Path) -> Result<()> {
+pub fn run(runtime: &Path, role: Option<crate::recovery::Role<'_>>) -> Result<()> {
     let native_available = crate::job::decode_available();
     let store = Arc::new(SecureStore::open(runtime).map_err(|_| "source_mismatch")?);
     let registry = JobRegistry::open(store).map_err(native_error)?;
+    if let Some(role) = role {
+        crate::recovery::lifecycle(role, "ready");
+    }
     let fd = std::io::stdout().as_raw_fd();
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
@@ -164,15 +173,32 @@ pub fn run(runtime: &Path) -> Result<()> {
     let mut seen = HashSet::new();
     let mut order = VecDeque::new();
     let mut active: Option<Active> = None;
+    let mut input_closed = false;
     let outcome = (|| loop {
         if let Some(worker) = active.as_mut() {
             if worker.poll()? {
                 active = None;
             }
         }
+        if input_closed && active.is_none() {
+            break Ok(());
+        }
+        if input_closed {
+            std::thread::sleep(Duration::from_millis(5));
+            continue;
+        }
         let bytes = match inputs.recv_timeout(Duration::from_millis(5)) {
             Ok(transport::Input::Line(bytes)) => bytes,
-            Ok(transport::Input::Closed) | Err(RecvTimeoutError::Disconnected) => break Ok(()),
+            Ok(transport::Input::Closed) | Err(RecvTimeoutError::Disconnected) => {
+                if let Some(role) = role {
+                    crate::recovery::lifecycle(role, "input-closed");
+                    crate::recovery::detach_outputs().map_err(|_| "internal")?;
+                    input_closed = true;
+                } else {
+                    break Ok(());
+                }
+                continue;
+            }
             Ok(transport::Input::Invalid) => break Err("malformed_request"),
             Err(RecvTimeoutError::Timeout) => continue,
         };
@@ -185,7 +211,7 @@ pub fn run(runtime: &Path) -> Result<()> {
         let request = match protocol::parse(value) {
             Ok(request) => request,
             Err(error) => {
-                transport::send(protocol::response(&rpc, Err(error)), protocol::MAX_LINE)?;
+                send(protocol::response(&rpc, Err(error)), role.is_some())?;
                 continue;
             }
         };
@@ -211,7 +237,7 @@ pub fn run(runtime: &Path) -> Result<()> {
                 handle(&request, runtime, &registry, &mut active, native_available)
             }
         };
-        transport::send(protocol::response(&request.rpc, result), protocol::MAX_LINE)?;
+        send(protocol::response(&request.rpc, result), role.is_some())?;
     })();
     if let Some(mut worker) = active {
         worker.stop(Checkpoint::OwnerLost)?;
