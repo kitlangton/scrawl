@@ -140,8 +140,8 @@ export class RecordMedia2Job {
     finally { this.busy = false; }
   }
 
-  private operationInput(ownerToken: string): Media2JobInput {
-    const { input, prepared } = preflightMedia2Dispatch({ ownerToken, request: this.record.request, materials: this.record.materials });
+  private operationInput(ownerToken: string, timeoutMs: number): Media2JobInput {
+    const { input, prepared } = preflightMedia2Dispatch({ ownerToken, request: this.record.request, materials: this.record.materials }, timeoutMs);
     if (prepared.sha256 !== this.record.requestSha256) throw new Error("retained media2 request hash changed");
     return input;
   }
@@ -152,7 +152,7 @@ export class RecordMedia2Job {
     return this.exclusive(async () => {
       if (this.record.dispatchAttempted || !["ready", "unavailable"].includes(this.record.state))
         throw new Error("retained media2 job requires inspection before another derive");
-      const input = this.operationInput(ownerToken);
+      const input = this.operationInput(ownerToken, timeoutMs);
       this.record = { ...this.record, state: "submitted", dispatchAttempted: true, error: undefined };
       await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL);
       let status: Media2JobStatus;
@@ -172,10 +172,17 @@ export class RecordMedia2Job {
   async inspect(ownerToken: string, timeoutMs = 5000): Promise<Media2JobStatus> {
     return this.exclusive(async () => {
       if (!this.record.dispatchAttempted) throw new Error("retained media2 job has no dispatched request to inspect");
-      const input = this.operationInput(ownerToken);
+      const input = this.operationInput(ownerToken, timeoutMs);
       let status: Media2JobStatus;
       try { status = await this.client.inspect(input, timeoutMs); }
-      catch { this.record = { ...this.record, state: "unknown" }; await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL); throw new Error("retained media2 inspect outcome is unknown"); }
+      catch {
+        // A failed observation cannot erase a previously validated terminal result.
+        if (!["complete", "failed", "cancelled"].includes(this.record.state)) {
+          this.record = { ...this.record, state: "unknown" };
+          await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL);
+        }
+        throw new Error("retained media2 inspect outcome is unknown");
+      }
       return this.acceptStatus(status);
     });
   }
@@ -185,7 +192,7 @@ export class RecordMedia2Job {
     return this.exclusive(async () => {
       if (!this.record.dispatchAttempted || !["submitted", "running", "cancelling", "unknown"].includes(this.record.state))
         throw new Error("retained media2 job is not cancellable");
-      const input = this.operationInput(ownerToken);
+      const input = this.operationInput(ownerToken, timeoutMs);
       const previous = this.record;
       this.record = { ...this.record, state: "cancelling", cancelAttempted: true };
       await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL);
@@ -203,10 +210,14 @@ export class RecordMedia2Job {
 
   private async acceptStatus(status: Media2JobStatus): Promise<Media2JobStatus> {
     if (status.jobId !== this.jobId || status.requestSha256 !== this.record.requestSha256) {
-      this.record = { ...this.record, state: "unknown" };
-      await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL);
+      if (!["complete", "failed", "cancelled"].includes(this.record.state)) {
+        this.record = { ...this.record, state: "unknown" };
+        await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL);
+      }
       throw new Error("media2 client returned a mismatched original job binding");
     }
+    if (["complete", "failed", "cancelled"].includes(this.record.state) && status.state !== this.record.state)
+      throw new Error("media2 observation conflicts with the durable terminal result");
     let next: Media2JobRecord;
     if (status.state === "complete") {
       const derivative = validateComplete(status.derivative, this.record.request, this.record.materials);

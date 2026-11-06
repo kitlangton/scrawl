@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { chmod, lstat, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,11 +9,13 @@ import {
   Media2RpcError,
   Media2TransportError,
   preflightMedia2Dispatch,
+  encodeContactSheetLayout,
 } from "@apparent/engine-sdk/media2";
 import type {
   Media2JobInput,
   Media2RpcRequest,
   Media2Transport,
+  Derivative2DocumentInput,
 } from "@apparent/engine-sdk/media2";
 import type { MaterialsDocument } from "@apparent/engine-sdk/capture";
 import { RecordMedia2Job } from "../../dist/backend/processing/media2-consumer.js";
@@ -184,5 +187,96 @@ test("invalid media2 request is rejected before a private journal or client oper
     const client = {} as Media2Client;
     await assert.rejects(RecordMedia2Job.create(client, journal, bad), { name: "Media2PreflightError" });
     await assert.rejects(lstat(journal), { code: "ENOENT" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a failed terminal inspection preserves the durable terminal result across reopen", async () => {
+  const root = await privateRoot();
+  try {
+    const original = input(root);
+    const prepared = preflightMedia2Dispatch(original);
+    const client = {
+      async derive() { return { jobId: original.request.jobId, requestSha256: prepared.prepared.sha256, state: "failed", error: { code: "unavailable" } }; },
+      async inspect() { throw new Media2TransportError(); },
+    } as unknown as Media2Client;
+    const journal = join(root, "terminal.json");
+    const job = await RecordMedia2Job.create(client, journal, original);
+    await job.derive(token);
+    await assert.rejects(job.inspect(token), /outcome is unknown/);
+    assert.equal(job.state, "failed");
+    const reopened = await RecordMedia2Job.reopen(client, journal, original);
+    assert.equal(reopened.state, "failed");
+    await reopened.cleanupJournal();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("invalid operation timeouts fail preflight before dispatch state or client effects", async () => {
+  const root = await privateRoot();
+  try {
+    let calls = 0;
+    const client = { async derive() { calls++; throw new RangeError("invalid timeout"); } } as unknown as Media2Client;
+    const journal = join(root, "invalid-timeout.json");
+    const job = await RecordMedia2Job.create(client, journal, input(root));
+    await assert.rejects(job.derive(token, 0), { name: "Media2PreflightError" });
+    assert.equal(job.state, "ready");
+    assert.equal(calls, 0);
+    assert.equal(JSON.parse(await readFile(journal, "utf8")).dispatchAttempted, false);
+    await job.cleanupJournal();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("offline validated derivative completion survives reopen, caller mutation and failed or conflicting inspection", async () => {
+  const root = await privateRoot();
+  try {
+    const original = input(root);
+    const prepared = preflightMedia2Dispatch(original);
+    const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+    const seal = (path: string) => ({ relativePath: path, identity: { device: "1", inode: path, size: 11, modifiedNs: "3" }, sha256: "f".repeat(64) });
+    // Synthetic metadata for offline validation only: no image or native job authority is produced.
+    const layoutBytes = encodeContactSheetLayout(original.request.contactSheet!);
+    const payload = {
+      schema: "apparent.media-derivative-payload/2", materials: key, leaseId,
+      jobId: original.request.jobId, receiptId: "8".repeat(32), root: original.request.outputDirectory,
+      requestSha256: prepared.prepared.sha256,
+      frames: original.request.requestedBundleMs.map((time, index) => ({ requestIndex: index + 1,
+        requestedBundleMs: time, effectiveVideoMs: time - 125, actualVideoMs: time - 125,
+        clampedToStart: false, clampedToEnd: false, width: 320, height: 180,
+        encoding: "png", byteLength: 11, file: seal(`frame-${index + 1}.png`) })),
+      contactSheet: { encoding: "png", byteLength: 11, file: seal("sheet.png"), width: 960, height: 180,
+        layoutSha256: hash(layoutBytes), layout: original.request.contactSheet },
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(payload));
+    const derivative: Derivative2DocumentInput = { request: original.request, bytes, layoutBytes,
+      envelope: { schema: "apparent.media-derivative/2", materials: key, leaseId,
+        jobId: original.request.jobId, receiptId: payload.receiptId, root: payload.root,
+        requestSha256: payload.requestSha256, payload,
+        receiptFile: { relativePath: "receipt.json", identity: { device: "1", inode: "receipt", size: bytes.length, modifiedNs: "3" }, sha256: hash(bytes) } } };
+    const complete = { state: "complete" as const, jobId: original.request.jobId, requestSha256: prepared.prepared.sha256, derivative };
+    let inspection = 0;
+    const client = {
+      async derive() { return structuredClone(complete); },
+      async inspect() {
+        if (++inspection === 1) throw new Media2TransportError();
+        if (inspection === 2) return { ...complete, jobId: "0".repeat(32) };
+        return { state: "running", jobId: complete.jobId, requestSha256: complete.requestSha256 };
+      },
+    } as unknown as Media2Client;
+    const journal = join(root, "complete.json");
+    const job = await RecordMedia2Job.create(client, journal, original);
+    const status = await job.derive(token);
+    assert.equal(status.state, "complete");
+    assert.equal(job.state, "complete");
+    const returned = job.derivative!;
+    returned.bytes[0] = 0;
+    assert.notEqual(job.derivative!.bytes[0], 0, "callers cannot mutate the persisted completion");
+    await assert.rejects(job.inspect(token), /outcome is unknown/);
+    await assert.rejects(job.inspect(token), /mismatched original job binding/);
+    await assert.rejects(job.inspect(token), /conflicts with the durable terminal result/);
+    assert.equal(job.state, "complete");
+    const reopened = await RecordMedia2Job.reopen(client, journal, original);
+    assert.equal(reopened.state, "complete");
+    assert.deepEqual(reopened.derivative!.bytes, bytes);
+    assert.deepEqual(Buffer.from(reopened.derivative!.layoutBytes!), Buffer.from(layoutBytes));
+    await reopened.cleanupJournal();
   } finally { await rm(root, { recursive: true, force: true }); }
 });

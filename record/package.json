@@ -82,7 +82,7 @@
     "test:contracts": "tsc --noEmit --allowImportingTsExtensions --module NodeNext --target ES2022 --strict --types node test/native-host/adapter.types.ts"
   },
   "peerDependencies": {
-    "@apparent/engine-sdk": "^0.4.0",
+    "@apparent/engine-sdk": "^0.4.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
