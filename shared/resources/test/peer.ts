@@ -9,5 +9,6 @@ if (command === "lock") {
   else { process.stdin.resume(); process.stdin.once("end", () => { emit("released"); process.exit(); }); }
 } else {
   if (scenario === "silent") { process.stdin.resume(); setTimeout(() => process.exit(), 1000); }
+  else if (scenario === "delayed-published") { setTimeout(() => { emit("published"); process.exit(); }, 150); }
   else { emit(scenario); process.exit(); }
 }

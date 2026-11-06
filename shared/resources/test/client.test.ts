@@ -46,10 +46,10 @@ test("provider mismatch and malformed protocol expose only safe categories", asy
   } finally { await f.close(); }
 });
 test("publication preserves terminal states; unknown completion is uncertain", async () => {
-  for (const scenario of ["published", "destination_exists", "refused", "publication_uncertain", "silent", "malformed"]) {
+  for (const scenario of ["published", "delayed-published", "destination_exists", "refused", "publication_uncertain", "silent", "malformed"]) {
     const f = await fixture(scenario); try {
-      const h = await f.handle(); const result = await new NativeResources(f.provider).publish(h, "stage", "final", { timeoutMs: 100 });
-      assert.equal(h.fd, -1); assert.deepEqual(result, { state: scenario === "silent" || scenario === "malformed" ? "publication_uncertain" : scenario });
+      const h = await f.handle(); const result = await new NativeResources(f.provider).publish(h, "stage", "final", scenario === "silent" ? { timeoutMs: 100 } : {});
+      assert.equal(h.fd, -1); assert.deepEqual(result, { state: scenario === "silent" || scenario === "malformed" ? "publication_uncertain" : scenario === "delayed-published" ? "published" : scenario });
     } finally { await f.close(); }
   }
 });
