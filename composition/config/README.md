@@ -65,17 +65,37 @@ and other owners remain intact. An uncertain result requires a fresh read.
 Example privileged assembly (owner policy functions are supplied by Onboarding):
 
 ```ts
-const snapshot = await backend.readForAdoption('onboarding');
-if (!snapshot.owner.present) {
-  const progress = decodeLegacy(snapshot.legacy); // owner schema/policy
-  const result = await backend.adoptLegacy('onboarding', snapshot.legacy, codec.encode(progress));
-  // Owner resolves conflict/unknown using a fresh snapshot; never assume adoption.
+import { adoptOnboardingProgress } from '@apparent/onboarding';
+
+const result = await adoptOnboardingProgress(backend); // owner codec and repair policy
+if (result.status === 'ready') {
+  // Required when the owner entry predated adoption. New adoption atomically
+  // writes this same fence together with revision 1.
+  if (result.source === 'existing') {
+    const retired = await backend.retireOnboardingLegacyWriter();
+    if (retired.status !== 'retired') throw new Error('Onboarding writer ownership is unknown');
+  }
+  const store = bindOwnerProgress(backend, 'onboarding', codec);
 }
-const store = bindOwnerProgress(backend, 'onboarding', codec);
 ```
 
-This comparison protects legacy changes before the adoption transaction. Installed
-cutover must first retire/quiesce the old journey writer; that writer must not
-continue changing legacy progress after adoption. This API does not switch an
-installed route or silently migrate at read time. Legacy bytes remain for an
-explicit rollback/migration window; removal is a separate owner-approved step.
+The initial snapshot is only a decode input. The adoption transaction compares
+its exact presence/value under the config writer lock, writes owner revision 1,
+and writes an explicit `onboardingLegacyWriter: {schema: 1, state: "retired"}`
+marker in the same atomic publication. Legacy `Progress::save` uses that same
+writer transaction and refuses to change the top-level key after the marker,
+including late callbacks and later process restarts. If an owner entry already
+exists, privileged assembly must explicitly call `retireOnboardingLegacyWriter()`
+before activating it; an unknown result refuses activation. The operation is
+bound to the onboarding owner binding and changes no other config writer. The
+marker is an explicit ownership record, never inferred from config presence.
+This API does not switch an installed route or silently migrate at read time.
+Legacy bytes remain for an explicit rollback/migration window; removal is a
+separate owner-approved step.
+
+The fence is enforced by writers built with this native config implementation.
+An older running GUI binary does not understand the marker. Production assembly
+must establish that the legacy journey writer has been upgraded to this fence
+(or stopped) before relying on retirement; a successful helper call alone does
+not qualify an old GUI. This prerequisite does not upgrade or stop installed
+applications. Host activation must retain that writer-version/identity gate.

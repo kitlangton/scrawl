@@ -1,4 +1,4 @@
-use apparent_config_native::{adopt_legacy_in, compare_and_swap_pen_color_in, compare_and_swap_stream_state_in, read_for_adoption_in, read_pen_color_in, read_stream_state_in, AdoptResult, CasResult, ConfigPublicationUncertain, LegacyCasResult, LegacyValue};
+use apparent_config_native::{adopt_legacy_in, compare_and_swap_pen_color_in, compare_and_swap_stream_state_in, read_for_adoption_in, read_pen_color_in, read_stream_state_in, retire_onboarding_legacy_writer_in, AdoptResult, CasResult, ConfigPublicationUncertain, LegacyCasResult, LegacyValue};
 use serde_json::{json, Value};
 use std::{io::{self, BufRead, Read, Write}, path::PathBuf};
 const LIMIT: usize = 64 * 1024;
@@ -39,6 +39,7 @@ fn dispatch(req: &Value, path: &PathBuf, owner: &str) -> (String, Value) {
     let result = match object.get("operation").and_then(Value::as_str) {
         Some("read") if object.len() == 3 => read_stream_state_in(path, owner).map(|(revision, value)| json!({"revision":revision,"value":value})),
         Some("readForAdoption") if object.len() == 3 => read_for_adoption_in(path, owner).map(|snapshot| snapshot_json(&snapshot)),
+        Some("retireOnboardingLegacyWriter") if object.len() == 3 && owner == "onboarding" => retire_onboarding_legacy_writer_in(path).map(|()| json!({"status":"retired"})),
         Some("readPenColor") if object.len() == 3 && owner == "record" => read_pen_color_in(path).map(|value| field_json(&value)),
         Some("compareAndSwapPenColor") if object.len() == 5 && owner == "record" => {
             let expected = object.get("expectedLegacy").and_then(parse_legacy_value);

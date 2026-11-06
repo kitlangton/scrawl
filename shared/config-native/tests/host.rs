@@ -148,6 +148,70 @@ fn adoption_refuses_owner_cas_winner_including_null_and_malformed_selected_owner
 }
 
 #[test]
+fn onboarding_adoption_atomically_retires_real_legacy_progress_writer_and_preserves_other_config() {
+    let dir = temp(); let path = dir.join("config.json");
+    fs::write(&path, br#"{"onboarding":{"resume":"permissions"},"secret":"synthetic","streamState":{"agent":{"revision":2,"value":{"keep":true}}}}"#).unwrap();
+    let snapshot = apparent_config_native::read_for_adoption_in(&path, "onboarding").unwrap();
+    let adopted = apparent_config_native::adopt_legacy_in(&path, "onboarding", snapshot.legacy, json!({"schema":1,"resume":"permissions"})).unwrap();
+    assert_eq!(adopted, apparent_config_native::AdoptResult::Saved { revision: 1 });
+    assert!(apparent_config_native::set_config_value_in(&path, "onboarding", json!({"resume":"welcome"})).is_err());
+    assert!(apparent_config_native::set_config_value_in(&path, "onboardingLegacyWriter", Value::Null).is_err());
+    assert!(apparent_config_native::update_config_in(&path, |config| { config.as_object_mut().unwrap().remove("onboardingLegacyWriter"); Ok(()) }).is_err());
+    let before = fs::read(&path).unwrap();
+    assert!(apparent_config_native::update_config_in(&path, |config| { config["onboarding"] = json!({"resume":"welcome"}); Ok(()) }).is_err());
+    assert!(apparent_config_native::update_config_allowed_in(&path, &|| true, |config| { config.as_object_mut().unwrap().remove("onboarding"); Ok(()) }).is_err());
+    assert_eq!(fs::read(&path).unwrap(), before, "rejected generic edits must not publish any bytes");
+    apparent_config_native::update_config_in(&path, |config| { config["anotherSetting"] = json!(true); Ok(()) }).unwrap();
+    apparent_config_native::set_config_value_in(&path, "unrelated", json!(false)).unwrap();
+    let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["onboarding"], json!({"resume":"permissions"}));
+    assert_eq!(saved["streamState"]["onboarding"]["value"]["resume"], "permissions");
+    assert_eq!(saved["streamState"]["agent"], json!({"revision":2,"value":{"keep":true}}));
+    assert_eq!(saved["secret"], "synthetic");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn explicit_onboarding_retirement_is_restart_safe_owner_bound_and_does_not_block_other_keys() {
+    let dir = temp(); let path = dir.join("config.json");
+    fs::write(&path, br#"{"onboarding":{"resume":"try-it"},"secret":"synthetic"}"#).unwrap();
+    assert_eq!(response(&host(&path, "record", &adoption_req("wrong", "retireOnboardingLegacyWriter", "")).1)["status"], "unknown");
+    assert_eq!(response(&host(&path, "onboarding", &adoption_req("retire", "retireOnboardingLegacyWriter", "")).1), json!({"status":"retired"}));
+    assert!(apparent_config_native::set_config_value_in(&path, "onboarding", json!({"resume":"welcome"})).is_err());
+    apparent_config_native::set_config_value_in(&path, "microphoneEnabled", json!(false)).unwrap();
+    let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["onboarding"]["resume"], "try-it");
+    assert_eq!(saved["secret"], "synthetic");
+    assert_eq!(saved["microphoneEnabled"], false);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn malformed_onboarding_ownership_marker_refuses_adoption_and_legacy_writes() {
+    let dir = temp(); let path = dir.join("config.json");
+    fs::write(&path, br#"{"onboarding":{"resume":"permissions"},"onboardingLegacyWriter":{"state":"maybe"}}"#).unwrap();
+    let snapshot = apparent_config_native::read_for_adoption_in(&path, "onboarding").unwrap();
+    assert!(apparent_config_native::adopt_legacy_in(&path, "onboarding", snapshot.legacy, json!({"schema":1})).is_err());
+    assert!(apparent_config_native::set_config_value_in(&path, "onboarding", json!({"resume":"welcome"})).is_err());
+    let unchanged: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(unchanged["onboarding"]["resume"], "permissions");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn onboarding_owner_presence_alone_does_not_retire_writer_and_pre_adoption_save_conflicts() {
+    let dir = temp(); let path = dir.join("config.json");
+    fs::write(&path, br#"{"onboarding":{"resume":"permissions"},"streamState":{"onboarding":{"revision":7,"value":{"schema":1,"resume":"welcome"}}}}"#).unwrap();
+    apparent_config_native::set_config_value_in(&path, "onboarding", json!({"resume":"try-it"})).unwrap();
+    let stale = apparent_config_native::adopt_legacy_in(&path, "onboarding", apparent_config_native::LegacyValue { present: true, value: json!({"resume":"permissions"}) }, json!({"schema":1,"resume":"permissions"})).unwrap();
+    assert!(matches!(stale, apparent_config_native::AdoptResult::Conflict(_)));
+    let after = apparent_config_native::read_for_adoption_in(&path, "onboarding").unwrap();
+    assert_eq!(after.legacy.value, json!({"resume":"try-it"}));
+    assert_eq!(after.owner.revision, 7);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn record_pen_color_presence_cas_is_locked_bounded_and_owner_denied() {
     let dir = temp(); let path = dir.join("config.json");
     fs::write(&path, br#"{"penColor":null,"secret":"synthetic","streamState":{"agent":{"opaque":1}}}"#).unwrap();

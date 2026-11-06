@@ -17,13 +17,42 @@ impl std::error::Error for ConfigPublicationUncertain {}
 /// Sets one top-level key in `path` (`null` removes it), keeping the rest (and its `0600` mode,
 /// since it holds the ingest token).
 pub fn set_config_value_in(path: &Path, key: &str, value: serde_json::Value) -> Result<()> {
-    update_config_checked_in(path, None, |config| {
+    ensure!(key != ONBOARDING_WRITER_OWNER_KEY, "onboarding writer ownership is host-managed");
+    update_config_checked_in(path, None, ConfigMutationAuthority::Ordinary, |config| {
+        ensure!(key != "onboarding" || !onboarding_legacy_writer_retired(config)?, "legacy onboarding progress writer has been retired");
         if value.is_null() {
             config.as_object_mut().unwrap().remove(key);
         } else {
             config[key] = value;
         }
         Ok(true)
+    })
+}
+
+const ONBOARDING_WRITER_OWNER_KEY: &str = "onboardingLegacyWriter";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConfigMutationAuthority { Ordinary, OnboardingOwnership }
+
+fn onboarding_legacy_writer_retired(config: &serde_json::Value) -> Result<bool> {
+    let top = config.as_object().context("Config must be an object")?;
+    match top.get(ONBOARDING_WRITER_OWNER_KEY) {
+        None => Ok(false),
+        Some(value) => {
+            ensure!(value == &serde_json::json!({"state":"retired","schema":1}), "Invalid onboarding writer ownership marker");
+            Ok(true)
+        }
+    }
+}
+
+/// Permanently transfers the legacy onboarding key to the owner store.
+pub fn retire_onboarding_legacy_writer_in(path: &Path) -> Result<()> {
+    update_config_checked_in(path, None, ConfigMutationAuthority::OnboardingOwnership, |config| {
+        let top = config.as_object_mut().context("Config must be an object")?;
+        match top.get(ONBOARDING_WRITER_OWNER_KEY) {
+            None => { top.insert(ONBOARDING_WRITER_OWNER_KEY.to_owned(), serde_json::json!({"state":"retired","schema":1})); Ok(true) }
+            Some(value) => { ensure!(value == &serde_json::json!({"state":"retired","schema":1}), "Invalid onboarding writer ownership marker"); Ok(false) }
+        }
     })
 }
 
@@ -34,7 +63,7 @@ pub fn update_config_in(
     path: &Path,
     edit: impl FnOnce(&mut serde_json::Value) -> Result<()>,
 ) -> Result<()> {
-    update_config_checked_in(path, None, |config| { edit(config)?; Ok(true) })
+    update_config_checked_in(path, None, ConfigMutationAuthority::Ordinary, |config| { edit(config)?; Ok(true) })
 }
 
 /// Connect's background authorization writes must recheck cancellation after
@@ -44,12 +73,13 @@ pub fn update_config_allowed_in(
     allowed: &dyn Fn() -> bool,
     edit: impl FnOnce(&mut serde_json::Value) -> Result<()>,
 ) -> Result<()> {
-    update_config_checked_in(path, Some(allowed), |config| { edit(config)?; Ok(true) })
+    update_config_checked_in(path, Some(allowed), ConfigMutationAuthority::Ordinary, |config| { edit(config)?; Ok(true) })
 }
 
 fn update_config_checked_in(
     path: &Path,
     allowed: Option<&dyn Fn() -> bool>,
+    authority: ConfigMutationAuthority,
     edit: impl FnOnce(&mut serde_json::Value) -> Result<bool>,
 ) -> Result<()> {
     use std::io::Write;
@@ -58,10 +88,16 @@ fn update_config_checked_in(
     config_write_hook("before_lock", path);
     let writer = ConfigWriter::acquire(path, allowed)?;
     let mut config = read_snapshot(&writer, path)?;
+    let previous_onboarding_marker = config.get(ONBOARDING_WRITER_OWNER_KEY).cloned();
+    let previous_onboarding = config.get("onboarding").cloned();
     #[cfg(any(test, feature = "test-support"))]
     config_write_hook("snapshot", path);
     ensure!(allowed.is_none_or(|check| check()), "cancelled");
     if !edit(&mut config)? { return Ok(()); }
+    ensure!(authority == ConfigMutationAuthority::OnboardingOwnership || config.get(ONBOARDING_WRITER_OWNER_KEY).cloned() == previous_onboarding_marker, "onboarding writer ownership is host-managed");
+    if authority == ConfigMutationAuthority::Ordinary && previous_onboarding_marker.is_some() {
+        ensure!(config.get("onboarding").cloned() == previous_onboarding, "legacy onboarding progress writer has been retired");
+    }
     let tmp = std::ffi::CString::new(format!(".config-{}.tmp", random_id()?))?;
     let mut body = serde_json::to_vec_pretty(&config)?;
     body.push(b'\n');
@@ -146,7 +182,7 @@ pub fn compare_and_swap_pen_color_in(
     validate_legacy_value(&expected)?;
     validate_legacy_value(&next)?;
     let mut outcome = None;
-    update_config_checked_in(path, None, |config| {
+    update_config_checked_in(path, None, ConfigMutationAuthority::Ordinary, |config| {
         let current = top_level_value(config, "penColor")?;
         if current != expected {
             outcome = Some(LegacyCasResult::Conflict(current));
@@ -241,7 +277,9 @@ pub fn adopt_legacy_in(
     value: serde_json::Value,
 ) -> Result<AdoptResult> {
     let mut outcome = None;
-    update_config_checked_in(path, None, |config| {
+    let authority = if owner == "onboarding" { ConfigMutationAuthority::OnboardingOwnership } else { ConfigMutationAuthority::Ordinary };
+    update_config_checked_in(path, None, authority, |config| {
+        if owner == "onboarding" { let _ = onboarding_legacy_writer_retired(config)?; }
         let snapshot = adoption_snapshot(config, owner)?;
         if snapshot.owner.present || snapshot.legacy != expected_legacy {
             outcome = Some(AdoptResult::Conflict(snapshot));
@@ -251,6 +289,9 @@ pub fn adopt_legacy_in(
         let stream = top.entry("streamState").or_insert_with(|| serde_json::json!({}));
         let map = stream.as_object_mut().context("streamState must be an object")?;
         map.insert(owner.to_owned(), serde_json::json!({"revision":1,"value":value}));
+        if owner == "onboarding" {
+            top.insert(ONBOARDING_WRITER_OWNER_KEY.to_owned(), serde_json::json!({"state":"retired","schema":1}));
+        }
         outcome = Some(AdoptResult::Saved { revision: 1 });
         Ok(true)
     })?;
@@ -294,7 +335,7 @@ pub fn compare_and_swap_stream_state_in(
 ) -> Result<CasResult> {
     ensure!(expected <= 9_007_199_254_740_991, "Invalid expected revision");
     let mut outcome = None;
-    update_config_checked_in(path, None, |config| {
+    update_config_checked_in(path, None, ConfigMutationAuthority::Ordinary, |config| {
         let top = config.as_object_mut().context("Config must be an object")?;
         let stream = top.entry("streamState").or_insert_with(|| serde_json::json!({}));
         let map = stream.as_object_mut().context("streamState must be an object")?;

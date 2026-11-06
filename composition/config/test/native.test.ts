@@ -24,6 +24,23 @@ async function fixture() {
   };
 }
 
+test('public onboarding bootstrap retires the legacy writer atomically and existing-owner retirement is explicit', async () => {
+  const f = await fixture();
+  try {
+    await writeFile(f.configPath, JSON.stringify({ onboarding: { resume: 'permissions' }, secret: 'synthetic' }), { mode: 0o600 });
+    const backend = await f.peer();
+    const snapshot = await backend.readForAdoption('onboarding');
+    assert.deepEqual(await backend.adoptLegacy('onboarding', snapshot.legacy, { stage: 'permissions' }), { status: 'saved', revision: 1 });
+    const saved = JSON.parse(await readFile(f.configPath, 'utf8'));
+    assert.deepEqual(saved.onboardingLegacyWriter, { schema: 1, state: 'retired' });
+    assert.equal(saved.secret, 'synthetic');
+    assert.deepEqual(saved.onboarding, { resume: 'permissions' });
+    assert.deepEqual(await backend.retireOnboardingLegacyWriter(), { status: 'retired' });
+    const other = await f.peer('record');
+    await assert.rejects(other.retireOnboardingLegacyWriter(), /onboarding owner/i);
+  } finally { await f.close(); }
+});
+
 test('real helper CAS has one cross-process winner, preserves other owners and survives restart', async () => {
   const f = await fixture();
   try {
