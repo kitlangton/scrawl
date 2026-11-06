@@ -177,6 +177,20 @@ The active native caller remains authoritative migration debt. This source chang
 
 ## Queue and command adoption boundaries
 
+The `./sender-upload` export uploads an already prepared, consented plaintext
+snapshot through reservation, bounded asset PUTs, completion and exact ready-state
+manifest readback. It reuses the recipient asset validator and bounded transport
+reader. The caller supplies the stable snapshot, persisted manifest, fresh active
+guard, approved upload authorization and provider lifetime. Callback references,
+signal, identifier and manifest are detached before asynchronous work; returned
+asset bytes remain caller-owned. Each request runs once, refuses redirects, and
+exposes fixed error categories. Waiting for snapshot reads is cancellation/deadline
+bounded; the callback must honor its signal and own cleanup until its work settles.
+A failed operation may have left server-side effects; it does not roll them back.
+This is explicitly plaintext protocol preparation, with no encryption fallback,
+credential refresh/401 retry, filesystem snapshot, queue write, worker or installed
+route. Those adoption responsibilities remain with the parent migration.
+
 The `./local-status` export composes `readLocalStatus` from the existing private
 credential and queue readers under one queue lease. The caller supplies admitted
 fresh settings, approved server context, time and the resource provider lifetime.

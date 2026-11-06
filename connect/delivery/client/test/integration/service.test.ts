@@ -16,6 +16,7 @@ import {
 } from "../../src/recipient/crypto.ts";
 import { retrieveRecipientCapture } from "../../src/recipient/retrieve.ts";
 import { RecipientTransportError } from "../../src/recipient/transport.ts";
+import { uploadPreparedPlainCapture } from "../../src/sender/transport.ts";
 
 const serviceDir = resolve(fileURLToPath(new URL("../../../../service/", import.meta.url)));
 const captureId = "a981426be1254f37938214f960aed501";
@@ -218,4 +219,24 @@ async function exerciseProfile(mount: "" | "/connect") {
 test("retrieves through real local Workers on root and /connect origins and rejects revoked credentials", async () => {
   await exerciseProfile("");
   await exerciseProfile("/connect");
+});
+
+test("prepared plaintext sender reserves, uploads and verifies through real Workers on both bases", async () => {
+  for (const mount of ["", "/connect"] as const) await proxy(mount, async ({ origin, service }) => {
+    const server = origin + mount, account = await service.identity(`plaintext-sender-${mount || "root"}`);
+    const bytes = new Map([
+      ["apparent.json", encoder.encode("{}")], ["summary.md", encoder.encode("Synthetic prepared upload.")],
+      ["contact-sheet.png", Uint8Array.of(3, 2, 1)],
+    ]);
+    const files = [...bytes].map(([path, value]) => ({ path, size: value.length, sha256: digest(value) }));
+    const options = { server, captureId, files, active: () => true,
+      readAsset: async (name: string) => bytes.get(name)!,
+      authorize: async (approvedServer: string, scope: "upload") => ({ approvedServer, scope, token: account.token }) };
+    await uploadPreparedPlainCapture(options);
+    await uploadPreparedPlainCapture({ ...options, readAsset: async () => { throw Error("ready captures need no bytes"); } });
+    const result = await retrieveRecipientCapture({ credential: { server, token: account.read, grantId: "synthetic-read-grant" },
+      captureId, allowLegacyPlaintext: true });
+    assert.equal(result.files.length, files.length);
+    for (const file of result.files) assert.deepEqual(file.bytes, bytes.get(file.path));
+  });
 });
