@@ -325,7 +325,10 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     assert.equal(cancelledCrash.state, "cancelled", "accepted cancellation survives owner crash and recovery");
     assert.throws(() => statSync(join(runtime, "capture-v2", "materials", cancelCrash.captureId)), { code: "ENOENT" });
 
-    const sixth = startInput(postCrashSource, id(), token(), "crash-during-capture");
+    const afterCancelSources = await client.discoverSources();
+    const afterCancelSource = afterCancelSources.sources.find((item) => item.kind === "display");
+    assert.ok(afterCancelSource);
+    const sixth = startInput(afterCancelSource, id(), token(), "crash-during-capture");
     await client.start(sixth);
     await until(client, { captureId: sixth.captureId, ownerToken: sixth.ownerToken }, ["recording"]);
     const nextNativeChild = (client as unknown as { transport: { child: { kill: (signal: string) => boolean; once: (event: string, callback: () => void) => void } } }).transport.child;
