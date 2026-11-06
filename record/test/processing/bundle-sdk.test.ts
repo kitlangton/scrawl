@@ -4,6 +4,7 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink,
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
+import { crc32, deflateSync } from "node:zlib";
 import { assembleCanonicalBundle, type BundleAssemblyInput } from "@apparent/record/processing/bundle";
 import { prepareRecordPublication } from "../../dist/backend/publication/staging.js";
 import { createCompletedCapturePublisher } from "../../dist/backend/publication/completed-capture.js";
@@ -14,7 +15,7 @@ import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
 import { SqlitePublicationBindingStore } from "../../dist/backend/publication/store.js";
 import { Media2Client, type Media2RpcRequest, encodeContactSheetLayout, prepareMedia2Request, selectDerivative2Artifact, validateDerivative2Document, type Derivative2DocumentInput } from "@apparent/engine-sdk/media2";
 import { readRetainedDerivativeArtifacts } from "../../dist/backend/processing/retained-artifacts.js";
-import { createRecordCaptureCoordinator } from "../../dist/backend/host/capture2/coordinator.js";
+import { createRecordCaptureCoordinator, createStandardRecordCaptureCoordinator } from "../../dist/backend/host/capture2/coordinator.js";
 import { AbsentDestinationAllocator } from "../../dist/backend/host/absent-destination-allocator.js";
 
 const identity = { captureId: "a".repeat(32), materialsId: "b".repeat(32) };
@@ -1118,9 +1119,50 @@ test("publication database atomically admits immutable processing policy beside 
 });
 
 // All ports and receipts below are synthetic offline consistency fixtures; this is not native authority or platform proof.
-type CoordinatorCase = "complete" | "media-failed" | "media-unknown" | "media-blocked" | "publication-unknown" | "publication-reserved" | "publication-reserved-close" | "selection-failed";
+// Synthetic valid RGBA8 pixels/profile and detached method-port receipts, never native issuance.
+function standardFixturePng(width: number, height: number, withProfile: boolean): Uint8Array {
+  const chunk = (name: string, body: Buffer) => {
+    const type = Buffer.from(name), out = Buffer.alloc(body.length + 12);
+    out.writeUInt32BE(body.length); type.copy(out, 4); body.copy(out, 8);
+    out.writeUInt32BE(crc32(body, crc32(type)), body.length + 8); return out;
+  };
+  const header = Buffer.alloc(13); header.writeUInt32BE(width); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
+  const pixels = Buffer.alloc(height * (width * 4 + 1));
+  const profile = Buffer.alloc(20 + (2304 + Math.min(width, 128) * Math.min(height, 128)) * 4);
+  profile.write("APOBS001"); profile.writeUInt32LE(width, 8); profile.writeUInt32LE(height, 12);
+  profile.writeUInt16LE(Math.min(width, 128), 16); profile.writeUInt16LE(Math.min(height, 128), 18);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header), chunk("IDAT", deflateSync(pixels)),
+    ...(withProfile ? [chunk("apOB", profile)] : []), chunk("IEND", Buffer.alloc(0))]);
+}
+async function syntheticStandardDerivative(input: BundleAssemblyInput, request: import("@apparent/engine-sdk/media2").Media2JobRequest, withProfile: boolean): Promise<Derivative2DocumentInput> {
+  const materials = validateMaterialsDocument(input.manifest, input.payloadBytes);
+  await mkdir(request.outputDirectory, { recursive: true, mode: 0o700 });
+  const seal = async (name: string, content: Uint8Array) => {
+    await writeFile(join(request.outputDirectory, name), content, { mode: 0o600 });
+    const info = await lstat(join(request.outputDirectory, name), { bigint: true });
+    return { relativePath: name, sha256: sha(content), identity: { device: String(info.dev), inode: String(info.ino), size: content.byteLength, modifiedNs: String(info.mtimeNs) } };
+  };
+  const scale = Math.min(1, request.limits.maxEdge / Math.max(materials.payload.video.width, materials.payload.video.height));
+  const width = Math.round(materials.payload.video.width * scale), height = Math.round(materials.payload.video.height * scale);
+  const png = standardFixturePng(width, height, withProfile);
+  const frames = [];
+  for (const [index, time] of request.requestedBundleMs.entries()) frames.push({ requestIndex: index + 1, requestedBundleMs: time,
+    effectiveVideoMs: time - materials.payload.clock.videoOffsetMs, actualVideoMs: time - materials.payload.clock.videoOffsetMs,
+    clampedToStart: false, clampedToEnd: false, width, height, encoding: "png", byteLength: png.byteLength, file: await seal(`frame-${index + 1}.png`, png) });
+  const layoutBytes = request.contactSheet && encodeContactSheetLayout(request.contactSheet);
+  const sheetBytes = request.contactSheet && standardFixturePng(request.contactSheet.width, request.contactSheet.height, false);
+  const sheet = request.contactSheet && sheetBytes && { encoding: "png", byteLength: sheetBytes.byteLength, file: await seal("sheet.png", sheetBytes),
+    width: request.contactSheet.width, height: request.contactSheet.height, layoutSha256: sha(layoutBytes!), layout: request.contactSheet };
+  const payload = { schema: "apparent.media-derivative-payload/2", materials: request.materials, leaseId: request.leaseId, jobId: request.jobId,
+    receiptId: request.jobId, root: request.outputDirectory, requestSha256: prepareMedia2Request(request, materials).sha256, frames, contactSheet: sheet };
+  const content = bytes(payload), receiptFile = await seal("receipt.json", content);
+  return { envelope: { schema: "apparent.media-derivative/2", materials: payload.materials, leaseId: payload.leaseId, jobId: payload.jobId,
+    receiptId: payload.receiptId, root: payload.root, requestSha256: payload.requestSha256, receiptFile, payload }, bytes: content, request, layoutBytes };
+}
+type CoordinatorCase = "standard" | "standard-unavailable" | "standard-unknown" | "standard-blocked" | "standard-selected-restart" | "complete" | "media-failed" | "media-unknown" | "media-blocked" | "publication-unknown" | "publication-reserved" | "publication-reserved-close" | "selection-failed";
 async function coordinatorCase(mode: CoordinatorCase) {
   const input = await fixture();
+  const standard = mode.startsWith("standard");
   const root = await realpath(await mkdtemp(join(tmpdir(), "record-capture-coordinator-")));
   let releaseMediaHandshake: () => void = () => undefined;
   const controlRoot = join(root, "control"), outputRoot = join(root, "output");
@@ -1161,6 +1203,11 @@ async function coordinatorCase(mode: CoordinatorCase) {
     const originalPaths = ["capture.mp4", "facts/context.json", "facts/interactions.json", "facts/transcript.json"];
     payload.files = [];
     for (let i = 0; i < originalPaths.length; i++) payload.files.push(await seal(originalPaths[i]!, materialBytes[i]!));
+    if (standard) {
+      payload.collection.interactions = "unavailable"; payload.collection.transcript = "unavailable";
+      delete payload.facts.interactions; delete payload.facts.transcript;
+      payload.files = payload.files.filter((file: { relativePath: string }) => !/interactions|transcript/u.test(file.relativePath));
+    }
     const payloadBytes = bytes(payload);
     await writeFile(join(materialRoot, "materials.json"), payloadBytes, { mode: 0o600 });
     const payloadStat = await lstat(join(materialRoot, "materials.json"), { bigint: true });
@@ -1218,7 +1265,7 @@ async function coordinatorCase(mode: CoordinatorCase) {
     const mediaClient = new Media2Client({
       async request(rpc: Media2RpcRequest) {
         if (rpc.method === "handshake") {
-          if (mode === "media-blocked") { signalMediaHandshake(); await mediaHandshakeGate; }
+          if (mode === "media-blocked" || mode === "standard-blocked") { signalMediaHandshake(); await mediaHandshakeGate; }
           mediaNegotiated = true;
           return { channel: "media", protocolVersion: 2, rpcId: rpc.rpcId, result: {
             channel: "media", protocolVersion: 2, implementation: "native",
@@ -1226,19 +1273,20 @@ async function coordinatorCase(mode: CoordinatorCase) {
           } };
         }
         assert.equal(mediaNegotiated, true, "fresh public Media2Client requires handshake before derive");
-        if (rpc.method === "inspect" && mode === "media-unknown") throw new Error("lost inspect " + ownerToken);
+        if (rpc.method === "inspect" && (mode === "media-unknown" || mode === "standard-unknown")) throw new Error("lost inspect " + ownerToken);
         assert.equal(rpc.method, "derive", "synthetic single-dispatch case has no implicit cancel or repeat");
         if (rpc.method !== "derive") throw new Error("unexpected synthetic media operation");
         const admitted = await new SqlitePublicationBindingStore(controlRoot).getProcessing(captureId);
         assert.ok(admitted, "original processing policy is durable before media dispatch");
-        assert.deepEqual((admitted.plan as { requestVideoProof: boolean }).requestVideoProof, true);
+        assert.deepEqual(standard ? (admitted.plan as { base: { requestVideoProof: boolean } }).base.requestVideoProof : (admitted.plan as { requestVideoProof: boolean }).requestVideoProof, true);
         assert.equal(JSON.stringify(admitted).includes(ownerToken), false);
         derives++;
-        if (mode === "media-unknown") throw new Error("lost derive " + ownerToken);
+        if (mode === "media-unknown" || mode === "standard-unknown") throw new Error("lost derive " + ownerToken);
         if (mode === "media-failed") return { channel: "media", protocolVersion: 2, rpcId: rpc.rpcId,
           result: { jobId: rpc.jobId, requestSha256: rpc.requestSha256, state: "failed", error: { code: "decode_failed" } } };
         const request = JSON.parse(rpc.requestJson);
-        const document = derivative2For(input, [...request.requestedBundleMs], { outputDirectory: derivativeRoot, frameFiles: [frameSeal], sheetFile: sheetSeal, jobId: request.jobId });
+        const document = standard ? await syntheticStandardDerivative(input, request, mode !== "standard-unavailable")
+          : derivative2For(input, [...request.requestedBundleMs], { outputDirectory: derivativeRoot, frameFiles: [frameSeal], sheetFile: sheetSeal, jobId: request.jobId });
         return { channel: "media", protocolVersion: 2, rpcId: rpc.rpcId, result: {
           jobId: request.jobId, requestSha256: rpc.requestSha256, state: "complete",
           derivative: { envelope: document.envelope, receiptJson: Buffer.from(document.bytes).toString("utf8") },
@@ -1262,9 +1310,46 @@ async function coordinatorCase(mode: CoordinatorCase) {
       }); },
       preflight: preflightCapturePublication, pollIntervalMs: 10000,
     };
-    const coordinator = await createRecordCaptureCoordinator(options as never);
+    const createFlow = () => standard ? createStandardRecordCaptureCoordinator({ ...options,
+      standardProcessing: { requestVideoProof: true, createdAtMs: 1234 } } as never) : createRecordCaptureCoordinator(options as never);
+    const originalSelection = SqlitePublicationBindingStore.prototype.selectVisualProcessing;
+    let selectionCrash = false;
+    if (mode === "standard-selected-restart") SqlitePublicationBindingStore.prototype.selectVisualProcessing = async function(original, selection) {
+      const result = await originalSelection.call(this, original, selection);
+      if (!selectionCrash) { selectionCrash = true; throw new Error("injected crash after selection commit"); }
+      return result;
+    };
+    const coordinator = await createFlow();
     try {
-      if (mode === "media-blocked") {
+      if (mode === "standard-unavailable" || mode === "standard-unknown" || mode === "standard-selected-restart") {
+        await coordinator.reconcile().catch(() => undefined);
+        assert.equal(await coordinator.resolveHandoff({ captureId: requestId, artifactId: bundleId }), null);
+        const before = await new SqlitePublicationBindingStore(controlRoot).getProcessing(captureId);
+        assert.ok(before);
+        assert.equal(derives, 1);
+        assert.equal(publishes, 0);
+        if (mode !== "standard-selected-restart") assert.ok(coordinator.processingIssues().some(issue => issue.code === (mode === "standard-unknown" ? "media-outcome-unknown" : "visual-observations-unavailable")));
+        const stopped = await coordinator.shutdown();
+        assert.equal(stopped.runtimeClearance, mode === "standard-unknown" ? "unknown" : "unresolved");
+        SqlitePublicationBindingStore.prototype.selectVisualProcessing = originalSelection;
+        const restored = await createFlow();
+        try {
+          await restored.reconcile().catch(() => undefined);
+          if (mode === "standard-selected-restart") {
+            await restored.reconcile();
+            assert.equal((await restored.captureFacts.readFacts()).captures[0]?.phase, "saved");
+            assert.equal(derives, 2, "committed selection restarts only the final derive, never the sampling job");
+            assert.deepEqual((await new SqlitePublicationBindingStore(controlRoot).getProcessing(captureId))?.visualSelection, before.visualSelection);
+            assert.equal(publishes, 1);
+          } else {
+            assert.equal(derives, 1, "unavailable observations and unknown sample jobs never dispatch a replacement derive");
+            assert.equal(publishes, 0);
+            assert.deepEqual((await new SqlitePublicationBindingStore(controlRoot).getProcessing(captureId))?.plan, before.plan);
+          }
+        } finally { await restored.dispose(); }
+        return;
+      }
+      if (mode === "media-blocked" || mode === "standard-blocked") {
         await mediaHandshakeEntered;
         const stopping = coordinator.shutdown();
         await new Promise(resolve => setImmediate(resolve));
@@ -1302,7 +1387,7 @@ async function coordinatorCase(mode: CoordinatorCase) {
         } finally { release(); await inspecting; SqlitePublicationBindingStore.prototype.get = originalGet; }
         return;
       }
-      if (mode !== "complete") {
+      if (mode !== "complete" && mode !== "standard") {
         let notices = 0;
         const detach = coordinator.observeProcessingIssues(() => { notices++; });
         coordinator.observeProcessingIssues(() => { throw new Error("isolated observer"); });
@@ -1379,9 +1464,9 @@ async function coordinatorCase(mode: CoordinatorCase) {
       assert.deepEqual(facts.captures.map(value => [value.captureId, value.artifactId, value.phase, value.delivery]), [[requestId, bundleId, "saved", "unknown"]]);
       const resolved = await coordinator.resolveHandoff({ captureId: requestId, artifactId: bundleId });
       assert.equal(resolved?.handoff.savedBundle.bundlePath, bundlePath);
-      assert.equal(resolved?.handoff.processing.frames[0]?.reason, "fixture selection");
-      assert.equal(derives, 1);
-      assert.equal(selections, 1, "restart reuses immutable persisted frame/layout/admission decisions");
+      assert.equal(resolved?.handoff.processing.frames[0]?.reason, standard ? undefined : "fixture selection");
+      assert.equal(derives, standard ? 2 : 1);
+      assert.equal(selections, standard ? 0 : 1, "restart reuses immutable persisted frame/layout/admission decisions");
       assert.equal((await new SqlitePublicationBindingStore(controlRoot).list()).length, 1);
       assert.equal(JSON.stringify(await new SqlitePublicationBindingStore(controlRoot).listProcessing()).includes(ownerToken), false);
       assert.equal(publishes, 1, "the original assembled plan is published once");
@@ -1392,18 +1477,18 @@ async function coordinatorCase(mode: CoordinatorCase) {
       assert.equal(await coordinator.shutdown(), shutdown);
       await rm(materialRoot, { recursive: true, force: true });
       await coordinator.dispose();
-      const reopened = await createRecordCaptureCoordinator(options as never);
+      const reopened = await createFlow();
       try {
         assert.equal((await reopened.resolveHandoff({ captureId: requestId, artifactId: bundleId }))?.handoff.savedBundle.bundlePath, bundlePath);
-        assert.equal(derives, 1, "restart resolves Saved without rereading deleted retained materials or deriving again");
-        assert.equal(selections, 1, "restart does not reconstruct processing policy from caller glue");
+        assert.equal(derives, standard ? 2 : 1, "restart resolves Saved without rereading deleted retained materials or deriving again");
+        assert.equal(selections, standard ? 0 : 1, "restart does not reconstruct processing policy from caller glue");
         assert.equal(publishes, 1, "restart reconciles the same publication binding without redispatch");
       } finally { await reopened.dispose(); }
-    } finally { await coordinator.dispose(); }
+    } finally { SqlitePublicationBindingStore.prototype.selectVisualProcessing = originalSelection; await coordinator.dispose(); }
   } finally { restoreReserve(); releaseMediaHandshake(); await rm(root, { recursive: true, force: true }); }
 }
 
-for (const mode of ["complete", "media-failed", "media-unknown", "media-blocked", "publication-unknown", "publication-reserved", "publication-reserved-close", "selection-failed"] as const)
+for (const mode of ["standard", "standard-unavailable", "standard-unknown", "standard-blocked", "standard-selected-restart", "complete", "media-failed", "media-unknown", "media-blocked", "publication-unknown", "publication-reserved", "publication-reserved-close", "selection-failed"] as const)
   test(`capture coordinator retains the original identity and exposes ${mode}`, () => coordinatorCase(mode));
 
 for (const mode of ["pending", "failed"] as const) test(`coordinator startup ${mode} is observable and drains before cleanup`, { timeout: 5000 }, async () => {
@@ -1595,5 +1680,54 @@ test("rejects assembly materials keys from a foreign capture despite matching re
     foreignAssemblyKey.materials.manifest.key.captureId = "9".repeat(32);
     await assert.rejects(prepareRecordPublication(stagingInput(source, foreignAssemblyKey, root, "5".repeat(32), destinationPath)), /materials|identity|capture|binding/u);
     await assertAbsent(join(root, "private"));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// Pure planner checks: the SDK validator and public coordinator tests above own ingress validation.
+test("standard visual planning bounds sampling and full-frame output without changing the original clock", async () => {
+  const { planStandardVisual, finishStandardVisual } = await import("../../dist/backend/host/capture2/standard-visual.js");
+  const input = await fixture();
+  const materials = validateMaterialsDocument(input.manifest, input.payloadBytes);
+  const base = { schema: 1 as const, materialsManifest: materials.manifest, trustedMaterialsRoot: materials.manifest.root,
+    materialsLimits: { maxFileBytes: 8_000_000, maxAggregateBytes: 20_000_000 }, artifactLimits: { maxFileBytes: 64_000_000, maxAggregateBytes: 128_000_000 },
+    admission: input.admission, marks: [], requestVideoProof: false, publicationId: "1".repeat(32), stagingRoot: "/private/staging", contactSheetPath: "contact-sheet.png" };
+  assert.throws(() => planStandardVisual(materials, base, "/private/control"), /richer policy/u, "collected semantic facts cannot be silently ignored");
+  materials.payload.collection.interactions = "unavailable"; materials.payload.collection.transcript = "unavailable";
+  materials.payload.clock = { ...materials.payload.clock, videoOffsetMs: 125, durationMs: 3_600_125 };
+  materials.payload.video = { ...materials.payload.video, width: 7680, height: 4320, durationMs: 3_600_000 };
+  const plan = planStandardVisual(materials, base, "/private/control");
+  const times = plan.samples.flatMap(request => request.requestedBundleMs);
+  assert.equal(times.length, 480); assert.equal(plan.samples.length, 10); assert.equal(times[0], 125);
+  assert.ok(times.at(-1)! <= materials.payload.clock.durationMs);
+  assert.equal(new Set(plan.samples.map(request => request.jobId)).size, 10);
+  assert.ok(plan.samples.every(request => request.requestedBundleMs.length <= 48 && request.contactSheet === null && request.limits.maxEdge === 640));
+  const measured = plan.samples.flatMap(request => request.requestedBundleMs.map((timeMs, index) => ({ id: `${request.jobId}:${index + 1}`, timeMs,
+    width: 640, height: 360, thumbnail: new Array<number>(2304).fill(0) })));
+  const result = finishStandardVisual(plan, materials, measured);
+  assert.equal(result.request.jobId, plan.finalJob.jobId);
+  assert.ok(result.request.requestedBundleMs.length <= 12);
+  assert.equal(result.request.requestedBundleMs.every(time => times.includes(time)), true);
+  const sheet = result.request.contactSheet!;
+  assert.ok(sheet.tiles.every(tile => Math.abs(tile.width / tile.height - 16 / 9) < 0.01));
+  assert.ok(result.request.limits.maxEdge ** 2 * result.frames.length + sheet.width * sheet.height <= result.request.limits.maxTotalPixels);
+  assert.equal(result.processingWarnings?.length, 2, "coarsening and downscaling remain explicit limitations");
+  assert.throws(() => finishStandardVisual(plan, materials, measured.slice(1)), /original standard sampling plan/u);
+});
+
+test("standard visual selection CAS preserves its original plan and refuses a different replay", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "record-visual-cas-")));
+  try {
+    const input = await fixture();
+    const store = new SqlitePublicationBindingStore(root);
+    const record = { schema: 1 as const, captureId: identity.captureId, requestId: "visual-cas", materials: input.manifest.key,
+      leaseId: input.manifest.leaseId, bundleId: input.admission.bundleId, bundlePath: input.admission.bundlePath, plan: { kind: "standard-visual", stable: "original" } };
+    const reserved = await store.reserveProcessing(record);
+    const results = await Promise.allSettled([store.selectVisualProcessing(reserved, { choice: 1 }), store.selectVisualProcessing(reserved, { choice: 2 })]);
+    assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+    const selected = await store.getProcessing(identity.captureId);
+    assert.deepEqual(selected?.plan, record.plan);
+    assert.deepEqual(await store.reserveProcessing(record), selected, "original reservation replays after the one-time selection");
+    assert.deepEqual(await store.selectVisualProcessing(reserved, selected!.visualSelection), selected);
+    await assert.rejects(store.selectVisualProcessing({ ...reserved, leaseId: "f".repeat(32) }, selected!.visualSelection));
   } finally { await rm(root, { recursive: true, force: true }); }
 });

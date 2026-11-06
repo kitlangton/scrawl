@@ -37,6 +37,8 @@ export interface ProcessingCoordinatorRecord {
   bundleId: string;
   bundlePath: string;
   plan: unknown;
+  /** Immutable final frame/layout decision for a standard visual sampling plan. */
+  visualSelection?: unknown;
 }
 
 export interface PublicationBinding {
@@ -214,14 +216,42 @@ export class SqlitePublicationBindingStore {
       const row = db.prepare("SELECT record_json FROM publication_processing WHERE capture_id = ? OR request_id = ?").get(value.captureId, value.requestId);
       if (row) {
         const existing = decodeProcessing(row.record_json);
-        if (JSON.stringify(existing) !== JSON.stringify(value)) throw hostError();
+        const { visualSelection: _existingSelection, ...originalExisting } = existing;
+        const { visualSelection: requestedSelection, ...originalRequested } = value;
+        if (!isDeepStrictEqual(originalExisting, originalRequested) || (requestedSelection !== undefined && !isDeepStrictEqual(existing.visualSelection, requestedSelection))) throw hostError();
         db.exec("COMMIT");
         return existing;
       }
+      if (value.visualSelection !== undefined) throw hostError();
       db.prepare("INSERT INTO publication_processing (capture_id, request_id, record_json) VALUES (?, ?, ?)").run(value.captureId, value.requestId, JSON.stringify(value));
       db.exec("COMMIT");
       return structuredClone(value);
     } catch { try { db.exec("ROLLBACK"); } catch { /* transaction may have completed */ } throw hostError(); }
+    finally { try { db.close(); } catch { /* preserve result */ } }
+  }
+
+  /** Freeze the result of one original standard sampling plan, never its requests. */
+  async selectVisualProcessing(original: ProcessingCoordinatorRecord, selection: unknown): Promise<ProcessingCoordinatorRecord> {
+    if (!validProcessing(original) || (original.plan as { kind?: string })?.kind !== "standard-visual" || selection === undefined)
+      throw hostError();
+    const db = await this.#open();
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      const row = db.prepare("SELECT record_json FROM publication_processing WHERE capture_id = ?").get(original.captureId);
+      if (!row) throw hostError();
+      const current = decodeProcessing(row.record_json);
+      const { visualSelection: _current, ...currentIdentity } = current;
+      const { visualSelection: _expected, ...expectedIdentity } = original;
+      if (!isDeepStrictEqual(currentIdentity, expectedIdentity)) throw hostError();
+      if (current.visualSelection !== undefined) {
+        if (!isDeepStrictEqual(current.visualSelection, selection)) throw hostError();
+        db.exec("COMMIT"); return current;
+      }
+      const next = { ...current, visualSelection: structuredClone(selection) };
+      if (!validProcessing(next)) throw hostError();
+      db.prepare("UPDATE publication_processing SET record_json = ? WHERE capture_id = ?").run(JSON.stringify(next), current.captureId);
+      db.exec("COMMIT"); return structuredClone(next);
+    } catch { try { db.exec("ROLLBACK"); } catch { /* preserve storage failure */ } throw hostError(); }
     finally { try { db.close(); } catch { /* preserve result */ } }
   }
 
@@ -337,7 +367,7 @@ function validProcessing(value: ProcessingCoordinatorRecord): boolean {
       id.test(value.leaseId) && typeof value.bundleId === "string" && value.bundleId.length > 0 && Buffer.byteLength(value.bundleId) <= 255 &&
       !/[\\/\p{Cc}]/u.test(value.bundleId) && value.bundleId !== "." && value.bundleId !== ".." && typeof value.bundlePath === "string" && value.bundlePath.length <= 4096 &&
       !value.bundlePath.includes("\0") && isAbsolute(value.bundlePath) && resolve(value.bundlePath) === value.bundlePath && value.plan !== undefined && Buffer.byteLength(JSON.stringify(value)) <= 2 * 1024 * 1024 &&
-      !JSON.stringify(value).includes('"ownerToken"');
+      !JSON.stringify(value).includes('"ownerToken"') && (value.visualSelection === undefined || (value.plan as { kind?: string })?.kind === "standard-visual");
   } catch { return false; }
 }
 
