@@ -86,7 +86,7 @@ export async function runQualification(command: string, args: string[], options:
       child.stdout.setEncoding('utf8').on('data', value => { stdout += value; if (stdout.length > 8 * 1024 * 1024) abort(new Error('qualification output limit')); });
       child.stderr.setEncoding('utf8').on('data', value => { stderr += value; if (stderr.length > 8 * 1024 * 1024) abort(new Error('qualification output limit')); });
       child.once('error', reject);
-      child.once('close', code => failure ? reject(failure) : code === 0 ? resolve() : reject(new Error('native qualification failed: ' + stderr)));
+      child.once('close', code => failure ? reject(new Error(`${failure.message}\nstdout:\n${stdout}\nstderr:\n${stderr}`)) : code === 0 ? resolve() : reject(new Error(`native qualification failed (${code}):\nstdout:\n${stdout}\nstderr:\n${stderr}`)));
     });
     return { stdout, stderr };
   } finally {
