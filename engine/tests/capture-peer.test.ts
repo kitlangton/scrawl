@@ -217,6 +217,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
   process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS = "750";
   process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS = "900";
   let client: CaptureClient | undefined;
+  let scenarioPassed = false;
   try {
     await delay(500);
     execFileSync(xsetrootCommand, ["-solid", "#cc2211"]);
@@ -533,6 +534,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     await client.handshake(15_000);
     const replayRelease = await client.releaseMaterials({ captureId, ownerToken, materialsId: manifest.key.materialsId, leaseId: manifest.leaseId });
     assert.equal(replayRelease.released, true, "release acknowledgment replays after worker restart");
+    scenarioPassed = true;
   } finally {
     await client?.close();
     if (xserver.exitCode === null && xserver.signalCode === null) {
@@ -557,6 +559,13 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
         writeFileSync(join(diagnostic, "xserver-exit.json"), `${JSON.stringify({ exitCode: xserver.exitCode, signalCode: xserver.signalCode })}\n`, { mode: 0o600 });
       } catch { /* no diagnostic file was produced */ }
     }
-    rmSync(runtime, { recursive: true, force: true });
+    if (scenarioPassed) {
+      rmSync(runtime, { recursive: true, force: true });
+    } else {
+      // Keep the test-owned private runtime (including its authenticated
+      // journals) available for diagnosis. The 0700 directory must not be
+      // copied into shared evidence because journals contain owner tokens.
+      process.stderr.write(`capture peer failed; private synthetic runtime retained at ${runtime}\n`);
+    }
   }
 });
