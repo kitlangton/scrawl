@@ -57,7 +57,7 @@ export async function installLocal(
   const prefix = canonicalAbsolute(input.prefix, 'prefix');
   if (process.platform !== 'linux' || process.arch !== 'x64') fail('requires Linux x64');
   const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
-  if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 13)) fail('requires Node.js 22.13+');
+  if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 18)) fail('requires Node.js 22.18+');
   if (!SHA256.test(input.agentSha256) || !SHA256.test(input.manifestSha256)) fail('trusted SHA-256 values are required');
 
   const initialArchiveHash = await hashRegularFile(agentPath, MAX_AGENT_ARCHIVE_BYTES);

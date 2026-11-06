@@ -8,6 +8,11 @@
     "native-host": "712e4cd8f4b95ca08364f32f72e9dc855ce6e12c862fd5efce9c296c88dab221"
   },
   "limits": "Integrity-verified compiled package built from committed source; no registry publication, native GUI artifact admission, installed routing or Agent OS-effect claim.",
-  "validation": "normal paired-tar install with scripts enabled; public runtime imports and strict headless declarations; 18 installed socket tests; source/native behavior unchanged from PR833",
-  "nativeBehaviorSha": "33f95219899c407bed5a767c3ceb1433985b2e49"
+  "validation": "Exact paired compiled tar bytes reproduced and verified in main CI",
+  "nativeBehaviorSha": "33f95219899c407bed5a767c3ceb1433985b2e49",
+  "mainCi": {
+    "runId": "42225727920",
+    "contractsJob": "127918604915",
+    "evidence": "normal paired-tar install, plain Node imports, strict headless types and 18 compiled socket tests; both tar SHA256 values match independently verified main CI packed proof"
+  }
 }
