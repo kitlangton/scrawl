@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decodeStoredEncryptedSpool } from "../../dist/sender/spool-record.js";
-import type { Context } from "../../dist/recipient/crypto.js";
+import { decodeStoredEncryptedSpool } from "../../src/sender/spool-record.ts";
+import type { Context } from "../../src/recipient/crypto.ts";
 
 const context: Context = { origin: "https://connect.test", accountId: "acct", captureId: "0123456789abcdef0123456789abcdef", senderGrantId: "sender" };
 const hash = "a".repeat(64);
@@ -41,6 +41,10 @@ test("fails closed on unknown fields and duplicate JSON keys", () => {
   rejected({ metadata: { ...record().metadata, extra: 1 }, files: rootFiles });
   const duplicate = new TextEncoder().encode('{"metadata":{"context":{"origin":"https://connect.test","accountId":"acct","captureId":"0123456789abcdef0123456789abcdef","senderGrantId":"sender","senderGrantId":"x"},"recipientGrants":[]},"files":[]}');
   assert.throws(() => decodeStoredEncryptedSpool(duplicate, { context, profile: "root" }), { message: "invalid_encrypted_spool" });
+  // Unlike the receipt and metadata, Rust Asset has no deny_unknown_fields.
+  assert.deepEqual(decode(record([{ ...rootFiles[0]!, future: "ignored" }, rootFiles[1]!])).files, rootFiles);
+  assert.throws(() => decodeStoredEncryptedSpool(new TextEncoder().encode(JSON.stringify(record())),
+    { context, profile: "unsupported" as "root" }), { message: "invalid_encrypted_spool" });
 });
 
 test("rejects duplicate, malformed, near-prefix, out-of-sequence, and oversized transport assets", () => {

@@ -27,7 +27,8 @@ function validateFiles(value: unknown, profile: StoredSpoolProfile): Asset[] {
   const names = new Set<string>(); let total = 0;
   const files: Asset[] = [];
   for (const raw of value) {
-    if (!record(raw) || !exact(raw, ["path", "size", "sha256"]) || typeof raw.path !== "string"
+    // Rust Asset ignores unknown fields; the read-only DTO keeps known facts.
+    if (!record(raw) || typeof raw.path !== "string"
       || raw.path.length > 128 || !Number.isSafeInteger(raw.size) || (raw.size as number) <= 0
       || typeof raw.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(raw.sha256) || names.has(raw.path)) return invalid();
     const path = raw.path, size = raw.size as number;
@@ -36,7 +37,7 @@ function validateFiles(value: unknown, profile: StoredSpoolProfile): Asset[] {
     const local = grouped ? path.slice(prefix.length) : path;
     const index = local.match(/^sealed\/part-(\d{6})\.age$/);
     const isEnvelope = local === "envelope.json";
-    if (isEnvelope ? size > 128 * 1024 : !index || Number(index[1]) >= 16 || Number(index[1]) > 0 && size > chunk || size > chunk) return invalid();
+    if (isEnvelope ? size > 128 * 1024 : !index || Number(index[1]) >= 16 || size > chunk) return invalid();
     names.add(path); total += size;
     if (total > 500_000_000) return invalid();
     files.push({ path, size, sha256: raw.sha256 });
@@ -54,6 +55,7 @@ function validateFiles(value: unknown, profile: StoredSpoolProfile): Asset[] {
 /** Decode the JSON shape Rust serde writes. The pinned context is supplied by the caller. */
 export function decodeStoredEncryptedSpool(bytes: Uint8Array, expected: { context: Context; profile: StoredSpoolProfile }): StoredEncryptedSpool {
   try {
+    if (expected.profile !== "root" && expected.profile !== "evidence-first-v1" || expected.context.group !== undefined) return invalid();
     const value = decodeStrictJson(bytes, 2_000_000);
     if (!record(value) || !exact(value, ["metadata", "files"]) || !record(value.metadata)
       || !exact(value.metadata, ["context", "recipientGrants"]) || !record(value.metadata.context)) return invalid();

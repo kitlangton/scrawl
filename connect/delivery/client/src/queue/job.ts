@@ -25,8 +25,11 @@ function validateEncrypted(v: unknown): EncryptedJob | null {
   if (v === null) return null;
   if (!object(v) || Object.keys(v).some(k => !["context", "recipientGrants"].includes(k)) || !object(v.context) || !Array.isArray(v.recipientGrants)) return invalid();
   const c = v.context;
-  if (Object.keys(c).some(k => !["origin", "accountId", "captureId", "senderGrantId", "group"].includes(k)) || ![c.origin,c.accountId,c.captureId,c.senderGrantId].every(str) || (c.group !== undefined && !str(c.group)) || !v.recipientGrants.every(str)) return invalid();
-  return structuredClone(v) as unknown as EncryptedJob;
+  if (Object.keys(c).some(k => !["origin", "accountId", "captureId", "senderGrantId", "group"].includes(k)) || ![c.origin,c.accountId,c.captureId,c.senderGrantId].every(str) || (c.group !== undefined && c.group !== null && !str(c.group)) || !v.recipientGrants.every(str)) return invalid();
+  const normalized = structuredClone(v) as unknown as EncryptedJob;
+  // Rust's Option group accepts null and serializes None without this field.
+  if (c.group === null) delete normalized.context.group;
+  return normalized;
 }
 export function decodeJob(bytes: Uint8Array): Job {
   const v = decodeStrictJson(bytes, 2_000_000);
