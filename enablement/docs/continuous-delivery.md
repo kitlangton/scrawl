@@ -22,11 +22,18 @@ This trigger policy supersedes other automatic pipeline descriptions below.
 Existing release admission still rejects diagnostic manual verification receipts;
 manual triggering does not waive publication gates.
 
-Feature-branch pushes without a PR retain inexpensive local selector, push-hook
-and release-admission contracts, plus affected-owner architecture checks. Install
-the architecture checker once with `npm --prefix composition/architecture ci`;
-the hook fails clearly if it is unavailable and never installs packages. Before
-contract checks in either PR or changed-tree verification, a read-only dependency
+Feature-branch pushes without a PR retain affected-owner checks, applicable
+boundary contracts, and exact-HEAD/clean-tree/index/runtime-budget enforcement.
+The hook regression suites for push guards, verification selection, release
+admission, temporary-environment checks and owner lanes run when their test or
+production input closure changes. A change to the shared `verification.py`
+selector runs the complete machinery matrix; unknown history and uncertain
+verification/tooling inputs do the same. Owner-only and documentation-only
+changes keep their owner checks without rerunning unrelated machinery suites.
+Install the architecture checker once with `npm --prefix composition/architecture ci`
+when a selected architecture check needs it; the hook fails clearly if it is
+unavailable and never installs packages. Before contract checks in either PR or
+changed-tree verification, a read-only dependency
 preflight checks selected architecture, Record/renderer, Agent, App Shell,
 onboarding, resources, Connect client and Public packages for required locked
 installs and npm lock freshness. Existing package selectors control the check:

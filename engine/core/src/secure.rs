@@ -160,6 +160,18 @@ impl Store {
         if rc != 0 && io::Error::last_os_error().kind() != io::ErrorKind::AlreadyExists {
             return Err(io::Error::last_os_error());
         }
+        let child = self.existing_child(key)?;
+        child.dir.sync_all()?;
+        self.dir.sync_all()?;
+        Ok(child)
+    }
+    /// Open an existing private child without provisioning state on lookup.
+    pub fn existing_child(
+        self: &std::sync::Arc<Self>,
+        key: &str,
+    ) -> io::Result<std::sync::Arc<Self>> {
+        self.check()?;
+        let leaf = name(key)?;
         let dir = cvt(unsafe {
             libc::openat(
                 self.dir.as_raw_fd(),
@@ -174,8 +186,6 @@ impl Store {
             private: true,
         });
         child.check()?;
-        child.dir.sync_all()?;
-        self.dir.sync_all()?;
         Ok(child)
     }
     pub fn check(&self) -> io::Result<()> {
@@ -551,6 +561,32 @@ mod tests {
         fs::create_dir(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
+    }
+
+    #[test]
+    fn existing_child_never_provisions_and_rejects_replaced_links() {
+        let path = temp();
+        let store = std::sync::Arc::new(Store::open(&path).unwrap());
+        assert_eq!(
+            store.existing_child("missing").err().unwrap().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert!(!path.join("missing").exists());
+        let child = store.child("owned").unwrap();
+        child.write_new("record", b"retained").unwrap();
+        assert_eq!(
+            store
+                .existing_child("owned")
+                .unwrap()
+                .read("record")
+                .unwrap()
+                .unwrap(),
+            b"retained"
+        );
+        fs::rename(path.join("owned"), path.join("retained")).unwrap();
+        std::os::unix::fs::symlink(path.join("retained"), path.join("owned")).unwrap();
+        assert!(store.existing_child("owned").is_err());
+        fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
