@@ -131,7 +131,8 @@ class PrePushGuardTests(unittest.TestCase):
         # unknown-history selection; it never invokes this hook suite.
         delivery = self.repo / "composition/delivery"
         delivery.mkdir(parents=True)
-        for name in ("core.ts", "cli.ts", "core.test.ts"):
+        for name in ("core.ts", "cli.ts", "core.test.ts", "runtime/pr-candidate.ts", "runtime/pr-candidate.test.ts"):
+            (delivery / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(SELECTOR.parents[1] / "composition/delivery" / name, delivery / name)
         # File-length tests exercise pre-commit only, so this closure stays
         # finite and never recursively invokes the pre-push test suite.

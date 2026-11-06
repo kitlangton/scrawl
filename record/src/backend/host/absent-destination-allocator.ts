@@ -32,7 +32,7 @@ export class AbsentDestinationAllocator {
         rootsOverlap(this.#controlRoot, this.#destinationRoot)) throw hostError();
 
     await ensurePrivateRoot(this.#controlRoot);
-    await ensurePrivateRoot(this.#destinationRoot);
+    await ensureDefaultDestinationRoot(this.#destinationRoot);
     const db = await this.#open();
     try {
       const digest = createHash("sha256").update(requestId, "utf8").digest("hex");
@@ -112,6 +112,19 @@ export class AbsentDestinationAllocator {
       return db;
     } catch { try { db?.close(); } catch { /* sanitized */ } throw hostError(); }
   }
+}
+
+/** Existing host-selected output folders may be user-readable, but must remain owned, non-aliased, and not writable by group/other. */
+async function ensureDefaultDestinationRoot(root: string): Promise<void> {
+  let info;
+  try { info = await lstat(root); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw hostError();
+    await ensurePrivateRoot(root);
+    return;
+  }
+  if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid?.() || (info.mode & 0o022) !== 0 ||
+      await realpath(root).catch(() => "") !== root) throw hostError();
 }
 
 function validBundlePath(path: string): boolean {

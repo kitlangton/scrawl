@@ -8,7 +8,7 @@
     ".": "./dist/index.js",
     "./recipient-publication": "./dist/recipient/publication.js",
     "./recipient-command": "./dist/cli/recipient.js",
-    "./credentials": "./dist/credentials/wire.js",
+    "./credentials": "./dist/credentials/index.js",
     "./queue": "./dist/queue/index.js",
     "./settings-controller": "./dist/settings-controller.cjs",
     "./settings-transport": "./dist/settings-transport.cjs",

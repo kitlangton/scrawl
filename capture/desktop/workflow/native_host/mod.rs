@@ -1,6 +1,20 @@
 //! Strict, Record-bound protocol carried by the existing same-user GUI socket.
 use serde::{Deserialize, Serialize};
 
+pub(crate) const MAX_SERIALIZED_FRAME_BYTES: usize = 131_072;
+pub(crate) const MAX_UTF8_TEXT_BYTES: usize = 21_800;
+const LEGACY_MAX_FRAME_BYTES: usize = 4096;
+
+pub(crate) fn clipboard_text_refusal(text: &str) -> Option<&'static str> {
+    if text.contains('\0') {
+        Some("invalid-text")
+    } else if text.len() > MAX_UTF8_TEXT_BYTES {
+        Some("too-large")
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Request {
@@ -11,6 +25,8 @@ pub(crate) struct Request {
     pub(crate) deadline: u64,
     #[serde(default)]
     pub(crate) expected: Option<Expected>,
+    #[serde(default)]
+    pub(crate) observed: Option<Expected>,
     #[serde(default, rename = "permissionId")]
     pub(crate) permission_id: Option<String>,
     #[serde(default)]
@@ -23,6 +39,8 @@ pub(crate) struct Request {
     pub(crate) rgb: Field<serde_json::Value>,
     #[serde(default, rename = "expectedPenColor")]
     pub(crate) expected_pen_color: Option<ExpectedPenColor>,
+    #[serde(default)]
+    pub(crate) text: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -71,6 +89,7 @@ pub(crate) enum Operation {
     SaveRecordShortcut(Shortcut),
     ApplyStrokeColor(Option<[u8; 3]>, ExpectedPenColor),
     ReadStrokeColor,
+    WriteClipboardText(String),
 }
 
 #[derive(Clone, Debug)]
@@ -90,7 +109,7 @@ const PERMISSIONS: &[&str] = &[
 ];
 
 pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
-    if line.len() > 4096 {
+    if line.len().saturating_add(1) > MAX_SERIALIZED_FRAME_BYTES {
         return None;
     }
     let request: Request = serde_json::from_str(line).ok()?;
@@ -136,9 +155,20 @@ pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
             "rgb",
             "expectedPenColor",
         ],
+        "writeClipboardText" => &[
+            "protocol", "id", "owner", "operation", "deadline", "observed", "text",
+        ],
         _ => return None,
     };
     if object.len() != fields.len() || object.keys().any(|key| !fields.contains(&key.as_str())) {
+        return None;
+    }
+    let max_frame = if request.operation == "writeClipboardText" {
+        MAX_SERIALIZED_FRAME_BYTES
+    } else {
+        LEGACY_MAX_FRAME_BYTES
+    };
+    if line.len().saturating_add(1) > max_frame {
         return None;
     }
     if request.protocol != 1
@@ -176,6 +206,19 @@ pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
                 && request.expected_pen_color.is_none() =>
         {
             Operation::ReadStrokeColor
+        }
+        "writeClipboardText"
+            if request.expected.is_none()
+                && request.observed.is_some()
+                && request.text.is_some()
+                && request.permission_id.is_none()
+                && request.key.is_none()
+                && request.modifiers.is_none()
+                && request.shortcut.is_none()
+                && matches!(&request.rgb, Field::Missing)
+                && request.expected_pen_color.is_none() =>
+        {
+            Operation::WriteClipboardText(request.text.clone()?)
         }
         "requestPermission"
             if request.expected.is_some()
@@ -246,7 +289,8 @@ pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
         }
         _ => return None,
     };
-    if request.expected.as_ref().is_some_and(|expected| {
+    let observed = request.expected.as_ref().or(request.observed.as_ref());
+    if observed.is_some_and(|expected| {
         expected.process_epoch.is_empty()
             || expected.process_epoch.len() > 64
             || !expected
@@ -259,7 +303,7 @@ pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
     Some(Admitted {
         id: request.id,
         deadline: request.deadline,
-        expected: request.expected,
+        expected: request.expected.or(request.observed),
         operation,
     })
 }
@@ -303,6 +347,13 @@ fn parse_rgb(value: &serde_json::Value) -> Option<Option<[u8; 3]>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn clipboard_request(text: &str, observed: serde_json::Value, deadline: u64) -> String {
+        serde_json::json!({
+            "protocol": 1, "id": "a".repeat(36), "owner": "record",
+            "operation": "writeClipboardText", "deadline": deadline,
+            "observed": observed, "text": text,
+        }).to_string()
+    }
     fn req(operation: &str, extra: &str) -> String {
         format!(
             r#"{{"protocol":1,"id":"req-1","owner":"record","operation":"{operation}","deadline":3000{extra}}}"#
@@ -373,5 +424,45 @@ mod tests {
             assert!(parse(&line, 1000).is_none(), "{line}");
         }
         assert!(parse(&req("readSnapshot", ""), 3000).is_none());
+    }
+
+    #[test]
+    fn clipboard_request_accepts_exact_bounded_text_and_observation_only() {
+        let observed = serde_json::json!({"processEpoch":"e".repeat(64),"revision":9_007_199_254_740_991u64});
+        let text = "quote \" slash \\ tab\t newline\n λ 🖍";
+        let line = clipboard_request(text, observed.clone(), 3000);
+        let parsed = parse(&line, 1000).unwrap();
+        assert!(matches!(parsed.operation, Operation::WriteClipboardText(ref got) if got == text));
+        assert_eq!(parsed.expected.as_ref().unwrap().process_epoch, "e".repeat(64));
+        assert_eq!(parsed.expected.as_ref().unwrap().revision, 9_007_199_254_740_991);
+        assert!(parse(&clipboard_request("bad\0text", observed.clone(), 3000), 1000).is_some());
+        for extra in [
+            serde_json::json!({"rgb":null}),
+            serde_json::json!({"expected": {"processEpoch":"e", "revision":1}}),
+            serde_json::json!({"path":"/tmp/file"}),
+        ] {
+            let mut request: serde_json::Value = serde_json::from_str(&clipboard_request("x", observed.clone(), 3000)).unwrap();
+            request.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            assert!(parse(&request.to_string(), 1000).is_none());
+        }
+    }
+
+    #[test]
+    fn clipboard_wire_limit_includes_worst_case_json_escaping_and_newline() {
+        let observed = serde_json::json!({"processEpoch":"e".repeat(64),"revision":9_007_199_254_740_991u64});
+        let text = "\u{1}".repeat(MAX_UTF8_TEXT_BYTES);
+        let line = clipboard_request(&text, observed.clone(), 3000);
+        assert!(line.len() + 1 <= MAX_SERIALIZED_FRAME_BYTES);
+        assert!(matches!(parse(&line, 1000).unwrap().operation, Operation::WriteClipboardText(_)));
+        assert_eq!(clipboard_text_refusal(&text), None);
+        let too_many = "\u{1}".repeat(MAX_UTF8_TEXT_BYTES + 1);
+        assert_eq!(clipboard_text_refusal(&too_many), Some("too-large"));
+        let line = clipboard_request(&too_many, observed.clone(), 9_007_199_254_740_991);
+        assert!(line.len() + 1 > MAX_SERIALIZED_FRAME_BYTES);
+        let line = clipboard_request(&"x".repeat(MAX_UTF8_TEXT_BYTES + 1), observed, 3000);
+        assert!(line.len() + 1 <= MAX_SERIALIZED_FRAME_BYTES);
+        assert!(matches!(parse(&line, 1000).unwrap().operation,
+            Operation::WriteClipboardText(ref value) if value == &"x".repeat(MAX_UTF8_TEXT_BYTES + 1)));
+        assert!(parse(&"x".repeat(LEGACY_MAX_FRAME_BYTES), 1000).is_none());
     }
 }

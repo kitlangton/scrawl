@@ -52,6 +52,59 @@ test("concurrent processes choose one durable binding; restart and lost reply re
   assert.equal(dbInfo.mode & 0o077, 0);
 });
 
+test("default allocation accepts an owned 0755 destination root without weakening private storage", async t => {
+  const parent = await temporary(t), control = join(parent, "control"), output = join(parent, "ordinary-output");
+  await mkdir(output, { mode: 0o755 }); await chmod(output, 0o755);
+  const before = await lstat(output), allocator = new AbsentDestinationAllocator(control, output);
+  const request = "ordinary default output", binding = await allocator.allocate(request);
+  assert.equal(binding.bundlePath, join(output, binding.bundleId));
+  assert.equal((await lstat(output)).mode & 0o777, before.mode & 0o777, "allocation never changes the configured directory mode");
+  await assertAbsent(binding.bundlePath);
+  assert.equal((await lstat(control)).mode & 0o777, 0o700);
+  assert.equal((await lstat(join(control, "capture2-destination-bindings.sqlite"))).mode & 0o777, 0o600);
+  for (const suffix of ["-wal", "-shm", "-journal"]) {
+    const path = join(control, `capture2-destination-bindings.sqlite${suffix}`);
+    try { assert.equal((await lstat(path)).mode & 0o777, 0o600); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+
+  await mkdir(binding.bundlePath, { mode: 0o755 });
+  await writeFile(join(binding.bundlePath, "published.bytes"), "synthetic publication", { mode: 0o600 });
+  assert.deepEqual(await new AbsentDestinationAllocator(control, output).allocate(request), binding, "reopen replays the exact binding after publication populates the path");
+  assert.equal(await readFile(join(binding.bundlePath, "published.bytes"), "utf8"), "synthetic publication");
+
+  const occupiedRequest = "occupied default output";
+  const digest = (await import("node:crypto")).createHash("sha256").update(occupiedRequest).digest("hex");
+  const occupied = join(output, `record-${digest}.apparent`);
+  await mkdir(occupied, { mode: 0o700 }); await writeFile(join(occupied, "keep"), "user data", { mode: 0o600 });
+  await assert.rejects(allocator.allocate(occupiedRequest), /storage is unavailable/u);
+  assert.equal(await readFile(join(occupied, "keep"), "utf8"), "user data");
+
+  const missingOutput = join(parent, "new-private-output");
+  const created = await new AbsentDestinationAllocator(join(parent, "new-control"), missingOutput).allocate("new root");
+  assert.equal((await lstat(missingOutput)).mode & 0o777, 0o700, "a newly created output root keeps its private default mode");
+  await assertAbsent(created.bundlePath);
+});
+
+test("default allocation rejects unsafe, aliased, non-directory, and foreign destination roots", async t => {
+  const parent = await temporary(t);
+  for (const [name, mode] of [["other-writable", 0o757], ["group-and-other-writable", 0o777]] as const) {
+    const root = join(parent, name); await mkdir(root, { mode: 0o700 }); await chmod(root, mode);
+    await assert.rejects(new AbsentDestinationAllocator(join(parent, `${name}-control`), root).allocate(name), /storage is unavailable/u);
+  }
+  const target = join(parent, "target"); await mkdir(target, { mode: 0o700 });
+  const alias = join(parent, "destination-alias"); await symlink(target, alias);
+  await assert.rejects(new AbsentDestinationAllocator(join(parent, "alias-control"), alias).allocate("alias"), /storage is unavailable/u);
+  const nonDirectory = join(parent, "not-a-directory"); await writeFile(nonDirectory, "preserve");
+  await assert.rejects(new AbsentDestinationAllocator(join(parent, "file-control"), nonDirectory).allocate("non-directory"), /storage is unavailable/u);
+  assert.equal(await readFile(nonDirectory, "utf8"), "preserve");
+
+  const foreign = await lstat("/root").catch(() => undefined);
+  if (foreign && foreign.uid !== process.getuid?.()) {
+    await assert.rejects(new AbsentDestinationAllocator(join(parent, "foreign-control"), "/root").allocate("foreign"), /storage is unavailable/u);
+  }
+});
+
 test("first reservation refuses an existing final path and preserves it; known replay tolerates later population", async t => {
   const parent = await temporary(t), [control, output] = roots(parent), request = "occupied";
   const digest = (await import("node:crypto")).createHash("sha256").update(request).digest("hex");
