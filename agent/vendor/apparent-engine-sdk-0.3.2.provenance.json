@@ -1,0 +1,12 @@
+{
+  "package": "@apparent/engine-sdk",
+  "version": "0.3.2",
+  "sourceCommit": "bfafe7b5ea011a5498545515210767d5668fe9bd",
+  "workflow": ".github/workflows/stream-engine.yml",
+  "runId": "42161991547",
+  "runAttempt": 1,
+  "artifactId": "13477078422",
+  "componentSha256": "a0c5646591db3ca8c70894a6990498f19817d4a5b0ecba06891e4d4b89076d46",
+  "componentBytes": 37968,
+  "packageTarballSha256": "3b539f7d978d692a5d7fca9f358047bc197d415f6764c33707cff5a710119d01"
+}

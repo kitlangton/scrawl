@@ -3,7 +3,7 @@
   "id": "agent",
   "kind": "npm",
   "package": "agent",
-  "inputs": ["agent/", "engine/sdk/"],
+  "inputs": ["agent/"],
   "verify": ["test"],
   "build": "build",
   "targets": ["linux-x64"],
