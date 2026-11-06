@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
@@ -220,9 +220,9 @@ function exactUtf8(text: unknown): { bytes: Buffer } | { reason: 'invalid-text' 
   return bytes.length > MAX_UTF8_TEXT_BYTES ? { reason: 'too-large' } : { bytes };
 }
 
-function clipboardResult(value: unknown, expectedBytes: number): NativeClipboardWriteResult {
+function clipboardResult(value: unknown, expectedBytes: number, expectedDigest: string): NativeClipboardWriteResult {
   if (exact(value, ['status', 'digest', 'byteLength']) && value.status === 'applied'
-    && typeof value.digest === 'string' && /^[a-f0-9]{64}$/.test(value.digest)
+    && typeof value.digest === 'string' && value.digest === expectedDigest
     && Number.isSafeInteger(value.byteLength) && value.byteLength === expectedBytes) {
     return { status: 'applied', digest: value.digest, byteLength: expectedBytes };
   }
@@ -252,7 +252,7 @@ export function createNativeClipboardPort(): NativeClipboardPort {
         const value = await request(target, 'writeClipboardText', {
           observed: { processEpoch: epoch, revision }, text,
         });
-        return clipboardResult(value, encoded.bytes.length);
+        return clipboardResult(value, encoded.bytes.length, createHash('sha256').update(encoded.bytes).digest('hex'));
       } catch (error) {
         if (error instanceof RequestFrameTooLarge) return { status: 'refused', reason: 'too-large' };
         return { status: 'outcome-unknown' };

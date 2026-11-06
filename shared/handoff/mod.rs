@@ -271,7 +271,7 @@ pub fn copy_string_to_clipboard_verified(content: &str) -> VerifiedClipboardText
         }
         let after = pasteboard.changeCount();
         let actual = unsafe { pasteboard.stringForType(NSPasteboardTypeString) };
-        if pasteboard_write_confirmed(before as isize, after as isize, actual.is_some_and(|text| text.to_string() == content)) {
+        if pasteboard_write_confirmed(before as isize, after as isize, pasteboard.changeCount() as isize, actual.is_some_and(|text| text.to_string() == content)) {
             VerifiedClipboardTextWrite::Applied
         } else {
             VerifiedClipboardTextWrite::OutcomeUnknown
@@ -293,8 +293,8 @@ pub fn copy_string_to_clipboard_verified(content: &str) -> VerifiedClipboardText
 }
 
 #[cfg(target_os = "macos")]
-fn pasteboard_write_confirmed(before: isize, after: isize, exact_readback: bool) -> bool {
-    after > before && exact_readback
+fn pasteboard_write_confirmed(before: isize, after: isize, after_readback: isize, exact_readback: bool) -> bool {
+    after > before && after == after_readback && exact_readback
 }
 
 #[cfg(target_os = "macos")]

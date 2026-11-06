@@ -353,3 +353,9 @@ test('clipboard stale, busy, unavailable, malformed receipt, and lost reply stay
     assert.equal(dispatches, 1);
   }
 });
+
+test('clipboard refuses a different digest even when its byte length matches', async () => {
+  await withSocket(() => ({ status: 'applied', digest: '0'.repeat(64), byteLength: 5 }), async () => {
+    assert.deepEqual(await createNativeClipboardPort().writeText('exact', expected), { status: 'outcome-unknown' });
+  });
+});

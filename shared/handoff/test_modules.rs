@@ -3,9 +3,10 @@ use super::*;
 #[cfg(target_os = "macos")]
 #[test]
 fn pasteboard_write_requires_advance_and_exact_string_type_readback() {
-    assert!(pasteboard_write_confirmed(11, 12, true));
-    assert!(!pasteboard_write_confirmed(11, 11, true));
-    assert!(!pasteboard_write_confirmed(11, 12, false));
+    assert!(pasteboard_write_confirmed(11, 12, 12, true));
+    assert!(!pasteboard_write_confirmed(11, 12, 13, true));
+    assert!(!pasteboard_write_confirmed(11, 11, 11, true));
+    assert!(!pasteboard_write_confirmed(11, 12, 12, false));
 }
 
 #[cfg(test)]
