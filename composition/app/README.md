@@ -21,8 +21,11 @@ shell simply presents it. Tests generate small contributions with independent
 synthetic preferences; this is persistence proof, not a production config API
 or a security boundary between trusted streams. Future owners choose their
 supported persistence/credential adapter; no renderer receives Node or generic
-filesystem IPC.
-There is intentionally no preload bridge until a real capability requires one.
+filesystem IPC. The default empty shell ships a narrow preload facade for fixed
+Onboarding progress read/CAS calls, but has no registered handler unless a trusted
+main binding is supplied at build time. It exposes no generic IPC, filesystem or
+config-path operation. The route is bound to the exact main frame and local entry
+URL, then revoked on navigation or window close.
 
 `@apparent/app-contracts/host` defines the API 1 owner host seam. A compiled-in
 `ContributionFactory` declares its own dependency type; composition binds the
@@ -32,12 +35,55 @@ owner adapter.
 `ProgressStore` matches the Onboarding `read`/`compareAndSwap` shape. Its codec
 belongs to the owner and handles initial and legacy values. The app adapter only
 delegates to a transactional backend; it has no filesystem writer or JS
-read-modify-write fallback. Production still needs the authoritative config
-transaction provider that atomically preserves unrelated keys and implements
-revisioned CAS. The current configuration writer path is
-`shared/handoff/config_store.rs` -> `connect/client/src/config/store.rs`; it must
-be extended or replaced at its owning boundary before this seam can persist
-real settings. No writer is installed here.
+read-modify-write fallback. `composition/app/scripts/build.ts` accepts one trusted
+compiled main binding, its published Onboarding assets, and the exact staged config
+helper plus digest. It copies and hashes those inputs into the shell inventory;
+runtime code derives the config file from Electron's user data directory and fixes
+the helper path inside the application. No renderer input selects an owner, executable, config path or key.
+The existing foundation profile override remains a trusted launcher input. A build without these inputs
+keeps the empty shell usable and registers no progress handler.
+
+After explicit owner bootstrap and the legacy-writer compatibility gate succeed,
+a composition assembly module can bind the published public package exports:
+
+```ts
+import { createConfigBackend } from '@apparent/config-host';
+import { onboardingProgressCodec } from '@apparent/onboarding';
+import { bindOwnerProgress } from './host-services.js';
+
+export async function createOnboardingProgressStore({ configPath, configHostPath }) {
+  const backend = await createConfigBackend({ executable: configHostPath,
+    executableSha256: ONBOARDING_CONFIG_HOST_SHA256, configPath, ownerId: 'onboarding' });
+  return { store: bindOwnerProgress(backend, 'onboarding', onboardingProgressCodec),
+    close: () => backend.close() };
+}
+```
+
+The binding module is compiled into `owner-binding.mjs`; main supplies only its
+fixed config path and the helper copied into the app. Do not retire the legacy
+writer or adopt installed user state automatically: quiesce the old writer and
+make cutover explicit. The native integration test uses a separate synthetic
+config, retires its unused legacy writer, adopts through
+`adoptOnboardingProgress`, and verifies that unrelated keys and legacy bytes
+remain. This seam does not switch the installed route or finish Record injection,
+coaching or full factory activation. Optional renderer injection is adapted inside
+composition; the shared no-props `StreamModule` ABI remains unchanged.
+
+The assembly caller supplies the published package resolution root and matching
+assets at build time:
+
+```ts
+await buildShell(shellOutput, {
+  module: compiledCompositionBinding,
+  configHost: { path: attestedLinuxHelper, sha256: attestedHelperSha256 },
+  ownerAssets: publishedOnboardingAssets,
+  resolvePaths: [publishedPackagesNodeModules],
+});
+```
+
+The helper path/hash are admission inputs to this build call, not runtime app
+settings. Onboarding retirement/adoption decisions belong in the supplied
+composition binding and must be explicit for the target config.
 
 Coaching views use bounded declarative content, placement, and owner-allowlisted
 identifiers validated against a compiled-in view list.
@@ -132,3 +178,11 @@ the current installed route until replacement acceptance; remove each old route
 only after its remaining consumers and packaging inputs are verified. Until then,
 rollback is to close this separate development application; existing Apparent
 continues to run normally.
+
+The bridge unit tests cover deterministic promotion/revocation, registration
+rollback/successors and destroyed-window cleanup. The explicit native Electron
+lane is `APPARENT_ONBOARDING_CONFIG_HOST=<verified-helper> npm run test:electron:onboarding`
+(use Xvfb and the existing sandbox helper on Linux). It consumes the pinned Linux
+or macOS helper artifact, exercises real packaged main/preload/renderer calls,
+and requires privileged host cleanup to finish before application exit. No Rust
+compilation is added to the normal TypeScript check loop.

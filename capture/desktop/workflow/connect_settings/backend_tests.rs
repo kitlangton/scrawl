@@ -274,6 +274,10 @@ fn login_approval_is_consumed_by_read_then_activation_starts_worker_once() {
 fn eof_after_terminal_login_before_activation_revokes_and_never_starts_worker() {
     let fixture = Fixture::new();
     let (backend, started, release) = fake();
+    // Hold revocation between the attempt counter and the committed effect so
+    // observing the counter cannot accidentally stand in for completed cleanup.
+    let (finish_disable, disable_gate) = mpsc::channel();
+    *backend.disable_gate.lock().unwrap() = Some(disable_gate);
     let mut session = Session::start(&fixture.config, backend.clone());
     session.read();
     session.command("login", None);
@@ -301,6 +305,9 @@ fn eof_after_terminal_login_before_activation_revokes_and_never_starts_worker() 
     session.close();
     assert!(!allowed());
     wait_for(|| backend.disables.load(Ordering::SeqCst) == 1);
+    assert!(backend.state.lock().unwrap().uploads_enabled);
+    finish_disable.send(()).unwrap();
+    wait_for(|| !backend.state.lock().unwrap().uploads_enabled);
     assert_eq!(workers.load(Ordering::SeqCst), 0);
     assert!(!backend.state.lock().unwrap().uploads_enabled);
 }
