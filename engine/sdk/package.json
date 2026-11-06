@@ -1,6 +1,6 @@
 {
   "name": "@apparent/engine-sdk",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "type": "module",
   "files": ["dist", "README-media2.md"],
@@ -9,6 +9,7 @@
     "./testing": { "types": "./dist/src/testing.d.ts", "import": "./dist/src/testing.js" },
     "./media": { "types": "./dist/src/media.d.ts", "import": "./dist/src/media.js" },
     "./media/testing": { "types": "./dist/src/media-testing.d.ts", "import": "./dist/src/media-testing.js" },
+    "./observations": { "types": "./dist/src/observations/index.d.ts", "import": "./dist/src/observations/index.js" },
     "./media2": { "types": "./dist/src/media2/index.d.ts", "import": "./dist/src/media2/index.js" },
     "./capture": { "types": "./dist/src/capture.d.ts", "import": "./dist/src/capture.js" },
     "./capture/testing": { "types": "./dist/src/capture-testing.d.ts", "import": "./dist/src/capture-testing.js" }

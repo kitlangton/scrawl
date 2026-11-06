@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto'
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
+
+export const VISUAL_OBSERVATIONS = { schema: 'apparent.frame-observation-profile/1', appliesTo: 'media/2-frame-png', chunkType: 'apOB', algorithm: 'apparent.visual-luma/1' } as const
+export function validateObservationAdvertisement(value: unknown, media2: boolean) {
+  if (value !== undefined && (!media2 || !isDeepStrictEqual(value, VISUAL_OBSERVATIONS))) throw new Error('unsupported visual observation profile')
+}
 
 export type InventoryEntry = { path: string; mode: number; sha256: string }
 export type MediaManifest = {
@@ -8,6 +14,7 @@ export type MediaManifest = {
   capabilities: ['media/1'] | ['media/1', 'media/2']; media2Launch?: { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2']; sharesCaptureRuntime: true }; launch: { entry: 'apparent-engine-frames'; argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1']; worker: 'libexec/apparent-engine-frames'; pathLookup: false; runtimeBuilds: false }
   environment: { osRelease: string; kernel: string; architecture: 'x86_64'; rustc: string; cargo: string; gstreamer: string; glibc: string; pluginSource: string; plugins: string[]; baseline: string[] }
   runtimeFiles: InventoryEntry[]
+  visualObservations?: typeof VISUAL_OBSERVATIONS
 }
 
 export const REQUIRED_PLUGINS = ['libgstcoreelements.so', 'libgsttypefindfunctions.so', 'libgstplayback.so', 'libgstapp.so', 'libgstvideoconvertscale.so', 'libgstisomp4.so', 'libgstlibav.so'] as const
@@ -28,6 +35,7 @@ export function validateArtifact(directory: string): MediaManifest {
   const manifestPath = resolve(root, 'manifest.json'); const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as MediaManifest
   if (manifest.schema !== 1 || !/^[0-9a-f]{40}$/.test(manifest.sourceSha) || manifest.target !== 'linux-x64' || manifest.rustTriple !== 'x86_64-unknown-linux-gnu' || !['["media/1"]', '["media/1","media/2"]'].includes(JSON.stringify(manifest.capabilities))) throw new Error('unsupported media artifact identity')
   const media2 = manifest.capabilities.length === 2
+  validateObservationAdvertisement(manifest.visualObservations, media2)
   const media2Identity = { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'], sharesCaptureRuntime: true }
   if (media2 ? JSON.stringify(manifest.media2Launch) !== JSON.stringify(media2Identity) : manifest.media2Launch !== undefined) throw new Error('unsupported retained media launch identity')
   if (manifest.launch.entry !== 'apparent-engine-frames' || JSON.stringify(manifest.launch.argv) !== JSON.stringify(['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1']) || manifest.launch.worker !== 'libexec/apparent-engine-frames' || manifest.launch.pathLookup !== false || manifest.launch.runtimeBuilds !== false) throw new Error('unsupported media launch identity')

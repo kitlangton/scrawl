@@ -1,5 +1,52 @@
 # Retained-material derivative/2 contract
 
+SDK0.4.2 adds the Rust-free offline export
+`@apparent/engine-sdk/observations: readFrameVisualObservations(input)`.
+Supply the original `document`, validated `materials`, ordered 1-based
+`requestIndex`, sealed `pngBytes` and explicit `maxFileBytes` budget. It validates
+the original derivative request/layout/material/lease binding and full PNG seal,
+then returns raw measurements plus that source identity, clock and collection
+references. It performs no I/O, decode, selection, dispatch or material release.
+Offline consistency is not native issuance: retain authenticated Media2Client
+completion and native registry authority for publication.
+
+Optional media/2 frame PNG profile `apOB` is ancillary, private and unsafe to copy
+after image transformations. A native producer measures the exact final decoded
+RGBA8 plane immediately before lossless PNG encoding; no later resize or colour
+rewrite is permitted before sealing. Contact sheets and media/1 are unchanged.
+The profile is covered by the existing PNG hash, byte length and file identity.
+Old jobs/outputs return `state: 'unavailable'` with reason
+`observation-profile-absent`; recognized future versions return unsupported.
+Malformed, contradictory or duplicate profiles throw, including bad CRC, dimensions,
+length, grid shape and nonfinite/out-of-range cells. PNG chunk walking is bounded
+to 16,384 chunks and the caller's file budget; no pixel decompression occurs here.
+The existing Node>=22.6 floor is retained: the CRC primitive is
+[`node:zlib.crc32`, available since Node22.2](https://nodejs.org/download/release/v22.23.0/docs/api/zlib.html#zlibcrc32data-value).
+
+Profile bytes are ASCII `APOBS001`, then little-endian width/height u32, region
+columns/rows u16, 2,304 thumbnail f32 cells, then columns*rows region f32 cells.
+The maximum is 74,772 bytes. Dimensions must match both PNG IHDR and the selected
+receipt; regions are exactly min(width,128) by min(height,128). All cells are
+row-major native float32 in [0,1], exposed unchanged as JS numbers. PNG lengths
+and CRC retain standard big-endian encoding.
+The single `apOB` chunk follows the complete IDAT sequence and precedes IEND;
+the reader rejects an observation block before image data or interleaved IDAT.
+
+The 64×36 thumbnail samples cell centres using native f32 encoded-RGB
+`(0.2126R+0.7152G+0.0722B)/255`, ignoring alpha, without gamma linearization.
+The region grid preserves the donor's integer luma `((54R+183G+19B)>>8)`, sampled
+cells as `f32(sum)/255.0/f32(max(count,1))` in that native f32 operation order,
+with step `max(floor(max(width,height)/512),1)`. Thumbnail products, left-associated
+sum and final division likewise use f32 arithmetic; no f64 recomputation is stored.
+These observations describe the requested **decoded derivative dimensions**:
+resizing does not promise numeric or selector parity with unscaled donor input.
+Record chooses an adequate common decode size and compatible planes, owns all
+scene/region comparisons, thresholds, grouping, novelty and final frame policy,
+and may use `Math.fround` for donor comparison fidelity. Pixel measurements do
+not infer interactions, marks or strokes. Capture candidates remain unavailable
+until a real collector exists. The SDK export alone establishes no native
+profile availability, standard selector readiness or supported-platform proof.
+
 Public SDK export: `@apparent/engine-sdk/media2`. SDK0.4.0 froze the types and
 offline validators for Record's additive staging adapter. SDK0.4.1 adds an
 explicitly negotiated client and process transport. This supplies no native job

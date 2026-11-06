@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { Media2Client, launchMedia2Worker, validateDerivative2Document, type Media2JobInput } from '../sdk/src/media2/index.ts';
+import { readFrameVisualObservations } from '../sdk/src/observations/index.ts';
 import { validateMaterialsDocument } from '../sdk/src/capture-documents/index.ts';
 import { createMediaJobId, launchMediaWorker, MediaChildProcessTransport, MediaClient, MediaRpcError, type DecodeRequest, type MediaJobStatus } from '../sdk/src/media.ts';
 
@@ -359,6 +360,23 @@ test('packaged retained media/2 decodes H264 with native seals and cold recovery
       const info = await stat(join(input.request.outputDirectory, image.file.relativePath), { bigint: true });
       assert.deepEqual({ device: String(info.dev), inode: String(info.ino), size: Number(info.size), modifiedNs: String(info.mtimeNs) }, image.file.identity);
     }
+    const observations = [];
+    for (const frame of envelope.payload.frames) {
+      const pngBytes = await readFile(join(input.request.outputDirectory, frame.file.relativePath));
+      const observation = readFrameVisualObservations({ document: status.derivative, materials, requestIndex: frame.requestIndex, pngBytes, maxFileBytes: 4 * 1024 * 1024 });
+      assert.equal(observation.state, 'measured', 'new native frame PNGs carry the sealed observation profile');
+      if (observation.state !== 'measured') assert.fail('native observations missing');
+      assert.equal(observation.source.jobId, input.request.jobId);
+      assert.equal(observation.source.leaseId, input.request.leaseId);
+      assert.deepEqual(observation.source.materials, input.request.materials);
+      assert.deepEqual(observation.source.clock, materials.payload.clock);
+      assert.deepEqual(observation.pixels, { width: frame.width, height: frame.height, origin: 'decoded-derivative-rgba8', alpha: 'ignored' });
+      assert.equal(observation.regions.columns, Math.min(frame.width, 128));
+      assert.equal(observation.regions.rows, Math.min(frame.height, 128));
+      observations.push(observation);
+    }
+    assert.deepEqual(observations[0].thumbnail, observations[3].thumbnail, 'duplicate decoded planes retain the same raw measurements');
+    assert.deepEqual(observations[0].regions, observations[3].regions);
     await media.close();
     media = new Media2Client(launchMedia2Worker(resolve(binary!), f.runtime));
     await media.handshake();

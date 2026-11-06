@@ -437,6 +437,13 @@ impl RetainedPreparation {
             self.total_pixels <= 64_000_000,
             "frame pixel budget exceeded"
         );
+        let observations =
+            crate::observations::apobs001_profile(&frame.rgba, frame.width, frame.height)
+                .ok_or_else(|| anyhow::anyhow!("invalid RGBA plane for APOBS001 profile"))?;
+        ensure!(
+            observations.len() <= crate::observations::APOBS001_MAX_BYTES,
+            "APOBS001 profile exceeds its byte bound"
+        );
         let mut png_bytes = Vec::new();
         {
             let mut encoder = png::Encoder::new(&mut png_bytes, frame.width, frame.height);
@@ -444,6 +451,7 @@ impl RetainedPreparation {
             encoder.set_depth(png::BitDepth::Eight);
             let mut writer = encoder.write_header()?;
             writer.write_image_data(&frame.rgba)?;
+            writer.write_chunk(png::chunk::ChunkType(*b"apOB"), &observations)?;
             writer.finish()?;
         }
         let index = self.next_index + 1;
@@ -630,6 +638,28 @@ mod tests {
     use std::io::Write;
     use std::os::unix::fs::MetadataExt;
 
+    fn png_chunks(bytes: &[u8]) -> Vec<([u8; 4], &[u8])> {
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+        let mut chunks = Vec::new();
+        let mut offset = 8;
+        while offset < bytes.len() {
+            assert!(offset + 12 <= bytes.len(), "truncated PNG chunk");
+            let length = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+            let end = offset
+                .checked_add(12 + length)
+                .expect("PNG chunk length overflow");
+            assert!(end <= bytes.len(), "PNG chunk extends beyond file");
+            let kind: [u8; 4] = bytes[offset + 4..offset + 8].try_into().unwrap();
+            chunks.push((kind, &bytes[offset + 8..offset + 8 + length]));
+            offset = end;
+            if kind == *b"IEND" {
+                break;
+            }
+        }
+        assert_eq!(offset, bytes.len(), "bytes follow PNG IEND");
+        chunks
+    }
+
     #[cfg(feature = "materials-media")]
     #[derive(Default)]
     struct MemorySink {
@@ -717,12 +747,31 @@ mod tests {
         assert_eq!(&first[..8], b"\x89PNG\r\n\x1a\n");
         assert_ne!(first, second);
         assert_eq!(second, duplicate);
+        let chunks = png_chunks(second);
+        assert_eq!(chunks.iter().filter(|(kind, _)| kind == b"apOB").count(), 1);
+        assert_eq!(chunks[chunks.len() - 2].0, *b"apOB");
+        assert_eq!(chunks.last().unwrap().0, *b"IEND");
+        let attached_profile = chunks.iter().find(|(kind, _)| kind == b"apOB").unwrap().1;
         let decoder = png::Decoder::new(std::io::Cursor::new(second));
         let mut reader = decoder.read_info().unwrap();
         assert_eq!((reader.info().width, reader.info().height), (2, 1));
         let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
-        reader.next_frame(&mut pixels).unwrap();
-        assert_eq!(pixels[0], 20);
+        let decoded = reader.next_frame(&mut pixels).unwrap();
+        let decoded_rgba = &pixels[..decoded.buffer_size()];
+        let source_rgba = [20, 0, 0, 255, 20, 0, 0, 255];
+        assert_eq!(decoded_rgba, source_rgba);
+        let decoded_profile = crate::observations::apobs001_profile(decoded_rgba, 2, 1).unwrap();
+        assert_eq!(attached_profile, decoded_profile.as_slice());
+        assert_eq!(
+            payload["frames"][1]["file"]["identity"]["size"],
+            second.len() as u64,
+            "the sealed size includes the apOB chunk"
+        );
+        assert_eq!(
+            payload["frames"][1]["file"]["sha256"],
+            hex(&Sha256::digest(second)),
+            "the sealed digest includes the apOB chunk"
+        );
         assert_eq!(sink.files.get("receipt.json"), Some(&payload_bytes));
         let envelope: Value = serde_json::from_slice(&envelope_bytes).unwrap();
         assert_eq!(envelope["payload"], payload);
