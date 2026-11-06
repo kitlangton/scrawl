@@ -74,3 +74,10 @@ analytics fixtures stay private to the producer and are never uploaded.
 
 PR readiness is established from the affected owner workflows directly. Each owner
 retains its own checks, builds, permissions and publication gates.
+
+App Shell's Linux Electron prerequisite setup uses its locked Playwright Chromium
+package list through the same isolated signed HTTPS Ubuntu installer. The complete
+installer process group has a 240-second deadline; acquisition timeouts and one
+retry bound mirror stalls without changing tests or workflow budgets. Architecture
+checker installs retain `npm ci` and integrity checks, with a lockfile-keyed npm
+download cache and offline preference; cached packages do not replace fresh checks.

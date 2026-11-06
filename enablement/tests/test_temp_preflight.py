@@ -89,8 +89,10 @@ class TempPreflightTests(unittest.TestCase):
                 verification, 'run_connect_client_typescript_tests') as client_tests, patch.object(
                 verification, 'run_app_shell_check') as app_check, patch.object(
                 verification, 'run_record_typescript_check') as record_check, patch.object(
-                verification, 'run_onboarding_package_check') as onboarding_check:
+                verification, 'run_onboarding_package_check') as onboarding_check, patch.object(
+                verification, 'run_architecture_check') as architecture_check:
             verification.run_pr_checks()
+        architecture_check.assert_called_once_with([])  # Unknown history requests all owners.
         public_build.assert_called_once_with()  # Unknown history includes Public feedback.
         client_tests.assert_called_once_with()  # Keep owner checks selected without live dependency setup.
         commands = [call.args[0] for call in run.call_args_list]
