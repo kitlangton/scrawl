@@ -139,18 +139,20 @@ exclusion or production adoption.
 Run from the repository root:
 
 ```
-cargo test --manifest-path capture/engine/Cargo.toml --offline
-cargo build --manifest-path capture/engine/Cargo.toml --offline
-cargo fmt --manifest-path capture/engine/Cargo.toml -- --check
-cargo tree --manifest-path capture/engine/Cargo.toml --offline
+cargo test --manifest-path engine/core/Cargo.toml --offline
+cargo build --manifest-path engine/core/Cargo.toml --offline
+cargo fmt --manifest-path engine/core/Cargo.toml -- --check
+cargo tree --manifest-path engine/core/Cargo.toml --offline
 ```
 
 The package pins cached libc/serde/serde_json dependencies and has its own small,
-unmodified Cargo-generated lockfile. Root Cargo.toml/Cargo.lock and CI are
-unchanged: this is a staged package, not a final workspace/lock policy decision.
-There are no Agent, GPUI, recorder or product dependencies. The target branch's
-repository hooks remain unchanged; no integration-branch line-cap or lockfile
-policy is imported. Historical macOS package build/process proof is retained
+unmodified Cargo-generated lockfile. Root Cargo.toml/Cargo.lock remain unchanged;
+verification selectors and pre-push contracts now check the moved core and
+standalone provider while retaining root checks for legacy capture code.
+There are no Agent, GPUI, recorder or product dependencies. This move does not
+change the workspace/lock policy or line-cap rules. Applicable native-producer
+PR checks verify the moved package on Linux and macOS before merge.
+Historical macOS package build/process proof is retained
 for source-identical code, not a fresh run on this port. Native capture/media
 acceptance and both products' real integration remain separate gates.
 

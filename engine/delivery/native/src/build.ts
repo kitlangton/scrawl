@@ -34,7 +34,7 @@ mkdirSync(output, { recursive: true })
 const cargoTargetDir = resolve(packageRoot, '.build', 'cargo-target')
 const cargoCommon = ['--locked', '--target', targetConfig.triple, '--target-dir', cargoTargetDir]
 if (process.env.APPARENT_CARGO_OFFLINE === '1') cargoCommon.push('--offline')
-execFileSync('cargo', ['test', ...cargoCommon, '--manifest-path', resolve(repositoryRoot, 'capture/engine/Cargo.toml')], { cwd: repositoryRoot, stdio: 'inherit' })
+execFileSync('cargo', ['test', ...cargoCommon, '--manifest-path', resolve(repositoryRoot, 'engine/core/Cargo.toml')], { cwd: repositoryRoot, stdio: 'inherit' })
 execFileSync('cargo', ['test', ...cargoCommon, '--manifest-path', manifestPath], { cwd: repositoryRoot, stdio: 'inherit' })
 execFileSync('cargo', ['build', ...cargoCommon, '--release', '--manifest-path', manifestPath], { cwd: repositoryRoot, stdio: 'inherit' })
 const binary = resolve(cargoTargetDir, targetConfig.triple, 'release', 'apparent-engine')

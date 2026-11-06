@@ -135,10 +135,11 @@ At the decision's starting revision (`d11ecd29`):
 - Desktop/Agent policy and CLI behavior still live partly in Rust, including
   root composition and shared config/handoff modules. Existing bridge routes
   are not proof those owners have independent development loops.
-- Production Engine modules are compiled into the root application.
-  `capture/engine/src` is a staged admission/receipt package with no production
-  recording callers; it is not an adopted standalone capture engine. See its
-  [current adoption limits](../../capture/engine/README.md).
+- Legacy Engine runtime, bundle, export and native modules remain compiled into
+  the root application from `capture/engine/`. `engine/core` is the standalone
+  Store/admission crate consumed by the native Engine provider; it does not
+  replace the legacy recorder. See its [core contract](../../engine/core/README.md)
+  and the [legacy adoption limits](../../capture/engine/README.md).
 - `enablement/verification.py` has a bounded Connect browser-file selector;
   unknown/shared inputs conservatively broaden verification. Other owner and
   build-hook routes must be audited before claiming Rust-free change selection.

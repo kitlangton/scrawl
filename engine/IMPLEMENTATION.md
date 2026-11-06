@@ -9,7 +9,7 @@ are verified. A source package or producer build does not establish adoption.
 
 | Scoped capability | Current standalone state | Required acceptance / consumer return condition |
 | --- | --- | --- |
-| Installable runtime and discovery | The native producer packages the unavailable capture provider; Linux frames worker has real local/guest conformance. Media packaging is in progress. | Verified package-contained executable/runtime inventory, supported launch/discovery route, SDK interoperability without consumer Cargo, and applicable main-CI/artifact gates. Notify Record and Agent separately when media becomes usable. |
+| Installable runtime and discovery | The capture-v1 producer remains unavailable. The packaged Linux media/1 runtime and discovery were delivered at PR722 (`463f0053`), with exact-artifact handoff to Record and Agent. SDK0.3.1 adds capture/2 document/client preflight, without native capture/2 availability. | Preserve published packages/contracts. The repaired capture/2 candidate is unmerged; its native adoption and platform gates remain open. |
 | Real capture and readiness | Capture-v1 admission, durable identity/receipts and SDK exist. Native handshake remains unavailable; starts fail without media. | Real first-frame readiness, authoritative permission/source facts, authenticated start/inspect/stop/cancel, durable valid native artifact, EOF/crash reconciliation and consumer integration on macOS/Linux. Never substitute a reference-peer receipt. |
 | Native input, picker, drawing and capture exclusion | No standalone published capability. Platform owns the existing permission/shortcut Host transport; Record owns workflow and local-only/pen policy. | Publish actual input/geometry/exclusion facts and enforced native operations, with explicit unavailable methods. Coordinate existing Host mechanics rather than duplicate them. A stored preference or admission lock is not shortcut reservation, accepted drawing or local-only proof. |
 | Frame decoding and media measurements | SDK 0.2 `media/1` and Linux worker are implemented; macOS decoder is absent. | Installable Linux runtime/discovery plus real conformance; separate macOS implementation/proof. Preserve source identity, ordering/clocks, leases, bounded jobs, cancellation and durable PNG references. Visual measurements needed by Record policy remain unpublished. |
@@ -17,11 +17,24 @@ are verified. A source package or producer build does not establish adoption.
 | Transcription, reprocessing and recovery | Legacy native inference/recovery exists; no standalone SDK seam. | Provider/model readiness and bounded inference/media/recovery operations, stable time-aligned results and safe publication/reconciliation. Record assembles standard bundles; Agent calls Record's headless API for standard regeneration and Engine for specific native operations. |
 | Retention, pinning and active-use protection | Staged native read/maintenance leases exist. Legacy retention does not participate; there is no published SDK maintenance/pinning API. | Bounded, identity-checked filesystem/media operations enforcing live-reader/capture/delivery exclusions and durable pin/publication rules. Record supplies eligibility/scheduling policy; preserve existing pending-transfer protections and verify participating readers/writers before claiming coordination. |
 
-The next mergeable outcome is the packaged Linux frames runtime. The existing
-packaging implementation owner and completion route remain active. Its completion
-does not close capture, macOS media, export, inference or maintenance acceptance.
-After that outcome, continue with the next compatible native capability needed
-by actual consumers; publish its contract before consumer integration can proceed.
+## Extraction and donor removal
+
+Move existing native execution into top-level `engine/`, with minimal adapters;
+do not retain a permanent Engine dependency on `capture/`. The immediate slice
+moves the existing core crate and tests byte-for-byte (except documentation).
+Unmerged capture/2 repairs and their evidence are preserved separately. No native
+reuse percentage is claimed. Published SDK and Record output ownership remain.
+
+| Donor | Move/reuse destination and unavoidable boundary | Verification / removal condition |
+| --- | --- | --- |
+| `capture/engine/{src,tests,Cargo.toml,Cargo.lock}` | Existing crate moves to `engine/core`; no new execution or storage behavior in this slice. | All build/test/package references point to the moved crate; source/tests preserved and old crate files removed. |
+| `capture/desktop/linux/capture/media.rs` | Extract existing Recorder/Source, encoder, timing, finish and media execution into Engine; replace Desktop/Sampler coupling with explicit inputs/callbacks. | Verify both existing callers and standalone SDK/native package, then remove the donor execution code. The parallel unmerged X11 recorder must converge on this donor. |
+| `capture/desktop/linux/capture/portal.rs` | Move stream mechanics into Engine with explicit selection/consent inputs; retain product policy with its owner. | Actual selected-output identity and portal consent proof; convert callers before deleting donor code. |
+| `capture/engine/native/{Media,Export,LiveTranscribe}.swift` | Adapt/package existing native execution under `engine/`; new code limited to demonstrated SDK/ownership gaps. | Preserve active reservations; affected macOS compilation/native proof and converted build/package inputs before donor removal. |
+
+New durable protocol identity/reconnect adapters may be necessary; new capture,
+media or filesystem execution requires a concrete gap in the existing donor.
+This extraction does not close publication, macOS, export, inference or retention.
 
 ## Contracts and return routes
 
