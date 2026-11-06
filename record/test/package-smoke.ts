@@ -1,13 +1,13 @@
 /** Verify the packed artifact in consumers that cannot see repository siblings. */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { runQualification } from './native-qualification/native-qualification.ts';
+import { checkGeneratedNodeScript, runQualification } from './native-qualification/native-qualification.ts';
 
 const run = promisify(execFile);
 const scratch = await mkdtemp(path.join(tmpdir(), 'record-packed-'));
@@ -199,7 +199,7 @@ try {
     const capture2 = path.join(scratch, 'capture2');
     await initConsumer(capture2);
     await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact, 'react@19.2.0', 'react-dom@19.2.0'], { cwd: capture2 });
-    const capture2Result = await runQualification(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
+    const nativeScript = `
       import assert from 'node:assert/strict';
       import {createHash} from 'node:crypto';
       import {spawn} from 'node:child_process';
@@ -220,7 +220,7 @@ try {
       import {assembleCanonicalBundle} from '@apparent/record/processing/bundle';
       import {prepareRecordPublication} from '@apparent/record/publication';
       import {preflightCapturePublication} from '@apparent/engine-sdk/capture';
-      const {reconcileAndCancel,runBounded,trackChild,waitForExit} = await import(pathToFileURL(process.env.APPARENT_QUALIFICATION_HELPERS).href);
+      const {reconcileAndCancel,runBounded,runCleanupSteps,trackChild,waitForExit} = await import(pathToFileURL(process.env.APPARENT_QUALIFICATION_HELPERS).href);
 
       const archive = path.resolve(process.env.APPARENT_CAPTURE2_ARCHIVE);
       const root = await realpath(await mkdtemp(path.join(tmpdir(), 'record-capture2-native-')));
@@ -228,6 +228,9 @@ try {
       console.log('private native proof root: ' + root);
       const logPath = path.join(root, 'qualification.log');
       await writeFile(logPath, '', {mode:0o600});
+      const emittedScript = path.join(root,'qualification-script.mjs');
+      await copyFile(process.env.APPARENT_QUALIFICATION_SCRIPT_PATH,emittedScript);
+      await chmod(emittedScript,0o600);
       const recordLog = async (label, value) => {
         const line = label + ' ' + JSON.stringify(value);
         console.log(line);
@@ -308,12 +311,13 @@ try {
       const mediaArtifact=await admitArtifact('media',path.resolve(process.env.APPARENT_MEDIA2_ARCHIVE),{sha256:'17a5f71442dc3920a7be5bc4836d186b2da212840ee3f2a2bd811f508ee4625b',size:100853159,files:186});
       assert.deepEqual(acceptance.inventoriesVerified,{media:186,capture:54});
       const capturePayload=captureArtifact.payload, captureManifest=captureArtifact.manifest, mediaPayload=mediaArtifact.payload, mediaManifest=mediaArtifact.manifest;
-      const xvfb = trackChild(spawn('Xvfb', ['-displayfd','1','-screen','0','683x480x24','-nolisten','tcp'], {stdio:['ignore','pipe','pipe']}));
-      let display = '';
-      let scene, client, mediaClient;
+      let xvfb, display = '', scene, client, mediaClient, host, recordRuntime, recordClient, pillHost, mappings;
       let clientClosed = false;
+      let qualificationError;
+      let cleanupErrors = [];
       const previousDisplay = process.env.DISPLAY, previousWayland = process.env.WAYLAND_DISPLAY;
       try {
+        xvfb = trackChild(spawn('Xvfb', ['-displayfd','1','-screen','0','683x480x24','-nolisten','tcp'], {stdio:['ignore','pipe','pipe']}));
         display = await new Promise((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error('owned Xvfb startup deadline')), 5000);
           xvfb.stdout.setEncoding('utf8'); xvfb.stdout.once('data', value => { clearTimeout(timer); resolve(':' + value.trim()); });
@@ -329,11 +333,9 @@ try {
         await Promise.all([runtime,control,bundles].map(dir => mkdir(dir,{mode:0o700})));
         const transport = launchCaptureEngine(path.join(capturePayload, captureManifest.launch.entry), runtime, 40000);
         client = new CaptureClient(transport);
-        const mappings = new SqliteCaptureMappingStore(control);
+        mappings = new SqliteCaptureMappingStore(control);
         const destinations = new AbsentDestinationAllocator(control,bundles);
-        let host = createCapture2Host({client,mappings,destinations});
-        let recordRuntime, recordClient, pillHost;
-        try {
+        host = createCapture2Host({client,mappings,destinations});
           if (sceneSpawnError) throw sceneSpawnError;
           const deadline = Date.now()+150000;
           const waitFor = async (fn, label) => {
@@ -536,29 +538,34 @@ try {
           assert.equal((await host.inspect(cancelId)).phase,'cancelled');
           assert.equal(await lstat(areaMapping.bundlePath).then(()=>true,()=>false),false,'cancel must not create final destination');
           console.log('packed Record capture/2 native Xvfb consumer passed');
-        } finally {
-          await reconcileAndCancel(mappings,client,Date.now()+15000);
-          if(mediaClient) { await mediaClient.close(); mediaClient=undefined; }
-          if(pillHost)disposeWorkflowPillHost(pillHost);
-          recordClient?.detach(); recordRuntime?.dispose();
-          host.dispose();
-          await client.close();
-          clientClosed = true;
-          await waitForExit(scene,1000);
-          await waitForExit(xvfb,1000);
-          console.error('private native proof retained for inspection and recovery: '+root);
-        }
+      } catch (error) {
+        qualificationError = error;
       } finally {
-        try {
-          if (client && !clientClosed) await client.close();
-          if (scene) await waitForExit(scene,1000);
-          await waitForExit(xvfb,1000);
-        } finally {
-          if(previousDisplay===undefined)delete process.env.DISPLAY;else process.env.DISPLAY=previousDisplay;
-          if(previousWayland===undefined)delete process.env.WAYLAND_DISPLAY;else process.env.WAYLAND_DISPLAY=previousWayland;
-        }
+        const cleanupSteps = [];
+        if (mappings && client) cleanupSteps.push({label:'capture reconciliation',run:()=>reconcileAndCancel(mappings,client,Date.now()+15000)});
+        if (mediaClient) cleanupSteps.push({label:'media/2 client close',run:async()=>{await mediaClient.close();mediaClient=undefined;}});
+        if (pillHost) cleanupSteps.push({label:'pill host disposal',run:()=>disposeWorkflowPillHost(pillHost)});
+        if (recordClient) cleanupSteps.push({label:'Record client detach',run:()=>recordClient.detach()});
+        if (recordRuntime) cleanupSteps.push({label:'Record runtime disposal',run:()=>recordRuntime.dispose()});
+        if (host) cleanupSteps.push({label:'capture host disposal',run:()=>host.dispose()});
+        if (client && !clientClosed) cleanupSteps.push({label:'capture client close',run:async()=>{await client.close();clientClosed=true;}});
+        if (scene) cleanupSteps.push({label:'synthetic scene exit',run:()=>waitForExit(scene,1000)});
+        if (xvfb) cleanupSteps.push({label:'owned Xvfb exit',run:()=>waitForExit(xvfb,1000)});
+        cleanupErrors = await runCleanupSteps(cleanupSteps);
+        for (const failure of cleanupErrors) console.error(failure.stack);
+        if(previousDisplay===undefined)delete process.env.DISPLAY;else process.env.DISPLAY=previousDisplay;
+        if(previousWayland===undefined)delete process.env.WAYLAND_DISPLAY;else process.env.WAYLAND_DISPLAY=previousWayland;
+        console.error('private native proof retained for inspection and recovery: '+root);
       }
-    `], { cwd: capture2, timeout: 240000, env: { ...process.env, APPARENT_CAPTURE2_ARCHIVE: archive, APPARENT_MEDIA2_ARCHIVE: mediaArchive, APPARENT_QUALIFICATION_HELPERS: path.join(root, 'test/native-qualification/native-qualification.ts') } });
+      if (qualificationError || cleanupErrors.length) throw new AggregateError([...(qualificationError?[qualificationError]:[]),...cleanupErrors],'native qualification failed; inspect retained proof and cleanup results',{cause:qualificationError});
+    `;
+    const qualificationPacket = await mkdtemp(path.join(tmpdir(),'record-capture2-script-'));
+    await chmod(qualificationPacket,0o700);
+    const qualificationScript = path.join(qualificationPacket,'qualification.mjs');
+    await writeFile(qualificationScript,nativeScript,{mode:0o600});
+    await checkGeneratedNodeScript(nativeScript);
+    console.log('private generated native script packet: '+qualificationScript);
+    const capture2Result = await runQualification(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', nativeScript], { cwd: capture2, timeout: 240000, env: { ...process.env, APPARENT_CAPTURE2_ARCHIVE: archive, APPARENT_MEDIA2_ARCHIVE: mediaArchive, APPARENT_QUALIFICATION_HELPERS: path.join(root, 'test/native-qualification/native-qualification.ts'), APPARENT_QUALIFICATION_SCRIPT_PATH: qualificationScript } });
     process.stdout.write(capture2Result.stdout);
   }
   const sdkDeclarations = path.join(publication, 'consumer.ts');
