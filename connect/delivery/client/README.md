@@ -201,6 +201,16 @@ the prepared uploader and its trusted authorization caller retain those checks.
 An incomplete job/spool publication fails rather than triggering a second writer.
 No installed command or worker uses this API yet; Rust remains the sole writer.
 
+`./sender-upload/authority` reads the authenticated peer registry with one bounded
+GET, reusing the recipient decoder. The caller supplies an already approved server,
+upload grant and public key derived from its current local endpoint identity.
+It validates exact scope, own-key binding, unique peers and classical AGE/Ed25519
+keys, returning detached frozen public facts after rechecking caller freshness.
+This is point-in-time service evidence, not cached authorization for later requests.
+It does not refresh tokens, write state or switch installed callers. The local
+Worker sender fixture uses this reader before every encrypted upload request;
+production worker adoption and credential ownership remain separate gates.
+
 `./sender-upload/encrypted` transfers an already sealed root or grouped
 evidence/media snapshot. Discriminated profile options prevent mixed layouts.
 Before reservation it verifies envelope hashes, signatures, exact signed context

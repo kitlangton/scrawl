@@ -12,6 +12,7 @@
     "./local-status": "./dist/cli/status-state.js",
     "./sender-upload": "./dist/sender/transport.js",
     "./sender-upload/encrypted": "./dist/sender/encrypted-transport.js",
+    "./sender-upload/authority": "./dist/sender/authority.js",
     "./sender-spool": "./dist/sender/spool-reader.js",
     "./recipient-command/renewal": "./dist/state/renewal-owner.js",
     "./recipient-command": "./dist/cli/recipient.js",
