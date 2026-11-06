@@ -20,7 +20,7 @@ test('packed CLI installs offline outside checkout and prints its standalone ski
     };
     const source=fileURLToPath(new URL('..',import.meta.url));
     const metadata=JSON.parse(run([npm,'pack','--ignore-scripts','--json','--pack-destination',root],source));
-    run([npm,'install','--offline','--ignore-scripts','--no-audit','--no-fund','--prefix',root,join(root,metadata[0].filename)]);
+    run([npm,'install','--offline','--no-audit','--no-fund','--prefix',root,join(root,metadata[0].filename)]);
     const cli=resolve(root,'node_modules/@apparent/agent/dist/cli.js');
     assert.equal(run(['--input-type=module','-e',"await import('@apparent/agent')"]),'');
     const packageRoot=resolve(root,'node_modules/@apparent/agent');
@@ -50,8 +50,11 @@ test('packed CLI installs offline outside checkout and prints its standalone ski
         '@apparent/record','@apparent/record/host','@apparent/record/host/capture2','@apparent/record/publication',
         '@apparent/record/processing','@apparent/record/processing/media-consumer','@apparent/engine-sdk/media',
       ]);
-      for(const dependency of ['react','react-dom','electron','@apparent/ui'])
-        assert.equal(await access(join(packageRoot,'node_modules',dependency)).then(()=>true,()=>false),false,`${dependency} must not be installed in the packed Agent closure`);
+      run(['--input-type=module','-e',[
+        "import assert from 'node:assert/strict';import {createRequire} from 'node:module';",
+        "const require=createRequire(new URL('./package.json',import.meta.url));",
+        "for(const name of ['react','react-dom','electron','@apparent/ui'])assert.throws(()=>require.resolve(name),{code:'MODULE_NOT_FOUND'});",
+      ].join('')],packageRoot);
     } finally { await rm(recordConsumer,{force:true}); }
     assert.match(run([cli,'--help']),/Local Apparent/);assert.equal(run([cli,'--version']),'0.1.0\n');
     for (const command of ['inspect', 'record', 'capture', 'frames', 'zoom']) assert.match(run([cli,command,'--help']),/Usage: apparent-agent/);

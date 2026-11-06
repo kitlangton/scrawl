@@ -48,7 +48,7 @@ The legacy Rust command remains until every supported installed/package-manager 
 The standalone npm package includes `apparent-agent-install-local`, which
 accepts a local Agent tarball, its trusted expected SHA-256, a complete native
 media root, its trusted manifest SHA-256, and a fresh absolute prefix. It
-supports Linux x64 only and requires Node 22.6+ plus existing npm. It verifies
+supports Linux x64 only and requires Node 22.13+ plus existing npm. It verifies
 the Agent archive before invoking `npm --offline --ignore-scripts`, checks the
 installed Agent/SDK versions and media export, verifies every regular file,
 mode and hash in the native inventory before and after copying, then requires

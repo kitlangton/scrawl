@@ -58,7 +58,7 @@ entire native inventory against its manifest before and after copying, and
 requires the installed Agent 0.1.0 and a stable SDK 0.2.x or 0.3.x media export.
 It accepts plain patch releases in those lines; new minor lines and prereleases are refused.
 The media/1 handshake remains mandatory. SDK 0.3's
-capture/2 interface does not enable native recording in this installer. Node 22.6+ and
+capture/2 interface does not enable native recording in this installer. Node 22.13+ and
 an existing npm are required.
 
 ```sh
