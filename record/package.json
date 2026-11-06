@@ -57,6 +57,10 @@
       "types": "./dist/backend/processing/media2-consumer.d.ts",
       "import": "./dist/backend/processing/media2-consumer.js"
     },
+    "./processing/retained-artifacts": {
+      "types": "./dist/backend/processing/retained-artifacts.d.ts",
+      "import": "./dist/backend/processing/retained-artifacts.js"
+    },
     "./publication": {
       "types": "./dist/backend/publication/index.d.ts",
       "import": "./dist/backend/publication/index.js"
