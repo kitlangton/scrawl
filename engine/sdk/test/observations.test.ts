@@ -111,4 +111,7 @@ test("PNG walking rejects truncation, trailing data, unknown critical chunks and
   assert.throws(() => readFrameVisualObservations(input(flood)), /bounds/);
   const huge = png(); huge.writeUInt32BE(0xffffffff, 8);
   assert.throws(() => readFrameVisualObservations(input(huge)), /oversized/);
+  assert.throws(() => readFrameVisualObservations(input(png([], 100, 50, [chunk("PLTE", Buffer.alloc(3))]))), /palette/);
+  assert.throws(() => readFrameVisualObservations(input(png([], 100, 50, [chunk("teST", Buffer.alloc(0)), chunk("IDAT", Buffer.from([0]))]))), /nonconsecutive/);
+  assert.throws(() => readFrameVisualObservations(input(png([Buffer.alloc(74_773)]))), /bounds/);
 });

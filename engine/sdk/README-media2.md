@@ -33,7 +33,9 @@ and CRC retain standard big-endian encoding.
 The 64×36 thumbnail samples cell centres using native f32 encoded-RGB
 `(0.2126R+0.7152G+0.0722B)/255`, ignoring alpha, without gamma linearization.
 The region grid preserves the donor's integer luma `((54R+183G+19B)>>8)`, sampled
-cell means divided by255, with step `max(floor(max(width,height)/512),1)`.
+cells as `f32(sum)/255.0/f32(max(count,1))` in that native f32 operation order,
+with step `max(floor(max(width,height)/512),1)`. Thumbnail products, left-associated
+sum and final division likewise use f32 arithmetic; no f64 recomputation is stored.
 These observations describe the requested **decoded derivative dimensions**:
 resizing does not promise numeric or selector parity with unscaled donor input.
 Record chooses an adequate common decode size and compatible planes, owns all
