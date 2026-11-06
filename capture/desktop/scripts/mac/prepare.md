@@ -1,7 +1,7 @@
 # Prepare the device-free Darwin regression packet on Linux
 
 From a clean checkout, freeze the complete candidate and validate the real
-`capture/engine/native/tests/live-transcribe.py` input closure before requesting
+`engine/native/tests/live-transcribe.py` input closure before requesting
 Mac execution. This command launches nothing, allocates nothing and needs only
 Python 3 and Git. It does not replace the separately owned Linux frontend/Rust
 bridge verification command.
@@ -38,7 +38,7 @@ hash, and check the guest prerequisites listed in the receipt. In particular,
 installed. Then run from the repository root:
 
 ```sh
-python3 capture/engine/native/tests/live-transcribe.py
+python3 engine/native/tests/live-transcribe.py
 ```
 
 Retain the actual command, exit, compiler output and candidate identity. The

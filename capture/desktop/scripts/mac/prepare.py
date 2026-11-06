@@ -10,9 +10,9 @@ import re
 import subprocess
 import sys
 
-ENTRY = 'capture/engine/native/tests/live-transcribe.py'
-INPUTS = (ENTRY, 'capture/engine/native/tests/live-transcribe.swift',
-          'capture/engine/native/LiveTranscribe.swift', 'capture/engine/native/Media.swift',
+ENTRY = 'engine/native/tests/live-transcribe.py'
+INPUTS = (ENTRY, 'engine/native/tests/live-transcribe.swift',
+          'engine/native/LiveTranscribe.swift', 'engine/native/Media.swift',
           'shared/native/Info.plist')
 
 
