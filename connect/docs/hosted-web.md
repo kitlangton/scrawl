@@ -111,6 +111,17 @@ scheduled handler remains the single cleanup implementation. The Wrangler
 template has no routes, preview exposure, provider resource IDs or credentials;
 operator configuration and activation remain separate.
 
+The gateway also preserves the existing API/auth/viewer contract on the exact
+`https://hosted.tryapparent.com` host: `/v1[/...]`, `/auth[/...]`, `/s/...`, and
+the four recipient viewer assets dispatch unchanged to the service under its
+legacy root-origin profile. The legacy profile is cached per runtime environment
+and refreshed when its bindings or secrets change, preserving Better Auth's
+environment-scoped initialization behavior. Other hosts and unknown legacy
+paths do not reach the service. Scheduled cleanup delegates once to that same
+service handler; deployment into the existing Worker must retain its current
+bindings and sole cron. This is synthetic compatibility evidence only; it does
+not authorize or prove provider activation.
+
 The web package retains its canonical and legacy documents for Public
 composition. The hosting packager includes only the three canonical documents,
 rewrites browser assets and illustrations under `/connect`, and rejects
