@@ -100,6 +100,36 @@ test('record refuses to imply readiness without explicit Engine paths', async ()
   assert.match(result.stderr, /explicit absolute paths/);
 });
 
+test('record defaults duration to five seconds and rejects invalid or duplicate values before effects', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'apparent-agent-record-default-'));
+  try {
+    const cli = new URL('../dist/cli.js', import.meta.url).pathname;
+    const out = join(root, 'omitted.apparent');
+    const env = { ...process.env, APPARENT_ENGINE_EXECUTABLE: '', APPARENT_ENGINE_RUNTIME: '' };
+    const omitted = spawnSync(process.execPath, [cli, 'record', '--out', out], { encoding: 'utf8', env });
+    assert.equal(omitted.status, 2);
+    assert.match(omitted.stderr, /Set APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME/);
+    assert.equal(omitted.stdout, '');
+    const maximum = spawnSync(process.execPath, [cli, 'record', '--duration', '3600', '--out', join(root, 'maximum.apparent')], { encoding: 'utf8', env });
+    assert.equal(maximum.status, 2);
+    assert.match(maximum.stderr, /Set APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME/);
+    const invalidArgs = [
+      ['--duration', '0'], ['--duration', '3601'], ['--duration', 'invalid'],
+      ['--duration'], ['--duration', '2', '--duration', '3'],
+    ];
+    for (const [index, invalid] of invalidArgs.entries()) {
+      const destination = join(root, `invalid-${index}.apparent`);
+      const result = spawnSync(process.execPath, [cli, 'record', ...invalid, '--out', destination], { encoding: 'utf8', env });
+      assert.equal(result.status, 2);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr.includes('Set APPARENT_ENGINE_EXECUTABLE'), false);
+      await assert.rejects(readFile(destination));
+    }
+    const missing = spawnSync(process.execPath, [cli, 'record', '--duration', '2'], { encoding: 'utf8', env });
+    assert.equal(missing.status, 2); assert.equal(missing.stderr.includes('Set APPARENT_ENGINE_EXECUTABLE'), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('foreground adapter starts only when ready and returns only a saved native receipt', async () => {
   const calls: string[] = []; let state = 'recording';
   const client = {

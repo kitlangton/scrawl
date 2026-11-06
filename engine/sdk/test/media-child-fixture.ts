@@ -43,6 +43,17 @@ process.stdin.on("data", (chunk: string) => {
     const index = buffer.indexOf("\n");
     const request = JSON.parse(buffer.slice(0, index)) as Request;
     buffer = buffer.slice(index + 1);
+    if (mode === "media2-oversized") {
+      process.stdout.write("x".repeat(1024 * 1024 + 1));
+      continue;
+    }
+    if (mode === "media2-unavailable") {
+      const result = request.method === "handshake"
+        ? { result: { channel: "media", protocolVersion: 2, implementation: "test-double", capabilities: { retainedFrames: false, contactSheet: false, nativeJobAuthority: false } } }
+        : { error: { code: "unavailable" } };
+      process.stdout.write(JSON.stringify({ channel: "media", protocolVersion: 2, rpcId: request.rpcId, ...result }) + "\n");
+      continue;
+    }
     if (mode === "bad-utf8") {
       process.stdout.write(Buffer.from([0xff, 0x0a]));
       continue;

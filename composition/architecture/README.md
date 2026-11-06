@@ -8,6 +8,8 @@ CI checks each stream's owner with `npm run check -- --owner record` (or `engine
 
 Agent may consume declared public `@apparent/record` package exports for headless lifecycle work. This dependency does not allow private Record exports, cross-owner source paths, or a reverse Record-to-Agent edge.
 
+Agent may also consume `@apparent/native-host` root and `./clipboard` exports and declare that canonical package dependency. This bounded exception does not permit other composition packages, NativeHost pen/private exports, relative source paths or aliases. NativeHost cannot depend back on Agent; ordinary shell assembly retains its public Agent dependency.
+
 Owners can declare packed-package test loaders in `architecture.json` beside their package. No Platform edit or approval is required. Rules apply only to the named function in a `test/` file, using a constant environment-root plus `node_modules/<package>/<declared public export target>` and `pathToFileURL(...).href`. Private targets, other files/functions and other root expressions remain rejected. The declared package still follows normal dependency directions and export checks. For example:
 
 ```json

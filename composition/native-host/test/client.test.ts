@@ -6,10 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { MAX_SERIALIZED_FRAME_BYTES, MAX_UTF8_TEXT_BYTES } from '@apparent/app-contracts/host';
-import { createNativeHostPort } from '../src/client.ts';
-import { createNativeClipboardPort } from '../src/clipboard.ts';
-import { createNativePenPort } from '../src/pen.ts';
+import { MAX_SERIALIZED_FRAME_BYTES, MAX_UTF8_TEXT_BYTES } from '@apparent/app-contracts/native';
+import { createNativeHostPort, createNativeClipboardPort, createNativePenPort } from '../src/client.ts';
 
 const facts = {
   api: 1, processEpoch: 'epoch-a', revision: 4, scope: 'running-desktop-process', freshness: 'cached-gui-observation',

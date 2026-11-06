@@ -197,3 +197,12 @@ test('media native targets use the same producer with platform-specific fresh se
   assert.match(mac, /error.code !== 'ENOENT'/);
   assert.match(mac, /HOMEBREW_NO_AUTO_UPDATE: '1'/);
 });
+
+test('headless native host packaging is checked through its consuming shell lane', () => {
+  const shell = entry('app-shell');
+  for (const event of ['pull_request', 'push']) assert(eventPaths(shell, event).includes('composition/native-host/**'));
+  assert.match(contracts, /npm --prefix composition\/native-host run test:packed/);
+  assert.match(contracts, /npm --prefix shared\/contracts ci/);
+  const registration = JSON.parse(readFileSync(new URL('../../../composition/app/delivery.json', import.meta.url), 'utf8'));
+  assert(registration.inputs.includes('composition/native-host/'));
+});

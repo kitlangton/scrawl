@@ -4,6 +4,8 @@ import type { EngineClient, Receipt, StartRequest } from '@apparent/engine-sdk';
 
 export type RecordingClient = Pick<EngineClient, 'handshake' | 'prepareStart' | 'start' | 'control'>;
 
+export const DEFAULT_RECORD_DURATION_SECONDS = 5;
+
 /** Foreground lifecycle; the host owns durable authority storage and child cleanup. */
 export async function recordWithEngine(
   client: RecordingClient, out: string, durationSeconds: number,
