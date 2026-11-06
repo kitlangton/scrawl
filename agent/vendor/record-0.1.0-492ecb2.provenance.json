@@ -1,0 +1,13 @@
+{
+  "package": "@apparent/record",
+  "version": "0.1.0",
+  "sourceCommit": "492ecb215b4275c11c402d4fa658fa19a14c81c6",
+  "sourceDigest": "5129e4fdcfe02fc4eba118b80c94338839643544183e215c368b1f1d1a955dd7",
+  "workflow": ".github/workflows/stream-record.yml",
+  "runId": "42156148340",
+  "runAttempt": 1,
+  "artifactId": "13475041524",
+  "componentSha256": "c21aba9052e6d2c0f4740c1c962a746149e4f713e9ba7078319ab62ce3a2ac17",
+  "componentBytes": 221310,
+  "packageTarballSha256": "a9718973791f8a1b75612a3b314e940c2a0641338cd2100663665c44afec3110"
+}
