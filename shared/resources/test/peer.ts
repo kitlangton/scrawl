@@ -1,4 +1,5 @@
 // Protocol fixture only: real flock/rename behavior is covered by native.test.ts.
+import { appendFile } from "node:fs/promises";
 const [scenario, command] = process.argv.slice(2);
 const emit = (state: string) => process.stdout.write(JSON.stringify({ protocol: 1, state }) + "\n");
 if (scenario === "malformed") { process.stdout.write('{"protocol":1,"state":"acquired","state":"busy"}\n'); process.exit(); }
@@ -9,8 +10,9 @@ if (command === "lock") {
   if (scenario === "lost") { setTimeout(() => process.exit(7), 30); }
   else { process.stdin.resume(); process.stdin.once("end", () => { emit("released"); process.exit(); }); }
 } else if (command === "replace") {
-  if (scenario === "silent") { process.stdin.resume(); setTimeout(() => process.exit(), 1000); }
-  else emit(scenario);
+  if (scenario === "replace-count" || scenario === "silent-count") await appendFile(process.env.APPARENT_RESOURCE_PEER_MARKER!, "x");
+  if (scenario === "silent" || scenario === "silent-count") { process.stdin.resume(); setTimeout(() => process.exit(), 1000); }
+  else emit(scenario === "replace-count" ? "replaced" : scenario);
 } else {
   if (scenario === "silent") { process.stdin.resume(); setTimeout(() => process.exit(), 1000); }
   else if (scenario === "delayed-published") { setTimeout(() => { emit("published"); process.exit(); }, 150); }

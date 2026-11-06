@@ -89,6 +89,25 @@ test("replaceFile consumes the parent, validates identities, and fails closed on
   } finally { await f.close(); }
 });
 
+test("replaceFile cancellation is refused before dispatch and uncertain after one dispatch", async () => {
+  const earlyFixture = await fixture(); try {
+    const controller = new AbortController(); controller.abort(); const handle = await earlyFixture.handle();
+    assert.deepEqual(await new NativeResources({ ...earlyFixture.provider, executable: "/does-not-exist" }).replaceFile(handle, "stage", "final", { source: { device: "1", inode: "2" }, destination: null }, { signal: controller.signal }), { state: "refused" });
+    assert.equal(handle.fd, -1);
+  } finally { await earlyFixture.close(); }
+  const lateFixture = await fixture("silent-count"); try {
+    const controller = new AbortController(), handle = await lateFixture.handle();
+    const result = new NativeResources(lateFixture.provider).replaceFile(handle, "stage", "final", { source: { device: "1", inode: "2" }, destination: null }, { timeoutMs: 1000, signal: controller.signal });
+    setTimeout(() => controller.abort(), 50);
+    assert.deepEqual(await result, { state: "publication_uncertain" }); assert.equal(handle.fd, -1);
+    assert.equal(await (await import("node:fs/promises")).readFile(lateFixture.marker, "utf8"), "x");
+  } finally { await lateFixture.close(); }
+  const countFixture = await fixture("replace-count"); try {
+    assert.deepEqual(await new NativeResources(countFixture.provider).replaceFile(await countFixture.handle(), "stage", "final", { source: { device: "1", inode: "2" }, destination: null }), { state: "replaced" });
+    assert.equal(await (await import("node:fs/promises")).readFile(countFixture.marker, "utf8"), "x");
+  } finally { await countFixture.close(); }
+});
+
 test("ACL guard consumes its descriptor and returns only checked facts", async () => {
   for (const [scenario, state] of [["published", "accepted"], ["refused", "refused"]] as const) {
     const f = await fixture(scenario); try {
