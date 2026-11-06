@@ -42,9 +42,6 @@ permissions:
   contents: read
 env:
   APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-platform.yml'
-concurrency:
-  group: value-stream-platform-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
-  cancel-in-progress: false
 jobs:
   contracts:
     # The agent whose run hits the limit owns optimization; never raise it.
@@ -85,6 +82,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.contracts.outputs.matrix) }}
+    # Only selected components share a lock: an unrelated push must not replace
+    # another component's pending main producer.
+    concurrency:
+      group: platform-${{ matrix.id }}-${{ matrix.target }}-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
+      cancel-in-progress: false
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.target == 'web' && 10 || 15 }}
     env:
@@ -122,6 +124,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.contracts.outputs.matrix) }}
+    # Only selected components share a lock: an unrelated push must not replace
+    # another component's pending main producer.
+    concurrency:
+      group: platform-${{ matrix.id }}-${{ matrix.target }}-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
+      cancel-in-progress: false
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.target == 'web' && 10 || 15 }}
     env:

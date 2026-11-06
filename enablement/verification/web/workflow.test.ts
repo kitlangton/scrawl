@@ -232,7 +232,9 @@ test('Platform shares one selector and gates successful audit on selected execut
   assert.match(section(source, 'contracts'), /has_ready: \$\{\{ steps.selection.outputs.has_ready \}\}/)
   assert.match(section(source, 'contracts'), /id: selection\n\s+run: node --experimental-strip-types composition\/delivery\/platform\/plan\.ts/)
   assert.match(section(source, 'contracts'), /composition\/delivery\/platform\/plan\.ts/)
+  assert.doesNotMatch(source.split('jobs:')[0], /concurrency:/)
   for (const job of ['stream', 'verify-pr']) {
+    assert.match(section(source, job), /group: platform-\$\{\{ matrix.id \}\}-\$\{\{ matrix.target \}\}/)
     assert.match(section(source, job), /needs.contracts.outputs.has_ready == 'true'/)
     assert.match(section(source, job), /matrix: \$\{\{ fromJSON\(needs.contracts.outputs.matrix\) \}\}/)
   }

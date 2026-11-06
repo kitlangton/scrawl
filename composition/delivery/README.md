@@ -168,6 +168,8 @@ job selects changed components from the full PR merge-base diff or main push
 before/after diff, including deleted files and both rename sides. Missing history
 selects all; shared delivery/architecture inputs select all; unrelated inputs
 select none. Registrations supply each selected component's target matrix.
+Main concurrency locks belong to each selected component/target, so an unrelated
+push cannot replace another component's pending producer.
 Native producers and the TypeScript shell remain isolated jobs with unchanged
 verification, packaging and artifact IDs. The audit requires successful contracts
 and selected execution before a receipt can authorize reuse. A failure in any
