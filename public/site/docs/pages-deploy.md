@@ -41,6 +41,8 @@ enabled-analytics fixture. Synthetic fixture bytes are never uploaded.
 `npm run check:independence` verifies a fresh source copy with Cargo/Rust/Python
 denied. The producer uses `verify:installed`, installs its locked Chromium and
 Firefox, checks delivery/shared architecture contracts and seals its component.
+Browser verification covers raw output and an owned temporary chunked copy;
+the latter serves movie requests through the compiled Pages worker in workerd.
 Unchanged artifacts use the shared receipt/admission protocol.
 
 Deployment downloads the exact same-run component and checks its producer output
