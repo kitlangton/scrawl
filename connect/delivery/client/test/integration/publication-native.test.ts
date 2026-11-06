@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { replacePrivateStateFile, type StateReplacementResources } from "../../src/state/replacement.ts";
 import { commitCompletedRenewal } from "../../src/state/renewal-commit.ts";
-import { persistRenewalExchange } from "../../src/state/renewal-exchange.ts";
+import { persistRenewalExchange, renewStateCredential } from "../../src/state/renewal-exchange.ts";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { createServer } from "node:http";
@@ -575,4 +575,70 @@ test("native renewal exchange fences a cooperating cancellation during real HTTP
     assert.deepEqual(JSON.parse(await readFile(path.join(root, "read.credential"), "utf8")), base);
     assert.equal(JSON.parse(await readFile(path.join(root, "read.renewal"), "utf8")).completed, false);
   } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+}));
+
+test("native renewal coordinator joins both scopes and terminal rejection through real HTTP", async () => {
+  for (const scope of ["read", "upload"] as const) for (const response of ["rotate", "reject", "invalid"] as const) await fixture(async root => {
+    let requests = 0;
+    const server = createServer(async (req, res) => {
+      requests++;
+      for await (const _chunk of req) { /* Drain the bounded synthetic request. */ }
+      if (req.url !== "/connect/v1/token/refresh" || req.method !== "POST" || req.headers.authorization || req.headers.cookie) {
+        res.statusCode = 400; res.end(); return;
+      }
+      if (response === "reject") { res.statusCode = 401; res.end(); }
+      else if (response === "invalid") res.end("not JSON");
+      else res.end(JSON.stringify({ scope, accessToken: "new-access", refreshToken: "new-refresh", grantId: "grant", expiresIn: 60, refreshExpiresIn: 300 }));
+    });
+    server.listen(0, "127.0.0.1"); await once(server, "listening");
+    try {
+      const address = server.address(); assert.ok(address && typeof address === "object");
+      const context = { scope, approvedServer: `http://127.0.0.1:${address.port}/connect` };
+      const base = { server: context.approvedServer, scope, token: "old-access", generation: "a".repeat(32), refreshToken: "old-refresh", expiresAt: 1900, refreshExpiresAt: 3000, grantId: "grant" };
+      const other = scope === "read" ? "upload" : "read";
+      await writeFile(path.join(root, `${scope}.credential`), JSON.stringify(base), { mode: 0o600 });
+      await writeFile(path.join(root, `${other}.credential`), '{"retained":true}', { mode: 0o600 });
+      await writeFile(path.join(root, "config"), '{"retained":true}', { mode: 0o600 });
+      const snapshot = await readCredentialSnapshot(root, context, resources);
+      const result = await renewStateCredential(root, context, snapshot, resources, { now: () => 2000 });
+      assert.equal(requests, 1);
+      const stored = JSON.parse(await readFile(path.join(root, `${scope}.credential`), "utf8"));
+      if (response === "rotate") {
+        assert.equal(result.state, "credential"); if (result.state === "credential") assert.equal(result.source, "renewed");
+        assert.equal(stored.token, "new-access"); assert.equal(stored.expiresAt, 2060);
+        await assert.rejects(lstat(path.join(root, `${scope}.renewal`)), { code: "ENOENT" });
+        await assert.rejects(lstat(path.join(root, `${scope}.response`)), { code: "ENOENT" });
+      } else {
+        assert.deepEqual(result, { state: "auth_required" }); assert.equal(stored.authRequired, true); assert.equal(stored.token, base.token);
+        assert.equal(stored.refreshToken, base.refreshToken); assert.equal(stored.generation, base.generation);
+        assert.equal(JSON.parse(await readFile(path.join(root, `${scope}.renewal`), "utf8")).completed, response === "invalid");
+        if (response === "invalid") assert.equal(await readFile(path.join(root, `${scope}.response`), "utf8"), "not JSON");
+      }
+      assert.equal((await lstat(path.join(root, `${scope}.credential`))).mode & 0o777, 0o600);
+      assert.equal(await readFile(path.join(root, `${other}.credential`), "utf8"), '{"retained":true}');
+      assert.equal(await readFile(path.join(root, "config"), "utf8"), '{"retained":true}');
+    } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  });
+});
+
+test("native renewal coordinator reloads a real cooperating recovery winner between phases", async () => fixture(async root => {
+  const f = await completedRenewalState(root); let recovered = false;
+  const observed: NamespaceResources & StateReplacementResources = {
+    checkAcl: handle => resources.checkAcl(handle), replaceFile: (...args) => resources.replaceFile(...args),
+    async lock(handle, options) {
+      const inode = (await handle.stat()).ino;
+      const isScope = inode === (await lstat(path.join(f.state, "read.renewal.lock"))).ino;
+      const result = await resources.lock(handle, options);
+      if (result.state !== "acquired" || !isScope || recovered) return result;
+      return { state: "acquired", lease: { signal: result.lease.signal, assertHeld: () => result.lease.assertHeld(), async release() {
+        await result.lease.release(); recovered = true;
+        assert.equal((await commitCompletedRenewal(f.state, f.context, f.snapshot, resources)).state, "committed");
+      } } };
+    },
+  };
+  const result = await renewStateCredential(f.state, f.context, f.snapshot, observed, { now: () => 2000, request: async () => { throw new Error("unexpected POST"); } });
+  assert.equal(recovered, true); assert.equal(result.state, "credential");
+  if (result.state === "credential") { assert.equal(result.source, "other_writer"); assert.equal(result.credential.token, "synthetic-new-access"); }
+  await assert.rejects(lstat(path.join(f.state, "read.response")), { code: "ENOENT" });
+  assert.equal(JSON.parse(await readFile(path.join(f.state, "read.credential"), "utf8")).expiresAt, 2060);
 }));
