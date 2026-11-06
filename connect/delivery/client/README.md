@@ -368,5 +368,27 @@ uncertainty without retry or restoration. It has no production caller or package
 export and must not write live state alongside Rust. Isolated Linux protected-
 wrapper and Mac direct-adapter cases cover both scopes, scope contention and
 evidence substitution under the cooperative protocol. They do not establish
-installed Mac or ARM admission. Active request preparation, response persistence,
-full writer ownership and production caller adoption remain separate gates.
+installed Mac or ARM admission. Full writer ownership and production caller
+adoption remain separate gates.
+
+The internal `state/renewal-exchange` phase durably prepares the legacy journal,
+sends one bounded refresh POST with the scope lease held and queue lease released,
+then publishes raw response bytes before the completed marker. It shares the
+existing planner, HTTP transport, stamped private readers and replacement path.
+Fresh login, cancellation, intent and evidence fences precede each publication.
+A prepared journal or orphan response can survive a stopped or failed exchange;
+those results never authorize blind HTTP replay. As in the Rust donor, a later
+invocation can replace incomplete evidence and issue a fresh request. An incomplete
+journal does not prove that the server did not rotate its token; the eventual
+writer orchestration must account for that ambiguity rather than add retries.
+Completed raw evidence is
+merged and published separately by `renewal-commit` using the saved issue time.
+This phase does not parse a newly received reply, publish credentials, mark
+`authRequired`, export a writer or switch any installed caller. Rust remains the
+sole live writer. Isolated Linux protected-wrapper tests exercise real HTTP,
+both scopes and cancellation while the queue is available during the request.
+The frozen Mac direct-adapter proof also covers those cases and completed
+recovery/scope contention, with all client tests passing. It uses an owner-local
+Mac ARM helper and does not establish installed ARM or installed Mac adoption.
+Final rejection/renewal orchestration, coordinated writer ownership and production
+adoption remain acceptance gates.

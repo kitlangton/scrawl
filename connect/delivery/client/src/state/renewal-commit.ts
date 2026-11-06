@@ -3,9 +3,8 @@ import path from "node:path";
 import { decodeStoredCredential, type StoredCredential } from "../credentials/wire.ts";
 import { decodeRenewalJournal, isCompletedRenewalFor, recoverCompletedRenewal, sameStoredCredential } from "../credentials/renewal-journal.ts";
 import type { CredentialSnapshot } from "./namespace.ts";
-import { readCredential, readCancellation, readOptionalStateFile, pendingIntent } from "./credential-files.ts";
-import { directoryIdentity } from "./directory.ts";
-import { CredentialSnapshotError, checkSignal, samePathFd, withRenewalScope, withStateQueue, type NamespaceResources, type StateDirectory } from "./queue-transaction.ts";
+import { readCredential, readCancellation, pendingIntent, readStateEvidence, stateFileStamp as stamp } from "./credential-files.ts";
+import { CredentialSnapshotError, checkSignal, samePathFd, withRenewalScope, withStateQueue, type NamespaceResources } from "./queue-transaction.ts";
 import { replacePrivateStateFile, type StateReplacementResources } from "./replacement.ts";
 import { PrivateFileError } from "./private-file.ts";
 
@@ -15,20 +14,7 @@ export type RenewalCommitResult =
   | { state: "unchanged"; reason: Reason }
   | { state: "publication_uncertain" };
 const reject = (reason: "stale_snapshot" | "revocation_pending" | "unsafe_file" | "unavailable"): never => { throw new CredentialSnapshotError(reason); };
-const stamp = (s: Awaited<ReturnType<typeof privateStat>>) => `${directoryIdentity(s)}:${s.size}:${s.mtimeNs}:${s.ctimeNs}:${s.nlink}`;
 const privateStat = (file: string) => lstat(file, { bigint: true });
-
-async function readEvidence<T extends object>(directory: StateDirectory, name: string, limit: number,
-  resources: NamespaceResources, signal: AbortSignal, decode: (bytes: Uint8Array) => T) {
-  const file = path.join(directory.path, name);
-  const before = await privateStat(file).catch(error => { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; });
-  if (!before) return null;
-  const expectedStamp = stamp(before);
-  const value = await readOptionalStateFile(directory, name, limit, resources, signal, decode);
-  const after = await privateStat(file);
-  if (value === null || !after.isFile() || after.isSymbolicLink() || stamp(after) !== expectedStamp) reject("unsafe_file");
-  return { value: value!, file, expectedStamp };
-}
 
 /** Internal coordinated-writer preparation; no production caller or package export.
  * Caller must own the sole state writer before using this against live state.
@@ -73,9 +59,9 @@ export async function commitCompletedRenewal(directoryPath: string,
         };
         const stored = await current();
         const journalName = `${ctx.scope}.renewal`, responseName = `${ctx.scope}.response`;
-        const journal = await readEvidence(directory, journalName, 65_536, resources, signal, bytes => decodeRenewalJournal(bytes, ctx));
+        const journal = await readStateEvidence(directory, journalName, 65_536, resources, signal, bytes => decodeRenewalJournal(bytes, ctx));
         if (!journal || !isCompletedRenewalFor(stored, journal.value)) return { state: "unchanged", reason: "not_recoverable" };
-        const recovered = await readEvidence(directory, responseName, 2_000_000, resources, signal,
+        const recovered = await readStateEvidence(directory, responseName, 2_000_000, resources, signal,
           bytes => recoverCompletedRenewal(stored, journal.value, bytes));
         if (!recovered) return { state: "unchanged", reason: "not_recoverable" };
         const evidence = [journal, recovered];
