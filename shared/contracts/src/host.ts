@@ -106,3 +106,13 @@ export interface LegacyAdoptionBackend extends TransactionalConfigBackend {
   /** Only creates an absent owner entry if the legacy presence/value still match. */
   adoptLegacy(ownerId: string, expectedLegacy: LegacyConfigValue, value: JsonValue): Promise<ConfigAdoptionResult>;
 }
+
+/** Record's narrow compatibility access to its compiled `penColor` config key. */
+export interface RecordPenColorConfig {
+  read(): Promise<LegacyConfigValue>;
+  compareAndSwap(expected: LegacyConfigValue, next: LegacyConfigValue): Promise<
+    | { status: 'saved' }
+    | { status: 'conflict'; current: LegacyConfigValue }
+    | { status: 'unknown'; message: string }
+  >;
+}
