@@ -138,10 +138,10 @@ export function mediaBuildIdentity(env = process.env, os = platform(), probe = (
   throw new Error('Media reuse requires Linux or macOS')
 }
 export function supportsPrCandidate(id: string, target: string): boolean {
-  return id === 'engine' ? target === 'linux-x64' : ['engine-native', 'app-shell', 'engine-media-native', 'platform-config'].includes(id) && ['linux-x64', 'macos-x64'].includes(target)
+  return id === 'engine' ? target === 'linux-x64' : ['engine-native', 'app-shell', 'engine-media-native', 'platform-config', 'onboarding'].includes(id) && ['linux-x64', 'macos-x64'].includes(target)
 }
-export function appShellBuildEnvironment(env = process.env) {
-  return [...new Set(['NODE_OPTIONS', 'NODE_ENV', ...Object.keys(env).filter(key => /^(ELECTRON_|npm_config_|NPM_CONFIG_)/.test(key))])].sort().map(key => [key, env[key] ?? ''])
+export function packageBuildEnvironment(env = process.env, electron = false) {
+  return [...new Set(['NODE_OPTIONS', 'NODE_ENV', 'NODE_PATH', 'ESBUILD_BINARY_PATH', 'ESBUILD_WORKER_THREADS', ...Object.keys(env).filter(key => /^(npm_config_|NPM_CONFIG_)/.test(key) || (electron && key.startsWith('ELECTRON_')))])].sort().map(key => [key, env[key] ?? ''])
 }
 function fingerprint(root: string, owner: Owner, target: Target, revision = 'HEAD') {
   if (target !== 'linux-x64' && target !== 'macos-x64' && target !== 'web' || !owner.targets.includes(target)) throw new Error('Owner is not registered for this target')
@@ -149,7 +149,7 @@ function fingerprint(root: string, owner: Owner, target: Target, revision = 'HEA
   const imageOS = process.env.ImageOS ?? ''
   const imageVersion = process.env.ImageVersion ?? ''
   if (!imageOS || !imageVersion) throw new Error('Runner image identity is unavailable')
-  return createHash('sha256').update(JSON.stringify({ source, environment: environmentDigest(owner), node: process.version, imageOS, imageVersion, platform: platform(), arch: arch(), target, ...(supportsPrCandidate(owner.id, target) && owner.language === 'native' ? { native: nativeBuildIdentity() } : {}), ...(owner.id === 'app-shell' ? { packaging: appShellBuildEnvironment() } : {}), ...(owner.id === 'engine-media-native' ? { media: mediaBuildIdentity() } : {}) })).digest('hex')
+  return createHash('sha256').update(JSON.stringify({ source, environment: environmentDigest(owner), node: process.version, imageOS, imageVersion, platform: platform(), arch: arch(), target, ...(supportsPrCandidate(owner.id, target) && owner.language === 'native' ? { native: nativeBuildIdentity() } : {}), ...(['app-shell', 'onboarding'].includes(owner.id) ? { packaging: packageBuildEnvironment(process.env, owner.id === 'app-shell') } : {}), ...(owner.id === 'engine-media-native' ? { media: mediaBuildIdentity() } : {}) })).digest('hex')
 }
 export function sourceDigest(root: string, owner: Owner, revision = 'HEAD'): string { return trackedInputs(root, owner, revision).digest }
 export function environmentDigest(owner: Owner, env = process.env): string { return createHash('sha256').update(JSON.stringify([...(owner.environment ?? [])].sort().map(key => [key, env[key] ?? '']))).digest('hex') }

@@ -98,7 +98,12 @@ impl RenewalServer {
                 let (status, value) = if head.starts_with("POST /v1/token/refresh ") {
                     count.fetch_add(1, Ordering::SeqCst);
                     let body: Value = serde_json::from_slice(&bytes[end..]).unwrap();
-                    assert_eq!(body, json!({"refreshToken":"synthetic-refresh-old"}));
+                    let refresh = if mode.starts_with("read") {
+                        "synthetic-refresh-read"
+                    } else {
+                        "synthetic-refresh-old"
+                    };
+                    assert_eq!(body, json!({"refreshToken":refresh}));
                     barrier.started.store(true, Ordering::SeqCst);
                     if mode == "delayed" {
                         let deadline = Instant::now() + Duration::from_secs(8);
@@ -125,6 +130,7 @@ impl RenewalServer {
                         }
                         "revoked" => (401, json!({"error":{"code":"reauthorization_required"}})),
                         "scope" => (200, reply("read", "server-grant:not-local-hex")),
+                        "read" | "read-delayed" => (200, reply("read", "grant-read")),
                         "grant" => (200, reply("upload", "different-grant")),
                         _ => (200, reply("upload", "server-grant:not-local-hex")),
                     }
@@ -209,6 +215,222 @@ fn reply(scope: &str, grant: &str) -> Value {
 fn renewable(f: &Fixture, server: &str) {
     f.authorize(server);
     atomic_json(&f.client.state.join("upload.credential"), &json!({"server":server,"scope":"upload","token":"synthetic-access-old","generation":"a".repeat(32),"refreshToken":"synthetic-refresh-old","expiresAt":now()-1,"refreshExpiresAt":now()+86400,"grantId":"server-grant:not-local-hex"})).unwrap();
+}
+fn renewable_read(f: &Fixture, server: &str) {
+    f.authorize(server);
+    atomic_json(&f.client.state.join("read.credential"), &json!({"server":server,"scope":"read","token":"synthetic-read-old","generation":"a".repeat(32),"refreshToken":"synthetic-refresh-read","expiresAt":now()-1,"refreshExpiresAt":now()+86400,"grantId":"grant-read"})).unwrap();
+}
+
+#[test]
+fn recipient_rejection_marks_only_the_exact_current_read_token_without_network() {
+    for mismatch in ["none", "token", "generation", "epoch", "revocation"] {
+        let f = Fixture::new();
+        let server = RenewalServer::new("read");
+        renewable_read(&f, &server.url);
+        let read = f.client.credential("read", &server.url).unwrap();
+        let before = read_private(&f.client.state.join("read.credential"), 32768).unwrap();
+        let upload = fs::read(f.client.state.join("upload.credential")).unwrap();
+        let config = fs::read(&f.client.config).unwrap();
+        if mismatch == "epoch" { atomic_json(&f.client.state.join("cancellation"), &"new").unwrap(); }
+        if mismatch == "revocation" { atomic_json(&f.client.state.join("revocation-test.intent"), &true).unwrap(); }
+        let result = f.client.reject_recipient_access(&server.url,
+            if mismatch == "generation" { "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } else { &read.generation },
+            if mismatch == "token" { "previous-token" } else { &read.token }, None, &|| true);
+        if mismatch == "none" {
+            result.unwrap();
+            let rejected = f.client.credential("read", &server.url).unwrap();
+            assert!(rejected.auth_required); assert_eq!(rejected.token, read.token);
+        } else {
+            if mismatch != "token" { assert!(result.is_err()); } else { result.unwrap(); }
+            assert_eq!(read_private(&f.client.state.join("read.credential"), 32768).unwrap(), before);
+        }
+        assert_eq!(server.requests.load(Ordering::SeqCst), 0);
+        assert_eq!(fs::read(f.client.state.join("upload.credential")).unwrap(), upload);
+        assert_eq!(fs::read(&f.client.config).unwrap(), config);
+    }
+}
+
+#[test]
+fn recipient_renewal_due_and_forced_preserve_upload_authority_and_config() {
+    for force in [false, true] {
+        let f = Fixture::new();
+        let server = RenewalServer::new("read");
+        renewable_read(&f, &server.url);
+        if force {
+            let mut read = f.client.credential("read", &server.url).unwrap();
+            read.expires_at = Some(now() + 3600);
+            atomic_json(&f.client.state.join("read.credential"), &read).unwrap();
+        }
+        let upload_before = read_private(&f.client.state.join("upload.credential"), 32768).unwrap();
+        let config_before = fs::read(&f.client.config).unwrap();
+        let read = f.client.credential("read", &server.url).unwrap();
+        f.client
+            .renew_recipient_access(
+                &server.url,
+                &read.generation,
+                &read.token,
+                None,
+                force,
+                &|| true,
+            )
+            .unwrap();
+        let renewed = f.client.credential("read", &server.url).unwrap();
+        assert_eq!(renewed.token, "synthetic-access-new");
+        assert_eq!(renewed.generation, "a".repeat(32));
+        assert_eq!(
+            read_private(&f.client.state.join("upload.credential"), 32768).unwrap(),
+            upload_before
+        );
+        assert_eq!(fs::read(&f.client.config).unwrap(), config_before);
+        assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn recipient_renewal_skips_changed_token_and_rejects_stale_or_revoked_context() {
+    // A concurrent writer already rotated the access token: do not POST again.
+    let f = Fixture::new();
+    let server = RenewalServer::new("read");
+    renewable_read(&f, &server.url);
+    let mut read = f.client.credential("read", &server.url).unwrap();
+    let old_token = read.token.clone();
+    read.token = "synthetic-access-newer".into();
+    atomic_json(&f.client.state.join("read.credential"), &read).unwrap();
+    f.client
+        .renew_recipient_access(
+            &server.url,
+            &read.generation,
+            &old_token,
+            None,
+            true,
+            &|| true,
+        )
+        .unwrap();
+    assert_eq!(server.refreshes.load(Ordering::SeqCst), 0);
+
+    for invalid in ["generation", "epoch", "revocation", "auth"] {
+        let f = Fixture::new();
+        let server = RenewalServer::new("read");
+        renewable_read(&f, &server.url);
+        let read = f.client.credential("read", &server.url).unwrap();
+        let before = read_private(&f.client.state.join("read.credential"), 32768).unwrap();
+        let config_before = fs::read(&f.client.config).unwrap();
+        let mut generation = read.generation.clone();
+        let mut epoch = None;
+        if invalid == "generation" {
+            generation = "b".repeat(32);
+        }
+        if invalid == "epoch" {
+            atomic_json(&f.client.state.join("cancellation"), &"new-epoch").unwrap();
+            epoch = Some("old-epoch");
+        }
+        if invalid == "revocation" {
+            atomic_json(&f.client.state.join("revocation-synthetic.intent"), &true).unwrap();
+        }
+        if invalid == "auth" {
+            let mut credential = read.clone();
+            credential.auth_required = true;
+            atomic_json(&f.client.state.join("read.credential"), &credential).unwrap();
+        }
+        let result = f.client.renew_recipient_access(
+            &server.url,
+            &generation,
+            &read.token,
+            epoch,
+            true,
+            &|| true,
+        );
+        assert!(result.is_err(), "invalid={invalid}");
+        assert_eq!(
+            server.refreshes.load(Ordering::SeqCst),
+            0,
+            "invalid={invalid}"
+        );
+        if invalid != "auth" {
+            assert_eq!(
+                read_private(&f.client.state.join("read.credential"), 32768).unwrap(),
+                before
+            );
+        }
+        assert_eq!(fs::read(&f.client.config).unwrap(), config_before);
+    }
+}
+
+#[test]
+fn recipient_renewal_recovers_completed_response_using_saved_issue_time() {
+    let f = Fixture::new();
+    let server = RenewalServer::new("read");
+    renewable_read(&f, &server.url);
+    let mut base = f.client.credential("read", &server.url).unwrap();
+    base.refresh_expires_at = Some(1);
+    atomic_json(&f.client.state.join("read.credential"), &base).unwrap();
+    let issued = now().saturating_sub(100);
+    atomic_json(
+        &f.client.state.join("read.renewal"),
+        &json!({"base":base,"issued":issued,"completed":true}),
+    )
+    .unwrap();
+    atomic_json(
+        &f.client.state.join("read.response"),
+        &reply("read", "grant-read"),
+    )
+    .unwrap();
+    f.client
+        .renew_recipient_access(
+            &server.url,
+            &base.generation,
+            &base.token,
+            None,
+            false,
+            &|| true,
+        )
+        .unwrap();
+    let renewed = f.client.credential("read", &server.url).unwrap();
+    assert_eq!(renewed.expires_at, Some(issued + 3600));
+    assert_eq!(server.refreshes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn recipient_renewal_cancellation_and_new_login_block_delayed_publication() {
+    for new_login in [false, true] {
+        let f = Fixture::new();
+        let server = RenewalServer::new("read-delayed");
+        renewable_read(&f, &server.url);
+        let before = read_private(&f.client.state.join("read.credential"), 32768).unwrap();
+        let client = f.client.clone();
+        let url = server.url.clone();
+        let worker = std::thread::spawn(move || {
+            client.renew_recipient_access(
+                &url,
+                &"a".repeat(32),
+                "synthetic-read-old",
+                None,
+                true,
+                &|| true,
+            )
+        });
+        wait_started(&server);
+        if new_login {
+            let mut replacement = f.client.credential("read", &server.url).unwrap();
+            replacement.generation = "b".repeat(32);
+            replacement.token = "synthetic-read-new-login".into();
+            atomic_json(&f.client.state.join("read.credential"), &replacement).unwrap();
+        } else {
+            atomic_json(&f.client.state.join("cancellation"), &"cancelled-epoch").unwrap();
+        }
+        server.gate.release.store(true, Ordering::SeqCst);
+        assert!(worker.join().unwrap().is_err());
+        let after = read_private(&f.client.state.join("read.credential"), 32768).unwrap();
+        if new_login {
+            assert_ne!(after, before);
+            assert_eq!(
+                f.client.credential("read", &server.url).unwrap().generation,
+                "b".repeat(32)
+            );
+        } else {
+            assert_eq!(after, before);
+        }
+    }
 }
 fn settings_health_contended_renewal(cancel: bool) {
     use crate::settings::Health;

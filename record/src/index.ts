@@ -4,7 +4,7 @@ export type { BundleAllocation, CaptureMapping, CaptureMappingStore, EngineSdkPo
 export type { RecordCommand, RecordState } from "./backend/workflow/controller.js";
 export { RecordWorkflow } from "./backend/workflow/controller.js";
 export { assembleProcessingOutput, decodeSelectedFrames } from "./backend/processing/index.js";
-export type { DecodeSelection, ProcessingInput, ProcessingOutput, PublishedMediaClient, SelectedFrame, TranscriptSegment } from "./backend/processing/index.js";
+export type { DecodeSelection, ProcessingInput, ProcessingOutput, PublishedMediaClient, SelectedFrame, SemanticFrameText, TranscriptSegment } from "./backend/processing/index.js";
 export { associateTranscriptWithSelectedFrames } from "./backend/selection/transcript-association.js";
 export type { AssociatedFrame, SelectedFrameReference, TimedTranscriptUnit, TranscriptFacts } from "./backend/selection/transcript-association.js";
 export { formatLocalHandoff } from "./backend/handoff/index.js";

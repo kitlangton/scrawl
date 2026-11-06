@@ -275,3 +275,31 @@ or repeats the rejected token. Otherwise expired renewable access reports
 `renewal_required`. Active renewal, provider assembly and installed adoption remain
 separate gates. This path creates only the compatible empty lock file; Rust retains
 all credential/queue/config JSON mutation.
+
+
+A private host may explicitly supply `StateRecipientOptions.renewRead`, bound to
+that same directory's **existing authoritative writer**. TypeScript still does
+not write credential JSON. Each bounded GET prepares fresh same-login authority;
+renewable access within 30 seconds of expiry asks the writer to renew. One 401
+may force renewal and retry that GET once with a different token. A second 401
+asks the writer to mark only the exact current read token `authRequired` and
+stops. Cancellation, login, revocation and request deadlines remain fences.
+Completed responses are committed by the owner before writer-backed transport
+uses them. No upload/config/consent gate is restored.
+
+`./recipient-command/renewal` exports the private `RecipientRenewalOwner` port
+and `decodeRecipientRenewalReply`. The temporary legacy executable accepts
+protocol-1 `renew_read` (server, generation, token, cancellation, force) and
+`reject_read` (the same context without force). Replies contain only read-scope
+`current` or `rejected`, or allowlisted failure categories. The decoder checks
+exit status and the expected operation. Requests contain an access token: send
+them only over the admitted private stdin pipe, never arguments, renderer IPC,
+logs or shared temporary files. The host must bind the exact state namespace,
+admit/protect the writer executable, propagate cancellation, bound its process
+and output, and await its terminal result. Resource-helper admission alone does
+not admit this legacy writer. The checked-in joined native test uses an
+externally built, hash-pinned writer and isolated synthetic state; it is not an
+installed locator or release. Without this explicit port, the previous read-only
+recovery/reload behavior remains. Installed provider/launch assembly and caller
+adoption are still pending. Remove this temporary legacy bridge when the
+coordinated TypeScript writer and all its consumers pass the migration gates.

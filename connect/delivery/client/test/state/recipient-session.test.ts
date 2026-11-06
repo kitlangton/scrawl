@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { openRecipientReadSession, RecipientSessionError } from "../../src/state/recipient-session.ts";
 import type { NamespaceResources } from "../../src/state/namespace.ts";
 import { generateAgeIdentity } from "../../src/recipient/crypto.ts";
+import type { RecipientRenewalOwner } from "../../src/state/renewal-owner.ts";
 const server = "https://app.tryapparent.com/connect", id = "b".repeat(32);
 const ports: NamespaceResources = {
   checkAcl: async h => { await h.close(); return { state: "accepted" }; },
@@ -107,5 +108,83 @@ test("unauthorized reload uses another writer's new token but refuses unchanged 
     try { assert.equal(next.credential.token, "writer-rotated"); } finally { next.dispose(); }
     await f.put("read.credential", { ...f.credential, token: "new-login", generation: "c".repeat(32) });
     await assert.rejects(session.reloadAfterUnauthorized(), category("stale_snapshot"));
+  } finally { session.dispose(); }
+}));
+
+test("an admitted writer renews within 30 seconds, outside the queue lease, then state is reloaded", () => fixture(async f => {
+  await f.put("read.credential", { ...f.credential, expiresAt: 130 });
+  let calls = 0, held = false;
+  const resources: NamespaceResources = { ...ports, lock: async h => { await h.close(); assert.equal(held, false); held = true;
+    return { state: "acquired", lease: { signal: new AbortController().signal, assertHeld() { assert(held); }, async release() { held = false; } } }; } };
+  const renewRead: RecipientRenewalOwner = async request => {
+    calls++; assert.equal(held, false); assert(Object.isFrozen(request)); assert(Object.isFrozen(request.operation));
+    assert.deepEqual(request, { protocol: 1, operation: { kind: "renew_read", server, generation: "a".repeat(32), token: "synthetic", cancellation: null, force: false } });
+    await f.put("read.credential", { ...f.credential, token: "renewed", expiresAt: 300 }); return { state: "current" };
+  };
+  const session = await openRecipientReadSession(f.state, server, resources, { ...options, renewRead });
+  try { assert.equal(session.credential.token, "renewed"); await session.assertCurrent(); assert.equal(calls, 1); }
+  finally { session.dispose(); }
+}));
+
+test("unexpired access needs no writer; a rejected token forces one renewal, but another writer's rotation needs none", () => fixture(async f => {
+  let calls = 0;
+  const renewRead: RecipientRenewalOwner = async request => {
+    calls++; assert.equal(request.operation.force, true); assert.equal(request.operation.token, "synthetic");
+    await f.put("read.credential", { ...f.credential, token: "renewed" }); return { state: "current" };
+  };
+  const session = await openRecipientReadSession(f.state, server, ports, { ...options, renewRead });
+  try {
+    assert.equal(calls, 0);
+    const next = await session.reloadAfterUnauthorized();
+    try { assert.equal(next.credential.token, "renewed"); assert.equal(calls, 1); } finally { next.dispose(); }
+    const another = await session.reloadAfterUnauthorized();
+    try { assert.equal(another.credential.token, "renewed"); assert.equal(calls, 1); } finally { another.dispose(); }
+  } finally { session.dispose(); }
+}));
+
+test("completed replies must be committed by the owner before a writer-backed session uses them", () => fixture(async f => {
+  const base = { ...f.credential, expiresAt: 1, refreshExpiresAt: 1 };
+  await f.put("read.credential", base); await f.put("read.renewal", { base, issued: 90, completed: true });
+  await f.put("read.response", { scope: "read", grantId: "reader", accessToken: "recovered", refreshToken: "new-refresh", expiresIn: 100, refreshExpiresIn: 200 });
+  await assert.rejects(openRecipientReadSession(f.state, server, ports, { ...options, renewRead: async () => ({ state: "current" }) }), category("state_unavailable"));
+  const renewRead: RecipientRenewalOwner = async request => {
+    assert.equal(request.operation.force, true); assert.equal(request.operation.token, "synthetic");
+    await f.put("read.credential", { ...base, token: "recovered", refreshToken: "new-refresh", expiresAt: 190, refreshExpiresAt: 290 });
+    await unlink(path.join(f.state, "read.renewal")); await unlink(path.join(f.state, "read.response")); return { state: "current" };
+  };
+  const session = await openRecipientReadSession(f.state, server, ports, { ...options, renewRead });
+  try { assert.equal(session.credential.token, "recovered"); await session.assertCurrent(); } finally { session.dispose(); }
+}));
+
+test("writer failures and late cancellation, login or revocation never yield usable credentials", () => fixture(async f => {
+  await f.put("read.credential", { ...f.credential, expiresAt: 100 });
+  const before = await readFile(path.join(f.state, "read.credential"));
+  await assert.rejects(openRecipientReadSession(f.state, server, ports, { ...options, renewRead: async () => { throw new Error("private-token"); } }), category("state_unavailable"));
+  assert.deepEqual(await readFile(path.join(f.state, "read.credential")), before);
+  await assert.rejects(openRecipientReadSession(f.state, server, ports, { ...options, renewRead: async () => ({ state: "offline" }) }), category("offline"));
+  const abort = new AbortController();
+  await assert.rejects(openRecipientReadSession(f.state, server, ports, { ...options, signal: abort.signal, renewRead: async () => { abort.abort(); return { state: "current" }; } }), category("cancelled"));
+  await assert.rejects(openRecipientReadSession(f.state, server, ports, { ...options, renewRead: async () => {
+    await f.put("read.credential", { ...f.credential, generation: "c".repeat(32) }); return { state: "current" };
+  } }), category("stale_snapshot"));
+  await f.put("read.credential", { ...f.credential, expiresAt: 100 });
+  await assert.rejects(openRecipientReadSession(f.state, server, ports, { ...options, renewRead: async () => {
+    await f.put("revocation-pending.intent", true); return { state: "current" };
+  } }), category("revocation_pending"));
+}));
+
+test("each request observes newly due expiry without retaining its short-lived abort signal", () => fixture(async f => {
+  let time = 100, calls = 0;
+  const session = await openRecipientReadSession(f.state, server, ports, { nowSeconds: () => time, renewRead: async (_request, signal) => {
+    calls++; assert.equal(signal?.aborted, false);
+    await f.put("read.credential", { ...f.credential, token: "renewed-later", expiresAt: 400 }); return { state: "current" };
+  } });
+  try {
+    time = 180; const request = new AbortController();
+    const next = await session.prepareForRequest(undefined, request.signal);
+    try {
+      assert.equal(next.credential.token, "renewed-later"); assert.equal(calls, 1);
+      request.abort(); await next.assertCurrent();
+    } finally { next.dispose(); }
   } finally { session.dispose(); }
 }));

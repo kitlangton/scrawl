@@ -234,20 +234,32 @@ fn read_journal(directory: &Path, capture: &str, owner: &str) -> Result<Journal,
 fn remove_unsealed(directory: &Path, journal: &Journal) -> Result<(), &'static str> {
     let expected = directory.join("materials").join(&journal.capture_id);
     let path = PathBuf::from(&journal.root);
-    if path != expected {
+    if path != expected
+        || path.file_name().and_then(|leaf| leaf.to_str()) != Some(journal.capture_id.as_str())
+    {
         return Err("source_mismatch");
     }
-    let dir = match apparent_capture_engine::SecureStore::open(&path) {
+    let parent = Arc::new(
+        apparent_capture_engine::SecureStore::open(path.parent().ok_or("internal")?)
+            .map_err(|_| "source_mismatch")?,
+    );
+    let dir = match parent.existing_child(&journal.capture_id) {
         Ok(dir) => dir,
-        Err(error)
-            if error.kind() == io::ErrorKind::NotFound
-                && journal.root_device.is_none()
-                && journal.root_inode.is_none() =>
-        {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // A completed removal may precede the durable terminal receipt.
+            // Only the exact leaf may be absent; the pinned parent must survive.
+            parent
+                .directory_file()
+                .map_err(|_| "source_mismatch")?
+                .sync_all()
+                .map_err(|_| "internal")?;
             return Ok(());
         }
         Err(_) => return Err("source_mismatch"),
     };
+    let parent_file = parent.directory_file().map_err(|_| "source_mismatch")?;
+    let leaf =
+        std::ffi::CString::new(journal.capture_id.as_str()).map_err(|_| "source_mismatch")?;
     let meta = dir.directory_metadata().map_err(|_| "source_mismatch")?;
     if !meta.is_dir()
         || meta.file_type().is_symlink()
@@ -323,12 +335,19 @@ fn remove_unsealed(directory: &Path, journal: &Journal) -> Result<(), &'static s
         .sync_all()
         .map_err(|_| "internal")?;
     // Unknown entries make unlinkat(AT_REMOVEDIR) fail; they are never traversed/deleted.
-    let parent = pinned_dir(path.parent().ok_or("internal")?).map_err(|_| "source_mismatch")?;
-    let leaf = std::ffi::CString::new(journal.capture_id.clone()).map_err(|_| "source_mismatch")?;
-    if unsafe { libc::unlinkat(parent.as_raw_fd(), leaf.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+    if unsafe { libc::unlinkat(parent_file.as_raw_fd(), leaf.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
         return Err("source_mismatch");
     }
-    parent.sync_all().map_err(|_| "internal")
+    parent.check().map_err(|_| "source_mismatch")?;
+    parent_file.sync_all().map_err(|_| "internal")
+}
+fn pause_test_cancel_after_unsealed_cleanup(journal: &Journal) {
+    let Ok(target) = std::env::var("APPARENT_CAPTURE_TEST_CANCEL_CLEANUP_BUNDLE_ID") else {
+        return;
+    };
+    if journal.request["bundleId"].as_str() == Some(target.as_str()) {
+        thread::sleep(Duration::from_secs(5));
+    }
 }
 fn operation_dir(shared: &Shared) -> Result<apparent_capture_engine::SecureStore, &'static str> {
     let j = shared.journal.lock().map_err(|_| "internal")?.clone();
@@ -637,8 +656,10 @@ fn worker(
             recorder.stop();
             drop(movie);
             let prior = shared.journal.lock().map_err(|_| "internal")?;
-            let _ = remove_unsealed(&shared.directory, &prior);
+            remove_unsealed(&shared.directory, &prior)?;
+            let cleanup_binding = prior.clone();
             drop(prior);
+            pause_test_cancel_after_unsealed_cleanup(&cleanup_binding);
             let mut j = shared.journal.lock().map_err(|_| "internal")?;
             j.state = "cancelled".into();
             drop(j);
@@ -691,10 +712,16 @@ fn worker(
             .ok()
             .and_then(|j| read_journal(&shared.directory, &j.capture_id, &j.owner_token).ok())
             .is_some_and(|j| j.cancel_requested);
-        if let Ok(j) = shared.journal.lock() {
-            if j.materials.is_none() {
-                let _ = remove_unsealed(&shared.directory, &j);
-            }
+        let cleanup_failed = match shared.journal.lock() {
+            Ok(j) if j.materials.is_none() => remove_unsealed(&shared.directory, &j).is_err(),
+            Ok(_) => false,
+            Err(_) => true,
+        };
+        if cleanup_failed {
+            // Keep the durable active journal and cancellation intent so cold
+            // inspection can retry after the original identity is restored.
+            drop(permit);
+            return;
         }
         if let Ok(mut j) = shared.journal.lock() {
             if code == "cancelled" || durable_cancel {
@@ -1557,5 +1584,115 @@ fn main() {
     }
     for (_, (_, handle)) in active {
         let _ = handle.join();
+    }
+}
+
+#[cfg(test)]
+mod unsealed_cleanup_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fixture() -> (PathBuf, PathBuf, PathBuf, Journal) {
+        let capture_id = new_id().unwrap();
+        let base = std::env::temp_dir().join(format!("apparent-cleanup-{capture_id}"));
+        let capture_root = base.join("capture-v2");
+        let materials_parent = capture_root.join("materials");
+        let root = materials_parent.join(&capture_id);
+        fs::create_dir(&base).unwrap();
+        fs::set_permissions(&base, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir(&capture_root).unwrap();
+        fs::set_permissions(&capture_root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir(&materials_parent).unwrap();
+        fs::set_permissions(&materials_parent, fs::Permissions::from_mode(0o700)).unwrap();
+        let store = apparent_capture_engine::SecureStore::create(&root).unwrap();
+        let mut movie = store.file("recording.mp4", true).unwrap();
+        movie.write_all(b"unsealed partial media").unwrap();
+        movie.sync_all().unwrap();
+        let file = movie.metadata().unwrap();
+        let directory = store.directory_metadata().unwrap();
+        let journal = Journal {
+            capture_id: capture_id.clone(),
+            owner_token: "a".repeat(64),
+            request: json!({"bundleId":"cleanup-test.apparent"}),
+            state: "recording".into(),
+            error: None,
+            materials: None,
+            root: root.to_string_lossy().into_owned(),
+            materials_id: None,
+            lease_id: None,
+            root_device: Some(directory.dev()),
+            root_inode: Some(directory.ino()),
+            release_phase: None,
+            release_movie: None,
+            release_payload: None,
+            partial_movie: Some(
+                json!({"device":file.dev().to_string(),"inode":file.ino().to_string()}),
+            ),
+            payload_digest: None,
+            admitted_monotonic_ns: None,
+            confirmed_at_ms: None,
+            cancel_requested: true,
+        };
+        (base, capture_root, root, journal)
+    }
+
+    #[test]
+    fn missing_unsealed_leaf_is_idempotent_but_missing_parent_is_not() {
+        let (base, capture_root, root, journal) = fixture();
+        remove_unsealed(&capture_root, &journal).unwrap();
+        assert!(!root.exists());
+        remove_unsealed(&capture_root, &journal).unwrap();
+        assert!(fs::remove_dir(root.parent().unwrap()).is_ok());
+        assert_eq!(
+            remove_unsealed(&capture_root, &journal),
+            Err("source_mismatch")
+        );
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn replaced_unsealed_root_or_file_is_never_removed() {
+        let (base, capture_root, root, journal) = fixture();
+        let original = root.with_file_name("original-root");
+        fs::rename(&root, &original).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            remove_unsealed(&capture_root, &journal),
+            Err("source_mismatch")
+        );
+        assert!(root.is_dir());
+        assert!(original.join("recording.mp4").is_file());
+        fs::remove_dir(&root).unwrap();
+        std::os::unix::fs::symlink(&original, &root).unwrap();
+        assert_eq!(
+            remove_unsealed(&capture_root, &journal),
+            Err("source_mismatch")
+        );
+        assert!(
+            fs::symlink_metadata(&root)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_file(&root).unwrap();
+        fs::rename(&original, &root).unwrap();
+
+        let moved_file = root.with_file_name("recording-original.mp4");
+        fs::rename(root.join("recording.mp4"), &moved_file).unwrap();
+        apparent_capture_engine::SecureStore::open(&root)
+            .unwrap()
+            .write_new("recording.mp4", b"replacement partial media")
+            .unwrap();
+        assert_eq!(
+            remove_unsealed(&capture_root, &journal),
+            Err("source_mismatch")
+        );
+        assert_eq!(
+            fs::read(root.join("recording.mp4")).unwrap(),
+            b"replacement partial media"
+        );
+        assert!(moved_file.is_file());
+        fs::remove_dir_all(base).unwrap();
     }
 }

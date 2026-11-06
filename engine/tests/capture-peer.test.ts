@@ -3,7 +3,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { CaptureClient, launchCaptureEngine, type CaptureStatus } from "../sdk/src/capture.ts";
@@ -208,6 +208,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
   const oldFinalizeDelay = process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS;
   const oldReleaseDelay = process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS;
   const oldReadinessUnavailable = process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE;
+  const oldCancelCleanupBundle = process.env.APPARENT_CAPTURE_TEST_CANCEL_CLEANUP_BUNDLE_ID;
   process.env.DISPLAY = display;
   delete process.env.WAYLAND_DISPLAY;
   const runtime = mkdtempSync(join(tmpdir(), "apparent-capture-runtime-"));
@@ -216,8 +217,10 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
   process.env.GST_DEBUG_FILE = join(runtime, "gstreamer.log");
   process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS = "750";
   process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS = "900";
+  process.env.APPARENT_CAPTURE_TEST_CANCEL_CLEANUP_BUNDLE_ID = "capture-cancel-ack-crash.apparent";
   let client: CaptureClient | undefined;
   let scenarioPassed = false;
+  let preserveCancelRuntime = false;
   try {
     await delay(500);
     execFileSync(xsetrootCommand, ["-solid", "#cc2211"]);
@@ -416,7 +419,9 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     }
     const cancelled = await until(client, { captureId: fourth.captureId, ownerToken: fourth.ownerToken }, ["cancelled"]);
     assert.equal(cancelled.error, undefined, "cancelled is a terminal state, not a failed result");
-    assert.throws(() => statSync(join(runtime, "capture-v2", "materials", fourth.captureId)), { code: "ENOENT" }, "cancel never leaves a sealed material root");
+    const fourthRoot = join(runtime, "capture-v2", "materials", fourth.captureId);
+    try { statSync(fourthRoot); preserveCancelRuntime = true; } catch {}
+    assert.throws(() => statSync(fourthRoot), { code: "ENOENT" }, "cancel never leaves a sealed material root");
 
     const fifth = startInput(reconnectSource, id(), token(), "crash-after-seal");
     await client.start(fifth);
@@ -470,6 +475,22 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     } finally {
       await coldCancellation.close();
     }
+    const cancelledRoot = join(runtime, "capture-v2", "materials", cancelCrash.captureId);
+    const cleanupDeadline = Date.now() + 4_000;
+    let cleanupObserved = false;
+    while (Date.now() < cleanupDeadline) {
+      try { statSync(cancelledRoot); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        cleanupObserved = true;
+        break;
+      }
+      await delay(10);
+    }
+    assert.equal(cleanupObserved, true, "the owner reaches the deterministic post-cleanup pause");
+    const cancellationJournal = JSON.parse(readFileSync(join(runtime, "capture-v2", `${cancelCrash.captureId}.json`), "utf8"));
+    assert.equal(cancellationJournal.state, "recording", "terminal cancellation is not durable before cleanup acknowledgment");
+    assert.equal(cancellationJournal.cancel_requested, true, "cancel acknowledgment is already durable");
     const cancelOwner = (client as unknown as { transport: { child: { kill: (signal: string) => boolean; once: (event: string, callback: () => void) => void } } }).transport.child;
     const cancelOwnerExit = new Promise<void>((resolveExit) => cancelOwner.once("exit", resolveExit));
     assert.equal(cancelOwner.kill("SIGKILL"), true, "crash after the durable cancellation acknowledgment");
@@ -477,7 +498,13 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
     await delay(100);
     await client.handshake(15_000);
-    const cancelledCrash = await client.inspect({ captureId: cancelCrash.captureId, ownerToken: cancelCrash.ownerToken });
+    let cancelledCrash: CaptureStatus;
+    try {
+      cancelledCrash = await client.inspect({ captureId: cancelCrash.captureId, ownerToken: cancelCrash.ownerToken });
+    } catch (error) {
+      preserveCancelRuntime = true;
+      throw error;
+    }
     assert.equal(cancelledCrash.state, "cancelled", "accepted cancellation survives owner crash and recovery");
     assert.throws(() => statSync(join(runtime, "capture-v2", "materials", cancelCrash.captureId)), { code: "ENOENT" });
 
@@ -548,6 +575,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     if (oldFinalizeDelay === undefined) delete process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS; else process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS = oldFinalizeDelay;
     if (oldReleaseDelay === undefined) delete process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS; else process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS = oldReleaseDelay;
     if (oldReadinessUnavailable === undefined) delete process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE; else process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = oldReadinessUnavailable;
+    if (oldCancelCleanupBundle === undefined) delete process.env.APPARENT_CAPTURE_TEST_CANCEL_CLEANUP_BUNDLE_ID; else process.env.APPARENT_CAPTURE_TEST_CANCEL_CLEANUP_BUNDLE_ID = oldCancelCleanupBundle;
     if (process.env.APPARENT_CAPTURE_EVIDENCE_DIR) {
       try {
         const evidence = resolve(process.env.APPARENT_CAPTURE_EVIDENCE_DIR);
@@ -559,13 +587,18 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
         writeFileSync(join(diagnostic, "xserver-exit.json"), `${JSON.stringify({ exitCode: xserver.exitCode, signalCode: xserver.signalCode })}\n`, { mode: 0o600 });
       } catch { /* no diagnostic file was produced */ }
     }
+    const preserveRoot = process.env.APPARENT_CAPTURE_TEST_PRESERVE_RUNTIME_DIR;
     if (scenarioPassed) {
       rmSync(runtime, { recursive: true, force: true });
+    } else if (preserveCancelRuntime && preserveRoot) {
+      const destination = join(resolve(preserveRoot), "runtime");
+      mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+      chmodSync(dirname(destination), 0o700);
+      renameSync(runtime, destination);
     } else {
-      // Keep the test-owned private runtime (including its authenticated
-      // journals) available for diagnosis. The 0700 directory must not be
-      // copied into shared evidence because journals contain owner tokens.
+      // Retain failed synthetic journals privately; they contain owner tokens.
       process.stderr.write(`capture peer failed; private synthetic runtime retained at ${runtime}\n`);
+
     }
   }
 });

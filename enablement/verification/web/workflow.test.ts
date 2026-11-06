@@ -253,3 +253,12 @@ test('supported native candidates qualify Rust before admission, while Config ma
   assert.match(component.slice(firstRust, component.indexOf('id: admit')), /inputs\.language == 'native' && steps\.candidate-support\.outputs\.supported == 'true'/)
   assert.match(section(entry('platform-config'), 'stream'), /pull-requests: read/)
 })
+
+
+test('Onboarding keeps its TypeScript-only package lanes and authenticates PR candidates on main', () => {
+  const source = entry('onboarding')
+  const matrix = JSON.parse(source.match(/^\s+matrix: (.+)$/m)![1]).include
+  assert(matrix.every((row: any) => row.language === 'typescript' && row.kind === 'npm'))
+  assert.match(section(source, 'stream'), /pull-requests: read/)
+  assert.match(component, /inputs\.language == 'native' && steps\.candidate-support\.outputs\.supported == 'true'/)
+})

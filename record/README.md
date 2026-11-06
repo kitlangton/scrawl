@@ -60,8 +60,13 @@ verified tarball SHA-256 is
 `f0c4b9777033bcde0463e0442074e5af714cddaed1c45452802012e66d21c156`.
 
 Assembly requires at least one selected frame, one contact sheet, and exact
-sealed media references. Each artifact declares the exact materials key; media
-hashes and identities must match the validated material inventory. Generated
+sealed media references. Hosts may supply video/audio as `materialReferences`
+instead of reading media bytes into JavaScript; Record derives each media
+inventory hash, length, and identity only from the SDK-validated original
+materials payload. References must name the declared video/audio files, and
+cannot overlap byte-backed artifacts. Existing byte-backed media callers keep
+their behavior. Each artifact declares the exact materials key; media hashes
+and identities must match the validated material inventory. Generated
 documents have no filesystem identity. Image seals remain caller-attested,
 not authenticated derivative receipts: inventory provenance distinguishes them
 from material references and generated documents. A publisher must still

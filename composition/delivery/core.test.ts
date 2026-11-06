@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
 import { assertBuildWorkflowIdentity } from './cli.ts'
-import { mediaBuildIdentity, supportsPrCandidate, appShellBuildEnvironment, nativeBuildIdentity, assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
+import { mediaBuildIdentity, supportsPrCandidate, packageBuildEnvironment, nativeBuildIdentity, assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
 // accidentally use the hook caller's index, object database or worktree.
@@ -424,11 +424,11 @@ test('native fingerprints invalidate when the actual compiler output or flags ch
 
 
 test('App Shell reuse fingerprints packaging overrides without unrelated workflow settings', () => {
-  const baseline = appShellBuildEnvironment({})
-  for (const name of ['ELECTRON_OVERRIDE_DIST_PATH', 'ELECTRON_MIRROR', 'ELECTRON_RUN_AS_NODE', 'npm_config_arch', 'NPM_CONFIG_PLATFORM', 'NODE_OPTIONS', 'NODE_ENV']) {
-    assert.notDeepEqual(appShellBuildEnvironment({ [name]: 'changed' }), baseline, name)
+  const baseline = packageBuildEnvironment({}, true)
+  for (const name of ['ELECTRON_OVERRIDE_DIST_PATH', 'ELECTRON_MIRROR', 'ELECTRON_RUN_AS_NODE', 'npm_config_arch', 'NPM_CONFIG_PLATFORM', 'NODE_OPTIONS', 'NODE_ENV', 'NODE_PATH', 'ESBUILD_BINARY_PATH']) {
+    assert.notDeepEqual(packageBuildEnvironment({ [name]: 'changed' }, true), baseline, name)
   }
-  assert.deepEqual(appShellBuildEnvironment({ GITHUB_RUN_ID: 'different', PUBLIC_POSTHOG_TOKEN: 'synthetic' }), baseline)
+  assert.deepEqual(packageBuildEnvironment({ GITHUB_RUN_ID: 'different', PUBLIC_POSTHOG_TOKEN: 'synthetic' }, true), baseline)
   assert.equal(supportsPrCandidate('app-shell', 'linux-x64'), true)
   assert.equal(supportsPrCandidate('app-shell', 'macos-x64'), true)
   assert.equal(supportsPrCandidate('app-shell', 'web'), false)
@@ -516,4 +516,36 @@ test('Config candidate sealing retains each staged helper manifest under its own
     assert.equal(JSON.parse(manifest).sourceSha, 'b'.repeat(40))
   }
   assert.throws(() => sealPayload(repo, config, 'linux-x64', input, resolve(temp, 'config-wrong-workflow'), 'c'.repeat(64), { ...prEnv, GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-engine.yml@refs/pull/9/merge' }, true), /canonical/)
+})
+
+test('Onboarding fingerprints package build overrides without probing a native toolchain', () => {
+  const root = resolve(temp, 'onboarding-fingerprint'); newRepo(root)
+  const bin = resolve(temp, 'onboarding-no-native'); mkdirSync(bin)
+  for (const tool of ['rustc', 'cargo']) { const path = resolve(bin, tool); writeFileSync(path, '#!/bin/sh\nexit 99\n'); chmodSync(path, 0o755) }
+  const onboarding: Owner = { ...owner, id: 'onboarding', package: 'onboarding', inputs: ['onboarding/'] }
+  const saved = { PATH: process.env.PATH, ESBUILD_BINARY_PATH: process.env.ESBUILD_BINARY_PATH, npm_config_ignore_scripts: process.env.npm_config_ignore_scripts }
+  try {
+    process.env.PATH = bin + ':' + process.env.PATH
+    const initial = inputDigest(root, onboarding)
+    process.env.ESBUILD_BINARY_PATH = '/synthetic/pinned-esbuild'
+    assert.notEqual(inputDigest(root, onboarding), initial)
+    const changed = inputDigest(root, onboarding); process.env.npm_config_ignore_scripts = 'true'
+    assert.notEqual(inputDigest(root, onboarding), changed)
+  } finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value } }
+  assert.deepEqual(packageBuildEnvironment({ ELECTRON_MIRROR: 'unrelated' }), packageBuildEnvironment({}))
+})
+
+test('Onboarding promotion retains its verified npm package and build provenance on both targets', () => {
+  const onboarding: Owner = { ...owner, id: 'onboarding', package: 'onboarding', inputs: ['onboarding/'], targets: ['linux-x64', 'macos-x64'] }
+  const input = resolve(temp, 'onboarding-candidate'); mkdirSync(input)
+  writeFileSync(resolve(input, 'apparent-onboarding.tgz'), 'synthetic packaged JS and CSS')
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-onboarding.yml@refs/pull/9/merge', GITHUB_RUN_ID: '1001', GITHUB_RUN_ATTEMPT: '1' }
+  for (const target of onboarding.targets) {
+    const sealed = resolve(temp, 'onboarding-sealed-' + target), promoted = resolve(temp, 'onboarding-promoted-' + target)
+    const receipt = sealPayload(repo, onboarding, target, input, sealed, 'a'.repeat(64), prEnv, true)
+    const zip = resolve(temp, 'onboarding-' + target + '.zip'); execFileSync('zip', ['-q', zip, 'component.tar.gz', 'receipt.json'], { cwd: sealed })
+    const next = reusePayload(repo, onboarding, target, zip, promoted, receipt.inputDigest, receipt.sourceSha, '99', '1001', '1', { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-onboarding.yml@refs/heads/main', GITHUB_RUN_ID: '1002' })
+    assert.equal(next.buildSourceSha, receipt.sourceSha); assert.equal(next.reusedFrom.runId, '1001')
+    assert.deepEqual(readFileSync(resolve(promoted, 'component.tar.gz')), readFileSync(resolve(sealed, 'component.tar.gz')))
+  }
 })
