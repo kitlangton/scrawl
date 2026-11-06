@@ -7,7 +7,7 @@ import test from "node:test";
 import { assembleCanonicalBundle, type BundleAssemblyInput } from "@apparent/record/processing/bundle";
 import { prepareRecordPublication } from "../../dist/backend/publication/staging.js";
 import { createCompletedCapturePublisher } from "../../dist/backend/publication/completed-capture.js";
-import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, validateFactFile, validateMaterialsDocument, type MaterialsDocument } from "@apparent/engine-sdk/capture";
+import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, validateFactFile, validateMaterialsDocument, type MaterialsDocument, type StrokeFacts } from "@apparent/engine-sdk/capture";
 import { createRecordPublicationRecovery } from "../../dist/backend/publication/recovery.js";
 import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
 import { SqlitePublicationBindingStore } from "../../dist/backend/publication/store.js";
@@ -123,7 +123,7 @@ test("public SDK validator seals RGB facts and canonical assembly preserves abse
   const manifest = { ...input.manifest, key: { ...identity, revision: sha(payloadBytes) }, payloadFile: { ...input.manifest.payloadFile,
     sha256: sha(payloadBytes), identity: { ...input.manifest.payloadFile.identity, size: payloadBytes.byteLength } } };
   const materials = validateMaterialsDocument(manifest, payloadBytes);
-  const validated = validateFactFile(strokeFile, strokeBytes, materials, "acceptedStrokes");
+  const validated = validateFactFile(strokeFile, strokeBytes, materials, "acceptedStrokes") as StrokeFacts;
   assert.deepEqual(validated.strokes.map(stroke => stroke.rgb), colors);
   for (const bad of [[0, 0], [0, 0, 256], [0, -1, 0], [0, 1.5, 0], [0, 0, "0"]]) {
     const invalid = bytes({ schema: "apparent.capture-strokes/1", identity, coordinates: "target-normalized-10000",
@@ -170,7 +170,7 @@ test("public SDK validator seals RGB facts and canonical assembly preserves abse
     admission: { ...input.admission, captureId: identity.captureId, materialsId: identity.materialsId },
     additionalCanonicalFacts: { strokes: strokes.map(stroke => ({ id: stroke.id, t0: 100, t1: 200, fw: 800, fh: 600, pts: [100, 100, 0] })) } });
   spoof.frames[0]!.absolutePath = join(spoof.admission.bundlePath, spoof.frames[0]!.artifactPath);
-  spoof.additionalCanonicalFacts!.strokes![1]!.rgb = [1, 2, 3] as never;
+  Object.assign(spoof.additionalCanonicalFacts!.strokes![1]!, { rgb: [1, 2, 3] });
   assert.throws(() => assembleCanonicalBundle(spoof, {}), /cannot supply observed RGB/u);
 });
 
