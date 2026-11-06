@@ -68,8 +68,7 @@ test('compiled demo clipboard preflights, writes exact Record text once with a f
   server.listen(socketPath);await once(server,'listening');await chmod(socketPath,0o600);const run=promisify(execFile);const cli=new URL('../../dist/cli.js',import.meta.url).pathname;
   try{
     const malformed=await run(process.execPath,[cli,'demo','--clipboard','--out',join(root,'bad.apparent'),'--json','--json'],{env:{...process.env,HOME:root}}).then(()=>null,(error:any)=>error);assert.equal(malformed.code,2);assert.equal(malformed.stdout,'');assert.equal(snapshots,0);await assert.rejects(access(join(root,'bad.apparent')));
-    for(const badOut of [`${root}/nested/../bad.apparent`, `${root}/nul\0.apparent`]) {
-      if (badOut.includes('\0')) continue; // execFile itself rejects NUL arguments before starting the CLI.
+    for(const badOut of [`${root}/nested/../bad.apparent`]) {
       const invalid=await run(process.execPath,[cli,'demo','--clipboard','--out',badOut],{env:{...process.env,HOME:root}}).then(()=>null,(error:any)=>error);
       assert.equal(invalid.code,2);assert.match(invalid.stderr,/canonical absolute/);assert.equal(snapshots,0);
     }
