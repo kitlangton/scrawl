@@ -81,3 +81,13 @@ installer process group has a 240-second deadline; acquisition timeouts and one
 retry bound mirror stalls without changing tests or workflow budgets. Architecture
 checker installs retain `npm ci` and integrity checks, with a lockfile-keyed npm
 download cache and offline preference; cached packages do not replace fresh checks.
+
+Capture/2 is independently discoverable as `engine-capture-native` from
+`engine/delivery/capture/delivery.json`, Linux x64 only. Its `engine/` and `.cargo/`
+inputs include the standalone Cargo manifests/lock, Core and native launcher;
+mandatory delivery/architecture/workflow inputs are added by admission. The CI
+capture dependency profile adds X11 and H264 encoder/parser plugins to the bounded
+Ubuntu installer. Existing `engine-native` and `engine-media-native` retain their
+own routes. Select the absolute manifest launch entry and its 40-second shutdown
+grace; registration does not activate installed routing or certify unsupported
+Wayland, macOS, audio, drawing or publication capabilities.
