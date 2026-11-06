@@ -117,3 +117,9 @@ a real recipient caller to supply bounded strict decoding, current
 authorization-derived sender key and pinned expected context, then retain Rust
 unpack/native publication and authorization gates until those consumers are
 independently verified.
+
+## Canonical API base compatibility
+
+Client settings and recipient contexts accept a legacy root API URL or the exact `/connect` API base. API routes are appended to that base; HTTP Origin/CSRF allowlists remain origin-only. The signed envelope context stays pinned to the exact normalized transport base, account, capture, sender grant and group. The migration-only production crypto lane exercises both root and mounted contexts through actual Rust pack/unpack and TypeScript encryption/signatures. Ordinary TypeScript package commands do not invoke Rust.
+
+The active native caller remains authoritative migration debt. This source change does not update installed apps: publication/adoption of a client containing the mounted-base fix is required before the canonical setup command is available to those installations. Keep the existing root API compatibility profile until those consumers migrate.

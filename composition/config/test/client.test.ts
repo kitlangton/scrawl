@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createConfigBackend } from '../src/client.ts';
+import { createConfigBackend, createRecordPenColorConfig } from '../src/client.ts';
 
 const peer = fileURLToPath(new URL('./peer.ts', import.meta.url));
 async function options(mode = 'ok') {
@@ -107,4 +107,30 @@ test('adoption loses no safety on unknown publication or transport loss', async 
       else await assert.rejects(backend.read('onboarding'), /unavailable/i);
     } finally { await backend.close(); }
   }
+});
+
+test('Record facade fixes owner and key, preserves absent versus null, and reports fresh CAS conflict', async () => {
+  const base = await options();
+  const { ownerId: _ownerId, ...recordOptions } = base;
+  const record = await createRecordPenColorConfig(recordOptions);
+  try {
+    assert.deepEqual(await record.read(), { present: true, value: null });
+    assert.deepEqual(await record.compareAndSwap({ present: true, value: null }, { present: true, value: 'blue' }), { status: 'saved' });
+  } finally { await record.close(); }
+
+  const conflictOptions = await options('conflict');
+  const { ownerId: _conflictOwner, ...conflictRecordOptions } = conflictOptions;
+  const conflictRecord = await createRecordPenColorConfig(conflictRecordOptions);
+  try {
+    assert.deepEqual(await conflictRecord.compareAndSwap({ present: false, value: null }, { present: false, value: null }), { status: 'conflict', current: { present: true, value: null } });
+  } finally { await conflictRecord.close(); }
+
+  const onboarding = await createConfigBackend(base);
+  try { await assert.rejects(onboarding.readPenColor(), /record owner/i); }
+  finally { await onboarding.close(); }
+
+  const unknown = await createRecordPenColorConfig({ ...recordOptions, configPath: join(tmpdir(), 'unknown.json') });
+  try {
+    assert.equal((await unknown.compareAndSwap({ present: false, value: null }, { present: true, value: 'red' })).status, 'unknown');
+  } finally { await unknown.close(); }
 });

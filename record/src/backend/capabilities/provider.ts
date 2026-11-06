@@ -37,8 +37,10 @@ export interface RecordNativePort {
   readFacts(): Promise<RecordNativeFacts>;
   /** Optional notification only; each notification causes an authoritative reread. */
   observe?(listener: () => void): () => void;
+  /** Detaches this adapter only; must not close its caller-owned transport. */
+  dispose?(): void;
   /** Dispatch only. This receipt cannot establish an operation outcome. */
-  dispatch?(command: NativeAction): Promise<"accepted" | "refused" | "cancelled" | "outcome-unknown">;
+  dispatch?(command: NativeAction, observed?: { providerEpoch: string; revision: number }): Promise<"accepted" | "refused" | "cancelled" | "outcome-unknown">;
 }
 
 /** Producer seam for assembled, authenticated Record output and reservation facts. */
@@ -95,9 +97,10 @@ function validNativeFacts(value: unknown): value is RecordNativeFacts {
     typeof item.relaunchNeeded === "boolean" && ["granted", "denied", "not-determined", "unavailable"].includes(item.status) &&
     Array.isArray(item.allowedRepairActions) && item.allowedRepairActions.every((action: unknown) => ["request-permission", "open-system-settings", "request-safe-relaunch"].includes(String(action))));
   const shortcut = facts.shortcut as Record<string, unknown> | undefined;
-  const validShortcut = !!shortcut && (shortcut.effective === null || typeof shortcut.effective === "string") &&
+  const validShortcut = !!shortcut && (shortcut.configured === undefined || shortcut.configured === null || typeof shortcut.configured === "string") &&
+    (shortcut.effective === null || typeof shortcut.effective === "string") &&
     (shortcut.label === null || typeof shortcut.label === "string") &&
-    ["registered", "unregistered", "externally-managed", "unknown"].includes(String(shortcut.registration)) &&
+    ["registered", "unregistered", "externally-managed", "unknown", "unavailable"].includes(String(shortcut.registration)) &&
     typeof shortcut.externallyManaged === "boolean" && (shortcut.draft === null || (!!shortcut.draft && typeof shortcut.draft === "object" &&
       typeof (shortcut.draft as Record<string, unknown>).sessionId === "string" && typeof (shortcut.draft as Record<string, unknown>).value === "string"));
   return validRequirements && validShortcut;
@@ -143,14 +146,14 @@ function validRecordCaptureFacts(value: unknown): value is RecordCaptureFacts {
   return validCaptures && validAdmission;
 }
 
-function revisionedPortSnapshots<T extends { version: 1; providerEpoch: string; revision: number }>() {
+function revisionedPortSnapshots<T extends { version: 1; providerEpoch: string; revision: number }>(fingerprintOf: (value: T) => unknown = value => value) {
   let epoch: string | undefined;
   let revision = -1;
   let fingerprint = "";
   const retired = new Set<string>();
   return (next: T): T | undefined => {
     if (retired.has(next.providerEpoch)) return undefined;
-    const nextFingerprint = JSON.stringify(next);
+    const nextFingerprint = JSON.stringify(fingerprintOf(next));
     if (epoch === undefined || epoch !== next.providerEpoch) {
       if (epoch !== undefined) retired.add(epoch);
       epoch = next.providerEpoch;
@@ -211,7 +214,8 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
   let nativeReadSequence = 0;
   let nativeFacts = unavailableNative();
   let outputFacts = unavailableCaptureFacts();
-  const acceptNativeSnapshot = revisionedPortSnapshots<RecordNativeFacts>();
+  // Record edit drafts are consumer-owned UI state layered over immutable native facts.
+  const acceptNativeSnapshot = revisionedPortSnapshots<RecordNativeFacts>(value => ({ ...value, shortcut: { ...value.shortcut, draft: null } }));
   const acceptOutputSnapshot = revisionedPortSnapshots<RecordCaptureFacts>();
   let pen = unknownPen();
   const captures = new Map<string, CaptureFact>();
@@ -284,7 +288,9 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
     if (command.expected.providerEpoch !== current.providerEpoch || command.expected.revision !== current.revision)
       return refuse(command, "stale provider epoch or revision");
     if (!command.requestId.trim() || usedRequests.has(command.requestId)) return refuse(command, "request ID is empty or already used");
-    const response = (status: CommandResult["status"]): CommandResult => ({ status, requestId: command.requestId, snapshot: snapshot() }) as CommandResult;
+    const response = (status: CommandResult["status"]): CommandResult => status === "refused"
+      ? refuse(command, "action refused or unavailable")
+      : { status, requestId: command.requestId, snapshot: snapshot() } as CommandResult;
     if (command.type === "refresh") { await refresh(); await options.runtime.dispatch({ type: "refresh-readiness" }); publish(); return response("accepted"); }
     if (command.type === "select-pen") {
       if (!options.penConfig) return refuse(command, "authoritative config backend unavailable");
@@ -357,7 +363,7 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
     if (!options.native?.dispatch) return refuse(command, "native host action port unavailable");
     usedRequests.add(command.requestId);
     try {
-      const status = await options.native.dispatch(nativeCommand);
+      const status = await options.native.dispatch(nativeCommand, { providerEpoch: nativeFacts.providerEpoch, revision: nativeFacts.revision });
       await refresh();
       return response(status);
     } catch { await refresh(); return response("outcome-unknown"); }
@@ -377,8 +383,9 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
     detach() {
       if (detached) return;
       detached = true; unsubscribeRuntime(); unsubscribeNative(); unsubscribeCaptureFacts(); listeners.clear();
-      // Runtime disposal only detaches subscriptions; native capture ownership stays with Engine.
-      options.runtime.dispose();
+      // Native adapter cleanup cannot strand the separately owned runtime subscription.
+      try { options.native?.dispose?.(); }
+      finally { options.runtime.dispose(); }
     },
   };
   return client;

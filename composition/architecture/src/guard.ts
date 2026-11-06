@@ -19,7 +19,7 @@ const packageOwners: Record<string, Owner> = {
   '@apparent/connect-client': 'connect', '@apparent/connect-static-hosting': 'connect',
 };
 const publicEdges: Record<Owner, Owner[]> = {
-  engine: ['shared'], record: ['engine', 'shared'], agent: ['engine', 'shared'], onboarding: ['record', 'shared'],
+  engine: ['shared'], record: ['engine', 'shared'], agent: ['engine', 'record', 'shared'], onboarding: ['record', 'shared'],
   connect: ['shared'], shared: [], composition: ['engine', 'record', 'agent', 'onboarding', 'shared'], legacy: [], other: [],
 };
 const sourceExt = new Set(['.ts', '.tsx', '.cts', '.mts']);

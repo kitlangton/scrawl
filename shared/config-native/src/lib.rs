@@ -129,6 +129,109 @@ pub fn read_for_adoption_in(path: &Path, owner: &str) -> Result<AdoptionSnapshot
     adoption_snapshot(&config, owner)
 }
 
+/// Read Record's bounded legacy pen color under the shared config writer lock.
+pub fn read_pen_color_in(path: &Path) -> Result<LegacyValue> {
+    let writer = ConfigWriter::acquire(path, None)?;
+    let config = read_snapshot(&writer, path)?;
+    top_level_value(&config, "penColor")
+}
+
+/// Presence/value CAS for Record's existing top-level `penColor` setting.
+/// A missing desired value removes the key; stored JSON null remains present.
+pub fn compare_and_swap_pen_color_in(
+    path: &Path,
+    expected: LegacyValue,
+    next: LegacyValue,
+) -> Result<LegacyCasResult> {
+    validate_legacy_value(&expected)?;
+    validate_legacy_value(&next)?;
+    let mut outcome = None;
+    update_config_checked_in(path, None, |config| {
+        let current = top_level_value(config, "penColor")?;
+        if current != expected {
+            outcome = Some(LegacyCasResult::Conflict(current));
+            return Ok(false);
+        }
+        let top = config.as_object_mut().context("Config must be an object")?;
+        if next.present { top.insert("penColor".to_owned(), next.value.clone()); }
+        else { top.remove("penColor"); }
+        outcome = Some(LegacyCasResult::Saved);
+        Ok(true)
+    })?;
+    Ok(outcome.expect("transaction always sets outcome"))
+}
+
+fn top_level_value(config: &serde_json::Value, key: &str) -> Result<LegacyValue> {
+    let top = config.as_object().context("Config must be an object")?;
+    let value = top.get(key).cloned();
+    let value = LegacyValue { present: value.is_some(), value: value.unwrap_or(serde_json::Value::Null) };
+    validate_legacy_value(&value)?;
+    Ok(value)
+}
+
+fn validate_legacy_value(value: &LegacyValue) -> Result<()> {
+    ensure!(value.present || value.value.is_null(), "Invalid legacy config presence");
+    ensure!(serde_json::to_vec(&value.value)?.len() <= 16 * 1024, "Legacy config value exceeds size limit");
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LegacyCasResult { Saved, Conflict(LegacyValue) }
+
+/// Run one bounded native effect only while Record's fixed pen color still
+/// matches the observed presence/value. The shared config writer lock remains
+/// held for the whole callback, ordering the effect after earlier settings CAS
+/// operations and before later ones.
+///
+/// Lock order is config writer lock, then any runtime/native resource lock the
+/// callback needs. The callback must not reenter config access, perform
+/// filesystem or network work, or wait without its caller's deadline/admission
+/// policy. An error is propagated and is never reported as `Applied`.
+pub fn with_pen_color_current_in<T>(
+    path: &Path,
+    expected: LegacyValue,
+    effect: impl FnOnce() -> Result<T>,
+) -> Result<PenColorEffectResult<T>> {
+    pen_color_effect_in(path, expected, None, effect)
+}
+
+/// Bounded hosts must use this variant and retain their admission deadline
+/// through lock acquisition and the final check immediately before the effect.
+/// The callback still owns cancellation/bounding once an effect has started.
+pub fn with_pen_color_current_allowed_in<T>(
+    path: &Path,
+    expected: LegacyValue,
+    allowed: &dyn Fn() -> bool,
+    effect: impl FnOnce() -> Result<T>,
+) -> Result<PenColorEffectResult<T>> {
+    pen_color_effect_in(path, expected, Some(allowed), effect)
+}
+
+fn pen_color_effect_in<T>(
+    path: &Path,
+    expected: LegacyValue,
+    allowed: Option<&dyn Fn() -> bool>,
+    effect: impl FnOnce() -> Result<T>,
+) -> Result<PenColorEffectResult<T>> {
+    validate_legacy_value(&expected)?;
+    let writer = ConfigWriter::acquire(path, allowed)?;
+    let config = read_snapshot(&writer, path)?;
+    let current = top_level_value(&config, "penColor")?;
+    if current != expected {
+        return Ok(PenColorEffectResult::Conflict(current));
+    }
+    ensure!(allowed.is_none_or(|check| check()), "cancelled");
+    let result = effect()?;
+    drop(writer);
+    Ok(PenColorEffectResult::Applied(result))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PenColorEffectResult<T> {
+    Applied(T),
+    Conflict(LegacyValue),
+}
+
 /// Adopt a legacy value only while both the owner entry is still absent and
 /// the exact legacy key still matches the caller's observed presence/value.
 pub fn adopt_legacy_in(

@@ -589,7 +589,7 @@ mod tests {
             {"t0": 900, "t1": 900, "fw": 2560, "fh": 1440,
              "pin": 1, "pts": [640, 720, 0]},
             {"t0": 1000, "t1": 1200, "fw": 2560, "fh": 1440,
-             "pts": [1900, 500, 0, 2100, 700, 200]}
+             "rgb": [17, 61, 239], "pts": [1900, 500, 0, 2100, 700, 200]}
         ]))
         .unwrap();
         let mut options = Options {
@@ -682,6 +682,8 @@ mod tests {
             colored > 30,
             "pin and stroke are visible after the click has faded"
         );
+        assert!(blue_pixels(&late) > 30,
+            "the recorded blue stroke survives real H.264 export after click ripples expire");
         let audio_at = |time: &str| {
             Command::new("ffmpeg")
                 .args(["-v", "error", "-ss", time, "-i"])

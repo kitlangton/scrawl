@@ -479,6 +479,69 @@ fn shortcuts_round_trip_through_the_config_keeping_other_keys_and_0600() {
     assert_eq!(read_json(&path)["ingestToken"], "secret");
 }
 
+#[test]
+fn native_shortcut_compare_and_save_refuses_a_changed_persisted_value() {
+    let dir = TempDir::new("native-shortcut-cas");
+    let path = dir.0.join("config.json");
+    let legacy = dir.0.join("absent-legacy");
+    let expected = ShortcutConfig::default_record();
+    let current = ShortcutConfig { key_code: R, carbon_modifiers: CTRL_OPT, label: label(CTRL_OPT, "R") };
+    let proposed = ShortcutConfig { key_code: V, carbon_modifiers: CTRL_OPT, label: label(CTRL_OPT, "V") };
+    save_shortcut_in(&path, ShortcutKind::Record, &current).unwrap();
+    assert!(!save_shortcut_if_current_in(&path, ShortcutKind::Record, &expected, &proposed).unwrap());
+    assert_eq!(Shortcuts::load_from(&path, &legacy).0.record, current);
+}
+
+#[test]
+fn native_shortcut_admission_observation_is_not_rebased_after_external_edit() {
+    let dir = TempDir::new("native-shortcut-admission-race");
+    let path = dir.0.join("config.json");
+    let legacy = dir.0.join("absent-legacy");
+    let admitted = ShortcutConfig::default_record();
+    let external = ShortcutConfig { key_code: R, carbon_modifiers: CTRL_OPT, label: label(CTRL_OPT, "R") };
+    let proposed = ShortcutConfig { key_code: V, carbon_modifiers: CTRL_OPT, label: label(CTRL_OPT, "V") };
+    let effect_called = std::cell::Cell::new(false);
+    save_shortcut_in(&path, ShortcutKind::Record, &external).unwrap();
+    let result = save_shortcut_if_current_allowed_in(
+        &path, ShortcutKind::Record, &admitted, &proposed, &|| true,
+        || { effect_called.set(true); Ok(()) },
+    ).unwrap();
+    assert!(!result, "the stale observation must lose CAS");
+    assert!(!effect_called.get(), "registration must follow the admitted-value check");
+    assert_eq!(Shortcuts::load_from(&path, &legacy).0.record, external);
+}
+
+#[test]
+fn native_shortcut_readback_compensation_preserves_a_concurrent_writer() {
+    let dir = TempDir::new("native-shortcut-readback-race");
+    let path = dir.0.join("config.json");
+    let legacy = dir.0.join("absent-legacy");
+    let old = ShortcutConfig::default_record();
+    let written = ShortcutConfig { key_code: V, carbon_modifiers: CTRL_OPT, label: label(CTRL_OPT, "V") };
+    let external = ShortcutConfig { key_code: R, carbon_modifiers: CTRL_OPT, label: label(CTRL_OPT, "R") };
+    assert!(save_shortcut_if_current_in(&path, ShortcutKind::Record, &old, &written).unwrap());
+    // Force an external writer in the exact window between our config CAS and readback.
+    save_shortcut_in(&path, ShortcutKind::Record, &external).unwrap();
+    assert!(!restore_shortcut_if_current_in(&path, ShortcutKind::Record, &written, &old).unwrap());
+    assert_eq!(Shortcuts::load_from(&path, &legacy).0.record, external);
+}
+
+#[test]
+fn native_shortcut_deadline_is_rechecked_before_registration_and_write() {
+    let dir = TempDir::new("native-shortcut-deadline");
+    let path = dir.0.join("config.json");
+    let old = ShortcutConfig::default_record();
+    let proposed = ShortcutConfig { key_code: V, carbon_modifiers: CTRL_OPT, label: label(CTRL_OPT, "V") };
+    let effect_called = std::cell::Cell::new(false);
+    let result = save_shortcut_if_current_allowed_in(
+        &path, ShortcutKind::Record, &old, &proposed, &|| false,
+        || { effect_called.set(true); Ok(()) },
+    );
+    assert!(result.is_err());
+    assert!(!effect_called.get());
+    assert_eq!(Shortcuts::load_from(&path, &dir.0.join("absent-legacy")).0.record, old);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn copilot_record_shortcut_from_config_is_the_only_record_shortcut_in_settings() {

@@ -1,6 +1,6 @@
 # Connect web
 
-Legacy deployed profile (held until canonical gateway acceptance): `https://app.tryapparent.com/connect`, `/connect/device?code=USERCODE`, and `/connect/shares`, including slash/no-slash variants. Legacy `/hosted`, `/hosted/device` and `/hosted/shares` remain rendering aliases. All six are prerendered with a loading state, no account data, `noindex,nofollow`, and no-referrer/no-store metadata. They are absent from the homepage and sitemap. The sole Pages pipeline composes `connect/web/dist` into Public's packaged artifact. This source adoption is not deployment or real sign-in proof.
+Canonical routes are `https://app.tryapparent.com/connect`, `/connect/device?code=USERCODE`, and `/connect/shares`, including slash/no-slash variants. The legacy Public composition retains its six `/hosted` rendering aliases until cutover. The dedicated Worker instead redirects only exact GET/HEAD requests for `/hosted[/]`, `/hosted/device[/]`, `/hosted/shares[/]`, and the three existing `/hosted/{source-pond-v4,agent-pond-v4,agent-reading-v4}.png` links. It preserves query bytes, including device codes, and redirects to the fixed deployment `SITE_ORIGIN` canonical `/connect` equivalents. These are temporary **302** redirects with `no-store`, `no-referrer`, `noindex`, and no cookies, so rollback does not leave a sticky cached redirect. Other methods receive 405; unknown, encoded, private and near-prefix paths receive 404. No Connect bytes are copied into Public by this compatibility bridge. The aliases remain absent from the homepage and sitemap. This source adoption is not deployment or real sign-in proof.
 
 The setup dialog uses `apparent connect login` and `apparent connect status`.
 It tells users to update Apparent for `connect`; older apps can use `apparent cloud`,
@@ -17,6 +17,8 @@ The frontend is aligned to `connect/docs/hosted-api.md`; `connect/web/src/api.ts
 - Upload permission includes add/read/delete of account captures, per backend contract. Agent `read` is a separate read-only credential. Unknown scopes fail closed. No browser endpoint should return device secrets or bearer tokens.
 
 The canonical deployment profile uses `VITE_HOSTED_API_ORIGIN=https://app.tryapparent.com/connect`, `API_ORIGIN=https://app.tryapparent.com/connect` and `SITE_ORIGIN=https://app.tryapparent.com`. UI, API, authentication callbacks, capability links and viewer assets share this origin and mount. Browser configuration accepts only a deployment-controlled HTTPS origin or exact `/connect` base (loopback HTTP for local tests), without credentials, query or fragment. This is public configuration, never an OAuth secret. CORS and CSRF still compare exact origins, with HttpOnly/Secure/SameSite cookie protections. The currently deployed legacy profile uses `https://hosted.tryapparent.com` for the API and host-only cookies; retain it only for compatibility until the canonical gateway and provider callback are accepted. Public Pages composition is a legacy deployment path, not the canonical target.
+
+Better Auth receives the API URL's origin as `baseURL` and the full mounted `/connect/auth` path as `basePath`. A path-bearing `baseURL` makes Better Auth ignore `basePath`, breaking callback dispatch even when sign-in initiation works. The artifact verifier builds the service and runs its focused OAuth/mount tests, including the signed provider callback and authenticated session readback, before delivery can seal the artifact.
 
 Session/CSRF data stays in memory, never localStorage or DOM attributes. The human code is only passed to fixed approval endpoints and the fixed sign-in return route, never treated as a capture permission. There is no token input, private capture browser, web recorder, billing, or browser share-creation control. Capture authorization must be enforced by the API; knowing an ID is not access.
 
@@ -83,7 +85,7 @@ npm --prefix connect/tooling/hosting ci --include=dev
 VITE_HOSTED_API_ORIGIN=https://app.tryapparent.com/connect API_ORIGIN=https://app.tryapparent.com/connect SITE_ORIGIN=https://app.tryapparent.com npm --prefix connect/tooling/hosting run verify:artifact
 ```
 
-The verifier installs locked web/service dependencies, builds the browser and existing service implementation, packages the gateway, and tests the compiled artifact with local ASSETS and synthetic D1/R2/auth bindings. Wrangler runtime tests load the deployable config and compiled bytes with bundling disabled. Tests cover UI hydration, anonymous session, account denial, OAuth callback URI/cookies, viewer resources and static privacy boundaries. They do not establish real provider sign-in or live deployment. Evidence stays in private temporary directories.
+The verifier installs locked web/service dependencies, builds the browser and existing service implementation, packages the gateway, and tests the compiled artifact with local ASSETS and synthetic D1/R2/auth bindings. Wrangler runtime tests load the deployable config and compiled bytes with bundling disabled. Tests cover UI hydration, anonymous session, account denial, OAuth callback URI/cookies, viewer resources and static privacy boundaries. They do not establish real provider sign-in or live deployment. Evidence stays in private temporary directories. Runtime tests use an unchanged copy of the deployment package outside `.output`; Wrangler state/cache directories never enter the sealed artifact. Tests stop the runtime process group before removing that copy, and a final inventory guard permits deployment files only. Run one build/verifier at a time per checkout.
 
 The legacy Public composition profile still uses the origin-only API configuration until cutover. Its publisher and compatibility graph checks remain documented in `public/site/docs/pages-deploy.md`; do not use those legacy commands to prepare the canonical gateway artifact or publish synthetic fixtures. Browser, service and recipient tests remain available in their owning packages.
 
@@ -111,10 +113,23 @@ scheduled handler remains the single cleanup implementation. The Wrangler
 template has no routes, preview exposure, provider resource IDs or credentials;
 operator configuration and activation remain separate.
 
+The gateway also preserves the existing API/auth/viewer contract on the exact
+`https://hosted.tryapparent.com` host: `/v1[/...]`, `/auth[/...]`, `/s/...`, and
+the four recipient viewer assets dispatch unchanged to the service under its
+legacy root-origin profile. The legacy profile is cached per runtime environment
+and refreshed when its bindings or secrets change, preserving Better Auth's
+environment-scoped initialization behavior. Other hosts and unknown legacy
+paths do not reach the service. Scheduled cleanup delegates once to that same
+service handler; deployment into the existing Worker must retain its current
+bindings and sole cron. This is synthetic compatibility evidence only; it does
+not authorize or prove provider activation.
+
 The web package retains its canonical and legacy documents for Public
 composition. The hosting packager includes only the three canonical documents,
 rewrites browser assets and illustrations under `/connect`, and rejects
 unexpected inputs and missing resource edges before replacing generated output.
+The Worker separately retains only the exact legacy redirect map described
+above; it does not render or package legacy `/hosted` documents or assets.
 Its build profile uses `VITE_HOSTED_API_ORIGIN` and `API_ORIGIN` set to
 `https://app.tryapparent.com/connect`, with `SITE_ORIGIN` set to
 `https://app.tryapparent.com`. Public's legacy producer profile is unchanged
@@ -160,3 +175,5 @@ synthetic account/device/share states, analytics, no-JS loading HTML and
 artifact/resource closure. Neither lane logs in or accesses private recordings.
 The local Worker run does not establish zone route activation, live cookies,
 OAuth, provider configuration, or deployment.
+
+Legacy `https://hosted.tryapparent.com/s/<capability>` HTML document requests (GET/HEAD) redirect temporarily to `https://app.tryapparent.com/connect/s/<capability>`, with no-store/no-referrer/noindex and query preservation. Metadata and file endpoints under the old link remain service requests for existing clients, not redirects. Existence and authorization are checked by the canonical destination; a redirect does not prove that a recording exists or is ready.

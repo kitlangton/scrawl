@@ -99,7 +99,8 @@ while (pending.length) {
 if (visited.size !== packaged.size) throw new Error(`unreferenced Worker output: ${[...packaged.keys()].filter(path => !visited.has(path)).join(", ")}`)
 for (const [path, bytes] of packaged) if (/\.(?:html|js|css)$/.test(path) && /https?:\/\/(?:localhost|127\.0\.0\.1)|phc_synthetic|dist-test|verified@example/.test(bytes.toString())) throw new Error(`private or synthetic output: ${path}`)
 
-await rm(output, { recursive: true, force: true })
+// Reset only this package-owned generated artifact before writing fresh bytes.
+await rm(resolve(packageRoot, ".output"), { recursive: true, force: true })
 for (const [path, bytes] of packaged) {
   const full = join(output, path)
   await mkdir(join(full, ".."), { recursive: true })

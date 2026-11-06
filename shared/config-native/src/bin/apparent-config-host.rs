@@ -1,4 +1,4 @@
-use apparent_config_native::{adopt_legacy_in, compare_and_swap_stream_state_in, read_for_adoption_in, read_stream_state_in, AdoptResult, CasResult, ConfigPublicationUncertain, LegacyValue};
+use apparent_config_native::{adopt_legacy_in, compare_and_swap_pen_color_in, compare_and_swap_stream_state_in, read_for_adoption_in, read_pen_color_in, read_stream_state_in, AdoptResult, CasResult, ConfigPublicationUncertain, LegacyCasResult, LegacyValue};
 use serde_json::{json, Value};
 use std::{io::{self, BufRead, Read, Write}, path::PathBuf};
 const LIMIT: usize = 64 * 1024;
@@ -34,11 +34,23 @@ fn main() {
 fn dispatch(req: &Value, path: &PathBuf, owner: &str) -> (String, Value) {
     let Some(object) = req.as_object() else { return (String::new(), unknown("invalid request")); };
     let id = object.get("id").and_then(Value::as_str).filter(|id| id.len() <= 128).unwrap_or("").to_owned();
-    let valid_keys = object.keys().all(|k| ["protocol", "id", "operation", "expected", "value", "expectedLegacy"].contains(&k.as_str()));
+    let valid_keys = object.keys().all(|k| ["protocol", "id", "operation", "expected", "value", "expectedLegacy", "next"].contains(&k.as_str()));
     if !valid_keys || object.get("protocol").and_then(Value::as_u64) != Some(1) || id.is_empty() { return (id, unknown("invalid request")); }
     let result = match object.get("operation").and_then(Value::as_str) {
         Some("read") if object.len() == 3 => read_stream_state_in(path, owner).map(|(revision, value)| json!({"revision":revision,"value":value})),
         Some("readForAdoption") if object.len() == 3 => read_for_adoption_in(path, owner).map(|snapshot| snapshot_json(&snapshot)),
+        Some("readPenColor") if object.len() == 3 && owner == "record" => read_pen_color_in(path).map(|value| field_json(&value)),
+        Some("compareAndSwapPenColor") if object.len() == 5 && owner == "record" => {
+            let expected = object.get("expectedLegacy").and_then(parse_legacy_value);
+            let next = object.get("next").and_then(parse_legacy_value);
+            match (expected, next) {
+                (Some(expected), Some(next)) => compare_and_swap_pen_color_in(path, expected, next).map(|result| match result {
+                    LegacyCasResult::Saved => json!({"status":"saved"}),
+                    LegacyCasResult::Conflict(current) => json!({"status":"conflict","current":field_json(&current)}),
+                }),
+                _ => return (id, unknown("invalid request")),
+            }
+        }
         Some("adoptLegacy") if object.len() == 5 => {
             let expected_legacy = object.get("expectedLegacy").and_then(parse_legacy_value);
             let value = object.get("value");
@@ -101,6 +113,8 @@ fn operation_failure(error: &anyhow::Error) -> Value {
         ("Invalid streamState entry", "invalid-owner-entry"),
         ("Invalid streamState revision", "invalid-owner-revision"),
         ("revision limit reached", "revision-limit"),
+        ("Invalid legacy config presence", "invalid-legacy-presence"),
+        ("Legacy config value exceeds size limit", "legacy-value-too-large"),
     ];
     for cause in error.chain() {
         let text = cause.to_string();

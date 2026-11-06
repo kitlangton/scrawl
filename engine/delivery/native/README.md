@@ -63,7 +63,7 @@ check, not provenance authorization.
 ## Producer input closure
 
 The delivery registration accepts directory roots, so the bounded complete
-owner roots are `engine/`, `capture/engine/` and `.cargo/`. `.cargo/config.toml`
+owner roots are `engine/` and `.cargo/`. `.cargo/config.toml`
 sets the Linux CPU baseline and macOS deployment target inherited by Cargo;
 it must participate in native artifact fingerprints. `engine/` includes the producer
 package, Rust manifests/lockfile/source/tests and the SDK files used by
@@ -71,7 +71,7 @@ real-process verification. It also fingerprints the existing `engine/delivery.js
 and the SDK package graph as part of that directory; neither is modified or
 registered as a native producer. Root `Cargo.toml` and `Cargo.lock` are outside
 these roots and are not build inputs: the engine manifest's path dependency
-resolves directly to `capture/engine`.
+resolves directly to `engine/core`.
 
 The common delivery workflow/core, runtime-budget action and verifier inputs
 are included by the delivery system's mandatory input closure.

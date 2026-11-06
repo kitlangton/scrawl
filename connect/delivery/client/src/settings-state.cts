@@ -17,7 +17,7 @@ const expires = (v:unknown):v is number|null => v === null || Number.isSafeInteg
 function serverUrl(raw:string):string|null {
   const value=raw.replace(/\/+$/,'');
   if(value.length>2048 || /[^\x00-\x7f]/.test(value) || /[\x00-\x20\x7f"'\\?#@]/.test(value)) return null;
-  const match=/^(https?):\/\/([^/]+)$/.exec(value);
+  const match=/^(https?):\/\/([^/]+)(?:\/(connect))?$/.exec(value);
   if(!match) return null;
   const [,scheme,authority]=match;
   if(!authority || (authority.match(/:/g)?.length??0)>1) return null;

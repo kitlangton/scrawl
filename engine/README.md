@@ -11,7 +11,8 @@ in [`README-media.md`](README-media.md); it is separate from capture-v1.
 
 `engine/sdk` defines the TypeScript client and JSON Lines contract. The standalone
 `apparent-engine` executable now implements the bounded protocol transport and
-uses `capture/engine` for durable, authenticated admission and receipts. Its
+uses `engine/core` for durable, authenticated admission and receipts. The legacy
+root-application capture runtime remains under `capture/engine/`. Its
 screen adapter is not implemented yet: handshake reports `readiness: "unavailable"`
 and `screenCapture: false`, and an admitted start is durably failed without
 creating media. This is not native capture acceptance. There is still no real

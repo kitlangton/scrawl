@@ -6,6 +6,11 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { assembleCanonicalBundle, type BundleAssemblyInput } from "@apparent/record/processing/bundle";
 import { prepareRecordPublication } from "../../dist/backend/publication/staging.js";
+import { createCompletedCapturePublisher } from "../../dist/backend/publication/completed-capture.js";
+import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, validateFactFile, validateMaterialsDocument, type MaterialsDocument, type StrokeFacts } from "@apparent/engine-sdk/capture";
+import { createRecordPublicationRecovery } from "../../dist/backend/publication/recovery.js";
+import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
+import { SqlitePublicationBindingStore } from "../../dist/backend/publication/store.js";
 
 const identity = { captureId: "a".repeat(32), materialsId: "b".repeat(32) };
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
@@ -15,7 +20,7 @@ const sealed = (relativePath: string, content: Uint8Array, inode: string) => ({
   identity: { device: "1", inode, size: content.byteLength, modifiedNs: "3" },
 });
 
-async function fixture(): Promise<BundleAssemblyInput> {
+async function fixture(): Promise<BundleAssemblyInput & { manifest: MaterialsDocument["manifest"] }> {
   const root = "/private/sdk-valid-materials";
   const source = { id: "display-1", generation: "d".repeat(32), confirmedAtMs: 0, kind: "display" as const,
     displayId: 1, rectangle: { x: 0, y: 0, width: 800, height: 600, scale: 1 },
@@ -54,7 +59,7 @@ async function fixture(): Promise<BundleAssemblyInput> {
     warnings: [], safety: { nativeRemoteDelivery: "forbidden", safeForProcessing: true },
   };
   const payloadBytes = bytes(payload);
-  const manifest = { schema: "apparent.capture-materials/1", key: { ...identity, revision: sha(payloadBytes) }, root,
+  const manifest: MaterialsDocument["manifest"] = { schema: "apparent.capture-materials/1", key: { ...identity, revision: sha(payloadBytes) }, root,
     leaseId: payload.leaseId, payloadFile: { relativePath: "materials.json", sha256: sha(payloadBytes),
       identity: { device: "1", inode: "inode-materials", size: payloadBytes.byteLength, modifiedNs: "3" } } };
   return {
@@ -99,6 +104,74 @@ test("assembles an SDK-validated materials envelope and sealed facts with defaul
   assert.deepEqual(document.context, { workspace: "demo" });
   assert.deepEqual(document.events.map((event: { kind: string }) => event.kind), ["app_change", "click"]);
   assert.deepEqual(result.validatedFacts.transcript?.identity, identity);
+});
+
+test("public SDK validator seals RGB facts and canonical assembly preserves absent, black and observed colors", async () => {
+  const input = await fixture();
+  const payload = JSON.parse(new TextDecoder().decode(input.payloadBytes));
+  const colors = [undefined, [0, 0, 0], [15, 127, 240]] as const;
+  const strokes = colors.map((rgb, index) => ({ id: String(index + 1).repeat(32), surface: "screen", surfaceId: "surface-a", transformId: "transform-a",
+    startMs: 100, endMs: 200, acceptedAtMs: 250, ...(rgb === undefined ? {} : { rgb }), points: [{ timeMs: 100, x: 100, y: 100 }] }));
+  const strokeBytes = bytes({ schema: "apparent.capture-strokes/1", identity, coordinates: "target-normalized-10000",
+    surfaces: [{ surfaceId: "surface-a", transformId: "transform-a", width: 800, height: 600, target: "capture-rectangle" }], strokes });
+  const strokeSeal = sealed("facts/strokes.json", strokeBytes, "inode-strokes");
+  const strokeFile = { relativePath: strokeSeal.relativePath, identity: strokeSeal.identity, sha256: strokeSeal.sha256 };
+  payload.files.push({ relativePath: strokeFile.relativePath, sha256: strokeFile.sha256, identity: strokeFile.identity });
+  payload.facts.acceptedStrokes = { file: strokeFile.relativePath, schema: "apparent.capture-strokes/1" };
+  payload.collection.acceptedStrokes = "collected";
+  const payloadBytes = bytes(payload);
+  const manifest = { ...input.manifest, key: { ...identity, revision: sha(payloadBytes) }, payloadFile: { ...input.manifest.payloadFile,
+    sha256: sha(payloadBytes), identity: { ...input.manifest.payloadFile.identity, size: payloadBytes.byteLength } } };
+  const materials = validateMaterialsDocument(manifest, payloadBytes);
+  const validated = validateFactFile(strokeFile, strokeBytes, materials, "acceptedStrokes") as StrokeFacts;
+  assert.deepEqual(validated.strokes.map(stroke => stroke.rgb), colors);
+  for (const bad of [[0, 0], [0, 0, 256], [0, -1, 0], [0, 1.5, 0], [0, 0, "0"]]) {
+    const invalid = bytes({ schema: "apparent.capture-strokes/1", identity, coordinates: "target-normalized-10000",
+      surfaces: [{ surfaceId: "surface-a", transformId: "transform-a", width: 800, height: 600, target: "capture-rectangle" }],
+      strokes: [{ ...strokes[0], rgb: bad }] });
+    const invalidSeal = sealed("facts/strokes.json", invalid, `inode-bad-${String(bad.length)}-${String(bad[2])}`);
+    const invalidFile = { relativePath: invalidSeal.relativePath, identity: invalidSeal.identity, sha256: invalidSeal.sha256 };
+    const badPayload = structuredClone(payload);
+    badPayload.files[badPayload.files.findIndex((file: { relativePath: string }) => file.relativePath === strokeFile.relativePath)] =
+      { relativePath: invalidFile.relativePath, sha256: invalidFile.sha256, identity: invalidFile.identity };
+    const badPayloadBytes = bytes(badPayload);
+    const badManifest = { ...manifest, key: { ...identity, revision: sha(badPayloadBytes) }, payloadFile: { ...manifest.payloadFile,
+      sha256: sha(badPayloadBytes), identity: { ...manifest.payloadFile.identity, size: badPayloadBytes.byteLength } } };
+    const badMaterials = validateMaterialsDocument(badManifest, badPayloadBytes);
+    assert.throws(() => validateFactFile(invalidFile, invalid, badMaterials, "acceptedStrokes"), /rgb|byte/u);
+  }
+  const result = assembleCanonicalBundle({ ...input, manifest, payloadBytes,
+    artifacts: input.artifacts.map(artifact => ({ ...artifact, materials: manifest.key })),
+    facts: { ...input.facts, acceptedStrokes: { file: strokeFile, bytes: strokeBytes } },
+    admission: { ...input.admission, captureId: identity.captureId, materialsId: identity.materialsId },
+    additionalCanonicalFacts: { strokes: strokes.map(stroke => ({ id: stroke.id, t0: 100, t1: 200, fw: 800, fh: 600, pts: [100, 100, 0] })) } });
+  const document = JSON.parse(new TextDecoder().decode(result.apparentJson));
+  assert.equal(Object.hasOwn(document.strokes[0], "rgb"), false);
+  assert.deepEqual(document.strokes[1].rgb, [0, 0, 0]);
+  assert.deepEqual(document.strokes[2].rgb, [15, 127, 240]);
+  assert.deepEqual(result.validatedFacts.acceptedStrokes?.strokes.map(stroke => stroke.rgb), colors);
+  const publicationRoot = await mkdtemp(join(tmpdir(), "record-rgb-preflight-"));
+  try {
+    const destination = join(publicationRoot, "rgb.apparent");
+    const publishable = assemblyForDestination({ ...input, manifest, payloadBytes,
+      artifacts: input.artifacts.map(artifact => ({ ...artifact, materials: manifest.key })),
+      facts: { ...input.facts, acceptedStrokes: { file: strokeFile, bytes: strokeBytes } },
+      admission: { ...input.admission, captureId: identity.captureId, materialsId: identity.materialsId },
+      additionalCanonicalFacts: { strokes: strokes.map(stroke => ({ id: stroke.id, t0: 100, t1: 200, fw: 800, fh: 600, pts: [100, 100, 0] })) } }, destination);
+    const prepared = await prepareRecordPublication(stagingInput({ ...input, manifest, payloadBytes }, publishable, publicationRoot,
+      "d".repeat(32), destination));
+    assert.equal(prepared.plan.entries.find(entry => entry.relativePath === "apparent.json")?.sha256, sha(publishable.apparentJson));
+    assert.deepEqual(JSON.parse(new TextDecoder().decode(publishable.apparentJson)).strokes.map((stroke: { rgb?: number[] }) => stroke.rgb),
+      [undefined, [0, 0, 0], [15, 127, 240]]);
+  } finally { await rm(publicationRoot, { recursive: true, force: true }); }
+  const spoof = structuredClone({ ...input, manifest, payloadBytes,
+    artifacts: input.artifacts.map(artifact => ({ ...artifact, materials: manifest.key })),
+    facts: { ...input.facts, acceptedStrokes: { file: strokeFile, bytes: strokeBytes } },
+    admission: { ...input.admission, captureId: identity.captureId, materialsId: identity.materialsId },
+    additionalCanonicalFacts: { strokes: strokes.map(stroke => ({ id: stroke.id, t0: 100, t1: 200, fw: 800, fh: 600, pts: [100, 100, 0] })) } });
+  spoof.frames[0]!.absolutePath = join(spoof.admission.bundlePath, spoof.frames[0]!.artifactPath);
+  Object.assign(spoof.additionalCanonicalFacts!.strokes![1]!, { rgb: [1, 2, 3] });
+  assert.throws(() => assembleCanonicalBundle(spoof, {}), /cannot supply observed RGB/u);
 });
 
 test("private staging prepares SDK-validated plan without touching destination or dispatching", async () => {
@@ -257,6 +330,175 @@ test("refuses a staged destination that differs from the assembled bundle path",
     await assert.rejects(prepareRecordPublication(request), /destination|bundle path|binding/u);
     await assertAbsent(request.stagingRoot);
     await assertAbsent(requestedDestination);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("completed-capture composition refuses a mismatched observed status before staging", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-composition-reject-"));
+  const destinationPath = join(root, "final.apparent");
+  assemblyForDestination(input, destinationPath);
+  const client = { async handshake() { throw new Error("must not reach SDK"); } } as unknown as CaptureClient;
+  const publisher = createCompletedCapturePublisher(client, join(root, "control"), preflightCapturePublication);
+  try {
+    await assert.rejects(publisher.publishCompletedCapture({
+      status: { captureId: identity.captureId, state: "materials-ready", materials: { ...input.manifest, leaseId: "e".repeat(32) } } as never,
+      assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
+      stagingRoot: join(root, "staging"), destinationPath,
+    }), /binding conflicts/u);
+    await assertAbsent(join(root, "staging"));
+    await assertAbsent(join(root, "control"));
+    await assert.rejects(publisher.publishCompletedCapture({
+      status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+      assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
+      stagingRoot: join(root, "staging"), destinationPath,
+      derivatives: [{ envelope: {}, bytes: new Uint8Array(), requestedBundleMs: [1000] }] as never,
+    }), error => error instanceof CapturePublicationPreflightError && error.dispatched === false);
+    await assertAbsent(destinationPath);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("completed-capture composition refuses the packed SDK test peer without reserving or creating the destination", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-composition-test-peer-"));
+  const destinationPath = join(root, "final.apparent");
+  assemblyForDestination(input, destinationPath);
+  const client = new CaptureClient(new ReferenceCapturePeer(), { allowTestDouble: true });
+  const publisher = createCompletedCapturePublisher(client, join(root, "control"), preflightCapturePublication);
+  try {
+    await assert.rejects(publisher.publishCompletedCapture({
+      status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+      assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
+      stagingRoot: join(root, "staging"), destinationPath,
+    }), error => error instanceof Error && (error as Error & { dispatched?: boolean }).dispatched === false);
+    assert.equal(await new SqlitePublicationBindingStore(join(root, "control")).get(identity.captureId), undefined);
+    await assertAbsent(destinationPath);
+  } finally { await client.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("completed-capture composition stages the assembled bytes, isolates inputs, and returns only recovery status", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-composition-success-"));
+  const destinationPath = join(root, "final.apparent");
+  assemblyForDestination(input, destinationPath);
+  let dispatched: { ownerToken: string; planBytes: Uint8Array } | undefined;
+  const sdk = {
+    async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
+    async publish(request: { ownerToken: string; planBytes: Uint8Array; captureId: string; publicationId: string; planFile: { planSha256: string } }) {
+      dispatched = { ownerToken: request.ownerToken, planBytes: new Uint8Array(request.planBytes) };
+      return { captureId: request.captureId, state: "publishing", publicationId: request.publicationId, planSha256: request.planFile.planSha256 };
+    },
+  } as unknown as CaptureClient;
+  const publisher = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
+  let binaryJSONCalls = 0;
+  const originalToJSON = Object.getOwnPropertyDescriptor(Uint8Array.prototype, "toJSON");
+  Object.defineProperty(Uint8Array.prototype, "toJSON", { configurable: true,
+    value(this: Uint8Array) { binaryJSONCalls++; return Array.from(this); } });
+  const request = {
+    status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+    assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
+    stagingRoot: join(root, "staging"), destinationPath,
+  };
+  try {
+    const pending = publisher.publishCompletedCapture(request);
+    request.ownerToken = "d".repeat(64);
+    request.assembly.artifacts.find(artifact => artifact.role === "frame")!.bytes.fill(0);
+    const status = await pending;
+    assert.equal(status.state, "publishing");
+    assert.equal("ownerToken" in status, false);
+    assert.equal(dispatched?.ownerToken, "c".repeat(64));
+    assert.ok(dispatched?.planBytes.byteLength);
+    assert.equal(binaryJSONCalls, 0, "publication must hash binary values before JSON traversal");
+    await assertAbsent(destinationPath);
+  } finally {
+    if (originalToJSON) Object.defineProperty(Uint8Array.prototype, "toJSON", originalToJSON);
+    else Reflect.deleteProperty(Uint8Array.prototype, "toJSON");
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("identical completed-capture calls coalesce and conflicting in-flight bindings are refused", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-composition-concurrent-"));
+  const destinationPath = join(root, "final.apparent");
+  assemblyForDestination(input, destinationPath);
+  let startDispatch!: () => void, finishDispatch!: (status: never) => void;
+  const dispatched = new Promise<void>(resolve => { startDispatch = resolve; });
+  const response = new Promise<never>(resolve => { finishDispatch = resolve; });
+  const sdk = {
+    async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
+    async publish(request: { captureId: string; publicationId: string; planFile: { planSha256: string } }) {
+      startDispatch();
+      return response.then(() => ({ captureId: request.captureId, state: "publishing", publicationId: request.publicationId, planSha256: request.planFile.planSha256 })) as never;
+    },
+  } as unknown as CaptureClient;
+  const publisher = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
+  const request = {
+    status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+    assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
+    stagingRoot: join(root, "staging"), destinationPath,
+  };
+  try {
+    const first = publisher.publishCompletedCapture(request);
+    const second = publisher.publishCompletedCapture(request);
+    await dispatched;
+    await assert.rejects(publisher.publishCompletedCapture({ ...request, publicationId: "b".repeat(32) }), /conflicts with its in-flight publication/u);
+    finishDispatch(undefined as never);
+    const [left, right] = await Promise.all([first, second]);
+    assert.equal(left.state, "publishing");
+    assert.deepEqual(left, right);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("ambiguous composed publication reconciles the same durable binding after restart", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-composition-reconcile-"));
+  const destinationPath = join(root, "final.apparent");
+  assemblyForDestination(input, destinationPath);
+  let dispatches = 0, inspections = 0;
+  let expectedPublicationId = "";
+  const sdk = {
+    async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
+    async publish() { dispatches++; throw new Error("ambiguous SDK reply"); },
+    async inspectPublication(request: { captureId: string; publicationId: string; planSha256: string }) {
+      inspections++;
+      assert.equal(request.publicationId, expectedPublicationId);
+      return { captureId: request.captureId, state: "publishing", publicationId: request.publicationId, planSha256: request.planSha256 };
+    },
+  } as unknown as CaptureClient;
+  const publicationId = "a".repeat(32), ownerToken = "c".repeat(64);
+  expectedPublicationId = publicationId;
+  const request = {
+    status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+    assembly: input, ownerToken, publicationId, stagingRoot: join(root, "staging"), destinationPath,
+  };
+  try {
+    const first = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
+    await assert.rejects(first.publishCompletedCapture(request), /outcome is unknown/u);
+    assert.equal(dispatches, 1);
+    const reopened = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
+    const conflictingRoot = join(root, "conflicting-staging");
+    await assert.rejects(reopened.publishCompletedCapture({ ...request, publicationId: "b".repeat(32),
+      stagingRoot: conflictingRoot }));
+    await assertAbsent(conflictingRoot);
+    const observed = await reopened.reconcile({
+      captureId: identity.captureId, ownerToken, publicationId, materials: input.manifest.key,
+      leaseId: input.manifest.leaseId, bundleId: "sdk-bundle", bundlePath: destinationPath,
+    });
+    assert.equal(observed.state, "publishing");
+    assert.equal(inspections, 1);
+    await assert.rejects(reopened.reconcile({
+      captureId: identity.captureId, ownerToken, publicationId: "b".repeat(32), materials: input.manifest.key,
+      leaseId: input.manifest.leaseId, bundleId: "sdk-bundle", bundlePath: destinationPath,
+    }), /conflicts with the supplied original identity/u);
+    assert.equal(dispatches, 1, "reconciliation does not rerun assembly, staging, or publication");
+    const original = structuredClone({ publicationId, materials: input.manifest.key,
+      leaseId: input.manifest.leaseId, bundleId: "sdk-bundle", bundlePath: destinationPath });
+    const direct = createRecordPublicationRecovery(sdk, join(root, "control"), preflightCapturePublication);
+    const pending = direct.reconcile(identity.captureId, ownerToken, original);
+    original.publicationId = "b".repeat(32);
+    original.materials.materialsId = "9".repeat(32);
+    assert.equal((await pending).state, "publishing", "reconciliation snapshots expectations before awaiting storage");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

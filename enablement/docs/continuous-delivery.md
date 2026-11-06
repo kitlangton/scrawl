@@ -16,7 +16,10 @@ Existing release admission still rejects diagnostic manual verification receipts
 manual triggering does not waive publication gates.
 
 Feature-branch pushes without a PR retain inexpensive local selector, push-hook
-and release-admission contracts. Applicable Value-stream PR checks must pass
+and release-admission contracts, plus affected-owner architecture checks. Install
+the architecture checker once with `npm --prefix composition/architecture ci`;
+the hook fails clearly if it is unavailable and never installs packages.
+Applicable Value-stream PR checks must pass
 before merge; standalone Linux/macOS and Connect workflows remain manual-only.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.

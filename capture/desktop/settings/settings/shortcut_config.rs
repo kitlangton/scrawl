@@ -67,13 +67,7 @@ impl Shortcuts {
         let mut shortcuts = Self::default();
         let stored = config.get("shortcuts");
         for kind in ShortcutKind::ALL {
-            let value = stored.and_then(|s| s.get(kind_key(kind)));
-            if kind.can_unset() && value.is_some_and(serde_json::Value::is_null) {
-                shortcuts.set(kind, ShortcutConfig::unset());
-            } else if let Some(cfg) = value
-                .and_then(|v| serde_json::from_value::<Stored>(v.clone()).ok())
-                .and_then(|s| from_stored(kind, s))
-            {
+            if let Some(cfg) = configured_shortcut(stored, kind) {
                 shortcuts.set(kind, cfg);
             }
         }
@@ -111,6 +105,16 @@ fn kind_key(kind: ShortcutKind) -> &'static str {
     match kind {
         ShortcutKind::Record => "record",
         ShortcutKind::Paste => "paste",
+    }
+}
+
+fn configured_shortcut(stored: Option<&serde_json::Value>, kind: ShortcutKind) -> Option<ShortcutConfig> {
+    let value = stored.and_then(|s| s.get(kind_key(kind)));
+    if kind.can_unset() && value.is_some_and(serde_json::Value::is_null) {
+        Some(ShortcutConfig::unset())
+    } else {
+        value.and_then(|v| serde_json::from_value::<Stored>(v.clone()).ok())
+            .and_then(|stored| from_stored(kind, stored))
     }
 }
 
@@ -158,27 +162,95 @@ pub fn save_shortcut_in(
     kind: ShortcutKind,
     cfg: &ShortcutConfig,
 ) -> anyhow::Result<()> {
-    crate::shared::handoff::update_config_in(path, |config| {
+    write_shortcut(path, kind, None, cfg, None, || Ok(())).map(|_| ())
+}
+
+/// Changes a shortcut only if the owner-decoded persisted value still matches `expected`.
+/// The comparison and write run inside the existing single config writer transaction.
+pub fn save_shortcut_if_current_in(
+    path: &Path,
+    kind: ShortcutKind,
+    expected: &ShortcutConfig,
+    cfg: &ShortcutConfig,
+) -> anyhow::Result<bool> {
+    write_shortcut(path, kind, Some(expected), cfg, None, || Ok(()))
+}
+
+/// Deadline-aware native-host variant. `before_write` runs only after the shared config lock
+/// is held and the persisted value still matches the observation used to admit the request.
+pub fn save_shortcut_if_current_allowed_in(
+    path: &Path,
+    kind: ShortcutKind,
+    expected: &ShortcutConfig,
+    cfg: &ShortcutConfig,
+    allowed: &dyn Fn() -> bool,
+    before_write: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    write_shortcut(path, kind, Some(expected), cfg, Some(allowed), before_write)
+}
+
+/// Attempts compensation only while the value written by this request still owns the slot.
+/// A false result means another writer changed it, so that value must be preserved.
+pub fn restore_shortcut_if_current_in(
+    path: &Path,
+    kind: ShortcutKind,
+    written: &ShortcutConfig,
+    previous: &ShortcutConfig,
+) -> anyhow::Result<bool> {
+    save_shortcut_if_current_in(path, kind, written, previous)
+}
+
+pub fn restore_shortcut_if_current_allowed_in(
+    path: &Path,
+    kind: ShortcutKind,
+    written: &ShortcutConfig,
+    previous: &ShortcutConfig,
+    allowed: &dyn Fn() -> bool,
+) -> anyhow::Result<bool> {
+    save_shortcut_if_current_allowed_in(path, kind, written, previous, allowed, || Ok(()))
+}
+
+fn write_shortcut(
+    path: &Path,
+    kind: ShortcutKind,
+    expected: Option<&ShortcutConfig>,
+    cfg: &ShortcutConfig,
+    allowed: Option<&dyn Fn() -> bool>,
+    before_write: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    let mut conflict = false;
+    let edit = |config: &mut serde_json::Value| {
+        let stored = config.get("shortcuts");
+        let current = configured_shortcut(stored, kind).unwrap_or_else(|| kind.default_config());
+        if expected.is_some_and(|expected| expected != &current) {
+            conflict = true;
+            anyhow::bail!("shortcut changed since snapshot");
+        }
+        if let Some(allowed) = allowed {
+            anyhow::ensure!(allowed(), "shortcut admission expired");
+        }
+        before_write()?;
         let object = config.as_object_mut().expect("config store returns object");
         let shortcuts = object.entry("shortcuts").or_insert_with(|| serde_json::json!({}));
-        if !shortcuts.is_object() {
-            *shortcuts = serde_json::json!({});
-        }
+        if !shortcuts.is_object() { *shortcuts = serde_json::json!({}); }
         let map = shortcuts.as_object_mut().expect("an object");
-        if cfg.is_default_for(kind) {
-            map.remove(kind_key(kind));
-        } else if cfg.is_unset() {
+        if cfg.is_default_for(kind) { map.remove(kind_key(kind)); }
+        else if cfg.is_unset() {
             anyhow::ensure!(kind.can_unset(), "the {kind:?} shortcut can't be turned off");
             map.insert(kind_key(kind).to_owned(), serde_json::Value::Null);
         } else {
             map.insert(kind_key(kind).to_owned(), serde_json::to_value(Stored {
-                key_code: cfg.key_code,
-                modifiers: cfg.carbon_modifiers,
-                label: cfg.label.clone(),
+                key_code: cfg.key_code, modifiers: cfg.carbon_modifiers, label: cfg.label.clone(),
             })?);
         }
         Ok(())
-    })
+    };
+    let result = match allowed {
+        Some(allowed) => crate::shared::handoff::update_config_allowed_in(path, allowed, edit),
+        None => crate::shared::handoff::update_config_in(path, edit),
+    };
+    if conflict { return Ok(false); }
+    result.map(|_| true)
 }
 
 /// The label of the paste shortcut, for hints (`⌥⇧V`, or `Alt+Shift+V`, unless changed; "the

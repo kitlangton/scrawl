@@ -20,17 +20,20 @@
   },
   "dependencies": {
     "@apparent/engine-sdk": "file:../engine/sdk",
+    "@apparent/record": "file:vendor/record-0.1.0-492ecb2.tgz",
+    "@types/node": "22.19.0",
     "pngjs": "^7.0.0"
   },
   "bundledDependencies": [
     "@apparent/engine-sdk",
+    "@apparent/record",
+    "@types/node",
     "pngjs"
   ],
   "engines": {
-    "node": ">=22.6"
+    "node": ">=22.13"
   },
   "devDependencies": {
-    "@types/node": "22.19.0",
     "@types/pngjs": "^6.0.5",
     "typescript": "5.9.3"
   },
@@ -43,6 +46,8 @@
   },
   "bundleDependencies": [
     "@apparent/engine-sdk",
+    "@apparent/record",
+    "@types/node",
     "pngjs"
   ]
 }

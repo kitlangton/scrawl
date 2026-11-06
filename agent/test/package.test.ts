@@ -20,10 +20,62 @@ test('packed CLI installs offline outside checkout and prints its standalone ski
     };
     const source=fileURLToPath(new URL('..',import.meta.url));
     const metadata=JSON.parse(run([npm,'pack','--ignore-scripts','--json','--pack-destination',root],source));
-    run([npm,'install','--offline','--ignore-scripts','--no-audit','--no-fund','--prefix',root,join(root,metadata[0].filename)]);
+    run([npm,'install','--offline','--no-audit','--no-fund','--prefix',root,join(root,metadata[0].filename)]);
     const cli=resolve(root,'node_modules/@apparent/agent/dist/cli.js');
     assert.equal(run(['--input-type=module','-e',"await import('@apparent/agent')"]),'');
+    const packageRoot=resolve(root,'node_modules/@apparent/agent');
+    const recordConsumer=join(packageRoot,'.record-consumer.mts');
+    await writeFile(recordConsumer,[
+      "import * as record from '@apparent/record';",
+      "import * as host from '@apparent/record/host';",
+      "import * as capture2 from '@apparent/record/host/capture2';",
+      "import * as publication from '@apparent/record/publication';",
+      "import * as processing from '@apparent/record/processing';",
+      "import * as mediaConsumer from '@apparent/record/processing/media-consumer';",
+      "import * as media from '@apparent/engine-sdk/media';",
+      "import type { Capture2Phase } from '@apparent/record/host/capture2';",
+      '// @ts-expect-error Capture2Host has no Agent-visible Saved phase.',
+      'const savedPhase: Capture2Phase = "saved";',
+      'void [record, host, capture2, publication, processing, mediaConsumer, media];',
+    ].join('\n'));
+    try {
+      const tsc=resolve(source,'node_modules/typescript/bin/tsc');
+      run([tsc,'--noEmit','--strict','--skipLibCheck','false','--module','NodeNext','--moduleResolution','NodeNext',
+        '--target','ES2022','--types','node','--typeRoots',resolve(source,'node_modules/@types'),recordConsumer],packageRoot);
+      const imports=run(['--input-type=module','-e',[
+        "for(const [name,key] of [['@apparent/record','RecordWorkflow'],['@apparent/record/host','createRecordHostRuntime'],",
+        "['@apparent/record/host/capture2','createCapture2Host'],['@apparent/record/publication','prepareRecordPublication'],",
+        "['@apparent/record/processing','assembleProcessingOutput'],['@apparent/record/processing/media-consumer','processCompletedBundle'],",
+        "['@apparent/engine-sdk/media','MediaClient']]){const value=await import(name);if(!(key in value))throw Error(name+' missing '+key);console.log(name)}",
+        "await import('@apparent/agent');",
+      ].join('')],packageRoot);
+      assert.deepEqual(imports.trim().split('\n'),[
+        '@apparent/record','@apparent/record/host','@apparent/record/host/capture2','@apparent/record/publication',
+        '@apparent/record/processing','@apparent/record/processing/media-consumer','@apparent/engine-sdk/media',
+      ]);
+      run(['--input-type=module','-e',[
+        "import assert from 'node:assert/strict';import {createRequire} from 'node:module';",
+        "const require=createRequire(new URL('./package.json',import.meta.url));",
+        "for(const name of ['react','react-dom','electron','@apparent/ui'])assert.throws(()=>require.resolve(name),{code:'MODULE_NOT_FOUND'});",
+      ].join('')],packageRoot);
+      run(['--input-type=module','-e',[
+        "import assert from 'node:assert/strict';",
+        "import {CaptureClient} from '@apparent/engine-sdk/capture';",
+        "import {ReferenceCapturePeer} from '@apparent/engine-sdk/capture/testing';",
+        "const peer=new ReferenceCapturePeer();",
+        "assert.equal(peer.handshake.implementation,'test-double');assert.equal(peer.handshake.readiness,'unavailable');",
+        "assert.equal(Object.values(peer.handshake.capabilities).every(value=>value===false),true);",
+        "await assert.rejects(()=>new CaptureClient(peer).handshake(),error=>error.message.includes('explicit /capture/testing opt-in'));",
+        "await peer.close();",
+      ].join('')],packageRoot);
+    } finally { await rm(recordConsumer,{force:true}); }
     assert.match(run([cli,'--help']),/Local Apparent/);assert.equal(run([cli,'--version']),'0.1.0\n');
+    const captureV1=runRaw([cli,'capture','inspect','fixture-id']);
+    assert.equal(captureV1.status,2);assert.equal(captureV1.stdout,'');assert.match(captureV1.stderr,/Set explicit absolute Engine executable and runtime paths/);
+    for(const protocolArgs of [['--protocol','capture-v9','inspect','fixture-id'],['--protocol','capture2','--protocol','capture2','inspect','fixture-id']]) {
+      const invalid=runRaw([cli,'capture',...protocolArgs]);
+      assert.equal(invalid.status,2);assert.equal(invalid.stdout,'');assert.match(invalid.stderr,/one --protocol capture2/);
+    }
     for (const command of ['inspect', 'record', 'capture', 'frames', 'zoom']) assert.match(run([cli,command,'--help']),/Usage: apparent-agent/);
     for(const args of [['--at','1','--mark','m1'],['--at','1','--frame','2'],['--mark','m1','--frames','-1']]) {
       const invalid=runRaw([cli,'zoom',...args]); assert.equal(invalid.status,2); assert.equal(invalid.stdout,'');

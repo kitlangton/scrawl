@@ -38,12 +38,17 @@ try {
   const declarations = path.join(headless, 'consumer.ts');
   await writeFile(declarations, `
     import { RecordWorkflow } from '@apparent/record';
-    import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator } from '@apparent/record/host';
+    import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, type AbsentDestinationBinding } from '@apparent/record/host';
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
+    import { createRecordNativePort, type NativeHostPortInput } from '@apparent/record/host/native';
     import { createRecordFixture } from '@apparent/record/fixtures';
-    void [RecordWorkflow, createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, decodeSelectedFrames, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory, createRecordCapabilityProvider, hasConfirmedArtifactOpen];
+    declare const destinations: AbsentDestinationAllocator;
+    const exact: Promise<AbsentDestinationBinding> = destinations.reserveExact('request', '/home/user/output/requested.apparent');
+    declare const nativePort: NativeHostPortInput;
+    void createRecordNativePort(nativePort, { requiredPermissionIds: ['screen-recording'] });
+    void [RecordWorkflow, createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, decodeSelectedFrames, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory, createRecordCapabilityProvider, createRecordNativePort, hasConfirmedArtifactOpen, exact];
   `);
   const tsc = path.join(root, 'node_modules/typescript/bin/tsc');
   await run(process.execPath, [tsc, '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', declarations], { cwd: headless });
@@ -51,18 +56,26 @@ try {
     import assert from 'node:assert/strict';
     import { createRequire } from 'node:module';
     import { RecordWorkflow } from '@apparent/record';
-    import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator } from '@apparent/record/host';
+    import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator } from '@apparent/record/host';
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
+    import { createRecordNativePort } from '@apparent/record/host/native';
     import { createRecordFixture } from '@apparent/record/fixtures';
     const require = createRequire(import.meta.url);
-    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk']) assert.throws(() => require.resolve(name));
+    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk', '@apparent/app-contracts']) assert.throws(() => require.resolve(name));
     assert.equal(typeof RecordWorkflow, 'function');
     assert.equal(typeof createRecordHostRuntime, 'function');
+    const requested = process.cwd() + '/requested.apparent';
+    const exactDestinations = new AbsentDestinationAllocator(process.cwd() + '/private-control', process.cwd() + '/default-output');
+    const binding = await exactDestinations.reserveExact('packed-exact-request', requested);
+    assert.equal(binding.bundlePath, requested);
+    assert.deepEqual(await new AbsentDestinationAllocator(process.cwd() + '/private-control', process.cwd() + '/unused-default').reserveExact('packed-exact-request', requested), binding);
+    await assert.rejects((await import('node:fs/promises')).lstat(requested), error => error.code === 'ENOENT');
     assert.equal(typeof decodeSelectedFrames, 'function');
-    for (const exported of [SqliteCaptureMappingStore, PrivateBundleAllocator, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory]) assert.equal(typeof exported, 'function');
+    for (const exported of [SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory]) assert.equal(typeof exported, 'function');
     assert.equal(typeof createRecordCapabilityProvider, 'function');
+    assert.equal(typeof createRecordNativePort, 'function');
     assert.equal(typeof hasConfirmedArtifactOpen, 'function');
     assert.equal(hasConfirmedArtifactOpen(createRecordFixture().driver.current(), 'unknown'), false);
     console.log('headless packed runtime and declaration consumer passed');
@@ -70,14 +83,24 @@ try {
   process.stdout.write(runtime.stdout);
 
   // The canonical bundle subpath uses only the packed public SDK contract.
-  await run('npm', ['install', '--no-audit', '--no-fund', tarball, path.join(root, 'vendor/engine-sdk-0.3.1.tgz')], { cwd: bundle });
+  const sdkArtifact = process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root, 'vendor/engine-sdk-0.3.2.tgz');
+  const sdkBytes = await readFile(sdkArtifact);
+  assert.equal(createHash('sha256').update(sdkBytes).digest('hex'), '3b539f7d978d692a5d7fca9f358047bc197d415f6764c33707cff5a710119d01');
+  await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact], { cwd: bundle });
   const bundleDeclarations = path.join(bundle, 'consumer.ts');
   await writeFile(bundleDeclarations, `
-    import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators } from '@apparent/record/processing/bundle';
-    import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts } from '@apparent/engine-sdk/capture';
+    import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators, type CanonicalStroke } from '@apparent/record/processing/bundle';
+    import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts, type StrokeRgb } from '@apparent/engine-sdk/capture';
+    import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
     const validators: BundleValidators = { materials: validateMaterialsDocument, fact: validateFactFile };
     const consume = (input: BundleAssemblyInput) => assembleCanonicalBundle(input, validators);
-    void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
+    const loadAndAssemble = async (input: CaptureMaterialsInput, policy: Omit<BundleAssemblyInput, 'manifest' | 'payloadBytes' | 'facts'>) => {
+      const loaded = await readCaptureMaterials(input);
+      return assembleCanonicalBundle({ ...policy, manifest: loaded.materials.manifest, payloadBytes: loaded.payloadBytes, facts: loaded.assemblyFacts }, validators);
+    };
+    const rgb: StrokeRgb = [12, 34, 56];
+    const canonical: CanonicalStroke = { id: 'record-mapping', t0: 0, t1: 1, fw: 1, fh: 1, pts: [0, 0, 0], rgb };
+    void canonical; void loadAndAssemble; void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
   `);
   const bundleTsc = path.join(root, 'node_modules/typescript/bin/tsc');
   await run(process.execPath, [bundleTsc, '--noEmit', '--strict', '--types', 'node', '--typeRoots', path.join(root, 'node_modules/@types'), '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', bundleDeclarations], { cwd: bundle });
@@ -85,6 +108,8 @@ try {
     import assert from 'node:assert/strict';
     import { assembleCanonicalBundle } from '@apparent/record/processing/bundle';
     import { validateMaterialsDocument, validateFactFile } from '@apparent/engine-sdk/capture';
+    const {readCaptureMaterials} = await import('@apparent/record/host/materials');
+    assert.equal(typeof readCaptureMaterials, 'function');
     assert.equal(typeof assembleCanonicalBundle, 'function');
     assert.equal(typeof validateMaterialsDocument, 'function');
     assert.equal(typeof validateFactFile, 'function');
@@ -110,21 +135,23 @@ try {
   process.stdout.write(uiResult.stdout);
   // The publication profile explicitly supplies the published SDK; it is not
   // installed for the other headless or UI consumers.
-  const sdkArtifact = process.env.APPARENT_ENGINE_SDK_TARBALL ?? path.join(root, 'vendor/engine-sdk-0.3.1.tgz');
-  const sdkBytes = await readFile(sdkArtifact);
-  assert.equal(createHash('sha256').update(sdkBytes).digest('hex'), '1b605f06273f9c1a134b68b0ed233605b120813214914ca70ed0c8c5f0346f04');
-  const sdkTarball = path.join(scratch, 'engine-sdk-0.3.1.tgz'); await copyFile(sdkArtifact, sdkTarball);
+  const sdkTarball = path.join(scratch, 'engine-sdk-0.3.2.tgz'); await copyFile(sdkArtifact, sdkTarball);
   await run('npm', ['install', '--no-audit', '--no-fund', sdkTarball, tarball], { cwd: publication });
   const publicationResult = await run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     import {createRequire} from 'node:module';
     import {CaptureClient, preflightCapturePublication} from '@apparent/engine-sdk/capture';
     import {ReferenceCapturePeer} from '@apparent/engine-sdk/capture/testing';
-    import {createRecordPublicationRecovery, prepareRecordPublication} from '@apparent/record/publication';
+    import {createRecordPublicationRecovery, createCompletedCapturePublisher, prepareRecordPublication} from '@apparent/record/publication';
+    import {createCapture2Host} from '@apparent/record/host/capture2';
     const client = new CaptureClient(new ReferenceCapturePeer(), {allowTestDouble:true});
+    assert.equal((await client.handshake()).readiness, 'unavailable');
     const recovery = createRecordPublicationRecovery(client, process.cwd() + '/unused-private-root', preflightCapturePublication);
     assert.equal(typeof recovery.publish, 'function');
+    assert.equal(typeof createCapture2Host, 'function');
     assert.equal(typeof prepareRecordPublication, 'function');
+    assert.equal(typeof createCompletedCapturePublisher, 'function');
+    assert.equal(typeof createCompletedCapturePublisher(client, process.cwd() + '/unused-private-root', preflightCapturePublication).publishCompletedCapture, 'function');
     for (const name of ['react','react-dom','electron','@apparent/ui']) assert.throws(()=>createRequire(import.meta.url).resolve(name));
     await client.close();
     console.log('packed publication profile passed without UI peers');
@@ -132,13 +159,25 @@ try {
   process.stdout.write(publicationResult.stdout);
   const sdkDeclarations = path.join(publication, 'consumer.ts');
   await writeFile(sdkDeclarations, `
-    import {preflightCapturePublication, type CaptureClient} from '@apparent/engine-sdk/capture';
-    import {createRecordPublicationRecovery, prepareRecordPublication} from '@apparent/record/publication';
+    import {preflightCapturePublication, type CaptureClient, type SourceDescriptor, type CaptureOptions, type InvocationFact} from '@apparent/engine-sdk/capture';
+    import {createCapture2Host, type Capture2Host, type Capture2StartIntent} from '@apparent/record/host/capture2';
+    import {createCompletedCapturePublisher, createRecordPublicationRecovery, prepareRecordPublication, type CompletedCapturePublisher, type PublishCompletedCaptureInput, type ReconcileCompletedCaptureInput} from '@apparent/record/publication';
     declare const client: CaptureClient;
+    declare const host: Capture2Host;
+    declare const intent: Capture2StartIntent;
+    declare const source: SourceDescriptor;
+    declare const options: CaptureOptions;
+    declare const invocation: InvocationFact;
+    const exactStart: Capture2StartIntent = { requestId: 'request', source, options, invocation, destinationPath: '/home/user/output/requested.apparent' };
+    const exactReceipt: ReturnType<Capture2Host['start']> = host.start(exactStart);
+    const capture: ReturnType<Capture2Host['start']> = host.start(intent);
     const recovery = createRecordPublicationRecovery(client, '/private/control', preflightCapturePublication);
     const result: ReturnType<CaptureClient['publish']> = recovery.publish({} as Parameters<CaptureClient['publish']>[0]);
     const stage: (input: Parameters<typeof prepareRecordPublication>[0]) => Promise<import('@apparent/record/publication').PreparedRecordPublication> = prepareRecordPublication;
-    void result; void stage;
+    const publisher = createCompletedCapturePublisher(client, '/private/control', preflightCapturePublication);
+    const publish: (input: PublishCompletedCaptureInput) => ReturnType<CompletedCapturePublisher['publishCompletedCapture']> = publisher.publishCompletedCapture;
+    const reconcile: (input: ReconcileCompletedCaptureInput) => ReturnType<CompletedCapturePublisher['reconcile']> = publisher.reconcile;
+    void result; void stage; void publish; void reconcile; void capture; void exactReceipt;
   `);
   await run(process.execPath, [tsc, '--noEmit', '--strict', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', sdkDeclarations], { cwd: publication });
 } finally {

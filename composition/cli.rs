@@ -444,7 +444,7 @@ enum Command {
         /// Preserve recorded timing instead of speeding up long quiet holds (needs FFmpeg).
         #[arg(long)]
         no_speedup: bool,
-        /// Leave out the red ink, pins and laser.
+        /// Leave out recorded ink, pins and laser.
         #[arg(long)]
         no_ink: bool,
         /// Leave out click ripples and touch trails.

@@ -229,8 +229,8 @@ const DIGITS:Record<string,string[]>={
   '0':['111','101','101','101','111'],'1':['010','110','010','010','111'],'2':['111','001','111','100','111'],
   '3':['111','001','111','001','111'],'4':['101','101','111','001','001'],'5':['111','100','111','001','111'],
   '6':['111','100','111','101','111'],'7':['111','001','010','010','010'],'8':['111','101','111','101','111'],'9':['111','101','111','001','111']};
-function pinMarker(image:any,x:number,y:number,number:number,budget:RasterBudget){
-  const radius=9.75;disk(image,x,y,11.625,[255,255,255,255],budget);disk(image,x,y,radius,[238,48,68,255],budget);
+function pinMarker(image:any,x:number,y:number,number:number,budget:RasterBudget,color=[238,48,68]){
+  const radius=9.75;disk(image,x,y,11.625,[255,255,255,255],budget);disk(image,x,y,radius,[...color,255],budget);
   const digits=String(number),scale=Math.min(1,14/(digits.length*4-1)),width=(digits.length*4-1)*scale,height=5*scale;
   budget.steps+=digits.length*15;if(budget.steps>2_000_000)throw new Error('Zoom annotation raster work limit exceeded');
   for(let d=0;d<digits.length;d++){const glyph=DIGITS[digits[d]];for(let row=0;row<5;row++)for(let col=0;col<3;col++)if(glyph[row][col]==='1'){
@@ -262,13 +262,15 @@ export function annotateZoomFrame(image: any, bundle: any, at: number, rect: Cro
   const selected=mark&&bundle.marks.find((item:any)=>item.id===mark.id),focused=selected&&at>=selected.t0?selected:undefined, owned=new Set<number>(focused?.strokes??[]);
   const active=bundle.strokes.map((s:any,i:number)=>({s,i})).filter(({s,i}:any)=>!s.laser&&(owned.has(i)||(!focused&&s.t0<=at&&at-s.t1<=1200)));
   for(const {s,i} of active){
+    const color: number[] = s.rgb ?? [238,48,68];
     const pts:number[][]=[]; for(let j=0;j<s.pts.length;j+=3){const t=s.t0+s.pts[j+2];if(!owned.has(i)&&t>at)break;pts.push(point(s.pts[j]/10000,s.pts[j+1]/10000));}
-    if(s.pin!==undefined&&s.pin!==null&&pts.length){const [x,y]=pts[0];pinMarker(image,x,y,s.pin,budget);}
-    else for(let j=1;j<pts.length;j++)line(image,pts[j-1][0],pts[j-1][1],pts[j][0],pts[j][1],2,[238,48,68,230],budget);
+    if(s.pin!==undefined&&s.pin!==null&&pts.length){const [x,y]=pts[0];pinMarker(image,x,y,s.pin,budget,color);}
+    else for(let j=1;j<pts.length;j++)line(image,pts[j-1][0],pts[j-1][1],pts[j][0],pts[j][1],2,[...color,230],budget);
   }
   for(const s of bundle.strokes.filter((stroke:any)=>stroke.laser)){
+    const color: number[] = s.rgb ?? [255,32,50];
     const pts:number[][]=[];for(let j=0;j<s.pts.length;j+=3){const t=s.t0+s.pts[j+2];if(t>at||at-t>420)continue;pts.push(point(s.pts[j]/10000,s.pts[j+1]/10000));}
-    for(let j=1;j<pts.length;j++)line(image,pts[j-1][0],pts[j-1][1],pts[j][0],pts[j][1],1,[255,32,50,150],budget);
+    for(let j=1;j<pts.length;j++)line(image,pts[j-1][0],pts[j-1][1],pts[j][0],pts[j][1],1,[...color,150],budget);
   }
   const events=eventsAt(bundle.events,at),clicks=events.map((e:any)=>e.kind==='click'&&Math.abs(e.t-at)<=600?{delta:Math.abs(e.t-at),point:[e.x,e.y]}:e.kind==='drag'&&(e.label==='long press'||e.label?.startsWith('long press:'))&&((e.t<=at&&at-e.t1<=600)||Math.abs(e.t-at)<=600)?{delta:Math.abs(e.t1-at),point:[e.x0,e.y0]}:undefined).filter(Boolean).sort((a:any,b:any)=>a.delta-b.delta);
   for(const e of events){if(e.kind==='drag'&&e.button==='touch'&&e.t<=at&&at-e.t1<=900&&!(e.label==='long press'||e.label?.startsWith('long press:'))){const path=e.path?.length>=2?e.path:[[e.x0,e.y0],[e.x1,e.y1]];let prev:number[]|undefined;for(const p of path){const q=point(p[0],p[1]);if(prev)line(image,prev[0],prev[1],q[0],q[1],2,[45,142,255,220],budget);prev=q;}}}
@@ -326,7 +328,7 @@ export async function runZoom(options: { bundle: string; at?: string; mark?: str
   const times = sampleTimes(bounds[0],bounds[1],options.frames);
   if(bundle.strokes.length>MAX_STROKES||bundle.marks.length>MAX_MARKS||bundle.events.length>MAX_EVENTS) throw new Error('Bundle annotation inventory exceeds zoom limits');
   let pointCount=0;
-  for(const s of bundle.strokes){if(!Array.isArray(s.pts)||s.pts.length%3!==0||s.pts.length>MAX_POINTS*3||!Number.isSafeInteger(s.fw)||!Number.isSafeInteger(s.fh)||s.fw<=0||s.fh<=0||s.fw>100_000||s.fh>100_000||!Number.isSafeInteger(s.t0)||!Number.isSafeInteger(s.t1)||s.t1<s.t0||s.pin!==undefined&&s.pin!==null&&(!Number.isSafeInteger(s.pin)||s.pin<1||s.pin>0xffffffff))throw new Error('Malformed stroke in zoom bundle');pointCount+=s.pts.length/3;if(pointCount>MAX_POINTS)throw new Error('Bundle stroke points exceed zoom render limits');let prior=-1;for(let i=0;i<s.pts.length;i+=3){if(!Number.isSafeInteger(s.pts[i])||s.pts[i]<0||s.pts[i]>10000||!Number.isSafeInteger(s.pts[i+1])||s.pts[i+1]<0||s.pts[i+1]>10000||!Number.isSafeInteger(s.pts[i+2])||s.pts[i+2]<prior||s.pts[i+2]>s.t1-s.t0+1000)throw new Error('Malformed stroke point in zoom bundle');prior=s.pts[i+2];}}
+  for(const s of bundle.strokes){if(Object.prototype.hasOwnProperty.call(s,'rgb')&&(!Array.isArray(s.rgb)||s.rgb.length!==3||s.rgb.some((channel:number)=>!Number.isInteger(channel)||channel<0||channel>255)))throw new Error('Malformed stroke RGB in zoom bundle');if(!Array.isArray(s.pts)||s.pts.length%3!==0||s.pts.length>MAX_POINTS*3||!Number.isSafeInteger(s.fw)||!Number.isSafeInteger(s.fh)||s.fw<=0||s.fh<=0||s.fw>100_000||s.fh>100_000||!Number.isSafeInteger(s.t0)||!Number.isSafeInteger(s.t1)||s.t1<s.t0||s.pin!==undefined&&s.pin!==null&&(!Number.isSafeInteger(s.pin)||s.pin<1||s.pin>0xffffffff))throw new Error('Malformed stroke in zoom bundle');pointCount+=s.pts.length/3;if(pointCount>MAX_POINTS)throw new Error('Bundle stroke points exceed zoom render limits');let prior=-1;for(let i=0;i<s.pts.length;i+=3){if(!Number.isSafeInteger(s.pts[i])||s.pts[i]<0||s.pts[i]>10000||!Number.isSafeInteger(s.pts[i+1])||s.pts[i+1]<0||s.pts[i+1]>10000||!Number.isSafeInteger(s.pts[i+2])||s.pts[i+2]<prior||s.pts[i+2]>s.t1-s.t0+1000)throw new Error('Malformed stroke point in zoom bundle');prior=s.pts[i+2];}}
   for(const m of bundle.marks)if(!Array.isArray(m.strokes)||m.strokes.some((i:number)=>!Number.isSafeInteger(i)||i<0||i>=bundle.strokes.length)||!Number.isSafeInteger(m.t0)||!Number.isSafeInteger(m.t1)||m.t1<m.t0||m.pin!==undefined&&m.pin!==null&&(!Number.isSafeInteger(m.pin)||m.pin<1||m.pin>0xffffffff)||!Array.isArray(m.boxNorm)||m.boxNorm.length!==4||m.boxNorm.some((v:number)=>!Number.isFinite(v)||v<0||v>1)||[m.from,m.to].filter(Boolean).some((p:any)=>!Array.isArray(p)||p.length!==2||p.some((v:number)=>!Number.isFinite(v)||v<0||v>1)))throw new Error('Malformed mark in zoom bundle');
   let eventPoints=0;for(const e of bundle.events){if(e.kind==='drag'&&e.path!==undefined&&(!Array.isArray(e.path)||e.path.length>MAX_POINTS||e.path.some((p:any)=>!Array.isArray(p)||p.length!==2))||e.kind!=='drag'&&e.path!==undefined)throw new Error('Malformed interaction path in zoom bundle');eventPoints+=e.kind==='drag'?(e.path?.length??0):0;if(eventPoints>MAX_POINTS)throw new Error('Interaction paths exceed zoom render limits');const coords=e.kind==='drag'?[e.x0,e.y0,e.x1,e.y1,...(e.path??[]).flat()]:['click','point','scroll','note'].includes(e.kind)?[e.x,e.y]:[];if(coords.some((v:any)=>typeof v!=='number'||!Number.isFinite(v)||v<0||v>1))throw new Error('Malformed interaction coordinates in zoom bundle');if(e.t!==undefined&&!Number.isSafeInteger(e.t)||e.t1!==undefined&&!Number.isSafeInteger(e.t1)||Number.isSafeInteger(e.t1)&&Number.isSafeInteger(e.t)&&e.t1<e.t)throw new Error('Malformed interaction time range in zoom bundle');}
   const executable=process.env.APPARENT_ENGINE_FRAMES_EXECUTABLE, runtime=process.env.APPARENT_ENGINE_RUNTIME;

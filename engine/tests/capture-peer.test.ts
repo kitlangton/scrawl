@@ -1,0 +1,420 @@
+import assert from "node:assert/strict";
+import { spawn, execFileSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import test from "node:test";
+import { CaptureClient, launchCaptureEngine, type CaptureStatus } from "../sdk/src/capture.ts";
+import { validateMaterialsDocument } from "../sdk/src/capture-documents/index.ts";
+
+const id = () => randomBytes(16).toString("hex");
+const token = () => randomBytes(32).toString("hex");
+const binary = process.env.APPARENT_ENGINE_CAPTURE_BIN;
+const xvfbCommand = process.env.APPARENT_XVFB ?? "Xvfb";
+const xsetrootCommand = process.env.APPARENT_XSETROOT ?? "xsetroot";
+const ffprobeCommand = process.env.APPARENT_FFPROBE ?? "ffprobe";
+const ffmpegCommand = process.env.APPARENT_FFMPEG ?? "ffmpeg";
+
+async function until(client: CaptureClient, authority: { ownerToken: string; captureId: string }, states: string[]) {
+  const deadline = Date.now() + 12_000;
+  let last: CaptureStatus | undefined;
+  while (Date.now() < deadline) {
+    last = await client.inspect(authority);
+    if (states.includes(last.state)) return last;
+    if (last.state === "failed") throw new Error(`capture failed: ${last.error?.code ?? "unknown"}`);
+    await delay(40);
+  }
+  throw new Error(`capture did not reach ${states.join("/")}; last=${last?.state}:${last?.error?.code ?? "none"}`);
+}
+function startInput(source: Awaited<ReturnType<CaptureClient["discoverSources"]>>["sources"][number], captureId: string, ownerToken: string, suffix: string) {
+  return {
+    captureId, ownerToken, bundleId: `capture-${suffix}.apparent`,
+    bundlePath: resolve(tmpdir(), `capture-${suffix}.apparent`), source,
+    options: { audio: "none" as const, localOnly: true as const },
+    invocation: { kind: "explicit" as const, invocationId: id(), observedAtMs: Date.now() },
+  };
+}
+function observeEngineStderr(client: CaptureClient) {
+  if (process.env.APPARENT_CAPTURE_DEBUG_STDERR !== "1") return;
+  const child = (client as unknown as { transport: { child: {
+    stderr: NodeJS.ReadableStream;
+    on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+  } } }).transport.child;
+  child.stderr.on("data", (chunk: Buffer) => process.stderr.write(chunk));
+  child.on("exit", (code, signal) => {
+    process.stderr.write(`capture worker exited: code=${code} signal=${signal}\n`);
+  });
+}
+
+test("SDK capture/2 records a selected X11 output, seals materials, and releases only by owner", { skip: !binary }, async () => {
+  let displayNumber = 91 + Math.floor(Math.random() * 80);
+  let foundFreeDisplay = false;
+  for (let attempt = 0; attempt < 80; attempt++) {
+    try { statSync(`/tmp/.X${displayNumber}-lock`); displayNumber = 91 + ((displayNumber - 90) % 80); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") { foundFreeDisplay = true; break; } throw error; }
+  }
+  assert.ok(foundFreeDisplay, "an unused private Xvfb display must be available");
+  const display = `:${displayNumber}`;
+  let xserverDiagnostics = "";
+  const xserver = spawn(xvfbCommand, [display, "-screen", "0", "1366x768x24", "-nolisten", "tcp"], { stdio: ["ignore", "ignore", "pipe"] });
+  xserver.stderr?.on("data", (chunk: Buffer) => { xserverDiagnostics = (xserverDiagnostics + chunk.toString()).slice(-8192); });
+  const oldDisplay = process.env.DISPLAY;
+  const oldWayland = process.env.WAYLAND_DISPLAY;
+  const oldGstDebug = process.env.GST_DEBUG;
+  const oldGstDebugFile = process.env.GST_DEBUG_FILE;
+  const oldFinalizeDelay = process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS;
+  const oldReleaseDelay = process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS;
+  const oldReadinessUnavailable = process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE;
+  process.env.DISPLAY = display;
+  delete process.env.WAYLAND_DISPLAY;
+  const runtime = mkdtempSync(join(tmpdir(), "apparent-capture-runtime-"));
+  chmodSync(runtime, 0o700);
+  process.env.GST_DEBUG = "2";
+  process.env.GST_DEBUG_FILE = join(runtime, "gstreamer.log");
+  process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS = "750";
+  process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS = "900";
+  let client: CaptureClient | undefined;
+  try {
+    await delay(500);
+    execFileSync(xsetrootCommand, ["-solid", "#cc2211"]);
+    process.stderr.write("capture peer: Xvfb endpoint verified before starting Engine worker\n");
+    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    observeEngineStderr(client);
+    let hello;
+    try {
+      hello = await client.handshake(15_000);
+    } catch (error) {
+      const evidence = process.env.APPARENT_CAPTURE_EVIDENCE_DIR;
+      if (evidence) {
+        mkdirSync(evidence, { recursive: true, mode: 0o700 });
+        const diagnostic = join(evidence, "startup-diagnostics");
+        mkdirSync(diagnostic, { mode: 0o700 });
+        for (const name of ["gstreamer.log", "capture-v2/journal.json"]) {
+          try { copyFileSync(join(runtime, name), join(diagnostic, name.replaceAll("/", "-"))); } catch {}
+        }
+        writeFileSync(join(diagnostic, "xserver.stderr"), xserverDiagnostics, { mode: 0o600 });
+        writeFileSync(join(diagnostic, "worker.stderr-note"), `${String(error)}\n`, { mode: 0o600 });
+      }
+      throw new Error(`capture handshake failed; Xvfb=${xserver.exitCode ?? "running"}; ${xserverDiagnostics.trim() || "no Xvfb stderr"}; ${String(error)}`);
+    }
+    assert.equal(hello.implementation, "native");
+    assert.equal(hello.readiness, "ready");
+    assert.equal(hello.capabilities.publication, false);
+    assert.equal(hello.capabilities.audioCapture, false);
+    const discovery = await client.discoverSources();
+    assert.equal(discovery.state, "available");
+    const source = discovery.sources.find((item) => item.kind === "display");
+    assert.ok(source, "X11 display source must be advertised");
+    assert.equal(source.bounds.width, 1366);
+    assert.equal(source.bounds.height, 768);
+
+    const failedJournal = startInput(source, id(), token(), "journal-write-failure");
+    chmodSync(join(runtime, "capture-v2"), 0o500);
+    await assert.rejects(client.start(failedJournal), /internal/);
+    assert.throws(() => statSync(join(runtime, "capture-v2", "materials", failedJournal.captureId)), { code: "ENOENT" }, "journal persistence failure precedes managed directory creation");
+    chmodSync(join(runtime, "capture-v2"), 0o700);
+
+    const captureId = id();
+    const ownerToken = token();
+    const input = startInput(source, captureId, ownerToken, "first");
+    const started = await client.start(input);
+    assert.ok(["starting", "recording"].includes(started.state));
+    const recording = await until(client, { captureId, ownerToken }, ["recording"]);
+    assert.equal(recording.state, "recording");
+    process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = "1";
+    const coldStopClient = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    try {
+      const coldHello = await coldStopClient.handshake(15_000);
+      assert.equal(coldHello.readiness, "unavailable", "cold control client has no new source readiness");
+      const coldObserved = await coldStopClient.inspect({ captureId, ownerToken });
+      assert.equal(coldObserved.state, "recording", "cold inspect observes the authenticated live owner");
+      const coldStopped = await coldStopClient.stop({ captureId, ownerToken });
+      assert.equal(coldStopped.state, "stopping", "cold stop reaches the live owner without claiming global capture admission");
+    } finally {
+      await coldStopClient.close();
+      if (oldReadinessUnavailable === undefined) delete process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE;
+      else process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = oldReadinessUnavailable;
+    }
+    for (const color of ["#11bb44", "#2244dd", "#e6d22a", "#cc2211"]) {
+      execFileSync(xsetrootCommand, ["-solid", color]);
+      await delay(180);
+    }
+    const ready = await until(client, { captureId, ownerToken }, ["materials-ready"]);
+    assert.equal(ready.state, "materials-ready");
+    const manifest = ready.materials!;
+    const payloadPath = join(manifest.root, manifest.payloadFile.relativePath);
+    const payloadBytes = readFileSync(payloadPath);
+    const payloadStat = statSync(payloadPath, { bigint: true });
+    assert.equal(createHash("sha256").update(payloadBytes).digest("hex"), manifest.payloadFile.sha256);
+    assert.equal(payloadStat.ino.toString(), manifest.payloadFile.identity.inode);
+    assert.equal(payloadStat.dev.toString(), manifest.payloadFile.identity.device);
+    assert.equal(payloadStat.size, BigInt(manifest.payloadFile.identity.size));
+    assert.equal(payloadStat.mtimeNs.toString(), manifest.payloadFile.identity.modifiedNs);
+    const payload = JSON.parse(payloadBytes.toString("utf8"));
+    const detached = validateMaterialsDocument(manifest, payloadBytes);
+    assert.equal(detached.payload.identity.captureId, captureId);
+    assert.equal(payload.schema, "apparent.capture-materials-payload/1");
+    assert.equal(payload.safety.nativeRemoteDelivery, "forbidden");
+    assert.equal(payload.safety.safeForProcessing, true);
+    assert.equal(payload.invocation.invocationId, input.invocation.invocationId, "native clock normalization preserves caller invocation identity");
+    assert.equal(payload.invocation.observedAtMs, 0, "native receipt time is represented in the capture epoch, not copied from caller wall time");
+    assert.ok(payload.confirmedSource.confirmedAtMs > 0, "source confirmation time is measured after native source revalidation");
+    assert.equal(payload.clock.epoch, "capture-admission-monotonic");
+    assert.equal(payload.clock.units, "integer-milliseconds");
+    assert.ok(payload.clock.durationMs >= payload.video.durationMs, "capture clock ends at native-source stop while media duration comes from finalized MP4 timing");
+    assert.ok(payload.clock.videoOffsetMs > 0, "video offset is the first native source-buffer arrival, not a fabricated zero");
+    assert.ok(Math.abs(payload.clock.durationMs - payload.video.durationMs) < 500, "controlled post-EOS finalization delay is excluded from both capture and encoded-video duration");
+    assert.equal(payload.video.width, 1366);
+    assert.equal(payload.video.height, 768);
+    assert.ok(Object.values(payload.collection).every((state) => state === "unavailable"));
+    const movie = join(manifest.root, "recording.mp4");
+    const videoFile = payload.files.find((file: { relativePath: string }) => file.relativePath === "recording.mp4");
+    assert.ok(videoFile);
+    const movieBytes = readFileSync(movie);
+    const movieStat = statSync(movie, { bigint: true });
+    assert.equal(createHash("sha256").update(movieBytes).digest("hex"), videoFile.sha256);
+    assert.equal(movieStat.ino.toString(), videoFile.identity.inode);
+    assert.equal(movieStat.dev.toString(), videoFile.identity.device);
+    assert.equal(movieStat.size, BigInt(videoFile.identity.size));
+    assert.equal(movieStat.mtimeNs.toString(), videoFile.identity.modifiedNs);
+    const probe = execFileSync(ffprobeCommand, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height", "-show_entries", "format=duration", "-of", "json", movie], { encoding: "utf8" });
+    const probeResult = JSON.parse(probe);
+    const stream = probeResult.streams[0];
+    assert.equal(stream.codec_name, "h264");
+    assert.equal(stream.width, 1366);
+    assert.equal(stream.height, 768);
+    assert.ok(Math.abs(Number(probeResult.format.duration) * 1000 - payload.video.durationMs) < 250, "manifest video duration matches the finalized MP4 timeline");
+    const png = join(runtime, "first-frame.png");
+    execFileSync(ffmpegCommand, ["-v", "error", "-i", movie, "-frames:v", "1", "-y", png]);
+    assert.equal(readFileSync(png).subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+    const hashes = execFileSync(ffmpegCommand, ["-v", "error", "-i", movie, "-f", "framemd5", "-"], { encoding: "utf8" }).split("\n").filter((line) => line && !line.startsWith("#"));
+    assert.ok(new Set(hashes.map((line) => line.split(",").at(-1)?.trim())).size > 1, "selected source must contain changing frames");
+    if (process.env.APPARENT_CAPTURE_EVIDENCE_DIR) {
+      const evidence = resolve(process.env.APPARENT_CAPTURE_EVIDENCE_DIR);
+      mkdirSync(evidence, { recursive: true, mode: 0o700 });
+      copyFileSync(movie, join(evidence, "recording.mp4"));
+      copyFileSync(payloadPath, join(evidence, "materials.json"));
+      copyFileSync(png, join(evidence, "first-frame.png"));
+      writeFileSync(join(evidence, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    }
+
+    const replay = await client.start(input);
+    assert.equal(replay.state, "materials-ready");
+    const conflict = { ...input, bundlePath: `${input.bundlePath}.other` };
+    await assert.rejects(client.start(conflict), /identity_conflict/);
+    await assert.rejects(client.inspect({ captureId, ownerToken: token() }), /permission_denied/);
+    await assert.rejects(client.releaseMaterials({ captureId, ownerToken: token(), materialsId: manifest.key.materialsId, leaseId: manifest.leaseId }), /permission_denied/);
+
+    const area = discovery.sources.find((item) => item.kind === "area");
+    assert.ok(area);
+    const second = startInput(area, id(), token(), "second");
+    assert.equal(second.source.bounds.width, 683);
+    assert.equal(second.source.bounds.height, 384);
+    const secondStart = await client.start(second);
+    assert.ok(["starting", "recording"].includes(secondStart.state), "new capture can start while old materials stay retained");
+    await until(client, { captureId: second.captureId, ownerToken: second.ownerToken }, ["recording"]);
+    for (const color of ["#e65b32", "#37c6a1", "#a842d4"]) {
+      execFileSync(xsetrootCommand, ["-solid", color]);
+      await delay(160);
+    }
+    await client.stop({ captureId: second.captureId, ownerToken: second.ownerToken });
+    const areaReady = await until(client, { captureId: second.captureId, ownerToken: second.ownerToken }, ["materials-ready"]);
+    const areaDocument = validateMaterialsDocument(areaReady.materials!, readFileSync(join(areaReady.materials!.root, areaReady.materials!.payloadFile.relativePath)));
+    assert.equal(areaDocument.payload.confirmedSource.rectangle.width, 683, "confirmed source keeps the actual physical area");
+    assert.equal(areaDocument.payload.video.width, 682, "manifest reports the actual even encoded width");
+    assert.equal(areaDocument.payload.video.height, 384);
+    const areaMovie = join(areaReady.materials!.root, "recording.mp4");
+    const areaInfo = JSON.parse(execFileSync(ffprobeCommand, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name", "-of", "json", areaMovie], { encoding: "utf8" }));
+    assert.deepEqual(areaInfo.streams[0], { codec_name: "h264", width: 682, height: 384 }, "the odd-width physical area is resampled to valid even encoded dimensions");
+    if (process.env.APPARENT_CAPTURE_EVIDENCE_DIR) {
+      const evidence = join(resolve(process.env.APPARENT_CAPTURE_EVIDENCE_DIR), "area");
+      mkdirSync(evidence, { recursive: true, mode: 0o700 });
+      copyFileSync(areaMovie, join(evidence, "recording.mp4"));
+      copyFileSync(join(areaReady.materials!.root, areaReady.materials!.payloadFile.relativePath), join(evidence, "materials.json"));
+      writeFileSync(join(evidence, "manifest.json"), `${JSON.stringify(areaReady.materials, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      writeFileSync(join(evidence, "ffprobe.json"), `${JSON.stringify(areaInfo, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      execFileSync(ffmpegCommand, ["-v", "error", "-i", areaMovie, "-frames:v", "1", join(evidence, "first-frame.png")]);
+    }
+
+    const third = startInput(source, id(), token(), "eof");
+    await client.start(third);
+    await until(client, { captureId: third.captureId, ownerToken: third.ownerToken }, ["recording"]);
+    // Recording begins at the first source buffer; let it traverse the encoder
+    // and muxer before exercising stdin-EOF finalization.
+    await delay(160);
+    assert.equal(await client.close(), "eof-exited", "stdin EOF drains and exits without a signal request");
+    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    await delay(100);
+    await client.handshake(15_000);
+    const recovered = await client.inspect({ captureId: third.captureId, ownerToken: third.ownerToken });
+    assert.equal(recovered.state, "materials-ready", `authenticated reconnect recovers the sealed EOF result (${recovered.error?.code ?? "no error"})`);
+    assert.ok(recovered.materials?.payloadFile.sha256);
+    await client.releaseMaterials({ captureId: third.captureId, ownerToken: third.ownerToken, materialsId: recovered.materials!.key.materialsId, leaseId: recovered.materials!.leaseId });
+
+    const reconnectSources = await client.discoverSources();
+    const reconnectSource = reconnectSources.sources.find((item) => item.kind === "display");
+    assert.ok(reconnectSource);
+    const fourth = startInput(reconnectSource, id(), token(), "cancel");
+    await client.start(fourth);
+    await until(client, { captureId: fourth.captureId, ownerToken: fourth.ownerToken }, ["recording"]);
+    process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = "1";
+    const coldCancelClient = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    try {
+      const coldHello = await coldCancelClient.handshake(15_000);
+      assert.equal(coldHello.readiness, "unavailable");
+      const coldCancelled = await coldCancelClient.cancel({ captureId: fourth.captureId, ownerToken: fourth.ownerToken });
+      assert.ok(["starting", "recording", "stopping"].includes(coldCancelled.state));
+    } finally {
+      await coldCancelClient.close();
+      if (oldReadinessUnavailable === undefined) delete process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE;
+      else process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = oldReadinessUnavailable;
+    }
+    const cancelled = await until(client, { captureId: fourth.captureId, ownerToken: fourth.ownerToken }, ["cancelled"]);
+    assert.equal(cancelled.error, undefined, "cancelled is a terminal state, not a failed result");
+    assert.throws(() => statSync(join(runtime, "capture-v2", "materials", fourth.captureId)), { code: "ENOENT" }, "cancel never leaves a sealed material root");
+
+    const fifth = startInput(reconnectSource, id(), token(), "crash-after-seal");
+    await client.start(fifth);
+    await until(client, { captureId: fifth.captureId, ownerToken: fifth.ownerToken }, ["recording"]);
+    await client.stop({ captureId: fifth.captureId, ownerToken: fifth.ownerToken });
+    const fifthReady = await until(client, { captureId: fifth.captureId, ownerToken: fifth.ownerToken }, ["materials-ready"]);
+    const nativeChild = (client as unknown as { transport: { child: { kill: (signal: string) => boolean; once: (event: string, callback: () => void) => void } } }).transport.child;
+    const childExit = new Promise<void>((resolveExit) => nativeChild.once("exit", resolveExit));
+    assert.equal(nativeChild.kill("SIGKILL"), true);
+    await childExit;
+    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    await delay(100);
+    await client.handshake(15_000);
+    const afterCrash = await client.inspect({ captureId: fifth.captureId, ownerToken: fifth.ownerToken });
+    assert.equal(afterCrash.state, "materials-ready", `crash recovery preserves the sealed state (${afterCrash.error?.code ?? "no error"})`);
+    assert.equal(afterCrash.materials?.key.revision, fifthReady.materials?.key.revision, "crash recovery preserves the exact sealed manifest");
+    await client.cancel({ captureId: fifth.captureId, ownerToken: fifth.ownerToken });
+    const pendingRelease = client.releaseMaterials({ captureId: fifth.captureId, ownerToken: fifth.ownerToken, materialsId: afterCrash.materials!.key.materialsId, leaseId: afterCrash.materials!.leaseId }).then(value => ({ value }), error => ({ error }));
+    const releaseJournal = join(runtime, "capture-v2", `${fifth.captureId}.json`);
+    const releaseDeadline = Date.now() + 4_000;
+    while (Date.now() < releaseDeadline && JSON.parse(readFileSync(releaseJournal, "utf8")).release_phase !== "pending") await delay(10);
+    assert.equal(JSON.parse(readFileSync(releaseJournal, "utf8")).release_phase, "pending", "release intent is durable before deletion begins");
+    const releasingChild = (client as unknown as { transport: { child: { kill: (signal: string) => boolean; once: (event: string, callback: () => void) => void } } }).transport.child;
+    const releaseExit = new Promise<void>((resolveExit) => releasingChild.once("exit", resolveExit));
+    assert.equal(releasingChild.kill("SIGKILL"), true);
+    await releaseExit;
+    const lostReleaseReply = await pendingRelease;
+    assert.ok("error" in lostReleaseReply, "crash after durable release intent leaves the reply unknown to the caller");
+    delete process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS;
+    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    await delay(100);
+    await client.handshake(15_000);
+    const pendingReplay = await client.inspect({ captureId: fifth.captureId, ownerToken: fifth.ownerToken });
+    assert.equal(pendingReplay.state, "cancelled");
+    assert.equal(pendingReplay.materials?.key.materialsId, afterCrash.materials!.key.materialsId, "crash during release retains original manifest and lease authority");
+    await client.releaseMaterials({ captureId: fifth.captureId, ownerToken: fifth.ownerToken, materialsId: afterCrash.materials!.key.materialsId, leaseId: afterCrash.materials!.leaseId });
+    const releasedReplay = await client.inspect({ captureId: fifth.captureId, ownerToken: fifth.ownerToken });
+    assert.equal(releasedReplay.state, "cancelled");
+    assert.equal(releasedReplay.materials, undefined);
+
+    const postCrashSources = await client.discoverSources();
+    const postCrashSource = postCrashSources.sources.find((item) => item.kind === "display");
+    assert.ok(postCrashSource);
+    const cancelCrash = startInput(postCrashSource, id(), token(), "cancel-ack-crash");
+    await client.start(cancelCrash);
+    await until(client, { captureId: cancelCrash.captureId, ownerToken: cancelCrash.ownerToken }, ["recording"]);
+    const coldCancellation = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    try {
+      await coldCancellation.handshake(15_000);
+      await coldCancellation.cancel({ captureId: cancelCrash.captureId, ownerToken: cancelCrash.ownerToken });
+    } finally {
+      await coldCancellation.close();
+    }
+    const cancelOwner = (client as unknown as { transport: { child: { kill: (signal: string) => boolean; once: (event: string, callback: () => void) => void } } }).transport.child;
+    const cancelOwnerExit = new Promise<void>((resolveExit) => cancelOwner.once("exit", resolveExit));
+    assert.equal(cancelOwner.kill("SIGKILL"), true, "crash after the durable cancellation acknowledgment");
+    await cancelOwnerExit;
+    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    await delay(100);
+    await client.handshake(15_000);
+    const cancelledCrash = await client.inspect({ captureId: cancelCrash.captureId, ownerToken: cancelCrash.ownerToken });
+    assert.equal(cancelledCrash.state, "cancelled", "accepted cancellation survives owner crash and recovery");
+    assert.throws(() => statSync(join(runtime, "capture-v2", "materials", cancelCrash.captureId)), { code: "ENOENT" });
+
+    const afterCancelSources = await client.discoverSources();
+    const afterCancelSource = afterCancelSources.sources.find((item) => item.kind === "display");
+    assert.ok(afterCancelSource);
+    const sixth = startInput(afterCancelSource, id(), token(), "crash-during-capture");
+    await client.start(sixth);
+    await until(client, { captureId: sixth.captureId, ownerToken: sixth.ownerToken }, ["recording"]);
+    const nextNativeChild = (client as unknown as { transport: { child: { kill: (signal: string) => boolean; once: (event: string, callback: () => void) => void } } }).transport.child;
+    const nextExit = new Promise<void>((resolveExit) => nextNativeChild.once("exit", resolveExit));
+    assert.equal(nextNativeChild.kill("SIGKILL"), true);
+    await nextExit;
+    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    await delay(100);
+    await client.handshake(15_000);
+    const failedCrash = await client.inspect({ captureId: sixth.captureId, ownerToken: sixth.ownerToken });
+    assert.equal(failedCrash.state, "failed", "a crash before sealing is never recovered as Saved or materials-ready");
+    assert.equal(failedCrash.error?.code, "unavailable");
+    assert.throws(() => statSync(join(runtime, "capture-v2", "materials", sixth.captureId)), { code: "ENOENT" }, "crash recovery removes only unsealed partial files");
+
+    await client.releaseMaterials({ captureId: second.captureId, ownerToken: second.ownerToken, materialsId: areaReady.materials!.key.materialsId, leaseId: areaReady.materials!.leaseId });
+    const runtimeRoot = join(runtime, "capture-v2");
+    const heldRoot = `${runtimeRoot}.held-${id()}`;
+    renameSync(runtimeRoot, heldRoot);
+    symlinkSync(heldRoot, runtimeRoot);
+    await assert.rejects(client.releaseMaterials({ captureId, ownerToken, materialsId: manifest.key.materialsId, leaseId: manifest.leaseId }), /source_mismatch|internal/);
+    unlinkSync(runtimeRoot);
+    renameSync(heldRoot, runtimeRoot);
+    const heldOperation = `${manifest.root}.held-${id()}`;
+    renameSync(manifest.root, heldOperation);
+    mkdirSync(manifest.root, { mode: 0o700 });
+    await assert.rejects(client.releaseMaterials({ captureId, ownerToken, materialsId: manifest.key.materialsId, leaseId: manifest.leaseId }), /source_mismatch/);
+    rmdirSync(manifest.root);
+    renameSync(heldOperation, manifest.root);
+    const unexpected = join(manifest.root, "caller-owned.txt");
+    writeFileSync(unexpected, "preserve this caller file", { mode: 0o600, flag: "wx" });
+    await assert.rejects(client.releaseMaterials({ captureId, ownerToken, materialsId: manifest.key.materialsId, leaseId: manifest.leaseId }), /source_mismatch/);
+    assert.equal(readFileSync(unexpected, "utf8"), "preserve this caller file", "unknown contents are preserved on refused cleanup");
+    unlinkSync(unexpected);
+    const abandoned = await client.cancel({ captureId, ownerToken });
+    assert.equal(abandoned.state, "cancelled", "cancel on ready materials durably marks abandonment");
+    assert.equal(abandoned.materials?.key.materialsId, manifest.key.materialsId, "cancel retains material and lease authority");
+    const released = await client.releaseMaterials({ captureId, ownerToken, materialsId: manifest.key.materialsId, leaseId: manifest.leaseId });
+    assert.equal(released.released, true);
+    assert.throws(() => statSync(movie), { code: "ENOENT" });
+    assert.throws(() => statSync(join(manifest.root, "apparent.json")), { code: "ENOENT" });
+    const afterRelease = await client.inspect({ captureId, ownerToken });
+    assert.equal(afterRelease.state, "cancelled");
+    assert.equal(afterRelease.materials, undefined, "released terminal observation never exposes a missing manifest");
+    await client.close();
+    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    await delay(100);
+    await client.handshake(15_000);
+    const replayRelease = await client.releaseMaterials({ captureId, ownerToken, materialsId: manifest.key.materialsId, leaseId: manifest.leaseId });
+    assert.equal(replayRelease.released, true, "release acknowledgment replays after worker restart");
+  } finally {
+    await client?.close();
+    if (xserver.exitCode === null && xserver.signalCode === null) {
+      xserver.kill("SIGTERM");
+      await Promise.race([new Promise<void>((resolveExit) => xserver.once("close", () => resolveExit())), delay(1_000)]);
+    }
+    if (oldDisplay === undefined) delete process.env.DISPLAY; else process.env.DISPLAY = oldDisplay;
+    if (oldWayland === undefined) delete process.env.WAYLAND_DISPLAY; else process.env.WAYLAND_DISPLAY = oldWayland;
+    if (oldGstDebug === undefined) delete process.env.GST_DEBUG; else process.env.GST_DEBUG = oldGstDebug;
+    if (oldGstDebugFile === undefined) delete process.env.GST_DEBUG_FILE; else process.env.GST_DEBUG_FILE = oldGstDebugFile;
+    if (oldFinalizeDelay === undefined) delete process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS; else process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS = oldFinalizeDelay;
+    if (oldReleaseDelay === undefined) delete process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS; else process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS = oldReleaseDelay;
+    if (oldReadinessUnavailable === undefined) delete process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE; else process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = oldReadinessUnavailable;
+    if (process.env.APPARENT_CAPTURE_EVIDENCE_DIR) {
+      try {
+        const evidence = resolve(process.env.APPARENT_CAPTURE_EVIDENCE_DIR);
+        mkdirSync(evidence, { recursive: true, mode: 0o700 });
+        copyFileSync(join(runtime, "gstreamer.log"), join(evidence, "gstreamer.log"));
+        const diagnostic = join(evidence, "startup-diagnostics");
+        mkdirSync(diagnostic, { recursive: true, mode: 0o700 });
+        writeFileSync(join(diagnostic, "xserver.stderr"), xserverDiagnostics, { mode: 0o600 });
+        writeFileSync(join(diagnostic, "xserver-exit.json"), `${JSON.stringify({ exitCode: xserver.exitCode, signalCode: xserver.signalCode })}\n`, { mode: 0o600 });
+      } catch { /* no diagnostic file was produced */ }
+    }
+    rmSync(runtime, { recursive: true, force: true });
+  }
+});

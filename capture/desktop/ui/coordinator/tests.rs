@@ -1,5 +1,20 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn native_host_linux_settings_capability_matches_effective_route() {
+    use super::policy::native_host_permission_actions;
+    use crate::capture::desktop::settings::onboarding::Permission;
+    assert!(native_host_permission_actions(Permission::Microphone, false).is_empty());
+    assert!(native_host_permission_actions(Permission::ScreenRecording, false).is_empty());
+    assert_eq!(
+        native_host_permission_actions(Permission::Accessibility, false).contains(&"open-system-settings"),
+        crate::capture::desktop::linux::privacy::settings_available(Permission::Accessibility),
+    );
+    assert!(!crate::capture::desktop::linux::privacy::open_settings(Permission::Microphone),
+        "unsupported privacy routes must refuse without opening a system page");
+}
+
 #[test]
 fn reveal_activity_releases_strokes_before_waiting_for_live_ink() {
     let (sender, _) = flume::unbounded();

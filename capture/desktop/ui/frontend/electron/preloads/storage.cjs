@@ -1,5 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
-contextBridge.exposeInMainWorld('apparentSettingsMounted', () => ipcRenderer.invoke('apparent:settings-mounted'));
+contextBridge.exposeInMainWorld('apparentSettingsMounted', async () => {
+  // The hidden page gets one render opportunity between these callbacks.
+  // This recovers if Electron omits ready-to-show without showing a blank page.
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  await ipcRenderer.invoke('apparent:settings-mounted');
+  await ipcRenderer.invoke('apparent:settings-frame-ready');
+});
 contextBridge.exposeInMainWorld('apparentBuild', Object.freeze({
   read: () => ipcRenderer.invoke('apparent:build-identity'),
 }));
