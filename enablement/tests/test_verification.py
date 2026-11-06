@@ -39,12 +39,14 @@ class SelectionTests(unittest.TestCase):
             (root / "agent/src").mkdir(parents=True)
             (root / "agent/src/secret.ts").write_text("export const value = 1;\n")
             (root / "record/src/index.ts").write_text("import {value} from '../../agent/src/secret.ts';\nvoid value;\n")
-            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-            subprocess.run(["git", "add", "record", "agent"], cwd=root, check=True)
+            # Hooks inherit Git state for the pushed checkout, not this fixture.
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            subprocess.run(["git", "init", "-q"], cwd=root, env=env, check=True)
+            subprocess.run(["git", "add", "record", "agent"], cwd=root, env=env, check=True)
             result = subprocess.run(
                 ["node", "--experimental-strip-types", "composition/architecture/src/cli.ts",
                  "--root", str(root), "--owner", "record"], cwd=verification.ROOT,
-                capture_output=True, text=True)
+                capture_output=True, text=True, env=env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("cross-owner path", result.stderr)
 
