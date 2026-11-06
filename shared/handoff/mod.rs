@@ -255,31 +255,56 @@ pub enum VerifiedClipboardTextWrite {
     OutcomeUnknown,
 }
 
+/// Single-operation private child entry point used to put potentially blocking native clipboard
+/// calls behind the caller's deadline. Linux X11 keeps the child alive as its selection owner;
+/// macOS returns after its pasteboard write and stable readback.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn run_native_clipboard_text_owner() -> Result<()> {
+    use std::io::Read as _;
+
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .take(crate::capture::desktop::workflow::native_host::MAX_UTF8_TEXT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(bytes.len() <= crate::capture::desktop::workflow::native_host::MAX_UTF8_TEXT_BYTES, "Clipboard text exceeds limit");
+    let content = String::from_utf8(bytes).context("Clipboard text is not valid UTF-8")?;
+    ensure!(!content.contains('\0'), "Clipboard text contains NUL");
+    #[cfg(target_os = "macos")]
+    {
+        let result = copy_string_to_clipboard_verified_local(&content);
+        match result {
+            VerifiedClipboardTextWrite::Applied => println!("APPLIED"),
+            VerifiedClipboardTextWrite::OutcomeUnknown => println!("UNKNOWN"),
+            VerifiedClipboardTextWrite::Unavailable => println!("UNAVAILABLE"),
+        }
+        std::io::Write::flush(&mut std::io::stdout())?;
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        crate::capture::desktop::linux::clipboard::run_x11_text_owner(&content)
+    }
+}
+
 /// Uses the existing platform clipboard writer, then confirms the exact text and write owner.
 /// This method returns no clipboard content and never attempts to restore a previous owner.
-pub fn copy_string_to_clipboard_verified(content: &str) -> VerifiedClipboardTextWrite {
+pub fn copy_string_to_clipboard_verified_until(
+    content: &str,
+    deadline: std::time::Instant,
+) -> VerifiedClipboardTextWrite {
     if content.contains('\0') {
+        return VerifiedClipboardTextWrite::Unavailable;
+    }
+    if std::time::Instant::now() >= deadline {
         return VerifiedClipboardTextWrite::Unavailable;
     }
     #[cfg(target_os = "macos")]
     {
-        use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
-        let pasteboard = NSPasteboard::generalPasteboard();
-        let before = pasteboard.changeCount();
-        if copy_string_to_clipboard(content).is_err() {
-            return VerifiedClipboardTextWrite::OutcomeUnknown;
-        }
-        let after = pasteboard.changeCount();
-        let actual = unsafe { pasteboard.stringForType(NSPasteboardTypeString) };
-        if pasteboard_write_confirmed(before as isize, after as isize, pasteboard.changeCount() as isize, actual.is_some_and(|text| text.to_string() == content)) {
-            VerifiedClipboardTextWrite::Applied
-        } else {
-            VerifiedClipboardTextWrite::OutcomeUnknown
-        }
+        run_bounded_native_clipboard_child(content, deadline)
     }
     #[cfg(target_os = "linux")]
     {
-        match crate::capture::desktop::linux::clipboard::set_text_verified(content) {
+        match crate::capture::desktop::linux::clipboard::set_text_verified_until(content, deadline) {
             crate::capture::desktop::linux::clipboard::VerifiedTextWrite::Applied => VerifiedClipboardTextWrite::Applied,
             crate::capture::desktop::linux::clipboard::VerifiedTextWrite::Unavailable => VerifiedClipboardTextWrite::Unavailable,
             crate::capture::desktop::linux::clipboard::VerifiedTextWrite::OutcomeUnknown => VerifiedClipboardTextWrite::OutcomeUnknown,
@@ -289,6 +314,105 @@ pub fn copy_string_to_clipboard_verified(content: &str) -> VerifiedClipboardText
     {
         let _ = content;
         VerifiedClipboardTextWrite::Unavailable
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn run_bounded_native_clipboard_child(content: &str, deadline: std::time::Instant) -> VerifiedClipboardTextWrite {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let executable = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(_) => return VerifiedClipboardTextWrite::Unavailable,
+    };
+    let mut child = match Command::new(executable)
+        .arg("--internal-native-clipboard-text-owner")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return VerifiedClipboardTextWrite::Unavailable,
+    };
+    let Some(mut input) = child.stdin.take() else {
+        stop_clipboard_helper(&mut child);
+        return VerifiedClipboardTextWrite::OutcomeUnknown;
+    };
+    let bytes = content.as_bytes().to_vec();
+    let (write_tx, write_rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let result = input.write_all(&bytes);
+        drop(input);
+        let _ = write_tx.send(result);
+    });
+    if !matches!(write_rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())), Ok(Ok(()))) {
+        stop_clipboard_helper(&mut child);
+        let _ = write_rx.recv_timeout(std::time::Duration::from_millis(100));
+        return VerifiedClipboardTextWrite::OutcomeUnknown;
+    }
+    let Some(mut stdout) = child.stdout.take() else {
+        stop_clipboard_helper(&mut child);
+        return VerifiedClipboardTextWrite::OutcomeUnknown;
+    };
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let result = std::io::BufRead::read_line(&mut std::io::BufReader::new(&mut stdout), &mut line);
+        let _ = tx.send((result, line));
+    });
+    let response = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
+    let status = match response {
+        Ok((Ok(_), line)) if line == "APPLIED\n" => VerifiedClipboardTextWrite::Applied,
+        Ok((Ok(_), line)) if line == "UNAVAILABLE\n" => VerifiedClipboardTextWrite::Unavailable,
+        Ok((Ok(_), _)) => VerifiedClipboardTextWrite::OutcomeUnknown,
+        _ => VerifiedClipboardTextWrite::OutcomeUnknown,
+    };
+    if status != VerifiedClipboardTextWrite::Applied || std::time::Instant::now() >= deadline {
+        stop_clipboard_helper(&mut child);
+        return if status == VerifiedClipboardTextWrite::Unavailable && std::time::Instant::now() < deadline {
+            status
+        } else {
+            VerifiedClipboardTextWrite::OutcomeUnknown
+        };
+    }
+    while std::time::Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(exit)) if exit.success() => return VerifiedClipboardTextWrite::Applied,
+            Ok(Some(_)) | Err(_) => return VerifiedClipboardTextWrite::OutcomeUnknown,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
+        }
+    }
+    stop_clipboard_helper(&mut child);
+    VerifiedClipboardTextWrite::OutcomeUnknown
+}
+
+#[cfg(target_os = "macos")]
+fn stop_clipboard_helper(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(target_os = "macos")]
+fn copy_string_to_clipboard_verified_local(content: &str) -> VerifiedClipboardTextWrite {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let before = pasteboard.changeCount();
+    if copy_string_to_clipboard(content).is_err() {
+        return VerifiedClipboardTextWrite::OutcomeUnknown;
+    }
+    let after = pasteboard.changeCount();
+    let actual = unsafe { pasteboard.stringForType(NSPasteboardTypeString) };
+    if pasteboard_write_confirmed(
+        before as isize,
+        after as isize,
+        pasteboard.changeCount() as isize,
+        actual.is_some_and(|text| text.to_string() == content),
+    ) {
+        VerifiedClipboardTextWrite::Applied
+    } else {
+        VerifiedClipboardTextWrite::OutcomeUnknown
     }
 }
 

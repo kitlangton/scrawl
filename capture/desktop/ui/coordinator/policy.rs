@@ -637,6 +637,8 @@ impl ApparentCoordinator {
             let text = text.clone();
             let deadline = request.deadline;
             let expected_revision = expected.revision;
+            let deadline_instant = std::time::Instant::now()
+                + std::time::Duration::from_millis(deadline.saturating_sub(crate::capture::desktop::workflow::agent_capture::storage_clock_ms()));
             let reply = reply.clone();
             let worker = std::thread::Builder::new().name("apparent-native-clipboard-write".into()).spawn(move || {
                 struct ReleaseClipboardLane;
@@ -652,7 +654,7 @@ impl ApparentCoordinator {
                 } else if NATIVE_HOST_REVISION_FOR_WORKER.load(Ordering::Acquire) != expected_revision {
                     refused("stale")
                 } else {
-                    match crate::shared::handoff::copy_string_to_clipboard_verified(&text) {
+                    match crate::shared::handoff::copy_string_to_clipboard_verified_until(&text, deadline_instant) {
                         crate::shared::handoff::VerifiedClipboardTextWrite::Applied
                             if crate::capture::desktop::workflow::agent_capture::storage_clock_ms() < deadline => {
                                 let digest = Sha256::digest(text.as_bytes());
