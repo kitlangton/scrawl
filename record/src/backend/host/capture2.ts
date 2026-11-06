@@ -12,7 +12,7 @@ export interface Capture2MappingStore extends CaptureMappingStore {
   /** Atomic compare-and-insert against the complete capture/2 registry inspected before admission. */
   putCapture2IfUnchanged(mapping: CaptureMapping, inspectedRequestIds: readonly string[]): Promise<CaptureMapping>;
 }
-export interface Capture2StartIntent { requestId: string; source: SourceDescriptor; options: CaptureOptions; invocation: InvocationFact }
+export interface Capture2StartIntent { requestId: string; source: SourceDescriptor; options: CaptureOptions; invocation: InvocationFact; destinationPath?: string }
 export interface Capture2Host {
   readiness(): Promise<{ ready: boolean; reason?: string }>;
   discoverSources(): Promise<SourceDiscovery>;
@@ -28,7 +28,7 @@ export interface Capture2Host {
 const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object"
   ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => [key, canonical(entry)]))
   : value;
-const intentOf = (source: SourceDescriptor, options: CaptureOptions, invocation: InvocationFact) => JSON.stringify(canonical({ protocol: 2, source, options, invocation }));
+const intentOf = (source: SourceDescriptor, options: CaptureOptions, invocation: InvocationFact, destinationPath?: string) => JSON.stringify(canonical({ protocol: 2, source, options, invocation, ...(destinationPath === undefined ? {} : { destinationPath }) }));
 const publicReceipt = (requestId: string, status: CaptureStatus): Capture2Receipt => ({
   requestId,
   phase: status.state === "saved" || status.state === "publishing" ? "processing" : status.state === "materials-ready" ? "materials-ready" : status.state,
@@ -140,7 +140,7 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
     },
     start(request) {
       const intent = structuredClone(request);
-      const serializedIntent = intentOf(intent.source, intent.options, intent.invocation);
+      const serializedIntent = intentOf(intent.source, intent.options, intent.invocation, intent.destinationPath);
       const pending = inflight.get(intent.requestId);
       if (pending) return pending.intent === serializedIntent
         ? pending.promise.then(value => structuredClone(value))
@@ -149,10 +149,6 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
       freshAdmission = true;
       const work = Promise.resolve().then(async () => {
         const ready = await hello();
-        if (!ready.ready || handshake?.implementation !== "native") throw Object.assign(new Error("Capture/2 is unavailable; no native start was dispatched"), { dispatched: false });
-        if (!discovery || discovery.state !== "available" || !discovery.sources.some(source => isDeepStrictEqual(source, intent.source))) throw new Error("Capture source is not the exact descriptor in the current discovery generation");
-        if (!intent.requestId.trim() || intent.options.localOnly !== true || !["none", "microphone"].includes(intent.options.audio)) throw new Error("Explicit local capture intent is required");
-        validateCaptureRequest({ channel: "capture", protocolVersion: 2, clientId: client.clientId, rpcId: randomUUID().replaceAll("-", ""), method: "start", ownerToken: "0".repeat(64), captureId: "0".repeat(32), bundleId: "record-preflight.apparent", bundlePath: "/record-preflight.apparent", source: intent.source, options: intent.options, invocation: intent.invocation });
         const old = await mappings.getByRequestId(intent.requestId);
         ensureLive();
         if (old) {
@@ -162,6 +158,10 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
           try { return observe(old, await client.inspect({ captureId: old.captureId, ownerToken: old.ownerToken })); }
           catch { ensureLive(); unknown(intent.requestId); throw new Error("Capture start outcome is unknown; inspect the same Record request to reconcile"); }
         }
+        if (!ready.ready || handshake?.implementation !== "native") throw Object.assign(new Error("Capture/2 is unavailable; no native start was dispatched"), { dispatched: false });
+        if (!discovery || discovery.state !== "available" || !discovery.sources.some(source => isDeepStrictEqual(source, intent.source))) throw new Error("Capture source is not the exact descriptor in the current discovery generation");
+        if (!intent.requestId.trim() || intent.options.localOnly !== true || !["none", "microphone"].includes(intent.options.audio)) throw new Error("Explicit local capture intent is required");
+        validateCaptureRequest({ channel: "capture", protocolVersion: 2, clientId: client.clientId, rpcId: randomUUID().replaceAll("-", ""), method: "start", ownerToken: "0".repeat(64), captureId: "0".repeat(32), bundleId: "record-preflight.apparent", bundlePath: "/record-preflight.apparent", source: intent.source, options: intent.options, invocation: intent.invocation });
         // Recheck durable capture/2 ownership before reserving a new public ID.
         // Unknown inspection is busy: it cannot prove that another capture ended.
         const inspectedRequestIds = await mappings.listRequestIds("capture2");
@@ -178,7 +178,9 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
           }
         }
         ensureLive();
-        const destination = await destinations.allocate(intent.requestId);
+        const destination = intent.destinationPath === undefined
+          ? await destinations.allocate(intent.requestId)
+          : await destinations.reserveExact(intent.requestId, intent.destinationPath);
         ensureLive();
         const mapping: CaptureMapping = { requestId: intent.requestId, captureId: randomUUID().replaceAll("-", ""), ownerToken: randomBytes(32).toString("hex"), bundleId: destination.bundleId, bundlePath: destination.bundlePath, capture2Intent: serializedIntent };
         const winner = await mappings.putCapture2IfUnchanged(mapping, inspectedRequestIds);
