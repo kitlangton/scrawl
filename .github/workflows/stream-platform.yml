@@ -1,4 +1,4 @@
-name: platform-config delivery
+name: platform delivery
 on:
   pull_request:
     branches: [main]
@@ -7,7 +7,6 @@ on:
       - 'shared/config-native/**'
       - 'shared/contracts/**'
       - '.cargo/**'
-      - '.github/workflows/stream-platform-config.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
       - '.github/actions/delivery-contracts/**'
@@ -15,6 +14,11 @@ on:
       - '.github/actions/runtime-budget/**'
       - 'enablement/verification/workflow-budget.ts'
       - 'LICENSE'
+      - 'shared/resources/**'
+      - 'composition/app/**'
+      - 'composition/native-host/**'
+      - 'shared/ui/**'
+      - '.github/workflows/stream-platform.yml'
   push:
     branches: [main]
     paths:
@@ -22,7 +26,6 @@ on:
       - 'shared/config-native/**'
       - 'shared/contracts/**'
       - '.cargo/**'
-      - '.github/workflows/stream-platform-config.yml'
       - 'composition/delivery/**'
       - 'composition/architecture/**'
       - '.github/actions/delivery-contracts/**'
@@ -30,12 +33,17 @@ on:
       - '.github/actions/runtime-budget/**'
       - 'enablement/verification/workflow-budget.ts'
       - 'LICENSE'
+      - 'shared/resources/**'
+      - 'composition/app/**'
+      - 'composition/native-host/**'
+      - 'shared/ui/**'
+      - '.github/workflows/stream-platform.yml'
 permissions:
   contents: read
 env:
-  APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-platform-config.yml'
+  APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-platform.yml'
 concurrency:
-  group: value-stream-platform-config-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
+  group: value-stream-platform-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
   cancel-in-progress: false
 jobs:
   contracts:
@@ -45,27 +53,38 @@ jobs:
     permissions:
       contents: read
       actions: read
+    outputs:
+      matrix: ${{ steps.selection.outputs.matrix }}
+      has_ready: ${{ steps.selection.outputs.has_ready }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+      - name: Select changed platform components
+        id: selection
+        run: node --experimental-strip-types composition/delivery/platform/plan.ts
       - uses: ./.github/actions/delivery-contracts
 
   stream:
     # The agent whose run hits the limit owns optimization; never raise it.
     name: deliver / stream (${{ matrix.id }}, ${{ matrix.target }})
     needs: contracts
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && needs.contracts.outputs.has_ready == 'true'
     permissions:
       contents: read
       actions: read
+      pull-requests: read
       id-token: write
       attestations: write
     strategy:
       fail-fast: false
-      matrix: {"include":[{"id":"platform-config","target":"linux-x64","runner":"ubuntu-24.04","kind":"directory","stage":"library","package":"composition/config/native","verify":["verify"],"build":"build","language":"native","packageManager":"npm","architecture_owner":"composition"},{"id":"platform-config","target":"macos-x64","runner":"macos-26-intel","kind":"directory","stage":"library","package":"composition/config/native","verify":["verify"],"build":"build","language":"native","packageManager":"npm","architecture_owner":"composition"}]}
+      matrix: ${{ fromJSON(needs.contracts.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.target == 'web' && 10 || 15 }}
     env:
@@ -96,13 +115,13 @@ jobs:
     # The agent whose run hits the limit owns optimization; never raise it.
     name: verify-pr / pr-stream (${{ matrix.id }}, ${{ matrix.target }})
     needs: contracts
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && needs.contracts.outputs.has_ready == 'true'
     permissions:
       contents: read
       actions: read
     strategy:
       fail-fast: false
-      matrix: {"include":[{"id":"platform-config","target":"linux-x64","runner":"ubuntu-24.04","kind":"directory","stage":"library","package":"composition/config/native","verify":["verify"],"build":"build","language":"native","packageManager":"npm","architecture_owner":"composition"},{"id":"platform-config","target":"macos-x64","runner":"macos-26-intel","kind":"directory","stage":"library","package":"composition/config/native","verify":["verify"],"build":"build","language":"native","packageManager":"npm","architecture_owner":"composition"}]}
+      matrix: ${{ fromJSON(needs.contracts.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.target == 'web' && 10 || 15 }}
     env:
@@ -143,6 +162,20 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - name: Require successful selected components
+        env:
+          CONTRACTS: ${{ needs.contracts.result }}
+          HAS_READY: ${{ needs.contracts.outputs.has_ready }}
+          PRODUCER: ${{ needs.stream.result }}
+          PR: ${{ needs.verify-pr.result }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          test "$CONTRACTS" = success
+          if [ "$HAS_READY" = true ]; then
+            if [ "$EVENT" = pull_request ]; then test "$PR" = success; else test "$PRODUCER" = success; fi
+          else
+            test "$HAS_READY" = false
+          fi
       - uses: ./.github/actions/runtime-budget
         with:
           platform: linux

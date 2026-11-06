@@ -286,7 +286,7 @@ class SelectionTests(unittest.TestCase):
             delivery_action = verification.select([action])
             self.assertTrue(delivery_action["app_shell"])
             self.assertFalse(delivery_action["root"])
-        entry_workflow = verification.select([".github/workflows/stream-app-shell.yml"])
+        entry_workflow = verification.select([".github/workflows/stream-platform.yml"])
         self.assertTrue(entry_workflow["app_shell"])
         self.assertFalse(entry_workflow["root"])
         self.assertFalse(verification.select(["composition/cli.rs"])["app_shell"])
@@ -372,12 +372,14 @@ class SelectionTests(unittest.TestCase):
             package = root / "composition/delivery"
             package.mkdir(parents=True)
             (package / "delivery.test.ts").touch()
+            (package / "platform").mkdir()
+            (package / "platform/selector.test.ts").touch()
             with patch.object(verification, "ROOT", root), patch.object(
                     verification, "run_app_shell_check") as app_shell, patch.object(
                     verification.subprocess, "run") as run:
                 verification.run_pr_checks({"paths": ["composition/delivery/core.ts"]})
             command = ["node", "--experimental-strip-types", "--test",
-                       "composition/delivery/delivery.test.ts"]
+                       "composition/delivery/delivery.test.ts", "composition/delivery/platform/selector.test.ts"]
             app_shell.assert_called_once_with()
             self.assertIn(command, [call.args[0] for call in run.call_args_list])
             self.assertFalse(any(call.args[0][:2] == ["npm", "ci"] for call in run.call_args_list))

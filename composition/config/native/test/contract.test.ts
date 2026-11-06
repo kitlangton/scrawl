@@ -13,7 +13,7 @@ test('producer registration covers both native and typed client contract inputs'
   const registration = JSON.parse(readFileSync(new URL('../delivery.json', import.meta.url), 'utf8'))
   assert.deepEqual(registration.inputs, ['composition/config/', 'shared/config-native/', 'shared/contracts/', '.cargo/'])
   assert.deepEqual(registration.verify, ['verify'])
-  const workflow = readFileSync(new URL('../../../../.github/workflows/stream-platform-config.yml', import.meta.url), 'utf8')
+  const workflow = readFileSync(new URL('../../../../.github/workflows/stream-platform.yml', import.meta.url), 'utf8')
   for (const path of ['composition/config/**', 'shared/config-native/**', 'shared/contracts/**', '.cargo/**']) assert(workflow.includes(`- '${path}'`), `workflow must trigger on ${path}`)
 })
 

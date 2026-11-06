@@ -11,7 +11,7 @@ import { verifyPackagedApplication } from '../scripts/package.ts';
 import { buildSyntheticStream } from './synthetic-stream.ts';
 
 test('CI explicitly installs Electron before provisioning its sandbox helper', async () => {
-  const workflow = await readFile(join(root, '../../.github/workflows/stream-app-shell.yml'), 'utf8');
+  const workflow = await readFile(join(root, '../../.github/workflows/stream-platform.yml'), 'utf8');
   const job = workflow.split('\n  stream:\n')[1]?.split(/\n  [a-z-]+:\n/)[0];
   assert(job, 'Independent stream producer job must exist');
   assert(job.includes('uses: ./.github/actions/delivery-component'));

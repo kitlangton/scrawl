@@ -7,7 +7,7 @@ The isolated TypeScript architecture checker in `composition/architecture` rejec
 `engine-native` consumes `engine/delivery/native/delivery.json` independently of the SDK slot. That native lane installs Rust and produces the exact executable/manifest inventory through the Engine-owned producer. Its inputs include `engine/` and inherited `.cargo/` settings. The separate `engine-media-native` producer also fingerprints `capture/engine/` because its Linux media worker still uses that legacy implementation. Packaging does not enable installed routing.
 
 `platform-resources` consumes `shared/resources/delivery/delivery.json` through
-`stream-platform-resources.yml`, with fixed Linux x64 and Intel Mac targets. Its
+`stream-platform.yml`, with fixed Linux x64 and Intel Mac targets. Its
 native helper remains owned by the producer and staged before the public
 TypeScript adapter tests. The registration must fingerprint both
 `shared/resources/` and inherited `.cargo/`; the synthetic contract rejects an
@@ -161,3 +161,18 @@ Ubuntu installer. Existing `engine-native` and `engine-media-native` retain thei
 own routes. Select the absolute manifest launch entry and its 40-second shutdown
 grace; registration does not activate installed routing or certify unsupported
 Wayland, macOS, audio, drawing or publication capabilities.
+
+
+Platform config, resources and App Shell share `stream-platform.yml`. One contracts
+job selects changed components from the full PR merge-base diff or main push
+before/after diff, including deleted files and both rename sides. Missing history
+selects all; shared delivery/architecture inputs select all; unrelated inputs
+select none. Registrations supply each selected component's target matrix.
+Native producers and the TypeScript shell remain isolated jobs with unchanged
+verification, packaging and artifact IDs. The audit requires successful contracts
+and selected execution before a receipt can authorize reuse. A failure in any
+selected component therefore blocks the shared audit and candidate reuse for that
+run; component jobs still run independently with fail-fast disabled.
+The new canonical workflow path participates in fingerprints and admission;
+old workflow receipts are not promoted across the migration and the first new
+producer run builds fresh. Broad manual platform verification remains separate.

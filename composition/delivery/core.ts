@@ -11,7 +11,7 @@ export type Owner = { schema: 1; id: string; kind: Kind; package: string; inputs
 export const auditJob = 'Workflow runtime budget'
 export const contractsJob = 'Delivery contracts'
 export function workflowPathFor(ownerId: string): string {
-  const stream = ['engine-native', 'engine-media-native', 'engine-capture-native'].includes(ownerId) ? 'engine' : ownerId
+  const stream = ['platform-config', 'platform-resources', 'app-shell'].includes(ownerId) ? 'platform' : ['engine-native', 'engine-media-native', 'engine-capture-native'].includes(ownerId) ? 'engine' : ownerId
   return `.github/workflows/stream-${stream}.yml`
 }
 const roots = [
