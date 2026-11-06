@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmod, lstat, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -272,14 +272,51 @@ test("separate processes reopening the same ready journal cannot both dispatch",
   const children: ReturnType<typeof spawn>[] = [];
   try {
     const journal = join(root, "processes.sqlite");
-    await RecordMedia2Job.create({} as Media2Client, journal, input(root));
+    const original = input(root);
+    const prepared = preflightMedia2Dispatch(original);
+    await RecordMedia2Job.create({} as Media2Client, journal, original);
+
+    // Reproduce the old fixture's unsafe pre-barrier SELECT with a deterministic
+    // rollback-journal lock. The child has the same zero-timeout read-only access
+    // that used to discover its expected request by reading the journal.
+    const lockDb = new DatabaseSync(journal);
+    let lockHeld = false;
+    try {
+      assert.equal(lockDb.prepare("PRAGMA journal_mode = DELETE").get()?.journal_mode, "delete");
+      lockDb.exec("BEGIN EXCLUSIVE");
+      lockHeld = true;
+      const rawRead = spawnSync(process.execPath, ["--input-type=module", "-e", `
+        import { DatabaseSync } from 'node:sqlite';
+        let stage = 'open';
+        let db;
+        try {
+          db = new DatabaseSync(process.argv[1], {readOnly:true});
+          stage = 'select';
+          db.prepare('SELECT record_json FROM media2_job WHERE id = 1').get();
+          console.log(JSON.stringify({stage:'read'}));
+        } catch (error) {
+          console.log(JSON.stringify({stage,code:error.code,errcode:error.errcode,errstr:error.errstr}));
+        } finally { db?.close(); }
+      `, journal], { encoding: "utf8", timeout: 3000 });
+      assert.equal(rawRead.error, undefined, String(rawRead.error));
+      assert.equal(rawRead.status, 0, rawRead.stderr);
+      assert.deepEqual(JSON.parse(rawRead.stdout.trim()), {
+        stage: "select", code: "ERR_SQLITE_ERROR", errcode: 5, errstr: "database is locked",
+      });
+    } finally {
+      if (lockHeld) lockDb.exec("ROLLBACK");
+      lockDb.close();
+    }
+
+    // The journal remains in DELETE mode so the two public reopen calls also
+    // contend while the production store restores WAL with its bounded retry.
     const source = `
-      import { DatabaseSync } from 'node:sqlite';
       const { RecordMedia2Job } = await import(process.argv[2]);
-      const db = new DatabaseSync(process.argv[1], {readOnly:true});
-      const record = JSON.parse(db.prepare('SELECT record_json FROM media2_job WHERE id = 1').get().record_json); db.close();
-      const client = {async derive() { console.log('dispatch'); return {jobId:record.request.jobId,requestSha256:record.requestSha256,state:'running'}; }};
-      const job = await RecordMedia2Job.reopen(client, process.argv[1], {ownerToken:'${token}',request:record.request,materials:record.materials});
+      const request = JSON.parse(process.argv[3]);
+      const materials = JSON.parse(process.argv[4]);
+      const requestSha256 = process.argv[5];
+      const client = {async derive() { console.log('dispatch'); return {jobId:request.jobId,requestSha256,state:'running'}; }};
+      const job = await RecordMedia2Job.reopen(client, process.argv[1], {ownerToken:'${token}',request,materials});
       console.log('ready');
       await new Promise(resolve => process.stdin.once('data', resolve));
       try { await job.derive('${token}'); console.log('accepted'); }
@@ -287,7 +324,9 @@ test("separate processes reopening the same ready journal cannot both dispatch",
     `;
     const runs = [0, 1].map(() => {
       const child = spawn(process.execPath, ["--input-type=module", "-e", source, journal,
-        new URL("../../dist/backend/processing/media2-consumer.js", import.meta.url).href], { stdio: ["pipe", "pipe", "pipe"] });
+        new URL("../../dist/backend/processing/media2-consumer.js", import.meta.url).href,
+        JSON.stringify(original.request), JSON.stringify(original.materials), prepared.prepared.sha256],
+        { stdio: ["pipe", "pipe", "pipe"] });
       children.push(child);
       let output = "", error = "";
       child.stderr!.on("data", chunk => { error += String(chunk); });
