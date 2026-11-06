@@ -1,5 +1,21 @@
 import { isDeepStrictEqual } from "node:util";
-import type { NativeAction, RecordNativeFacts, RecordNativePort } from '../../capabilities/provider.js';
+import type { NativeAction, RecordNativeFacts, RecordNativePort, RecordPenConfigPort } from '../../capabilities/provider.js';
+import type { RecordNativeHostInput, RecordNativePenInput, RecordPenColorConfigInput } from './pen.js';
+export type { RecordNativeHostInput, RecordNativePenInput, RecordPenColorConfigInput } from './pen.js';
+
+/** Lazily loads the optional pen adapter so source-level native host tests stay independent of it. */
+export function createRecordPenConfigPort(input: {
+  config: RecordPenColorConfigInput;
+  nativePen: RecordNativePenInput;
+  nativeHost: RecordNativeHostInput;
+}): RecordPenConfigPort {
+  let adapter: Promise<RecordPenConfigPort> | undefined;
+  const get = () => adapter ??= import('./pen.js').then(module => module.createRecordPenConfigPort(input));
+  return {
+    read: async () => (await get()).read(),
+    writeApplyAndReadBack: async color => (await get()).writeApplyAndReadBack(color),
+  };
+}
 
 /** Local structural consumer seam; kept type-only so headless Record has no host-contract dependency. */
 export interface NativeHostPortInput {
