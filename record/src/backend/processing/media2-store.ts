@@ -1,6 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
-import { ensurePrivateFile, ensurePrivateRoot, hostError, validatePrivateFile } from "../host/private-path.js";
+import { ensurePrivateRoot, hostError, validatePrivateFile } from "../host/private-path.js";
 import { initializePrivateSqlite } from "../host/sqlite-initialization.js";
 
 /** One private media job, using the host stores' bounded SQLite durability.
@@ -11,6 +13,13 @@ export class Media2Store {
     if (!isAbsolute(path) || resolve(path) !== path || path.includes("\0")) throw hostError();
   }
   async create(value: unknown): Promise<void> {
+    await ensurePrivateRoot(dirname(this.path));
+    // Claim an absent namespace before SQLite can change an existing database's
+    // journal mode or schema. Never initialize a caller's occupied path.
+    try {
+      const handle = await open(this.path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+      await handle.close();
+    } catch { throw hostError(); }
     const db = await this.open(true);
     try { db.prepare("INSERT INTO media2_job (id, record_json) VALUES (1, ?)").run(JSON.stringify(value)); }
     catch { throw hostError(); }
@@ -33,8 +42,7 @@ export class Media2Store {
   }
   private async open(create = false): Promise<DatabaseSync> {
     await ensurePrivateRoot(dirname(this.path));
-    if (create) await ensurePrivateFile(this.path);
-    else await validatePrivateFile(this.path);
+    await validatePrivateFile(this.path);
     for (const suffix of ["-wal", "-shm", "-journal"]) await validatePrivateFile(this.path + suffix, true);
     let db: DatabaseSync | undefined;
     try {

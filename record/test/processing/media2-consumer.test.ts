@@ -333,6 +333,20 @@ test("cleanup clears payload but preserves a tombstone against stale journal reu
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("creating a job preserves an unrelated occupied private journal path byte for byte", async () => {
+  const root = await privateRoot();
+  try {
+    const journal = join(root, "occupied.sqlite");
+    const database = new DatabaseSync(journal);
+    try { database.exec("CREATE TABLE unrelated (value TEXT); INSERT INTO unrelated VALUES ('preserve me')"); }
+    finally { database.close(); }
+    await chmod(journal, 0o600);
+    const originalBytes = await readFile(journal);
+    await assert.rejects(RecordMedia2Job.create({} as Media2Client, journal, input(root)));
+    assert.deepEqual(await readFile(journal), originalBytes);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("offline validated derivative completion survives reopen, caller mutation and failed or conflicting inspection", async () => {
   const root = await privateRoot();
   try {
