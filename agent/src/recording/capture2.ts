@@ -7,17 +7,11 @@ import { performance } from 'node:perf_hooks';
 import { CaptureClient, launchCaptureEngine, preflightCapturePublication, type CaptureTransport } from '@apparent/engine-sdk/capture';
 import { DEFAULT_RECORD_DURATION_SECONDS } from '../recording.js';
 import type { Capture2Host, Capture2Receipt } from '@apparent/record/host/capture2';
+import type { RecordPublicationOutput } from '@apparent/record/publication';
 
 export type Capture2Clock = { now(): number; sleep(ms: number): Promise<void> };
 const systemClock: Capture2Clock = { now: () => performance.now(), sleep: ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms)) };
-export type Capture2PublicOutput = {
-  captureFacts: { readFacts(): Promise<{ captures: readonly { captureId: string; artifactId?: string; phase: string }[] }> };
-  resolveHandoff(identity: Readonly<{ captureId: string; artifactId: string }>): Promise<{
-    captureId: string;
-    artifactId: string;
-    handoff?: { savedBundle?: { status: string; bundlePath: string } };
-  } | null>;
-};
+export type Capture2PublicOutput = Pick<RecordPublicationOutput, 'captureFacts' | 'resolveHandoff'>;
 export type Capture2HostFactory = (paths: { controlRoot: string; destinationRoot: string; runtime: string; executable: string }) => Promise<{
   host: Capture2Host;
   allocateDestination(requestId: string, exactPath?: string): Promise<string>;
