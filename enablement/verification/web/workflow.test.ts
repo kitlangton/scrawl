@@ -16,7 +16,7 @@ const section = (source: string, name: string) => source.split(`\n  ${name}:\n`)
 const registrations: Record<string, string> = {
   'app-shell': 'composition/app/delivery.json', record: 'record/delivery.json',
   'connect-browser': 'connect/tooling/hosting/delivery.json', 'connect-client': 'connect/delivery.json', engine: 'engine/delivery.json',
-  'engine-native': 'engine/delivery/native/delivery.json', 'engine-media-native': 'engine/delivery/media/delivery.json',
+  'engine-native': 'engine/delivery/native/delivery.json', 'engine-capture-native': 'engine/delivery/capture/delivery.json', 'engine-media-native': 'engine/delivery/media/delivery.json',
   'platform-config': 'composition/config/native/delivery.json', onboarding: 'onboarding/delivery.json',
   agent: 'agent/delivery.json', public: 'public/delivery.json',
 }
