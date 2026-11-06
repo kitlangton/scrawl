@@ -1,6 +1,6 @@
 import { lstat } from "node:fs/promises";
 import type { CaptureClient, CaptureStatus, PublicationExpectation, CapturePublishInput, CapturePublicationPreflight } from "@apparent/engine-sdk/capture";
-import { SqlitePublicationBindingStore, type PublicationBinding, type PublicationOutputMetadata } from "./store.js";
+import { maxRecoveryJsonBytes, SqlitePublicationBindingStore, type PublicationBinding, type PublicationOutputMetadata, type PublicationRecoveryDescriptor } from "./store.js";
 
 type PublishInput = CapturePublishInput;
 export type PublicationPreflight = (input: PublishInput, timeoutMs?: number) => CapturePublicationPreflight;
@@ -68,6 +68,10 @@ export function createRecordPublicationRecoveryInternal(
       if (!binding) throw new Error("Record publication binding is unavailable");
       if (original && !matchesExpected(binding, original)) throw new Error("Record publication binding conflicts with the supplied original identity");
       if (!/^[0-9a-f]{64}$/u.test(ownerToken)) throw new Error("Record publication authority is invalid");
+      if (binding.state === "reserved") {
+        if (!binding.recoveryInput) throw new Error("Record reserved publication is unsupported for automatic recovery; original dispatch input is unavailable");
+        return resumeReserved(binding, ownerToken);
+      }
       try {
         await client.handshake();
         const status = await client.inspectPublication({
@@ -84,6 +88,31 @@ export function createRecordPublicationRecoveryInternal(
       }
     },
   };
+
+  async function resumeReserved(binding: PublicationBinding, ownerToken: string): Promise<CaptureStatus> {
+    const input = restoreInput(binding.recoveryInput!, ownerToken);
+    const prepared = preflight(input, publishTimeoutMs);
+    const recovered = bindingFrom(input, prepared.expected, binding.output);
+    if (!sameBinding(binding, recovered)) throw new Error("Record reserved publication recovery input conflicts with its durable binding");
+    try {
+      const hello = await client.handshake();
+      if (hello.implementation !== "native" || !hello.capabilities.publication)
+        throw Object.assign(new Error("Record publication is unavailable; no request was dispatched"), { dispatched: false });
+    } catch (error) {
+      if (error && typeof error === "object" && (error as { dispatched?: unknown }).dispatched === false) throw error;
+      throw new Error("Record publication is unavailable; no request was dispatched");
+    }
+    await assertDestinationAbsent(binding.bundlePath);
+    if (!await store.beginDispatch(binding)) throw new Error("Record publication dispatch is already owned; reconcile the same durable binding");
+    try {
+      const status = await client.publish(input, publishTimeoutMs);
+      if (!await store.observe(binding, checkedState(status, binding), status.publication)) throw new Error("Stale publication observation");
+      return structuredClone(status);
+    } catch {
+      // After the CAS, a lost reply is ambiguous exactly like the initial dispatch.
+      throw new Error("Record publication outcome is unknown; reconcile the same durable binding");
+    }
+  }
 
   async function publishOnce(input: PublishInput, binding: PublicationBinding): Promise<CaptureStatus> {
     const prior = await store.get(binding.captureId);
@@ -158,6 +187,7 @@ function bindingFrom(input: PublishInput, expected: PublicationExpectation, outp
     bundleId: expected.bundleId,
     bundlePath: expected.bundlePath,
     manifestSha256: expected.manifestSha256,
+    recoveryInput: recoveryDescriptor(input),
     ...(output ? { output } : {}),
     state: "reserved",
   };
@@ -202,5 +232,42 @@ function sameBinding(left: PublicationBinding, right: PublicationBinding): boole
   return left.captureId === right.captureId && left.publicationId === right.publicationId &&
     left.planSha256 === right.planSha256 && JSON.stringify(left.materials) === JSON.stringify(right.materials) &&
     left.leaseId === right.leaseId && left.bundleId === right.bundleId && left.bundlePath === right.bundlePath &&
-    left.manifestSha256 === right.manifestSha256 && JSON.stringify(left.output) === JSON.stringify(right.output);
+    left.manifestSha256 === right.manifestSha256 && JSON.stringify(left.recoveryInput) === JSON.stringify(right.recoveryInput) && JSON.stringify(left.output) === JSON.stringify(right.output);
+}
+
+function recoveryDescriptor(input: PublishInput): PublicationRecoveryDescriptor {
+  // Reject oversized detached bytes before allocating their base64 copies.
+  const documents = [input.planBytes, ...(input.derivatives ?? []).map(item => item.bytes),
+    ...(input.derivatives2 ?? []).flatMap(item => item.layoutBytes ? [item.bytes, item.layoutBytes] : [item.bytes])];
+  let encodedBytes = 0;
+  for (const document of documents) {
+    encodedBytes += 4 * Math.ceil(document.byteLength / 3);
+    if (encodedBytes > maxRecoveryJsonBytes) throw new Error("Record publication recovery metadata exceeds its storage budget; no request was dispatched");
+  }
+
+  return {
+    schema: 1,
+    captureId: input.captureId,
+    leaseId: input.leaseId,
+    publicationId: input.publicationId,
+    planFile: structuredClone(input.planFile),
+    planBytesBase64: Buffer.from(input.planBytes).toString("base64"),
+    materials: structuredClone(input.materials),
+    ...(input.derivatives ? { derivatives: input.derivatives.map(item => ({ envelope: structuredClone(item.envelope), bytesBase64: Buffer.from(item.bytes).toString("base64"), requestedBundleMs: [...item.requestedBundleMs] })) } : {}),
+    ...(input.derivatives2 ? { derivatives2: input.derivatives2.map(item => ({ envelope: structuredClone(item.envelope), bytesBase64: Buffer.from(item.bytes).toString("base64"), request: structuredClone(item.request), layoutBytesBase64: item.layoutBytes ? Buffer.from(item.layoutBytes).toString("base64") : null })) } : {}),
+  };
+}
+
+function restoreInput(value: PublicationRecoveryDescriptor, ownerToken: string): PublishInput {
+  return {
+    ownerToken,
+    captureId: value.captureId,
+    leaseId: value.leaseId,
+    publicationId: value.publicationId,
+    planFile: structuredClone(value.planFile),
+    planBytes: new Uint8Array(Buffer.from(value.planBytesBase64, "base64")),
+    materials: structuredClone(value.materials),
+    ...(value.derivatives ? { derivatives: value.derivatives.map(item => ({ envelope: structuredClone(item.envelope), bytes: new Uint8Array(Buffer.from(item.bytesBase64, "base64")), requestedBundleMs: [...item.requestedBundleMs] })) } : {}),
+    ...(value.derivatives2 ? { derivatives2: value.derivatives2.map(item => ({ envelope: structuredClone(item.envelope), bytes: new Uint8Array(Buffer.from(item.bytesBase64, "base64")), request: structuredClone(item.request), layoutBytes: item.layoutBytesBase64 === null ? null : new Uint8Array(Buffer.from(item.layoutBytesBase64, "base64")) })) } : {}),
+  };
 }

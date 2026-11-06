@@ -125,6 +125,194 @@ test("lost publish reply survives reopen and reconciliation uses the durable ori
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+// The method-port Saved receipt below is an offline shape-validation fixture, not native authority.
+test("reserved publication with no admitted dispatch resumes the exact input after a crash before beginDispatch", async () => {
+  const root = await temp();
+  const input = makeInput(join(root, "final.apparent"));
+  let dispatches = 0;
+  let inspections = 0;
+  const sdk = {
+    async publish(recovered: CapturePublishInput) {
+      dispatches++;
+      assert.equal(recovered.ownerToken, ownerToken);
+      assert.deepEqual(recovered.planBytes, input.planBytes);
+      assert.deepEqual(recovered.materials, input.materials);
+      assert.deepEqual(recovered.planFile, input.planFile);
+      return { captureId, state: "saved", publicationId, planSha256: input.planFile.planSha256, materials: materials.manifest,
+        publication: { captureId, materials: materials.manifest.key, publicationId, planSha256: input.planFile.planSha256,
+          bundleId: "take.apparent", bundlePath: join(root, "final.apparent"), artifactVersion: 1, artifactProvenance: "native",
+          manifestSha256: "1".repeat(64), inventorySha256: "6".repeat(64) } } as CaptureStatus;
+    },
+    async inspectPublication() {
+      inspections++;
+      if (dispatches === 0) throw Object.assign(new Error("publication not found"), { code: "not_found" });
+      return pending(captureId, publicationId, input.planFile.planSha256);
+    },
+  } as unknown as CaptureClient;
+  const originalReserve = SqlitePublicationBindingStore.prototype.reserve;
+  let faulted = false;
+  SqlitePublicationBindingStore.prototype.reserve = async function(binding) {
+    const reserved = await originalReserve.call(this, binding);
+    if (!faulted) { faulted = true; throw new Error("injected stop after durable reservation, before beginDispatch"); }
+    return reserved;
+  };
+  try {
+    const first = createRecordPublicationRecovery(sdk, join(root, "private"));
+    await assert.rejects(first.publish(input), /injected stop after durable reservation/u);
+    const store = new SqlitePublicationBindingStore(join(root, "private"));
+    const durable = await store.get(captureId);
+    assert.equal(durable?.state, "reserved");
+    assert.equal(dispatches, 0);
+
+    const restarted = createRecordPublicationRecovery(sdk, join(root, "private"));
+    assert.equal((await restarted.reconcile(captureId, ownerToken)).state, "saved");
+    assert.equal(inspections, 0, "an undispatched reservation is resumed rather than inspected as a native publication");
+    assert.equal(dispatches, 1);
+    assert.equal((await store.get(captureId))?.state, "saved");
+    const db = new DatabaseSync(join(root, "private", "publication-bindings.sqlite"));
+    try {
+      const raw = String(db.prepare("SELECT binding_json FROM publication_binding WHERE capture_id = ?").get(captureId)?.binding_json);
+      assert.equal(raw.includes(ownerToken), false, "owner authority is supplied at resume time, not persisted");
+      assert.equal(raw.includes('"ownerToken"'), false);
+    } finally { db.close(); }
+  } finally {
+    SqlitePublicationBindingStore.prototype.reserve = originalReserve;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reserved publication recovery rejects tampered dispatch bytes and tuple metadata", async () => {
+  for (const mutation of ["bytes", "hash"] as const) {
+    const root = await temp();
+    const input = makeInput(join(root, "final.apparent"));
+    let dispatches = 0, inspections = 0;
+    const sdk = {
+      async publish() { dispatches++; return pending(captureId, publicationId, input.planFile.planSha256); },
+      async inspectPublication() { inspections++; throw new Error("not_found"); },
+    } as unknown as CaptureClient;
+    const originalReserve = SqlitePublicationBindingStore.prototype.reserve;
+    let faulted = false;
+    SqlitePublicationBindingStore.prototype.reserve = async function(binding) {
+      const reserved = await originalReserve.call(this, binding);
+      if (!faulted) { faulted = true; throw new Error("fault after reserve"); }
+      return reserved;
+    };
+    try {
+      const first = createRecordPublicationRecovery(sdk, join(root, "private"));
+      await assert.rejects(first.publish(input), /fault after reserve/u);
+      const path = join(root, "private", "publication-bindings.sqlite");
+      const db = new DatabaseSync(path);
+      try {
+        const row = JSON.parse(String(db.prepare("SELECT binding_json FROM publication_binding WHERE capture_id = ?").get(captureId)?.binding_json));
+        if (mutation === "bytes") {
+          const chars = [...row.recoveryInput.planBytesBase64];
+          chars[0] = chars[0] === "A" ? "B" : "A";
+          row.recoveryInput.planBytesBase64 = chars.join("");
+        } else row.planSha256 = "9".repeat(64);
+        db.prepare("UPDATE publication_binding SET binding_json = ? WHERE capture_id = ?").run(JSON.stringify(row), captureId);
+      } finally { db.close(); }
+      const restarted = createRecordPublicationRecovery(sdk, join(root, "private"));
+      await assert.rejects(restarted.reconcile(captureId, ownerToken), /Invalid capture publication input|conflicts with its durable binding/u);
+      assert.equal(dispatches, 0);
+      assert.equal(inspections, 0);
+    } finally {
+      SqlitePublicationBindingStore.prototype.reserve = originalReserve;
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("concurrent handles resume one reserved publication through the durable dispatch CAS", async () => {
+  const root = await temp();
+  const input = makeInput(join(root, "final.apparent"));
+  let dispatches = 0, inspections = 0;
+  let release!: (status: CaptureStatus) => void;
+  const sdk = {
+    publish() { dispatches++; return new Promise<CaptureStatus>(resolve => { release = resolve; }); },
+    async inspectPublication() { inspections++; throw new Error("not_found"); },
+  } as unknown as CaptureClient;
+  const originalReserve = SqlitePublicationBindingStore.prototype.reserve;
+  let faulted = false;
+  SqlitePublicationBindingStore.prototype.reserve = async function(binding) {
+    const reserved = await originalReserve.call(this, binding);
+    if (!faulted) { faulted = true; throw new Error("fault after reserve"); }
+    return reserved;
+  };
+  try {
+    const first = createRecordPublicationRecovery(sdk, join(root, "private"));
+    await assert.rejects(first.publish(input), /fault after reserve/u);
+    SqlitePublicationBindingStore.prototype.reserve = originalReserve;
+    const resumed = createRecordPublicationRecovery(sdk, join(root, "private"));
+    const other = createRecordPublicationRecovery(sdk, join(root, "private"));
+    const winning = resumed.reconcile(captureId, ownerToken);
+    while (!release) await new Promise(resolve => setImmediate(resolve));
+    await assert.rejects(other.reconcile(captureId, ownerToken), /outcome remains unresolved/u);
+    assert.equal(dispatches, 1);
+    assert.equal(inspections, 1, "a handle observing dispatching state reconciles only through inspectPublication");
+    release(pending(captureId, publicationId, input.planFile.planSha256));
+    assert.equal((await winning).state, "publishing");
+    assert.equal((await new SqlitePublicationBindingStore(join(root, "private")).get(captureId))?.state, "publishing");
+  } finally {
+    SqlitePublicationBindingStore.prototype.reserve = originalReserve;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy reserved publications without a dispatch descriptor stay explicitly unsupported", async () => {
+  const root = await temp();
+  const input = makeInput(join(root, "final.apparent"));
+  let dispatches = 0, inspections = 0;
+  const sdk = {
+    async publish() { dispatches++; return pending(captureId, publicationId, input.planFile.planSha256); },
+    async inspectPublication() { inspections++; throw new Error("not_found"); },
+  } as unknown as CaptureClient;
+  const store = new SqlitePublicationBindingStore(join(root, "private"));
+  try {
+    await store.reserve({ captureId, publicationId, planSha256: input.planFile.planSha256, materials: materials.manifest.key,
+      leaseId: materials.manifest.leaseId, bundleId: "take.apparent", bundlePath: input.planFile.stagingRoot + "/final.apparent",
+      manifestSha256: "1".repeat(64), state: "reserved" });
+    const recovery = createRecordPublicationRecovery(sdk, join(root, "private"));
+    await assert.rejects(recovery.reconcile(captureId, ownerToken), /unsupported for automatic recovery/u);
+    assert.equal(dispatches, 0);
+    assert.equal(inspections, 0);
+    assert.equal((await store.get(captureId))?.recoveryInput, undefined);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("reserved publication stays undispatched when publication capability is unavailable at restart", async () => {
+  const root = await temp();
+  const input = makeInput(join(root, "final.apparent"));
+  let handshakes = 0, dispatches = 0, inspections = 0;
+  const sdk = {
+    async handshake() {
+      handshakes++;
+      return { implementation: "native", capabilities: { publication: handshakes === 1 } };
+    },
+    async publish() { dispatches++; return pending(captureId, publicationId, input.planFile.planSha256); },
+    async inspectPublication() { inspections++; throw new Error("not_found"); },
+  } as unknown as CaptureClient;
+  const originalReserve = SqlitePublicationBindingStore.prototype.reserve;
+  let faulted = false;
+  SqlitePublicationBindingStore.prototype.reserve = async function(binding) {
+    const reserved = await originalReserve.call(this, binding);
+    if (!faulted) { faulted = true; throw new Error("fault after reserve"); }
+    return reserved;
+  };
+  try {
+    const first = createRecordPublicationRecovery(sdk, join(root, "private"));
+    await assert.rejects(first.publish(input), /fault after reserve/u);
+    SqlitePublicationBindingStore.prototype.reserve = originalReserve;
+    const restarted = createRecordPublicationRecovery(sdk, join(root, "private"));
+    await assert.rejects(restarted.reconcile(captureId, ownerToken), /unavailable; no request was dispatched/u);
+    assert.equal(dispatches, 0);
+    assert.equal(inspections, 0);
+    assert.equal((await new SqlitePublicationBindingStore(join(root, "private")).get(captureId))?.state, "reserved");
+  } finally {
+    SqlitePublicationBindingStore.prototype.reserve = originalReserve;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("existing final destination is refused without reserving or replacing it", async () => {
   const root = await temp();
   const finalPath = join(root, "already-there.apparent");
@@ -341,5 +529,41 @@ test("Saved inspection preserves the first exact receipt and observation time", 
     assert.deepEqual(await store.get(captureId), first);
     await assert.rejects(store.observe(binding, "saved", { ...receipt, inventorySha256: "8".repeat(64) }), /storage is unavailable/);
     assert.deepEqual(await store.get(captureId), first);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("recovery descriptors enforce per-record and retained aggregate byte budgets atomically", async () => {
+  const root = await temp();
+  const store = new SqlitePublicationBindingStore(join(root, "private"));
+  const make = (index: number, padding: number) => {
+    const capture = index.toString(16).padStart(32, "0");
+    const publication = (index + 100).toString(16).padStart(32, "0");
+    const input = makeInput(join(root, `${index}.apparent`));
+    const descriptor = { schema: 1 as const, captureId: capture, publicationId: publication, leaseId: input.leaseId,
+      planFile: input.planFile, planBytesBase64: Buffer.alloc(padding, 32).toString("base64"), materials: input.materials };
+    return { captureId: capture, publicationId: publication, planSha256: input.planFile.planSha256,
+      materials: { ...materials.manifest.key, captureId: capture }, leaseId: input.leaseId,
+      bundleId: "take.apparent", bundlePath: join(root, `${index}.apparent`), manifestSha256: "1".repeat(64),
+      state: "reserved" as const, recoveryInput: descriptor };
+  };
+  try {
+    await assert.rejects(store.reserve(make(1, 2 * 1024 * 1024)), /storage is unavailable/);
+    assert.equal((await store.list()).length, 0, "oversized descriptor cannot reserve identity");
+    // These directly exercise store admission, not SDK/native publication validity.
+    const prototype = make(2, 768 * 1024);
+    const bytes = Buffer.byteLength(JSON.stringify(prototype.recoveryInput));
+    const capacity = Math.floor(16 * 1024 * 1024 / bytes);
+    for (let index = 2; index < capacity + 1; index++) await store.reserve(make(index, 768 * 1024));
+    const results = await Promise.allSettled([store.reserve(make(1000, 768 * 1024)),
+      new SqlitePublicationBindingStore(join(root, "private")).reserve(make(1001, 768 * 1024))]);
+    assert.equal(results.filter(item => item.status === "fulfilled").length, 1, "aggregate admission has one remaining slot");
+    const rows = await store.list();
+    assert.equal(rows.length, capacity);
+    assert.ok(rows.reduce((sum, row) => sum + Buffer.byteLength(JSON.stringify(row.recoveryInput)), 0) <= 16 * 1024 * 1024);
+    const original = make(2, 768 * 1024);
+    assert.deepEqual(await store.reserve(original), original, "exact replay succeeds at capacity");
+    await store.observe(original, "cancelled");
+    await assert.rejects(store.reserve(make(2000, 768 * 1024)), /storage is unavailable/);
+    assert.equal((await store.get(original.captureId))?.state, "cancelled", "terminal history remains retained, not evicted for admission");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
