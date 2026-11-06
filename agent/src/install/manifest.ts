@@ -19,8 +19,17 @@ export function validateManifest(value: unknown): NativeManifest {
   }
   const media2 = JSON.stringify(value.capabilities) === JSON.stringify(['media/1', 'media/2']);
   const media1 = JSON.stringify(value.capabilities) === JSON.stringify(['media/1']);
-  const expectedKeys = ['schema', 'sourceSha', 'target', 'rustTriple', 'capabilities', 'launch', 'environment', 'runtimeFiles', ...(media2 ? ['media2Launch'] : [])];
+  const hasVisualObservations = Object.hasOwn(value, 'visualObservations');
+  const expectedKeys = ['schema', 'sourceSha', 'target', 'rustTriple', 'capabilities', 'launch', 'environment', 'runtimeFiles', ...(media2 ? ['media2Launch'] : []), ...(media2 && hasVisualObservations ? ['visualObservations'] : [])];
   if ((!media1 && !media2) || !exactKeys(value, expectedKeys)) fail('native media manifest has an invalid schema');
+  if (hasVisualObservations) {
+    const profile = value.visualObservations;
+    if (!media2 || !isRecord(profile) || !exactKeys(profile, ['schema', 'appliesTo', 'chunkType', 'algorithm']) ||
+        profile.schema !== 'apparent.frame-observation-profile/1' || profile.appliesTo !== 'media/2-frame-png' ||
+        profile.chunkType !== 'apOB' || profile.algorithm !== 'apparent.visual-luma/1') {
+      fail('native visual observation profile rejected');
+    }
+  }
   if (media2) {
     const media2Launch = value.media2Launch;
     const expectedMedia2Argv = ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'];

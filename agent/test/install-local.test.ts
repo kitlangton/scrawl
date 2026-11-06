@@ -287,6 +287,52 @@ test('dual media manifest preserves the exact media/1 install path and rejects p
   }
 }));
 
+test('dual media manifest accepts only the exact additive visual observation profile before installation writes', async () => withTemp(async (directory) => {
+  const base = await fixtureRoot(directory);
+  const dual = structuredClone(base.manifest) as any;
+  dual.capabilities = ['media/1', 'media/2'];
+  dual.media2Launch = {
+    argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'],
+    sharesCaptureRuntime: true,
+  };
+  dual.visualObservations = {
+    schema: 'apparent.frame-observation-profile/1',
+    appliesTo: 'media/2-frame-png',
+    chunkType: 'apOB',
+    algorithm: 'apparent.visual-luma/1',
+  };
+  assert.deepEqual(validateManifest(dual).visualObservations, dual.visualObservations);
+
+  const archive = join(directory, 'agent.tgz');
+  await writeFile(archive, agentTar, { mode: 0o600 });
+  const reject = async (value: any, index: number) => {
+    const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+    await writeFile(join(base.root, 'manifest.json'), bytes, { mode: 0o600 });
+    const prefix = join(directory, `invalid-profile-${index}`);
+    await assert.rejects(installLocal({ agentPath: archive, agentSha256: sha256(agentTar), nativeRoot: base.root,
+      manifestSha256: sha256(bytes), prefix }, fixtureDependencies()));
+    await assert.rejects(lstat(prefix), { code: 'ENOENT' });
+  };
+  const malformed = [
+    (value: any) => { value.visualObservations = { ...value.visualObservations, schema: 'apparent.frame-observation-profile/2' }; },
+    (value: any) => { value.visualObservations = { ...value.visualObservations, appliesTo: 'media/1-frame-png' }; },
+    (value: any) => { value.visualObservations = { ...value.visualObservations, chunkType: 'apXX' }; },
+    (value: any) => { value.visualObservations = { ...value.visualObservations, algorithm: 'apparent.visual-luma/2' }; },
+    (value: any) => { delete value.visualObservations.algorithm; },
+    (value: any) => { value.visualObservations.extra = true; },
+    (value: any) => { value.visualObservations.schema = 1; },
+    (value: any) => { value.visualObservations = null; },
+    (value: any) => { value.visualObservations = 'apparent.frame-observation-profile/1'; },
+    (value: any) => { value.capabilities = ['media/1']; delete value.media2Launch; },
+  ];
+  for (const [index, change] of malformed.entries()) {
+    const value = structuredClone(dual);
+    change(value);
+    assert.throws(() => validateManifest(value));
+    await reject(value, index);
+  }
+}));
+
 test('native inventory aggregate, file-count, entry-count and per-file bounds fail before prefix creation', async () => withTemp(async (directory) => {
   const { input, native } = await fixtureInputs(directory);
   const noPrefix = async (limits: typeof DEFAULT_LIMITS, pattern: RegExp, suffix: string) => {
