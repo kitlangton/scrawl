@@ -103,7 +103,7 @@ test("setup presentation uses donor header and truthful three-step progress labe
   const f = fixture(); await f.controller.load();
   const render = () => renderToStaticMarkup(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} }));
   assert.match(render(), /apparent · setup/); assert.match(render(), /1 \/ 3/);
-  f.progress.value = { ...initialProgress(), status: "in-progress", stage: "pen" }; await f.controller.load(); assert.match(render(), /Pick your pen\./); assert.match(render(), /1 \/ 3/);
+  f.progress.value = { ...initialProgress(), status: "in-progress", stage: "pen" }; await f.controller.load(); assert.match(render(), /Pick your pen\./); assert.doesNotMatch(render(), /1 \/ 3/);
   f.progress.value = { ...initialProgress(), status: "in-progress", stage: "permissions" }; await f.controller.load(); assert.match(render(), /2 \/ 3/);
   f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await f.controller.load(); assert.match(render(), /Choose your shortcut\./); assert.match(render(), /3 \/ 3/);
   f.controller.dispose();
