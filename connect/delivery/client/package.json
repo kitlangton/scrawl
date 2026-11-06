@@ -28,7 +28,7 @@
     "dev": "tsc --watch",
     "prepack": "npm run build",
     "pretest": "npm run build",
-    "test": "node --experimental-strip-types --test test/*.test.ts test/recipient/*.test.ts test/cli/*.test.ts test/queue/*.test.ts test/credentials/*.test.ts test/state/*.test.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts test/recipient/*.test.ts test/cli/*.test.ts test/queue/*.test.ts test/credentials/*.test.ts test/state/*.test.ts test/sender/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "pack": "npm pack --dry-run",

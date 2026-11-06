@@ -27,6 +27,8 @@ import { readLocalStatus } from "../../src/cli/status-state.ts";
 import { decodeJob } from "../../src/queue/job.ts";
 import { openCommittedEncryptedSpool, EncryptedSpoolReadError } from "../../src/sender/spool-reader.ts";
 import { uploadPreparedEncryptedCapture } from "../../src/sender/encrypted-transport.ts";
+import { sealCapture } from "../../src/sender/seal.ts";
+import { publishEncryptedSpool } from "../../src/sender/spool-publication.ts";
 
 const target = process.platform === "linux" ? "linux-x64" : process.arch === "arm64" ? "macos-arm64" : "macos-x64";
 const artifactPath = process.env.APPARENT_RESOURCE_ARTIFACT;
@@ -81,7 +83,7 @@ assert.equal(typeof resources.checkAcl, "function", "native SDK must provide des
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-test("native committed spool reader supplies the encrypted sender and fences login changes", async () => fixture(async root => {
+test("native spool publication feeds the committed reader and sender under the stable lease", async () => fixture(async root => {
   const id = "c".repeat(32), generation = "d".repeat(32);
   const received = new Map<string, Buffer>();
   let files: { path: string; size: number; sha256: string }[] = [];
@@ -101,24 +103,43 @@ test("native committed spool reader supplies the encrypted sender and fences log
   try {
     const context: Context = { origin, accountId: "account", captureId: id, senderGrantId: "sender" };
     const seed = Uint8Array.from({ length: 32 }, (_, i) => i + 1), reader = await generateAgeIdentity();
-    const source = capture().files;
-    const inner = { version: 1, context, files: source.map(({ path, size, sha256 }) => ({ path, size, sha256 })) };
-    const sealed = await encryptAge(encodeArchive(inner, source.map(file => file.bytes)), [reader.recipient]);
-    const chunks = splitAgeStream(sealed), chunkAssets = chunks.map((bytes, i) => ({ path: `sealed/part-${String(i).padStart(6, "0")}.age`, size: bytes.length, sha256: digest(bytes) }));
-    const signed = { version: 1, context, chunks: chunkAssets };
-    const envelope = Buffer.from(JSON.stringify({ signed, signature: await signEnvelope(seed, signed) }));
-    const assets = [{ path: "envelope.json", size: envelope.length, sha256: digest(envelope) }, ...chunkAssets];
-    const receipt = { metadata: { context, recipientGrants: ["reader"] }, files: assets };
-    const spool = path.join(root, `${id}.sealed`); await mkdir(path.join(spool, "sealed"), { recursive: true, mode: 0o700 });
-    await writeFile(path.join(spool, "spool-state.json"), JSON.stringify(receipt), { mode: 0o600 });
-    await writeFile(path.join(spool, "envelope.json"), envelope, { mode: 0o600 });
-    for (let i = 0; i < chunks.length; i++) await writeFile(path.join(spool, chunkAssets[i]!.path), chunks[i]!, { mode: 0o600 });
-    const job = decodeJob(Buffer.from(JSON.stringify({ id, bundle: "/synthetic.apparent", server: origin, generation,
-      created: 1, attempts: 0, nextAttempt: 0, status: "pending", encrypted: true, files: assets, encryption: receipt.metadata })));
+    const self = await generateAgeIdentity(), signingKey = await ed25519.getPublicKeyAsync(seed);
+    const ownPublicKey = { version: 1 as const, recipient: self.recipient, signing: Buffer.from(signingKey).toString("hex") };
+    const sealed = await sealCapture({ server: origin, captureId: id, ownPublicKey, signingSeed: seed, profile: "root",
+      authority: { server: origin, accountId: "account", grantId: "sender", scope: "upload", devices: [
+        { grantId: "sender", scope: "upload", key: ownPublicKey },
+        { grantId: "reader", scope: "read", key: { ...ownPublicKey, recipient: reader.recipient } }] },
+      files: capture().files, active: () => true });
+    const pending = decodeJob(Buffer.from(JSON.stringify({ id, bundle: "/synthetic.apparent", server: origin, generation,
+      created: 1, attempts: 0, nextAttempt: 0, status: "pending", encrypted: true })));
     const credential = { server: origin, scope: "upload", generation, token: "synthetic-upload", refreshToken: "synthetic-refresh",
-      expiresAt: Math.floor(Date.now() / 1000) + 1000, refreshExpiresAt: Math.floor(Date.now() / 1000) + 2000, grantId: "sender" };
-    await writeFile(path.join(root, `${id}.job`), JSON.stringify(job), { mode: 0o600 });
+      expiresAt: Math.floor(Date.now() / 1000) + 1000, refreshExpiresAt: Math.floor(Date.now() / 1000) + 2000,
+      grantId: "sender", encryption_identity: "f".repeat(32) };
+    await writeFile(path.join(root, `${id}.job`), JSON.stringify(pending), { mode: 0o600 });
     await writeFile(path.join(root, "upload.credential"), JSON.stringify(credential), { mode: 0o600 });
+    const credentialsBefore = await readFile(path.join(root, "upload.credential"));
+    const pendingBefore = await readFile(path.join(root, `${id}.job`));
+    const credentialSnapshot = await readCredentialSnapshot(root, { scope: "upload", approvedServer: origin }, resources);
+    const publicationResources = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+      async publish(parent: import("node:fs/promises").FileHandle, stage: string, destination: string, options?: { signal?: AbortSignal }) {
+        try {
+          const contender = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+          if (contender.state === "acquired") await contender.lease.release();
+          assert.equal(contender.state, "busy", "native publication must hold the same queue inode lease");
+        } catch (error) { await parent.close().catch(() => {}); throw error; }
+        return resources.publish(parent, stage, destination, options);
+      } };
+    const published = await publishEncryptedSpool(root, pending, sealed, credentialSnapshot, signingKey, publicationResources, { active: () => true });
+    assert.equal(published.state, "committed"); if (published.state !== "committed") return;
+    assert.deepEqual(await readFile(path.join(root, `${id}.job`)), pendingBefore);
+    assert.deepEqual(await readFile(path.join(root, "upload.credential")), credentialsBefore);
+    const receipt = published.record, assets = [...receipt.files], spool = published.path;
+    const envelope = sealed.assets.find(asset => asset.path === "envelope.json")!.bytes;
+    const chunkAssets = assets.filter(asset => asset.path.startsWith("sealed/"));
+    for (const asset of sealed.assets) assert.deepEqual(new Uint8Array(await readFile(path.join(spool, asset.path))), asset.bytes);
+    // A fixture-only authoritative job commit joins the existing committed reader.
+    const job = { ...pending, files: assets, encryption: receipt.metadata };
+    await writeFile(path.join(root, `${id}.job`), JSON.stringify(job), { mode: 0o600 });
     const before = await readFile(path.join(spool, "spool-state.json"));
     const snapshot = await openCommittedEncryptedSpool(root, job, resources, { lockTimeoutMs: 0 });
     const lock = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
@@ -128,13 +149,14 @@ test("native committed spool reader supplies the encrypted sender and fences log
       finally { await lock.lease.release(); }
     }
     await uploadPreparedEncryptedCapture({ server: origin, captureId: id, context, profile: "root", envelope: assets[0]!, chunks: chunkAssets,
-      recipientGrantIds: ["reader"], trustedSenderSigningKey: await ed25519.getPublicKeyAsync(seed), active: () => true,
+      recipientGrantIds: receipt.metadata.recipientGrants, trustedSenderSigningKey: await ed25519.getPublicKeyAsync(seed), active: () => true,
       readAsset: async (name, signal) => { const bytes = await snapshot.readAsset(name, signal); borrowed.push(bytes); return bytes; },
       authorize: async (approvedServer, scope) => ({ approvedServer, scope, token: credential.token,
-        accountId: "account", senderGrantId: "sender", recipientGrantIds: ["reader"] }) });
-    assert.equal(received.size, assets.length); assert.deepEqual(received.get("envelope.json"), envelope);
+        accountId: "account", senderGrantId: "sender", recipientGrantIds: receipt.metadata.recipientGrants }) });
+    assert.equal(received.size, assets.length); assert.deepEqual(received.get("envelope.json"), Buffer.from(envelope));
     for (const asset of assets) assert.equal(digest(received.get(asset.path)!), asset.sha256);
     assert.deepEqual(await readFile(path.join(spool, "spool-state.json")), before);
+    sealed.assets.forEach(asset => asset.bytes.fill(0));
     await writeFile(path.join(root, "upload.credential"), JSON.stringify({ ...credential, generation: "e".repeat(32) }));
     await assert.rejects(snapshot.readAsset("envelope.json"), e => e instanceof EncryptedSpoolReadError && e.category === "stale_snapshot");
   } finally { borrowed.forEach(bytes => bytes.fill(0)); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
