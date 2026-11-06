@@ -23,7 +23,7 @@ export interface ProposedRecoveryPeerRelease {
   peerId: string;
   connection: "released";
   /** Unknown is not permission to kill/cancel native work or allocate a new tuple. */
-  nativeAdmission: "closed-confirmed" | "unconfirmed" | "peer-exit-observed";
+  inputClosure: "confirmed" | "unconfirmed" | "peer-exit-observed";
   runtimeClearance: "not-established";
   reconcile: "original-capture-materials-job-publication-bindings";
 }
@@ -75,7 +75,10 @@ export declare function proposedLaunchMedia2RecoveryPeer(
  * - Publication retains original auth/material/plan bindings and held resources
  *   through commit/recovery. Releasing the client is never commit/cancel/cleanup.
  * - Ready/release facts bind the private launch nonce. Releasing closes admission
- *   to this connection, not the runtime. Unknown work stays reconcilable.
+ *   to this connection, not the runtime. Already received requests may still be
+ *   processed; they retain original authorization and identities. Unknown work
+ *   stays reconcilable. Input closure is not proof that native job admission,
+ *   work completion or global runtime clearance has finished.
  *
  * Agent must use only this public peer handle, with Record local shutdown/drain;
  * no unref/process.exit/private-child/force-close workaround at the consumer.
