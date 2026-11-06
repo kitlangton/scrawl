@@ -78,7 +78,8 @@ test("replaceFile consumes the parent, validates identities, and fails closed on
   for (const scenario of ["replaced", "destination_changed", "refused", "publication_uncertain", "silent", "malformed"]) {
     const f = await fixture(scenario); try {
       const h = await f.handle();
-      const result = await new NativeResources(f.provider).replaceFile(h, "stage", "final", { source: { device: "1", inode: "2" }, destination: null }, { timeoutMs: 100 });
+      // Allow Node startup on CI; only the silent peer tests deadline expiry.
+      const result = await new NativeResources(f.provider).replaceFile(h, "stage", "final", { source: { device: "1", inode: "2" }, destination: null }, { timeoutMs: scenario === "silent" ? 100 : 3000 });
       assert.equal(h.fd, -1);
       assert.deepEqual(result, { state: scenario === "silent" || scenario === "malformed" ? "publication_uncertain" : scenario });
     } finally { await f.close(); }
