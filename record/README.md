@@ -174,6 +174,19 @@ fact or resolves the same request/artifact pair after restart; delivery remains
 `unknown`. Older bindings without this output context stay unavailable. This
 does not add clipboard effects or infer native origin from local materials.
 
+`@apparent/record/host/capture2-coordinator` exports
+`createRecordCaptureCoordinator` for hosts composing the existing capture/2
+runtime, retained media/2 job, materials and sealed-artifact readers, canonical
+assembler, and publication output. The host supplies trusted roots and one
+explicit processing-selection callback; its decisions and stable identities are
+stored in the existing private publication SQLite database before media dispatch.
+After restart it inspects the original media job and publication binding, then
+exposes the same authenticated Saved facts and exact handoff resolver. It does
+not choose default frames/layout, close caller-owned clients, release materials,
+copy to the clipboard, or infer local-only delivery. Synthetic method-port
+coverage proves the offline composition only; native capture/media/publication
+and installed-provider adoption remain separate evidence gates.
+
 Binary inputs are fingerprinted by digest and length. Supplied derivative receipts
 are forwarded to the existing stager and SDK validation without asserting provenance.
 Once a durable binding exists, a new composition refuses before staging; use

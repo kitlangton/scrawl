@@ -127,6 +127,20 @@ export class RecordMedia2Job {
     return new RecordMedia2Job(client, journalPath, record);
   }
 
+  /** Reopen the exact retained request/material binding without rereading source files. */
+  static async reopenRetained(client: Client, journalPath: string, ownerToken: string): Promise<RecordMedia2Job> {
+    const store = new Media2Store(journalPath);
+    const record = await store.read() as Media2JobRecord;
+    validateRecord(record);
+    const { prepared } = preflightMedia2Dispatch({ ownerToken, request: record.request, materials: record.materials });
+    if (prepared.sha256 !== record.requestSha256) throw new Error("reopened retained media2 request hash changed");
+    if (record.state === "complete") {
+      const document = validateComplete(restoreDerivative(record.derivative!), record.request, record.materials);
+      record.derivative = storedDerivative(document);
+    }
+    return new RecordMedia2Job(client, journalPath, record);
+  }
+
   get jobId(): string { return this.record.request.jobId; }
   get state(): RecordMedia2JobState { return this.record.state; }
   get requestSha256(): string { return this.record.requestSha256; }

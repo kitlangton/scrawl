@@ -14,6 +14,8 @@ import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
 import { SqlitePublicationBindingStore } from "../../dist/backend/publication/store.js";
 import { encodeContactSheetLayout, prepareMedia2Request, selectDerivative2Artifact, validateDerivative2Document, type Derivative2DocumentInput } from "@apparent/engine-sdk/media2";
 import { readRetainedDerivativeArtifacts } from "../../dist/backend/processing/retained-artifacts.js";
+import { createRecordCaptureCoordinator } from "../../dist/backend/host/capture2/coordinator.js";
+import { AbsentDestinationAllocator } from "../../dist/backend/host/absent-destination-allocator.js";
 
 const identity = { captureId: "a".repeat(32), materialsId: "b".repeat(32) };
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
@@ -113,11 +115,12 @@ function derivative2For(input: BundleAssemblyInput, requestedBundleMs = [1000], 
   outputDirectory?: string;
   frameFiles?: Array<{ relativePath: string; identity: { device: string; inode: string; size: number; modifiedNs: string }; sha256: string }>;
   sheetFile?: { relativePath: string; identity: { device: string; inode: string; size: number; modifiedNs: string }; sha256: string };
+  jobId?: string;
 } = {}): Derivative2DocumentInput {
   const materials = validateMaterialsDocument(input.manifest, input.payloadBytes);
   const layout = { schema: "apparent.contact-sheet-layout/1" as const, width: 400, height: 300, backgroundRgb: [0, 0, 0] as [number, number, number], fit: "stretch" as const, sampling: "legacy-bilinear" as const, clipping: "reject" as const, tiles: [{ requestIndex: 1, x: 0, y: 0, width: 400, height: 300 }] };
   const request = prepareMedia2Request({ schema: "apparent.retained-frame-request/1", materials: materials.manifest.key, leaseId: materials.payload.leaseId,
-    jobId: "9".repeat(32), outputDirectory: options.outputDirectory ?? "/private/sdk-output/derivative-job", requestedBundleMs,
+    jobId: options.jobId ?? "9".repeat(32), outputDirectory: options.outputDirectory ?? "/private/sdk-output/derivative-job", requestedBundleMs,
     limits: { maxFrames: 2, maxEdge: 4096, maxTotalPixels: 64_000_000, deadlineMs: 10_000 }, contactSheet: layout }, materials).request;
   const sourceFrame = input.artifacts.find(artifact => artifact.role === "frame")!;
   const sourceSheet = input.artifacts.find(artifact => artifact.role === "contact-sheet")!;
@@ -983,6 +986,10 @@ test("publication output exposes only durably matched Saved facts and handoff af
     assert.equal(reserved?.output?.processing.bundlePath, destinationPath);
     assert.equal(JSON.stringify(reserved).includes(ownerToken), false);
     assert.ok(planSha256);
+    assert.equal((await first.captureFacts.readFacts()).revision, 0);
+    await first.reconcile({ captureId: identity.captureId, ownerToken, publicationId, materials: input.manifest.key, leaseId: input.manifest.leaseId,
+      bundleId: "sdk-bundle", bundlePath: destinationPath });
+    assert.equal((await first.captureFacts.readFacts()).revision, 1, "a new Saved projection advances the stable producer revision");
     await assert.rejects(first.publish({ ...args, requestId: "changed-public-request", stagingRoot: join(root, "changed-staging") }), /already bound to publication/u);
     await assertAbsent(join(root, "changed-staging"));
 
@@ -1006,6 +1013,162 @@ test("publication output exposes only durably matched Saved facts and handoff af
     assert.equal((await reopened.resolveHandoff({ captureId: requestId, artifactId: "sdk-bundle" }))?.handoff.processing.frames.length, assembly.processing.frames.length);
     assert.equal((await reopened.captureFacts.readFacts()).captures[0]?.delivery, "unknown", "nativeRemoteDelivery forbidden is not local-only proof");
     assert.equal(await reopened.resolveHandoff({ captureId: identity.captureId, artifactId: "sdk-bundle" }), null, "private Engine capture ID is not the public request ID");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("publication database atomically admits immutable processing policy beside existing bindings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "record-processing-admission-"));
+  const captureId = "a".repeat(32), requestId = "public-request-with-separate-id";
+  const store = new SqlitePublicationBindingStore(join(root, "control"));
+  const older = { captureId, publicationId: "1".repeat(32), planSha256: "2".repeat(64), materials: { captureId, materialsId: "b".repeat(32), revision: "3".repeat(64) },
+    leaseId: "c".repeat(32), bundleId: "record-old.apparent", bundlePath: join(root, "record-old.apparent"), manifestSha256: "4".repeat(64), state: "reserved" as const };
+  const record = { schema: 1 as const, captureId, requestId, materials: older.materials, leaseId: older.leaseId, bundleId: older.bundleId,
+    bundlePath: older.bundlePath, plan: { createdAtMs: 1234, request: { jobId: "5".repeat(32), requestedBundleMs: [1000, 1000], layout: { width: 400, height: 300 } }, requestVideoProof: true } };
+  try {
+    await store.reserve(older);
+    const second = new SqlitePublicationBindingStore(join(root, "control"));
+    const [firstWinner, secondWinner] = await Promise.all([store.reserveProcessing(record), second.reserveProcessing(structuredClone(record))]);
+    assert.deepEqual(firstWinner, record);
+    assert.deepEqual(secondWinner, record, "cross-handle concurrent admission returns one immutable winner");
+    assert.equal((await store.get(captureId))?.publicationId, older.publicationId, "additive processing schema preserves existing publication rows");
+    assert.deepEqual(await store.listProcessing(), [record]);
+    await assert.rejects(store.reserveProcessing({ ...record, plan: { ...record.plan, createdAtMs: 9999 } }), /storage is unavailable/u);
+    await assert.rejects(store.reserveProcessing({ ...record, plan: { ...record.plan, ownerToken: "c".repeat(64) } }), /storage is unavailable/u);
+    const snapshot = await store.getProcessing(captureId);
+    snapshot!.plan.request.requestedBundleMs[0] = 2000;
+    assert.deepEqual((await store.getProcessing(captureId))?.plan, record.plan, "reads are isolated copies");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("capture coordinator advances one retained request through synthetic media, staging, Saved, and restart handoff", async () => {
+  const input = await fixture();
+  const root = await realpath(await mkdtemp(join(tmpdir(), "record-capture-coordinator-")));
+  const controlRoot = join(root, "control"), outputRoot = join(root, "output");
+  const materialRoot = join(root, "retained-materials"), derivativeRoot = join(root, "retained-derivative");
+  await Promise.all([mkdir(controlRoot, { mode: 0o700 }), mkdir(outputRoot, { mode: 0o755 }), mkdir(materialRoot, { mode: 0o700 }), mkdir(derivativeRoot, { mode: 0o700 })]);
+  const requestId = "coordinator-public-request";
+  const captureId = identity.captureId;
+  const bundleId = `record-${sha(new TextEncoder().encode(requestId))}.apparent`;
+  const bundlePath = join(outputRoot, bundleId);
+  const ownerToken = "c".repeat(64), materialsId = identity.materialsId, leaseId = "c".repeat(32);
+  const seal = async (relativePath: string, content: Uint8Array) => {
+    const path = join(materialRoot, relativePath);
+    await mkdir(join(path, ".."), { recursive: true, mode: 0o700 });
+    await writeFile(path, content, { mode: 0o600 });
+    const stat = await lstat(path, { bigint: true });
+    return { relativePath, sha256: sha(content), identity: { device: String(stat.dev), inode: String(stat.ino), size: Number(stat.size), modifiedNs: String(stat.mtimeNs) } };
+  };
+  try {
+    const payload = JSON.parse(new TextDecoder().decode(input.payloadBytes));
+    payload.root = materialRoot;
+    payload.bundleId = bundleId;
+    payload.identity = { captureId, materialsId };
+    payload.leaseId = leaseId;
+    const sourceFiles = input.artifacts.filter(artifact => artifact.role === "video").map(artifact => artifact.bytes);
+    const factFiles = Object.values(input.facts).map(fact => fact!.bytes);
+    const materialBytes = [sourceFiles[0]!, ...factFiles];
+    const originalPaths = ["capture.mp4", "facts/context.json", "facts/interactions.json", "facts/transcript.json"];
+    payload.files = [];
+    for (let i = 0; i < originalPaths.length; i++) payload.files.push(await seal(originalPaths[i]!, materialBytes[i]!));
+    const payloadBytes = bytes(payload);
+    await writeFile(join(materialRoot, "materials.json"), payloadBytes, { mode: 0o600 });
+    const payloadStat = await lstat(join(materialRoot, "materials.json"), { bigint: true });
+    input.payloadBytes = payloadBytes;
+    input.manifest.root = materialRoot;
+    input.manifest.leaseId = leaseId;
+    input.manifest.key = { captureId, materialsId, revision: sha(payloadBytes) };
+    input.manifest.payloadFile = { relativePath: "materials.json", sha256: sha(payloadBytes), identity: { device: String(payloadStat.dev), inode: String(payloadStat.ino), size: Number(payloadStat.size), modifiedNs: String(payloadStat.mtimeNs) } };
+
+    const png = input.artifacts.find(artifact => artifact.role === "frame")!.bytes;
+    const sheet = input.artifacts.find(artifact => artifact.role === "contact-sheet")!.bytes;
+    await mkdir(join(derivativeRoot, "native"), { mode: 0o700 });
+    await writeFile(join(derivativeRoot, "native/frame.png"), png, { mode: 0o600 });
+    await writeFile(join(derivativeRoot, "native/sheet.png"), sheet, { mode: 0o600 });
+    const derivativeSeal = async (relativePath: string, content: Uint8Array) => {
+      const stat = await lstat(join(derivativeRoot, relativePath), { bigint: true });
+      return { relativePath, sha256: sha(content), identity: { device: String(stat.dev), inode: String(stat.ino), size: Number(stat.size), modifiedNs: String(stat.mtimeNs) } };
+    };
+    const frameSeal = await derivativeSeal("native/frame.png", png), sheetSeal = await derivativeSeal("native/sheet.png", sheet);
+
+    const mapping = { requestId, captureId, ownerToken, bundleId, bundlePath, capture2Intent: "synthetic-retained-intent" };
+    const mappings = {
+      async listRequestIds(protocol?: "v1" | "capture2") { return protocol === "capture2" ? [requestId] : []; },
+      async getByRequestId(id: string) { return id === requestId ? structuredClone(mapping) : undefined; },
+      async getByCaptureId(id: string) { return id === captureId ? structuredClone(mapping) : undefined; },
+      async putIfAbsent(value: typeof mapping) { return structuredClone(value); },
+      async putCapture2IfUnchanged(value: typeof mapping) { return structuredClone(value); },
+    };
+    const materialsManifest = structuredClone(input.manifest);
+    const captureClient = {
+      async handshake() { return { implementation: "native", readiness: "ready", capabilities: { sourceDiscovery: true, displayCapture: true, areaCapture: false, audioCapture: false, contextFacts: false, interactionFacts: false, candidates: false, transcript: false, strokes: false, publication: true, retainedMaterials: true } }; },
+      async discoverSources() { return { state: "available", sources: [{ id: "source", generation: "d".repeat(32), kind: "display", displayId: 1, bounds: { x: 0, y: 0, width: 800, height: 600, scale: 1 } }] }; },
+      async inspect() { return { captureId, state: "materials-ready", materials: materialsManifest }; },
+      async start() { return { captureId, state: "recording" }; }, async stop() { return { captureId, state: "materials-ready", materials: materialsManifest }; },
+      async cancel() { return { captureId, state: "cancelled" }; }, async list() { return [{ captureId, state: "materials-ready", materials: materialsManifest }]; },
+      async publish(request: Parameters<CaptureClient["publish"]>[0]) {
+        publishes++;
+        const prepared = preflightCapturePublication(request);
+        return { captureId, state: "publishing", publicationId: request.publicationId, planSha256: prepared.plan.planSha256 };
+      },
+      async inspectPublication(request: Parameters<CaptureClient["inspectPublication"]>[0]) {
+        return { captureId, state: "saved", publicationId: request.publicationId, planSha256: request.planSha256, materials: materialsManifest,
+          publication: { captureId, materials: request.expected.materials, publicationId: request.publicationId, planSha256: request.planSha256,
+            bundleId: request.expected.bundleId, bundlePath: request.expected.bundlePath, artifactVersion: 1 as const, artifactProvenance: "native" as const,
+            manifestSha256: request.expected.manifestSha256, inventorySha256: "9".repeat(64) } };
+      },
+    } as unknown as CaptureClient;
+    let derives = 0, publishes = 0;
+    const mediaClient = {
+      async derive(request: Parameters<Media2Client["derive"]>[0]) {
+        const admitted = await new SqlitePublicationBindingStore(controlRoot).getProcessing(captureId);
+        assert.ok(admitted, "original processing policy is durable before media dispatch");
+        assert.deepEqual((admitted.plan as { requestVideoProof: boolean }).requestVideoProof, true);
+        assert.equal(JSON.stringify(admitted).includes(ownerToken), false);
+        derives++;
+        const document = derivative2For(input, [...request.request.requestedBundleMs], { outputDirectory: derivativeRoot, frameFiles: [frameSeal], sheetFile: sheetSeal, jobId: request.request.jobId });
+        return { jobId: request.request.jobId, requestSha256: prepareMedia2Request(request.request, request.materials).sha256, state: "complete", derivative: document };
+      },
+      async inspect(request: Parameters<Media2Client["inspect"]>[0]) {
+        throw new Error(`unexpected inspect for synthetic single dispatch ${request.request.jobId}`);
+      },
+      async cancel() { throw new Error("coordinator must not cancel media implicitly"); },
+    } as unknown as Media2Client;
+    const destinations = new AbsentDestinationAllocator(controlRoot, outputRoot);
+    const options = {
+      captureClient, mediaClient, mappings: mappings as never, destinations, privateControlRoot: controlRoot,
+      createStartIntent: () => { throw new Error("preexisting synthetic capture must not be restarted"); },
+      trustedMaterialsRoot: () => materialRoot,
+      selectProcessing: ({ materials }: { mapping: Readonly<{ requestId: string }>; materials: MaterialsDocument }) => ({
+        request: { outputDirectory: derivativeRoot, requestedBundleMs: [1000], limits: { maxFrames: 2, maxEdge: 4096, maxTotalPixels: 64_000_000, deadlineMs: 10_000 },
+          contactSheet: { schema: "apparent.contact-sheet-layout/1", width: 400, height: 300, backgroundRgb: [0, 0, 0], fit: "stretch", sampling: "legacy-bilinear", clipping: "reject",
+            tiles: [{ requestIndex: 1, x: 0, y: 0, width: 400, height: 300 }] } },
+        materialsLimits: { maxFileBytes: 4_000_000, maxAggregateBytes: 8_000_000 }, artifactLimits: { maxFileBytes: 4_000_000, maxAggregateBytes: 8_000_000 },
+        frames: [{ requestIndex: 1, index: 1, timeMs: 1000, text: "synthetic selected frame", reason: "fixture selection", event: "fixture", screenName: "display", bundlePath: "frames/frame-01.png", canonicalReason: "scene_change" }],
+        contactSheetPath: "contact-sheet.png", admission: { createdAtMs: 1234, destination: { session: "synthetic-session", title: "", via: "sdk" } }, marks: [], requestVideoProof: true,
+      }),
+      preflight: preflightCapturePublication, pollIntervalMs: 10000,
+    };
+    const coordinator = await createRecordCaptureCoordinator(options as never);
+    try {
+      for (let index = 0; index < 5; index++) await coordinator.reconcile();
+      const facts = await coordinator.captureFacts.readFacts();
+      assert.deepEqual(facts.captures.map(value => [value.captureId, value.artifactId, value.phase, value.delivery]), [[requestId, bundleId, "saved", "unknown"]]);
+      const resolved = await coordinator.resolveHandoff({ captureId: requestId, artifactId: bundleId });
+      assert.equal(resolved?.handoff.savedBundle.bundlePath, bundlePath);
+      assert.equal(resolved?.handoff.processing.frames[0]?.reason, "fixture selection");
+      assert.equal(derives, 1);
+      assert.equal((await new SqlitePublicationBindingStore(controlRoot).list()).length, 1);
+      assert.equal(JSON.stringify(await new SqlitePublicationBindingStore(controlRoot).listProcessing()).includes(ownerToken), false);
+      assert.equal(publishes, 1, "the original assembled plan is published once");
+      await rm(materialRoot, { recursive: true, force: true });
+      coordinator.dispose();
+      const reopened = await createRecordCaptureCoordinator(options as never);
+      try {
+        assert.equal((await reopened.resolveHandoff({ captureId: requestId, artifactId: bundleId }))?.handoff.savedBundle.bundlePath, bundlePath);
+        assert.equal(derives, 1, "restart resolves Saved without rereading deleted retained materials or deriving again");
+        assert.equal(publishes, 1, "restart reconciles the same publication binding without redispatch");
+      } finally { reopened.dispose(); }
+    } finally { coordinator.dispose(); }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

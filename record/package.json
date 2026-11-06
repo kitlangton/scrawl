@@ -37,6 +37,10 @@
       "types": "./dist/backend/host/capture2/runtime.d.ts",
       "import": "./dist/backend/host/capture2/runtime.js"
     },
+    "./host/capture2-coordinator": {
+      "types": "./dist/backend/host/capture2/coordinator.d.ts",
+      "import": "./dist/backend/host/capture2/coordinator.js"
+    },
     "./host/native": {
       "types": "./dist/backend/host/native/index.d.ts",
       "import": "./dist/backend/host/native/index.js"
