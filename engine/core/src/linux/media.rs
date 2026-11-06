@@ -197,7 +197,7 @@ impl Drop for VideoReader {
 }
 
 /// Keep the existing box-filter scaling and alpha behavior byte-for-byte.
-fn shrink_to_edge(
+pub(crate) fn shrink_to_edge(
     width: u32,
     height: u32,
     rgba: Vec<u8>,
@@ -218,13 +218,13 @@ fn shrink_to_edge(
         for x in 0..w as usize {
             let x0 = x * sw / w as usize;
             let x1 = ((x + 1) * sw / w as usize).max(x0 + 1);
-            let mut acc = [0_u32; 3];
-            let n = ((y1 - y0) * (x1 - x0)) as u32;
+            let mut acc = [0_u64; 3];
+            let n = ((y1 - y0) * (x1 - x0)) as u64;
             for sy in y0..y1 {
                 for px in rgba[(sy * sw + x0) * 4..(sy * sw + x1) * 4].chunks_exact(4) {
-                    acc[0] += u32::from(px[0]);
-                    acc[1] += u32::from(px[1]);
-                    acc[2] += u32::from(px[2]);
+                    acc[0] += u64::from(px[0]);
+                    acc[1] += u64::from(px[1]);
+                    acc[2] += u64::from(px[2]);
                 }
             }
             out[(y * w as usize + x) * 4..][..4].copy_from_slice(&[
@@ -348,6 +348,12 @@ mod tests {
         }
     }
 
+    #[test]
+    fn large_valid_source_downscales_without_color_sum_overflow() {
+        let (width, height, rgba) = shrink_to_edge(5000, 4000, vec![255; 5000 * 4000 * 4], 1);
+        assert_eq!((width, height), (1, 1));
+        assert_eq!(rgba, [255, 255, 255, 255]);
+    }
     #[test]
     fn frames_shrink_to_their_long_edge() {
         let (w, h, rgba) = shrink_to_edge(4, 2, vec![255; 4 * 2 * 4], 2);

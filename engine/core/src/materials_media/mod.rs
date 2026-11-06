@@ -368,7 +368,13 @@ pub fn derive_linux(
     for (i, requested) in requested_bundle_ms.iter().copied().enumerate() {
         checkpoint()?;
         let effective = requested.saturating_sub(video_offset_ms);
-        let frame = reader.frame(effective, max_edge, 256 * 1024 * 1024)?;
+        let mut frame = reader.frame(effective, 16_384, 256 * 1024 * 1024)?;
+        checkpoint()?;
+        let (width, height, rgba) =
+            crate::linux::media::shrink_to_edge(frame.width, frame.height, frame.rgba, max_edge);
+        frame.width = width;
+        frame.height = height;
+        frame.rgba = rgba;
         total_pixels = total_pixels
             .checked_add(u64::from(frame.width) * u64::from(frame.height))
             .ok_or_else(|| anyhow::anyhow!("frame pixel budget overflow"))?;
@@ -878,7 +884,7 @@ mod tests {
             &"e".repeat(32),
             output_root_str,
             &requests,
-            160,
+            80,
             &mut sink,
             &mut || Ok(()),
         )
@@ -907,7 +913,7 @@ mod tests {
             &"1".repeat(32),
             stopped_output.0.to_str().unwrap(),
             &requests,
-            160,
+            80,
             &mut stopped_sink,
             &mut || {
                 ensure!(writes.get() == 0, "cancelled or deadline exceeded");
@@ -923,6 +929,8 @@ mod tests {
         let envelope: Value = serde_json::from_slice(&envelope_bytes).unwrap();
         assert_eq!(envelope["payload"], payload);
         assert_eq!(payload["frames"].as_array().unwrap().len(), 4);
+        assert_eq!(payload["frames"][0]["width"], 80);
+        assert_eq!(payload["frames"][0]["height"], 45);
         assert_eq!(payload["frames"][0]["requestedBundleMs"], 0);
         assert_eq!(payload["frames"][0]["effectiveVideoMs"], 0);
         assert_eq!(payload["frames"][0]["clampedToStart"], true);
@@ -942,7 +950,7 @@ mod tests {
             bytes: 256 * 1024 * 1024,
         });
         let mut reader = decoder.read_info().unwrap();
-        assert_eq!((reader.info().width, reader.info().height), (160, 90));
+        assert_eq!((reader.info().width, reader.info().height), (80, 45));
         let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
         reader.next_frame(&mut rgba).unwrap();
         assert!(
