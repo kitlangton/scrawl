@@ -2,7 +2,7 @@ import type { NativeRequirement } from "@apparent/record/capabilities";
 
 const names: Record<string, string> = {
   "screen-capture": "Screen Recording",
-  "screen-recording": "Screen Recording",
+  "screen-recording": "Screen & System Audio Recording",
   microphone: "Microphone",
   accessibility: "Accessibility",
   camera: "Camera",

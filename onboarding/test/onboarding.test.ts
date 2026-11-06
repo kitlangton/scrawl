@@ -99,7 +99,7 @@ test("renders the actual React contribution with accessible controls and packed 
   assert.match(html, /Pick your pen\./); for (const color of ["coral", "purple", "blue", "green"]) assert.match(html, new RegExp(`aria-label="${color} pen"`)); assert.equal((html.match(/<span aria-hidden="true" style="--pencil:/g) ?? []).length, 4); assert.match(html, /Choose a color for your pen/); assert.doesNotMatch(html, /ink pen|laser pen|cursor pen|Frog guide|A quick setup/); assert.match(html, /Try later/); f.controller.dispose();
 });
 
-test("mounted permission rows use readable names and provider-factual states", async () => {
+test("mounted permission checklist stays compact and reports provider facts without false readiness", async () => {
   const f = fixture();
   f.progress.value = { ...initialProgress(), status: "in-progress", stage: "permissions" };
   const current = f.driver.current();
@@ -116,8 +116,23 @@ test("mounted permission rows use readable names and provider-factual states", a
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
   const text = dom.window.document.body.textContent ?? "";
-  assert.match(text, /Review recording access\./); assert.match(text, /Screen Recording/); assert.match(text, /Reopen Apparent to use this access/);
-  assert.match(text, /Microphone/); assert.match(text, /Not allowed/); assert.match(text, /Access/); assert.doesNotMatch(text, /screen-capture|future-internal-id/);
+  assert.match(text, /Review recording access/); assert.match(text, /Screen Recording/); assert.match(text, /Reopen Apparent to use this access/);
+  assert.match(text, /Microphone/); assert.match(text, /Not allowed/); assert.match(text, /Access/); assert.doesNotMatch(text, /screen-capture|future-internal-id|operating system remains/);
+  const beforeUnknown = f.driver.current();
+  f.driver.publish({ ...beforeUnknown, revision: beforeUnknown.revision + 1, readiness: { requirements: [{ id: "microphone", required: true, status: "unavailable", usableNow: false, relaunchNeeded: false, allowedRepairActions: [] }] } });
+  await act(async () => { await Promise.resolve(); });
+  assert.match(dom.window.document.body.textContent ?? "", /Status unknown/);
+  assert.match(dom.window.document.body.textContent ?? "", /Access status is unknown/);
+  assert.doesNotMatch(dom.window.document.body.textContent ?? "", /✓ Enabled/);
+  const unavailable = f.driver.current();
+  f.driver.publish({ ...unavailable, revision: unavailable.revision + 1, readiness: { requirements: [{ id: "microphone", required: true, status: "granted", usableNow: true, relaunchNeeded: false, allowedRepairActions: [] }] } });
+  await act(async () => { await Promise.resolve(); });
+  assert.match(dom.window.document.body.textContent ?? "", /✓ Enabled/);
+  assert.doesNotMatch(dom.window.document.body.textContent ?? "", /Access status is unknown/);
+  f.driver.disconnect();
+  await act(async () => { await Promise.resolve(); });
+  assert.match(dom.window.document.body.textContent ?? "", /Status unknown/);
+  assert.doesNotMatch(dom.window.document.body.textContent ?? "", /✓ Enabled/);
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
 });
 
@@ -204,6 +219,21 @@ test("mounted pen choice commits only on Use this pen and reduced motion advance
   assert.equal(dom.window.document.querySelector<HTMLButtonElement>('[aria-label="purple pen"]')!.disabled, false);
   await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Use this pen")!.click(); await Promise.resolve(); });
   assert.equal(f.controller.state.progress.stage, "permissions");
+  await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
+});
+
+test("setup Later stays in scrollable content and defers through its owner control", async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  f.progress.value = { ...initialProgress(), status: "in-progress", stage: "pen" }; await f.controller.load(); let closed = 0;
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() { closed++; } })); await Promise.resolve(); });
+  const later = [...dom.window.document.querySelectorAll("button")].find(button => button.textContent === "Try later")!;
+  const section = dom.window.document.querySelector("main.onboarding-shell section")!;
+  assert.ok(section.contains(later), "Later belongs to the pane that scrolls above the fixed setup footer");
+  assert.ok(section.parentElement?.querySelector("footer"), "the setup navigation remains outside the scroll pane");
+  await act(async () => { later.click(); await Promise.resolve(); });
+  assert.equal(f.controller.state.progress.status, "deferred"); assert.equal(closed, 1);
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
 });
 
@@ -314,6 +344,26 @@ test("practice renderer is a compact coach in the owner screen without setup nav
   const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "screen" }; await f.controller.load();
   const html = renderToStaticMarkup(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} }));
   assert.match(html, /data-practice="true"/); assert.match(html, /class="onboarding-practice"/); assert.match(html, /class="onboarding-coach-frog"/); assert.doesNotMatch(html, /aria-label="Close setup"/); assert.match(html, /Try later/); f.controller.dispose();
+});
+
+test("armed practice says the effective shortcut once and keeps local-only and unarmed states clear", async () => {
+  const armed = fixture(), admissionId = "practice-render-admission";
+  armed.progress.value = { ...initialProgress(), status: "in-progress", stage: "practice-start", admissionId };
+  const before = armed.driver.current();
+  armed.driver.publish({ ...before, revision: before.revision + 1, shortcut: { ...before.shortcut, effective: "⌥⇧S", label: "⌥⇧S", registration: "registered" }, nextShortcutAdmission: { state: "armed", admissionId, delivery: "local-only", expiresAt: new Date(Date.now() + 60_000).toISOString() } });
+  await armed.controller.load();
+  const ready = renderToStaticMarkup(createElement(OnboardingContribution, { controller: armed.controller, Button: TestButton, close() {} }));
+  assert.match(ready, /Press ⌥⇧S to start recording\./); assert.equal((ready.match(/⌥⇧S/g) ?? []).length, 1);
+  assert.match(ready, /Local-only practice/); assert.doesNotMatch(ready, /Ready when you are|onboarding-waiting|Try again/); assert.match(ready, /Try later/);
+  armed.controller.dispose();
+
+  const preparing = fixture(); preparing.progress.value = { ...initialProgress(), status: "in-progress", stage: "practice-start", admissionId: "pending-admission" }; await preparing.controller.load();
+  const preparingHtml = renderToStaticMarkup(createElement(OnboardingContribution, { controller: preparing.controller, Button: TestButton, close() {} }));
+  assert.match(preparingHtml, /Preparing your local practice/); assert.doesNotMatch(preparingHtml, /Press .* to start recording/); preparing.controller.dispose();
+
+  const ended = fixture(); ended.progress.value = { ...initialProgress(), status: "in-progress", stage: "practice-start" }; await ended.controller.load();
+  const endedHtml = renderToStaticMarkup(createElement(OnboardingContribution, { controller: ended.controller, Button: TestButton, close() {} }));
+  assert.match(endedHtml, /The previous practice ended/); assert.match(endedHtml, /Try again/); ended.controller.dispose();
 });
 
 test("failed copy offers a scoped copy retry for the saved practice capture", async () => {
