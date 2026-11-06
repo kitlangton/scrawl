@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, BufRead, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -239,39 +239,32 @@ fn remove_unsealed(directory: &Path, journal: &Journal) -> Result<(), &'static s
     {
         return Err("source_mismatch");
     }
-    let parent = pinned_dir(path.parent().ok_or("internal")?).map_err(|_| "source_mismatch")?;
-    let leaf =
-        std::ffi::CString::new(journal.capture_id.as_str()).map_err(|_| "source_mismatch")?;
-    let root_fd = unsafe {
-        libc::openat(
-            parent.as_raw_fd(),
-            leaf.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
-    if root_fd < 0 {
-        let error = io::Error::last_os_error();
-        // Cleanup is replayable when the exact managed leaf is already absent.
-        // Missing ancestors, symlinks and replacements still fail closed.
-        if error.kind() == io::ErrorKind::NotFound {
-            parent.sync_all().map_err(|_| "internal")?;
+    let parent = Arc::new(
+        apparent_capture_engine::SecureStore::open(path.parent().ok_or("internal")?)
+            .map_err(|_| "source_mismatch")?,
+    );
+    let dir = match parent.existing_child(&journal.capture_id) {
+        Ok(dir) => dir,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // A completed removal may precede the durable terminal receipt.
+            // Only the exact leaf may be absent; the pinned parent must survive.
+            parent
+                .directory_file()
+                .map_err(|_| "source_mismatch")?
+                .sync_all()
+                .map_err(|_| "internal")?;
             return Ok(());
         }
-        return Err("source_mismatch");
-    }
-    let pinned_root = unsafe { File::from_raw_fd(root_fd) };
-    let pinned_meta = pinned_root.metadata().map_err(|_| "source_mismatch")?;
-    let dir = match apparent_capture_engine::SecureStore::open(&path) {
-        Ok(dir) => dir,
         Err(_) => return Err("source_mismatch"),
     };
+    let parent_file = parent.directory_file().map_err(|_| "source_mismatch")?;
+    let leaf =
+        std::ffi::CString::new(journal.capture_id.as_str()).map_err(|_| "source_mismatch")?;
     let meta = dir.directory_metadata().map_err(|_| "source_mismatch")?;
     if !meta.is_dir()
         || meta.file_type().is_symlink()
         || meta.uid() != unsafe { libc::geteuid() }
         || meta.mode() & 0o777 != 0o700
-        || pinned_meta.dev() != meta.dev()
-        || pinned_meta.ino() != meta.ino()
     {
         return Err("source_mismatch");
     }
@@ -342,10 +335,11 @@ fn remove_unsealed(directory: &Path, journal: &Journal) -> Result<(), &'static s
         .sync_all()
         .map_err(|_| "internal")?;
     // Unknown entries make unlinkat(AT_REMOVEDIR) fail; they are never traversed/deleted.
-    if unsafe { libc::unlinkat(parent.as_raw_fd(), leaf.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+    if unsafe { libc::unlinkat(parent_file.as_raw_fd(), leaf.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
         return Err("source_mismatch");
     }
-    parent.sync_all().map_err(|_| "internal")
+    parent.check().map_err(|_| "source_mismatch")?;
+    parent_file.sync_all().map_err(|_| "internal")
 }
 fn pause_test_cancel_after_unsealed_cleanup(journal: &Journal) {
     let Ok(target) = std::env::var("APPARENT_CAPTURE_TEST_CANCEL_CLEANUP_BUNDLE_ID") else {
@@ -1675,7 +1669,12 @@ mod unsealed_cleanup_tests {
             remove_unsealed(&capture_root, &journal),
             Err("source_mismatch")
         );
-        assert!(fs::symlink_metadata(&root).unwrap().file_type().is_symlink());
+        assert!(
+            fs::symlink_metadata(&root)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         fs::remove_file(&root).unwrap();
         fs::rename(&original, &root).unwrap();
 
