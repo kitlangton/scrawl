@@ -116,13 +116,23 @@ function trackedInputs(root: string, owner: Owner, revision = 'HEAD'): { digest:
   const entries = [...paths].sort()
   return { digest: createHash('sha256').update(entries.map(entry => `${entry}\0`).join('')).digest('hex'), entries }
 }
+/** Identity of the actual native compiler/linker environment, before admission. */
+export function nativeBuildIdentity(env = process.env, os = platform(), probe = (command: string, args: string[]) => execFileSync(command, args, { encoding: 'utf8', timeout: 15000 }).trim()) {
+  const read = (command: string, args: string[]) => { const value = probe(command, args).trim(); if (!value) throw new Error('Native toolchain identity is unavailable'); return value }
+  const keys = ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER', 'RUSTUP_TOOLCHAIN', 'CARGO_BUILD_TARGET', 'RUSTDOC', 'RUSTDOCFLAGS', 'CARGO_ENCODED_RUSTDOCFLAGS', 'RUSTC_BOOTSTRAP', 'SOURCE_DATE_EPOCH', 'CC', 'CXX', 'AR', 'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'HOST_CC', 'TARGET_CC', 'HOST_CFLAGS', 'TARGET_CFLAGS', 'SDKROOT', 'DEVELOPER_DIR', 'MACOSX_DEPLOYMENT_TARGET', ...Object.keys(env).filter(key => /^(CARGO_TARGET_|CARGO_PROFILE_|CARGO_BUILD_|CC_|CXX_|AR_|CFLAGS_|CXXFLAGS_|CPPFLAGS_|LDFLAGS_)/.test(key))]
+  const variables = [...new Set(keys)].sort().map(key => [key, env[key] ?? ''])
+  // Unknown wrappers can change bytes without changing the compiler identity.
+  if (env.RUSTC_WRAPPER || env.RUSTC_WORKSPACE_WRAPPER) throw new Error('Native reuse does not admit compiler wrappers')
+  return { rustc: read(env.RUSTC || 'rustc', ['-vV']), cargo: read('cargo', ['--version']), cc: read(env.CC || 'cc', ['--version']),
+    ...(os === 'darwin' ? { sdk: read('xcrun', ['--show-sdk-version']), clang: read('xcrun', ['clang', '--version']) } : {}), variables }
+}
 function fingerprint(root: string, owner: Owner, target: Target, revision = 'HEAD') {
   if (target !== 'linux-x64' && target !== 'macos-x64' && target !== 'web' || !owner.targets.includes(target)) throw new Error('Owner is not registered for this target')
   const source = trackedInputs(root, owner, revision).digest
   const imageOS = process.env.ImageOS ?? ''
   const imageVersion = process.env.ImageVersion ?? ''
   if (!imageOS || !imageVersion) throw new Error('Runner image identity is unavailable')
-  return createHash('sha256').update(JSON.stringify({ source, environment: environmentDigest(owner), node: process.version, imageOS, imageVersion, platform: platform(), arch: arch(), target })).digest('hex')
+  return createHash('sha256').update(JSON.stringify({ source, environment: environmentDigest(owner), node: process.version, imageOS, imageVersion, platform: platform(), arch: arch(), target, ...(owner.id === 'engine-native' ? { native: nativeBuildIdentity() } : {}) })).digest('hex')
 }
 export function sourceDigest(root: string, owner: Owner, revision = 'HEAD'): string { return trackedInputs(root, owner, revision).digest }
 export function environmentDigest(owner: Owner, env = process.env): string { return createHash('sha256').update(JSON.stringify([...(owner.environment ?? [])].sort().map(key => [key, env[key] ?? '']))).digest('hex') }
@@ -264,7 +274,7 @@ export function sealPayload(root: string, owner: Owner, target: Target, inputDir
   if (!statSync(source).isDirectory()) throw new Error('Payload input is not a directory')
   const check = (dir: string) => { for (const name of readdirSync(dir)) { const p = resolve(dir, name); const stat = lstatSync(p); if (stat.isSymbolicLink()) { const link = readlinkSync(p); if (isAbsolute(link) || windows(link)) throw new Error('Unsafe payload symlink'); const resolved = resolve(dirname(p), link); const rel = relative(source, resolved); if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('Payload symlink escapes input directory'); let actual: string; try { actual = realpathSync(p) } catch { throw new Error('Broken payload symlink') } const actualRel = relative(source, actual); if (actualRel === '..' || actualRel.startsWith(`..${sep}`) || isAbsolute(actualRel)) throw new Error('Payload symlink escapes input directory'); } else if (stat.isDirectory()) check(p); else if (!stat.isFile()) throw new Error('Unsupported payload filesystem entry') } }
   check(source)
-  const prIdentity = candidate && owner.id === 'engine' && target === 'linux-x64' && env.GITHUB_EVENT_NAME === 'pull_request' && /^refs\/pull\/[1-9][0-9]*\/merge$/.test(env.GITHUB_REF ?? '') && env.GITHUB_WORKFLOW_REF === `tryapparent/apparent/${workflowPathFor(owner.id)}@${env.GITHUB_REF}`
+  const prIdentity = candidate && (owner.id === 'engine' && target === 'linux-x64' || owner.id === 'engine-native' && (target === 'linux-x64' || target === 'macos-x64')) && env.GITHUB_EVENT_NAME === 'pull_request' && /^refs\/pull\/[1-9][0-9]*\/merge$/.test(env.GITHUB_REF ?? '') && env.GITHUB_WORKFLOW_REF === `tryapparent/apparent/${workflowPathFor(owner.id)}@${env.GITHUB_REF}`
   if ((!prIdentity && (candidate || env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${workflowPathFor(owner.id)}@refs/heads/main`)) || env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID ?? '') || !/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ATTEMPT ?? '')) throw new Error('Sealing requires canonical main workflow identity')
   const output = outsideCheckout(root, outputDir)
   if (output === source || output.startsWith(`${source}${sep}`) || source.startsWith(`${output}${sep}`)) throw new Error('Output directory overlaps payload input')
@@ -274,7 +284,7 @@ export function sealPayload(root: string, owner: Owner, target: Target, inputDir
   if (readdirSync(output).length) throw new Error('Seal output directory must be empty')
   execFileSync('tar', [...(owner.stage === 'website' ? ['--format=ustar'] : []), '-czf', resolve(output, 'component.tar.gz'), '-C', dirname(source), source.slice(dirname(source).length + 1)], { stdio: 'inherit' })
   const archive = readFileSync(resolve(output, 'component.tar.gz'))
-  const receipt = { schema: 1, id: owner.id, target, stage: owner.stage, sourceSha: sha, inputDigest: inputDigestValue, sourceDigest: sourceDigest(root, owner), environmentDigest: environmentDigest(owner, env), sha256: createHash('sha256').update(archive).digest('hex'), size: archive.length, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT }
+  const receipt = { schema: 1, id: owner.id, target, stage: owner.stage, sourceSha: sha, ...(owner.id === 'engine-native' ? { buildSourceSha: sha } : {}), inputDigest: inputDigestValue, sourceDigest: sourceDigest(root, owner), environmentDigest: environmentDigest(owner, env), sha256: createHash('sha256').update(archive).digest('hex'), size: archive.length, runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT }
   const receiptPath = resolve(output, 'receipt.json')
   requireNoSymlink(output)
   writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
@@ -301,7 +311,7 @@ export function reusePayload(root: string, owner: Owner, target: Target, zip: st
   finally { closeSync(fd) }
   const archive = readFileSync(archivePath)
   if (archive.length !== original.size || createHash('sha256').update(archive).digest('hex') !== original.sha256) throw new Error('Prior archive hash or size mismatch')
-  const receipt = { ...original, sourceSha: git(root, ['rev-parse', 'HEAD']).trim(), runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
+  const receipt = { ...original, ...(owner.id === 'engine-native' ? { buildSourceSha: original.buildSourceSha ?? original.reusedFrom?.sourceSha ?? original.sourceSha } : {}), sourceSha: git(root, ['rev-parse', 'HEAD']).trim(), runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
     reusedFrom: { artifactId, sourceSha: priorSha, runId: original.runId, runAttempt: original.runAttempt } }
   writeFileSync(resolve(output, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
   return receipt
