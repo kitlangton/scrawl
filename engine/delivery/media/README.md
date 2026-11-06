@@ -30,7 +30,7 @@ producer must use the runtime installed by its declared CI environment.
 with each non-base-OS transitive library by its needed SONAME, `plugins/` with
 only the required plugins, and `manifest.json`. The loader and baseline glibc
 are host requirements; the manifest records the observed glibc version. The
-entry accepts exactly the SDK arguments
+default media/1 launch accepts the SDK arguments
 `--media-runtime-directory DIR --media-channel media --media-protocol-version 1`,
 sets closed library/plugin paths and execs the colocated worker without PATH,
 Cargo, npm, Node, source, registry persistence or host plugin search.
@@ -59,5 +59,10 @@ pipe terminates the helper when the job disappears. Darwin memory enforcement
 checks the worker/helper combined physical footprint every 10 ms against 1536
 MiB and fails closed if usage cannot be read; this is a sampled physical budget,
 not Linux's instantaneous virtual-address limit. Hard frame/pixel, CPU, file-size,
-descriptor and deadline bounds remain. Neither decoder starts capture, accesses
-an audio device or implements raw-material/media2 decoding.
+descriptor and deadline bounds remain. Neither decoder starts capture or accesses an audio device. The Mac adapter does
+not implement retained-material media/2. Linux additionally accepts the explicit
+protocol 2 argv recorded in `media2Launch`, using the same private runtime root as
+capture/2. Its supervised job binds native frames and a caller-planned contact
+sheet to authenticated retained materials. Failed partial files remain private
+and unpublished; no recursive caller-directory cleanup is claimed. Media/1 argv
+and completed-bundle behavior remain unchanged.

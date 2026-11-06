@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { CaptureClient, launchCaptureEngine, type CaptureStatus } from "../sdk/src/capture.ts";
 import { validateMaterialsDocument } from "../sdk/src/capture-documents/index.ts";
+import { Media2Client, Media2RpcError, Media2TransportError, launchMedia2Worker, type Media2JobInput } from "../sdk/src/media2/index.ts";
 
 const id = () => randomBytes(16).toString("hex");
 const token = () => randomBytes(32).toString("hex");
@@ -16,6 +17,146 @@ const xvfbCommand = process.env.APPARENT_XVFB ?? "Xvfb";
 const xsetrootCommand = process.env.APPARENT_XSETROOT ?? "xsetroot";
 const ffprobeCommand = process.env.APPARENT_FFPROBE ?? "ffprobe";
 const ffmpegCommand = process.env.APPARENT_FFMPEG ?? "ffmpeg";
+
+// Optional extension of this existing real capture scenario. Producer/guest
+// qualification supplies the separate packaged media entry explicitly.
+async function deriveRetainedFrames(runtime: string, ownerToken: string, materials: ReturnType<typeof validateMaterialsDocument>) {
+  const executable = process.env.APPARENT_ENGINE_MEDIA2_BIN;
+  if (!executable) return;
+  const outputParent = mkdtempSync(join(tmpdir(), "capture-media2-"));
+  chmodSync(outputParent, 0o700);
+  const input: Media2JobInput = {
+    ownerToken, materials,
+    request: {
+      schema: "apparent.retained-frame-request/1", materials: materials.manifest.key,
+      leaseId: materials.manifest.leaseId, jobId: id(), outputDirectory: join(outputParent, "output"),
+      requestedBundleMs: [materials.payload.clock.durationMs, 0, materials.payload.clock.durationMs],
+      limits: { maxFrames: 3, maxEdge: 160, maxTotalPixels: 100000, deadlineMs: 10000 },
+      contactSheet: { schema: "apparent.contact-sheet-layout/1", width: 320, height: 120,
+        backgroundRgb: [11, 22, 33], fit: "stretch", sampling: "legacy-bilinear", clipping: "reject",
+        tiles: [{ requestIndex: 1, x: 0, y: 0, width: 160, height: 120 }, { requestIndex: 2, x: 160, y: 0, width: 160, height: 120 }] },
+    },
+  };
+  let media = new Media2Client(launchMedia2Worker(resolve(executable), runtime));
+  observeEngineStderr(media);
+  const competing = new Media2Client(launchMedia2Worker(resolve(executable), runtime));
+  try {
+    const hello = await media.handshake();
+    assert.deepEqual(hello.capabilities, { retainedFrames: true, contactSheet: true, nativeJobAuthority: true });
+    await competing.handshake();
+    const racing = await Promise.allSettled([media.derive(input), competing.derive(input)]);
+    const admitted = racing.find(result => result.status === "fulfilled");
+    assert.ok(admitted && admitted.status === "fulfilled", "one duplicate peer must admit the original request");
+    for (const result of racing) if (result.status === "rejected") {
+      assert.ok(result.reason instanceof Media2RpcError && ["invalid_output", "busy"].includes(result.reason.code), "a losing peer reports a bounded admission conflict");
+    }
+    // Both process loops remain usable while the single admitted job proceeds.
+    await Promise.all([media.handshake(1000), competing.handshake(1000)]);
+    const concurrent = await competing.inspect(input, 1000);
+    assert.ok(["running", "complete"].includes(concurrent.state));
+    let status = admitted.value;
+    const until = Date.now() + 15000;
+    while (status.state === "running" && Date.now() < until) { await delay(10); status = await media.inspect(input); }
+    assert.equal(status.state, "complete");
+    if (status.state !== "complete") throw new Error("retained media did not complete");
+    const derivative = status.derivative;
+    // The public SDK validates detached bytes, original request/layout, native
+    // material/lease/job/root binding and every ordered frame/sheet seal.
+    const envelope = derivative.envelope as import("../sdk/src/media2/index.ts").Derivative2Envelope;
+    assert.deepEqual(envelope.payload.frames.map(frame => frame.requestedBundleMs), input.request.requestedBundleMs);
+    assert.deepEqual(envelope.payload.frames.map(frame => frame.requestIndex), [1, 2, 3]);
+    assert.equal(envelope.payload.frames[0].file.sha256, envelope.payload.frames[2].file.sha256);
+    assert.ok(envelope.payload.contactSheet);
+    const images = [...envelope.payload.frames, envelope.payload.contactSheet];
+    for (const image of images) {
+      const bytes = readFileSync(join(envelope.root, image.file.relativePath));
+      assert.equal(bytes.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+      assert.equal(createHash("sha256").update(bytes).digest("hex"), image.file.sha256);
+      assert.equal(bytes.length, image.byteLength);
+      assert.equal(bytes.readUInt32BE(16), image.width);
+      assert.equal(bytes.readUInt32BE(20), image.height);
+    }
+    await assert.rejects(media.inspect({ ...input, ownerToken: token() }), /permission_denied/);
+    await assert.rejects(media.inspect({ ...input, request: { ...input.request, requestedBundleMs: [0, 0, materials.payload.clock.durationMs] } }), /identity_conflict/);
+    assert.deepEqual(await media.derive(input), status, "same request retains native receipt identity");
+    await media.close();
+    media = new Media2Client(launchMedia2Worker(resolve(executable), runtime));
+    await media.handshake();
+    assert.deepEqual(await media.inspect(input), status, "cold authenticated replay keeps the original derivative");
+    assert.deepEqual(await media.cancel(input), status, "completed native work wins late cancellation");
+
+    // Exercise the real native path with enough retained frames to keep the
+    // worker busy. Timeout is an unknown RPC result; only the explicit public
+    // cancel below may stop the accepted original job.
+    const longRequest = (jobId: string, outputDirectory: string): Media2JobInput => ({
+      ...input,
+      request: {
+        ...input.request,
+        jobId,
+        outputDirectory,
+        requestedBundleMs: Array.from({ length: 48 }, (_, index) => Math.floor(materials.payload.clock.durationMs * index / 47)),
+        limits: { maxFrames: 48, maxEdge: 1366, maxTotalPixels: 64_000_000, deadlineMs: 60_000 },
+        contactSheet: null,
+      },
+    });
+    const cancelInput = longRequest(id(), join(outputParent, "cancel-output"));
+    let timedOut: unknown;
+    try { await media.derive(cancelInput, 1); } catch (error) { timedOut = error; }
+    assert.ok(timedOut instanceof Media2TransportError, "short RPC deadline reports an unknown transport outcome");
+    assert.equal(timedOut.dispatched, "unknown", "timeout does not claim that dispatch was cancelled");
+    const reconciled = await media.derive(cancelInput);
+    assert.equal(reconciled.jobId, cancelInput.request.jobId, "reconciliation uses the original job identity");
+    assert.equal(reconciled.requestSha256, (await media.inspect(cancelInput)).requestSha256, "reconciliation preserves the original request digest");
+    assert.equal(reconciled.state, "running", "the timed-out native job remains accepted and running");
+    const cancelled = await media.cancel(cancelInput);
+    assert.equal(cancelled.jobId, cancelInput.request.jobId);
+    assert.equal(cancelled.state, "cancelled", "terminal cancellation is returned only after native child stop and reap");
+    assert.ok(!("derivative" in cancelled), "cancelled work has no completed derivative");
+    assert.equal((await media.inspect(cancelInput)).state, "cancelled", "the original tuple observes the durable cancellation");
+    assert.equal(statSync(materials.manifest.root).isDirectory(), true, "cancellation retains the original material root and lease");
+
+    // Process loss is injected only through this helper's own client transport
+    // handle. The native child lifetime is tied to the service and reconciles
+    // through the same durable registry after cold restart.
+    const lossInput = longRequest(id(), join(outputParent, "owner-loss-output"));
+    const lossAccepted = await media.derive(lossInput);
+    assert.equal(lossAccepted.jobId, lossInput.request.jobId);
+    assert.equal(lossAccepted.state, "running", "process-loss case starts with active native work");
+    const ownedChild = (media as unknown as { transport: { child: import("node:child_process").ChildProcess } }).transport.child;
+    const serviceExit = new Promise<void>((resolveExit) => ownedChild.once("exit", () => resolveExit()));
+    assert.equal(ownedChild.kill("SIGKILL"), true, "kill targets only this helper's owned media service");
+    await serviceExit;
+    await media.close();
+    media = new Media2Client(launchMedia2Worker(resolve(executable), runtime));
+    await media.handshake();
+    const afterLoss = await media.inspect(lossInput);
+    assert.ok(afterLoss.state === "complete" || (afterLoss.state === "failed" && afterLoss.error.code === "owner_lost"),
+      `cold inspect resolves active work as owner_lost or verified complete, got ${afterLoss.state}${afterLoss.state === "failed" ? `:${afterLoss.error.code}` : ""}`);
+    assert.equal(afterLoss.jobId, lossAccepted.jobId, "cold recovery keeps the original job identity");
+    assert.equal(afterLoss.requestSha256, lossAccepted.requestSha256, "cold recovery keeps the original request digest, output path, materials and lease binding");
+    if (afterLoss.state === "complete") {
+      const envelope = afterLoss.derivative.envelope as import("../sdk/src/media2/index.ts").Derivative2Envelope;
+      assert.equal(envelope.payload.jobId, lossInput.request.jobId);
+      assert.equal(envelope.payload.requestSha256, afterLoss.requestSha256);
+      assert.deepEqual(envelope.payload.materials, materials.manifest.key);
+    }
+    if (process.env.APPARENT_CAPTURE_EVIDENCE_DIR) {
+      const evidence = join(resolve(process.env.APPARENT_CAPTURE_EVIDENCE_DIR), "media2");
+      mkdirSync(evidence, { recursive: true, mode: 0o700 });
+      writeFileSync(join(evidence, "request.json"), JSON.stringify(input.request), { mode: 0o600 });
+      writeFileSync(join(evidence, "receipt.json"), derivative.bytes, { mode: 0o600 });
+      writeFileSync(join(evidence, "envelope.json"), JSON.stringify(envelope), { mode: 0o600 });
+      writeFileSync(join(evidence, "conformance.json"), JSON.stringify({
+        timedOut: { jobId: cancelInput.request.jobId, requestSha256: reconciled.requestSha256, dispatched: timedOut.dispatched },
+        cancelled: { jobId: cancelled.jobId, state: cancelled.state, materialsRoot: materials.manifest.root },
+        processLoss: { jobId: lossInput.request.jobId, requestSha256: afterLoss.requestSha256, state: afterLoss.state,
+          error: afterLoss.state === "failed" ? afterLoss.error.code : undefined },
+      }, null, 2), { mode: 0o600 });
+      for (const [index, image] of images.entries()) copyFileSync(join(envelope.root, image.file.relativePath), join(evidence, `image-${index + 1}.png`));
+    }
+    console.log("Native capture -> authenticated retained media2 PNGs/contact sheet, timeout/cancel/reap, and cold process-loss reconciliation passed");
+  } finally { await media.close(); await competing.close(); rmSync(outputParent, { recursive: true, force: true }); }
+}
 
 async function until(client: CaptureClient, authority: { ownerToken: string; captureId: string }, states: string[]) {
   const deadline = Date.now() + 12_000;
@@ -36,7 +177,7 @@ function startInput(source: Awaited<ReturnType<CaptureClient["discoverSources"]>
     invocation: { kind: "explicit" as const, invocationId: id(), observedAtMs: Date.now() },
   };
 }
-function observeEngineStderr(client: CaptureClient) {
+function observeEngineStderr(client: CaptureClient | Media2Client) {
   if (process.env.APPARENT_CAPTURE_DEBUG_STDERR !== "1") return;
   const child = (client as unknown as { transport: { child: {
     stderr: NodeJS.ReadableStream;
@@ -101,7 +242,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     }
     assert.equal(hello.implementation, "native");
     assert.equal(hello.readiness, "ready");
-    assert.equal(hello.capabilities.publication, false);
+    assert.equal(hello.capabilities.publication, false, "the Media2-only candidate does not enable capture publication");
     assert.equal(hello.capabilities.audioCapture, false);
     const discovery = await client.discoverSources();
     assert.equal(discovery.state, "available");
@@ -123,6 +264,10 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     assert.ok(["starting", "recording"].includes(started.state));
     const recording = await until(client, { captureId, ownerToken }, ["recording"]);
     assert.equal(recording.state, "recording");
+    for (const color of ["#11bb44", "#2244dd", "#e6d22a", "#cc2211"]) {
+      execFileSync(xsetrootCommand, ["-solid", color]);
+      await delay(180);
+    }
     process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = "1";
     const coldStopClient = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
     try {
@@ -136,10 +281,6 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
       await coldStopClient.close();
       if (oldReadinessUnavailable === undefined) delete process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE;
       else process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = oldReadinessUnavailable;
-    }
-    for (const color of ["#11bb44", "#2244dd", "#e6d22a", "#cc2211"]) {
-      execFileSync(xsetrootCommand, ["-solid", color]);
-      await delay(180);
     }
     const ready = await until(client, { captureId, ownerToken }, ["materials-ready"]);
     assert.equal(ready.state, "materials-ready");
@@ -200,6 +341,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
       writeFileSync(join(evidence, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: "wx" });
     }
 
+    await deriveRetainedFrames(runtime, ownerToken, detached);
     const replay = await client.start(input);
     assert.equal(replay.state, "materials-ready");
     const conflict = { ...input, bundlePath: `${input.bundlePath}.other` };
