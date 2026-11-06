@@ -221,6 +221,71 @@ compatibility; then complete delivery/adoption under existing explicit gates.
 This Record-only slice does not include Onboarding factory, journey, adoption or
 activation work.
 
+## Privileged Record provider assembly
+
+`createRecordNativeBindings` in `src/record/native-bindings.ts` composes the
+published NativeHost, NativePen, NativeClipboard and Record-owned config adapters.
+Trusted composition supplies the admitted config helper path/hash, the same
+config path used by the running native GUI, required permission IDs from Record
+policy, and a resolver for an exact authenticated Saved capture/artifact pair.
+It fixes the clipboard limit to the active public producer constant. It never
+starts the GUI, chooses permission policy, formats handoff text, creates a second
+config writer or treats a clipboard dispatch as success. Closing this binding
+only closes its own config backend.
+
+`createRecordProviderHost` in `src/record/provider-host.ts` constructs the real
+Record capability provider around those ports and the caller's published Record
+runtime. Its `RecordHostServices` result plugs directly into the trusted
+`createRecordHostServices` build binding. The caller transfers exclusive runtime
+command/observation ownership on success and supplies an idempotent cleanup for
+its owned Engine resources. Authenticated output facts remain supplied by Record;
+omitting them leaves output unavailable.
+
+The host counts queued and in-flight commands and atomically closes admission
+before cleanup. Both the native ownership report (complete reconciliation,
+readable storage, no unresolved IDs) and Record's authoritative capture and
+shortcut-reservation facts must allow shutdown. It never derives clearance from
+a renderer snapshot. Cleanup advances by named stages; uncertain provider
+disposal blocks further release, and failed Engine cleanup cannot claim closure.
+Observation-only client detach does not dispose the runtime or cancel capture.
+Configured output-fact producers are reread before close admission; pending,
+unavailable or active facts cannot be cleared by the provider's initial snapshot.
+The packaged provider test uses the real public Record provider and synthetic
+native/Engine producers to verify reconciliation refusal, renderer refresh and
+ordered one-time cleanup through the shipped Electron bridge on both CI targets.
+These assembly APIs do not select an installed executable, authenticate a Saved
+artifact, enable an installed route or clear native product acceptance gates.
+
+The pinned public Record package additionally supplies
+`createRecordPublicationOutput` from `@apparent/record/publication`; its admitted
+SDK peer is packaged beside it. Trusted assembly injects `output.captureFacts`
+and uses `output.resolveHandoff` for the native clipboard adapter. That port owns
+the existing durable publication authority; composition adds no Saved-facts store
+or substitute resolver. It does not provide shortcut-reservation authority:
+`nextShortcutAdmission: unavailable` still blocks host shutdown until the trusted
+assembly can establish authoritative clearance. Automatic processing orchestration
+and installed legacy-transition clearance remain separate prerequisites.
+The trusted Record build may additionally provide `nativeArtifacts`, containing
+the Linux x64 Capture/2, Media/2 and config-helper payload directories, each with
+its externally admitted manifest SHA-256 and original build source SHA. Use the
+canonical delivery consumer to establish provenance and receipt admission first;
+the build does not turn an arbitrary local manifest into an admitted artifact.
+It snapshots and validates all three complete inventories before writing their
+bytes beneath `native-record/{capture,media,config}`. Undeclared files, aliases,
+changed bytes, unsupported protocols/targets and altered modes are refused.
+The shell and assembly receipts seal every native file and its executable mode;
+packaging rechecks both. No owner source or native compiler runs during assembly.
+
+`createRecordHostServices` receives `{ profilePath, nativeRoot }` from privileged
+main. `nativeRoot` is fixed inside this packaged application, never selected by
+the renderer. The binding must use absolute entries beneath it and one persistent
+private Capture/2 runtime for both Capture/2 and Media/2; it retains SDK/process
+shutdown ownership. A build without native artifacts retains the previous
+development-shell behavior. This route supports Linux x64 only because the
+Capture/2 and Media/2 producers are unavailable on Mac. It does not start those
+producers automatically, select capture sources, retire legacy writers, activate
+the installed route or clear the native pill/exclusion gates.
+
 Stream manifests may additionally seal `style.css` and at most nine font files
 under `fonts/` (TTF or WOFF2). These precompiled assets are copied and checked with
 the stream entry during assembly and packaged verification; undeclared files,
