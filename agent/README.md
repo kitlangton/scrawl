@@ -63,8 +63,11 @@ It accepts plain patch releases in those lines and stable 0.4.x after media/1 co
 The media/1 handshake remains mandatory. An exact dual `media/1` + `media/2`
 manifest is retained as part of the full runtime closure, while the launcher
 still uses only media/1. This does not activate media/2 or configure native
-recording; the SDK's capture/2 interface also does not enable recording in this
-installer. Node 22.18+ and an existing npm are required.
+recording. For dual-capability manifests, the installer also accepts the exact
+additive `visualObservations` profile `apparent.frame-observation-profile/1`
+(`media/2-frame-png`, `apOB`, `apparent.visual-luma/1`) while preserving it in
+the copied manifest. This metadata does not enable observations, SDK capture/2,
+recording or Mac routing. Node 22.18+ and an existing npm are required.
 
 ```sh
 node /absolute/path/to/extracted-agent-package/dist/install-local.js \
