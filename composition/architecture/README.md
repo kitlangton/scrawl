@@ -6,6 +6,8 @@ The guard checks statically visible TypeScript dependencies. It cannot prove run
 
 CI checks each stream's owner with `npm run check -- --owner record` (or `engine`, `agent`, `onboarding`, `connect`, `shared`, `composition`). Shared/composition checks and the checker regression tests run in `Delivery contracts`; each component job checks its own owner before artifact admission. An unrelated product owner's violation therefore fails that owner's lane. Omitting `--owner` scans all supported owners for local integration checks. The `connect` owner currently covers `connect/delivery/client`, `connect/tooling/hosting` and the consumed `connect/service` implementation; Connect web code and Public retain their own checks. This is a bounded client checkpoint, not whole-Connect certification.
 
+Agent may consume declared public `@apparent/record` package exports for headless lifecycle work. This dependency does not allow private Record exports, cross-owner source paths, or a reverse Record-to-Agent edge.
+
 Owners can declare packed-package test loaders in `architecture.json` beside their package. No Platform edit or approval is required. Rules apply only to the named function in a `test/` file, using a constant environment-root plus `node_modules/<package>/<declared public export target>` and `pathToFileURL(...).href`. Private targets, other files/functions and other root expressions remain rejected. The declared package still follows normal dependency directions and export checks. For example:
 
 ```json
