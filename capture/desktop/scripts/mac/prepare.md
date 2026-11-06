@@ -17,8 +17,9 @@ The receipt is private (0600), exclusively created in an existing private
 outside-checkout directory. Preserve it privately; paths and hashes describe
 source inputs, not native evidence. The command refuses a stale SHA, tracked or
 untracked changes, hidden index flags, missing/symlink inputs, altered committed
-bytes, invalid Python or malformed Info.plist. It hashes the actual entrypoint,
-sibling executable Swift fixture, production Swift sources and linker plist.
+bytes, invalid Python or malformed Info.plist. It hashes `build.rs`, the Cargo
+manifest, every complete helper Swift input in basename compiler order, the
+linker plist, and both moved Swift fixtures plus the maintained Python entry.
 There are no generated capture request IDs or external media fixtures in this
 scenario: PCM is generated in memory by the existing Swift tests. Do not use
 this packet to claim capture-control, GUI or hardware acceptance.
@@ -39,6 +40,29 @@ installed. Then run from the repository root:
 
 ```sh
 python3 engine/native/tests/live-transcribe.py
+```
+
+Compile the complete helper with the source order and flags from `build.rs`,
+then run the existing RGB proof:
+
+```sh
+target="$(uname -m)-apple-macos15.0"
+xcrun swiftc -O -swift-version 5 -target "$target" \
+  engine/native/Export.swift engine/native/LiveTranscribe.swift engine/native/Media.swift \
+  capture/engine/native/Mirror.swift capture/desktop/native/Onboarding.swift \
+  capture/desktop/native/OnboardingDemo.swift capture/desktop/native/PermissionPanel.swift \
+  capture/engine/native/PlaybackVolume.swift capture/engine/native/ScreenProbe.swift \
+  capture/desktop/native/Settings.swift capture/desktop/native/ShortcutKeys.swift shared/native/main.swift \
+  -o "$TMPDIR/apparent-helper" \
+  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker shared/native/Info.plist
+xcrun swiftc -O -swift-version 5 -target "$target" -parse-as-library \
+  engine/native/Export.swift engine/native/Media.swift engine/native/tests/ink-rgb.swift \
+  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker shared/native/Info.plist \
+  -o "$TMPDIR/ink-rgb-proof"
+rgb_output=$(mktemp -d "$TMPDIR/apparent-ink-rgb.XXXXXXXX")
+rmdir "$rgb_output"
+"$TMPDIR/ink-rgb-proof" "$rgb_output"
+rm -rf "$rgb_output" "$TMPDIR/apparent-helper" "$TMPDIR/ink-rgb-proof"
 ```
 
 Retain the actual command, exit, compiler output and candidate identity. The

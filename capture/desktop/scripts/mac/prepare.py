@@ -11,9 +11,25 @@ import subprocess
 import sys
 
 ENTRY = 'engine/native/tests/live-transcribe.py'
-INPUTS = (ENTRY, 'engine/native/tests/live-transcribe.swift',
-          'engine/native/LiveTranscribe.swift', 'engine/native/Media.swift',
-          'shared/native/Info.plist')
+LIVE_FIXTURE = 'engine/native/tests/live-transcribe.swift'
+INK_FIXTURE = 'engine/native/tests/ink-rgb.swift'
+HELPER_SOURCES = (
+    'engine/native/Export.swift',
+    'engine/native/LiveTranscribe.swift',
+    'engine/native/Media.swift',
+    'capture/engine/native/Mirror.swift',
+    'capture/desktop/native/Onboarding.swift',
+    'capture/desktop/native/OnboardingDemo.swift',
+    'capture/desktop/native/PermissionPanel.swift',
+    'capture/engine/native/PlaybackVolume.swift',
+    'capture/engine/native/ScreenProbe.swift',
+    'capture/desktop/native/Settings.swift',
+    'capture/desktop/native/ShortcutKeys.swift',
+    'shared/native/main.swift',
+)
+PLIST = 'shared/native/Info.plist'
+INPUTS = (ENTRY, LIVE_FIXTURE, INK_FIXTURE, 'Cargo.toml', 'build.rs',
+          *HELPER_SOURCES, PLIST)
 
 
 def git(root, *args):
@@ -42,13 +58,13 @@ def prepare(root, candidate):
         inputs.append({'path': name, 'bytes': len(data),
                        'sha256': hashlib.sha256(data).hexdigest()})
     compile((root / ENTRY).read_bytes(), ENTRY, 'exec')
-    plistlib.loads((root / INPUTS[-1]).read_bytes())
+    plistlib.loads((root / PLIST).read_bytes())
     # The fixed suite generates PCM internally. It has no request-ID or external media input.
     if head != git(root, 'rev-parse', 'HEAD').decode().strip() or git(root, 'status', '--porcelain'):
         raise ValueError('candidate changed during preparation')
     return {'schema': 1, 'status': 'PREPARED_ONLY', 'commit': head,
             'tree': git(root, 'rev-parse', 'HEAD^{tree}').decode().strip(),
-            'scenario': 'live-transcribe', 'inputs': inputs,
+            'scenario': 'engine-native-swift-closure', 'inputs': inputs,
             'command': ['python3', ENTRY], 'working_directory': '.',
             'fixture': 'sibling Swift test source; PCM generated in memory',
             'request_ids': 'not applicable: no capture-control requests',
@@ -58,7 +74,7 @@ def prepare(root, candidate):
             'gates': {name: 'UNRUN' for name in
                       ('guest_capabilities', 'darwin_compile', 'native_suite',
                        'installed_app', 'permissions', 'gui', 'media_acceptance')},
-            'scope': 'Device-free converter/source/completion regression only; no platform parity proof'}
+            'scope': 'Complete helper compile inputs and two device-free Swift suites; no platform parity proof'}
 
 
 def main():

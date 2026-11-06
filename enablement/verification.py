@@ -325,6 +325,11 @@ def select(paths, history_known=True):
         # root application inputs and retain the broad root checks.
         if path.startswith(("engine/core/", "engine/src/", "engine/tests/", "engine/delivery/")):
             engine = True
+        elif path.startswith("engine/native/"):
+            # These sources still compile into the legacy root helper, so keep
+            # the broad root lane (including the affected Mac helper checks).
+            broad = True
+            reasons.append(path)
         elif path.startswith("capture/engine/"):
             if not path.startswith("capture/engine/docs/"):
                 broad = True
