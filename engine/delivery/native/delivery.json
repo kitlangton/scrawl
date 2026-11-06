@@ -3,7 +3,7 @@
   "id": "engine-native",
   "kind": "directory",
   "package": "engine/delivery/native",
-  "inputs": ["engine/", "capture/engine/", ".cargo/"],
+  "inputs": ["engine/", ".cargo/"],
   "verify": ["verify"],
   "build": "build",
   "targets": ["linux-x64", "macos-x64"],
