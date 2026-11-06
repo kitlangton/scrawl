@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -12,7 +12,7 @@ import { controlCapture2, discoverCapture2Sources, parseCapture2ControlArgs, par
 
 const source = { id: 'display-actual', generation: 'a'.repeat(32), kind: 'display' as const, displayId: 0, bounds: { x: 0, y: 0, width: 800, height: 600, scale: 1 } };
 const args = (out: string, ...extra: string[]) => ['--protocol', 'capture2', '--duration', '1', '--out', out, '--source', source.id, ...extra];
-const defaultArgs = (out: string) => ['--protocol', 'capture2', '--out', out, '--source', source.id];
+const defaultArgs = (out?: string) => ['--protocol', 'capture2', ...(out ? ['--out', out] : []), '--source', source.id];
 function fixtureHost(out: string, outcome: 'publication-processing' | 'publication-materials-ready' | 'materials-ready' | 'unavailable' | 'unknown-source' | 'start-fails' = 'publication-processing', sleepHook?: () => void, closeOutcome = 'eof-exited') {
   const calls: Array<{ method: string; input?: unknown }> = [];
   const reqId = '4be6ebdb-7f40-430a-92de-7ac3c43e9e2e';
@@ -35,18 +35,21 @@ function fixtureHost(out: string, outcome: 'publication-processing' | 'publicati
   } as unknown as Capture2Host;
   const factory: Capture2HostFactory = async paths => {
     calls.push({ method: 'compose', input: paths });
-    return { host, close: async () => { calls.push({ method: 'close' }); return closeOutcome; } };
+    const allocator = new AbsentDestinationAllocator(join(paths.controlRoot, 'allocator-control'), paths.destinationRoot);
+    return { host, allocateDestination: async (id, exact) => exact ? (await allocator.reserveExact(id, exact)).bundlePath : (await allocator.allocate(id)).bundlePath,
+      close: async () => { calls.push({ method: 'close' }); return closeOutcome; } };
   };
   let now = 0;
   const clock: Capture2Clock = { now: () => now, sleep: async ms => { now += ms; sleepHook?.(); } };
   return { calls, factory, clock, reqId };
 }
 
-test('capture/2 requires explicit protocol, exact destination and source selector', () => {
+test('capture/2 requires explicit protocol and source selector; exact destination stays optional', () => {
   const parsed = parseCapture2RecordArgs(args('/tmp/fresh.apparent'));
   assert.deepEqual(parsed, { durationSeconds: 1, out: '/tmp/fresh.apparent', sourceId: source.id });
   assert.deepEqual(parseCapture2RecordArgs([...defaultArgs('/tmp/fresh.apparent'), '--duration', '3600']), { durationSeconds: 3600, out: '/tmp/fresh.apparent', sourceId: source.id });
   assert.deepEqual(parseCapture2RecordArgs(defaultArgs('/tmp/fresh.apparent')), { durationSeconds: 5, out: '/tmp/fresh.apparent', sourceId: source.id });
+  assert.deepEqual(parseCapture2RecordArgs(defaultArgs()), { durationSeconds: 5, sourceId: source.id });
   for (const invalid of [[], args('relative.apparent'), args('/tmp/fresh.apparent', '--source', 'other'), args('/tmp/fresh.apparent', '--duration', '1'),
     [...args('/tmp/fresh.apparent'), '--duration', '1'], [...defaultArgs('/tmp/fresh.apparent'), '--duration', '0'],
     [...defaultArgs('/tmp/fresh.apparent'), '--duration', '3601'], [...defaultArgs('/tmp/fresh.apparent'), '--duration', 'nope'],
@@ -79,6 +82,37 @@ test('capture/2 duplicate and invalid durations fail before control allocation o
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('capture/2 omitted destination uses read-only configured capturesDir and lets Record create a private missing root', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-capture2-configured-'));
+  const previousHome = process.env.HOME, previousCaptures = process.env.APPARENT_CAPTURES_DIR;
+  try {
+    const home = join(root, 'home'), captures = join(root, 'configured-captures');
+    await mkdir(join(home, '.config', 'apparent'), { recursive: true, mode: 0o700 });
+    await writeFile(join(home, '.config', 'apparent', 'config.json'), JSON.stringify({ capturesDir: captures, unrelated: 'preserved' }), { mode: 0o600 });
+    process.env.HOME = home; delete process.env.APPARENT_CAPTURES_DIR;
+    const fixture = fixtureHost(join(root, 'unused.apparent'));
+    const output: string[] = [], originalWrite = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array) => { output.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString()); return true; }) as typeof process.stdout.write;
+    let code: number;
+    try { code = await recordWithCapture2(defaultArgs(), {
+      executable: '/opt/apparent-engine', runtime: join(root, 'runtime'), controlRoot: join(root, 'control'), factory: fixture.factory, clock: fixture.clock,
+    }); } finally { process.stdout.write = originalWrite; }
+    assert.equal(code, 3);
+    const requestId = fixture.calls.find(call => call.method === 'start')!.input && (fixture.calls.find(call => call.method === 'start')!.input as { requestId: string }).requestId;
+    const identity = JSON.parse(await readFile(join(root, 'control', 'capture2-requests-v1', `${requestId}.json`), 'utf8'));
+    assert.equal(identity.destinationPath.startsWith(`${captures}/`), true);
+    assert.equal((await stat(captures)).mode & 0o777, 0o700);
+    await assert.rejects(access(identity.destinationPath), { code: 'ENOENT' });
+    const outcome = JSON.parse(output.join(''));
+    assert.equal(outcome.state, 'processing'); assert.equal(outcome.outcome, 'pending-saved-capability-unavailable');
+    assert.equal(JSON.stringify(outcome).includes(captures), false);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    if (previousCaptures === undefined) delete process.env.APPARENT_CAPTURES_DIR; else process.env.APPARENT_CAPTURES_DIR = previousCaptures;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('capture/2 omitted duration waits five seconds after observed recording readiness', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-capture2-default-'));
   try {
@@ -98,7 +132,8 @@ test('capture/2 omitted duration waits five seconds after observed recording rea
       cancel: async () => { phase = 'cancelled'; return { requestId: 'unused', phase }; },
       reconcile: async () => [], subscribe: () => () => undefined, dispose: () => undefined,
     } as unknown as Capture2Host;
-    const factory: Capture2HostFactory = async () => ({ host, close: async () => 'eof-exited' });
+    const allocator = new AbsentDestinationAllocator(join(root, 'control', 'allocator'), root);
+    const factory: Capture2HostFactory = async paths => ({ host, allocateDestination: async (id, exact) => exact ? (await allocator.reserveExact(id, exact)).bundlePath : (await allocator.allocate(id)).bundlePath, close: async () => 'eof-exited' });
     const clock: Capture2Clock = { now: () => now, sleep: async ms => { now += ms; } };
     assert.equal(await recordWithCapture2(defaultArgs(out), {
       executable: '/opt/apparent-engine', runtime: join(root, 'runtime'), controlRoot: join(root, 'control'), factory, clock,
@@ -156,7 +191,10 @@ test('capture/2 readiness and fresh source discovery fail before start', async (
 
 test('real packed SDK and Record host accept the generated invocation ID while retaining Agent UUID request identity', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-capture2-sdk-'));
+  const priorCaptures = process.env.APPARENT_CAPTURES_DIR;
   try {
+    const captures = join(root, 'captures'); await mkdir(captures, { mode: 0o755 });
+    process.env.APPARENT_CAPTURES_DIR = captures;
     const sdkSource = { ...source, generation: 'a'.repeat(32) };
     const requests: CaptureRequest[] = [];
     const handshake = {
@@ -177,19 +215,19 @@ test('real packed SDK and Record host accept the generated invocation ID while r
     const client = new CaptureClient(transport);
     const storeRoot = join(root, 'record-control');
     await mkdir(storeRoot, { mode: 0o700 });
+    const hostDestination = new AbsentDestinationAllocator(storeRoot, captures);
     const host = createCapture2Host({
       client,
       mappings: new SqliteCaptureMappingStore(storeRoot),
-      destinations: new AbsentDestinationAllocator(storeRoot, root),
+      destinations: hostDestination,
     });
-    const factory: Capture2HostFactory = async () => ({ host, close: () => client.close() });
-    const out = join(root, 'exact.apparent');
+    const factory: Capture2HostFactory = async () => ({ host, allocateDestination: async (id, exact) => exact ? (await hostDestination.reserveExact(id, exact)).bundlePath : (await hostDestination.allocate(id)).bundlePath, close: () => client.close() });
     const output: string[] = [], originalWrite = process.stdout.write, stderr: string[] = [], originalError = process.stderr.write;
     process.stdout.write = ((chunk: string | Uint8Array) => { output.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString()); return true; }) as typeof process.stdout.write;
     process.stderr.write = ((chunk: string | Uint8Array) => { stderr.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString()); return true; }) as typeof process.stderr.write;
     let rejected: unknown;
     try {
-      await recordWithCapture2(args(out), {
+      await recordWithCapture2(defaultArgs(), {
         executable: '/opt/apparent-engine', runtime: join(root, 'runtime'), controlRoot: join(root, 'control'), factory,
       });
     } catch (error) { rejected = error; }
@@ -198,14 +236,22 @@ test('real packed SDK and Record host accept the generated invocation ID while r
     assert.deepEqual(requests.map(request => request.method), ['handshake', 'discoverSources', 'start']);
     const start = requests.at(-1)!;
     assert.equal(start.method, 'start');
+    assert.equal(start.destinationPath, undefined);
     assert.match(start.invocation.invocationId, /^[0-9a-f]{32}$/);
     const requestId = /Capture\/2 request ID: ([0-9a-f-]{36})/.exec(stderr.join(''))?.[1];
     assert.match(requestId ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     const identity = JSON.parse(await readFile(join(root, 'control', 'capture2-requests-v1', `${requestId}.json`), 'utf8'));
     assert.equal(identity.requestId, requestId);
     assert.notEqual(start.invocation.invocationId, requestId);
-    assert.equal(identity.destinationPath, out);
-  } finally { await rm(root, { recursive: true, force: true }); }
+    assert.equal(identity.destinationPath.startsWith(`${captures}/`), true);
+    assert.equal(identity.destinationPath.endsWith('.apparent'), true);
+    assert.equal((await stat(captures)).mode & 0o777, 0o755);
+    await assert.rejects(access(identity.destinationPath), { code: 'ENOENT' });
+    assert.deepEqual(await hostDestination.allocate(requestId!), { bundleId: identity.destinationPath.split('/').at(-1), bundlePath: identity.destinationPath });
+  } finally {
+    if (priorCaptures === undefined) delete process.env.APPARENT_CAPTURES_DIR; else process.env.APPARENT_CAPTURES_DIR = priorCaptures;
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('capture/2 binds exact --out, uses explicit local-only options and keeps publication-shaped materials-ready pending', async () => {
