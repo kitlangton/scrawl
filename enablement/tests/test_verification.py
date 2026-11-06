@@ -19,6 +19,46 @@ spec.loader.exec_module(verification)
 
 
 class SelectionTests(unittest.TestCase):
+    def test_architecture_check_selects_changed_owners_and_scans_all_for_uncertain_paths(self):
+        self.assertEqual(verification.architecture_owners(["record/src/index.ts", "agent/src/main.ts"]),
+                         ["agent", "record"])
+        self.assertEqual(verification.architecture_owners(["README.md"]), [])
+        self.assertIsNone(verification.architecture_owners(["shared/contracts/src/index.ts"]))
+        self.assertIsNone(verification.architecture_owners(["composition/architecture/src/guard.ts"]))
+        self.architecture_patch.stop()
+        with patch.object(verification.subprocess, "run") as run:
+            verification.run_architecture_check(["composition/app/src/main.tsx"])
+        run.assert_called_once_with(
+            ["node", "--experimental-strip-types", "composition/architecture/src/cli.ts",
+             "--root", ".", "--owner", "composition"], cwd=verification.ROOT, check=True)
+
+    def test_architecture_cli_rejects_a_record_to_agent_source_edge(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "record/src").mkdir(parents=True)
+            (root / "agent/src").mkdir(parents=True)
+            (root / "agent/src/secret.ts").write_text("export const value = 1;\n")
+            (root / "record/src/index.ts").write_text("import {value} from '../../agent/src/secret.ts';\nvoid value;\n")
+            # Hooks inherit Git state for the pushed checkout, not this fixture.
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            subprocess.run(["git", "init", "-q"], cwd=root, env=env, check=True)
+            subprocess.run(["git", "add", "record", "agent"], cwd=root, env=env, check=True)
+            result = subprocess.run(
+                ["node", "--experimental-strip-types", "composition/architecture/src/cli.ts",
+                 "--root", str(root), "--owner", "record"], cwd=verification.ROOT,
+                capture_output=True, text=True, env=env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("cross-owner path", result.stderr)
+
+    def test_architecture_check_fails_actionably_without_installed_typescript(self):
+        self.architecture_patch.stop()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "composition/architecture").mkdir(parents=True)
+            with patch.object(verification, "ROOT", root):
+                with self.assertRaisesRegex(RuntimeError, "run npm ci in composition/architecture"):
+                    verification.run_architecture_check(["record/src/index.ts"])
+
     def test_top_level_onboarding_isolated_inputs_and_unknown_fallback(self):
         for path in verification.ONBOARDING_PACKAGE_INPUTS:
             selected = verification.select([path])
@@ -514,6 +554,9 @@ class SelectionTests(unittest.TestCase):
         guard = patch.object(verification, "check_temp_environment")
         guard.start()
         self.addCleanup(guard.stop)
+        self.architecture_patch = patch.object(verification, "run_architecture_check")
+        self.architecture_patch.start()
+        self.addCleanup(self.architecture_patch.stop)
 
     def test_documents_do_not_compile_app(self):
         result = verification.select(["enablement/refactor.md", "AGENTS.md", "docs/capture.md"])

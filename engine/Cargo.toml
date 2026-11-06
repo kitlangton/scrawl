@@ -15,8 +15,15 @@ name = "apparent-engine-frames"
 path = "src/frames.rs"
 required-features = ["media"]
 
+[[bin]]
+name = "apparent-engine-capture"
+path = "src/capture.rs"
+required-features = ["capture"]
+
 [features]
 media = ["dep:libc", "dep:png", "dep:sha2", "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
+
+capture = ["apparent-capture-engine/linux-media", "dep:libc", "dep:sha2", "dep:gstreamer", "dep:x11rb"]
 
 [dependencies]
 apparent-capture-engine = { path = "core" }
@@ -30,3 +37,5 @@ sha2 = { version = "=0.10.9", optional = true }
 gstreamer = { version = "=0.25.4", optional = true }
 gstreamer-app = { version = "=0.25.2", optional = true }
 gstreamer-video = { version = "=0.25.4", optional = true }
+
+x11rb = { version = "=0.13.2", features = ["randr"], optional = true }

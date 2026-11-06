@@ -103,7 +103,7 @@ const receipt = await host.start({ requestId, source, options, invocation, desti
 The caller must supply an existing, non-aliased output parent. `client` is a
 published `@apparent/engine-sdk/capture` `CaptureClient`; `source` must be the
 exact descriptor from current discovery, and `options` and `invocation` follow
-the SDK 0.3.1 public types. Start returns a lifecycle receipt, not a Saved
+the SDK 0.3.2 public types. Start returns a lifecycle receipt, not a Saved
 claim.
 
 Native adapter conformance runs in `npm run test:contracts` against the declared

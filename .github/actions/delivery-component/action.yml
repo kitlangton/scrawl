@@ -32,10 +32,12 @@ runs:
     - uses: actions/setup-node@v4
       with:
         node-version: '22.23.4'
+        cache: npm
+        cache-dependency-path: composition/architecture/package-lock.json
     - name: Install the owner architecture checker
       if: inputs.architecture_owner != ''
       shell: bash
-      run: npm --prefix composition/architecture ci --ignore-scripts
+      run: npm --prefix composition/architecture ci --ignore-scripts --prefer-offline --no-fund
     - name: Enforce this owner's dependency boundary
       if: inputs.architecture_owner != ''
       env:
@@ -103,9 +105,8 @@ runs:
       run: npm run prepare:electron
     - name: Linux Electron dependencies
       if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.kind == 'app-shell' && runner.os == 'Linux'
-      working-directory: composition/app
       shell: bash
-      run: npx --no-install playwright install-deps chromium
+      run: node --experimental-strip-types composition/delivery/runtime/electron-dependencies.ts
     - name: Prepare the pinned Electron sandbox helper
       if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.kind == 'app-shell' && runner.os == 'Linux'
       working-directory: composition/app
