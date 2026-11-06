@@ -3,9 +3,19 @@
   "id": "app-shell",
   "kind": "app-shell",
   "package": "composition/app",
-  "inputs": ["composition/app/", "shared/contracts/", "shared/ui/"],
-  "verify": ["check"],
+  "inputs": [
+    "composition/app/",
+    "shared/contracts/",
+    "shared/ui/",
+    "composition/native-host/"
+  ],
+  "verify": [
+    "check"
+  ],
   "build": "build",
-  "targets": ["linux-x64", "macos-x64"],
+  "targets": [
+    "linux-x64",
+    "macos-x64"
+  ],
   "stage": "development-app"
 }
