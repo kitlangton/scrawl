@@ -6,6 +6,10 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { assembleCanonicalBundle, type BundleAssemblyInput } from "@apparent/record/processing/bundle";
 import { prepareRecordPublication } from "../../dist/backend/publication/staging.js";
+import { createCompletedCapturePublisher } from "../../dist/backend/publication/completed-capture.js";
+import { CaptureClient, preflightCapturePublication } from "@apparent/engine-sdk/capture";
+import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
+import { SqlitePublicationBindingStore } from "../../dist/backend/publication/store.js";
 
 const identity = { captureId: "a".repeat(32), materialsId: "b".repeat(32) };
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
@@ -257,6 +261,148 @@ test("refuses a staged destination that differs from the assembled bundle path",
     await assert.rejects(prepareRecordPublication(request), /destination|bundle path|binding/u);
     await assertAbsent(request.stagingRoot);
     await assertAbsent(requestedDestination);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("completed-capture composition refuses a mismatched observed status before staging", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-composition-reject-"));
+  const destinationPath = join(root, "final.apparent");
+  const assembly = assemblyForDestination(input, destinationPath);
+  const client = { async handshake() { throw new Error("must not reach SDK"); } } as unknown as CaptureClient;
+  const publisher = createCompletedCapturePublisher(client, join(root, "control"), preflightCapturePublication);
+  try {
+    await assert.rejects(publisher.publishCompletedCapture({
+      status: { captureId: identity.captureId, state: "materials-ready", materials: { ...input.manifest, leaseId: "e".repeat(32) } } as never,
+      assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
+      stagingRoot: join(root, "staging"), destinationPath,
+    }), /binding conflicts/u);
+    await assertAbsent(join(root, "staging"));
+    await assertAbsent(join(root, "control"));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("completed-capture composition refuses the packed SDK test peer without reserving or creating the destination", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-composition-test-peer-"));
+  const destinationPath = join(root, "final.apparent");
+  assemblyForDestination(input, destinationPath);
+  const client = new CaptureClient(new ReferenceCapturePeer(), { allowTestDouble: true });
+  const publisher = createCompletedCapturePublisher(client, join(root, "control"), preflightCapturePublication);
+  try {
+    await assert.rejects(publisher.publishCompletedCapture({
+      status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+      assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
+      stagingRoot: join(root, "staging"), destinationPath,
+    }), error => error instanceof Error && (error as Error & { dispatched?: boolean }).dispatched === false);
+    assert.equal(await new SqlitePublicationBindingStore(join(root, "control")).get(identity.captureId), undefined);
+    await assertAbsent(destinationPath);
+  } finally { await client.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("completed-capture composition stages the assembled bytes, isolates inputs, and returns only recovery status", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-composition-success-"));
+  const destinationPath = join(root, "final.apparent");
+  assemblyForDestination(input, destinationPath);
+  let dispatched: { ownerToken: string; planBytes: Uint8Array } | undefined;
+  const sdk = {
+    async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
+    async publish(request: { ownerToken: string; planBytes: Uint8Array; captureId: string; publicationId: string; planFile: { planSha256: string } }) {
+      dispatched = { ownerToken: request.ownerToken, planBytes: new Uint8Array(request.planBytes) };
+      return { captureId: request.captureId, state: "publishing", publicationId: request.publicationId, planSha256: request.planFile.planSha256 };
+    },
+  } as unknown as CaptureClient;
+  const publisher = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
+  const request = {
+    status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+    assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
+    stagingRoot: join(root, "staging"), destinationPath,
+  };
+  try {
+    const pending = publisher.publishCompletedCapture(request);
+    request.ownerToken = "d".repeat(64);
+    request.assembly.artifacts.find(artifact => artifact.role === "frame")!.bytes.fill(0);
+    const status = await pending;
+    assert.equal(status.state, "publishing");
+    assert.equal("ownerToken" in status, false);
+    assert.equal(dispatched?.ownerToken, "c".repeat(64));
+    assert.ok(dispatched?.planBytes.byteLength);
+    await assertAbsent(destinationPath);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("identical completed-capture calls coalesce and conflicting in-flight bindings are refused", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-composition-concurrent-"));
+  const destinationPath = join(root, "final.apparent");
+  assemblyForDestination(input, destinationPath);
+  let startDispatch!: () => void, finishDispatch!: (status: never) => void;
+  const dispatched = new Promise<void>(resolve => { startDispatch = resolve; });
+  const response = new Promise<never>(resolve => { finishDispatch = resolve; });
+  const sdk = {
+    async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
+    async publish(request: { captureId: string; publicationId: string; planFile: { planSha256: string } }) {
+      startDispatch();
+      return response.then(() => ({ captureId: request.captureId, state: "publishing", publicationId: request.publicationId, planSha256: request.planFile.planSha256 })) as never;
+    },
+  } as unknown as CaptureClient;
+  const publisher = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
+  const request = {
+    status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+    assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
+    stagingRoot: join(root, "staging"), destinationPath,
+  };
+  try {
+    const first = publisher.publishCompletedCapture(request);
+    const second = publisher.publishCompletedCapture(request);
+    await dispatched;
+    await assert.rejects(publisher.publishCompletedCapture({ ...request, publicationId: "b".repeat(32) }), /conflicts with its in-flight publication/u);
+    finishDispatch(undefined as never);
+    const [left, right] = await Promise.all([first, second]);
+    assert.equal(left.state, "publishing");
+    assert.deepEqual(left, right);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("ambiguous composed publication reconciles the same durable binding after restart", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-composition-reconcile-"));
+  const destinationPath = join(root, "final.apparent");
+  assemblyForDestination(input, destinationPath);
+  let dispatches = 0, inspections = 0;
+  let expectedPublicationId = "";
+  const sdk = {
+    async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
+    async publish() { dispatches++; throw new Error("ambiguous SDK reply"); },
+    async inspectPublication(request: { captureId: string; publicationId: string; planSha256: string }) {
+      inspections++;
+      assert.equal(request.publicationId, expectedPublicationId);
+      return { captureId: request.captureId, state: "publishing", publicationId: request.publicationId, planSha256: request.planSha256 };
+    },
+  } as unknown as CaptureClient;
+  const publicationId = "a".repeat(32), ownerToken = "c".repeat(64);
+  expectedPublicationId = publicationId;
+  const request = {
+    status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+    assembly: input, ownerToken, publicationId, stagingRoot: join(root, "staging"), destinationPath,
+  };
+  try {
+    const first = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
+    await assert.rejects(first.publishCompletedCapture(request), /outcome is unknown/u);
+    assert.equal(dispatches, 1);
+    const reopened = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
+    const observed = await reopened.reconcile({
+      captureId: identity.captureId, ownerToken, publicationId, materials: input.manifest.key,
+      leaseId: input.manifest.leaseId, bundleId: "sdk-bundle", bundlePath: destinationPath,
+    });
+    assert.equal(observed.state, "publishing");
+    assert.equal(inspections, 1);
+    await assert.rejects(reopened.reconcile({
+      captureId: identity.captureId, ownerToken, publicationId: "b".repeat(32), materials: input.manifest.key,
+      leaseId: input.manifest.leaseId, bundleId: "sdk-bundle", bundlePath: destinationPath,
+    }), /conflicts with the supplied original identity/u);
+    assert.equal(dispatches, 1, "reconciliation does not rerun assembly, staging, or publication");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

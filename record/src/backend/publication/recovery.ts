@@ -8,7 +8,15 @@ const publishTimeoutMs = 10000;
 
 export interface RecordPublicationRecovery {
   publish(input: PublishInput): Promise<CaptureStatus>;
-  reconcile(captureId: string, ownerToken: string): Promise<CaptureStatus>;
+  reconcile(captureId: string, ownerToken: string, expected?: PublicationBindingExpectation): Promise<CaptureStatus>;
+}
+
+export interface PublicationBindingExpectation {
+  publicationId: string;
+  materials: PublicationBinding["materials"];
+  leaseId: string;
+  bundleId: string;
+  bundlePath: string;
 }
 
 /**
@@ -38,10 +46,11 @@ export function createRecordPublicationRecovery(
       inflight.set(snapshot.captureId, { binding, promise: operation });
       return operation.then(status => structuredClone(status));
     },
-    async reconcile(captureId, ownerToken) {
+    async reconcile(captureId, ownerToken, expected) {
       if (inflight.has(captureId)) throw new Error("Record publication command is already in flight");
       const binding = await store.get(captureId);
       if (!binding) throw new Error("Record publication binding is unavailable");
+      if (expected && !matchesExpected(binding, expected)) throw new Error("Record publication binding conflicts with the supplied original identity");
       if (!/^[0-9a-f]{64}$/u.test(ownerToken)) throw new Error("Record publication authority is invalid");
       try {
         await client.handshake();
@@ -104,6 +113,12 @@ export function createRecordPublicationRecovery(
       throw new Error("Record publication outcome is unknown; reconcile the same durable binding");
     }
   }
+}
+
+function matchesExpected(binding: PublicationBinding, expected: PublicationBindingExpectation): boolean {
+  return binding.publicationId === expected.publicationId && binding.materials.captureId === expected.materials.captureId &&
+    binding.materials.materialsId === expected.materials.materialsId && binding.materials.revision === expected.materials.revision &&
+    binding.leaseId === expected.leaseId && binding.bundleId === expected.bundleId && binding.bundlePath === expected.bundlePath;
 }
 
 async function assertDestinationAbsent(path: string): Promise<void> {
