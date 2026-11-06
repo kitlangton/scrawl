@@ -50,6 +50,8 @@ test('capture/2 requires explicit protocol and source selector; exact destinatio
   assert.deepEqual(parseCapture2RecordArgs([...defaultArgs('/tmp/fresh.apparent'), '--duration', '3600']), { durationSeconds: 3600, out: '/tmp/fresh.apparent', sourceId: source.id });
   assert.deepEqual(parseCapture2RecordArgs(defaultArgs('/tmp/fresh.apparent')), { durationSeconds: 5, out: '/tmp/fresh.apparent', sourceId: source.id });
   assert.deepEqual(parseCapture2RecordArgs(defaultArgs()), { durationSeconds: 5, sourceId: source.id });
+  for (const suffix of [['--out'], ['--out', ''], ['--out', '--source', source.id]])
+    assert.throws(() => parseCapture2RecordArgs([...defaultArgs(), ...suffix]), /--out/);
   for (const invalid of [[], args('relative.apparent'), args('/tmp/fresh.apparent', '--source', 'other'), args('/tmp/fresh.apparent', '--duration', '1'),
     [...args('/tmp/fresh.apparent'), '--duration', '1'], [...defaultArgs('/tmp/fresh.apparent'), '--duration', '0'],
     [...defaultArgs('/tmp/fresh.apparent'), '--duration', '3601'], [...defaultArgs('/tmp/fresh.apparent'), '--duration', 'nope'],

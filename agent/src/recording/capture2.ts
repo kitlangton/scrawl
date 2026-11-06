@@ -142,7 +142,10 @@ export function parseCapture2RecordArgs(args: string[]): { durationSeconds: numb
     const arg = args[i];
     if (arg === '--protocol' && !protocol && args[i + 1] === 'capture2') { protocol = true; i++; continue; }
     if (arg === '--duration' && !durationSeen) { durationSeen = true; duration = Number(args[++i]); }
-    else if (arg === '--out' && out === undefined) out = args[++i];
+    else if (arg === '--out' && out === undefined) {
+      out = args[++i];
+      if (!out || out.startsWith('--')) throw new Error('--out requires a normalized absolute .apparent destination');
+    }
     else if (arg === '--source' && sourceId === undefined) sourceId = args[++i];
     else throw new Error(`Unknown, duplicate, or invalid capture/2 record option: ${arg}`);
   }
@@ -168,6 +171,8 @@ export async function recordWithCapture2(
     throw new Error('Capture/2 requires APPARENT_ENGINE_CAPTURE_EXECUTABLE and APPARENT_ENGINE_RUNTIME as normalized absolute paths; no protocol fallback is attempted');
   if (!isAbsolute(controlRoot) || resolve(controlRoot) !== controlRoot || (parsed.out && (controlRoot === parsed.out || parsed.out.startsWith(`${controlRoot}/`) || controlRoot.startsWith(`${parsed.out}/`))))
     throw new Error('Agent capture/2 control root must be normalized, absolute, and separate from the output destination');
+  if (!parsed.out && (destinationRoot === controlRoot || destinationRoot.startsWith(`${controlRoot}/`) || controlRoot.startsWith(`${destinationRoot}/`)))
+    throw new Error('Configured capture storage must be separate from the Agent control root');
   await mkdir(controlRoot, { recursive: true, mode: 0o700 });
   const rootInfo = await lstat(controlRoot);
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || rootInfo.uid !== process.getuid?.() || (rootInfo.mode & 0o077) !== 0 || await realpath(controlRoot).catch(() => '') !== controlRoot)
