@@ -4,11 +4,11 @@
 
 Only dependency/cache trees (`target`, `node_modules`, `vendor`, `third_party`, `third-party`, `.git`, `__pycache__`) and specifically generated roots `public/site/video-demo/output`, `connect/web/dist`, and `connect/web/dist-site-check` are excluded. `public/site/public` is not excluded: tracked feature-demo HTML there is first-party code. Generic `src`, `shared`, library, test, `dist`, and generated-named directories receive no blanket exemption. On violation, split changes by responsibility and stage only the intended changes; the hook never edits or stages files. Git/plumbing failures reject the commit.
 
-At repository root, the maximum remains 10 immediate files and 10 non-hidden
-directories. Every immediate dot-prefixed directory is excluded from the root
-directory count, while its contents remain eligible and checked at their own
-levels. Nested hidden directories count normally. Files and symlinks whose names
-start with a dot remain included in the root file count.
+At repository root, the maximum remains 10 immediate files, but immediate
+directories have no count limit. This applies to both visible and hidden root
+directories; their contents remain eligible and checked at their own levels.
+Nested directories, including hidden ones, retain the normal directory limit.
+Files and symlinks whose names start with a dot remain included in the root file count.
 
 GitHub Actions requires a separate immediate workflow file for each independently
 scheduled delivery stream. The exact `.github/workflows/` file inventory is
