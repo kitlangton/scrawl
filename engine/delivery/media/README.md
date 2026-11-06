@@ -66,3 +66,13 @@ capture/2. Its supervised job binds native frames and a caller-planned contact
 sheet to authenticated retained materials. Failed partial files remain private
 and unpublished; no recursive caller-directory cleanup is claimed. Media/1 argv
 and completed-bundle behavior remain unchanged.
+
+The frozen Media/2 candidate `23aec4162ad939988855f205e943bd16dde53cc0` passed
+host and isolated-guest package proof, including the 1366×768 30 fps H.264
+fixture with ambient loader/plugin paths closed. The receipt and guest result are
+at `/tmp/m2proof-23aec-UvQjX3/package-receipt.json` and
+`/tmp/m2proof-23aec-UvQjX3/guest-run-23aec/result.json`; the guest artifact
+manifest is `/tmp/m2proof-23aec-UvQjX3/guest-artifacts-manifest.json`. This proof
+used an explicit plugin override from archive 463 and is local-only: it cannot
+be reused as CI evidence or artifact admission. Media/2 remains unadmitted and
+has no installed or Saved claim.
