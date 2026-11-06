@@ -8,6 +8,15 @@ route captures, or certify a complete Apparent bundle. Package tests cover real
 filesystem/process boundaries and the synthetic Linux recorder source/EOS paths;
 they are not native desktop acceptance.
 
+The optional `macos-capture` feature moves the existing ScreenCaptureKit filter,
+movie stream, RGBA frame acquisition and teardown into `src/macos.rs`. The legacy
+Mac caller still selects the target and exclusions, owns prompt/experiment policy,
+sampling cadence, geometry and timestamp conversion. The feature uses the existing
+ScreenCaptureKit 11.0.0/macOS 15 API and is absent from default Core and Linux
+dependency closures. This extraction does not establish a standalone Mac provider,
+first-frame readiness, filter-application acknowledgement or capture/2 support;
+the affected Mac seam still requires native qualification.
+
 ## Source and retained review
 
 This package-only port uses the complete 16-file admission/leases package from

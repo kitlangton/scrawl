@@ -9,18 +9,19 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use screencapturekit::prelude::*;
-use screencapturekit::recording_output::{
-    SCRecordingOutput, SCRecordingOutputCodec, SCRecordingOutputConfiguration,
-    SCRecordingOutputFileType,
+use apparent_capture_engine::macos::{
+    CaptureRequest as SckCaptureRequest, CaptureSource as SckCaptureSource,
+    CaptureStream as SckCaptureStream, FilterRequest as SckFilterRequest,
+    StreamConfiguration as SckStreamConfiguration,
 };
+use screencapturekit::prelude::*;
 use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 
 use super::super::{
     CANDIDATE_EDGE, CANDIDATE_EDGE_NO_VIDEO, CARBON_CMD_KEY, CARBON_CONTROL_KEY, CARBON_OPTION_KEY,
     CARBON_SHIFT_KEY, FRAME_SAMPLE_INTERVAL, LiveOverlayEvent, Sampler, SharedCaptureTelemetry,
-    ShortcutConfig, ShortcutKind, capture_size, clean_label, hotkey_combos, pick_display,
-    poll_clicks, apparent_log, track_shift_ink,
+    ShortcutConfig, ShortcutKind, apparent_log, capture_size, clean_label, hotkey_combos,
+    pick_display, poll_clicks, track_shift_ink,
 };
 use crate::capture::engine::runtime::sample_real_candidate;
 use crate::shared::model::{CaptureMode, InteractionEvent, RgbaFrame, TargetInfo};
@@ -1032,22 +1033,39 @@ pub(crate) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
         .clone();
     // Keep SCK initialization, capture and teardown on the owning worker.
     // stop() joins even if it arrives while setup is still in progress.
-    let (stream, recording_output, video_path, filter) = setup_sck_capture(
-        &sampler_target,
+    // Full-screen captures use the legacy post-recording crop budget; other modes use the
+    // smaller movie budget. The candidate size remains a separate sampler configuration.
+    let movie_edge = if sampler_target.mode == CaptureMode::Display {
+        2560.0
+    } else {
+        1280.0
+    };
+    let movie_request = sck_request(&sampler_target, movie_edge, &initial_excluded);
+    let mut stream = match SckCaptureStream::start(
+        &movie_request,
         video_output_path,
-        &initial_excluded,
         started_at,
         &thread_offset,
-    );
+    ) {
+        Ok(stream) => stream,
+        Err(error) => {
+            apparent_log(format!(
+                "SCShareableContent::get() failed: {error} (screen recording granted: {})",
+                screen_capture_granted()
+            ));
+            startup_failed.store(true, Ordering::Release);
+            SckCaptureStream::unavailable()
+        }
+    };
     crate::capture::desktop::start_metric("sck_ready_ms", started_at);
-    let shot_edge = if video_path.is_some() {
+    let shot_edge = if stream.video_path().is_some() {
         CANDIDATE_EDGE
     } else {
         CANDIDATE_EDGE_NO_VIDEO
     };
     let shot_config = sck_config(&sampler_target, shot_edge);
-    let mut filter_and_config = filter.map(|f| (f, shot_config));
-    if filter_and_config.is_none() {
+    let mut shot_config = stream.frame_configuration(shot_config);
+    if !stream.has_filter() {
         apparent_log("Screen capture failed to start: no ScreenCaptureKit filter");
         startup_failed.store(true, Ordering::Release);
     }
@@ -1071,17 +1089,24 @@ pub(crate) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
         cur_excluded.extend(&prompts.ids);
         if cur_excluded != last_excluded {
             last_excluded.clone_from(&cur_excluded);
-            prompts.hidden = sck_lists_windows(&prompts.ids);
-            if let Some((new_filter, _)) =
-                build_sck_filter_and_config(&sampler_target, &cur_excluded)
-            {
-                // Keep explicit privacy exclusions consistent in movie and candidates.
-                if let Some(ref stream) = stream
-                    && let Err(error) = stream.update_content_filter(&new_filter)
-                {
-                    apparent_log(format!("Recording filter update failed: {error:?}"));
+            prompts.hidden = apparent_capture_engine::macos::listed_window_ids(&prompts.ids);
+            let request = sck_filter_request(&sampler_target, &cur_excluded);
+            match stream.update_filter(&request) {
+                Ok(Some(update)) => {
+                    // Keep explicit privacy exclusions consistent in movie and candidates.
+                    if let Err(error) = update {
+                        apparent_log(format!("Recording filter update failed: {error}"));
+                    }
+                    shot_config =
+                        stream.frame_configuration(sck_config(&sampler_target, shot_edge));
                 }
-                filter_and_config = Some((new_filter, sck_config(&sampler_target, shot_edge)));
+                Ok(None) => {}
+                Err(error) => {
+                    apparent_log(format!(
+                        "SCShareableContent::get() failed: {error} (screen recording granted: {})",
+                        screen_capture_granted()
+                    ));
+                }
             }
         }
         let urgent = thread_urgent.swap(false, Ordering::AcqRel);
@@ -1100,101 +1125,51 @@ pub(crate) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
         if urgent || last_sample.elapsed() >= interval {
             last_sample = Instant::now();
             let t_ms = started_at.elapsed().as_millis() as u64;
-            if let Some((filter, config)) = filter_and_config.as_ref() {
+            if stream.has_filter() {
                 sample_real_candidate(
                     &thread_frames,
                     &thread_real_frame_seen,
                     &startup_failed,
                     urgent,
-                    || capture_sck_frame(filter, config, t_ms),
+                    || {
+                        let image = stream.capture_frame(&shot_config)?;
+                        Ok(RgbaFrame::new(t_ms, image.width, image.height, image.bytes))
+                    },
                 );
             }
         }
         thread::park_timeout(Duration::from_millis(30));
     }
-    if let Some(stream) = stream {
-        let _ = stream.stop_capture();
-        if let Some(ref output) = recording_output {
-            let _ = stream.remove_recording_output(output);
-        }
+    stream.stop();
+    stream.video_path()
+}
+
+fn sck_request(target: &TargetInfo, movie_edge: f64, excluded: &[u32]) -> SckCaptureRequest {
+    SckCaptureRequest {
+        filter: sck_filter_request(target, excluded),
+        configuration: sck_config(target, movie_edge),
     }
-    video_path
 }
 
-fn build_sck_filter_and_config(
-    target: &TargetInfo,
-    excluded_window_ids: &[u32],
-) -> Option<(SCContentFilter, SCStreamConfiguration)> {
-    let content = match SCShareableContent::get() {
-        Ok(c) => c,
-        Err(err) => {
-            // Screen Recording is asked for in onboarding, never mid-capture.
-            apparent_log(format!(
-                "SCShareableContent::get() failed: {err:?} (screen recording granted: {})",
-                screen_capture_granted()
-            ));
-            return None;
-        }
-    };
-    let filter = if target.mode == CaptureMode::Window && target.window_id.is_none() {
-        None
-    } else if let Some(window_id) = target.window_id
-        && let Some(window) = content
-            .windows()
-            .into_iter()
-            .find(|w| w.window_id() == window_id)
-    {
-        SCContentFilter::create().with_window(&window).build().ok()
-    } else if target.mode == CaptureMode::Window {
-        // The selected window may have closed since discovery. Never switch to a display.
-        None
-    } else if let Some(display) = content
-        .displays()
-        .into_iter()
-        .find(|d| d.display_id() == target.display_id)
-        .or_else(|| content.displays().into_iter().next())
-    {
-        // With this experiment on, only explicit picker/ink overlays and system prompts are
-        // excluded; the capsule remains in the movie and decoded full-quality keyframes.
-        let excluded_overlays: Vec<SCWindow> = content
-            .windows()
-            .into_iter()
-            .filter(|w| {
-                excluded_window_ids.contains(&w.window_id())
-                    || (!crate::shared::handoff::experiment("movableRecordingControls")
-                        && w.owning_application().as_ref().is_some_and(|a| {
-                            a.process_id() == std::process::id() as i32
-                        })
-                        && w.window_layer() != 0)
-            })
-            .collect();
-        let excluded_refs: Vec<&SCWindow> = excluded_overlays.iter().collect();
-        SCContentFilter::create()
-            .with_display(&display)
-            .with_excluding_windows(&excluded_refs)
-            .build()
-            .ok()
-    } else {
-        None
-    }?;
-
-    // Full-screen captures get auto-cropped to a window or region afterwards (`apparent autocrop`),
-    // so they need enough pixels for a crop to a quarter of the screen to stay sharp.
-    let long_edge = if target.mode == CaptureMode::Display {
-        2560.0
-    } else {
-        1280.0
-    };
-    Some((filter, sck_config(target, long_edge)))
+fn sck_filter_request(target: &TargetInfo, excluded: &[u32]) -> SckFilterRequest {
+    SckFilterRequest {
+        source: if target.mode == CaptureMode::Window {
+            SckCaptureSource::Window(target.window_id)
+        } else {
+            SckCaptureSource::Display(target.display_id)
+        },
+        excluded_window_ids: excluded.to_vec(),
+        // With this experiment on, the capsule remains in the movie and decoded keyframes.
+        exclude_own_non_normal_windows: !crate::shared::handoff::experiment(
+            "movableRecordingControls",
+        ),
+        own_process_id: std::process::id() as i32,
+    }
 }
 
-fn sck_config(target: &TargetInfo, long_edge: f64) -> SCStreamConfiguration {
+fn sck_config(target: &TargetInfo, long_edge: f64) -> SckStreamConfiguration {
     let (width, height) = capture_size(target, long_edge);
-    let mut config = SCStreamConfiguration::new()
-        .with_width(width)
-        .with_height(height)
-        .with_shows_cursor(true);
-    if target.mode == CaptureMode::Region {
+    let source_rect = if target.mode == CaptureMode::Region {
         // `sourceRect` is in the display's own points, not global ones.
         let b = core_graphics::display::CGDisplay::new(target.display_id).bounds();
         let display = [b.origin.x, b.origin.y, b.size.width, b.size.height];
@@ -1209,83 +1184,15 @@ fn sck_config(target: &TargetInfo, long_edge: f64) -> SCStreamConfiguration {
         } else {
             area
         };
-        config.set_source_rect(CGRect::new(x, y, w, h));
-    }
-    config
-}
-
-/// Starts the recording stream; returns it with the filter for candidate screenshots. Stores
-/// when the recording started (ms since `started_at`) into `video_offset_ms`.
-fn setup_sck_capture(
-    target: &TargetInfo,
-    video_output_path: Option<PathBuf>,
-    excluded_window_ids: &[u32],
-    started_at: Instant,
-    video_offset_ms: &AtomicU64,
-) -> (
-    Option<SCStream>,
-    Option<SCRecordingOutput>,
-    Option<PathBuf>,
-    Option<SCContentFilter>,
-) {
-    let Some((filter, config)) = build_sck_filter_and_config(target, excluded_window_ids) else {
-        return (None, None, None, None);
+        Some([x, y, w, h])
+    } else {
+        None
     };
-
-    if let Some(video_path) = video_output_path {
-        if let Ok(rec_cfg_builder) = SCRecordingOutputConfiguration::new()
-            && let Ok(rec_cfg) = rec_cfg_builder.with_output_url(&video_path).map(|c| {
-                c.with_video_codec(SCRecordingOutputCodec::H264)
-                    .with_output_file_type(SCRecordingOutputFileType::MP4)
-            })
-            && let Some(rec_output) = SCRecordingOutput::new(&rec_cfg)
-            && let Ok(stream) = SCStream::new(&filter, &config)
-            && stream.add_recording_output(&rec_output).is_ok()
-        {
-            // The movie's clock starts while `start_capture` runs; its midpoint is the closest
-            // estimate this side of the recording delegate.
-            let before = started_at.elapsed();
-            if stream.start_capture().is_ok() {
-                let after = started_at.elapsed();
-                video_offset_ms.store(((before + after) / 2).as_millis() as u64, Ordering::Release);
-                return (
-                    Some(stream),
-                    Some(rec_output),
-                    Some(video_path),
-                    Some(filter),
-                );
-            }
-        }
+    SckStreamConfiguration {
+        width,
+        height,
+        source_rect,
     }
-
-    (None, None, None, Some(filter))
-}
-
-fn capture_sck_frame(
-    filter: &SCContentFilter,
-    config: &SCStreamConfiguration,
-    t_ms: u64,
-) -> Result<RgbaFrame, String> {
-    // Development-only fault injection: keep the movie recording, but force the
-    // privacy-filtered screenshot path to fail for an end-to-end GUI check.
-    #[cfg(debug_assertions)]
-    if std::env::var("APPARENT_TEST_DROP_SCK_FRAMES").as_deref() == Ok("1") {
-        return Err("test-injected screenshot failure".into());
-    }
-    // Acquisition and conversion can fail for an individual sample. The sampler retries;
-    // these unclassified errors do not establish a terminal setup/source failure.
-    let image = SCScreenshotManager::capture_image(filter, config)
-        .map_err(|error| format!("{error:?}"))?;
-    let width = u32::try_from(image.width()).map_err(|error| error.to_string())?;
-    let height = u32::try_from(image.height()).map_err(|error| error.to_string())?;
-    if width == 0 || height == 0 {
-        return Err("screenshot has zero dimensions".into());
-    }
-    let rgba = image.rgba_data().map_err(|error| format!("{error:?}"))?;
-    if rgba.len() != (width as usize) * (height as usize) * 4 {
-        return Err("screenshot has invalid pixel length".into());
-    }
-    Ok(RgbaFrame::new(t_ms, width, height, rgba))
 }
 
 /// macOS prompts over a capture (`windows::system_prompts_over`): ScreenCaptureKit's "bypass
@@ -1349,22 +1256,6 @@ impl SystemPrompts {
 }
 
 /// Which of `ids` ScreenCaptureKit lists (and so can leave out of a recording).
-fn sck_lists_windows(ids: &[u32]) -> Vec<u32> {
-    if ids.is_empty() {
-        return Vec::new();
-    }
-    SCShareableContent::get()
-        .map(|content| {
-            content
-                .windows()
-                .into_iter()
-                .map(|w| w.window_id())
-                .filter(|id| ids.contains(id))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 
 /// Keeps the key event tap in step with Accessibility, which macOS reports live: makes the tap
 /// once it's on (no relaunch), stops it if it's turned off (an active tap whose grant is gone can
