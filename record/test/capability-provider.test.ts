@@ -309,3 +309,72 @@ test("cached saved output cannot override a live capture or admit copy and open"
   assert.equal(client.current().captures[0].phase, "saved", "assembled output may complete stopped materials");
   client.detach();
 });
+
+test("confirmed clipboard receipt is scoped to the saved artifact and command, never dispatch acceptance", async () => {
+  const { runtime } = runtimeFixture();
+  const facts = outputFacts();
+  facts.captures = [{ captureId: "saved-copy", artifactId: "artifact-copy", phase: "saved", delivery: "unknown", outcomes: [{ kind: "save", at: "2026-11-06T12:00:00Z", ok: true }] }];
+  let writes = 0;
+  const client = createRecordCapabilityProvider({ runtime, providerEpoch: "provider-copy", captureFacts: { readFacts: async () => facts },
+    clipboard: { async copyLocal(input: { captureId: string; artifactId: string }) { writes++; return { status: "applied" as const, ...input, digest: "a".repeat(64), byteLength: 42 }; } },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  const snapshot = client.current();
+  const request = { type: "copy-local" as const, captureId: "saved-copy", requestId: "copy-explicit", expected: { providerEpoch: snapshot.providerEpoch, revision: snapshot.revision } };
+  const pending = client.execute(request);
+  request.captureId = "caller-mutated";
+  const result = await pending;
+  assert.equal(result.status, "applied");
+  const receipt = result.snapshot.captures.find(c => c.captureId === "saved-copy")!.outcomes.find(o => o.kind === "copy");
+  assert.deepEqual(receipt, { kind: "copy", at: receipt?.at, ok: true, evidence: "native-write-readback", artifactId: "artifact-copy", requestId: "copy-explicit", digest: "a".repeat(64), byteLength: 42 });
+  assert.equal(writes, 1);
+  assert.equal((await client.execute({ ...request, captureId: "saved-copy", expected: { providerEpoch: result.snapshot.providerEpoch, revision: result.snapshot.revision } })).status, "refused");
+  assert.equal(writes, 1, "same command is never retried");
+  client.detach();
+});
+
+test("clipboard refusal, ambiguity and mismatched receipts never publish copy success", async () => {
+  for (const outcome of ["refused", "outcome-unknown", "foreign", "invalid-digest", "throw"] as const) {
+    const { runtime } = runtimeFixture(); const facts = outputFacts();
+    facts.captures = [{ captureId: "saved-copy", artifactId: "artifact-copy", phase: "saved", delivery: "unknown", outcomes: [{ kind: "save", at: "2026-11-06T12:00:00Z", ok: true }] }];
+    let writes = 0;
+    const client = createRecordCapabilityProvider({ runtime, providerEpoch: `provider-${outcome}`, captureFacts: { readFacts: async () => facts }, clipboard: {
+      async copyLocal(input: { captureId: string; artifactId: string }) {
+        writes++;
+        if (outcome === "throw") throw new Error("private path must not escape");
+        if (outcome === "refused") return { status: "refused" as const, reason: "too-large" };
+        if (outcome === "outcome-unknown") return { status: "outcome-unknown" as const };
+        return { status: "applied" as const, captureId: outcome === "foreign" ? "other" : input.captureId, artifactId: input.artifactId, digest: outcome === "invalid-digest" ? "invalid" : "a".repeat(64), byteLength: 42 };
+      },
+    } });
+    await new Promise(resolve => setImmediate(resolve));
+    const current = client.current();
+    const result = await client.execute({ type: "copy-local", captureId: "saved-copy", requestId: "copy-once", expected: { providerEpoch: current.providerEpoch, revision: current.revision } });
+    assert.equal(result.status, outcome === "refused" ? "refused" : "outcome-unknown");
+    assert.equal(writes, 1);
+    assert.equal(result.snapshot.captures[0]!.outcomes.some(o => o.kind === "copy" && o.ok), false);
+    assert.doesNotMatch(JSON.stringify(result), /private path/);
+    client.detach();
+  }
+});
+
+test("clipboard port requires saved artifact identity and suppresses late detached receipts", async () => {
+  const { runtime } = runtimeFixture(); const facts = outputFacts();
+  facts.captures = [{ captureId: "no-artifact", phase: "saved", delivery: "unknown", outcomes: [{ kind: "save", at: "2026-11-06T12:00:00Z", ok: true }] }];
+  let writes = 0; let finish!: (value: { status: "applied"; captureId: string; artifactId: string; digest: string; byteLength: number }) => void;
+  let start!: () => void; const started = new Promise<void>(resolve => start = resolve);
+  const client = createRecordCapabilityProvider({ runtime, providerEpoch: "provider-late-copy", captureFacts: { readFacts: async () => facts }, clipboard: {
+    copyLocal(input: { captureId: string; artifactId: string }) { writes++; start(); return new Promise(resolve => finish = resolve); },
+  } });
+  await new Promise(resolve => setImmediate(resolve));
+  let current = client.current();
+  assert.equal((await client.execute({ type: "copy-local", captureId: "no-artifact", requestId: "missing-artifact", expected: { providerEpoch: current.providerEpoch, revision: current.revision } })).status, "refused");
+  assert.equal(writes, 0);
+  facts.captures[0]!.artifactId = "artifact-copy"; facts.revision++;
+  await client.execute(command(client.current(), "refresh", "refresh-copy"));
+  current = client.current();
+  const pending = client.execute({ type: "copy-local", captureId: "no-artifact", requestId: "late-copy", expected: { providerEpoch: current.providerEpoch, revision: current.revision } });
+  await started; client.detach(); finish({ status: "applied", captureId: "no-artifact", artifactId: "artifact-copy", digest: "a".repeat(64), byteLength: 42 });
+  assert.equal((await pending).status, "outcome-unknown");
+  assert.equal(client.current().captures[0]!.outcomes.some(o => o.kind === "copy"), false);
+});

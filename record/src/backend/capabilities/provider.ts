@@ -50,6 +50,15 @@ export interface RecordCaptureFactsPort {
   dispatch?(command: CaptureAction): Promise<"accepted" | "refused" | "cancelled" | "outcome-unknown">;
 }
 
+/** Privileged exact-text copy consumer. The adapter verifies native digest/length against Record's formatted handoff. */
+export type RecordClipboardResult =
+  | { status: "applied"; captureId: string; artifactId: string; digest: string; byteLength: number }
+  | { status: "refused"; reason: string }
+  | { status: "outcome-unknown" };
+export interface RecordClipboardPort {
+  copyLocal(input: { captureId: string; artifactId: string }): Promise<RecordClipboardResult>;
+}
+
 /** Owner adapter over the existing authoritative penColor writer. */
 export interface RecordPenConfigPort {
   /** Reads the persisted top-level `penColor` and actual currently applied value. */
@@ -68,6 +77,8 @@ export interface RecordCapabilityProviderOptions {
   captureFacts?: RecordCaptureFactsPort;
   /** Undefined means the published config backend binding is not installed. */
   penConfig?: RecordPenConfigPort;
+  /** Undefined keeps copy dispatch-only through the legacy native action seam. */
+  clipboard?: RecordClipboardPort;
   /** Stable for one provider process; a restarted process must use a new value. */
   providerEpoch: string;
 }
@@ -134,6 +145,9 @@ function validRecordCaptureFacts(value: unknown): value is RecordCaptureFacts {
       if (fact.kind === "accepted-stroke") return fact.ok
         ? ["screen", "whiteboard"].includes(String(fact.surface)) && typeof fact.strokeId === "string"
         : ["screen", "whiteboard"].includes(String(fact.surface)) && ["rejected", "failed"].includes(String(fact.reason));
+      if (fact.kind === "copy" && "evidence" in fact) return fact.ok === true && fact.evidence === "native-write-readback" &&
+        typeof fact.artifactId === "string" && !!fact.artifactId.trim() && typeof fact.requestId === "string" && !!fact.requestId.trim() && typeof fact.digest === "string" && /^[0-9a-f]{64}$/u.test(fact.digest) &&
+        Number.isSafeInteger(fact.byteLength) && Number(fact.byteLength) > 0;
       if (fact.kind === "artifact-open") return typeof fact.artifactId === "string" && (fact.ok
         ? ["viewer-ack", "os-observation"].includes(String(fact.evidence))
         : ["refused", "failed"].includes(String(fact.reason)));
@@ -340,6 +354,28 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
       const known = current.captures.find(capture => capture.captureId === command.captureId);
       if (!known) return refuse(command, "unknown capture");
       if ((command.type === "copy-local" || command.type === "open-capture") && known.phase !== "saved") return refuse(command, "capture is not saved");
+      if (command.type === "copy-local" && options.clipboard) {
+        const artifactId = known.artifactId;
+        if (!artifactId?.trim()) return refuse(command, "saved artifact identity unavailable");
+        usedRequests.add(command.requestId);
+        try {
+          const receipt = await options.clipboard.copyLocal({ captureId: known.captureId, artifactId });
+          if (detached) return response("outcome-unknown");
+          if (receipt?.status === "refused" && typeof receipt.reason === "string") return refuse(command, receipt.reason);
+          if (receipt?.status !== "applied" || receipt.captureId !== known.captureId || receipt.artifactId !== artifactId ||
+              !/^[0-9a-f]{64}$/u.test(receipt.digest) || !Number.isSafeInteger(receipt.byteLength) || receipt.byteLength <= 0)
+            return response("outcome-unknown");
+          await refresh();
+          if (detached || snapshot().captures.find(item => item.captureId === known.captureId)?.artifactId !== artifactId)
+            return response("outcome-unknown");
+          captures.set(known.captureId, mergeCapture(captures.get(known.captureId), { ...known, outcomes: [{
+            kind: "copy", at: new Date().toISOString(), ok: true, evidence: "native-write-readback",
+            artifactId, requestId: command.requestId, digest: receipt.digest, byteLength: receipt.byteLength,
+          }] }));
+          publish();
+          return response("applied");
+        } catch { return response("outcome-unknown"); }
+      }
       if (command.type === "stop-capture" || command.type === "cancel-capture" || command.type === "inspect-capture") {
         const state = options.runtime.state;
         if (!("captureId" in state) || state.captureId !== command.captureId) return refuse(command, "Engine runtime does not own this capture");
@@ -393,7 +429,8 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
       return () => listeners.delete(listener);
     },
     execute(command) {
-      const work = commandQueue.then(() => executeOne(clone(command)));
+      const admitted = clone(command);
+      const work = commandQueue.then(() => executeOne(admitted));
       commandQueue = work.then(() => undefined, () => undefined);
       return work;
     },
