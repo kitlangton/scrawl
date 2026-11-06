@@ -1,0 +1,10 @@
+{
+  "package": "@apparent/native-host",
+  "sourceSha": "713f1591b7460ec752041424d11e76d0f99bc04a",
+  "packageSha256": "712e4cd8f4b95ca08364f32f72e9dc855ce6e12c862fd5efce9c296c88dab221",
+  "runId": "42225727920",
+  "contractsJob": 127918604915,
+  "verified": "Exact paired package hash reproduced in protected-main packed consumer; source/receipt evidence retained",
+  "nativeBehaviorSource": "33f95219899c407bed5a767c3ceb1433985b2e49",
+  "limits": "Compiled client package, not native GUI executable or installed-route admission"
+}
