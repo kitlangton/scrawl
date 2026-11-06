@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import { Media2Client, launchMedia2Worker, validateDerivative2Document, type Media2JobInput } from '../sdk/src/media2/index.ts';
 import { readFrameVisualObservations } from '../sdk/src/observations/index.ts';
 import { validateMaterialsDocument } from '../sdk/src/capture-documents/index.ts';
+import { launchMedia2RecoveryPeer } from '../sdk/src/recovery/index.ts';
 import { createMediaJobId, launchMediaWorker, MediaChildProcessTransport, MediaClient, MediaRpcError, type DecodeRequest, type MediaJobStatus } from '../sdk/src/media.ts';
 
 const binary = process.env.APPARENT_ENGINE_FRAMES_BIN;
@@ -337,6 +338,8 @@ test('packaged retained media/2 decodes H264 with native seals and cold recovery
     contactSheet: { schema: 'apparent.contact-sheet-layout/1', width: 64, height: 16, backgroundRgb: [11, 22, 33], fit: 'stretch', sampling: 'legacy-bilinear', clipping: 'reject', tiles: [1, 2, 3, 4].map((requestIndex, index) => ({ requestIndex, x: index * 16, y: 0, width: 16, height: 16 })) },
   } };
   let media = new Media2Client(launchMedia2Worker(resolve(binary!), f.runtime));
+  let recovery: Awaited<ReturnType<typeof launchMedia2RecoveryPeer>> | undefined;
+  let recoveryPending = false;
   try {
     const hello = await media.handshake();
     assert.deepEqual(hello.capabilities, { retainedFrames: true, contactSheet: true, nativeJobAuthority: true });
@@ -410,6 +413,29 @@ test('packaged retained media/2 decodes H264 with native seals and cold recovery
     if (lost.state !== 'failed') assert.fail('lost job was not reconciled');
     assert.equal(lost.error.code, 'owner_lost');
     assert.equal((await stat(materialRoot)).isDirectory(), true, 'cancel/process loss retains original materials');
-
-  } finally { await media.close(); await f.close(); }
+    recovery = await launchMedia2RecoveryPeer(resolve(binary!), f.runtime);
+    await recovery.client.handshake();
+    const releasedInput = busyInput(id(), join(f.root, 'retained-released'));
+    recoveryPending = true;
+    assert.equal((await recovery.client.derive(releasedInput)).state, 'running');
+    const release = await recovery.release();
+    assert.equal(release.connection, 'released');
+    assert.equal(release.runtimeClearance, 'not-established');
+    await assert.rejects(recovery.client.close(), /peer.release/);
+    let retained = await media.inspect(releasedInput);
+    const retainedDeadline = Date.now() + 25_000;
+    while (retained.state === 'running' && Date.now() < retainedDeadline) { await pause(20); retained = await media.inspect(releasedInput); }
+    assert.equal(retained.state, 'complete', `released job original tuple: ${JSON.stringify(retained)}`);
+    if (retained.state !== 'complete') assert.fail('release lost native derivative authority');
+    const retainedEnvelope = validateDerivative2Document(retained.derivative, materials);
+    assert.equal(retainedEnvelope.payload.jobId, releasedInput.request.jobId);
+    const image = retainedEnvelope.payload.frames[0];
+    assert.equal(createHash('sha256').update(await readFile(join(releasedInput.request.outputDirectory, image.file.relativePath))).digest('hex'), image.file.sha256);
+    recoveryPending = false;
+  } finally {
+    await recovery?.release();
+    await media.close();
+    if (recoveryPending) console.error(`Unresolved synthetic retained recovery fixture: ${f.root}`);
+    else await f.close();
+  }
 });

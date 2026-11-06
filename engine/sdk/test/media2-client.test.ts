@@ -1,4 +1,5 @@
 import test from "node:test";
+import "./recovery/process.test.ts";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";

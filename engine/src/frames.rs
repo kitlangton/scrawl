@@ -15,6 +15,8 @@ mod media2;
 mod media2_worker;
 #[path = "media/protocol.rs"]
 mod protocol;
+#[path = "recovery.rs"]
+mod recovery;
 mod retained;
 #[path = "media/service.rs"]
 mod service;
@@ -27,15 +29,29 @@ fn main() {
         job::child()
     } else if args == ["--media2-native-job"] {
         media2_worker::child()
-    } else if args.len() == 6
+    } else if (args.len() == 6 || args.len() == 8)
         && args[0] == "--media-runtime-directory"
         && args[2] == "--media-channel"
         && args[3] == "media"
         && args[4] == "--media-protocol-version"
     {
+        let role = if args.len() == 8
+            && args[6] == "--recovery-peer-v1"
+            && recovery::nonce(&args[7])
+            && args[5] == "2"
+        {
+            Some(recovery::Role {
+                peer_id: &args[7],
+                channel: "media/2",
+            })
+        } else if args.len() == 6 {
+            None
+        } else {
+            std::process::exit(2)
+        };
         match args[5].as_str() {
             "1" => service::run(std::path::Path::new(&args[1])),
-            "2" => media2::run(std::path::Path::new(&args[1])),
+            "2" => media2::run(std::path::Path::new(&args[1]), role),
             _ => Err("unsupported_version"),
         }
     } else {

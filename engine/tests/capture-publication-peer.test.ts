@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
+import { spawn } from "node:child_process";
 import { CaptureClient, CaptureRpcError, launchCaptureEngine, type MaterialsDocument } from "../sdk/src/capture.ts";
+import { launchCaptureRecoveryPeer } from "../sdk/src/recovery/index.ts";
 
 type SealedFile = MaterialsDocument["manifest"]["payloadFile"];
 
@@ -192,11 +194,74 @@ function createFixture() {
   };
 }
 
+async function recoveryCaller(mode: string, runtime: string, inputFile?: string): Promise<unknown[]> {
+  const caller = spawn(process.execPath, ["--experimental-strip-types", resolve("engine/sdk/test/recovery/caller.ts"), mode, runtime, ...(inputFile ? [inputFile] : [])], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, APPARENT_CAPTURE_TEST_PUBLICATION_COMMIT_DECISION_DELAY_MS: "3000" },
+  });
+  let output = "", errors = "";
+  caller.stdout.on("data", chunk => { output += chunk; });
+  caller.stderr.on("data", chunk => { errors += chunk; });
+  await new Promise<void>((done, reject) => {
+    const timer = setTimeout(() => { caller.kill("SIGKILL"); reject(new Error(`Recovery caller did not exit naturally: ${errors}`)); }, 12_000);
+    caller.once("error", error => { clearTimeout(timer); reject(error); });
+    caller.once("exit", code => { clearTimeout(timer); code === 0 ? done() : reject(new Error(errors)); });
+  });
+  return JSON.parse(output);
+}
+
+test("public recovery factories release both native connections without keeping the caller alive", { skip: !binary || !process.env.APPARENT_ENGINE_MEDIA2_BIN }, async () => {
+  const f = createFixture();
+  try {
+    const results = await recoveryCaller("native-idle", f.runtime);
+    assert.equal(results.length, 2);
+    for (const value of results) assert.equal((value as { connection: string }).connection, "released");
+  } finally { rmSync(f.base, { recursive: true, force: true }); }
+});
+
+test("public recovery release lets an unknown native publication finish after the one-shot caller exits", { skip: !binary }, async () => {
+  const f = createFixture();
+  let observer: Awaited<ReturnType<typeof launchCaptureRecoveryPeer>> | undefined;
+  let completed = false;
+  try {
+    const inputFile = join(f.base, "recovery-input.json");
+    privateFile(inputFile, Buffer.from(JSON.stringify({ ...f.input, planBytes: undefined })));
+    const results = await recoveryCaller("native-publication", f.runtime, inputFile);
+    assert.equal((results[0] as { connection: string }).connection, "released");
+    const journal = JSON.parse(readFileSync(join(f.captureRoot, `${f.captureId}.json`), "utf8"));
+    assert.equal(journal.publication.state, "publishing", "native work must still be pending after the caller's natural exit");
+    observer = await launchCaptureRecoveryPeer(resolve(binary!), f.runtime);
+    await observer.client.handshake();
+    let recovered;
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      try {
+        recovered = await observer.client.inspectPublication({ ownerToken: f.ownerToken, captureId: f.captureId, publicationId: f.publicationId, planSha256: f.planFile.sha256, expected: f.expectation }, 2000);
+        if (recovered.state === "saved") break;
+      } catch (error) {
+        if (error instanceof CaptureRpcError && error.code === "busy") { /* original tuple stays pending */ }
+        else if (!(error instanceof Error) || !/operation was not cancelled/.test(error.message)) throw error;
+      }
+      await delay(20);
+    }
+    assert.equal(recovered?.state, "saved");
+    assert.equal(recovered.publication?.manifestSha256, f.manifestFile.sha256);
+    assert.equal(hash(readFileSync(join(f.bundlePath, "apparent.json"))), f.manifestFile.sha256);
+    completed = true;
+  } finally {
+    await observer?.release();
+    if (completed) rmSync(f.base, { recursive: true, force: true });
+    else console.error(`Unresolved synthetic recovery fixture retained: ${f.base}`);
+  }
+});
+
 test("SDK packaged publication validates Saved and cold inspection", { skip: !binary }, async () => {
   const f = createFixture();
   let client: CaptureClient | undefined;
+  let peer: Awaited<ReturnType<typeof launchCaptureRecoveryPeer>> | undefined;
   try {
-    client = new CaptureClient(launchCaptureEngine(resolve(binary!), f.runtime, 40_000));
+    peer = await launchCaptureRecoveryPeer(resolve(binary!), f.runtime);
+    client = peer.client;
     const hello = await client.handshake(5000);
     assert.equal(hello.implementation, "native");
     assert.equal(hello.capabilities.publication, true);
@@ -206,11 +271,13 @@ test("SDK packaged publication validates Saved and cold inspection", { skip: !bi
     assert.equal(hash(readFileSync(join(f.bundlePath, "apparent.json"))), f.manifestFile.sha256);
     assert.equal(hash(readFileSync(join(f.bundlePath, "recording.mp4"))), f.materials.payload.files[0].sha256);
     assert.throws(() => statSync(join(f.bundlePath, "publication-plan.json")), { code: "ENOENT" });
-    await client.close();
+    await peer.release();
+    peer = undefined;
     client = undefined;
     rmSync(f.stagingRoot, { recursive: true });
     rmSync(f.materialRoot, { recursive: true });
-    client = new CaptureClient(launchCaptureEngine(resolve(binary!), f.runtime, 40_000));
+    peer = await launchCaptureRecoveryPeer(resolve(binary!), f.runtime);
+    client = peer.client;
     await client.handshake(5000);
     const recovered = await client.inspectPublication({
       ownerToken: f.ownerToken, captureId: f.captureId, publicationId: f.publicationId,
@@ -219,7 +286,7 @@ test("SDK packaged publication validates Saved and cold inspection", { skip: !bi
     assert.deepEqual(recovered.publication, saved.publication);
     assert.equal(recovered.state, "saved");
   } finally {
-    await client?.close();
+    await peer?.release();
     rmSync(f.base, { recursive: true, force: true });
   }
 });

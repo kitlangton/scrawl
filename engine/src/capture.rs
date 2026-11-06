@@ -25,6 +25,8 @@ use x11rb::protocol::randr::ConnectionExt as RandrExt;
 mod materials_media;
 #[path = "capture/publication.rs"]
 mod publication;
+#[path = "recovery.rs"]
+mod recovery;
 #[path = "retained.rs"]
 mod retained;
 
@@ -873,17 +875,25 @@ fn process_request(
     ready: &mut bool,
     active: &mut HashMap<String, (Arc<Shared>, thread::JoinHandle<()>)>,
     all: &mut HashMap<String, Arc<Shared>>,
+    recovery_role: bool,
 ) -> Result<Value, &'static str> {
     let method = string(&req, "method")?;
     let capture = req.get("captureId").and_then(Value::as_str).unwrap_or("");
     let owner = req.get("ownerToken").and_then(Value::as_str).unwrap_or("");
     match method {
         "handshake" => {
-            refresh_catalog(generation, sources, ready);
+            if !recovery_role {
+                refresh_catalog(generation, sources, ready);
+            }
             Ok(handshake(*ready && generation.len() == 32))
         }
         "publish" | "inspectPublication" => publication::handle(&req, runtime, root, all),
         "discoverSources" => {
+            if recovery_role {
+                return Ok(
+                    json!({"state":"unavailable","sources":[],"reason":"source discovery is disabled for recovery peers"}),
+                );
+            }
             refresh_catalog(generation, sources, ready);
             Ok(if sources.is_empty() {
                 json!({"state":"unavailable","sources":[],"reason":"X11 capture is unavailable"})
@@ -1467,7 +1477,16 @@ fn main() {
         eprintln!("capture startup: argument validation started");
     }
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 7
+    let recovery_role =
+        if args.len() == 9 && args[7] == "--recovery-peer-v1" && recovery::nonce(&args[8]) {
+            Some(recovery::Role {
+                peer_id: &args[8],
+                channel: "capture/2",
+            })
+        } else {
+            None
+        };
+    if !(args.len() == 7 || recovery_role.is_some())
         || args[1] != "--runtime-directory"
         || args[3] != "--capture-channel"
         || args[4] != "capture"
@@ -1502,16 +1521,22 @@ fn main() {
     {
         std::process::exit(2);
     }
-    if diagnose_startup {
+    if let Some(role) = recovery_role {
+        recovery::lifecycle(role, "ready");
+    }
+    if diagnose_startup && recovery_role.is_none() {
         eprintln!(
             "capture startup: secure store ready after {}ms",
             startup.elapsed().as_millis()
         );
         eprintln!("capture startup: probing X11 sources");
     }
-    let (mut generation, mut sources) =
-        available_sources().unwrap_or_else(|_| (String::new(), Vec::new()));
-    if diagnose_startup {
+    let (mut generation, mut sources) = if recovery_role.is_some() {
+        (String::new(), Vec::new())
+    } else {
+        available_sources().unwrap_or_else(|_| (String::new(), Vec::new()))
+    };
+    if diagnose_startup && recovery_role.is_none() {
         eprintln!(
             "capture startup: X11 probe returned {} sources after {}ms",
             sources.len(),
@@ -1519,8 +1544,8 @@ fn main() {
         );
         eprintln!("capture startup: checking native GStreamer readiness");
     }
-    let mut ready = native_ready(&sources);
-    if diagnose_startup {
+    let mut ready = recovery_role.is_none() && native_ready(&sources);
+    if diagnose_startup && recovery_role.is_none() {
         eprintln!(
             "capture startup: native readiness={} after {}ms",
             ready,
@@ -1589,7 +1614,9 @@ fn main() {
                                     ids.remove(&old);
                                 }
                             }
-                            let processed = if matches!(
+                            let processed = if recovery_role.is_some() && req["method"] == "start" {
+                                Err("unavailable")
+                            } else if matches!(
                                 req["method"].as_str(),
                                 Some("publish" | "inspectPublication")
                             ) {
@@ -1669,6 +1696,7 @@ fn main() {
                                     &mut ready,
                                     &mut active,
                                     &mut all,
+                                    recovery_role.is_some(),
                                 )
                             };
                             (rpc, processed)
@@ -1678,17 +1706,23 @@ fn main() {
                 if !deferred
                     && !rpc.is_empty()
                     && send(&mut stdout, response(&rpc, output)).is_err()
+                    && recovery_role.is_none()
                 {
                     break;
                 }
             }
             Ok(None) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                for (shared, _) in active.values() {
-                    if let Ok(j) = shared.journal.lock() {
-                        if j.state == "recording" || j.state == "stopping" {
-                            shared.stop.store(true, Ordering::Release);
-                        } else if j.state == "starting" {
-                            shared.cancel.store(true, Ordering::Release);
+                if let Some(role) = recovery_role {
+                    recovery::lifecycle(role, "input-closed");
+                    let _ = recovery::detach_outputs();
+                } else {
+                    for (shared, _) in active.values() {
+                        if let Ok(j) = shared.journal.lock() {
+                            if j.state == "recording" || j.state == "stopping" {
+                                shared.stop.store(true, Ordering::Release);
+                            } else if j.state == "starting" {
+                                shared.cancel.store(true, Ordering::Release);
+                            }
                         }
                     }
                 }
@@ -1699,7 +1733,8 @@ fn main() {
         loop {
             match publication_rx.try_recv() {
                 Ok((rpc, result)) => {
-                    if send(&mut stdout, response(&rpc, result)).is_err() {
+                    if send(&mut stdout, response(&rpc, result)).is_err() && recovery_role.is_none()
+                    {
                         break;
                     }
                 }
