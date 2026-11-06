@@ -121,7 +121,6 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
   const performStartCapture = async (requestId: string): Promise<{ state: RecordState; outcome: RecordStartOutcome }> => {
     if (disposed || startup.state !== "ready" || !readiness.ready || [...known.values()].some(receipt => active.has(receipt.phase))) return { state, outcome: "refused" };
     ++operationRevision;
-    const attemptRevision = operationRevision;
     const reservation: Capture2Receipt = { requestId, phase: "submitted-unknown" };
     known.set(requestId, reservation);
     startup = { state: "blocked", knownRequestIds: [...new Set([...startup.knownRequestIds, requestId])].sort(), unresolved: [{ requestId, state: "unknown", phase: "submitted-unknown" }] };
@@ -140,8 +139,8 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
       return { state, outcome: receipt.phase === "unknown" || receipt.phase === "submitted-unknown" ? "outcome-unknown" : "accepted" };
     } catch (error) {
       const definitelyNotDispatched = !!error && typeof error === "object" && (error as { dispatched?: unknown }).dispatched === false;
-      if (!disposed && definitelyNotDispatched && operationRevision === attemptRevision) releaseReservation(requestId, reservation);
-      if (!definitelyNotDispatched && !disposed && operationRevision === attemptRevision && known.get(requestId) === reservation) { known.set(requestId, { requestId, phase: "unknown" }); startup = { state: "blocked", knownRequestIds: [...new Set([...startup.knownRequestIds, requestId])].sort(), unresolved: [{ requestId, state: "unknown", phase: "unknown" }] }; publish({ phase: "uncertain", captureId: requestId, readiness, message: error instanceof Error ? error.message : String(error) }); }
+      if (!disposed && definitelyNotDispatched) releaseReservation(requestId, reservation);
+      if (!definitelyNotDispatched && !disposed && known.get(requestId) === reservation) { known.set(requestId, { requestId, phase: "unknown" }); startup = { state: "blocked", knownRequestIds: [...new Set([...startup.knownRequestIds, requestId])].sort(), unresolved: [{ requestId, state: "unknown", phase: "unknown" }] }; publish({ phase: "uncertain", captureId: requestId, readiness, message: error instanceof Error ? error.message : String(error) }); }
       return { state, outcome: definitelyNotDispatched ? "refused" : "outcome-unknown" };
     }
   };

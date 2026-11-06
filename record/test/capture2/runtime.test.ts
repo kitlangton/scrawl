@@ -98,7 +98,7 @@ test("fresh source selection is bound to discovery and startup reconciliation bl
   const state = restarted.state;
   assert.equal("captureId" in state ? state.captureId : undefined, "active-before-restart");
   assert.equal((await restarted.dispatch({ type: "stop" })).phase, "processing", "owned controls remain available while startup is blocked");
-  assert.equal(restarted.canStartCapture(), true, "materials-ready is processing, but no longer native-active");
+  assert.equal(restarted.canStartCapture?.(), true, "materials-ready is processing, but no longer native-active");
   restarted.dispose(); restartedHost.dispose();
 });
 
@@ -123,14 +123,55 @@ test("lost start reply reserves public ownership, blocks admission and recovers 
   ctx.transport.loseStartReply = true;
   const started = await ctx.client.execute({ type: "start-capture", delivery: "host-default", requestId: "lost-reply", expected: expected(ctx.client) });
   assert.equal(started.status, "outcome-unknown");
-  assert.equal(ctx.runtime.canStartCapture(), false);
+  assert.equal(ctx.runtime.canStartCapture?.(), false);
   assert.deepEqual(ctx.runtime.unresolvedOwnership().requestIds, ["lost-reply"]);
   assert.equal(ctx.runtime.startup.state, "blocked");
   assert.equal((await ctx.runtime.startCapture("another-id")).outcome, "refused");
   await new Promise(resolve => setTimeout(resolve, 140));
   assert.equal(ctx.runtime.state.phase, "recording");
   assert.equal(ctx.runtime.state.captureId, "lost-reply");
-  assert.equal(ctx.runtime.canStartCapture(), false);
+  assert.equal(ctx.runtime.canStartCapture?.(), false);
   await ctx.host.cancel("lost-reply");
   ctx.client.detach(); ctx.runtime.dispose(); ctx.host.dispose();
+});
+
+test("readiness changes cannot strand a definitely-undispatched reservation", async () => {
+  let emit!: (event: import('../../src/backend/host/capture2.ts').Capture2Event) => void;
+  const host = {
+    subscribe(listener: typeof emit) { emit = listener; return () => undefined; },
+    readiness: async () => ({ ready: true }), reconcile: async () => [],
+    discoverSources: async () => {
+      emit({ type: 'readiness-changed', readiness: { ready: false, reason: 'synthetic readiness changed' } });
+      return { state: 'available' as const, sources: [source] };
+    },
+    start: async () => { throw Object.assign(new Error('synthetic refusal before dispatch'), { dispatched: false }); },
+    inspect: async () => { throw new Error('no capture was dispatched'); },
+    stop: async () => { throw new Error('no capture was dispatched'); },
+    cancel: async () => { throw new Error('no capture was dispatched'); }, dispose() {},
+  };
+  const runtime = await createCapture2RecordRuntime({ host, createStartIntent: () => ({ source, options: { audio: 'none', localOnly: true }, invocation, destinationPath: '/synthetic/not-created.apparent' }) });
+  try {
+    assert.equal((await runtime.startCapture('not-dispatched')).outcome, 'refused');
+    assert.deepEqual(runtime.unresolvedOwnership().requestIds, []);
+    assert.equal(runtime.startup.state, 'ready');
+  } finally { runtime.dispose(); }
+});
+
+test("a delayed stop failure cannot overwrite a newer stopped-materials event", async () => {
+  let emit!: (event: import('../../src/backend/host/capture2.ts').Capture2Event) => void;
+  const host = {
+    subscribe(listener: typeof emit) { emit = listener; return () => undefined; },
+    readiness: async () => ({ ready: true }), reconcile: async () => [],
+    discoverSources: async () => ({ state: 'available' as const, sources: [source] }),
+    start: async () => ({ requestId: 'ordered', phase: 'recording' as const }),
+    inspect: async () => ({ requestId: 'ordered', phase: 'materials-ready' as const }),
+    stop: async () => { emit({ type: 'capture-changed', receipt: { requestId: 'ordered', phase: 'materials-ready' } }); throw new Error('synthetic delayed failure'); },
+    cancel: async () => ({ requestId: 'ordered', phase: 'cancelled' as const }), dispose() {},
+  };
+  const runtime = await createCapture2RecordRuntime({ host, createStartIntent: () => ({ source, options: { audio: 'none', localOnly: true }, invocation, destinationPath: '/synthetic/not-created.apparent' }) });
+  try {
+    await runtime.startCapture('ordered');
+    assert.equal((await runtime.dispatch({ type: 'stop' })).phase, 'processing');
+    assert.deepEqual(runtime.completionEligibleCaptureIds?.(), ['ordered']);
+  } finally { runtime.dispose(); }
 });

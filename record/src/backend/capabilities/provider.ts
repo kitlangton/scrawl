@@ -233,7 +233,8 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
   const snapshot = (): CapabilitySnapshot => {
     const live = captureFromRuntime(options.runtime.state, runtimeObservedAt);
     const merged = new Map<string, CaptureFact>();
-    const completionEligible = new Set(options.runtime.completionEligibleCaptureIds?.() ?? []);
+    const completionEligible = new Set(options.runtime.completionEligibleCaptureIds?.() ??
+      (options.runtime.state.phase === "ready" ? [options.runtime.state.captureId] : []));
     for (const item of outputFacts.captures) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
     for (const item of captures.values()) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
     for (const runtimeCapture of options.runtime.captures?.() ?? []) {
