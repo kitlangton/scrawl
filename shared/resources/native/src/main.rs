@@ -229,6 +229,93 @@ fn real_fsync(fd: RawFd) -> i32 {
     unsafe { libc::fsync(fd) }
 }
 
+fn private_directory(st: &libc::stat) -> bool {
+    (st.st_mode & libc::S_IFMT) == libc::S_IFDIR
+        && st.st_uid == unsafe { libc::geteuid() }
+        && st.st_mode & 0o077 == 0
+}
+
+fn parse_id(value: &str) -> Option<u64> {
+    if value.is_empty() || (value.len() > 1 && value.starts_with('0')) || !value.bytes().all(|b| b.is_ascii_digit()) { return None; }
+    value.parse::<u64>().ok()
+}
+
+fn same(st: &libc::stat, device: u64, inode: u64) -> bool {
+    st.st_dev as u64 == device && st.st_ino as u64 == inode
+}
+
+fn private_regular(st: &libc::stat) -> bool {
+    (st.st_mode & libc::S_IFMT) == libc::S_IFREG
+        && st.st_uid == unsafe { libc::geteuid() }
+        && st.st_mode & 0o7777 == 0o600
+        && st.st_nlink == 1
+        && st.st_size >= 0 && st.st_size <= 2_000_000
+}
+fn private_destination(st: &libc::stat) -> bool {
+    (st.st_mode & libc::S_IFMT) == libc::S_IFREG
+        && st.st_uid == unsafe { libc::geteuid() }
+        && st.st_mode & 0o7777 & !0o600 == 0
+        && st.st_size >= 0 && st.st_size <= 2_000_000
+}
+
+fn replace_file(source: &str, destination: &str, source_device: &str, source_inode: &str,
+    destination_present: bool, destination_device: &str, destination_inode: &str) -> &'static str {
+    let parent = match validate_fd(false) { Ok(fd) => fd, Err(_) => return "refused" };
+    replace_at(std::os::fd::AsRawFd::as_raw_fd(&parent), source, destination, source_device, source_inode, destination_present, destination_device, destination_inode, real_fsync)
+}
+
+fn replace_at<F>(parent_fd: RawFd, source: &str, destination: &str, source_device: &str, source_inode: &str,
+    destination_present: bool, destination_device: &str, destination_inode: &str, mut sync: F) -> &'static str
+where F: FnMut(RawFd) -> i32 {
+    if !basename(source) || !basename(destination) || source == destination { return "refused"; }
+    let Some(sd) = parse_id(source_device) else { return "refused"; };
+    let Some(si) = parse_id(source_inode) else { return "refused"; };
+    let (dd, di) = if destination_present {
+        let (Some(d), Some(i)) = (parse_id(destination_device), parse_id(destination_inode)) else { return "refused"; };
+        (d, i)
+    } else { (0, 0) };
+    let pfd = parent_fd;
+    let pst = match fstat(pfd) { Ok(s) => s, Err(_) => return "refused" };
+    if !private_directory(&pst) || !no_allow_acl_fd(pfd) { return "refused"; }
+    let src = cstr(source); let dst = cstr(destination);
+    let raw = unsafe { libc::openat(pfd, src.as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+    if raw < 0 { return "refused"; }
+    let source_fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    let sst = match fstat(raw) { Ok(s) => s, Err(_) => return "refused" };
+    if !private_regular(&sst) || !same(&sst, sd, si) || !no_allow_acl_fd(raw) { return "refused"; }
+    if sync(raw) != 0 { return "refused"; }
+    let mut current = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe { libc::fstatat(pfd, src.as_ptr(), current.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 { return "destination_changed"; }
+    if !same(&unsafe { current.assume_init() }, sd, si) { return "destination_changed"; }
+    let mut current_dst = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let dst_rc = unsafe { libc::fstatat(pfd, dst.as_ptr(), current_dst.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
+    if destination_present {
+        if dst_rc != 0 { return if errno() == libc::ENOENT { "destination_changed" } else { "refused" }; }
+        let current_dst = unsafe { current_dst.assume_init() };
+        if !private_destination(&current_dst) || !no_allow_acl_at(pfd, dst.as_ptr()) || !same(&current_dst, dd, di) { return "destination_changed"; }
+    } else if dst_rc == 0 { return "destination_changed"; }
+    else if errno() != libc::ENOENT { return "refused"; }
+    let rc = if destination_present { unsafe { libc::renameat(pfd, src.as_ptr(), pfd, dst.as_ptr()) } }
+        else { rename_noreplace(pfd, src.as_ptr(), dst.as_ptr()) };
+    if rc != 0 { let e = errno(); return if !destination_present && (e == libc::EEXIST || e == libc::ENOTEMPTY) { "destination_changed" } else if e == libc::EINTR { "publication_uncertain" } else { "refused" }; }
+    if sync(pfd) != 0 { return "publication_uncertain"; }
+    let mut final_st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let final_rc = unsafe { libc::fstatat(pfd, dst.as_ptr(), final_st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
+    let mut source_st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let source_rc = unsafe { libc::fstatat(pfd, src.as_ptr(), source_st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
+    if final_rc != 0 || source_rc == 0 || errno() != libc::ENOENT || !same(&unsafe { final_st.assume_init() }, sd, si) { return "publication_uncertain"; }
+    drop(source_fd); "replaced"
+}
+
+#[cfg(target_os = "macos")]
+fn no_allow_acl_at(dir: RawFd, name: *const libc::c_char) -> bool {
+    let fd = unsafe { libc::openat(dir, name, libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+    if fd < 0 { return false; }
+    let ok = no_allow_acl_fd(fd); unsafe { libc::close(fd); } ok
+}
+#[cfg(target_os = "linux")]
+fn no_allow_acl_at(_dir: RawFd, _name: *const libc::c_char) -> bool { true }
+
 fn publish_at<F>(parent_fd: RawFd, source: &str, destination: &str, mut sync: F) -> &'static str
 where
     F: FnMut(RawFd) -> i32,
@@ -414,6 +501,16 @@ fn run() -> &'static str {
         }
         "publish" if args.len() == 4 && args[0] == "--source" && args[2] == "--destination" => {
             publish(&args[1], &args[3])
+        }
+        "replace" if args.len() == 14 && args[0] == "--source" && args[2] == "--destination"
+            && args[4] == "--source-device" && args[6] == "--source-inode"
+            && args[8] == "--destination-present" && args[10] == "--destination-device"
+            && args[12] == "--destination-inode" => {
+            match args[9].as_str() {
+                "0" => replace_file(&args[1], &args[3], &args[5], &args[7], false, &args[11], &args[13]),
+                "1" => replace_file(&args[1], &args[3], &args[5], &args[7], true, &args[11], &args[13]),
+                _ => "refused",
+            }
         }
         _ => "refused",
     }
@@ -639,6 +736,25 @@ mod tests {
             "refused"
         );
         assert!(dir.join("stage").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn replacement_parent_sync_failure_is_uncertain_and_keeps_renamed_file() {
+        let dir = temp();
+        let parent = fs::File::open(&dir).unwrap();
+        fs::write(dir.join("stage"), b"replacement").unwrap();
+        fs::set_permissions(dir.join("stage"), fs::Permissions::from_mode(0o600)).unwrap();
+        let source = fs::metadata(dir.join("stage")).unwrap();
+        let mut calls = 0;
+        let state = replace_at(parent.as_raw_fd(), "stage", "final", &source.dev().to_string(), &source.ino().to_string(), false, "0", "0", |fd| {
+            calls += 1;
+            if calls == 1 { real_fsync(fd) } else { -1 }
+        });
+        assert_eq!(state, "publication_uncertain");
+        assert_eq!(calls, 2);
+        assert!(!dir.join("stage").exists());
+        assert_eq!(fs::read(dir.join("final")).unwrap(), b"replacement");
         fs::remove_dir_all(dir).unwrap();
     }
 }

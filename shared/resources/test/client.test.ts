@@ -73,6 +73,22 @@ test("publication cancellation distinguishes not-dispatched from unknown complet
   } finally { await f.close(); }
 });
 
+test("replaceFile consumes the parent, validates identities, and fails closed on older or unknown peers", async () => {
+  for (const scenario of ["replaced", "destination_changed", "refused", "publication_uncertain", "silent", "malformed"]) {
+    const f = await fixture(scenario); try {
+      const h = await f.handle();
+      const result = await new NativeResources(f.provider).replaceFile(h, "stage", "final", { source: { device: "1", inode: "2" }, destination: null }, { timeoutMs: 100 });
+      assert.equal(h.fd, -1);
+      assert.deepEqual(result, { state: scenario === "silent" || scenario === "malformed" ? "publication_uncertain" : scenario });
+    } finally { await f.close(); }
+  }
+  const f = await fixture(); try {
+    const h = await f.handle();
+    assert.deepEqual(await new NativeResources(f.provider).replaceFile(h, "stage", "final", { source: { device: "01", inode: "2" }, destination: null }), { state: "refused" });
+    assert.equal(h.fd, -1);
+  } finally { await f.close(); }
+});
+
 test("ACL guard consumes its descriptor and returns only checked facts", async () => {
   for (const [scenario, state] of [["published", "accepted"], ["refused", "refused"]] as const) {
     const f = await fixture(scenario); try {

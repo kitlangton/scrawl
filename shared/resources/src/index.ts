@@ -46,6 +46,12 @@ export class NativeLockLease {
 
 export type LockResult = { state: "acquired"; lease: NativeLockLease } | { state: "busy" | "cancelled" | "failed" | "refused" };
 export type PublicationResult = { state: "published" | "destination_exists" | "refused" | "publication_uncertain" };
+export type FileIdentity = { device: string; inode: string };
+export type ReplaceFileResult = { state: "replaced" | "destination_changed" | "refused" | "publication_uncertain" };
+function identity(value: FileIdentity): boolean {
+  const canonical = (x: string) => /^(0|[1-9][0-9]*)$/.test(x) && BigInt(x) <= 18446744073709551615n;
+  return !!value && typeof value === "object" && canonical(value.device) && canonical(value.inode);
+}
 function basename(value: string): boolean {
   if (typeof value !== "string" || !value.length || value.length > 4096 || value === "." || value === ".." || value.includes("/") || value.includes("\0") || Buffer.byteLength(value, "utf8") > 4096) return false;
   for (const character of value) { const cp = character.codePointAt(0)!; if (cp >= 0xd800 && cp <= 0xdfff) return false; }
@@ -120,6 +126,35 @@ export class NativeResources {
       const state = await session.next(timeout);
       if (!["published", "destination_exists", "refused", "publication_uncertain"].includes(state)) throw new NativeResourceError("protocol_error");
       await session.exit(); return { state: state as PublicationResult["state"] };
+    } catch { session.fail("process_failed"); return { state: "publication_uncertain" }; }
+    finally { options.signal?.removeEventListener("abort", cancel); }
+  }
+  /** Consumes parent on every outcome. Replacement is atomic under the caller's
+   * cooperative lock; expected identities are admission checks, not a same-UID CAS. */
+  async replaceFile(parent: FileHandle, source: string, destination: string, expected: { source: FileIdentity; destination: FileIdentity | null }, options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<ReplaceFileResult> {
+    const timeout = options.timeoutMs ?? 10_000;
+    if (!basename(source) || !basename(destination) || source === destination || !expected || !identity(expected.source) || (expected.destination !== null && !identity(expected.destination)) || !Number.isInteger(timeout) || timeout < 1 || timeout > 60_000) {
+      await parent.close(); return { state: "refused" };
+    }
+    if (options.signal?.aborted) { await parent.close(); return { state: "refused" }; }
+    const dst = expected.destination ?? { device: "0", inode: "0" };
+    let session: ResourceProcess;
+    try {
+      session = await launch(this.#provider, ["replace", "--source", source, "--destination", destination,
+        "--source-device", expected.source.device, "--source-inode", expected.source.inode,
+        "--destination-present", expected.destination === null ? "0" : "1", "--destination-device", dst.device, "--destination-inode", dst.inode], parent, options.signal);
+    } catch (error) {
+      if (error instanceof NativeResourceError && error.category === "cancelled") return { state: "refused" };
+      if (error instanceof NativeResourceError && error.category === "ownership_transfer_failed") return { state: "publication_uncertain" };
+      throw error;
+    }
+    const cancel = () => session.fail("process_failed");
+    options.signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      if (options.signal?.aborted) cancel();
+      const state = await session.next(timeout);
+      if (!["replaced", "destination_changed", "refused", "publication_uncertain"].includes(state)) throw new NativeResourceError("protocol_error");
+      await session.exit(); return { state: state as ReplaceFileResult["state"] };
     } catch { session.fail("process_failed"); return { state: "publication_uncertain" }; }
     finally { options.signal?.removeEventListener("abort", cancel); }
   }

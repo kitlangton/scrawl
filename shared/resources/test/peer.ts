@@ -8,6 +8,9 @@ if (command === "lock") {
   emit("acquired");
   if (scenario === "lost") { setTimeout(() => process.exit(7), 30); }
   else { process.stdin.resume(); process.stdin.once("end", () => { emit("released"); process.exit(); }); }
+} else if (command === "replace") {
+  if (scenario === "silent") { process.stdin.resume(); setTimeout(() => process.exit(), 1000); }
+  else emit(scenario);
 } else {
   if (scenario === "silent") { process.stdin.resume(); setTimeout(() => process.exit(), 1000); }
   else if (scenario === "delayed-published") { setTimeout(() => { emit("published"); process.exit(); }, 150); }

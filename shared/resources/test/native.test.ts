@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { constants } from "node:fs";
-import { mkdtemp, open, mkdir, chmod, writeFile, readFile, stat, lstat, symlink, link, rm } from "node:fs/promises";
+import { mkdtemp, open, mkdir, chmod, writeFile, readFile, stat, lstat, symlink, link, rm, rename, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -75,6 +75,11 @@ async function stage(parent: string, name: string, contents: string) {
   const directory = await open(path, constants.O_RDONLY | constants.O_DIRECTORY); await directory.sync(); await directory.close();
   return stat(path);
 }
+async function fileStage(parent: string, name: string, contents: string) {
+  const path = join(parent, name); const file = await open(path, "wx", 0o600);
+  await file.writeFile(contents); await file.sync(); await file.close(); return stat(path);
+}
+const identity = (value: Awaited<ReturnType<typeof stat>>) => ({ device: String(value.dev), inode: String(value.ino) });
 
 test("real publication keeps exact staged identity and never replaces a destination", async () => {
   const f = await fixture(); try {
@@ -111,6 +116,52 @@ test("publication preserves legitimate Unicode/space output names", async () => 
     assert.equal(await readFile(join(f.directory, destination, "bundle.txt"), "utf8"), "unicode output");
   } finally { await f.close(); }
 });
+
+test("real file replacement checks expected identities, preserves bytes and handles absent destinations", async () => {
+  const f = await fixture(); try {
+    const src = await fileStage(f.directory, "stage", "new bytes");
+    const dst = await fileStage(f.directory, "final", "old bytes");
+    assert.deepEqual(await resources.replaceFile(await f.parent(), "stage", "final", { source: identity(src), destination: identity(dst) }), { state: "replaced" });
+    assert.equal(await readFile(join(f.directory, "final"), "utf8"), "new bytes");
+    assert.equal((await stat(join(f.directory, "final"))).mode & 0o777, 0o600);
+    assert.equal(await lstat(join(f.directory, "stage")).then(() => true, () => false), false);
+    const next = await fileStage(f.directory, "next", "created");
+    assert.deepEqual(await resources.replaceFile(await f.parent(), "next", "created", { source: identity(next), destination: null }), { state: "replaced" });
+    assert.equal(await readFile(join(f.directory, "created"), "utf8"), "created");
+  } finally { await f.close(); }
+});
+
+test("stale source or destination identities leave both entries unchanged", async () => {
+  const f = await fixture(); try {
+    const src = await fileStage(f.directory, "stage", "source"); const dst = await fileStage(f.directory, "final", "destination");
+    assert.deepEqual(await resources.replaceFile(await f.parent(), "stage", "final", { source: { device: String(src.dev), inode: String(src.ino + 1) }, destination: identity(dst) }), { state: "refused" });
+    assert.deepEqual(await resources.replaceFile(await f.parent(), "stage", "final", { source: identity(src), destination: { device: String(dst.dev), inode: String(dst.ino + 1) } }), { state: "destination_changed" });
+    assert.equal(await readFile(join(f.directory, "stage"), "utf8"), "source"); assert.equal(await readFile(join(f.directory, "final"), "utf8"), "destination");
+  } finally { await f.close(); }
+});
+
+test("replacement refuses symlinks, traversal, unsafe descriptors, modes and hard-linked source", async () => {
+  const f = await fixture(); try {
+    await fileStage(f.directory, "target", "safe"); await symlink("target", join(f.directory, "link"));
+    assert.deepEqual(await resources.replaceFile(await f.parent(), "../target", "out", { source: { device: "0", inode: "0" }, destination: null }), { state: "refused" });
+    assert.deepEqual(await resources.replaceFile(await f.parent(), "link", "out", { source: { device: "0", inode: "0" }, destination: null }), { state: "refused" });
+    const source = await fileStage(f.directory, "stage", "data"); await link(join(f.directory, "stage"), join(f.directory, "hardlink"));
+    assert.deepEqual(await resources.replaceFile(await f.parent(), "stage", "out", { source: identity(source), destination: null }), { state: "refused" });
+    await rm(join(f.directory, "hardlink")); await chmod(join(f.directory, "stage"), 0o640);
+    assert.deepEqual(await resources.replaceFile(await f.parent(), "stage", "out", { source: identity(source), destination: null }), { state: "refused" });
+    assert.deepEqual(await resources.replaceFile(await open(f.lock, "r"), "stage", "out", { source: identity(source), destination: null }), { state: "refused" });
+  } finally { await f.close(); }
+});
+
+test("replacement stays anchored to the inherited parent after its pathname is renamed", async () => {
+  const f = await fixture(); let moved = ""; try {
+    const src = await fileStage(f.directory, "stage", "anchored"); await mkdir(join(f.directory, "replacement"), { mode: 0o700 });
+    const parent = await f.parent(); moved = join(tmpdir(), `apparent-resources-moved-${process.pid}-${Date.now()}`); await rename(f.directory, moved); await mkdir(f.directory, { mode: 0o700 });
+    assert.deepEqual(await resources.replaceFile(parent, "stage", "final", { source: identity(src), destination: null }), { state: "replaced" });
+    assert.equal(await readFile(join(moved, "final"), "utf8"), "anchored");
+    assert.deepEqual(await readdir(f.directory), []);
+  } finally { await f.close(); if (moved) await rm(moved, { recursive: true, force: true }); }
+});
 test("native ACL facts cover descriptors and Darwin allow/deny entries", async () => {
   const f = await fixture();
   const chmodAcl = async (args: string[]) => { const { execFileSync } = await import("node:child_process"); execFileSync("/bin/chmod", args); };
@@ -126,6 +177,10 @@ test("native ACL facts cover descriptors and Darwin allow/deny entries", async (
       await chmodAcl(["-N", f.lock]);
       await chmodAcl(["+a", "everyone allow search", f.directory]);
       assert.deepEqual(await resources.checkAcl(await f.parent()), { state: "refused" });
+      await chmodAcl(["-N", f.directory]);
+      const source = await fileStage(f.directory, "stage", "acl protected");
+      await chmodAcl(["+a", "everyone allow search", f.directory]);
+      assert.deepEqual(await resources.replaceFile(await f.parent(), "stage", "final", { source: identity(source), destination: null }), { state: "refused" });
     }
   } finally {
     if (process.platform === "darwin") { await chmodAcl(["-N", f.lock]); await chmodAcl(["-N", f.directory]); }
