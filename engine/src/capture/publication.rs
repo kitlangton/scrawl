@@ -63,6 +63,23 @@ struct Opened {
     _retained: RetainedMaterialSource,
 }
 
+pub(super) fn worker_panicked(journal: &mut CaptureJournal) {
+    if let Some(publication) = &mut journal.publication {
+        if publication.state == "saved" {
+            return;
+        }
+        // A durable commit decision can already have produced the destination.
+        // Keep that outcome unresolved until authenticated Core inspection.
+        if publication.commit_decided {
+            publication.state = "publishing".into();
+            journal.error = None;
+        } else {
+            publication.state = "failed".into();
+            journal.error = Some("internal".into());
+        }
+    }
+}
+
 pub(super) fn status_fields(status: &mut Value, publication: &Journal) {
     status["state"] = Value::String(publication.state.clone());
     if matches!(
@@ -195,17 +212,20 @@ pub(super) fn handle(
     }
 
     let publication = journal.publication.clone().ok_or("not_found")?;
+    // Also reconcile journals written by older panic handling, which could mark
+    // an already committed publication failed. The immutable binding and Core
+    // evidence, never that state label, establish Saved.
+    if publication.commit_decided
+        && publication.state != "saved"
+        && let Some(status) = recover_saved(runtime, root, capture, owner, all, &publication)?
+    {
+        return Ok(status);
+    }
     if publication.state == "saved"
         || publication.state == "cancelled"
         || publication.state == "failed"
     {
         return Ok(status_value(&journal));
-    }
-
-    if publication.commit_decided
-        && let Some(status) = recover_saved(runtime, root, capture, owner, all, &publication)?
-    {
-        return Ok(status);
     }
 
     let opened = match opened {
@@ -1613,6 +1633,79 @@ mod tests {
             "publicationId":f.request["publicationId"],"planSha256":request["planSha256"]});
         assert_eq!(call(&f, &inspect).unwrap(), saved);
         fs::remove_dir_all(f.base).unwrap();
+    }
+
+    #[test]
+    fn inspect_recovers_committed_publication_after_worker_panic_without_sources() {
+        for legacy_failed_state in [false, true] {
+            let f = fixture();
+            let mut journal = read_journal(&f.capture_root, &f.capture_id, &f.owner).unwrap();
+            let mut publication = request_binding(&f.request, &journal).unwrap();
+            let opened =
+                open_publication(&f.runtime, &f.capture_root, &journal, &publication).unwrap();
+            opened
+                .backend
+                .prepare(
+                    &opened.context,
+                    &opened.plan_bytes,
+                    &publication.plan_sha256,
+                )
+                .unwrap();
+            publication.commit_decided = true;
+            journal.publication = Some(publication.clone());
+            persist_record(
+                &f.runtime,
+                &f.capture_root,
+                &journal,
+                &mut Default::default(),
+            )
+            .unwrap();
+            let worker = std::thread::spawn(move || {
+                opened
+                    .backend
+                    .commit(
+                        &opened.context,
+                        &opened.plan_bytes,
+                        &publication.plan_sha256,
+                    )
+                    .unwrap();
+                panic!("synthetic worker loss after Core commit");
+            });
+            assert!(worker.join().is_err());
+            worker_panicked(&mut journal);
+            assert_eq!(journal.publication.as_ref().unwrap().state, "publishing");
+            assert!(journal.publication.as_ref().unwrap().commit_decided);
+            if legacy_failed_state {
+                journal.publication.as_mut().unwrap().state = "failed".into();
+                journal.error = Some("internal".into());
+            }
+            persist_record(
+                &f.runtime,
+                &f.capture_root,
+                &journal,
+                &mut Default::default(),
+            )
+            .unwrap();
+            fs::remove_dir_all(&journal.root).unwrap();
+            fs::remove_dir_all(&journal.publication.as_ref().unwrap().staging_root).unwrap();
+            let restarted = Runtime::open(&f.runtime_path).unwrap();
+            let inspect = json!({"method":"inspectPublication","captureId":f.capture_id,"ownerToken":f.owner,
+                "publicationId":f.request["publicationId"],"planSha256":f.request["planSha256"]});
+            let recovered = handle(
+                &inspect,
+                &restarted,
+                &f.capture_root,
+                &mut Default::default(),
+            )
+            .unwrap();
+            assert_eq!(recovered["state"], "saved");
+            assert!(f.destination.join("apparent.json").is_file());
+            assert_eq!(
+                recovered["publication"]["planSha256"],
+                f.request["planSha256"]
+            );
+            fs::remove_dir_all(f.base).unwrap();
+        }
     }
 
     #[test]
