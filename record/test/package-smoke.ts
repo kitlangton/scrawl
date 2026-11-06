@@ -75,9 +75,14 @@ try {
   await writeFile(bundleDeclarations, `
     import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators } from '@apparent/record/processing/bundle';
     import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts } from '@apparent/engine-sdk/capture';
+    import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
     const validators: BundleValidators = { materials: validateMaterialsDocument, fact: validateFactFile };
     const consume = (input: BundleAssemblyInput) => assembleCanonicalBundle(input, validators);
-    void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
+    const loadAndAssemble = async (input: CaptureMaterialsInput, policy: Omit<BundleAssemblyInput, 'manifest' | 'payloadBytes' | 'facts'>) => {
+      const loaded = await readCaptureMaterials(input);
+      return assembleCanonicalBundle({ ...policy, manifest: loaded.materials.manifest, payloadBytes: loaded.payloadBytes, facts: loaded.assemblyFacts }, validators);
+    };
+    void loadAndAssemble; void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
   `);
   const bundleTsc = path.join(root, 'node_modules/typescript/bin/tsc');
   await run(process.execPath, [bundleTsc, '--noEmit', '--strict', '--types', 'node', '--typeRoots', path.join(root, 'node_modules/@types'), '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', bundleDeclarations], { cwd: bundle });
@@ -85,6 +90,8 @@ try {
     import assert from 'node:assert/strict';
     import { assembleCanonicalBundle } from '@apparent/record/processing/bundle';
     import { validateMaterialsDocument, validateFactFile } from '@apparent/engine-sdk/capture';
+    const {readCaptureMaterials} = await import('@apparent/record/host/materials');
+    assert.equal(typeof readCaptureMaterials, 'function');
     assert.equal(typeof assembleCanonicalBundle, 'function');
     assert.equal(typeof validateMaterialsDocument, 'function');
     assert.equal(typeof validateFactFile, 'function');

@@ -33,6 +33,10 @@
       "types": "./dist/backend/host/capture2.d.ts",
       "import": "./dist/backend/host/capture2.js"
     },
+    "./host/materials": {
+      "types": "./dist/backend/host/materials.d.ts",
+      "import": "./dist/backend/host/materials.js"
+    },
     "./processing": {
       "types": "./dist/backend/processing/index.d.ts",
       "import": "./dist/backend/processing/index.js"
