@@ -132,7 +132,7 @@ The donor's unnamed legacy red fallback must not be relabelled coral.
 
 The historical donor `shared/handoff/pen.rs::save` documents the original
 persist-before-apply semantics; that file is not a current-main writer. The
-published `@apparent/engine-sdk` 0.3.2 capture API, `@apparent/native-host/pen`,
+published `@apparent/engine-sdk` 0.4.0 capture API, `@apparent/native-host/pen`,
 Record's `PEN_COLOR_RGB` palette, and its `createRecordPenConfigPort` factory
 (returning `RecordPenConfigPort`) are
 package-level contracts. Platform #779 supplies the top-level `penColor`

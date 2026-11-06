@@ -16,6 +16,8 @@ export interface PublishCompletedCaptureInput {
   stagingRoot: string;
   destinationPath: string;
   derivatives?: PreparePublicationInput["derivatives"];
+  derivatives2?: PreparePublicationInput["derivatives2"];
+  derivative2Artifacts?: PreparePublicationInput["derivative2Artifacts"];
 }
 
 export interface ReconcileCompletedCaptureInput extends PublicationBindingExpectation {
@@ -50,6 +52,8 @@ export function createCompletedCapturePublisher(
         destinationPath: snapshot.destinationPath,
         assembly: snapshot.assembly,
         derivatives: snapshot.derivatives,
+        derivatives2: snapshot.derivatives2,
+        derivative2Artifacts: snapshot.derivative2Artifacts,
       }))).digest("hex");
       const active = inFlight.get(snapshot.status.captureId);
       if (active) {
@@ -84,6 +88,8 @@ export function createCompletedCapturePublisher(
       assembly,
       artifactBytes: Object.fromEntries(input.assembly.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
       ...(input.derivatives ? { derivatives: input.derivatives } : {}),
+      ...(input.derivatives2 ? { derivatives2: input.derivatives2 } : {}),
+      ...(input.derivative2Artifacts ? { derivative2Artifacts: input.derivative2Artifacts } : {}),
     });
     return recovery.publish(prepared.input);
   }
