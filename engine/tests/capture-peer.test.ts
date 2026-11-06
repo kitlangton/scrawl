@@ -58,7 +58,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
   assert.ok(foundFreeDisplay, "an unused private Xvfb display must be available");
   const display = `:${displayNumber}`;
   let xserverDiagnostics = "";
-  const xserver = spawn(xvfbCommand, [display, "-screen", "0", "640x480x24", "-nolisten", "tcp"], { stdio: ["ignore", "ignore", "pipe"] });
+  const xserver = spawn(xvfbCommand, [display, "-screen", "0", "1366x768x24", "-nolisten", "tcp"], { stdio: ["ignore", "ignore", "pipe"] });
   xserver.stderr?.on("data", (chunk: Buffer) => { xserverDiagnostics = (xserverDiagnostics + chunk.toString()).slice(-8192); });
   const oldDisplay = process.env.DISPLAY;
   const oldWayland = process.env.WAYLAND_DISPLAY;
@@ -107,8 +107,8 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     assert.equal(discovery.state, "available");
     const source = discovery.sources.find((item) => item.kind === "display");
     assert.ok(source, "X11 display source must be advertised");
-    assert.equal(source.bounds.width, 640);
-    assert.equal(source.bounds.height, 480);
+    assert.equal(source.bounds.width, 1366);
+    assert.equal(source.bounds.height, 768);
 
     const failedJournal = startInput(source, id(), token(), "journal-write-failure");
     chmodSync(join(runtime, "capture-v2"), 0o500);
@@ -166,8 +166,8 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     assert.ok(payload.clock.durationMs >= payload.video.durationMs, "capture clock ends at native-source stop while media duration comes from finalized MP4 timing");
     assert.ok(payload.clock.videoOffsetMs > 0, "video offset is the first native source-buffer arrival, not a fabricated zero");
     assert.ok(Math.abs(payload.clock.durationMs - payload.video.durationMs) < 500, "controlled post-EOS finalization delay is excluded from both capture and encoded-video duration");
-    assert.equal(payload.video.width, 640);
-    assert.equal(payload.video.height, 480);
+    assert.equal(payload.video.width, 1366);
+    assert.equal(payload.video.height, 768);
     assert.ok(Object.values(payload.collection).every((state) => state === "unavailable"));
     const movie = join(manifest.root, "recording.mp4");
     const videoFile = payload.files.find((file: { relativePath: string }) => file.relativePath === "recording.mp4");
@@ -183,8 +183,8 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const probeResult = JSON.parse(probe);
     const stream = probeResult.streams[0];
     assert.equal(stream.codec_name, "h264");
-    assert.equal(stream.width, 640);
-    assert.equal(stream.height, 480);
+    assert.equal(stream.width, 1366);
+    assert.equal(stream.height, 768);
     assert.ok(Math.abs(Number(probeResult.format.duration) * 1000 - payload.video.durationMs) < 250, "manifest video duration matches the finalized MP4 timeline");
     const png = join(runtime, "first-frame.png");
     execFileSync(ffmpegCommand, ["-v", "error", "-i", movie, "-frames:v", "1", "-y", png]);
@@ -210,8 +210,8 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const area = discovery.sources.find((item) => item.kind === "area");
     assert.ok(area);
     const second = startInput(area, id(), token(), "second");
-    assert.equal(second.source.bounds.width, 320);
-    assert.equal(second.source.bounds.height, 240);
+    assert.equal(second.source.bounds.width, 683);
+    assert.equal(second.source.bounds.height, 384);
     const secondStart = await client.start(second);
     assert.ok(["starting", "recording"].includes(secondStart.state), "new capture can start while old materials stay retained");
     await until(client, { captureId: second.captureId, ownerToken: second.ownerToken }, ["recording"]);
@@ -223,7 +223,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const areaReady = await until(client, { captureId: second.captureId, ownerToken: second.ownerToken }, ["materials-ready"]);
     const areaMovie = join(areaReady.materials!.root, "recording.mp4");
     const areaInfo = JSON.parse(execFileSync(ffprobeCommand, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name", "-of", "json", areaMovie], { encoding: "utf8" }));
-    assert.deepEqual(areaInfo.streams[0], { codec_name: "h264", width: 320, height: 240 }, "the exact cropped area source produced a decodable movie");
+    assert.deepEqual(areaInfo.streams[0], { codec_name: "h264", width: 682, height: 384 }, "the odd-width physical area is resampled to valid even encoded dimensions");
 
     const third = startInput(source, id(), token(), "eof");
     await client.start(third);

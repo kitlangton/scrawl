@@ -20,3 +20,27 @@ pub use session::Binding;
 pub use session::{
     Admission, CaptureOwnerPermit, CaptureTransaction, Control, LiveCapturePermit, Runtime, Session,
 };
+
+/// Existing capture sizing arithmetic, with neutral frame values instead of an app target.
+/// Callers choose the long edge and maximum scale; native encoders receive even dimensions.
+pub fn capture_dimensions(frame: [f64; 3], long_edge: f64, maximum_scale: f64) -> (u32, u32) {
+    let [width, height, frame_scale] = frame;
+    let max_dim = width.max(height).max(1.0);
+    let native = frame_scale.clamp(1.0, maximum_scale);
+    let scale = (long_edge / max_dim).min(native);
+    (
+        ((width * scale).round() as u32).max(48) & !1,
+        ((height * scale).round() as u32).max(48) & !1,
+    )
+}
+
+#[cfg(test)]
+mod capture_dimension_tests {
+    #[test]
+    fn source_bounds_and_encoded_dimensions_are_distinct_for_odd_sources() {
+        assert_eq!(super::capture_dimensions([683.0, 384.0, 1.0], 683.0, 1.0), (682, 384));
+        assert_eq!(super::capture_dimensions([641.0, 481.0, 1.0], 641.0, 1.0), (640, 480));
+        assert_eq!(super::capture_dimensions([1366.0, 768.0, 1.0], 1366.0, 1.0), (1366, 768));
+        assert_eq!(super::capture_dimensions([2560.0, 1440.0, 2.0], 1920.0, 2.0), (1920, 1080));
+    }
+}

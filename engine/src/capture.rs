@@ -476,7 +476,7 @@ fn recording_start(
     };
     let recorder = apparent_capture_engine::linux::Recorder::new_with_file(
         &native,
-        (u32::from(source.width), u32::from(source.height)),
+        video_dimensions(source),
         (64, 64),
         movie,
         epoch,
@@ -500,6 +500,14 @@ fn recording_start(
         thread::sleep(Duration::from_millis(20));
     }
     Ok(recorder)
+}
+
+fn video_dimensions(source: &Source) -> (u32, u32) {
+    apparent_capture_engine::capture_dimensions(
+        [f64::from(source.width), f64::from(source.height), 1.0],
+        f64::from(source.width.max(source.height)),
+        1.0,
+    )
 }
 
 fn finalize(
@@ -540,7 +548,8 @@ fn finalize(
         .checked_sub(video_pts_start_ms)
         .map(|ns| ns.saturating_add(999_999) / 1_000_000)
         .ok_or("invalid_materials")?;
-    let payload = json!({"schema":"apparent.capture-materials-payload/1","identity":{"captureId":j.capture_id,"materialsId":materials_id},"bundleId":j.request["bundleId"],"root":root,"leaseId":lease_id,"clock":{"epoch":"capture-admission-monotonic","units":"integer-milliseconds","durationMs":duration,"videoOffsetMs":video_offset_ms},"confirmedSource":confirmed,"invocation":invocation,"files":[movie_file],"video":{"file":"recording.mp4","width":source.width,"height":source.height,"durationMs":video_duration_ms},"facts":{},"collection":{"context":"unavailable","interactions":"unavailable","candidates":"unavailable","transcript":"unavailable","acceptedStrokes":"unavailable"},"warnings":[],"safety":{"nativeRemoteDelivery":"forbidden","safeForProcessing":true}});
+    let (video_width, video_height) = video_dimensions(source);
+    let payload = json!({"schema":"apparent.capture-materials-payload/1","identity":{"captureId":j.capture_id,"materialsId":materials_id},"bundleId":j.request["bundleId"],"root":root,"leaseId":lease_id,"clock":{"epoch":"capture-admission-monotonic","units":"integer-milliseconds","durationMs":duration,"videoOffsetMs":video_offset_ms},"confirmedSource":confirmed,"invocation":invocation,"files":[movie_file],"video":{"file":"recording.mp4","width":video_width,"height":video_height,"durationMs":video_duration_ms},"facts":{},"collection":{"context":"unavailable","interactions":"unavailable","candidates":"unavailable","transcript":"unavailable","acceptedStrokes":"unavailable"},"warnings":[],"safety":{"nativeRemoteDelivery":"forbidden","safeForProcessing":true}});
     let payload_bytes = serde_json::to_vec(&payload).map_err(|_| "internal")?;
     {
         let mut j = shared.journal.lock().map_err(|_| "internal")?;
