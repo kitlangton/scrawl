@@ -23,6 +23,29 @@ lock; it writes owner revision 1 and never removes the legacy key. Conflicts
 return a fresh snapshot. Reads and conflicts do not rewrite the file. Never
 retry an uncertain write without reading persisted state.
 
+The authoritative GUI process can use
+`with_pen_color_current_in(path, expected, effect)` for the native apply seam.
+It acquires that same config writer lock, validates and compares only the fixed
+top-level `penColor` presence/value, and invokes the bounded callback while
+still holding the lock. It returns `PenColorEffectResult::Conflict(current)`
+without invoking the callback when the snapshot is stale, or
+`PenColorEffectResult::Applied(result)` only when the callback succeeds. Callback
+errors propagate and are never reported as applied; the operation does not
+write config or roll back any partial native effect.
+
+Bounded host requests must instead call
+`with_pen_color_current_allowed_in(path, expected, allowed, effect)`. Its
+admission predicate controls nonblocking lock acquisition and is rechecked
+immediately before the callback. Expiry before that point never invokes the
+effect. The callback must still bound any effect already in progress; cancellation
+cannot roll back an OS mutation that has started.
+
+The required lock order is config writer lock, then runtime/native resource
+lock. Callbacks must not reenter config access, perform filesystem or network
+work, or wait beyond caller-owned admission/deadline controls. This primitive
+does not implement pen policy, map colors, or prove that an OS pen effect was
+applied; the callback owner supplies and verifies that effect.
+
 Host envelopes live under `streamState[owner]` as `{revision,value}`. An absent
 entry reads as revision 0 and null. Revisions are monotonically increasing safe
 JavaScript integers. Unrelated keys, secrets and other owner entries remain
