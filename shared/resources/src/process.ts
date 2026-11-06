@@ -13,7 +13,7 @@ export class NativeResourceError extends Error {
   constructor(category: ResourceFailure) { super(category); this.name = "NativeResourceError"; this.category = category; }
 }
 export type ResourceProvider = { executable: string; sha256: string; target: ResourceTarget; protocol: 1 };
-export type Frame = "accepted" | "acquired" | "released" | "busy" | "cancelled" | "failed" | "published" | "destination_exists" | "refused" | "publication_uncertain";
+export type Frame = "accepted" | "acquired" | "released" | "busy" | "cancelled" | "failed" | "published" | "destination_exists" | "replaced" | "destination_changed" | "refused" | "publication_uncertain";
 const hostTarget = () => process.platform === "linux" && process.arch === "x64" ? "linux-x64"
   : process.platform === "darwin" && process.arch === "x64" ? "macos-x64"
   : process.platform === "darwin" && process.arch === "arm64" ? "macos-arm64" : undefined;
@@ -57,7 +57,7 @@ export class ResourceProcess extends EventEmitter {
       let end: number;
       while ((end = this.#buffer.indexOf("\n")) >= 0) {
         const line = this.#buffer.slice(0, end); this.#buffer = this.#buffer.slice(end + 1);
-        const match = /^\{"protocol":1,"state":"(accepted|acquired|released|busy|cancelled|failed|published|destination_exists|refused|publication_uncertain)"\}$/.exec(line);
+        const match = /^\{"protocol":1,"state":"(accepted|acquired|released|busy|cancelled|failed|published|destination_exists|replaced|destination_changed|refused|publication_uncertain)"\}$/.exec(line);
         if (!match || ++this.#count > 2) { this.fail("protocol_error"); return; }
         this.#frames.push(match[1] as Frame); this.emit("frame");
       }
