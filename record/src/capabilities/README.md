@@ -130,14 +130,17 @@ color choices and are not exposed by this preference. Fixtures begin with an
 explicit synthetic stored coral selection, not a claim about product defaults.
 The donor's unnamed legacy red fallback must not be relabelled coral.
 
-The inspected donor at `87c8268c162fc259457cea6babe52cbae84d3dc6` implements
-`shared/handoff/pen.rs::save`: validate the palette, persist `penColor` through
-`set_config_value_in`, then apply the color in memory. A failed write does not
-apply the new color. That writer exists in the release-baseline donor; this
-contract does not copy it to main, add another writer or change release/#658.
-The eventual Record host must delegate to the authoritative writer and publish
-only effective readback. Dispatch acceptance never selects a color; write
-failure preserves the last confirmed effective color. Production mapping is
-still unavailable, while the fixture supports all four explicit readbacks.
-`PEN_COLOR_RGB` exports the donor's exact approved RGB triples for swatches;
-these names must not be interpreted as CSS named colors or replacement branding.
+The historical donor `shared/handoff/pen.rs::save` documents the original
+persist-before-apply semantics; that file is not a current-main writer. The
+published `@apparent/engine-sdk` 0.3.2 capture API, `@apparent/native-host/pen`,
+Record's `PEN_COLOR_RGB` palette, and its `createRecordPenConfigPort` factory
+(returning `RecordPenConfigPort`) are
+package-level contracts. Platform #779 supplies the top-level `penColor`
+config CAS/read seam through the authoritative `shared/config-native` writer,
+and #786 supplies the guarded pen-effect producer. Record
+#799 implements the injected read/CAS/guarded-apply/getter adapter. These source
+and contract seams are implemented, but the installed Platform host binding and
+activation are not established by package availability. Record publishes an
+effective color only after authoritative readback; acceptance of a command or
+persisted preference alone is not proof that ink changed. The palette triples
+must not be interpreted as CSS named colors or replacement branding.
