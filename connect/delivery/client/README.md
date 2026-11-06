@@ -201,6 +201,20 @@ the prepared uploader and its trusted authorization caller retain those checks.
 An incomplete job/spool publication fails rather than triggering a second writer.
 No installed command or worker uses this API yet; Rust remains the sole writer.
 
+`./sender-seal` seals an already admitted, stable and consented in-memory snapshot
+for a fresh capture. It reuses the legacy archive, AGE encryption and signed
+envelope format, selecting current read grants plus the sender's own upload grant.
+It requires a read recipient, deduplicates shared AGE keys while retaining every
+selected grant, and supports root or evidence-first grouped output. Its frozen
+descriptors adapt to the prepared uploader. Returned ciphertext buffers belong to
+the caller and must be wiped after all consumers settle; internal plaintext and
+seed copies are wiped without clearing caller-owned input. Cancellation and
+freshness checks surround asynchronous crypto but cannot interrupt an already
+running crypto operation. This API does not establish consent, snapshot filesystem
+safety or durable spool publication, and must never regenerate committed spools.
+The local Worker fixture uses it, while installed workers and Rust writer ownership
+remain unchanged.
+
 `./sender-upload/authority` reads the authenticated peer registry with one bounded
 GET, reusing the recipient decoder. The caller supplies an already approved server,
 upload grant and public key derived from its current local endpoint identity.
