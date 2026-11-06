@@ -28,6 +28,29 @@ const TRANSPORT = /^\/v1\/captures\/([a-f0-9]{32})\/files\/(.+)$/;
 
 function error(category: RecipientTransportCategory): never { throw new RecipientTransportError(category); }
 
+/** Consume one bounded response without retaining its intermediate chunks. */
+export async function readBoundedTransportBody(body: ReadableStream<Uint8Array> | null, maximumBytes: number,
+  signal: AbortSignal): Promise<Uint8Array> {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0 || maximumBytes > FILE_MAX) error("invalid_request");
+  const check = () => { if (signal.aborted) error(signal.reason === "deadline" ? "timeout" : "cancelled"); };
+  check(); if (!body) return new Uint8Array();
+  const reader = body.getReader(), chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const item = await reader.read(); check();
+      if (item.done) break;
+      const chunk = item.value;
+      if (chunk.byteLength > maximumBytes - total) { chunk.fill(0); error("response_too_large"); }
+      total += chunk.byteLength; chunks.push(chunk);
+    }
+    const output = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
+    return output;
+  } finally { for (const chunk of chunks) chunk.fill(0); reader.releaseLock(); }
+}
+
 export function normalizeRecipientServer(server: string): string {
   if (typeof server !== "string" || server.length > 2048 || /[^\x21-\x7e]|["'\\?#@]/.test(server)) error("invalid_server");
   const base = server.replace(/\/+$/, "");
@@ -152,25 +175,7 @@ export class RecipientTransport {
           else if (response.status === 413 || response.status === 507) category = "quota_exceeded";
           error(category);
         }
-        if (!body) return new Uint8Array();
-        const reader = body.getReader();
-        const chunks: Uint8Array[] = [];
-        let total = 0;
-        try {
-          while (true) {
-            const item = await reader.read();
-            if (controller.signal.aborted) error(controller.signal.reason === "deadline" ? "timeout" : "cancelled");
-            if (item.done) break;
-            const chunk = item.value;
-            if (chunk.byteLength > maximumBytes - total) error("response_too_large");
-            total += chunk.byteLength;
-            chunks.push(chunk);
-          }
-        } finally { reader.releaseLock(); }
-        const output = new Uint8Array(total);
-        let offset = 0;
-        for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
-        return output;
+        return await readBoundedTransportBody(body, maximumBytes, controller.signal);
       }
       return error("request_failed");
     } catch (cause) {

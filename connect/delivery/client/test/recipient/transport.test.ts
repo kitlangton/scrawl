@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
-import { RecipientTransport, RecipientTransportError } from "../../src/recipient/transport.ts";
+import { RecipientTransport, RecipientTransportError, readBoundedTransportBody } from "../../src/recipient/transport.ts";
 
 async function fixture(handler: Parameters<typeof createServer>[0]) {
   const server: Server = createServer(handler);
@@ -152,4 +152,18 @@ test("does not return a truncated body and aborts an in-flight body read", async
     await new Promise(resolve => setTimeout(resolve, 20)); controller.abort();
     await category(pending, "cancelled");
   } finally { await f.close(); }
+});
+
+test("bounded response consumption preserves returned bytes and wipes intermediate chunks", async () => {
+  const first = new Uint8Array([1, 2]), second = new Uint8Array([3]);
+  const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(first); controller.enqueue(second); controller.close(); } });
+  assert.deepEqual(await readBoundedTransportBody(body, 3, new AbortController().signal), new Uint8Array([1, 2, 3]));
+  assert.deepEqual(first, new Uint8Array(2)); assert.deepEqual(second, new Uint8Array(1));
+});
+
+test("bounded response refusal wipes retained and overflowing chunks", async () => {
+  const first = new Uint8Array([1, 2]), second = new Uint8Array([3, 4]);
+  const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(first); controller.enqueue(second); controller.close(); } });
+  await assert.rejects(readBoundedTransportBody(body, 3, new AbortController().signal), error => error instanceof RecipientTransportError && error.category === "response_too_large");
+  assert.deepEqual(first, new Uint8Array(2)); assert.deepEqual(second, new Uint8Array(2));
 });

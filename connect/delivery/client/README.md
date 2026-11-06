@@ -321,3 +321,12 @@ Isolated Linux and Mac consumer tests cover replacement and stale-inode refusal
 under the real queue lease. They do not establish installed acceptance; the
 protected provider, coordinated sole-writer cutover and actual caller tests
 remain required.
+
+The internal `credentials/renewal-request` transport sends one bounded refresh
+POST to the already approved root or `/connect` API base, with no bearer header,
+cookies, redirects or retries. It returns raw reply bytes for durable response
+publication before the existing journal merge; successful HTTP does not establish
+valid renewed credentials. The caller owns journal preparation, locking, expiry,
+currentness, recovery and wiping returned bytes. A failed POST may follow a
+server-side rotation and never authorizes a blind retry. This has no production
+caller and does not change the Rust writer or installed routing.
