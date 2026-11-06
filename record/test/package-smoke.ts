@@ -98,8 +98,17 @@ try {
     import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts, type StrokeRgb } from '@apparent/engine-sdk/capture';
     import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
     import {createCapture2RecordRuntime, type Capture2RecordRuntimeOptions} from '@apparent/record/host/capture2-runtime';
+    import {createRecordCaptureCoordinator, type RecordCaptureCoordinator, type RecordCaptureProcessingSelection} from '@apparent/record/host/capture2-coordinator';
     declare const capture2RuntimeOptions: Capture2RecordRuntimeOptions;
     void createCapture2RecordRuntime(capture2RuntimeOptions);
+    declare const coordinator: RecordCaptureCoordinator;
+    const factsPort = coordinator.captureFacts;
+    const processingIssues = coordinator.processingIssues();
+    const detachProcessingIssues: () => void = coordinator.observeProcessingIssues(() => undefined);
+    const coordinatorDisposal: Promise<void> = coordinator.dispose();
+    void [processingIssues, detachProcessingIssues, coordinatorDisposal];
+    const handoffResolver: RecordCaptureCoordinator['resolveHandoff'] = coordinator.resolveHandoff;
+    declare const processingSelection: RecordCaptureProcessingSelection;
     const createMedia2Job = (client: Media2Client, input: Media2JobInput) => RecordMedia2Job.create(client, '/tmp/record-media2-job.json', input);
     const consumeRetainedArtifacts = async (input: ReadRetainedDerivativeArtifactsInput) => {
       const retained = await readRetainedDerivativeArtifacts(input);
@@ -118,7 +127,7 @@ try {
     const canonical: CanonicalStroke = { id: 'record-mapping', t0: 0, t1: 1, fw: 1, fh: 1, pts: [0, 0, 0], rgb };
     declare const media2Input: Media2JobInput;
     const media2State: RecordMedia2JobState = 'ready';
-    void [RecordMedia2Job, Media2Client, preflightMedia2Dispatch, media2Input, media2State, createMedia2Job, consumeRetainedArtifacts];
+    void [RecordMedia2Job, Media2Client, preflightMedia2Dispatch, media2Input, media2State, createMedia2Job, consumeRetainedArtifacts, createRecordCaptureCoordinator, factsPort, handoffResolver, processingSelection];
     void canonical; void loadAndAssemble; void consume; void retainedVideo; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
   `);
   const bundleTsc = path.join(root, 'node_modules/typescript/bin/tsc');
@@ -171,12 +180,14 @@ try {
     import {prepareMedia2Request, encodeContactSheetLayout, validateDerivative2Document, selectDerivative2Artifact} from '@apparent/engine-sdk/media2';
     import {createCapture2Host} from '@apparent/record/host/capture2';
     import {createCapture2RecordRuntime} from '@apparent/record/host/capture2-runtime';
+    import {createRecordCaptureCoordinator} from '@apparent/record/host/capture2-coordinator';
     const client = new CaptureClient(new ReferenceCapturePeer(), {allowTestDouble:true});
     assert.equal((await client.handshake()).readiness, 'unavailable');
     const recovery = createRecordPublicationRecovery(client, process.cwd() + '/unused-private-root', preflightCapturePublication);
     assert.equal(typeof recovery.publish, 'function');
     assert.equal(typeof createCapture2Host, 'function');
     assert.equal(typeof createCapture2RecordRuntime, 'function');
+    assert.equal(typeof createRecordCaptureCoordinator, 'function');
     assert.equal(typeof prepareRecordPublication, 'function');
     assert.equal(typeof createCompletedCapturePublisher, 'function');
     assert.equal(typeof createCompletedCapturePublisher(client, process.cwd() + '/unused-private-root', preflightCapturePublication).publishCompletedCapture, 'function');

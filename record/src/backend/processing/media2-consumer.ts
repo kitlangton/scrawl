@@ -127,6 +127,25 @@ export class RecordMedia2Job {
     return new RecordMedia2Job(client, journalPath, record);
   }
 
+  /** Reopen the exact retained request/material binding without rereading source files. */
+  static async reopenRetained(client: Client, journalPath: string, ownerToken: string, expected: {
+    request: Media2JobRequest; materials: MaterialsDocument["manifest"]["key"]; leaseId: string; bundleId: string;
+  }): Promise<RecordMedia2Job> {
+    const store = new Media2Store(journalPath);
+    const record = await store.read() as Media2JobRecord;
+    validateRecord(record);
+    const { prepared } = preflightMedia2Dispatch({ ownerToken, request: record.request, materials: record.materials });
+    if (prepared.sha256 !== record.requestSha256 || !isDeepStrictEqual(record.request, expected.request) ||
+        !isDeepStrictEqual(record.materials.manifest.key, expected.materials) || record.materials.manifest.leaseId !== expected.leaseId ||
+        record.materials.payload.bundleId !== expected.bundleId)
+      throw new Error("reopened retained media2 job conflicts with the original coordinator binding");
+    if (record.state === "complete") {
+      const document = validateComplete(restoreDerivative(record.derivative!), record.request, record.materials);
+      record.derivative = storedDerivative(document);
+    }
+    return new RecordMedia2Job(client, journalPath, record);
+  }
+
   get jobId(): string { return this.record.request.jobId; }
   get state(): RecordMedia2JobState { return this.record.state; }
   get requestSha256(): string { return this.record.requestSha256; }
