@@ -377,7 +377,11 @@ then publishes raw response bytes before the completed marker. It shares the
 existing planner, HTTP transport, stamped private readers and replacement path.
 Fresh login, cancellation, intent and evidence fences precede each publication.
 A prepared journal or orphan response can survive a stopped or failed exchange;
-those results never authorize blind HTTP replay. Completed raw evidence is
+those results never authorize blind HTTP replay. As in the Rust donor, a later
+invocation can replace incomplete evidence and issue a fresh request. An incomplete
+journal does not prove that the server did not rotate its token; the eventual
+writer orchestration must account for that ambiguity rather than add retries.
+Completed raw evidence is
 merged and published separately by `renewal-commit` using the saved issue time.
 This phase does not parse a newly received reply, publish credentials, mark
 `authRequired`, export a writer or switch any installed caller. Rust remains the
