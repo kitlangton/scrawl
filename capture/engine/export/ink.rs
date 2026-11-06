@@ -51,6 +51,8 @@ impl InkPlan {
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InkStroke {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rgb: Option<[u8; 3]>,
     /// The outline as drawn up to each moment, flat `x, y` pairs.
     pub snaps: Vec<Snap>,
     pub fade_at: u64,
@@ -66,6 +68,8 @@ pub struct Snap {
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pin {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rgb: Option<[u8; 3]>,
     pub x: f32,
     pub y: f32,
     pub n: u32,
@@ -76,6 +80,8 @@ pub struct Pin {
 
 #[derive(Debug, PartialEq, Serialize)]
 pub struct Laser {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rgb: Option<[u8; 3]>,
     pub frames: Vec<LaserFrame>,
 }
 
@@ -151,6 +157,7 @@ pub fn plan(bundle: &ApparentBundle, video_px: (u32, u32), layers: Layers) -> In
             } else if let Some(number) = stroke.pin {
                 if let Some(&(x, y, _)) = stroke.timed_points().first() {
                     plan.pins.push(Pin {
+                        rgb: stroke.rgb,
                         x: round(x),
                         y: round(y),
                         n: number,
@@ -274,6 +281,7 @@ fn ink_stroke(
         .filter(|s| s.poly.len() >= 6)
         .collect();
     (!snaps.is_empty()).then_some(InkStroke {
+        rgb: stroke.rgb,
         snaps,
         fade_at,
         fade_ms: FADE_MS,
@@ -301,13 +309,35 @@ fn laser(stroke: &Stroke, (w, h): (f32, f32), vt: impl Fn(u64) -> u64) -> Option
         }
         t = (t + LASER_STEP_MS).min(last);
     }
-    Some(Laser { frames })
+    Some(Laser { rgb: stroke.rgb, frames })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::shared::model::{Mark, Shape};
+
+    #[test]
+    fn stroke_rgb_survives_bundle_and_export_plan_without_changing_absent_defaults() {
+        let mut bundle = bundle();
+        let plain = stroke(100, &[(1000, 5000, 0), (9000, 5000, 100)]);
+        let mut pin = plain.clone(); pin.pin = Some(1);
+        let mut laser = plain.clone(); laser.laser = true;
+        bundle.strokes = vec![plain, pin, laser];
+        let layers = Layers { ink: true, clicks: false };
+        let legacy = serde_json::to_value(plan(&bundle, (320, 200), layers)).unwrap();
+        for role in ["strokes", "pins", "lasers"] {
+            assert!(legacy[role][0].get("rgb").is_none());
+        }
+        for (stroke, rgb) in bundle.strokes.iter_mut().zip([[17, 203, 81], [0, 0, 0], [255, 255, 255]]) {
+            stroke.rgb = Some(rgb);
+        }
+        let restored: ApparentBundle = serde_json::from_slice(&serde_json::to_vec(&bundle).unwrap()).unwrap();
+        let output = plan(&restored, (320, 200), layers);
+        assert_eq!(output.strokes[0].rgb, Some([17, 203, 81]));
+        assert_eq!(output.pins[0].rgb, Some([0, 0, 0]));
+        assert_eq!(output.lasers[0].rgb, Some([255, 255, 255]));
+    }
 
     fn bundle() -> ApparentBundle {
         serde_json::from_value(serde_json::json!({
@@ -330,6 +360,7 @@ mod tests {
             on: None,
             pin: None,
             laser: false,
+            rgb: None,
             pts: pts.iter().flat_map(|&(x, y, t)| [x, y, t]).collect(),
         }
     }

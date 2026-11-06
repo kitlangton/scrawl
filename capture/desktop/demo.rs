@@ -54,6 +54,7 @@ pub(crate) fn generate_demo_bundle(out: Option<PathBuf>) -> Result<(PathBuf, App
         on: Some("Band header".into()),
         pin: None,
         laser: false,
+        rgb: None,
         pts: circle_pts,
     };
 
@@ -73,6 +74,7 @@ pub(crate) fn generate_demo_bundle(out: Option<PathBuf>) -> Result<(PathBuf, App
         on: Some("Used 12 tools".into()),
         pin: None,
         laser: false,
+        rgb: None,
         pts: shaft_pts,
     };
     let arrow_head = Stroke {
@@ -83,6 +85,7 @@ pub(crate) fn generate_demo_bundle(out: Option<PathBuf>) -> Result<(PathBuf, App
         on: Some("Used 12 tools".into()),
         pin: None,
         laser: false,
+        rgb: None,
         pts: vec![
             (0.41 * SCALE as f32) as i32,
             (0.35 * SCALE as f32) as i32,
@@ -105,6 +108,7 @@ pub(crate) fn generate_demo_bundle(out: Option<PathBuf>) -> Result<(PathBuf, App
         on: Some("Send button".into()),
         pin: Some(1),
         laser: false,
+        rgb: None,
         pts: vec![
             (0.88 * SCALE as f32) as i32,
             (0.88 * SCALE as f32) as i32,

@@ -848,6 +848,7 @@ mod tests {
             on: None,
             pin: None,
             laser: false,
+            rgb: None,
             pts: vec![p(x), p(y), 0, p(x + 0.05), p(y), 200, p(x + 0.1), p(y), 400],
         }
     }

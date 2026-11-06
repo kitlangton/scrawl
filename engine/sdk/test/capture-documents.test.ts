@@ -122,6 +122,15 @@ test("stroke facts bind material identity, declared transforms and bounded order
   const f = material(); const strokes = { schema: "apparent.capture-strokes/1", identity: f.payload.identity, coordinates: "target-normalized-10000", surfaces: [{ surfaceId: "screen-1", transformId: "transform-1", width: 1280, height: 720, target: "capture-rectangle" }], strokes: [{ id: id("f"), surface: "screen", surfaceId: "screen-1", transformId: "transform-1", startMs: 10, endMs: 20, acceptedAtMs: 25, points: [{ timeMs: 10, x: 0, y: 10000 }, { timeMs: 20, x: 10000, y: 1 }] }] };
   const check = (value: unknown) => { const factBytes = bytes(value); const factFile = { ...sealed("strokes.json"), identity: { device: "1", inode: "9", size: factBytes.byteLength, modifiedNs: "3" }, sha256: hash(factBytes) }; const fixture = materialFixture({ files: [...f.payload.files, factFile], facts: { ...f.payload.facts, acceptedStrokes: { file: "strokes.json", schema: "apparent.capture-strokes/1" } }, collection: { ...f.payload.collection, acceptedStrokes: "collected" } }); const doc = validateMaterialsDocument(fixture.manifest, fixture.payloadBytes); return validateStrokeFacts(factFile, factBytes, doc); };
   assert.doesNotThrow(() => check(strokes));
+  for (const rgb of [[0, 0, 0], [255, 255, 255], [17, 203, 81]]) {
+    const checked = check({ ...strokes, strokes: [{ ...strokes.strokes[0], rgb }] });
+    assert.deepEqual(checked.strokes[0]?.rgb, rgb);
+  }
+  assert.equal(Object.hasOwn(check(strokes).strokes[0]!, "rgb"), false);
+  for (const rgb of [null, "coral", [], [0, 0], [0, 0, 0, 0], [-1, 0, 0], [256, 0, 0], [0.5, 0, 0], ["1", 2, 3]]) {
+    assert.throws(() => check({ ...strokes, strokes: [{ ...strokes.strokes[0], rgb }] }), /rgb/);
+  }
+
   assert.throws(() => check({ ...strokes, strokes: [{ ...strokes.strokes[0], surface: "whiteboard" }] }), /declared target/);
   assert.throws(() => check({ ...strokes, strokes: [{ ...strokes.strokes[0], acceptedAtMs: 19 }] }), /time order/);
   assert.throws(() => check({ ...strokes, strokes: [{ ...strokes.strokes[0], points: [{ timeMs: 26, x: 2, y: 2 }] }] }), /outside sorted/);
