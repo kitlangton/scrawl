@@ -210,7 +210,14 @@ test("subprocess reservations serialize same-request and same-path races durably
     child(control, join(parent, "bundles"), "left", false, join(output, "left.apparent")),
     child(control, join(parent, "bundles"), "right", false, join(output, "right.apparent")),
   ]);
-  assert.equal(competing.filter(result => result.status === "fulfilled").length, 2);
+  assert.equal(
+    competing.filter(result => result.status === "fulfilled").length,
+    2,
+    `independent absent destinations must both reserve; subprocess failures: ${competing
+      .map((result, index) => result.status === "rejected" ? `child ${index}: ${String(result.reason)}` : undefined)
+      .filter(Boolean)
+      .join(" | ")}`,
+  );
   const samePath = await Promise.allSettled([
     child(control, join(parent, "bundles"), "path-a", false, join(output, "contended.apparent")),
     child(control, join(parent, "bundles"), "path-b", false, join(output, "contended.apparent")),
