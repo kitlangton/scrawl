@@ -664,11 +664,13 @@ fn validate_source_binding(
     Ok(())
 }
 
+#[cfg(all(target_os = "linux", feature = "media"))]
 struct FrameSink<'a> {
     output: &'a mut dyn apparent_capture_engine::materials_media::DerivativeOutputSink,
     legacy_receipt: Option<Vec<u8>>,
 }
 
+#[cfg(all(target_os = "linux", feature = "media"))]
 impl apparent_capture_engine::materials_media::DerivativeOutputSink for FrameSink<'_> {
     fn write_new_synced(
         &mut self,

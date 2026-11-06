@@ -1,3 +1,4 @@
+#![cfg(all(feature = "media", target_os = "linux"))]
 #![allow(dead_code, unused_imports)]
 
 #[path = "../src/media/files.rs"]
