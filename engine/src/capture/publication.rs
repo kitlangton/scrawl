@@ -1058,7 +1058,7 @@ mod tests {
     };
 
     const FRAME: &[u8] =
-        include_bytes!("../../../record/test/fixtures/take.apparent/frames/frame-01.png");
+        include_bytes!("../../core/tests/fixtures/frame.png");
     const MOVIE: &[u8] = include_bytes!("../../core/tests/fixtures/tiny.mp4");
 
     struct Fixture {
