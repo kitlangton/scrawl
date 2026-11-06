@@ -257,16 +257,21 @@ fn private_destination(st: &libc::stat) -> bool {
         && st.st_mode & 0o7777 & !0o600 == 0
         && st.st_size >= 0 && st.st_size <= 2_000_000
 }
+fn rename_file(parent: RawFd, source: *const libc::c_char, destination: *const libc::c_char, present: bool) -> Result<(), i32> {
+    let rc = if present { unsafe { libc::renameat(parent, source, parent, destination) } }
+        else { rename_noreplace(parent, source, destination) };
+    if rc == 0 { Ok(()) } else { Err(errno()) }
+}
 
 fn replace_file(source: &str, destination: &str, source_device: &str, source_inode: &str,
     destination_present: bool, destination_device: &str, destination_inode: &str) -> &'static str {
     let parent = match validate_fd(false) { Ok(fd) => fd, Err(_) => return "refused" };
-    replace_at(std::os::fd::AsRawFd::as_raw_fd(&parent), source, destination, source_device, source_inode, destination_present, destination_device, destination_inode, real_fsync)
+    replace_at(std::os::fd::AsRawFd::as_raw_fd(&parent), source, destination, source_device, source_inode, destination_present, destination_device, destination_inode, real_fsync, rename_file)
 }
 
-fn replace_at<F>(parent_fd: RawFd, source: &str, destination: &str, source_device: &str, source_inode: &str,
-    destination_present: bool, destination_device: &str, destination_inode: &str, mut sync: F) -> &'static str
-where F: FnMut(RawFd) -> i32 {
+fn replace_at<F, R>(parent_fd: RawFd, source: &str, destination: &str, source_device: &str, source_inode: &str,
+    destination_present: bool, destination_device: &str, destination_inode: &str, mut sync: F, mut rename: R) -> &'static str
+where F: FnMut(RawFd) -> i32, R: FnMut(RawFd, *const libc::c_char, *const libc::c_char, bool) -> Result<(), i32> {
     if !basename(source) || !basename(destination) || source == destination { return "refused"; }
     let Some(sd) = parse_id(source_device) else { return "refused"; };
     let Some(si) = parse_id(source_inode) else { return "refused"; };
@@ -298,9 +303,9 @@ where F: FnMut(RawFd) -> i32 {
         if !private_destination(&current_dst) || !no_allow_acl_at(pfd, dst.as_ptr()) || !same(&current_dst, dd, di) { return "destination_changed"; }
     } else if dst_rc == 0 { return "destination_changed"; }
     else if errno() != libc::ENOENT { return "refused"; }
-    let rc = if destination_present { unsafe { libc::renameat(pfd, src.as_ptr(), pfd, dst.as_ptr()) } }
-        else { rename_noreplace(pfd, src.as_ptr(), dst.as_ptr()) };
-    if rc != 0 { let e = errno(); return if !destination_present && (e == libc::EEXIST || e == libc::ENOTEMPTY) { "destination_changed" } else if e == libc::EINTR { "publication_uncertain" } else { "refused" }; }
+    if let Err(e) = rename(pfd, src.as_ptr(), dst.as_ptr(), destination_present) {
+        return if !destination_present && (e == libc::EEXIST || e == libc::ENOTEMPTY) { "destination_changed" } else { "publication_uncertain" };
+    }
     if sync(pfd) != 0 { return "publication_uncertain"; }
     let mut final_st = std::mem::MaybeUninit::<libc::stat>::uninit();
     let final_rc = unsafe { libc::fstatat(pfd, dst.as_ptr(), final_st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
@@ -768,7 +773,7 @@ mod tests {
                         }
                     }
                     real_fsync(fd)
-                });
+                }, rename_file);
             let source_present = dir.join("stage").exists();
             let destination = fs::read(dir.join("final")).unwrap();
             fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
@@ -790,11 +795,29 @@ mod tests {
         let state = replace_at(parent.as_raw_fd(), "stage", "final", &source.dev().to_string(), &source.ino().to_string(), false, "0", "0", |fd| {
             calls += 1;
             if calls == 1 { real_fsync(fd) } else { -1 }
-        });
+        }, rename_file);
         assert_eq!(state, "publication_uncertain");
         assert_eq!(calls, 2);
         assert!(!dir.join("stage").exists());
         assert_eq!(fs::read(dir.join("final")).unwrap(), b"replacement");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn replacement_lost_rename_acknowledgement_keeps_effect_and_reports_uncertainty() {
+        let dir = temp();
+        let parent = fs::File::open(&dir).unwrap();
+        fs::write(dir.join("stage"), b"new bytes").unwrap();
+        fs::set_permissions(dir.join("stage"), fs::Permissions::from_mode(0o600)).unwrap();
+        let source = fs::metadata(dir.join("stage")).unwrap();
+        let state = replace_at(parent.as_raw_fd(), "stage", "final", &source.dev().to_string(), &source.ino().to_string(),
+            false, "0", "0", real_fsync, |fd, source, destination, present| {
+                rename_file(fd, source, destination, present)?;
+                Err(libc::EIO) // Effect succeeded; its acknowledgement was lost.
+            });
+        assert_eq!(state, "publication_uncertain");
+        assert!(!dir.join("stage").exists());
+        assert_eq!(fs::read(dir.join("final")).unwrap(), b"new bytes");
         fs::remove_dir_all(dir).unwrap();
     }
 }

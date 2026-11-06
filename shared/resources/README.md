@@ -130,6 +130,8 @@ name is rechecked before rename. An expected destination must still identify an
 owned private 0600 regular file with the supplied identity (data hard links are
 allowed). A null expected destination means it must be absent. A mismatch returns
 `destination_changed` without moving the source.
+Private source and parent metadata are rechecked after source sync. Unexpected
+rename failures report uncertainty; they never authorize cleanup or a retry.
 
 With a present destination, replacement uses `renameat` under the caller's
 existing cooperative lock. With an absent destination, the existing exclusive
