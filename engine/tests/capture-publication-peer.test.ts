@@ -258,8 +258,10 @@ test("public recovery release lets an unknown native publication finish after th
 test("SDK packaged publication validates Saved and cold inspection", { skip: !binary }, async () => {
   const f = createFixture();
   let client: CaptureClient | undefined;
+  let peer: Awaited<ReturnType<typeof launchCaptureRecoveryPeer>> | undefined;
   try {
-    client = new CaptureClient(launchCaptureEngine(resolve(binary!), f.runtime, 40_000));
+    peer = await launchCaptureRecoveryPeer(resolve(binary!), f.runtime);
+    client = peer.client;
     const hello = await client.handshake(5000);
     assert.equal(hello.implementation, "native");
     assert.equal(hello.capabilities.publication, true);
@@ -269,11 +271,13 @@ test("SDK packaged publication validates Saved and cold inspection", { skip: !bi
     assert.equal(hash(readFileSync(join(f.bundlePath, "apparent.json"))), f.manifestFile.sha256);
     assert.equal(hash(readFileSync(join(f.bundlePath, "recording.mp4"))), f.materials.payload.files[0].sha256);
     assert.throws(() => statSync(join(f.bundlePath, "publication-plan.json")), { code: "ENOENT" });
-    await client.close();
+    await peer.release();
+    peer = undefined;
     client = undefined;
     rmSync(f.stagingRoot, { recursive: true });
     rmSync(f.materialRoot, { recursive: true });
-    client = new CaptureClient(launchCaptureEngine(resolve(binary!), f.runtime, 40_000));
+    peer = await launchCaptureRecoveryPeer(resolve(binary!), f.runtime);
+    client = peer.client;
     await client.handshake(5000);
     const recovered = await client.inspectPublication({
       ownerToken: f.ownerToken, captureId: f.captureId, publicationId: f.publicationId,
@@ -282,7 +286,7 @@ test("SDK packaged publication validates Saved and cold inspection", { skip: !bi
     assert.deepEqual(recovered.publication, saved.publication);
     assert.equal(recovered.state, "saved");
   } finally {
-    await client?.close();
+    await peer?.release();
     rmSync(f.base, { recursive: true, force: true });
   }
 });

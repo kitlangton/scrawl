@@ -9,6 +9,7 @@ import test from "node:test";
 import { CaptureClient, launchCaptureEngine, type CaptureStatus } from "../sdk/src/capture.ts";
 import { validateMaterialsDocument } from "../sdk/src/capture-documents/index.ts";
 import { Media2Client, Media2RpcError, Media2TransportError, launchMedia2Worker, type Media2JobInput } from "../sdk/src/media2/index.ts";
+import { launchCaptureRecoveryPeer } from "../sdk/src/recovery/index.ts";
 
 const id = () => randomBytes(16).toString("hex");
 const token = () => randomBytes(32).toString("hex");
@@ -346,6 +347,16 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     assert.ok(["starting", "recording"].includes(started.state));
     const recording = await until(client, { captureId, ownerToken }, ["recording"]);
     assert.equal(recording.state, "recording");
+    const recoveryObserver = await launchCaptureRecoveryPeer(resolve(binary!), runtime);
+    try {
+      assert.equal((await recoveryObserver.client.handshake()).readiness, "unavailable");
+      assert.equal((await recoveryObserver.client.inspect({ captureId, ownerToken })).state, "recording");
+    } finally {
+      const released = await recoveryObserver.release();
+      assert.equal(released.connection, "released");
+      assert.equal(released.runtimeClearance, "not-established");
+    }
+    assert.equal((await client.inspect({ captureId, ownerToken })).state, "recording", "recovery EOF must leave another peer's actual native capture running");
     for (const color of ["#11bb44", "#2244dd", "#e6d22a", "#cc2211"]) {
       execFileSync(xsetrootCommand, ["-solid", color]);
       await delay(180);
