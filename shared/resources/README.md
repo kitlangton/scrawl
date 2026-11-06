@@ -75,9 +75,12 @@ request data, paths, errno messages or private contents appear in the protocol.
 ## Atomic directory publication
 
 `publish(parentHandle, sourceBasename, destinationBasename, options)` uses a
-caller-opened owned directory with no group/other write access. Source and
-candidate destination must share this parent; names permit ASCII letters,
-numbers, dot, underscore and hyphen, excluding dot/dot-dot and equal names.
+caller-opened directory owned by the current UID or root. Group/other write
+access requires the sticky bit, preserving the legacy trusted shared-parent
+contract; the staged source remains owned and private. Source and
+candidate destination must share this parent; names are well-formed single UTF-8 POSIX components, excluding slash, NUL,
+dot/dot-dot and equal names. Spaces and Unicode remain valid. Inputs are bounded
+to 4,096 UTF-8 bytes; the kernel enforces its actual filesystem name limit.
 The source must be an owned private real directory. The caller stages/validates
 all contents and fsyncs files and directories first; this helper does not walk
 or certify content, symlinks inside the staged tree, formats or user intent.
@@ -100,3 +103,15 @@ undone by cancellation.
 Wire invocation is `apparent-resource-host publish --source NAME --destination
 NAME` with fd 3 and one exact protocol-1 result line. No recursive deletion or
 product recovery behavior is implemented here.
+
+`checkAcl(handle)` consumes a file/directory descriptor and reports `accepted` or
+`refused`. It checks effective native ACL facts, not private-file or directory-tree
+authority. On macOS it refuses allow entries and accepts deny-only ACLs, adapting
+the legacy Connect check. On Linux the caller still must enforce the mode/ACL mask.
+Callers must independently validate ownership, private modes, inode identity and
+every ancestor. No contents or ACL principals are returned. The operation uses
+`apparent-resource-host acl` with fd 3; older helpers refuse this unknown operation
+and cannot satisfy callers requiring it. No credential or queue writer is added.
+
+Lock descriptors and publication parent/source descriptors also refuse Darwin ACL
+grants immediately before native effects. Ancestor validation remains caller-owned.

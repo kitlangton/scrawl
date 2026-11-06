@@ -29,6 +29,12 @@ fn fstat(fd: RawFd) -> io::Result<libc::stat> {
     }
 }
 
+fn publication_parent_metadata(st: &libc::stat) -> bool {
+    (st.st_mode & libc::S_IFMT) == libc::S_IFDIR
+        && (st.st_uid == 0 || st.st_uid == unsafe { libc::geteuid() })
+        && (st.st_mode & 0o022 == 0 || st.st_mode & libc::S_ISVTX as libc::mode_t != 0)
+}
+
 fn validate_fd(require_rw_regular: bool) -> Result<OwnedFd, &'static str> {
     validate_raw_fd(FD, require_rw_regular)
 }
@@ -42,7 +48,7 @@ fn validate_raw_fd(fd: RawFd, require_rw_regular: bool) -> Result<OwnedFd, &'sta
         return Err("refused");
     }
     let st = fstat(fd).map_err(|_| "refused")?;
-    if st.st_uid != unsafe { libc::geteuid() } {
+    if !no_allow_acl_fd(fd) || (require_rw_regular && st.st_uid != unsafe { libc::geteuid() }) {
         return Err("refused");
     }
     if require_rw_regular {
@@ -54,7 +60,7 @@ fn validate_raw_fd(fd: RawFd, require_rw_regular: bool) -> Result<OwnedFd, &'sta
         {
             return Err("refused");
         }
-    } else if (st.st_mode & libc::S_IFMT) != libc::S_IFDIR || st.st_mode & 0o022 != 0 {
+    } else if !publication_parent_metadata(&st) {
         return Err("refused");
     }
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
@@ -189,13 +195,14 @@ fn lock(timeout_ms: u64) -> &'static str {
     final_state
 }
 
+// Names are single UTF-8 POSIX components. Kernel-specific limits still apply.
 fn basename(s: &str) -> bool {
     !s.is_empty()
-        && s.len() <= 255
+        && s.len() <= 4096
         && s != "."
         && s != ".."
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        && !s.as_bytes().contains(&b'/')
+        && !s.as_bytes().contains(&0)
 }
 
 fn cstr(s: &str) -> CString {
@@ -233,10 +240,7 @@ where
         Ok(s) => s,
         Err(_) => return "refused",
     };
-    if pst.st_mode & libc::S_IFMT != libc::S_IFDIR
-        || pst.st_uid != unsafe { libc::geteuid() }
-        || pst.st_mode & 0o022 != 0
-    {
+    if !publication_parent_metadata(&pst) || !no_allow_acl_fd(parent_fd) {
         return "refused";
     }
     let src = cstr(source);
@@ -256,7 +260,8 @@ where
         Ok(s) => s,
         Err(_) => return "refused",
     };
-    if sst.st_uid != unsafe { libc::geteuid() } || sst.st_mode & 0o077 != 0 {
+    if sst.st_uid != unsafe { libc::geteuid() } || sst.st_mode & 0o077 != 0 || !no_allow_acl_fd(raw)
+    {
         return "refused";
     }
     if sync(raw) != 0 {
@@ -325,10 +330,58 @@ fn rename_noreplace(dir: RawFd, src: *const libc::c_char, dst: *const libc::c_ch
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 compile_error!("native resources support Linux and macOS only");
 
+// Adapted from Connect's no_allow_acl: Darwin ACL grants can override mode bits.
+// Only OS ACL facts are examined; caller owns pathname and file/dir policy.
+#[cfg(target_os = "macos")]
+fn no_allow_acl_fd(fd: RawFd) -> bool {
+    unsafe extern "C" {
+        fn acl_get_fd_np(fd: libc::c_int, kind: libc::c_int) -> *mut libc::c_void;
+        fn acl_get_entry(
+            acl: *mut libc::c_void,
+            selector: libc::c_int,
+            entry: *mut *mut libc::c_void,
+        ) -> libc::c_int;
+        fn acl_get_tag_type(entry: *mut libc::c_void, tag: *mut libc::c_int) -> libc::c_int;
+        fn acl_free(acl: *mut libc::c_void) -> libc::c_int;
+    }
+    let acl = unsafe { acl_get_fd_np(fd, 0x100) };
+    if acl.is_null() {
+        return errno() == libc::ENOENT;
+    }
+    let mut entry = std::ptr::null_mut();
+    let mut selector = 0;
+    let permitted = loop {
+        if unsafe { acl_get_entry(acl, selector, &mut entry) } != 0 {
+            break errno() == libc::EINVAL;
+        }
+        let mut tag = 0;
+        if unsafe { acl_get_tag_type(entry, &mut tag) } != 0 || tag != 2 {
+            break false;
+        }
+        selector = -1;
+    };
+    unsafe {
+        acl_free(acl);
+    }
+    permitted
+}
+#[cfg(target_os = "linux")]
+fn no_allow_acl_fd(_fd: RawFd) -> bool {
+    // POSIX ACL effective access is bounded by the mode's ACL mask; callers
+    // must still check ownership, private mode and ancestor metadata.
+    true
+}
+
 fn args() -> Result<(String, Vec<String>), &'static str> {
-    let mut it = env::args().skip(1);
-    let command = it.next().ok_or("refused")?;
-    let rest: Vec<_> = it.collect();
+    let mut it = env::args_os().skip(1);
+    let command = it
+        .next()
+        .ok_or("refused")?
+        .into_string()
+        .map_err(|_| "refused")?;
+    let rest = it
+        .map(|value| value.into_string().map_err(|_| "refused"))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok((command, rest))
 }
 
@@ -338,6 +391,16 @@ fn run() -> &'static str {
         Err(s) => return s,
     };
     match cmd.as_str() {
+        "acl" if args.is_empty() => match fstat(FD) {
+            Ok(st)
+                if (st.st_uid == 0 || st.st_uid == unsafe { libc::geteuid() })
+                    && matches!(st.st_mode & libc::S_IFMT, libc::S_IFREG | libc::S_IFDIR)
+                    && no_allow_acl_fd(FD) =>
+            {
+                "accepted"
+            }
+            _ => "refused",
+        },
         "lock"
             if args.len() == 2
                 && args[0] == "--timeout-ms"
@@ -385,7 +448,10 @@ mod tests {
     #[test]
     fn protocol_names_and_metadata_guards() {
         assert!(basename("a-_9.txt"));
-        for bad in ["", ".", "..", "/tmp/x", "a b", "a\n", &"x".repeat(256)] {
+        for valid in ["a b", "résumé.apparent", "a\n"] {
+            assert!(basename(valid));
+        }
+        for bad in ["", ".", "..", "/tmp/x", "a\0", &"x".repeat(4097)] {
             assert!(!basename(bad));
         }
         let dir = temp();
