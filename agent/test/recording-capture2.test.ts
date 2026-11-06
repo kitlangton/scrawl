@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -8,10 +8,11 @@ import { AbsentDestinationAllocator, SqliteCaptureMappingStore } from '@apparent
 import type { Capture2Host, Capture2Receipt } from '@apparent/record/host/capture2';
 import { createCapture2Host } from '@apparent/record/host/capture2';
 import type { CaptureRequest, CaptureResponse, CaptureTransport } from '@apparent/engine-sdk/capture';
-import { controlCapture2, discoverCapture2Sources, parseCapture2ControlArgs, parseCapture2RecordArgs, parseCapture2SourcesArgs, recordWithCapture2, retainPublicIdentity, type Capture2Clock, type Capture2HostFactory } from '../src/recording/capture2.ts';
+import { controlCapture2, discoverCapture2Sources, parseCapture2ControlArgs, parseCapture2RecordArgs, parseCapture2SourcesArgs, recordWithCapture2, retainPublicIdentity, type Capture2Clock, type Capture2HostFactory } from '../dist/recording/capture2.js';
 
 const source = { id: 'display-actual', generation: 'a'.repeat(32), kind: 'display' as const, displayId: 0, bounds: { x: 0, y: 0, width: 800, height: 600, scale: 1 } };
 const args = (out: string, ...extra: string[]) => ['--protocol', 'capture2', '--duration', '1', '--out', out, '--source', source.id, ...extra];
+const defaultArgs = (out: string) => ['--protocol', 'capture2', '--out', out, '--source', source.id];
 function fixtureHost(out: string, outcome: 'publication-processing' | 'publication-materials-ready' | 'materials-ready' | 'unavailable' | 'unknown-source' | 'start-fails' = 'publication-processing', sleepHook?: () => void, closeOutcome = 'eof-exited') {
   const calls: Array<{ method: string; input?: unknown }> = [];
   const reqId = '4be6ebdb-7f40-430a-92de-7ac3c43e9e2e';
@@ -44,11 +45,68 @@ function fixtureHost(out: string, outcome: 'publication-processing' | 'publicati
 test('capture/2 requires explicit protocol, exact destination and source selector', () => {
   const parsed = parseCapture2RecordArgs(args('/tmp/fresh.apparent'));
   assert.deepEqual(parsed, { durationSeconds: 1, out: '/tmp/fresh.apparent', sourceId: source.id });
-  for (const invalid of [[], args('relative.apparent'), args('/tmp/fresh.apparent', '--source', 'other'), args('/tmp/fresh.apparent', '--duration', '1')])
+  assert.deepEqual(parseCapture2RecordArgs([...defaultArgs('/tmp/fresh.apparent'), '--duration', '3600']), { durationSeconds: 3600, out: '/tmp/fresh.apparent', sourceId: source.id });
+  assert.deepEqual(parseCapture2RecordArgs(defaultArgs('/tmp/fresh.apparent')), { durationSeconds: 5, out: '/tmp/fresh.apparent', sourceId: source.id });
+  for (const invalid of [[], args('relative.apparent'), args('/tmp/fresh.apparent', '--source', 'other'), args('/tmp/fresh.apparent', '--duration', '1'),
+    [...args('/tmp/fresh.apparent'), '--duration', '1'], [...defaultArgs('/tmp/fresh.apparent'), '--duration', '0'],
+    [...defaultArgs('/tmp/fresh.apparent'), '--duration', '3601'], [...defaultArgs('/tmp/fresh.apparent'), '--duration', 'nope'],
+    [...defaultArgs('/tmp/fresh.apparent'), '--duration'], [...defaultArgs('/tmp/fresh.apparent'), '--source', 'duplicate']])
     assert.throws(() => parseCapture2RecordArgs(invalid));
   assert.deepEqual(parseCapture2ControlArgs(['--protocol', 'capture2', 'inspect', 'id']), { method: 'inspect', requestId: 'id' });
   for (const invalid of [['inspect', 'id'], ['--protocol', 'capture-v1', 'inspect', 'id'], ['--protocol', 'capture2', '--protocol', 'capture2'], ['--protocol', 'capture2', 'inspect', 'id', '--protocol']])
     assert.throws(() => parseCapture2ControlArgs(invalid));
+});
+
+test('capture/2 duplicate and invalid durations fail before control allocation or host effects', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-capture2-invalid-'));
+  try {
+    const out = join(root, 'exact.apparent');
+    const invalid = [
+      [...args(out), '--duration', '1'], [...defaultArgs(out), '--duration', '0'],
+      [...defaultArgs(out), '--duration', '3601'], [...defaultArgs(out), '--duration', 'invalid'],
+      [...defaultArgs(out), '--duration'],
+    ];
+    for (const [index, argv] of invalid.entries()) {
+      const controlRoot = join(root, `control-${index}`);
+      let factoryCalled = false;
+      await assert.rejects(recordWithCapture2(argv, {
+        executable: '/opt/apparent-engine', runtime: join(root, 'runtime'), controlRoot,
+        factory: async () => { factoryCalled = true; throw new Error('unexpected host composition'); },
+      }));
+      assert.equal(factoryCalled, false);
+      await assert.rejects(access(controlRoot), { code: 'ENOENT' });
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('capture/2 omitted duration waits five seconds after observed recording readiness', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-capture2-default-'));
+  try {
+    const out = join(root, 'exact.apparent');
+    let now = 0, phase = 'starting', stopAt = -1;
+    const calls: string[] = [];
+    const host = {
+      readiness: async () => ({ ready: true }),
+      discoverSources: async () => ({ state: 'available' as const, sources: [source] }),
+      start: async () => { calls.push('start'); return { requestId: 'unused', phase: 'starting' as const }; },
+      inspect: async () => {
+        calls.push('inspect');
+        if (phase === 'starting' && now >= 2_000) phase = 'recording';
+        return { requestId: 'unused', phase };
+      },
+      stop: async () => { stopAt = now; phase = 'materials-ready'; return { requestId: 'unused', phase }; },
+      cancel: async () => { phase = 'cancelled'; return { requestId: 'unused', phase }; },
+      reconcile: async () => [], subscribe: () => () => undefined, dispose: () => undefined,
+    } as unknown as Capture2Host;
+    const factory: Capture2HostFactory = async () => ({ host, close: async () => 'eof-exited' });
+    const clock: Capture2Clock = { now: () => now, sleep: async ms => { now += ms; } };
+    assert.equal(await recordWithCapture2(defaultArgs(out), {
+      executable: '/opt/apparent-engine', runtime: join(root, 'runtime'), controlRoot: join(root, 'control'), factory, clock,
+    }), 3);
+    assert.equal(stopAt, 7_000);
+    assert.equal(stopAt - 2_000, 5_000);
+    assert(calls.includes('start'));
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('capture/2 source args reject invalid options before transport creation', () => {
