@@ -47,10 +47,11 @@ export function createRecordPublicationRecovery(
       return operation.then(status => structuredClone(status));
     },
     async reconcile(captureId, ownerToken, expected) {
+      const original = expected && structuredClone(expected);
       if (inflight.has(captureId)) throw new Error("Record publication command is already in flight");
       const binding = await store.get(captureId);
       if (!binding) throw new Error("Record publication binding is unavailable");
-      if (expected && !matchesExpected(binding, expected)) throw new Error("Record publication binding conflicts with the supplied original identity");
+      if (original && !matchesExpected(binding, original)) throw new Error("Record publication binding conflicts with the supplied original identity");
       if (!/^[0-9a-f]{64}$/u.test(ownerToken)) throw new Error("Record publication authority is invalid");
       try {
         await client.handshake();

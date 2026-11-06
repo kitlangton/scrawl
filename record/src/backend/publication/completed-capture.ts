@@ -3,8 +3,9 @@ import { createHash } from "node:crypto";
 import type { CaptureClient, CaptureStatus, MaterialsDocument } from "@apparent/engine-sdk/capture";
 import { validateMaterialsDocument } from "@apparent/engine-sdk/capture";
 import { assembleCanonicalBundle, type BundleAssemblyInput } from "../processing/bundle/index.js";
-import { prepareRecordPublication } from "./staging.js";
+import { prepareRecordPublication, type PreparePublicationInput } from "./staging.js";
 import { createRecordPublicationRecovery, type PublicationBindingExpectation, type PublicationPreflight } from "./recovery.js";
+import { SqlitePublicationBindingStore } from "./store.js";
 
 export interface PublishCompletedCaptureInput {
   /** Host-observed SDK status; the manifest and bytes below remain the original materials document. */
@@ -14,6 +15,7 @@ export interface PublishCompletedCaptureInput {
   publicationId: string;
   stagingRoot: string;
   destinationPath: string;
+  derivatives?: PreparePublicationInput["derivatives"];
 }
 
 export interface ReconcileCompletedCaptureInput extends PublicationBindingExpectation {
@@ -33,20 +35,22 @@ export function createCompletedCapturePublisher(
   preflight: PublicationPreflight,
 ): CompletedCapturePublisher {
   const recovery = createRecordPublicationRecovery(client, privateControlRoot, preflight);
+  const bindings = new SqlitePublicationBindingStore(privateControlRoot);
   const inFlight = new Map<string, { fingerprint: string; promise: Promise<CaptureStatus> }>();
 
   return {
     async publishCompletedCapture(input) {
       const snapshot = structuredClone(input);
       validateObservedMaterials(snapshot);
-      const fingerprint = createHash("sha256").update(JSON.stringify({
+      const fingerprint = createHash("sha256").update(JSON.stringify(digestBytes({
         status: snapshot.status,
         ownerTokenSha256: createHash("sha256").update(snapshot.ownerToken).digest("hex"),
         publicationId: snapshot.publicationId,
         stagingRoot: snapshot.stagingRoot,
         destinationPath: snapshot.destinationPath,
         assembly: snapshot.assembly,
-      })).digest("hex");
+        derivatives: snapshot.derivatives,
+      }))).digest("hex");
       const active = inFlight.get(snapshot.status.captureId);
       if (active) {
         if (active.fingerprint !== fingerprint) return Promise.reject(new Error("Record completed capture identity conflicts with its in-flight publication"));
@@ -66,6 +70,10 @@ export function createCompletedCapturePublisher(
 
   async function publish(input: PublishCompletedCaptureInput): Promise<CaptureStatus> {
     const assembly = assembleCanonicalBundle(input.assembly);
+    // Existing ownership must be recovered using its original plan, never by
+    // generating another staging namespace or guessing that dispatch failed.
+    if (await bindings.get(input.status.captureId))
+      throw new Error("Record capture is already bound to publication; reconcile the original binding instead of restaging");
     const prepared = await prepareRecordPublication({
       ownerToken: input.ownerToken,
       publicationId: input.publicationId,
@@ -75,9 +83,20 @@ export function createCompletedCapturePublisher(
       materialsPayloadBytes: input.assembly.payloadBytes,
       assembly,
       artifactBytes: Object.fromEntries(input.assembly.artifacts.map(artifact => [artifact.relativePath, artifact.bytes])),
+      ...(input.derivatives ? { derivatives: input.derivatives } : {}),
     });
     return recovery.publish(prepared.input);
   }
+}
+
+/** Project binary values before JSON traversal; media size must not expand into decimal JSON keys. */
+function digestBytes(value: unknown): unknown {
+  if (value instanceof Uint8Array)
+    return { byteLength: value.byteLength, sha256: createHash("sha256").update(value).digest("hex") };
+  if (Array.isArray(value)) return value.map(digestBytes);
+  if (value && typeof value === "object")
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => [key, digestBytes(item)]));
+  return value;
 }
 
 function validateObservedMaterials(input: PublishCompletedCaptureInput): MaterialsDocument {

@@ -7,7 +7,8 @@ import test from "node:test";
 import { assembleCanonicalBundle, type BundleAssemblyInput } from "@apparent/record/processing/bundle";
 import { prepareRecordPublication } from "../../dist/backend/publication/staging.js";
 import { createCompletedCapturePublisher } from "../../dist/backend/publication/completed-capture.js";
-import { CaptureClient, preflightCapturePublication } from "@apparent/engine-sdk/capture";
+import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, type MaterialsDocument } from "@apparent/engine-sdk/capture";
+import { createRecordPublicationRecovery } from "../../dist/backend/publication/recovery.js";
 import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
 import { SqlitePublicationBindingStore } from "../../dist/backend/publication/store.js";
 
@@ -19,7 +20,7 @@ const sealed = (relativePath: string, content: Uint8Array, inode: string) => ({
   identity: { device: "1", inode, size: content.byteLength, modifiedNs: "3" },
 });
 
-async function fixture(): Promise<BundleAssemblyInput> {
+async function fixture(): Promise<BundleAssemblyInput & { manifest: MaterialsDocument["manifest"] }> {
   const root = "/private/sdk-valid-materials";
   const source = { id: "display-1", generation: "d".repeat(32), confirmedAtMs: 0, kind: "display" as const,
     displayId: 1, rectangle: { x: 0, y: 0, width: 800, height: 600, scale: 1 },
@@ -58,7 +59,7 @@ async function fixture(): Promise<BundleAssemblyInput> {
     warnings: [], safety: { nativeRemoteDelivery: "forbidden", safeForProcessing: true },
   };
   const payloadBytes = bytes(payload);
-  const manifest = { schema: "apparent.capture-materials/1", key: { ...identity, revision: sha(payloadBytes) }, root,
+  const manifest: MaterialsDocument["manifest"] = { schema: "apparent.capture-materials/1", key: { ...identity, revision: sha(payloadBytes) }, root,
     leaseId: payload.leaseId, payloadFile: { relativePath: "materials.json", sha256: sha(payloadBytes),
       identity: { device: "1", inode: "inode-materials", size: payloadBytes.byteLength, modifiedNs: "3" } } };
   return {
@@ -268,7 +269,7 @@ test("completed-capture composition refuses a mismatched observed status before 
   const input = await fixture();
   const root = await mkdtemp(join(tmpdir(), "record-composition-reject-"));
   const destinationPath = join(root, "final.apparent");
-  const assembly = assemblyForDestination(input, destinationPath);
+  assemblyForDestination(input, destinationPath);
   const client = { async handshake() { throw new Error("must not reach SDK"); } } as unknown as CaptureClient;
   const publisher = createCompletedCapturePublisher(client, join(root, "control"), preflightCapturePublication);
   try {
@@ -279,6 +280,13 @@ test("completed-capture composition refuses a mismatched observed status before 
     }), /binding conflicts/u);
     await assertAbsent(join(root, "staging"));
     await assertAbsent(join(root, "control"));
+    await assert.rejects(publisher.publishCompletedCapture({
+      status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+      assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
+      stagingRoot: join(root, "staging"), destinationPath,
+      derivatives: [{ envelope: {}, bytes: new Uint8Array(), requestedBundleMs: [1000] }] as never,
+    }), error => error instanceof CapturePublicationPreflightError && error.dispatched === false);
+    await assertAbsent(destinationPath);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -314,6 +322,10 @@ test("completed-capture composition stages the assembled bytes, isolates inputs,
     },
   } as unknown as CaptureClient;
   const publisher = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
+  let binaryJSONCalls = 0;
+  const originalToJSON = Object.getOwnPropertyDescriptor(Uint8Array.prototype, "toJSON");
+  Object.defineProperty(Uint8Array.prototype, "toJSON", { configurable: true,
+    value(this: Uint8Array) { binaryJSONCalls++; return Array.from(this); } });
   const request = {
     status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
     assembly: input, ownerToken: "c".repeat(64), publicationId: "a".repeat(32),
@@ -328,8 +340,13 @@ test("completed-capture composition stages the assembled bytes, isolates inputs,
     assert.equal("ownerToken" in status, false);
     assert.equal(dispatched?.ownerToken, "c".repeat(64));
     assert.ok(dispatched?.planBytes.byteLength);
+    assert.equal(binaryJSONCalls, 0, "publication must hash binary values before JSON traversal");
     await assertAbsent(destinationPath);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally {
+    if (originalToJSON) Object.defineProperty(Uint8Array.prototype, "toJSON", originalToJSON);
+    else Reflect.deleteProperty(Uint8Array.prototype, "toJSON");
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("identical completed-capture calls coalesce and conflicting in-flight bindings are refused", async () => {
@@ -392,6 +409,10 @@ test("ambiguous composed publication reconciles the same durable binding after r
     await assert.rejects(first.publishCompletedCapture(request), /outcome is unknown/u);
     assert.equal(dispatches, 1);
     const reopened = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
+    const conflictingRoot = join(root, "conflicting-staging");
+    await assert.rejects(reopened.publishCompletedCapture({ ...request, publicationId: "b".repeat(32),
+      stagingRoot: conflictingRoot }));
+    await assertAbsent(conflictingRoot);
     const observed = await reopened.reconcile({
       captureId: identity.captureId, ownerToken, publicationId, materials: input.manifest.key,
       leaseId: input.manifest.leaseId, bundleId: "sdk-bundle", bundlePath: destinationPath,
@@ -403,6 +424,13 @@ test("ambiguous composed publication reconciles the same durable binding after r
       leaseId: input.manifest.leaseId, bundleId: "sdk-bundle", bundlePath: destinationPath,
     }), /conflicts with the supplied original identity/u);
     assert.equal(dispatches, 1, "reconciliation does not rerun assembly, staging, or publication");
+    const original = structuredClone({ publicationId, materials: input.manifest.key,
+      leaseId: input.manifest.leaseId, bundleId: "sdk-bundle", bundlePath: destinationPath });
+    const direct = createRecordPublicationRecovery(sdk, join(root, "control"), preflightCapturePublication);
+    const pending = direct.reconcile(identity.captureId, ownerToken, original);
+    original.publicationId = "b".repeat(32);
+    original.materials.materialsId = "9".repeat(32);
+    assert.equal((await pending).state, "publishing", "reconciliation snapshots expectations before awaiting storage");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

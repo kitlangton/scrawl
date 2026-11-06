@@ -124,6 +124,14 @@ selected frames/images remain caller-attested, and it does not authenticate
 native provenance, supply capture/2 lifecycle, release materials, or prove
 production publication.
 
+Binary inputs are fingerprinted by digest and length. Supplied derivative receipts
+are forwarded to the existing stager and SDK validation without asserting provenance.
+Once a durable binding exists, a new composition refuses before staging; use
+`reconcile` with the original binding. A reserved plan that never reached dispatch
+can be resumed through the existing recovery publisher with its original prepared
+input. Concurrent first-time publishers still rely on the journal's atomic dispatch
+admission; losing staging files are private and preserved, never implicitly deleted.
+
 ```ts
 import { preflightCapturePublication } from "@apparent/engine-sdk/capture";
 import { createRecordPublicationRecovery } from "@apparent/record/publication";
