@@ -377,7 +377,9 @@ mod tests {
     use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
     fn temp() -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
+        // macOS may spell its temporary root through the /var symlink.
+        // Resolve the fixture root; Store must still reject aliased paths.
+        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "apparent-secure-{}",
             crate::identity::new_id().unwrap()
         ));
