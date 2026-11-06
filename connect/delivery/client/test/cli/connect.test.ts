@@ -53,3 +53,19 @@ test("returned actions are frozen", () => {
   assert.equal(Object.isFrozen(parseConnectCommand(["login"])), true);
   assert.equal(Object.isFrozen(parseConnectCommand(["upload", "bundle"])), true);
 });
+
+test("terminal separators preserve actions without positional arguments", () => {
+  assert.deepEqual(parseConnectCommand(["connect", "status", "--"]), { kind: "status", account: false });
+  assert.deepEqual(parseConnectCommand(["status", "--account", "--"]), { kind: "status", account: true });
+  for (const verb of ["disable", "logout", "retry"] as const) assert.deepEqual(parseConnectCommand([verb, "--"]), { kind: verb });
+  assert.deepEqual(parseConnectCommand(["shares", "list", "--"]), { kind: "shares-list" });
+  assert.throws(() => parseConnectCommand(["status", "--", "--account"]), { category: "invalid_arguments" });
+});
+
+test("attached values and lone hyphens remain values, while separate flags are not consumed", () => {
+  assert.equal((parseConnectCommand(["login", "--server=--literal"]) as { server: string }).server, "--literal");
+  assert.equal((parseConnectCommand(["login", "--server", "-"]) as { server: string }).server, "-");
+  assert.deepEqual(parseConnectCommand(["upload", "-"]), { kind: "upload", bundle: "-" });
+  assert.deepEqual(parseConnectCommand(["shares", "revoke", "-"]), { kind: "shares-revoke", id: "-" });
+  assert.throws(() => parseConnectCommand(["login", "--server", "-x"]), { category: "invalid_arguments" });
+});

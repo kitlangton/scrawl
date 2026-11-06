@@ -35,7 +35,7 @@ export function parseConnectCommand(args: readonly string[]): ConnectCommand {
       if (option) {
         const { name, inline } = option;
         const value = inline ?? rest[++i];
-        if (value === undefined || value.startsWith("--")) invalid(`missing value for ${name}`);
+        if (value === undefined || (inline === undefined && value.length > 1 && value.startsWith("-"))) invalid(`missing value for ${name}`);
         if (name === "--server") { if (server !== undefined) invalid("duplicate --server"); server = value; }
         else {
           if (seenScope) invalid("duplicate --scope"); seenScope = true;
@@ -48,12 +48,13 @@ export function parseConnectCommand(args: readonly string[]): ConnectCommand {
     return Object.freeze({ kind: "login", ...(server === undefined ? {} : { server }), scope, consentUpload, browser });
   }
   if (verb === "status") {
-    if (!rest.length) return Object.freeze({ kind: "status", account: false });
-    if (rest.length === 1 && rest[0] === "--account") return Object.freeze({ kind: "status", account: true });
+    const options = withoutTerminalSeparator(rest);
+    if (!options.length) return Object.freeze({ kind: "status", account: false });
+    if (options.length === 1 && options[0] === "--account") return Object.freeze({ kind: "status", account: true });
     invalid(rest[0] === "--account" ? "duplicate or unexpected status argument" : "unexpected status argument");
   }
   if (verb === "disable" || verb === "logout" || verb === "retry") {
-    if (rest.length) invalid(`unexpected ${verb} argument`);
+    if (withoutTerminalSeparator(rest).length) invalid(`unexpected ${verb} argument`);
     return Object.freeze({ kind: verb });
   }
   if (verb === "upload") {
@@ -63,7 +64,7 @@ export function parseConnectCommand(args: readonly string[]): ConnectCommand {
   }
   if (verb === "shares") {
     const [action, ...tail] = rest;
-    if (action === "list") { if (tail.length) invalid("unexpected shares list argument"); return Object.freeze({ kind: "shares-list" }); }
+    if (action === "list") { if (withoutTerminalSeparator(tail).length) invalid("unexpected shares list argument"); return Object.freeze({ kind: "shares-list" }); }
     if (action === "revoke") {
       const id = onePositional(tail, "shares revoke");
       if (id === undefined) invalid("missing share management ID");
@@ -86,9 +87,13 @@ function onePositional(args: readonly string[], context: string): string | undef
   let value: string | undefined, positionalOnly = false;
   for (const arg of args) {
     if (!positionalOnly && arg === "--") { positionalOnly = true; continue; }
-    if (!positionalOnly && arg.startsWith("-")) invalid(`unexpected ${context} option`);
+    if (!positionalOnly && arg.length > 1 && arg.startsWith("-")) invalid(`unexpected ${context} option`);
     if (value !== undefined) invalid(`unexpected ${context} argument`);
     value = arg;
   }
   return value;
+}
+
+function withoutTerminalSeparator(args: readonly string[]): readonly string[] {
+  return args.at(-1) === "--" ? args.slice(0, -1) : args;
 }
