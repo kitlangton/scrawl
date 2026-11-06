@@ -316,7 +316,7 @@ test("confirmed clipboard receipt is scoped to the saved artifact and command, n
   facts.captures = [{ captureId: "saved-copy", artifactId: "artifact-copy", phase: "saved", delivery: "unknown", outcomes: [{ kind: "save", at: "2026-11-06T12:00:00Z", ok: true }] }];
   let writes = 0;
   const client = createRecordCapabilityProvider({ runtime, providerEpoch: "provider-copy", captureFacts: { readFacts: async () => facts },
-    clipboard: { async copyLocal(input: { captureId: string; artifactId: string }) { writes++; return { status: "applied" as const, ...input, digest: "a".repeat(64), byteLength: 42 }; } },
+    clipboard: { async copyLocal(input: { captureId: string; artifactId: string }) { writes++; facts.captures[0]!.delivery = "local-only"; facts.revision++; return { status: "applied" as const, ...input, digest: "a".repeat(64), byteLength: 42 }; } },
   });
   await new Promise(resolve => setImmediate(resolve));
   const snapshot = client.current();
@@ -328,6 +328,7 @@ test("confirmed clipboard receipt is scoped to the saved artifact and command, n
   const receipt = result.snapshot.captures.find(c => c.captureId === "saved-copy")!.outcomes.find(o => o.kind === "copy");
   assert.deepEqual(receipt, { kind: "copy", at: receipt?.at, ok: true, evidence: "native-write-readback", artifactId: "artifact-copy", requestId: "copy-explicit", digest: "a".repeat(64), byteLength: 42 });
   assert.equal(writes, 1);
+  assert.equal(result.snapshot.captures[0]!.delivery, "local-only", "copy readback cannot regress newer authoritative capture facts");
   assert.equal((await client.execute({ ...request, captureId: "saved-copy", expected: { providerEpoch: result.snapshot.providerEpoch, revision: result.snapshot.revision } })).status, "refused");
   assert.equal(writes, 1, "same command is never retried");
   client.detach();

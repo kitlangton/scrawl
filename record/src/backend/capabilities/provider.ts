@@ -368,7 +368,9 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
           await refresh();
           if (detached || snapshot().captures.find(item => item.captureId === known.captureId)?.artifactId !== artifactId)
             return response("outcome-unknown");
-          captures.set(known.captureId, mergeCapture(captures.get(known.captureId), { ...known, outcomes: [{
+          const latest = captures.get(known.captureId);
+          if (!latest || latest.artifactId !== artifactId) return response("outcome-unknown");
+          captures.set(known.captureId, mergeCapture(latest, { ...latest, outcomes: [{
             kind: "copy", at: new Date().toISOString(), ok: true, evidence: "native-write-readback",
             artifactId, requestId: command.requestId, digest: receipt.digest, byteLength: receipt.byteLength,
           }] }));

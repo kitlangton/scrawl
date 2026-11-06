@@ -10,7 +10,7 @@ export interface RecordLocalHandoffResolution extends RecordLocalClipboardIdenti
   handoff: LocalHandoffInput;
 }
 
-/** Structural subset of the published Engine SDK clipboard port. */
+/** Structural subset of the published Platform native-host clipboard port. */
 export interface NativeClipboardPortInput {
   writeText(text: string, observed: { processEpoch: string; revision: number }): Promise<NativeClipboardWriteResultInput>;
 }

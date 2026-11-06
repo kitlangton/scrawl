@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { createRecordLocalClipboardPort } from "../../dist/backend/host/native/index.js";
+import { createRecordLocalClipboardPort, type NativeClipboardPortInput } from "../../dist/backend/host/native/index.js";
 import { formatLocalHandoff, type LocalHandoffInput } from "../../dist/backend/handoff/index.js";
 
 const identity = { captureId: "capture-1", artifactId: "artifact-1" };
@@ -50,7 +50,8 @@ function harness(options: {
     get snapshots() { return snapshots; },
     get shutdowns() { return shutdowns; },
     port: createRecordLocalClipboardPort({
-      clipboard,
+      // Deliberately malformed replies exercise the runtime boundary; public producer conformance is checked separately.
+      clipboard: clipboard as NativeClipboardPortInput,
       nativeHost,
       resolveHandoff: options.resolve ?? (async () => resolution()),
       maximumTextBytes: options.maximumTextBytes ?? 21_800,
@@ -183,4 +184,33 @@ test("snapshot failure is a known unavailable refusal before dispatch", async ()
   const h = harness({ snapshot: async () => { throw new Error("private snapshot detail"); } });
   assert.deepEqual(await h.port.copyLocal(identity), { status: "refused", ...identity, reason: "unavailable" });
   assert.equal(h.calls.length, 0);
+});
+
+
+test("public clipboard adapter composes with the provider and pill using controlled Saved and native receipts", async () => {
+  const { createRecordCapabilityProvider } = await import("@apparent/record/capabilities");
+  const { createRecordClientPillHost, disposeWorkflowPillHost } = await import("@apparent/record/ui");
+  const h = harness();
+  const startup = { state: "ready" as const, knownRequestIds: [] };
+  const state = { phase: "idle" as const, readiness: { ready: true as const } };
+  const report = { requestIds: [], storageUnavailable: false, reconciliation: "complete" as const };
+  const client = createRecordCapabilityProvider({
+    providerEpoch: "controlled-copy-provider", clipboard: h.port,
+    runtime: { state, startup, subscribe: () => () => {}, dispatch: async () => state, reconcileStartup: async () => startup, unresolvedOwnership: () => report, dispose: () => report },
+    captureFacts: { readFacts: async () => ({ version: 1, providerEpoch: "controlled-output", revision: 1, nextShortcutAdmission: { state: "unavailable" }, captures: [{
+      ...identity, phase: "saved", delivery: "unknown", outcomes: [{ kind: "save", at: "2026-11-06T12:00:00Z", ok: true }],
+    }] }) },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  const host = createRecordClientPillHost(client, { createRequestId: () => "public-copy-action" });
+  const view = (await host.read())!;
+  await host.act(view.revision, "copy");
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0]!.text, formatLocalHandoff(handoff).text);
+  assert.equal((await host.read())!.notice, "Handoff copied");
+  const receipt = client.current().captures[0]!.outcomes.find(value => value.kind === "copy");
+  assert.equal(receipt && "evidence" in receipt && receipt.evidence, "native-write-readback");
+  assert.equal(receipt && "requestId" in receipt && receipt.requestId, "public-copy-action");
+  disposeWorkflowPillHost(host); client.detach();
+  assert.equal(h.shutdowns, 0, "neither consumer closes caller-owned native ports");
 });

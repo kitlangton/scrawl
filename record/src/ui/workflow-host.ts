@@ -86,6 +86,7 @@ export function createRecordClientPillHost(client: RecordClient, options: Record
     if (view.phase === "completed" && feedback && currentViewCaptureId(snapshot) === feedback.captureId &&
         snapshot.captures.find(item => item.captureId === feedback.captureId)?.artifactId === feedback.artifactId) {
       view.warning = feedback.message; view.notice = null;
+      view.pocket = { tone: "warning", title: "Local handoff", description: feedback.message, actionIds: [] };
     }
     for (const observer of [...observers]) try { observer(structuredClone(view)); } catch { observers.delete(observer); }
   };
@@ -115,7 +116,7 @@ export function createRecordClientPillHost(client: RecordClient, options: Record
           const saved = latest.captures.find(item => item.captureId === owned.captureId && item.artifactId === owned.artifactId);
           if (!saved) return;
           copyFeedback = confirmedCopy(saved, command.requestId) ? undefined : { captureId: owned.captureId, artifactId: owned.artifactId,
-            message: result.status === "refused" ? "Copy unavailable" : "Copy outcome unknown" };
+            message: result.status === "refused" ? result.reason === "too-large" ? "Handoff exceeds the clipboard limit" : "Copy unavailable" : "Copy outcome unknown" };
           publish(latest);
         } catch {
           if (disposed || snapshot?.providerEpoch !== observed.providerEpoch) return;
@@ -169,7 +170,10 @@ function presentClient(value: CapabilitySnapshot, revision: number, options: Rec
     { id: "record", label: "Record again", enabled: canStart(value), selected: false, primary: false },
   ]; }
   if (active?.phase === "unknown") result.actions = [{ id: "inspect", label: "Check status", enabled: true, selected: false, primary: true }];
-  if (saved) result.notice = confirmedCopy(saved) ? "Handoff copied" : "Saved locally";
+  if (saved) {
+    result.notice = confirmedCopy(saved) ? "Handoff copied" : "Saved locally";
+    result.pocket = { tone: result.warning ? "warning" : "info", title: "Local handoff", description: result.warning ?? "", actionIds: [] };
+  }
   if (active?.delivery === "unknown" || active?.delivery === "local-only")
     result.warning = result.warning ? `${result.warning}; delivery status unavailable` : "Delivery status unavailable";
   return result;

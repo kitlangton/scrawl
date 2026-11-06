@@ -107,7 +107,7 @@
     "esbuild": "0.25.12",
     "@tailwindcss/cli": "4.1.17",
     "@apparent/engine-sdk": "file:vendor/engine-sdk-0.4.0.tgz",
-    "@apparent/app-contracts": "file:vendor/app-contracts-0.1.0-a8194a4.tgz",
+    "@apparent/app-contracts": "file:vendor/app-contracts-0.1.0-33f9521.tgz",
     "react": "19.2.0",
     "react-dom": "19.2.0"
   }
