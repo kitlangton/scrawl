@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { inventory, VISUAL_OBSERVATIONS } from './contract.ts'
 import { validateMacArtifact, type MacManifest } from './macos-contract.ts'
+import { recoveryLaunch } from './recovery-contract.ts'
 
 if (process.platform !== 'darwin' || process.arch !== 'x64' || process.env.OWNER_TARGET !== 'macos-x64') throw new Error('Mac production requires native macos-x64')
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -38,7 +39,7 @@ for (const file of [worker, helper]) {
   }
 }
 for (const file of ['apparent-engine-frames', 'libexec/apparent-engine-frames', 'libexec/apparent-engine-frames-native']) chmodSync(resolve(output, file), 0o755)
-const manifest: MacManifest = { schema: 1, sourceSha, target: 'macos-x64', rustTriple: 'x86_64-apple-darwin', capabilities: ['media/1', 'media/2'], visualObservations: VISUAL_OBSERVATIONS, media2Launch: { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'], sharesCaptureRuntime: true }, launch: { entry: 'apparent-engine-frames', worker: 'libexec/apparent-engine-frames', nativeHelper: 'libexec/apparent-engine-frames-native', argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1'], pathLookup: false, runtimeBuilds: false }, environment: { architecture: 'x86_64', minimumMacOS: '15.0', osRelease: run('sw_vers', ['-productVersion']), sdk: run('xcrun', ['--show-sdk-version']), swift: run('xcrun', ['swiftc', '--version']), rustc: run('rustc', ['--version']), cargo: run('cargo', ['--version']), systemLibraries: [...libraries].sort() }, runtimeFiles: inventory(output) }
+const manifest: MacManifest = { schema: 1, sourceSha, recoveryLaunch: recoveryLaunch('media/2'), target: 'macos-x64', rustTriple: 'x86_64-apple-darwin', capabilities: ['media/1', 'media/2'], visualObservations: VISUAL_OBSERVATIONS, media2Launch: { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'], sharesCaptureRuntime: true }, launch: { entry: 'apparent-engine-frames', worker: 'libexec/apparent-engine-frames', nativeHelper: 'libexec/apparent-engine-frames-native', argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1'], pathLookup: false, runtimeBuilds: false }, environment: { architecture: 'x86_64', minimumMacOS: '15.0', osRelease: run('sw_vers', ['-productVersion']), sdk: run('xcrun', ['--show-sdk-version']), swift: run('xcrun', ['swiftc', '--version']), rustc: run('rustc', ['--version']), cargo: run('cargo', ['--version']), systemLibraries: [...libraries].sort() }, runtimeFiles: inventory(output) }
 writeFileSync(resolve(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx', mode: 0o644 })
 validateMacArtifact(output)
 execFileSync('node', ['--experimental-strip-types', '--test', resolve(pkg, 'test/packaged-h264.test.ts'), resolve(root, 'engine/tests/media-peer.test.ts')], { cwd: pkg, stdio: 'inherit', env: { ...process.env, APPARENT_ENGINE_FRAMES_BIN: resolve(output, 'apparent-engine-frames'), APPARENT_RETAINED_MEDIA_FIXTURE: resolve(root, 'engine/core/tests/fixtures/tiny.mp4') } })

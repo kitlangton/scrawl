@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { BASELINE_LIBRARIES, REQUIRED_PLUGINS, validateArtifact, VISUAL_OBSERVATIONS } from '../src/contract.ts'
+import { recoveryLaunch, validateRecoveryAdvertisement } from '../src/recovery-contract.ts'
 
 function artifact() {
   const root = mkdtempSync(resolve(realpathSync(tmpdir()), 'engine-media-contract-'))
@@ -21,6 +22,16 @@ function artifact() {
   return root
 }
 import { readFileSync as requireBytes } from 'node:fs'
+
+test('recovery advertisement binds role/channel/argv without inferring release from old artifacts', () => {
+  validateRecoveryAdvertisement(undefined, 'media/2')
+  for (const channel of ['capture/2', 'media/2'] as const) {
+    const expected = recoveryLaunch(channel)
+    validateRecoveryAdvertisement(JSON.parse(JSON.stringify(expected)), channel)
+    for (const value of [{ ...expected, startsFreshCapture: true }, { ...expected, channel: channel === 'media/2' ? 'capture/2' : 'media/2' }, { ...expected, argv: expected.argv.slice(0, -2) }, { ...expected, onInputEof: 'cancel' }, { ...expected, unrecognized: true }]) assert.throws(() => validateRecoveryAdvertisement(value, channel), /recovery lifetime/)
+    assert.throws(() => validateRecoveryAdvertisement(expected, channel, false), /recovery lifetime/)
+  }
+})
 
 test('Linux entry forwards recovery only for media2 and refuses malformed nonce/version', () => {
   const root = mkdtempSync(resolve(realpathSync(tmpdir()), 'engine-media-argv-'))

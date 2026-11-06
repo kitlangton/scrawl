@@ -13,7 +13,7 @@ function runtime(value: string): void {
 }
 const refuseLegacyClose = async (): Promise<never> => { throw new Error("Recovery connection ownership belongs to peer.release(), not client.close()"); };
 
-/** Candidate only: package export/admission requires native qualification.
+/** Requires an admitted artifact supporting the negotiated recovery lifetime.
  * After local admission is closed and local operations drained, release the
  * peer even when runtime clearance is unresolved. Never use this to detach an
  * already-owning live-capture client or infer NativeSaved/runtime clearance.

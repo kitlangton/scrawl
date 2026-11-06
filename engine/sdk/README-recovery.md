@@ -1,8 +1,9 @@
-# Recovery connection candidate
+# Recovery connection ownership
 
-This source candidate is not exported or an available native capability. SDK
-0.4.1 and its admitted tarball are unchanged. Native qualification, review,
-versioned packaging and delivery remain required before consumer adoption.
+SDK 0.4.3 exports `@apparent/engine-sdk/recovery`. The export requires a matching
+admitted native recovery artifact; it does not upgrade earlier native packages.
+Native qualification and per-platform delivery remain separate adoption gates.
+Existing SDK versions and their immutable tarballs remain unchanged.
 
 `launchCaptureRecoveryPeer` and `launchMedia2RecoveryPeer` return a normal client,
 immutable native lifetime facts and a separately owned `release()` handle. They

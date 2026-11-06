@@ -51,3 +51,10 @@ capture and recover/reprocess remain full Engine acceptance gates.
 
 RPC duplicate detection covers the latest 4,096 accepted IDs with bounded memory.
 Use fresh RPC IDs; durable capture/request replay is a separate journal binding.
+
+New recovery-capable archives declare `recoveryLaunch` with the exact
+`apparent.engine-recovery-peer/1` identity and eight-argument launch. Use SDK
+0.4.3's separately negotiated recovery peer, not legacy close, to relinquish an
+unresolved recovery connection after local operations drain. Absent metadata
+does not imply support. See [SDK ownership semantics](../../sdk/README-recovery.md).
+Archive admission and native per-platform qualification remain separate gates.

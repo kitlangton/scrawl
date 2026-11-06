@@ -90,5 +90,13 @@ at `/tmp/m2proof-23aec-UvQjX3/package-receipt.json` and
 `/tmp/m2proof-23aec-UvQjX3/guest-run-23aec/result.json`; the guest artifact
 manifest is `/tmp/m2proof-23aec-UvQjX3/guest-artifacts-manifest.json`. This proof
 used an explicit plugin override from archive 463 and is local-only: it cannot
-be reused as CI evidence or artifact admission. Media/2 remains unadmitted and
-has no installed or Saved claim.
+be reused as CI evidence or artifact admission. That historical candidate did
+not establish admission; current admitted routes are recorded in the owning
+[implementation inventory](../../IMPLEMENTATION.md). No installed route is implied.
+
+Recovery-capable archives additionally declare the exact `recoveryLaunch`
+schema/channel/argv. SDK0.4.3 `/recovery` negotiates that role before exposing a
+client; missing metadata or an old artifact never becomes a safe-close fallback.
+The peer retains finite jobs under their original deadlines when the caller
+releases its connection. See [SDK ownership semantics](../../sdk/README-recovery.md).
+Recovery artifact admission and affected-platform proof remain separate gates.

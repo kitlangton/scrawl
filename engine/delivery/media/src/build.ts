@@ -3,6 +3,7 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BASELINE_LIBRARIES, VISUAL_OBSERVATIONS, inventory, REQUIRED_PLUGINS, sha256, validateArtifact, type MediaManifest } from './contract.ts'
+import { recoveryLaunch } from './recovery-contract.ts'
 
 if (process.platform === 'darwin') { await import('./build-macos.ts'); process.exit(0) }
 
@@ -69,7 +70,7 @@ const osRelease = readFileSync('/etc/os-release', 'utf8').split('\n').find(x => 
 const glibc = run('ldd', ['--version']).split('\n')[0]
 const rustc = run('rustc', ['--version']); const cargo = run('cargo', ['--version']); const gstreamer = run('pkg-config', ['--modversion', 'gstreamer-1.0'])
 const pluginSource = process.env.APPARENT_GST_PLUGIN_SOURCE ? `pkg-config:${gstDir};explicit-override:${process.env.APPARENT_GST_PLUGIN_SOURCE}` : `pkg-config:${gstDir}`
-const manifest: MediaManifest = { schema: 1, sourceSha, target: 'linux-x64', rustTriple: 'x86_64-unknown-linux-gnu', capabilities: ['media/1', 'media/2'], visualObservations: VISUAL_OBSERVATIONS, media2Launch: { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'], sharesCaptureRuntime: true }, launch: { entry: 'apparent-engine-frames', argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1'], worker: 'libexec/apparent-engine-frames', pathLookup: false, runtimeBuilds: false }, environment: { osRelease, kernel: run('uname', ['-r']), architecture: 'x86_64', rustc, cargo, gstreamer, glibc, pluginSource, plugins, baseline: [...baseline].sort() }, runtimeFiles: inventory(output) }
+const manifest: MediaManifest = { schema: 1, sourceSha, recoveryLaunch: recoveryLaunch('media/2'), target: 'linux-x64', rustTriple: 'x86_64-unknown-linux-gnu', capabilities: ['media/1', 'media/2'], visualObservations: VISUAL_OBSERVATIONS, media2Launch: { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'], sharesCaptureRuntime: true }, launch: { entry: 'apparent-engine-frames', argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1'], worker: 'libexec/apparent-engine-frames', pathLookup: false, runtimeBuilds: false }, environment: { osRelease, kernel: run('uname', ['-r']), architecture: 'x86_64', rustc, cargo, gstreamer, glibc, pluginSource, plugins, baseline: [...baseline].sort() }, runtimeFiles: inventory(output) }
 writeFileSync(resolve(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx', mode: 0o644 })
 if (frozen() !== sourceSha) throw new Error('source changed during media build')
 validateArtifact(output)
