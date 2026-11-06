@@ -228,6 +228,15 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const areaMovie = join(areaReady.materials!.root, "recording.mp4");
     const areaInfo = JSON.parse(execFileSync(ffprobeCommand, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name", "-of", "json", areaMovie], { encoding: "utf8" }));
     assert.deepEqual(areaInfo.streams[0], { codec_name: "h264", width: 682, height: 384 }, "the odd-width physical area is resampled to valid even encoded dimensions");
+    if (process.env.APPARENT_CAPTURE_EVIDENCE_DIR) {
+      const evidence = join(resolve(process.env.APPARENT_CAPTURE_EVIDENCE_DIR), "area");
+      mkdirSync(evidence, { recursive: true, mode: 0o700 });
+      copyFileSync(areaMovie, join(evidence, "recording.mp4"));
+      copyFileSync(join(areaReady.materials!.root, areaReady.materials!.payloadFile.relativePath), join(evidence, "materials.json"));
+      writeFileSync(join(evidence, "manifest.json"), `${JSON.stringify(areaReady.materials, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      writeFileSync(join(evidence, "ffprobe.json"), `${JSON.stringify(areaInfo, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      execFileSync(ffmpegCommand, ["-v", "error", "-i", areaMovie, "-frames:v", "1", join(evidence, "first-frame.png")]);
+    }
 
     const third = startInput(source, id(), token(), "eof");
     await client.start(third);
