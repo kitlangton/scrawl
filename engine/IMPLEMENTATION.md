@@ -81,3 +81,11 @@ assembly of optional RGB and settings. Whiteboard UI adaptation is not inferred
 from this screen-stroke boundary. These native donors still need physical moves
 under `engine/`; this compatible prerequisite does not introduce a parallel renderer
 or claim a standalone drawing/export operation or installed adoption.
+
+Focused proof covers exact RGB serialization/rebase/clipping, packed SDK 0.3.2
+imports/types, software PNG pixels, real Linux H.264 export, and the complete
+Swift helper build plus file-only native Mac stroke/pin/laser rendering. Explicit
+RGB uses sRGB on Mac; device RGB otherwise converts through the display profile.
+Absent-color Mac raw output was compared byte-for-byte with the original renderer.
+No screen/microphone capture or installed routing was exercised for this color
+slice; standalone capture/2 accepted-stroke collection remains unavailable.
