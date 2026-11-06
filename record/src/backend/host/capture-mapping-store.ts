@@ -4,14 +4,15 @@ import type { CaptureMapping, CaptureMappingStore } from "../engine/sdk-adapter.
 import { ensurePrivateFile, ensurePrivateRoot, hostError, validatePrivateFile } from "./private-path.js";
 import { initializePrivateSqlite } from "./sqlite-initialization.js";
 
-const schemaVersion = 1;
+const schemaVersion = 2;
 const valid = (mapping: CaptureMapping) =>
   typeof mapping.requestId === "string" && mapping.requestId.length > 0 && Buffer.byteLength(mapping.requestId) <= 4096 &&
   /^[0-9a-f]{32}$/u.test(mapping.captureId) && /^[0-9a-f]{64}$/u.test(mapping.ownerToken) &&
   typeof mapping.bundleId === "string" && Buffer.byteLength(mapping.bundleId) > 0 && Buffer.byteLength(mapping.bundleId) <= 255 &&
   !/[\\/\p{Cc}]/u.test(mapping.bundleId) && mapping.bundleId !== "." && mapping.bundleId !== ".." &&
   typeof mapping.bundlePath === "string" && isAbsolute(mapping.bundlePath) && resolve(mapping.bundlePath) === mapping.bundlePath &&
-  mapping.bundlePath.length <= 4096 && !mapping.bundlePath.includes("\0");
+  mapping.bundlePath.length <= 4096 && !mapping.bundlePath.includes("\0") &&
+  (mapping.capture2Intent === undefined || (typeof mapping.capture2Intent === "string" && Buffer.byteLength(mapping.capture2Intent) <= 16384));
 
 /** SQLite-backed owner-token store. The explicit root must be a private host directory. */
 export class SqliteCaptureMappingStore implements CaptureMappingStore {
@@ -23,10 +24,13 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
     this.#databasePath = join(privateRoot, "capture-mappings.sqlite");
   }
 
-  async listRequestIds(): Promise<string[]> {
+  async listRequestIds(protocol?: "v1" | "capture2"): Promise<string[]> {
     const db = await this.#open();
     try {
-      return db.prepare("SELECT request_id FROM capture_mapping ORDER BY request_id").all()
+      const query = protocol === "v1" ? "SELECT request_id FROM capture_mapping WHERE capture2_intent IS NULL ORDER BY request_id"
+        : protocol === "capture2" ? "SELECT request_id FROM capture_mapping WHERE capture2_intent IS NOT NULL ORDER BY request_id"
+        : "SELECT request_id FROM capture_mapping ORDER BY request_id";
+      return db.prepare(query).all()
         .map(row => {
           const requestId = row.request_id;
           if (typeof requestId !== "string" || !requestId.length || Buffer.byteLength(requestId) > 4096) throw hostError();
@@ -53,18 +57,21 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
     try {
       db = await this.#open();
       db.exec("BEGIN IMMEDIATE");
-      const existing = db.prepare("SELECT request_id, capture_id, owner_token, bundle_id, bundle_path FROM capture_mapping WHERE request_id = ?").get(mapping.requestId);
+      const existing = db.prepare("SELECT request_id, capture_id, owner_token, bundle_id, bundle_path, capture2_intent FROM capture_mapping WHERE request_id = ?").get(mapping.requestId);
       if (existing) {
         db.exec("COMMIT");
-        return rowToMapping(existing);
+        const winner = rowToMapping(existing);
+        if (winner.capture2Intent !== mapping.capture2Intent) throw new Error("capture2-intent-conflict");
+        return winner;
       }
-      db.prepare("INSERT INTO capture_mapping (request_id, capture_id, owner_token, bundle_id, bundle_path) VALUES (?, ?, ?, ?, ?)")
-        .run(mapping.requestId, mapping.captureId, mapping.ownerToken, mapping.bundleId, mapping.bundlePath);
+      db.prepare("INSERT INTO capture_mapping (request_id, capture_id, owner_token, bundle_id, bundle_path, capture2_intent) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(mapping.requestId, mapping.captureId, mapping.ownerToken, mapping.bundleId, mapping.bundlePath, mapping.capture2Intent ?? null);
       db.exec("COMMIT");
       return { ...mapping };
-    } catch {
+    } catch (error) {
       try { db?.exec("ROLLBACK"); } catch { /* transaction may already be committed */ }
       try { db?.close(); } catch { /* the handle may already be closed */ }
+      if (error instanceof Error && error.message === "capture2-intent-conflict") throw new Error("Record capture intent conflicts with its durable request binding");
       const reconciled = await this.#read("request_id", mapping.requestId).catch(() => undefined);
       if (reconciled) return reconciled;
       throw hostError();
@@ -77,7 +84,7 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
     if (typeof key !== "string" || !key.length || Buffer.byteLength(key) > 4096) throw hostError();
     const db = await this.#open();
     try {
-      const row = db.prepare(`SELECT request_id, capture_id, owner_token, bundle_id, bundle_path FROM capture_mapping WHERE ${column} = ?`).get(key);
+      const row = db.prepare(`SELECT request_id, capture_id, owner_token, bundle_id, bundle_path, capture2_intent FROM capture_mapping WHERE ${column} = ?`).get(key);
       return row ? rowToMapping(row) : undefined;
     } catch {
       throw hostError();
@@ -96,7 +103,9 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
       await initializePrivateSqlite(db);
       const version = Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
       if (version === 0) {
-        db.exec("CREATE TABLE IF NOT EXISTS capture_mapping (request_id TEXT PRIMARY KEY, capture_id TEXT NOT NULL UNIQUE, owner_token TEXT NOT NULL, bundle_id TEXT NOT NULL UNIQUE, bundle_path TEXT NOT NULL UNIQUE) STRICT; PRAGMA user_version = 1;");
+        db.exec("CREATE TABLE IF NOT EXISTS capture_mapping (request_id TEXT PRIMARY KEY, capture_id TEXT NOT NULL UNIQUE, owner_token TEXT NOT NULL, bundle_id TEXT NOT NULL UNIQUE, bundle_path TEXT NOT NULL UNIQUE, capture2_intent TEXT) STRICT; PRAGMA user_version = 2;");
+      } else if (version === 1) {
+        db.exec("ALTER TABLE capture_mapping ADD COLUMN capture2_intent TEXT; PRAGMA user_version = 2;");
       } else if (version !== schemaVersion) {
         db.close();
         throw hostError();
@@ -116,6 +125,7 @@ function rowToMapping(row: Record<string, unknown>): CaptureMapping {
     ownerToken: row.owner_token,
     bundleId: row.bundle_id,
     bundlePath: row.bundle_path,
+    ...(typeof row.capture2_intent === "string" ? { capture2Intent: row.capture2_intent } : {}),
   } as CaptureMapping;
   if (!valid(mapping)) throw hostError();
   return mapping;
