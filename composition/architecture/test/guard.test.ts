@@ -54,6 +54,53 @@ test('Agent consumes the published public Record package while private paths and
   }, root => assert(checkArchitecture(root, ['record']).some(error => error.includes('dependency @apparent/agent violates record -> agent'))));
 });
 
+test('Agent public NativeHost edge is limited to root and clipboard and never reversed', () => {
+  const host = JSON.stringify({ name: '@apparent/native-host', exports: {
+    '.': './dist/client.js', './clipboard': './dist/clipboard.js', './pen': './dist/pen.js',
+  } });
+  const agent = JSON.stringify({ name: '@apparent/agent', dependencies: {
+    '@apparent/native-host': 'file:vendor/native-host.tgz',
+  } });
+  const base = { 'composition/native-host/package.json': host, 'agent/package.json': agent };
+  fixture({ ...base, 'agent/src/copy.ts': "import '@apparent/native-host'; import '@apparent/native-host/clipboard';" },
+    root => assert.deepEqual(checkArchitecture(root, ['agent']), []));
+  fixture({ ...base, 'agent/package.json': JSON.stringify({ name: '@apparent/agent', dependencies: {
+    '@apparent/native-host': 'file:../composition/native-host',
+  } }) }, root => assert.deepEqual(checkArchitecture(root, ['agent']), []));
+  fixture({ ...base, 'composition/private-host/package.json': host,
+    'agent/package.json': JSON.stringify({ name: '@apparent/agent', dependencies: {
+      '@apparent/native-host': 'file:../composition/private-host',
+    } }),
+  }, root => assert(checkArchitecture(root, ['agent']).some(error => error.includes('canonical public package root'))));
+  for (const spec of ['@apparent/native-host/pen', '@apparent/native-host/src/client.ts', '@apparent/other-host']) {
+    fixture({ ...base, 'composition/other/package.json': JSON.stringify({ name: '@apparent/other-host', exports: { '.': './index.ts' } }),
+      'agent/src/copy.ts': `import '${spec}';` }, root => {
+      assert(checkArchitecture(root, ['agent']).some(error => error.includes('forbidden package dependency')));
+    });
+  }
+  fixture({ ...base, 'agent/src/copy.ts': "import '../../composition/native-host/src/client.ts';" },
+    root => assert(checkArchitecture(root, ['agent']).some(error => error.includes('cross-owner path'))));
+  fixture({ ...base, 'agent/src/copy.ts': "import '@apparent/native-host';",
+    'agent/tsconfig.json': JSON.stringify({ compilerOptions: { baseUrl: '..', paths: {
+      '@apparent/native-host': ['composition/native-host/src/client.ts'],
+    } } }), 'composition/native-host/src/client.ts': 'export {};',
+  }, root => assert(checkArchitecture(root, ['agent']).some(error => error.includes('tsconfig alias crosses'))));
+  fixture({ ...base, 'composition/native-host/package.json': JSON.stringify({ name: '@apparent/native-host',
+    dependencies: { '@apparent/agent': '0.1.0' } }), 'composition/native-host/src/client.ts': "import '@apparent/agent';",
+  }, root => {
+    const errors = checkArchitecture(root, ['composition']);
+    assert(errors.some(error => error.includes('dependency @apparent/agent violates')));
+    assert(errors.some(error => error.includes('forbidden package dependency')));
+  });
+  fixture({ ...base, 'agent/package.json': JSON.stringify({ name: '@apparent/agent', exports: { '.': './dist/index.js' } }),
+    'composition/app/src/main.ts': "import '@apparent/agent';",
+  }, root => assert.deepEqual(checkArchitecture(root, ['composition']), []));
+  fixture({ ...base, 'agent/package.json': JSON.stringify({ name: '@apparent/agent', dependencies: {
+    '@apparent/other-host': '0.1.0',
+  } }), 'composition/other/package.json': JSON.stringify({ name: '@apparent/other-host' }),
+  }, root => assert(checkArchitecture(root, ['agent']).some(error => error.includes('dependency @apparent/other-host violates'))));
+});
+
 test('Connect client cannot import Record private implementation', () => fixture({
   'connect/delivery/client/package.json': JSON.stringify({ name: '@apparent/connect-client', exports: { '.': './dist/index.js' } }),
   'connect/delivery/client/src/index.ts': "import '../../../../record/src/private.js';",
