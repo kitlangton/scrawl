@@ -13,7 +13,7 @@ mod movie;
 
 pub use backend::{
     FileIdentity, MaterialsKey, PreparedPublication, PublicationBackend, PublicationEvidence,
-    SealedFile, TrustedPublicationContext, TrustedSource,
+    PublicationRecoveryBinding, SealedFile, TrustedPublicationContext, TrustedSource,
 };
 /// Validate a movie container and its video sample extents from an already-open file.
 pub use movie::validate_movie;
