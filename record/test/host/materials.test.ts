@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -12,8 +12,8 @@ const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 const identity = { captureId: "a".repeat(32), materialsId: "b".repeat(32) };
 const expected: CaptureMaterialsExpected = { key: { ...identity, revision: "0".repeat(64) }, leaseId: "c".repeat(32), bundleId: "materials-test" };
 
-async function fixture(factIdentity = identity) {
-  const root = await mkdtemp(join(tmpdir(), "record-material-reader-")); await chmod(root, 0o700);
+async function fixture(factIdentity = identity, safeForProcessing = true) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "record-material-reader-"))); await chmod(root, 0o700);
   await mkdir(join(root, "facts"), { mode: 0o700 });
   const source = { id: "display", generation: "d".repeat(32), confirmedAtMs: 0, kind: "display" as const, displayId: 1,
     rectangle: { x: 0, y: 0, width: 10, height: 10, scale: 1 }, confirmation: { kind: "explicit-display" as const, id: "e".repeat(32) } };
@@ -35,29 +35,32 @@ async function fixture(factIdentity = identity) {
     confirmedSource: source, invocation, files: [contextFile, videoFile], video: { file: "capture.mp4", width: 10, height: 10, durationMs: 1000 },
     facts: { context: { file: contextFile.relativePath, schema: "apparent.capture-context/1" } },
     collection: { context: "collected", interactions: "unavailable", candidates: "unavailable", transcript: "unavailable", acceptedStrokes: "unavailable" },
-    warnings: [], safety: { nativeRemoteDelivery: "forbidden", safeForProcessing: true } };
-  const payloadBytes = enc(payload); await writeFile(join(root, "materials.json"), payloadBytes, { mode: 0o600 });
+    warnings: [], safety: { nativeRemoteDelivery: "forbidden", safeForProcessing } };
+  const payloadBytes = new TextEncoder().encode(JSON.stringify(payload, null, 2) + "\n"); await writeFile(join(root, "materials.json"), payloadBytes, { mode: 0o600 });
   const payloadFile = await sealed("materials.json", payloadBytes);
   const manifest: MaterialsManifest = { schema: "apparent.capture-materials/1", key: { ...identity, revision: sha(payloadBytes) }, root, leaseId: expected.leaseId, payloadFile };
-  return { root, manifest, expected: { ...expected, key: manifest.key }, ctx };
+  return { root, manifest, expected: { ...expected, key: manifest.key }, ctx, payloadBytes };
 }
 
 test("reads SDK-validated retained bytes while preserving unavailable facts and has no effects", async () => {
   const f = await fixture();
   try {
+    await rm(join(f.root, "capture.mp4")); // Metadata loading must not read or require media files.
     const before = await lstat(join(f.root, "materials.json"), { bigint: true });
     const input = { manifest: f.manifest, expected: f.expected, trustedRoot: f.root };
     const pending = readCaptureMaterials(input);
     input.manifest = { ...f.manifest, root: "/changed-after-call" };
     input.expected = { ...f.expected, leaseId: "9".repeat(32) };
     const result = await pending;
+    assert.deepEqual(result.payloadBytes, f.payloadBytes);
+    assert.equal(sha(result.payloadBytes), result.materials.manifest.key.revision);
     assert.equal(result.materials.payload.clock.durationMs, 1000);
     assert.equal(result.materials.payload.collection.interactions, "unavailable");
     assert.deepEqual([...result.facts.context!.bytes], [...f.ctx]);
     assert.deepEqual(Object.keys(result.assemblyFacts), ["context"]);
     const after = await lstat(join(f.root, "materials.json"), { bigint: true });
     assert.deepEqual([after.dev, after.ino, after.size, after.mtimeNs], [before.dev, before.ino, before.size, before.mtimeNs]);
-    assert.deepEqual((await (await import("node:fs/promises")).readdir(f.root)).sort(), ["capture.mp4", "facts", "materials.json"]);
+    assert.deepEqual((await (await import("node:fs/promises")).readdir(f.root)).sort(), ["facts", "materials.json"]);
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
@@ -69,6 +72,8 @@ test("rejects changed bytes, foreign identity, stale facts, aliases, symlinks an
     await assert.rejects(readCaptureMaterials({ ...matched, manifest: { ...f.manifest, payloadFile: { ...f.manifest.payloadFile, sha256: "9".repeat(64) } } }), /hash mismatch/i);
     await assert.rejects(readCaptureMaterials({ ...matched, expected: { ...f.expected, key: { ...f.expected.key, captureId: "9".repeat(32) } } }), /identity/i);
     await assert.rejects(readCaptureMaterials({ ...matched, limits: { maxFileBytes: 8, maxAggregateBytes: 8 } }), /byte limit/i);
+    await assert.rejects(readCaptureMaterials({ ...matched, limits: { maxFileBytes: f.payloadBytes.length, maxAggregateBytes: f.payloadBytes.length + f.ctx.length - 1 } }), /byte limit/i);
+    await assert.rejects(readCaptureMaterials({ ...matched, manifest: { ...f.manifest, payloadFile: { ...f.manifest.payloadFile, relativePath: "../materials.json" } } }), /escaping/i);
     const fact = join(f.root, "facts/context.json"); await writeFile(fact, "{}", { mode: 0o600 });
     await assert.rejects(readCaptureMaterials(matched), /identity changed|hash mismatch/i);
   } finally { await rm(f.root, { recursive: true, force: true }); }
@@ -95,4 +100,18 @@ test("rejects changed bytes, foreign identity, stale facts, aliases, symlinks an
     await (await import("node:fs/promises")).rename(path, actual); await symlink(actual, path);
     await assert.rejects(readCaptureMaterials({ manifest: leaf.manifest, expected: leaf.expected, trustedRoot: leaf.root }), /regular|symlink/i);
   } finally { await rm(leaf.root, { recursive: true, force: true }); }
+});
+
+
+test("unsafe processing and multiply-linked metadata fail closed without changing source bytes", async () => {
+  const unsafe = await fixture(identity, false);
+  try {
+    await assert.rejects(readCaptureMaterials({ manifest: unsafe.manifest, expected: unsafe.expected, trustedRoot: unsafe.root }), /safety/i);
+  } finally { await rm(unsafe.root, { recursive: true, force: true }); }
+  const linked = await fixture();
+  try {
+    await link(join(linked.root, "materials.json"), join(linked.root, "payload-alias.json"));
+    await assert.rejects(readCaptureMaterials({ manifest: linked.manifest, expected: linked.expected, trustedRoot: linked.root }), /regular private path/i);
+    assert.deepEqual(await (await import("node:fs/promises")).readFile(join(linked.root, "materials.json")), Buffer.from(linked.payloadBytes));
+  } finally { await rm(linked.root, { recursive: true, force: true }); }
 });

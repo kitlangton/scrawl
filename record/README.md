@@ -11,8 +11,10 @@ and each declared collected fact (`context`, `interactions`, `candidates`,
 `transcript`, `acceptedStrokes`) with finite per-file and aggregate byte limits,
 checks sealed identity and SHA-256 before/after bounded `O_NOFOLLOW` reads, and
 delegates schema and fact validation to the packed SDK 0.3.1 public capture API.
-The returned `assemblyFacts` is directly accepted by canonical bundle assembly;
-unavailable collection states remain in the validated materials document.
+The result retains the original `payloadBytes` for exact revision binding. Pass
+them with `materials.manifest` and `assemblyFacts` to canonical bundle assembly;
+never re-encode the parsed payload. Unavailable collection states remain in the
+validated materials document.
 Video/audio stay sealed references. A successful read proves only that local
 bytes matched the supplied seals at read time. It is not native authentication,
 availability, media validation or Saved. Correctness across pathname races still

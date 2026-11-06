@@ -20,6 +20,8 @@ export interface CaptureMaterialsInput {
 }
 export interface CaptureMaterialsRead {
   materials: MaterialsDocument;
+  /** Original detached bytes: re-encoding the parsed payload would change its sealed revision. */
+  payloadBytes: Uint8Array;
   /** Only collected states have entries. Unavailable observations remain in materials.payload.collection. */
   facts: Partial<Record<CaptureMaterialFactKind, CaptureFactInput>>;
   /** Assembly-compatible subset, preserving the exact public SealedFile envelopes. */
@@ -98,8 +100,6 @@ export async function readCaptureMaterials(input: CaptureMaterialsInput): Promis
   const { manifest, expected, trustedRoot } = snapshot;
   await checkRoot(trustedRoot);
   if (manifest.root !== trustedRoot || manifest.payloadFile.relativePath !== safeRelative(manifest.payloadFile.relativePath)) fail("manifest root/path alias mismatch");
-  const sealed = new Map<string, CaptureSealedFile>();
-  for (const file of [manifest.payloadFile]) sealed.set(safeRelative(file.relativePath), file);
   let aggregate = 0;
   const payloadBytes = await readSealed(trustedRoot, manifest.payloadFile, { maxFileBytes }, maxAggregateBytes);
   aggregate += payloadBytes.byteLength;
@@ -130,5 +130,5 @@ export async function readCaptureMaterials(input: CaptureMaterialsInput): Promis
   }
   const assemblyFacts: CaptureMaterialsRead["assemblyFacts"] = {};
   for (const kind of ["context", "interactions", "transcript", "acceptedStrokes"] as const) if (facts[kind]) assemblyFacts[kind] = facts[kind];
-  return { materials: structuredClone(materials), facts, assemblyFacts };
+  return { materials: structuredClone(materials), payloadBytes, facts, assemblyFacts };
 }

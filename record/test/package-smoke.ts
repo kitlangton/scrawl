@@ -28,7 +28,7 @@ try {
   await run('npm', ['pack', '--ignore-scripts', '--pack-destination', scratch], { cwd: root });
   await Promise.all([initConsumer(headless), initConsumer(ui), initConsumer(bundle), initConsumer(publication)]);
 
-  await run('npm', ['install', '--no-audit', '--no-fund', tarball, path.join(root, 'vendor/engine-sdk-0.3.1.tgz')], { cwd: headless });
+  await run('npm', ['install', '--no-audit', '--no-fund', tarball], { cwd: headless });
   const headlessInstalled = path.join(headless, 'node_modules/@apparent/record');
   const manifest = JSON.parse(await readFile(path.join(headlessInstalled, 'package.json'), 'utf8'));
   assert.equal(manifest.scripts?.prepare, 'npm run build', 'source author lifecycle remains compatible');
@@ -39,13 +39,11 @@ try {
   await writeFile(declarations, `
     import { RecordWorkflow } from '@apparent/record';
     import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator } from '@apparent/record/host';
-    import { readCaptureMaterials, type CaptureMaterialsInput, type CaptureMaterialsRead } from '@apparent/record/host/materials';
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
     import { createRecordFixture } from '@apparent/record/fixtures';
-    const read = (input: CaptureMaterialsInput): Promise<CaptureMaterialsRead> => readCaptureMaterials(input);
-    void [RecordWorkflow, createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, read, decodeSelectedFrames, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory, createRecordCapabilityProvider, hasConfirmedArtifactOpen];
+    void [RecordWorkflow, createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, decodeSelectedFrames, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory, createRecordCapabilityProvider, hasConfirmedArtifactOpen];
   `);
   const tsc = path.join(root, 'node_modules/typescript/bin/tsc');
   await run(process.execPath, [tsc, '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', declarations], { cwd: headless });
@@ -54,17 +52,14 @@ try {
     import { createRequire } from 'node:module';
     import { RecordWorkflow } from '@apparent/record';
     import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator } from '@apparent/record/host';
-    import { readCaptureMaterials } from '@apparent/record/host/materials';
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
     import { createRecordFixture } from '@apparent/record/fixtures';
     const require = createRequire(import.meta.url);
-    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui']) assert.throws(() => require.resolve(name));
-    assert.equal(typeof (await import('@apparent/engine-sdk/capture')).validateMaterialsDocument, 'function');
+    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk']) assert.throws(() => require.resolve(name));
     assert.equal(typeof RecordWorkflow, 'function');
     assert.equal(typeof createRecordHostRuntime, 'function');
-    assert.equal(typeof readCaptureMaterials, 'function');
     assert.equal(typeof decodeSelectedFrames, 'function');
     for (const exported of [SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory]) assert.equal(typeof exported, 'function');
     assert.equal(typeof createRecordCapabilityProvider, 'function');
@@ -80,9 +75,14 @@ try {
   await writeFile(bundleDeclarations, `
     import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators } from '@apparent/record/processing/bundle';
     import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts } from '@apparent/engine-sdk/capture';
+    import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
     const validators: BundleValidators = { materials: validateMaterialsDocument, fact: validateFactFile };
     const consume = (input: BundleAssemblyInput) => assembleCanonicalBundle(input, validators);
-    void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
+    const loadAndAssemble = async (input: CaptureMaterialsInput, policy: Omit<BundleAssemblyInput, 'manifest' | 'payloadBytes' | 'facts'>) => {
+      const loaded = await readCaptureMaterials(input);
+      return assembleCanonicalBundle({ ...policy, manifest: loaded.materials.manifest, payloadBytes: loaded.payloadBytes, facts: loaded.assemblyFacts }, validators);
+    };
+    void loadAndAssemble; void consume; void (null as unknown as MaterialsDocument | ContextFacts | InteractionFacts | TranscriptFacts | StrokeFacts);
   `);
   const bundleTsc = path.join(root, 'node_modules/typescript/bin/tsc');
   await run(process.execPath, [bundleTsc, '--noEmit', '--strict', '--types', 'node', '--typeRoots', path.join(root, 'node_modules/@types'), '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', bundleDeclarations], { cwd: bundle });
@@ -90,6 +90,8 @@ try {
     import assert from 'node:assert/strict';
     import { assembleCanonicalBundle } from '@apparent/record/processing/bundle';
     import { validateMaterialsDocument, validateFactFile } from '@apparent/engine-sdk/capture';
+    const {readCaptureMaterials} = await import('@apparent/record/host/materials');
+    assert.equal(typeof readCaptureMaterials, 'function');
     assert.equal(typeof assembleCanonicalBundle, 'function');
     assert.equal(typeof validateMaterialsDocument, 'function');
     assert.equal(typeof validateFactFile, 'function');
