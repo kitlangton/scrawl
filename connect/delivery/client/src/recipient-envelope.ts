@@ -1,4 +1,5 @@
 import type { Asset, Context, Signed } from "./index.js";
+import { decodeStrictJson } from "./recipient/json.ts";
 
 const JSON_BYTES = 128 * 1024;
 const PART_BYTES = 32 * 1024 * 1024;
@@ -25,6 +26,17 @@ export class RecipientEnvelopeError extends Error {
 
 function fail(category: RecipientEnvelopeFailure): never {
   throw new RecipientEnvelopeError(category);
+}
+
+/** Raw wire entrypoint: duplicate keys and byte bounds precede DTO validation. */
+export async function validateRecipientEnvelopeBytesWithVerifier(
+  bytes: Uint8Array, expected: Context, key: Uint8Array,
+  verify: (key: Uint8Array, signed: Signed, signature: string) => Promise<boolean>,
+): Promise<RecipientEnvelope> {
+  let value: unknown;
+  try { value = decodeStrictJson(bytes, JSON_BYTES); }
+  catch { fail("invalid_encryption_envelope"); }
+  return validateRecipientEnvelopeWithVerifier(value, expected, key, verify);
 }
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
