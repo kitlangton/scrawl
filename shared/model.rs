@@ -388,6 +388,9 @@ pub struct Stroke {
     pub pin: Option<u32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub laser: bool,
+    /// Exact recorded sRGB bytes. Absent retains the renderer's unnamed legacy default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgb: Option<[u8; 3]>,
     /// Flat triples `[x, y, dt_ms, ...]` where `x, y` are in `0..=SCALE` and `dt_ms` is ms since `t0`.
     pub pts: Vec<i32>,
 }
@@ -709,6 +712,24 @@ mod tests {
     }
 
     #[test]
+    fn stroke_rgb_preserves_legacy_bytes_and_exact_colored_rebase() {
+        let old = r#"{"t0":100,"t1":200,"fw":100,"fh":100,"pts":[100,200,0,300,400,100]}"#;
+        let mut stroke: Stroke = serde_json::from_str(old).unwrap();
+        assert_eq!(stroke.rgb, None);
+        assert_eq!(serde_json::to_string(&stroke).unwrap(), old);
+        stroke.rgb = Some([0, 203, 255]);
+        let saved = serde_json::to_string(&stroke).unwrap();
+        assert!(saved.contains("\"rgb\":[0,203,255]"));
+        let mut restored: Stroke = serde_json::from_str(&saved).unwrap();
+        assert!(restored.rebase(150));
+        assert_eq!(restored.rgb, Some([0, 203, 255]));
+        for invalid in ["[-1,0,0]", "[256,0,0]", "[0.5,0,0]", "[0,0]", "[0,0,0,0]", "\"coral\""] {
+            let bad = old.replace("\"pts\":", &format!("\"rgb\":{invalid},\"pts\":"));
+            assert!(serde_json::from_str::<Stroke>(&bad).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
     fn stroke_and_event_rebase_shift_dt_and_drop_pre_offset_items() {
         let mut before = Stroke {
             t0: 100,
@@ -718,6 +739,7 @@ mod tests {
             on: None,
             pin: None,
             laser: false,
+            rgb: None,
             pts: vec![10, 20, 0, 30, 40, 300],
         };
         assert!(!before.rebase(500));
@@ -730,6 +752,7 @@ mod tests {
             on: None,
             pin: None,
             laser: false,
+            rgb: None,
             pts: vec![10, 20, 0, 20, 30, 150, 30, 40, 200, 50, 60, 400],
         };
         assert!(spanning.rebase(500));
@@ -745,6 +768,7 @@ mod tests {
             on: None,
             pin: None,
             laser: false,
+            rgb: None,
             pts: vec![10, 20, 0, 50, 60, 200],
         };
         assert!(after.rebase(500));

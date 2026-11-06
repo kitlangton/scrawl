@@ -462,6 +462,7 @@ mod tests {
             on: None,
             pin: None,
             laser: false,
+            rgb: None,
             pts: points
                 .iter()
                 .flat_map(|p| {
