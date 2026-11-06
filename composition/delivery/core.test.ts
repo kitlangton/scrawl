@@ -464,3 +464,37 @@ test('media fingerprint includes the actual dependency probe results and media o
     assert.throws(() => inputDigest(root, media))
   } finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value } }
 })
+
+test('Config fingerprints include compiler and flag changes before candidate admission', () => {
+  const root = resolve(temp, 'config-fingerprint'); newRepo(root)
+  const bin = resolve(temp, 'config-toolchain-bin'); mkdirSync(bin)
+  for (const tool of ['rustc', 'cargo', 'cc', 'xcrun']) { const path = resolve(bin, tool); writeFileSync(path, '#!/bin/sh\nprintf "config compiler version one\\n"\n'); chmodSync(path, 0o755) }
+  const config: Owner = { ...owner, id: 'platform-config', package: 'composition/config/native', inputs: ['composition/config/', 'shared/config-native/', 'shared/contracts/', '.cargo/'], language: 'native' }
+  const saved = { PATH: process.env.PATH, RUSTC: process.env.RUSTC, CC: process.env.CC, CFLAGS: process.env.CFLAGS }
+  try {
+    process.env.PATH = bin + ':' + process.env.PATH; delete process.env.CC; delete process.env.RUSTC
+    const initial = inputDigest(root, config)
+    writeFileSync(resolve(bin, 'rustc'), '#!/bin/sh\nprintf "config compiler version two\\n"\n')
+    assert.notEqual(inputDigest(root, config), initial)
+    const changed = inputDigest(root, config); process.env.CFLAGS = '-DSYNTHETIC_CONFIG_TEST=1'
+    assert.notEqual(inputDigest(root, config), changed)
+    writeFileSync(resolve(bin, 'rustc'), '#!/bin/sh\nexit 1\n')
+    assert.throws(() => inputDigest(root, config))
+  } finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value } }
+})
+
+test('Config candidate sealing retains each staged helper manifest under its own workflow', () => {
+  const config: Owner = { ...owner, id: 'platform-config', kind: 'directory', package: 'composition/config/native', inputs: ['composition/config/'], language: 'native', targets: ['linux-x64', 'macos-x64'] }
+  const input = resolve(temp, 'config-helper-payload'); mkdirSync(input)
+  writeFileSync(resolve(input, 'manifest.json'), JSON.stringify({ sourceSha: 'b'.repeat(40), protocol: 1 }))
+  writeFileSync(resolve(input, 'apparent-config-host'), 'synthetic helper')
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform-config.yml@refs/pull/9/merge', GITHUB_RUN_ID: '997', GITHUB_RUN_ATTEMPT: '1' }
+  for (const target of config.targets) {
+    const sealed = resolve(temp, 'config-helper-sealed-' + target)
+    const receipt = sealPayload(repo, config, target, input, sealed, 'c'.repeat(64), prEnv, true)
+    assert.equal(receipt.buildSourceSha, receipt.sourceSha)
+    const manifest = execFileSync('tar', ['-xOzf', resolve(sealed, 'component.tar.gz'), 'config-helper-payload/manifest.json'], { encoding: 'utf8' })
+    assert.equal(JSON.parse(manifest).sourceSha, 'b'.repeat(40))
+  }
+  assert.throws(() => sealPayload(repo, config, 'linux-x64', input, resolve(temp, 'config-wrong-workflow'), 'c'.repeat(64), { ...prEnv, GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-engine.yml@refs/pull/9/merge' }, true), /canonical/)
+})

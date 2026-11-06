@@ -49,7 +49,7 @@ runs:
       shell: bash
       run: npm --prefix composition/architecture run check -- --owner "$ARCHITECTURE_OWNER"
     - uses: dtolnay/rust-toolchain@stable
-      if: inputs.id == 'engine-native' || inputs.id == 'engine-media-native'
+      if: inputs.language == 'native' && steps.candidate-support.outputs.supported == 'true'
     - name: Install Engine media runtime and fixture dependencies
       if: inputs.id == 'engine-media-native' && inputs.target == 'linux-x64'
       shell: bash
@@ -116,7 +116,7 @@ runs:
         done
         printf '%s\n' "$RUNNER_TEMP/value-stream-no-rust" >> "$GITHUB_PATH"
     - uses: dtolnay/rust-toolchain@stable
-      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.language == 'native' && inputs.id != 'engine-native' && inputs.id != 'engine-media-native'
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.language == 'native' && steps.candidate-support.outputs.supported != 'true'
     - name: Install Engine capture runtime dependencies
       if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.id == 'engine-capture-native'
       shell: bash
