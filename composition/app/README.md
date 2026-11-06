@@ -186,3 +186,37 @@ lane is `APPARENT_ONBOARDING_CONFIG_HOST=<verified-helper> npm run test:electron
 or macOS helper artifact, exercises real packaged main/preload/renderer calls,
 and requires privileged host cleanup to finish before application exit. No Rust
 compilation is added to the normal TypeScript check loop.
+
+## Record host composition checkpoint
+
+`buildShell(output, undefined, { module, resolvePaths? })` accepts a trusted
+composition module exporting `createRecordHostServices({ profilePath })`. It
+returns the public `RecordClient`, authoritative `canClose()` and `close()`.
+The binding is bundled and hashed into the existing shell inventory. The renderer
+cannot select a package, executable, profile, config owner or native filesystem
+path. This Record-only binding is separate from the existing progress binding;
+it neither changes nor activates Onboarding.
+
+Main exposes fixed, bounded Record read/execute/observation channels only to the
+exact main frame of its owned window. `connectRecordClient` adapts the preload
+facade to Record's immediate-observation API. Unknown command replies are never
+retried. Disposing renderer observation does not detach the provider, cancel a
+capture or create shutdown clearance. A close request stays blocked while the
+host reports unresolved ownership or cleanup fails. A production binding must
+serialize its admission/shutdown boundary and include in-flight commands and
+incomplete reconciliation when deciding clearance; a snapshot of renderer state
+is insufficient.
+
+The pinned Record tarball and provenance beside it identify the independently
+verified public producer used for type and fixture integration. `npm run
+test:electron:record` exercises the packaged main/preload/renderer path with that
+public fixture provider and a private synthetic profile. Ordinary App Shell
+Electron CI includes this check on Linux and Mac. This proves transport and
+window lifecycle mechanics, not a production capture/provider or installed route.
+
+Remaining Platform acceptance: bind the real Record/native runtime and trusted
+artifact discovery; verify the pill-to-capture/processing/authenticated-Saved/copy
+composition; qualify native window and clipboard boundaries and legacy-writer
+compatibility; then complete delivery/adoption under existing explicit gates.
+This Record-only slice does not include Onboarding factory, journey, adoption or
+activation work.

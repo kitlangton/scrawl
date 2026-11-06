@@ -23,7 +23,13 @@ export interface OnboardingMainBindingInput {
   /** Trusted package roots supplied by the assembly process for module resolution. */
   resolvePaths?: string[];
 }
-export async function buildShell(output: string, onboarding?: OnboardingMainBindingInput) {
+export interface RecordMainBindingInput {
+  /** Trusted composition module exporting createRecordHostServices({ profilePath }). */
+  module: string;
+  resolvePaths?: string[];
+}
+export async function buildShell(output: string, onboarding?: OnboardingMainBindingInput, record?: RecordMainBindingInput) {
+  if (onboarding && record) throw new Error('Owner host bindings must be assembled separately');
   await checkInstalled();
   if (onboarding && !/^[a-f0-9]{64}$/.test(onboarding.configHost.sha256)) throw new Error('Invalid admitted config host digest');
   await mkdir(join(output, 'vendor'), { recursive: true });
@@ -44,7 +50,12 @@ export async function buildShell(output: string, onboarding?: OnboardingMainBind
     format: 'cjs', target: 'node22', external: ['electron'], outfile: join(output, 'main.cjs') });
   await build({ entryPoints: [join(root, 'src/preload.cts')], bundle: true, platform: 'node',
     format: 'cjs', target: 'node22', external: ['electron'], outfile: join(output, 'preload.cjs') });
-  if (onboarding) {
+  if (record) {
+    await build({ entryPoints: [resolve(record.module)], bundle: true, platform: 'node',
+      format: 'esm', target: 'node22', external: ['electron'],
+      nodePaths: [join(root, 'node_modules'), ...(record.resolvePaths ?? []).map(path => resolve(path))],
+      outfile: join(output, 'owner-binding.mjs') });
+  } else if (onboarding) {
     const helper = await readRegular(onboarding.configHost.path);
     if (digest(helper) !== onboarding.configHost.sha256) throw new Error('Config host artifact digest mismatch');
     await mkdir(join(output, 'native'), { recursive: true });

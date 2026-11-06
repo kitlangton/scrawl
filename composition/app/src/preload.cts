@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { createRecordPreloadPort } from './record/preload.cts';
 import type { OnboardingProgressPort, Revision, SaveResult } from '@apparent/app-contracts/host';
 
 const MAX_BYTES = 64 * 1024;
@@ -85,5 +86,14 @@ const progress: OnboardingProgressPort = Object.freeze({
     }
   },
 });
-const api = Object.freeze({ onboardingProgress: progress });
+const api = Object.freeze({ onboardingProgress: progress, record: createRecordPreloadPort(),
+  host: Object.freeze({ observeCloseRefusal(listener: (reason: string) => void) {
+    if (typeof listener !== 'function') throw new TypeError('Invalid close observer');
+    const receive = (_event: unknown, reason: unknown) => {
+      if (reason === 'ownership-unresolved' || reason === 'shutdown-failed') listener(reason);
+    };
+    ipcRenderer.on('apparent:host:close-refused', receive);
+    return () => ipcRenderer.removeListener('apparent:host:close-refused', receive);
+  } }),
+});
 contextBridge.exposeInMainWorld('apparent', api);
