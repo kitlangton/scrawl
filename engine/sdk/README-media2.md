@@ -20,6 +20,8 @@ Old jobs/outputs return `state: 'unavailable'` with reason
 Malformed, contradictory or duplicate profiles throw, including bad CRC, dimensions,
 length, grid shape and nonfinite/out-of-range cells. PNG chunk walking is bounded
 to 16,384 chunks and the caller's file budget; no pixel decompression occurs here.
+The existing Node>=22.6 floor is retained: the CRC primitive is
+[`node:zlib.crc32`, available since Node22.2](https://nodejs.org/download/release/v22.23.0/docs/api/zlib.html#zlibcrc32data-value).
 
 Profile bytes are ASCII `APOBS001`, then little-endian width/height u32, region
 columns/rows u16, 2,304 thumbnail f32 cells, then columns*rows region f32 cells.
