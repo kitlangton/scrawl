@@ -31,6 +31,7 @@ struct PathSegment {
     float w1;
     float kind;
     float width;
+    uint rgb;
 };
 
 // A pin's brief live pulse: a thin ring at `radius`, `alpha` opaque.
@@ -38,7 +39,14 @@ struct PinMarker {
     float2 pos;
     float radius;
     float alpha;
+    uint rgb;
 };
+
+float3 recorded_srgb(uint packed) {
+    uint value = packed - 1u;
+    // The overlay's BGRA8Unorm attachment stores display sRGB channel values directly.
+    return float3((value >> 16u) & 255u, (value >> 8u) & 255u, value & 255u) / 255.0;
+}
 
 struct VertexOutput {
     float4 position [[position]];
@@ -76,12 +84,15 @@ fragment float4 laser_fragment(
     float2 p = (in.uv * u.resolution) / max(u.scale, 1.0);
 
     float3 laser_red = float3(1.0, 0.16, 0.19);
+    float3 laser_color = laser_red;
+    float laser_color_weight = 0.0;
     float3 laser_hot = float3(1.0, 0.97, 0.97);
 
     float laser_core_cov = 0.0;
     float laser_body_cov = 0.0;
     float laser_glow_cov = 0.0;
     float ink_red_cov = 0.0;
+    float3 ink_color = float3(1.0, 0.23, 0.19);
 
     uint tile_count = u.tile_cols * u.tile_rows;
     uint2 cell = min(uint2(max(p, float2(0.0)) / u.tile_size), uint2(u.tile_cols, u.tile_rows) - 1u);
@@ -113,6 +124,13 @@ fragment float4 laser_fragment(
                 float body = smoothstep(body_r + 0.85, max(0.0, body_r - 0.85), d) * pow(w, 0.40);
                 float core = smoothstep(core_r + 0.75, max(0.0, core_r - 0.75), d) * pow(w, 0.72);
                 float glow = exp(-(d * d) / (glow_sigma * glow_sigma)) * pow(w, 0.92);
+                // The bloom reaches beyond the body. Choose hue from the full
+                // optical contribution, including pixels with no body coverage.
+                float color_weight = glow * 0.42 + body * 0.88 + core * 0.95;
+                if (color_weight > laser_color_weight) {
+                    laser_color_weight = color_weight;
+                    laser_color = seg.rgb != 0u ? recorded_srgb(seg.rgb) : laser_red;
+                }
                 laser_body_cov = max(laser_body_cov, body);
                 laser_core_cov = max(laser_core_cov, core);
                 laser_glow_cov = max(laser_glow_cov, glow);
@@ -122,7 +140,10 @@ fragment float4 laser_fragment(
             float r = 2.25 * clamp(w, 0.55, 1.15);
             if (d < r + 2.0) {
                 float fill = smoothstep(r + 0.70, max(0.0, r - 0.70), d) * clamp(seg.width, 0.0, 1.0);
-                ink_red_cov = max(ink_red_cov, fill);
+                if (fill > ink_red_cov) {
+                    ink_red_cov = fill;
+                    ink_color = seg.rgb != 0u ? recorded_srgb(seg.rgb) : float3(1.0, 0.23, 0.19);
+                }
             }
         }
     }
@@ -134,7 +155,10 @@ fragment float4 laser_fragment(
         float off = abs(length(p - pin.pos) - pin.radius);
         if (off < 2.0) {
             float ring = smoothstep(1.25, 0.25, off) * pin.alpha;
-            ink_red_cov = max(ink_red_cov, ring);
+            if (ring > ink_red_cov) {
+                ink_red_cov = ring;
+                ink_color = pin.rgb != 0u ? recorded_srgb(pin.rgb) : float3(1.0, 0.23, 0.19);
+            }
         }
     }
 
@@ -143,7 +167,13 @@ fragment float4 laser_fragment(
         float d_tip = length(p - u.tip_pos);
         if (d_tip < 5.0) {
             float tip_fill = smoothstep(2.6, 1.4, d_tip) * u.tip_active;
-            ink_red_cov = max(ink_red_cov, tip_fill);
+            if (tip_fill > ink_red_cov) {
+                ink_red_cov = tip_fill;
+                uint packed_tip = as_type<uint>(u._pad2);
+                ink_color = (packed_tip & 0x80000000u) != 0u
+                    ? recorded_srgb(packed_tip & 0x01ffffffu)
+                    : float3(1.0, 0.23, 0.19);
+            }
         }
     }
 
@@ -223,16 +253,15 @@ fragment float4 laser_fragment(
 
     // 1. Composite ink (red fill)
     if (ink_red_cov > 0.001) {
-        float3 ink_col = float3(1.0, 0.23, 0.19);
         float a = ink_red_cov;
-        out.rgb = ink_col * a + out.rgb * (1.0 - a);
+        out.rgb = ink_color * a + out.rgb * (1.0 - a);
         out.a = a + out.a * (1.0 - a);
     }
 
     // 2. Composite optical laser (soft atmospheric bloom + anti-aliased ruby ribbon + white-hot core)
     float laser_alpha = clamp(laser_glow_cov * 0.42 + laser_body_cov * 0.88 + laser_core_cov * 0.95, 0.0, 1.0);
     if (laser_alpha > 0.002) {
-        float3 col = mix(laser_red, laser_hot, clamp(laser_core_cov * 0.92, 0.0, 1.0));
+        float3 col = mix(laser_color, laser_hot, clamp(laser_core_cov * 0.92, 0.0, 1.0));
         out.rgb = col * laser_alpha + out.rgb * (1.0 - laser_alpha);
         out.a = laser_alpha + out.a * (1.0 - laser_alpha);
     }

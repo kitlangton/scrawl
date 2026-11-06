@@ -44,11 +44,12 @@ struct Scene {
     now_sec: f32,
     picker_fade: f32,
     glow: bool,
-    ink: Vec<(Vec<[f32; 2]>, f32)>,
-    laser: Vec<Vec<([f32; 2], f32)>>,
+    ink: Vec<(Vec<[f32; 2]>, f32, Option<[u8; 3]>)>,
+    laser: Vec<(Vec<([f32; 2], f32)>, Option<[u8; 3]>)>,
     /// Pin pulses: centre, ring radius and opacity.
-    pins: Vec<([f32; 2], f32, f32)>,
+    pins: Vec<([f32; 2], f32, f32, Option<[u8; 3]>)>,
     tip: Option<[f32; 2]>,
+    tip_rgb: Option<[u8; 3]>,
     screen: [f32; 2],
 }
 
@@ -60,6 +61,19 @@ fn ink_color(alpha: f32) -> Hsla {
         a: alpha,
     }
     .into()
+}
+
+fn stroke_color(rgb: Option<[u8; 3]>, alpha: f32) -> Hsla {
+    match rgb {
+        Some([r, g, b]) => gpui::Rgba {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a: alpha,
+        }
+        .into(),
+        None => ink_color(alpha),
+    }
 }
 
 fn rgba(r: f32, g: f32, b: f32, a: f32) -> Hsla {
@@ -207,7 +221,7 @@ impl OverlayView {
                     if let Some([nx, ny]) = stroke.normalized_points().first().copied()
                         && let Some((radius, alpha)) = pin_pulse(now_ms.saturating_sub(stroke.t1))
                     {
-                        pins.push((to_screen(nx, ny), radius, alpha));
+                        pins.push((to_screen(nx, ny), radius, alpha, stroke.rgb));
                     }
                     continue;
                 }
@@ -217,7 +231,7 @@ impl OverlayView {
                     }
                     let raw =
                         slice_laser_window(&stroke.timed_points(), now_ms, TAIL_MS, to_screen);
-                    laser.push(smooth_laser_points(&raw));
+                    laser.push((smooth_laser_points(&raw), stroke.rgb));
                     continue;
                 }
                 let alpha = if *live {
@@ -242,7 +256,7 @@ impl OverlayView {
                     .into_iter()
                     .map(|(p, _)| p)
                     .collect();
-                ink.push((smoothed, alpha));
+                ink.push((smoothed, alpha, stroke.rgb));
             }
         }
         let tip = (active && t.shift_held.load(Ordering::Acquire)).then(|| {
@@ -266,6 +280,7 @@ impl OverlayView {
             laser,
             pins,
             tip,
+            tip_rgb: t.stroke_rgb(),
             screen,
         })
     }
@@ -451,27 +466,31 @@ fn paint_scene(scene: &Scene, bounds: Bounds<Pixels>, window: &mut Window) {
     }
 
     // A pin is a 1.5 pt ring centred on its radius, no fill, as `laser_overlay.metal` draws it.
-    for &(p, radius, alpha) in &scene.pins {
+    for &(p, radius, alpha, rgb) in &scene.pins {
         let outer = radius + 0.75;
         window.paint_quad(gpui::quad(
             rect_bounds([p[0] - outer, p[1] - outer, outer * 2.0, outer * 2.0], o),
             Corners::all(px(outer)),
             gpui::transparent_black(),
             Edges::all(px(1.5)),
-            ink_color(alpha),
+            stroke_color(rgb, alpha),
             gpui::BorderStyle::Solid,
         ));
     }
-    for (points, alpha) in &scene.ink {
-        paint_polyline(window, points, 4.5, ink_color(*alpha), o);
+    for (points, alpha, rgb) in &scene.ink {
+        paint_polyline(window, points, 4.5, stroke_color(*rgb, *alpha), o);
     }
-    for points in &scene.laser {
+    for (points, rgb) in &scene.laser {
         for pair in points.windows(2) {
             let w = (pair[0].1 + pair[1].1) / 2.0;
             if w <= 0.002 {
                 continue;
             }
-            let glow = rgba(1.0, 0.16, 0.19, 0.18 * w);
+            let color = match rgb {
+                Some([r, g, b]) => [*r as f32 / 255.0, *g as f32 / 255.0, *b as f32 / 255.0],
+                None => [1.0, 0.16, 0.19],
+            };
+            let glow = rgba(color[0], color[1], color[2], 0.18 * w);
             paint_polyline(
                 window,
                 &[pair[0].0, pair[1].0],
@@ -483,7 +502,7 @@ fn paint_scene(scene: &Scene, bounds: Bounds<Pixels>, window: &mut Window) {
                 window,
                 &[pair[0].0, pair[1].0],
                 4.9 * w.powf(0.68),
-                rgba(1.0, 0.16, 0.19, 0.88 * w.powf(0.4)),
+                rgba(color[0], color[1], color[2], 0.88 * w.powf(0.4)),
                 o,
             );
             paint_polyline(
@@ -496,7 +515,7 @@ fn paint_scene(scene: &Scene, bounds: Bounds<Pixels>, window: &mut Window) {
         }
     }
     if let Some(tip) = scene.tip {
-        paint_dot(window, tip, 2.0, ink_color(1.0), o);
+        paint_dot(window, tip, 2.0, stroke_color(scene.tip_rgb, 1.0), o);
     }
 }
 
