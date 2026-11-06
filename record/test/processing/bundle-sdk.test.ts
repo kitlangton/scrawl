@@ -7,7 +7,7 @@ import test from "node:test";
 import { assembleCanonicalBundle, type BundleAssemblyInput } from "@apparent/record/processing/bundle";
 import { prepareRecordPublication } from "../../dist/backend/publication/staging.js";
 import { createCompletedCapturePublisher } from "../../dist/backend/publication/completed-capture.js";
-import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, type MaterialsDocument } from "@apparent/engine-sdk/capture";
+import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, validateFactFile, validateMaterialsDocument, type MaterialsDocument } from "@apparent/engine-sdk/capture";
 import { createRecordPublicationRecovery } from "../../dist/backend/publication/recovery.js";
 import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
 import { SqlitePublicationBindingStore } from "../../dist/backend/publication/store.js";
@@ -104,6 +104,74 @@ test("assembles an SDK-validated materials envelope and sealed facts with defaul
   assert.deepEqual(document.context, { workspace: "demo" });
   assert.deepEqual(document.events.map((event: { kind: string }) => event.kind), ["app_change", "click"]);
   assert.deepEqual(result.validatedFacts.transcript?.identity, identity);
+});
+
+test("public SDK validator seals RGB facts and canonical assembly preserves absent, black and observed colors", async () => {
+  const input = await fixture();
+  const payload = JSON.parse(new TextDecoder().decode(input.payloadBytes));
+  const colors = [undefined, [0, 0, 0], [15, 127, 240]] as const;
+  const strokes = colors.map((rgb, index) => ({ id: String(index + 1).repeat(32), surface: "screen", surfaceId: "surface-a", transformId: "transform-a",
+    startMs: 100, endMs: 200, acceptedAtMs: 250, ...(rgb === undefined ? {} : { rgb }), points: [{ timeMs: 100, x: 100, y: 100 }] }));
+  const strokeBytes = bytes({ schema: "apparent.capture-strokes/1", identity, coordinates: "target-normalized-10000",
+    surfaces: [{ surfaceId: "surface-a", transformId: "transform-a", width: 800, height: 600, target: "capture-rectangle" }], strokes });
+  const strokeSeal = sealed("facts/strokes.json", strokeBytes, "inode-strokes");
+  const strokeFile = { relativePath: strokeSeal.relativePath, identity: strokeSeal.identity, sha256: strokeSeal.sha256 };
+  payload.files.push({ relativePath: strokeFile.relativePath, sha256: strokeFile.sha256, identity: strokeFile.identity });
+  payload.facts.acceptedStrokes = { file: strokeFile.relativePath, schema: "apparent.capture-strokes/1" };
+  payload.collection.acceptedStrokes = "collected";
+  const payloadBytes = bytes(payload);
+  const manifest = { ...input.manifest, key: { ...identity, revision: sha(payloadBytes) }, payloadFile: { ...input.manifest.payloadFile,
+    sha256: sha(payloadBytes), identity: { ...input.manifest.payloadFile.identity, size: payloadBytes.byteLength } } };
+  const materials = validateMaterialsDocument(manifest, payloadBytes);
+  const validated = validateFactFile(strokeFile, strokeBytes, materials, "acceptedStrokes");
+  assert.deepEqual(validated.strokes.map(stroke => stroke.rgb), colors);
+  for (const bad of [[0, 0], [0, 0, 256], [0, -1, 0], [0, 1.5, 0], [0, 0, "0"]]) {
+    const invalid = bytes({ schema: "apparent.capture-strokes/1", identity, coordinates: "target-normalized-10000",
+      surfaces: [{ surfaceId: "surface-a", transformId: "transform-a", width: 800, height: 600, target: "capture-rectangle" }],
+      strokes: [{ ...strokes[0], rgb: bad }] });
+    const invalidSeal = sealed("facts/strokes.json", invalid, `inode-bad-${String(bad.length)}-${String(bad[2])}`);
+    const invalidFile = { relativePath: invalidSeal.relativePath, identity: invalidSeal.identity, sha256: invalidSeal.sha256 };
+    const badPayload = structuredClone(payload);
+    badPayload.files[badPayload.files.findIndex((file: { relativePath: string }) => file.relativePath === strokeFile.relativePath)] =
+      { relativePath: invalidFile.relativePath, sha256: invalidFile.sha256, identity: invalidFile.identity };
+    const badPayloadBytes = bytes(badPayload);
+    const badManifest = { ...manifest, key: { ...identity, revision: sha(badPayloadBytes) }, payloadFile: { ...manifest.payloadFile,
+      sha256: sha(badPayloadBytes), identity: { ...manifest.payloadFile.identity, size: badPayloadBytes.byteLength } } };
+    const badMaterials = validateMaterialsDocument(badManifest, badPayloadBytes);
+    assert.throws(() => validateFactFile(invalidFile, invalid, badMaterials, "acceptedStrokes"), /rgb|byte/u);
+  }
+  const result = assembleCanonicalBundle({ ...input, manifest, payloadBytes,
+    artifacts: input.artifacts.map(artifact => ({ ...artifact, materials: manifest.key })),
+    facts: { ...input.facts, acceptedStrokes: { file: strokeFile, bytes: strokeBytes } },
+    admission: { ...input.admission, captureId: identity.captureId, materialsId: identity.materialsId },
+    additionalCanonicalFacts: { strokes: strokes.map(stroke => ({ id: stroke.id, t0: 100, t1: 200, fw: 800, fh: 600, pts: [100, 100, 0] })) } });
+  const document = JSON.parse(new TextDecoder().decode(result.apparentJson));
+  assert.equal(Object.hasOwn(document.strokes[0], "rgb"), false);
+  assert.deepEqual(document.strokes[1].rgb, [0, 0, 0]);
+  assert.deepEqual(document.strokes[2].rgb, [15, 127, 240]);
+  assert.deepEqual(result.validatedFacts.acceptedStrokes?.strokes.map(stroke => stroke.rgb), colors);
+  const publicationRoot = await mkdtemp(join(tmpdir(), "record-rgb-preflight-"));
+  try {
+    const destination = join(publicationRoot, "rgb.apparent");
+    const publishable = assemblyForDestination({ ...input, manifest, payloadBytes,
+      artifacts: input.artifacts.map(artifact => ({ ...artifact, materials: manifest.key })),
+      facts: { ...input.facts, acceptedStrokes: { file: strokeFile, bytes: strokeBytes } },
+      admission: { ...input.admission, captureId: identity.captureId, materialsId: identity.materialsId },
+      additionalCanonicalFacts: { strokes: strokes.map(stroke => ({ id: stroke.id, t0: 100, t1: 200, fw: 800, fh: 600, pts: [100, 100, 0] })) } }, destination);
+    const prepared = await prepareRecordPublication(stagingInput({ ...input, manifest, payloadBytes }, publishable, publicationRoot,
+      "d".repeat(32), destination));
+    assert.equal(prepared.plan.entries.find(entry => entry.relativePath === "apparent.json")?.sha256, sha(publishable.apparentJson));
+    assert.deepEqual(JSON.parse(new TextDecoder().decode(publishable.apparentJson)).strokes.map((stroke: { rgb?: number[] }) => stroke.rgb),
+      [undefined, [0, 0, 0], [15, 127, 240]]);
+  } finally { await rm(publicationRoot, { recursive: true, force: true }); }
+  const spoof = structuredClone({ ...input, manifest, payloadBytes,
+    artifacts: input.artifacts.map(artifact => ({ ...artifact, materials: manifest.key })),
+    facts: { ...input.facts, acceptedStrokes: { file: strokeFile, bytes: strokeBytes } },
+    admission: { ...input.admission, captureId: identity.captureId, materialsId: identity.materialsId },
+    additionalCanonicalFacts: { strokes: strokes.map(stroke => ({ id: stroke.id, t0: 100, t1: 200, fw: 800, fh: 600, pts: [100, 100, 0] })) } });
+  spoof.frames[0]!.absolutePath = join(spoof.admission.bundlePath, spoof.frames[0]!.artifactPath);
+  spoof.additionalCanonicalFacts!.strokes![1]!.rgb = [1, 2, 3] as never;
+  assert.throws(() => assembleCanonicalBundle(spoof, {}), /cannot supply observed RGB/u);
 });
 
 test("private staging prepares SDK-validated plan without touching destination or dispatching", async () => {

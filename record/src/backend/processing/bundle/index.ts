@@ -14,7 +14,7 @@ export interface SealedFile { relativePath:string; identity:{device:string;inode
 export interface FactBytes { file: SealedFile; bytes: Uint8Array }
 /** Images remain caller-attested; matching metadata is not native provenance. */
 export interface SealedArtifact { materials: MaterialsDocument["manifest"]["key"]; relativePath: string; bytes: Uint8Array; sha256: string; byteLength: number; identity:{device:string;inode:string;size:number;modifiedNs:string}; role: "frame" | "contact-sheet" | "video" | "audio" }
-export interface CanonicalStroke { id:string;t0:number;t1:number;fw:number;fh:number;on?:string;pin?:number;laser?:boolean;pts:number[] }
+export interface CanonicalStroke { id:string;t0:number;t1:number;fw:number;fh:number;on?:string;pin?:number;laser?:boolean;rgb?:[number,number,number];pts:number[] }
 export interface CanonicalMark { id:string;strokes:number[];t0:number;t1:number;boxNorm:[number,number,number,number];shape:"circle"|"underline"|"line"|"arrow"|"tap"|"pin"|"mark"|"flag";from?:[number,number];to?:[number,number];pin?:number;on?:string;description:string;frame?:string }
 export type CanonicalKeyframeReason="mark"|"click"|"laser"|"scene_change"|"speech"|"initial"|"whiteboard";
 export interface RecordAdmission {
@@ -112,8 +112,9 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
     const surface=strokesDoc!.surfaces.find(x=>x.surfaceId===s.surfaceId&&x.transformId===s.transformId);
     const points=s.points.flatMap(p=>[p.x,p.y,p.timeMs-s.startMs]);
     if(!surface||mapped.fw!==surface.width||mapped.fh!==surface.height||!isDeepStrictEqual(mapped.pts,points))fail(`accepted stroke ${s.id} mapping changes the observed surface geometry`);
+    if (Object.hasOwn(mapped, "rgb")) fail(`accepted stroke ${s.id} mapping cannot supply observed RGB`);
     const {id:_sourceStrokeId,...canonical}=mapped; void _sourceStrokeId;
-    return canonical;
+    return s.rgb === undefined ? canonical : { ...canonical, rgb: [...s.rgb] };
   }) ?? [];
   const events=interactionDoc?.events.map(e=>({...e})) ?? [];
   const windows=contextDoc?.windows.state==="collected"?contextDoc.windows.value.map(snapshot=>({t:snapshot.timeMs,windows:snapshot.entries.map(w=>({id:w.id,app:w.app,...(w.bundleId?{bundleId:w.bundleId}:{}),...(w.regular===undefined?{}:{regular:w.regular}),...(w.title?{title:w.title}:{}),bounds:w.bounds.map(n=>{if(!Number.isInteger(n))fail("window bounds require integer canonical coordinates");return n;}),layer:w.layer,...(w.frontmost===undefined?{}:{frontmost:w.frontmost})}))})):undefined;
