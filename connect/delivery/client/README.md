@@ -177,6 +177,17 @@ The active native caller remains authoritative migration debt. This source chang
 
 ## Queue and command adoption boundaries
 
+The queue API's `planAdmission` returns a detached, frozen plan for automatic
+private, explicit private or public-copy admission. It preserves first-match
+deduplication in supplied queue order and the donor's cancellation → pruning →
+capacity order; a full result retains earlier cancellation proposals. Fresh IDs
+cannot collide with any supplied record, including pruning candidates. Older
+history is not available to this planner. The caller must admit the completed
+canonical bundle, current settings, server, credential generation and queue facts
+under the authoritative lease. String validation grants no consent or authority.
+Proposals write or delete nothing; a writer may not apply a stale plan. Installed
+adoption must preserve the supplied queue-order behavior and sole-writer boundary.
+
 `./sender-spool` opens an existing committed encrypted job and its Rust-format
 `<id>.sealed/spool-state.json`. It never repairs or regenerates a spool. Every
 receipt/asset read uses the existing queue lease, private descriptor/ACL admission,
