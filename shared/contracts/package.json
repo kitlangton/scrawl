@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "files": ["dist", "src", "tsconfig.build.json"],
+  "files": [
+    "dist",
+    "src",
+    "tsconfig.build.json"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -28,5 +32,10 @@
     "@types/node": "22.19.0",
     "@types/react": "19.2.2",
     "typescript": "5.9.3"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }
