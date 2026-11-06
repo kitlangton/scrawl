@@ -18,6 +18,7 @@ import { retrieveRecipientCapture } from "../../src/recipient/retrieve.ts";
 import { RecipientTransportError } from "../../src/recipient/transport.ts";
 import { uploadPreparedPlainCapture } from "../../src/sender/transport.ts";
 import { uploadPreparedEncryptedCapture, type PreparedEncryptedGroup } from "../../src/sender/encrypted-transport.ts";
+import { readSenderPeerAuthority } from "../../src/sender/authority.ts";
 
 const serviceDir = resolve(fileURLToPath(new URL("../../../../service/", import.meta.url)));
 const captureId = "a981426be1254f37938214f960aed501";
@@ -125,12 +126,12 @@ async function authorize(
 }
 
 async function uploadEncryptedCapture(
-  service: Awaited<ReturnType<typeof fixtureAt>>,
   origin: string,
   account: Account,
   reader: { identity: string; recipient: string },
   upload: DeviceCredential,
   uploadSeed: Uint8Array,
+  senderRecipient: string,
   profile: "root" | "evidence-first-v1",
 ) {
   const context: Context = {
@@ -160,11 +161,10 @@ async function uploadEncryptedCapture(
     groups.push({ context: bound, envelope, chunks: chunks.map(chunk => ({ ...chunk, path: prefix + chunk.path })) });
   }
   // The fixture uses actual Worker peer facts, never a successful signature as authorization.
-  const peerFacts = async () => {
-    const response = await service.call("/v1/encryption/peers", { token: upload.accessToken });
-    assert.equal(response.status, 200);
-    return await response.json() as { accountId: string; grantId: string; devices: { grantId: string; scope: string }[] };
-  };
+  const ownPublicKey = { version: 1 as const, recipient: senderRecipient,
+    signing: Buffer.from(await ed25519.getPublicKeyAsync(uploadSeed)).toString("hex") };
+  const peerFacts = () => readSenderPeerAuthority({ server: origin, accessToken: upload.accessToken,
+    grantId: upload.grantId, ownPublicKey, active: () => true });
   const recipientGrantIds = (await peerFacts()).devices.filter(device => device.scope === "read").map(device => device.grantId);
   const options = { server: origin, captureId, context, recipientGrantIds, trustedSenderSigningKey: await ed25519.getPublicKeyAsync(uploadSeed),
     active: () => true, readAsset: async (name: string) => transport.get(name)!,
@@ -191,7 +191,7 @@ async function exerciseProfile(mount: "" | "/connect", profile: "root" | "eviden
     const senderSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 91);
     const readCredential = await authorize(service, account, "read", reader, readerSeed);
     const uploadCredential = await authorize(service, account, "upload", sender, senderSeed);
-    const contents = await uploadEncryptedCapture(service, serviceOrigin, account, reader, uploadCredential, senderSeed, profile);
+    const contents = await uploadEncryptedCapture(serviceOrigin, account, reader, uploadCredential, senderSeed, sender.recipient, profile);
     const result = await retrieveRecipientCapture({
       credential: {
         server: serviceOrigin,

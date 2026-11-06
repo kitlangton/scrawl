@@ -52,6 +52,7 @@ test("provider publishes explicit unavailable host/config facts and refuses abse
   assert.equal(snapshot.shortcut.registration, "unknown");
   assert.deepEqual(snapshot.nextShortcutAdmission, { state: "unavailable" });
   assert.deepEqual(snapshot.shortcutTrial, { state: "unavailable" });
+  assert.equal(snapshot.shortcutTrialBeginBinding, undefined);
   assert.equal(snapshot.pen.effective, null);
   assert.equal((await client.execute({ ...command(snapshot, "start-capture", "start-no-runtime", "local-only") })).status, "refused");
   assert.equal((await client.execute({ type: "begin-shortcut-trial", requestId: "trial-no-native", reservationId: "trial-1", bindingId: "binding-1", effectiveBinding: "Ctrl+Shift+R", sourceEpoch: "native-epoch", sourceRevision: 1, expiresAt: "2026-01-01T00:01:00Z", expected: { providerEpoch: snapshot.providerEpoch, revision: snapshot.revision } })).status, "refused");
@@ -81,6 +82,10 @@ test("shortcut trial requires matching source epoch, revision, effective binding
   const staleDispatch = await client.execute({ ...begin, requestId: "trial-stale-source", sourceRevision: begin.sourceRevision - 1,
     expected: { providerEpoch: client.current().providerEpoch, revision: client.current().revision } });
   assert.equal(staleDispatch.status, "refused", "trial admission must match the current producer revision");
+  const idleReplacement = await client.execute({ ...begin, requestId: "trial-idle-replacement", replaces: {
+    sourceEpoch: facts.providerEpoch, sourceRevision: facts.revision, bindingId: "binding-1", effectiveBinding: "Ctrl+Shift+R", reservationId: "old-reservation",
+  }, expected: { providerEpoch: client.current().providerEpoch, revision: client.current().revision } });
+  assert.equal(idleReplacement.status, "refused", "idle admission cannot be used to replace a terminal identity");
   facts.revision++;
   facts.shortcutTrial = { state: "reserved", sourceEpoch: facts.providerEpoch, sourceRevision: 1, bindingId: "binding-1", effectiveBinding: "Ctrl+Shift+R",
     reservationId: "reservation-1", expiresAt: "2026-01-01T00:01:00Z" };
@@ -143,6 +148,110 @@ test("shortcut trial requires matching source epoch, revision, effective binding
   await staleEpoch.execute({ type: "refresh", requestId: "trial-after-reconnect", expected: { providerEpoch: reconnectSnapshot.providerEpoch, revision: reconnectSnapshot.revision } });
   assert.equal(staleEpoch.current().shortcutTrial?.state, "unknown", "a reservation from another producer epoch stays unknown after reconnect");
   staleEpoch.detach();
+});
+
+test("terminal shortcut trial can rearm only from its exact retained identity and fresh current selectors", async () => {
+  for (const state of ["observed", "expired", "cancelled", "unknown"] as const) {
+    const facts = nativeFacts();
+    facts.providerEpoch = "native-epoch-current";
+    facts.revision = 4;
+    facts.shortcut = { ...facts.shortcut, bindingId: "binding-current", effective: "Alt+R", label: "Alt R" };
+    const previous = { sourceEpoch: "native-epoch-original", sourceRevision: 2, bindingId: "binding-original", effectiveBinding: "Ctrl+Shift+R", reservationId: `reservation-original-${state}` };
+    facts.shortcutTrial = state === "observed"
+      ? { state, ...previous, pressId: "press-1", pressedAt: "2026-01-01T00:00:01.000Z", releasedAt: "2026-01-01T00:00:01.100Z" }
+      : { state, ...previous };
+    const actions: RecordCommand[] = [];
+    const dispatchStatus = state === "unknown" ? "outcome-unknown" as const : "accepted" as const;
+    const client = createRecordCapabilityProvider({ runtime: runtimeFixture().runtime, providerEpoch: `provider-terminal-rearm-${state}`, native: {
+      readFacts: async () => structuredClone(facts),
+      dispatch: async action => { actions.push(structuredClone(action)); return dispatchStatus; },
+    } });
+    await new Promise(resolve => setImmediate(resolve));
+    const before = client.current();
+    const fresh = { sourceEpoch: facts.providerEpoch, sourceRevision: facts.revision, bindingId: "binding-current", effectiveBinding: "Alt+R" };
+    assert.deepEqual(before.shortcutTrialBeginBinding, fresh);
+    assert.deepEqual(before.shortcutTrial, { state: "unknown", ...previous }, "old terminal selectors and reservation identity survive binding/epoch change");
+
+    const requestFor = (requestId: string, selectors = fresh, replaces?: typeof previous) => ({
+      type: "begin-shortcut-trial" as const, requestId, reservationId: `reservation-next-${state}`, ...selectors,
+      ...(replaces ? { replaces } : {}), expiresAt: "2026-11-07T00:00:00.000Z",
+      expected: { providerEpoch: client.current().providerEpoch, revision: client.current().revision },
+    });
+    assert.equal((await client.execute(requestFor(`trial-missing-replaces-${state}`))).status, "refused");
+    const wrongFields: Array<Partial<typeof previous>> = [
+      { sourceEpoch: "wrong-epoch" }, { sourceRevision: 3 }, { bindingId: "wrong-binding" },
+      { effectiveBinding: "Wrong+R" }, { reservationId: "wrong-reservation" },
+    ];
+    for (const [index, wrong] of wrongFields.entries())
+      assert.equal((await client.execute(requestFor(`trial-wrong-prior-${state}-${index}`, fresh, { ...previous, ...wrong }))).status, "refused");
+    const sameId = await client.execute(requestFor(`trial-same-id-${state}`, fresh, { ...previous, reservationId: `reservation-next-${state}` }));
+    assert.equal(sameId.status, "refused");
+    const extraPrior = await client.execute(requestFor(`trial-extra-prior-${state}`, fresh, { ...previous, privateData: "ignored" } as typeof previous));
+    assert.equal(extraPrior.status, "refused");
+    const staleSelector = await client.execute(requestFor(`trial-stale-selector-${state}`, { ...fresh, sourceRevision: fresh.sourceRevision - 1 }));
+    assert.equal(staleSelector.status, "refused");
+
+    const old = client.current();
+    facts.revision++;
+    assert.equal((await client.execute({ type: "refresh", requestId: `trial-refresh-${state}`, expected: { providerEpoch: old.providerEpoch, revision: old.revision } })).status, "accepted");
+    const current = client.current();
+    assert.equal((await client.execute({ ...requestFor(`trial-stale-command-fence-${state}`, fresh), expected: { providerEpoch: old.providerEpoch, revision: old.revision } })).status, "refused");
+    const currentFresh = current.shortcutTrialBeginBinding!;
+    const withUntrustedTopLevel = { ...requestFor(`trial-rearm-${state}`, currentFresh, previous), privateMetadata: "do-not-forward" };
+    const result = await client.execute(withUntrustedTopLevel as RecordCommand);
+    assert.equal(result.status, dispatchStatus);
+    assert.equal(actions.length, 1);
+    assert.equal(Object.hasOwn(actions[0]!, "privateMetadata"), false, "native dispatch receives only the validated trial fields");
+    assert.deepEqual(actions[0] && "replaces" in actions[0] ? actions[0].replaces : undefined, previous);
+    assert.deepEqual(client.current().shortcutTrial, { state: "unknown", ...previous }, "accepted or ambiguous dispatch preserves the retained terminal fact");
+    assert.deepEqual(client.current().shortcutTrialBeginBinding, currentFresh);
+    assert.equal(client.current().captures.length, 0);
+    if (state === "unknown") {
+      const afterUnknown = client.current();
+      const retry = await client.execute({ ...requestFor(`trial-rearm-${state}`, afterUnknown.shortcutTrialBeginBinding!, previous),
+        expected: { providerEpoch: afterUnknown.providerEpoch, revision: afterUnknown.revision } });
+      assert.equal(retry.status, "refused", "an ambiguous dispatch keeps the original request ID consumed and is not retried");
+    }
+    client.detach();
+  }
+});
+
+test("raw reserved or pressing trial never receives fresh rearm selectors after projected unknown", async () => {
+  for (const state of ["reserved", "pressing"] as const) {
+    const facts = nativeFacts();
+    facts.providerEpoch = "native-current";
+    facts.revision = 8;
+    facts.shortcut = { ...facts.shortcut, bindingId: "binding-current", effective: "Alt+R", label: "Alt R" };
+    const prior = { sourceEpoch: "native-old", sourceRevision: 2, bindingId: "binding-old", effectiveBinding: "Ctrl+Shift+R", reservationId: `active-${state}` };
+    facts.shortcutTrial = { state, ...prior, expiresAt: "2026-11-07T00:00:00.000Z" };
+    let dispatched = 0;
+    const client = createRecordCapabilityProvider({ runtime: runtimeFixture().runtime, providerEpoch: `provider-active-${state}`, native: {
+      readFacts: async () => structuredClone(facts), dispatch: async () => { dispatched++; return "accepted"; },
+    } });
+    await new Promise(resolve => setImmediate(resolve));
+    const snapshot = client.current();
+    assert.equal(snapshot.shortcutTrial?.state, "unknown");
+    assert.equal(snapshot.shortcutTrialBeginBinding, undefined);
+    const result = await client.execute({ type: "begin-shortcut-trial", requestId: `replace-active-${state}`, reservationId: `new-${state}`,
+      sourceEpoch: facts.providerEpoch, sourceRevision: facts.revision, bindingId: "binding-current", effectiveBinding: "Alt+R",
+      replaces: prior, expiresAt: "2026-11-07T00:00:00.000Z", expected: { providerEpoch: snapshot.providerEpoch, revision: snapshot.revision } });
+    assert.equal(result.status, "refused");
+    assert.equal(dispatched, 0);
+    client.detach();
+  }
+
+  const externalFacts = nativeFacts();
+  externalFacts.shortcut = { effective: "Ctrl+Shift+R", label: "Ctrl Shift R", bindingId: "external-binding", registration: "externally-managed", externallyManaged: true, draft: null };
+  externalFacts.shortcutTrial = { state: "expired", sourceEpoch: "native-old", sourceRevision: 1, bindingId: "old-binding", effectiveBinding: "Ctrl+Shift+R", reservationId: "expired-external" };
+  const external = createRecordCapabilityProvider({ runtime: runtimeFixture().runtime, providerEpoch: "provider-external-rearm", native: { readFacts: async () => structuredClone(externalFacts) } });
+  await new Promise(resolve => setImmediate(resolve));
+  const snapshot = external.current();
+  assert.equal(snapshot.shortcutTrialBeginBinding, undefined, "externally managed shortcut has no fresh rearm selector");
+  assert.equal((await external.execute({ type: "begin-shortcut-trial", requestId: "trial-external-rearm", reservationId: "new-external",
+    sourceEpoch: externalFacts.providerEpoch, sourceRevision: externalFacts.revision, bindingId: "external-binding", effectiveBinding: "Ctrl+Shift+R",
+    replaces: { sourceEpoch: "native-old", sourceRevision: 1, bindingId: "old-binding", effectiveBinding: "Ctrl+Shift+R", reservationId: "expired-external" },
+    expiresAt: "2026-11-07T00:00:00.000Z", expected: { providerEpoch: snapshot.providerEpoch, revision: snapshot.revision } })).status, "refused");
+  external.detach();
 });
 
 test("provider preserves cursor-qualified note receipts but refuses malformed cursors or note content", async () => {

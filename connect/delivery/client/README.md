@@ -177,6 +177,40 @@ The active native caller remains authoritative migration debt. This source chang
 
 ## Queue and command adoption boundaries
 
+The queue API's `planAdmission` returns a detached, frozen plan for automatic
+private, explicit private or public-copy admission. It preserves first-match
+deduplication in supplied queue order and the donor's cancellation → pruning →
+capacity order; a full result retains earlier cancellation proposals. Fresh IDs
+cannot collide with any supplied record, including pruning candidates. Older
+history is not available to this planner. The caller must admit the completed
+canonical bundle, current settings, server, credential generation and queue facts
+under the authoritative lease. String validation grants no consent or authority.
+Proposals write or delete nothing; a writer may not apply a stale plan. Installed
+adoption must preserve the supplied queue-order behavior and sole-writer boundary.
+
+`./sender-spool` opens an existing committed encrypted job and its Rust-format
+`<id>.sealed/spool-state.json`. It never repairs or regenerates a spool. Every
+receipt/asset read uses the existing queue lease, private descriptor/ACL admission,
+job and credential-generation checks, cancellation/revocation fences, directory
+identity and immutable receipt checks. Assets must match the saved size and hash.
+The caller owns provider lifetime and returned ciphertext buffers, and must wipe
+each buffer after its consumer settles. The sealed-asset reader has a separate
+32 MiB ceiling; existing credential/JSON readers keep their 2 MB ceiling. This
+local handle is not service authorization or cryptographic envelope validation;
+the prepared uploader and its trusted authorization caller retain those checks.
+An incomplete job/spool publication fails rather than triggering a second writer.
+No installed command or worker uses this API yet; Rust remains the sole writer.
+
+`./sender-upload/authority` reads the authenticated peer registry with one bounded
+GET, reusing the recipient decoder. The caller supplies an already approved server,
+upload grant and public key derived from its current local endpoint identity.
+It validates exact scope, own-key binding, unique peers and classical AGE/Ed25519
+keys, returning detached frozen public facts after rechecking caller freshness.
+This is point-in-time service evidence, not cached authorization for later requests.
+It does not refresh tokens, write state or switch installed callers. The local
+Worker sender fixture uses this reader before every encrypted upload request;
+production worker adoption and credential ownership remain separate gates.
+
 `./sender-upload/encrypted` transfers an already sealed root or grouped
 evidence/media snapshot. Discriminated profile options prevent mixed layouts.
 Before reservation it verifies envelope hashes, signatures, exact signed context

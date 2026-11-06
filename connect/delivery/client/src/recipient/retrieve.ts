@@ -1,4 +1,4 @@
-import { Encrypter, identityToRecipient } from "age-encryption";
+import { identityToRecipient } from "age-encryption";
 import * as ed25519 from "@noble/ed25519";
 import { openRecipientArchive, type OpenedRecipientArchive } from "./archive.ts";
 import { verifyEnvelope, type Asset, type Context } from "./crypto.ts";
@@ -6,6 +6,7 @@ import { validateRecipientEnvelopeBytesWithVerifier } from "../recipient-envelop
 import { decodeStrictJson } from "./json.ts";
 import { exact, record, recipientAssets, validateRecipientReferences } from "./manifest.ts";
 import { RecipientTransport, RecipientTransportError, type RecipientAuthorization } from "./transport.ts";
+import { decodePeerAuthority, samePeerAuthorityKey, type PeerAuthorityKey, type PeerAuthorityPeer } from "./peer-authority.ts";
 
 export type RecipientReadCredential = {
   server: string; token: string; grantId: string;
@@ -36,36 +37,14 @@ function fail(category: RecipientRetrievalFailure): never { throw new RecipientR
 function allowed(signal?: AbortSignal): void { if (signal?.aborted) fail("cancelled"); }
 const hash = async (bytes: Uint8Array<ArrayBuffer>) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), b => b.toString(16).padStart(2, "0")).join("");
 const graphic = (value: unknown, maximum = 256): value is string => typeof value === "string" && value.length > 0 && value.length <= maximum && /^[\x21-\x7e]+$/.test(value);
-type Key = { version: 1; recipient: string; signing: string };
-type Peer = { grantId: string; scope: "read" | "upload"; key: Key };
-type Peers = { accountId: string; devices: Peer[] };
-function key(value: unknown): Key {
-  if (!record(value) || !exact(value, ["version", "recipient", "signing"]) || value.version !== 1
-    || typeof value.recipient !== "string" || value.recipient.length !== 62 || !/^age1[0-9a-z]+$/.test(value.recipient)
-    || typeof value.signing !== "string" || !/^[a-f0-9]{64}$/.test(value.signing)) fail("invalid_encryption_authorization");
-  try {
-    new Encrypter().addRecipient(value.recipient);
-    const point = ed25519.Point.fromBytes(unhex(value.signing), false);
-    if (point.isSmallOrder()) fail("invalid_encryption_authorization");
-  } catch { fail("invalid_encryption_authorization"); }
-  return { version: 1, recipient: value.recipient, signing: value.signing };
-}
 function unhex(value: string): Uint8Array<ArrayBuffer> { return Uint8Array.from(value.match(/../g)!, byte => parseInt(byte, 16)); }
-const sameKey = (a: Key, b: Key) => a.version === b.version && a.recipient === b.recipient && a.signing === b.signing;
-async function peers(transport: RecipientTransport, grantId: string, ownKey: Key): Promise<Peers> {
+type Key = PeerAuthorityKey;
+type Peer = PeerAuthorityPeer;
+const sameKey = samePeerAuthorityKey;
+async function peers(transport: RecipientTransport, grantId: string, ownKey: Key) {
   const value = await transport.getJson("/v1/encryption/peers");
-  if (!record(value) || !exact(value, ["accountId", "grantId", "scope", "devices"])
-    || !graphic(value.accountId) || value.grantId !== grantId || value.scope !== "read"
-    || !Array.isArray(value.devices) || value.devices.length > 64) fail("invalid_encryption_authorization");
-  const ids = new Set<string>(), devices: Peer[] = [];
-  for (const raw of value.devices) {
-    if (!record(raw) || !exact(raw, ["grantId", "scope", "key"]) || !graphic(raw.grantId, 512)
-      || ids.has(raw.grantId) || (raw.scope !== "read" && raw.scope !== "upload")) fail("invalid_encryption_authorization");
-    ids.add(raw.grantId); devices.push({ grantId: raw.grantId, scope: raw.scope, key: key(raw.key) });
-  }
-  const own = devices.find(p => p.grantId === grantId);
-  if (!own || own.scope !== "read" || !sameKey(own.key, ownKey)) fail("invalid_encryption_authorization");
-  return { accountId: value.accountId, devices };
+  try { return decodePeerAuthority(value, { scope: "read", grantId, ownPublicKey: ownKey }); }
+  catch { fail("invalid_encryption_authorization"); }
 }
 
 function wireAssets(input: unknown): Asset[] {

@@ -334,3 +334,34 @@ test("shortcut trial fixtures admit only the exact idle binding and never create
     assert.ok(current.shortcutTrial && "reservationId" in current.shortcutTrial);
   }
 });
+
+test("terminal rearm fixture keeps predecessor and fresh selectors separate; active unknown cannot rearm", async () => {
+  const fixture = createRecordFixture("shortcut-trial-terminal-rearm-available");
+  const before = fixture.driver.current();
+  assert.equal(before.shortcutTrial?.state, "expired");
+  assert.deepEqual(before.shortcutTrialBeginBinding, {
+    sourceEpoch: "fixture-native-epoch-current", sourceRevision: 7, bindingId: "binding-current", effectiveBinding: "Alt+R",
+  });
+  const previous = before.shortcutTrial;
+  if (previous?.state !== "expired") throw new Error("missing expired fixture identity");
+  assert.notEqual(previous.sourceEpoch, before.shortcutTrialBeginBinding?.sourceEpoch);
+  assert.notEqual(previous.bindingId, before.shortcutTrialBeginBinding?.bindingId);
+  const begin = {
+    type: "begin-shortcut-trial" as const, requestId: "fixture-rearm", reservationId: "fixture-next",
+    ...before.shortcutTrialBeginBinding!, replaces: {
+      sourceEpoch: previous.sourceEpoch, sourceRevision: previous.sourceRevision, bindingId: previous.bindingId,
+      effectiveBinding: previous.effectiveBinding, reservationId: previous.reservationId,
+    }, expiresAt: "2026-11-07T00:00:00.000Z", expected: { providerEpoch: before.providerEpoch, revision: before.revision },
+  };
+  fixture.driver.setNextResult("outcome-unknown");
+  assert.equal((await fixture.client.execute(begin)).status, "outcome-unknown");
+  assert.deepEqual(fixture.driver.current().shortcutTrial, before.shortcutTrial);
+  assert.deepEqual(fixture.driver.current().shortcutTrialBeginBinding, before.shortcutTrialBeginBinding);
+  assert.deepEqual(fixture.driver.current().captures, before.captures);
+
+  const active = createRecordFixture("shortcut-trial-active-unknown-no-rearm");
+  const activeBefore = active.driver.current();
+  assert.equal(activeBefore.shortcutTrial?.state, "unknown");
+  assert.equal(activeBefore.shortcutTrialBeginBinding, undefined);
+  assert.equal((await active.client.execute({ ...begin, requestId: "fixture-no-active-rearm", expected: { providerEpoch: activeBefore.providerEpoch, revision: activeBefore.revision } })).status, "refused");
+});
