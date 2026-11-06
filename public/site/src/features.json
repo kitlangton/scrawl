@@ -1274,7 +1274,7 @@
       "id": "cli-copy",
       "group": "cli",
       "name": "copy",
-      "says": "Copy a saved capture to the clipboard without contacting an agent session. The confirmation explains that copy is text-only by default and points to the contact sheet; the user checks the unsent draft for an image.",
+      "says": "Copy a saved capture to the clipboard without contacting an agent session. The local handoff honors the configured agentContext preference and remains text-only; the user checks the unsent draft for an image.",
       "status": "main",
       "added": "2026-10-28",
       "platforms": ["mac", "linux"],

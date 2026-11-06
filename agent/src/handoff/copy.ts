@@ -3,10 +3,12 @@ import { join } from 'node:path';
 import { lstat } from 'node:fs/promises';
 import { formatLocalHandoff } from '@apparent/record';
 import type { ProcessingInput, ProcessingWarning } from '@apparent/record/processing';
+import type { SemanticFrameText } from '@apparent/record';
 import { createNativeHostPort } from '@apparent/native-host';
 import { createNativeClipboardPort, MAX_UTF8_TEXT_BYTES, type NativeClipboardPort } from '@apparent/native-host/clipboard';
 import type { NativeHostPort } from '@apparent/app-contracts/native';
 import { resolveBundle, readManifest, checkImageReference, hasMicrophoneSamples, configuredExperiment } from '../bundle.js';
+import { keyframeTexts } from '../semantic/context.js';
 
 type Ports = { host: Pick<NativeHostPort, 'readSnapshot'>; clipboard: NativeClipboardPort };
 export type CopyResult = { status: 'applied'; digest: string; byteLength: number } |
@@ -51,14 +53,19 @@ export async function localCopyText(input = 'latest'): Promise<string> {
       else warnings.push({ kind: 'noWordsTranscribed' });
     }
   }
+  const frames: ProcessingInput['frames'] = bundle.keyframes.map((frame: any, i: number) => ({ index: frame.index ?? i + 1, timeMs: frame.t ?? 0, absolutePath: join(bundlePath, frame.file), text: frame.said ?? undefined,
+    event: frame.event ?? undefined, reason: ['click', 'flag'].includes(frame.reason) ? frame.reason : 'other', markId: frame.markId ?? undefined,
+    screenName: bundle.screens?.find((screen: any) => screen.t0 <= (frame.t ?? 0) && (frame.t ?? 0) < screen.t1)?.name }));
+  const semanticFrameText: SemanticFrameText[] | undefined = await configuredExperiment('agentContext') && frames.length
+    ? keyframeTexts(bundle).map((chunk, i) => ({ frameIndex: frames[i].index, head: chunk.head, lines: chunk.lines }))
+    : undefined;
+  if (semanticFrameText && semanticFrameText.length !== frames.length) throw new Error('Agent semantic text does not cover every bundle keyframe');
   const processing: ProcessingInput = {
     bundlePath, durationMs: bundle.durationMs, target: bundle.target, device: bundle.device,
     context: bundle.context, contextChanges: bundle.contextChanges?.map((event: any) => ({ timeMs: event.t, key: event.key, value: event.value ?? undefined })),
     screenAtStart: bundle.screens?.find((screen: any) => screen.t0 === 0)?.name,
     transcript: { text: bundle.transcript.text, segments: bundle.transcript.segments.map((segment: any) => ({ startMs: segment.t0, text: segment.text })) },
-    frames: bundle.keyframes.map((frame: any, i: number) => ({ index: frame.index ?? i + 1, timeMs: frame.t ?? 0, absolutePath: join(bundlePath, frame.file), text: frame.said ?? undefined,
-      event: frame.event ?? undefined, reason: ['click', 'flag'].includes(frame.reason) ? frame.reason : 'other', markId: frame.markId ?? undefined,
-      screenName: bundle.screens?.find((screen: any) => screen.t0 <= (frame.t ?? 0) && (frame.t ?? 0) < screen.t1)?.name })),
+    frames, semanticFrameText: semanticFrameText ? { mode: 'rich-context', frames: semanticFrameText } : undefined,
     marks: bundle.marks.map((mark: any) => ({ id: mark.id, shape: mark.shape, pin: mark.pin ?? undefined, framePath: mark.frame ? join(bundlePath, mark.frame) : undefined })),
     events: bundle.events.filter((event: any) => ['click', 'app_event', 'note'].includes(event.kind)).map((event: any) => event.kind === 'app_event'
       ? { kind: 'appEvent', timeMs: event.t, label: event.label } : event.kind === 'note' ? { kind: 'note', timeMs: event.t, pin: event.pin ?? 1, text: event.text } : { kind: 'click', timeMs: event.t }),
