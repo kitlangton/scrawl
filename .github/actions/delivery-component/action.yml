@@ -86,10 +86,31 @@ runs:
     - uses: dtolnay/rust-toolchain@stable
       if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.language == 'native'
     - name: Install Engine media runtime and fixture dependencies
-      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.id == 'engine-media-native'
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.id == 'engine-media-native' && inputs.target == 'linux-x64'
       shell: bash
       # The installer bounds update/install process groups to 60/180 seconds.
       run: node --experimental-strip-types composition/delivery/media-dependencies.ts
+    - name: Qualify native Intel Mac media toolchain
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.id == 'engine-media-native' && inputs.target == 'macos-x64'
+      shell: bash
+      run: |
+        node --input-type=module <<'NODE'
+        import { execFileSync } from 'node:child_process';
+        if (process.platform !== 'darwin' || process.arch !== 'x64') throw new Error('Native Intel Mac required');
+        const swift = execFileSync('xcrun', ['swiftc', '--version'], { encoding: 'utf8' });
+        const sdk = execFileSync('xcrun', ['--show-sdk-version'], { encoding: 'utf8' }).trim();
+        const version = /Swift version (\d+)\.(\d+)/.exec(swift);
+        if (!/^\d+(\.\d+)*$/.test(sdk) || !version || Number(version[1]) < 6 || (Number(version[1]) === 6 && Number(version[2]) < 2) || Number(sdk.split('.')[0]) < 26) throw new Error('Swift 6.2+ and SDK 26+ required');
+        console.log(swift.trim()); console.log('macOS SDK ' + sdk);
+        // FFmpeg generates test movies only; the sealed decoder uses system AVFoundation.
+        try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore', timeout: 10_000 }); }
+        catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+          execFileSync('brew', ['install', '--force-bottle', 'ffmpeg'], { stdio: 'inherit', timeout: 180_000, killSignal: 'SIGKILL',
+            env: { ...process.env, HOMEBREW_NO_AUTO_UPDATE: '1', HOMEBREW_NO_INSTALL_CLEANUP: '1' } });
+          execFileSync('ffmpeg', ['-version'], { stdio: 'inherit', timeout: 10_000 });
+        }
+        NODE
     - name: Install Engine capture runtime dependencies
       if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.id == 'engine-capture-native'
       shell: bash

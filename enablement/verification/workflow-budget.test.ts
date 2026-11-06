@@ -415,7 +415,8 @@ test('PR and fresh main media builds share the bounded runtime dependency instal
     const expression = condition.replaceAll('steps.admit.outputs.reuse', JSON.stringify(reuse))
       .replaceAll('steps.reuse.outcome', JSON.stringify(outcome)).replaceAll('inputs.id', JSON.stringify(id))
       .replaceAll('inputs.publish', JSON.stringify(publish))
-    assert.equal(Function(`return (${expression})`)(), expected)
+    assert.equal(Function(`return (${expression.replaceAll('inputs.target', JSON.stringify('linux-x64'))})`)(), expected)
+    assert.equal(Function(`return (${expression.replaceAll('inputs.target', JSON.stringify('macos-x64'))})`)(), false)
   }
   assert.match(setup, /run: node --experimental-strip-types composition\/delivery\/media-dependencies\.ts/)
   assert.doesNotMatch(setup, /apt-get|APPARENT_GST_PLUGIN_SOURCE/)
