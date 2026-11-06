@@ -387,5 +387,8 @@ This phase does not parse a newly received reply, publish credentials, mark
 `authRequired`, export a writer or switch any installed caller. Rust remains the
 sole live writer. Isolated Linux protected-wrapper tests exercise real HTTP,
 both scopes and cancellation while the queue is available during the request.
-Mac consumer proof, final rejection/renewal orchestration, coordinated writer
-ownership and production adoption remain acceptance gates.
+The frozen Mac direct-adapter proof also covers those cases and completed
+recovery/scope contention, with all client tests passing. It uses an owner-local
+Mac ARM helper and does not establish installed ARM or installed Mac adoption.
+Final rejection/renewal orchestration, coordinated writer ownership and production
+adoption remain acceptance gates.
