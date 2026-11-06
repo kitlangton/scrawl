@@ -10,7 +10,8 @@ export type CliFailure = { category: string; message: string };
 export type RecipientCliDependencies = {
   /** Caller supplies a fresh read credential; this boundary must not discover or persist secrets. */
   loadCredential(): Promise<RecipientReadCredential>;
-  /** Must publish privately without overwrite and return only after verified output is committed. */
+  /** Bytes are borrowed until this promise settles; copy them for longer retention.
+   * Publish privately without overwrite; report committed only after verified output. */
   publish(capture: RetrievedRecipientCapture, destination: string): Promise<
     | { state: "committed"; path: string; evidenceOnlyReceipt?: boolean }
     | { state: "publication-uncertain"; path?: string }
@@ -92,8 +93,11 @@ export async function runRecipientCommand(command: RecipientCommand, dependencie
       resolveIdentity: dependencies.resolveIdentity,
       authorize: dependencies.authorize,
     });
-    if (dependencies.cancelled?.aborted) throw new RecipientRetrievalError("cancelled");
-    return await publishVerified(retrieved, command.out, dependencies.publish);
+    const plaintext = retrieved.files.map(file => file.bytes);
+    try {
+      if (dependencies.cancelled?.aborted) throw new RecipientRetrievalError("cancelled");
+      return await publishVerified(retrieved, command.out, dependencies.publish);
+    } finally { for (const bytes of plaintext) bytes.fill(0); }
   } catch (error) { return { ok: false, error: safeFailure(error) }; }
 }
 

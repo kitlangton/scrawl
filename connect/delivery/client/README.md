@@ -188,6 +188,10 @@ The `./recipient-command` export prepares headless fetch/remote-inspect behavior
 and invokes the verified retrieval API through injected credential/publication
 boundaries. Explicit local sources remain local. Successful results require a
 committed publisher receipt; evidence snapshots require its evidence-only receipt.
+The command owns retrieved plaintext. Publisher callbacks borrow those buffers
+until their promise settles; the command then wipes them on success, uncertainty,
+failure or cancellation. Publishers must copy bytes needed beyond that lifetime.
+This does not delete committed output or retained filesystem staging evidence.
 This is not an installed CLI route or a filesystem publisher. A boolean receipt
 from a fixture does not establish native publication. Actual credential loading,
 renewal, private staging/no-overwrite publication and installed composition must
