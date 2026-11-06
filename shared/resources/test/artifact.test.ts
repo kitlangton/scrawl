@@ -17,6 +17,7 @@ test("artifact inventory, exact target, checksum, mode and canonical manifest", 
     await writeFile(path, JSON.stringify(manifest, null, 2) + "\n");
     await chmod(f.directory, 0o775); assert.throws(() => validateResourceArtifact(f.directory, target())); await chmod(f.directory, 0o700);
     await chmod(f.executable, 0o777); assert.throws(() => validateResourceArtifact(f.directory, target())); await chmod(f.executable, 0o755);
+    await chmod(f.executable, 0o4755); assert.throws(() => validateResourceArtifact(f.directory, target())); await chmod(f.executable, 0o755);
     await writeFile(join(f.directory, "extra"), "unexpected"); assert.throws(() => validateResourceArtifact(f.directory, target())); await rm(join(f.directory, "extra"));
     await rm(f.executable); await symlink(path, f.executable); assert.throws(() => validateResourceArtifact(f.directory, target()));
   } finally { await f.close(); }

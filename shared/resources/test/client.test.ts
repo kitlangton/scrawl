@@ -56,7 +56,7 @@ test("publication preserves terminal states; unknown completion is uncertain", a
 test("invalid names are refused before starting a provider", async () => {
   const f = await fixture(); try {
     const client = new NativeResources({ ...f.provider, executable: "/does-not-exist" });
-    for (const name of ["../escape", ".", "..", "with/slash", "x".repeat(256), "bad\n"]) {
+    for (const name of ["../escape", ".", "..", "with/slash", "x".repeat(4097), "bad\0", "\ud800"]) {
       const h = await f.handle(); assert.deepEqual(await client.publish(h, name, "final"), { state: "refused" }); assert.equal(h.fd, -1);
     }
   } finally { await f.close(); }
@@ -70,5 +70,18 @@ test("publication cancellation distinguishes not-dispatched from unknown complet
     const result = client.publish(await f.handle(), "stage", "final", { signal: late.signal });
     setTimeout(() => late.abort(), 50);
     assert.deepEqual(await result, { state: "publication_uncertain" });
+  } finally { await f.close(); }
+});
+
+test("ACL guard consumes its descriptor and returns only checked facts", async () => {
+  for (const [scenario, state] of [["published", "accepted"], ["refused", "refused"]] as const) {
+    const f = await fixture(scenario); try {
+      const h = await f.handle(); assert.deepEqual(await new NativeResources(f.provider).checkAcl(h), { state }); assert.equal(h.fd, -1);
+    } finally { await f.close(); }
+  }
+});
+test("single-component Unicode and space-containing names pass to the provider", async () => {
+  const f = await fixture(); try {
+    assert.deepEqual(await new NativeResources(f.provider).publish(await f.handle(), "résumé stage", "Sam's review 👋.apparent"), { state: "published" });
   } finally { await f.close(); }
 });

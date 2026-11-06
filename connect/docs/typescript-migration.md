@@ -29,6 +29,14 @@ store or filesystem publisher. The migration-only Rust producer
 interop lane exercises the same boundary; installed retrieval still uses the
 Rust client until transport, durable state and safe publication are adopted.
 
+The recipient publication library now privately stages verified bytes and uses
+the admitted native resource adapter for ACL checks and atomic no-replace
+publication. Linux and Mac consumer tests cover the full filesystem path and a
+synthetic encrypted CLI fetch; uncertain outcomes retain their data without retry
+or deletion. This is an injected library capability, not installed adoption:
+credential loading/renewal, provider assembly and the production CLI route still
+use the authoritative legacy path until their separate acceptance gates pass.
+
 
 Read with [hosted-client.md](hosted-client.md), [hosted-api.md](hosted-api.md),
 and [hosted-encryption.md](hosted-encryption.md). This is a source inventory,

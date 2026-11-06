@@ -2,6 +2,7 @@
 const [scenario, command] = process.argv.slice(2);
 const emit = (state: string) => process.stdout.write(JSON.stringify({ protocol: 1, state }) + "\n");
 if (scenario === "malformed") { process.stdout.write('{"protocol":1,"state":"acquired","state":"busy"}\n'); process.exit(); }
+if (command === "acl") { emit(scenario === "refused" ? "refused" : "accepted"); process.exit(); }
 if (command === "lock") {
   if (scenario === "busy") { emit("busy"); process.exit(); }
   emit("acquired");

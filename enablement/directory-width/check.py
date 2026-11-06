@@ -20,7 +20,7 @@ WORKFLOW_FILES = {
     b"verification-mac.yml",
     b"verification-platform.yml", b"verification.yml", b"web-delivery.yml",
     b"stream-agent.yml", b"stream-app-shell.yml", b"stream-connect-client.yml", b"stream-connect-browser.yml",
-    b"stream-engine-capture-native.yml", b"stream-engine-media-native.yml", b"stream-engine-native.yml", b"stream-engine.yml",
+    b"stream-engine.yml",
     b"stream-onboarding.yml", b"stream-platform-config.yml", b"stream-platform-resources.yml", b"stream-public.yml",
     b"stream-record.yml",
 }

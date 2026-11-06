@@ -1,6 +1,9 @@
 # Website and Connect continuous delivery
 
 Each value stream has an independent native GitHub paths-filtered workflow.
+Engine SDK, native core, media and capture components share `stream-engine.yml`
+with separate component/target matrix jobs and artifacts. Linux/macOS targets
+remain defined by each component registration.
 Owner entrypoints in `.github/workflows/stream-<owner>.yml` own their PR and main
 jobs, permissions, fixed owner/target matrix and runtime audit. Small composite
 actions under `.github/actions/delivery-contracts` and `delivery-component` share
@@ -18,14 +21,27 @@ manual triggering does not waive publication gates.
 Feature-branch pushes without a PR retain inexpensive local selector, push-hook
 and release-admission contracts, plus affected-owner architecture checks. Install
 the architecture checker once with `npm --prefix composition/architecture ci`;
-the hook fails clearly if it is unavailable and never installs packages.
+the hook fails clearly if it is unavailable and never installs packages. Before
+contract checks in either PR or changed-tree verification, a read-only dependency
+preflight checks selected architecture, Record/renderer, Agent, App Shell,
+onboarding, resources, Connect client and Public packages for required locked
+installs and npm lock freshness. Existing package selectors control the check:
+docs-only and unaffected owners stay skipped, and unknown history remains
+conservative. Missing or stale installs stop before contracts/builds and print a
+package-specific locked-install repair command. App Shell's existing check still
+compares copied shared contracts/UI against source; Record/Desktop checks reuse the
+frontend's read-only shared UI and Record snapshot guard. Public checks reuse the
+build's manifest, input and installed-package prerequisites. The changed-tree
+browser lane checks its Bun executable and lock inputs before the existing selected
+`bun install --frozen-lockfile` step. The preflight itself performs no install,
+fetch or dependency mutation.
 Applicable Value-stream PR checks must pass
 before merge; standalone Linux/macOS and Connect workflows remain manual-only.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
 `.github/workflows/stream-*.yml` are the independent main producer workflows for
-registered components, including Public's Bun-built web artifact and native Engine
+registered components (Engine components share one workflow), including Public's Bun-built web artifact and native Engine
 providers. Each paths filter includes its owner source, shared consumed inputs,
 registration/build contracts and its own workflow. The registry records each
 owner's supported targets and artifact stage; missing registrations remain

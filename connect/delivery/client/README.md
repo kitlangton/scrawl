@@ -203,3 +203,20 @@ parent's authoritative reader/writer must enforce private-file safety, renewal
 journal ordering and fresh cancellation/generation checks before publication.
 This API performs no file or HTTP access and must not be exposed to renderers or
 used to serialize private values into CLI output or diagnostics.
+
+
+The `./recipient-publication` export privately stages verified recipient captures
+and publishes them with an injected, admitted native resource provider. It checks
+ancestor/descriptor identity, ACL facts and private modes, synchronizes files and
+directories, and retains uncertain publication without retry or deletion. The
+provider must implement `checkAcl` and atomic no-replace publication; no fallback
+is allowed. This library does not select the provider or switch installed callers.
+
+The explicit native consumer suite is
+`node --experimental-strip-types --test test/integration/publication-native.test.ts`.
+Supply absolute `APPARENT_RESOURCE_SDK_CONSUMER` (isolated npm consumer with the
+packed public `@apparent/native-resources` SDK installed) and
+`APPARENT_RESOURCE_ARTIFACT` (qualified binary/manifest directory), plus
+`APPARENT_RESOURCE_SOURCE_SHA` pinned to the reviewed producer. Admission must
+verify producer provenance separately. This suite compiles no Rust, uses only
+synthetic private fixtures, and needs real Linux and Mac execution before adoption.

@@ -75,7 +75,8 @@ export interface StrokeFacts { schema: "apparent.capture-strokes/1"; identity: {
 export type ArtifactInput =
   | { kind: "material"; relativePath: string }
   | { kind: "assembled"; file: SealedFile }
-  | { kind: "derivative"; receipt: DerivativeEnvelope; fileIndex: number };
+  | { kind: "derivative"; receipt: DerivativeEnvelope; fileIndex: number }
+  | import("../media2/types.ts").Derivative2ArtifactInput;
 export interface PublicationEntry { relativePath: string; sha256: Sha256; byteLength: number; role: "manifest" | "summary" | "companion" | "frame" | "contact-sheet" | "video" | "audio" | "transcript" | "context" | "interactions" | "marks"; input: ArtifactInput }
 export interface PublicationPlan { schema: "apparent.bundle-publication/1"; publicationId: Id; materials: MaterialsKey; bundleId: string; stagingRoot: string; destination: { path: string; mode: "absent" }; artifactVersion: 1; entries: PublicationEntry[]; manifestPath: "apparent.json"; summaryPath: "summary.md"; profile: "apparent-bundle/1" }
 export interface PublishEnvelope { stagingRoot: string; planFile: SealedFile; planSha256: Sha256 }

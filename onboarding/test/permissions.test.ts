@@ -45,7 +45,7 @@ const requirement = (id: string, patch: Partial<NativeRequirement> = {}): Native
 
 test("permission presentation names supported IDs, safely labels future IDs, and describes readiness facts", () => {
   assert.equal(permissionName("screen-capture"), "Screen Recording");
-  assert.equal(permissionName("screen-recording"), "Screen Recording");
+  assert.equal(permissionName("screen-recording"), "Screen & System Audio Recording");
   assert.equal(permissionName("speech-recognition"), "Speech Recognition");
   assert.equal(permissionName("future-internal-id"), "Access");
   for (const id of ["constructor", "__proto__", "toString", "hasOwnProperty"]) assert.equal(permissionName(id), "Access");

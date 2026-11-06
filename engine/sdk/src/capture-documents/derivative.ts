@@ -18,11 +18,16 @@ function validatePayload(value: unknown, materials: MaterialsDocument, envelope:
   if (p.schema !== "apparent.media-derivative-payload/1") fail("unsupported derivative payload schema");
   validateMaterialsKey(p.materials); sameMaterials(p.materials as DerivativePayload["materials"], materials.manifest.key, "derivative payload");
   if (p.jobId !== envelope.jobId || p.receiptId !== envelope.receiptId || p.root !== envelope.root) fail("derivative envelope/receipt identity mismatch");
-  if (!Array.isArray(p.frames) || p.frames.length !== requests.length || p.frames.length < 1 || p.frames.length > 48) fail("derivative frame slots are missing, extra or exceed limits");
+  validateDerivativeFrameSlots(p.frames, materials, envelope.root, envelope.receiptFile.relativePath, requests);
+}
+
+/** Shared clock/slot rules; this validates metadata, not native provenance. */
+export function validateDerivativeFrameSlots(frames: unknown, materials: MaterialsDocument, root: string, receiptPath: string, requests: readonly number[]): void {
+  if (!Array.isArray(frames) || frames.length !== requests.length || frames.length < 1 || frames.length > 48) fail("derivative frame slots are missing, extra or exceed limits");
   const seen = new Set<number>();
   const paths = new Set<string>();
   let pixels = 0;
-  p.frames.forEach((frame, i) => {
+  frames.forEach((frame, i) => {
     const f = record(frame, `frames[${i}]`); optionalExact(f, ["requestIndex", "requestedBundleMs", "effectiveVideoMs", "actualVideoMs", "clampedToStart", "clampedToEnd", "width", "height", "file"], ["requestIndex", "requestedBundleMs", "effectiveVideoMs", "clampedToStart", "clampedToEnd", "width", "height", "file"], `frames[${i}]`);
     safeInt(f.requestIndex, "requestIndex", 1); if (f.requestIndex !== i + 1 || seen.has(f.requestIndex as number)) fail("frame slots must be ordered and one-based"); seen.add(f.requestIndex as number);
     safeInt(f.requestedBundleMs, "requested frame time"); if (f.requestedBundleMs !== requests[i]) fail("derivative frame request does not match requested slot");
@@ -34,9 +39,9 @@ function validatePayload(value: unknown, materials: MaterialsDocument, envelope:
     // Decoder PTS may include an edit-list/B-frame offset. It is independent of
     // the requested seek even at either clamp; never normalize it to zero or
     // infer a numeric ordering between these distinct clocks.
-    safeInt(f.width, "frame width", 1); safeInt(f.height, "frame height", 1); validateSealedFile(f.file, `frames[${i}].file`); contained(envelope.root, (f.file as SealedFile).relativePath, "derivative frame");
+    safeInt(f.width, "frame width", 1); safeInt(f.height, "frame height", 1); validateSealedFile(f.file, `frames[${i}].file`); contained(root, (f.file as SealedFile).relativePath, "derivative frame");
     const path = (f.file as SealedFile).relativePath;
-    if (paths.has(path) || path === envelope.receiptFile.relativePath) fail("derivative frame path aliases another slot or receipt");
+    if (paths.has(path) || path === receiptPath) fail("derivative frame path aliases another slot or receipt");
     paths.add(path);
     pixels += (f.width as number) * (f.height as number);
     if ((f.width as number) > 4096 || (f.height as number) > 4096 || pixels > 64_000_000) fail("derivative image inventory exceeds limits");

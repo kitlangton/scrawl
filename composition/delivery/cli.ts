@@ -36,7 +36,7 @@ function targetArg(value: string): Target { if (value !== 'linux-x64' && value !
 export function assertBuildWorkflowIdentity(env: NodeJS.ProcessEnv, ownerId: string) {
   if (env.GITHUB_EVENT_NAME !== 'pull_request') return
   const pullRef = /^refs\/pull\/([1-9][0-9]*)\/merge$/.exec(env.GITHUB_REF ?? '')
-  const expectedPath = `.github/workflows/stream-${ownerId}.yml`
+  const expectedPath = workflowPathFor(ownerId)
   if (env.GITHUB_REPOSITORY !== 'tryapparent/apparent' || !pullRef ||
       env.GITHUB_WORKFLOW_REF !== `tryapparent/apparent/${expectedPath}@${pullRef[0]}` ||
       (env.APPARENT_DELIVERY_WORKFLOW_PATH && env.APPARENT_DELIVERY_WORKFLOW_PATH !== expectedPath)) {

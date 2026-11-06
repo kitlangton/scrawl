@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { checkArchitecture } from '../src/guard.ts';
 const gitEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
 
@@ -197,3 +197,15 @@ test('Connect gateway and service share one owner while service imports cannot c
   'record/src/private.ts': 'export const internal = true;',
  },root=>assert.ok(checkArchitecture(root,['connect']).some(error=>error.includes('connect -> record'))));
 });
+
+// CLI integration belongs with its locked TypeScript package, not dependency-free hook contracts.
+test('CLI rejects a record-to-agent source edge', () => fixture({
+  'record/src/index.ts': "import {value} from '../../agent/src/secret.ts'; void value;",
+  'agent/src/secret.ts': 'export const value = 1;',
+}, root => {
+  const result = spawnSync(process.execPath, ['--experimental-strip-types',
+    path.resolve(import.meta.dirname, '../src/cli.ts'), '--root', root, '--owner', 'record'],
+    { encoding: 'utf8', env: gitEnvironment });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /cross-owner path/);
+}));

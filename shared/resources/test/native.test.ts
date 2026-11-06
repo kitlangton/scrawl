@@ -101,3 +101,44 @@ test("two concurrent no-replace publishers yield one winner and retain the losin
     assert.equal(await readFile(join(f.directory, loser + "/bundle.txt"), "utf8"), loser);
   } finally { await f.close(); }
 });
+
+test("publication preserves legitimate Unicode/space output names", async () => {
+  const f = await fixture(); try {
+    const source = "résumé stage", destination = "Sam's review 👋.apparent";
+    const before = await stage(f.directory, source, "unicode output");
+    assert.deepEqual(await resources.publish(await f.parent(), source, destination), { state: "published" });
+    const after = await stat(join(f.directory, destination)); assert.equal(after.ino, before.ino);
+    assert.equal(await readFile(join(f.directory, destination, "bundle.txt"), "utf8"), "unicode output");
+  } finally { await f.close(); }
+});
+test("native ACL facts cover descriptors and Darwin allow/deny entries", async () => {
+  const f = await fixture();
+  const chmodAcl = async (args: string[]) => { const { execFileSync } = await import("node:child_process"); execFileSync("/bin/chmod", args); };
+  try {
+    assert.deepEqual(await resources.checkAcl(await f.handle()), { state: "accepted" });
+    assert.deepEqual(await resources.checkAcl(await f.parent()), { state: "accepted" });
+    if (process.platform === "darwin") {
+      await chmodAcl(["+a", "everyone allow read", f.lock]);
+      assert.deepEqual(await resources.checkAcl(await f.handle()), { state: "refused" });
+      await chmodAcl(["-N", f.lock]);
+      await chmodAcl(["+a", "everyone deny delete", f.lock]);
+      assert.deepEqual(await resources.checkAcl(await f.handle()), { state: "accepted" });
+      await chmodAcl(["-N", f.lock]);
+      await chmodAcl(["+a", "everyone allow search", f.directory]);
+      assert.deepEqual(await resources.checkAcl(await f.parent()), { state: "refused" });
+    }
+  } finally {
+    if (process.platform === "darwin") { await chmodAcl(["-N", f.lock]); await chmodAcl(["-N", f.directory]); }
+    await f.close();
+  }
+});
+
+test("sticky shared output parents preserve the legacy no-replace contract", async () => {
+  const f = await fixture(); try {
+    await stage(f.directory, "stage", "sticky parent output"); await chmod(f.directory, 0o1777);
+    assert.deepEqual(await resources.publish(await f.parent(), "stage", "final"), { state: "published" });
+    await stage(f.directory, "second", "must remain staged"); await chmod(f.directory, 0o777);
+    assert.deepEqual(await resources.publish(await f.parent(), "second", "other"), { state: "refused" });
+    assert.equal(await readFile(join(f.directory, "second/bundle.txt"), "utf8"), "must remain staged");
+  } finally { await chmod(f.directory, 0o700); await f.close(); }
+});

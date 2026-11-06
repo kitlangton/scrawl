@@ -1,13 +1,12 @@
 # Native media producer
 
-This owner-local producer packages the headless Linux `apparent-engine-frames`
-worker and the bounded GStreamer runtime needed for media/1 decode. It does not
-activate or route an application. The registered production target is
-`linux-x64`. A separate native `macos-x64` build candidate reuses the moved
-AVFoundation implementation; its native verification and Platform admission
-are required before consumers can treat it as an available Mac artifact.
+This owner-local producer packages the headless `apparent-engine-frames` worker
+for registered `linux-x64` and native `macos-x64` targets. Linux carries a bounded
+GStreamer runtime; Mac reuses the moved AVFoundation implementation. Registration
+does not activate or route an application. Each target requires its actual native
+producer verification and Platform artifact admission before consumer adoption.
 
-Requires Node 22.6+, Rust 1.96+, an x86_64 Linux host, GStreamer development
+The Linux build requires Node 22.6+, Rust 1.96+, an x86_64 host, GStreamer development
 libraries discoverable through `pkg-config`, `ldd`, and FFmpeg only to generate
 synthetic test fixtures. From this directory run `npm ci`, `npm run verify`,
 then `OWNER_TARGET=linux-x64 npm run build`. Cargo inherits the repository
@@ -39,11 +38,13 @@ Cargo, npm, Node, source, registry persistence or host plugin search.
 Builds require a clean tracked/untracked checkout, freeze the full source SHA,
 stage and validate a strict path/mode/hash inventory, then check the tree and
 artifact again. The owner manifest is integrity metadata, not upstream
-provenance. Platform discovery/registration remains a separate owner action.
+provenance. Platform discovery uses the existing `engine-media-native` owner
+with separate target fingerprints, receipts and admission.
 
-On a native x86_64 Mac, the candidate build is `OWNER_TARGET=macos-x64 npm run
-build`. It requires Xcode with Swift 6.2+ and the macOS 26+ SDK, the same Node
-and Rust versions, and FFmpeg for synthetic test generation only. It compiles
+On a native x86_64 Mac, run `npm ci`, `npm run verify`, then
+`OWNER_TARGET=macos-x64 npm run build`. It requires Xcode with Swift 6.2+ and
+the macOS 26+ SDK and the same Node and Rust versions. FFmpeg generates the
+synthetic fixture movies only; it is not part of the sealed Mac runtime. It compiles
 the existing worker plus the private `FramesBridge.swift`/`Media.swift` helper;
 no Desktop application or GStreamer is linked. The artifact has three executable
 files: the absolute launch entry and the worker/helper under `libexec/`, plus

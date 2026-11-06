@@ -142,7 +142,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
             "verification-mac.yml",
             "verification-platform.yml", "verification.yml", "web-delivery.yml",
             "stream-agent.yml", "stream-app-shell.yml", "stream-connect-client.yml", "stream-connect-browser.yml",
-            "stream-engine-capture-native.yml", "stream-engine-media-native.yml", "stream-engine-native.yml", "stream-engine.yml",
+            "stream-engine.yml",
             "stream-onboarding.yml", "stream-platform-config.yml", "stream-platform-resources.yml", "stream-public.yml", "stream-record.yml",
         )
         for name in workflows:
@@ -155,7 +155,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
         self.stage(".github/workflows/unreviewed.yml")
         blocked = self.run_hook()
         self.assertEqual(blocked.returncode, 1)
-        self.assertIn(b".github/workflows: 24 files", blocked.stderr)
+        self.assertIn(b".github/workflows: 21 files", blocked.stderr)
 
     def test_workflow_directory_rejects_unknown_entry_within_file_limit(self) -> None:
         for name in (
@@ -164,7 +164,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
             "verification-mac.yml",
             "verification-platform.yml", "verification.yml",
             "stream-agent.yml", "stream-app-shell.yml", "stream-connect-client.yml", "stream-connect-browser.yml",
-            "stream-engine-capture-native.yml", "stream-engine-media-native.yml", "stream-engine-native.yml", "stream-engine.yml",
+            "stream-engine.yml",
             "stream-onboarding.yml", "stream-platform-config.yml", "stream-platform-resources.yml", "stream-public.yml", "stream-record.yml",
         ):
             self.put(f".github/workflows/{name}")
@@ -172,7 +172,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
         self.stage(".github/workflows")
         result = self.run_hook()
         self.assertEqual(result.returncode, 1)
-        self.assertIn(b".github/workflows: 23 files", result.stderr)
+        self.assertIn(b".github/workflows: 20 files", result.stderr)
 
     def test_unrelated_staged_change_does_not_enforce_existing_overwidth(self) -> None:
         files = self.seed_code_files(11)

@@ -7,6 +7,7 @@ import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
+import { assertBuildWorkflowIdentity } from './cli.ts'
 import { assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
@@ -97,15 +98,17 @@ test('native Engine and SDK are independent lanes with the same architectural ow
   assert.equal(native.length, 2); assert(native.every(row => row.language === 'native' && row.architecture_owner === 'engine'))
 })
 
-test('native Engine media is a Linux-only lane with a complete owner input closure', () => {
+test('native Engine media has Linux and native Intel Mac lanes with a complete owner input closure', () => {
   const path = resolve(temp, 'engine-media-plan')
   for (const dir of ['engine/delivery/media', 'engine/sdk', 'capture/engine', '.cargo']) mkdirSync(resolve(path, dir), { recursive: true })
   writeFileSync(resolve(path, 'engine/delivery.json'), JSON.stringify({ ...owner, id: 'engine', package: 'engine/sdk', inputs: ['engine/'] }))
-  writeFileSync(resolve(path, 'engine/delivery/media/delivery.json'), JSON.stringify({ ...owner, id: 'engine-media-native', kind: 'directory', language: 'native', package: 'engine/delivery/media', artifactPath: 'dist', verify: ['verify'], inputs: ['engine/', 'capture/engine/', '.cargo/'], targets: ['linux-x64'] }))
+  writeFileSync(resolve(path, 'engine/delivery/media/delivery.json'), JSON.stringify({ ...owner, id: 'engine-media-native', kind: 'directory', language: 'native', package: 'engine/delivery/media', artifactPath: 'dist', verify: ['verify'], inputs: ['engine/', 'capture/engine/', '.cargo/'], targets: ['linux-x64', 'macos-x64'] }))
   const plan = makePlan(path)
   assert.deepEqual(plan.blocked, [])
   const media = plan.matrix.include.filter(row => row.id === 'engine-media-native')
-  assert.equal(media.length, 1)
+  assert.equal(media.length, 2)
+  assert.equal(media[1].target, 'macos-x64')
+  assert.equal(media[1].runner, 'macos-26-intel')
   assert.equal(media[0].target, 'linux-x64')
   assert.equal(media[0].runner, 'ubuntu-24.04')
   assert.equal(media[0].language, 'native')
@@ -300,5 +303,24 @@ test('capture/2 has its own Linux native route and mandatory admission inputs', 
   assert.equal(row[0].architecture_owner, 'engine')
   assert.equal(row[0].package, 'engine/delivery/capture')
   assert.equal(row[0].language, 'native')
-  assert.equal(workflowPathFor(capture.id), '.github/workflows/stream-engine-capture-native.yml')
+  assert.equal(workflowPathFor(capture.id), '.github/workflows/stream-engine.yml')
+})
+
+test('Engine components require the consolidated canonical PR workflow identity', () => {
+  for (const id of ['engine', 'engine-native', 'engine-media-native', 'engine-capture-native']) {
+    assert.equal(workflowPathFor(id), '.github/workflows/stream-engine.yml')
+    const env = {
+      GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/123/merge',
+      GITHUB_REPOSITORY: 'tryapparent/apparent',
+      GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-engine.yml@refs/pull/123/merge',
+      APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-engine.yml',
+    }
+    assert.doesNotThrow(() => assertBuildWorkflowIdentity(env, id))
+    assert.throws(() => assertBuildWorkflowIdentity({ ...env,
+      GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-agent.yml@refs/pull/123/merge',
+    }, id), /canonical owner workflow/)
+    assert.throws(() => assertBuildWorkflowIdentity({ ...env,
+      APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-engine-native.yml',
+    }, id), /canonical owner workflow/)
+  }
 })
