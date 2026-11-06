@@ -296,7 +296,9 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
     if (!disposed) await Promise.all(ids.map(requestId => advance(requestId)));
   };
 
-  await reconcile();
+  // Startup recovery runs detached so callers can still issue Stop/Cancel while
+  // retained media or publication RPCs are in flight. Explicit reconcile awaits it.
+  void reconcile().catch(() => undefined);
 
   return {
     runtime,

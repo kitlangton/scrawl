@@ -1040,6 +1040,7 @@ test("publication database atomically admits immutable processing policy beside 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+// All ports and receipts below are synthetic offline consistency fixtures; this is not native authority or platform proof.
 test("capture coordinator advances one retained request through synthetic media, staging, Saved, and restart handoff", async () => {
   const input = await fixture();
   const root = await realpath(await mkdtemp(join(tmpdir(), "record-capture-coordinator-")));
@@ -1134,29 +1135,34 @@ test("capture coordinator advances one retained request through synthetic media,
       async cancel() { throw new Error("coordinator must not cancel media implicitly"); },
     } as unknown as Media2Client;
     const destinations = new AbsentDestinationAllocator(controlRoot, outputRoot);
+    let selections = 0;
     const options = {
       captureClient, mediaClient, mappings: mappings as never, destinations, privateControlRoot: controlRoot,
       createStartIntent: () => { throw new Error("preexisting synthetic capture must not be restarted"); },
       trustedMaterialsRoot: () => materialRoot,
-      selectProcessing: ({ materials }: { mapping: Readonly<{ requestId: string }>; materials: MaterialsDocument }) => ({
+      selectProcessing: ({ materials }: { mapping: Readonly<{ requestId: string }>; materials: MaterialsDocument }) => { selections++; return ({
         request: { outputDirectory: derivativeRoot, requestedBundleMs: [1000], limits: { maxFrames: 2, maxEdge: 4096, maxTotalPixels: 64_000_000, deadlineMs: 10_000 },
           contactSheet: { schema: "apparent.contact-sheet-layout/1", width: 400, height: 300, backgroundRgb: [0, 0, 0], fit: "stretch", sampling: "legacy-bilinear", clipping: "reject",
             tiles: [{ requestIndex: 1, x: 0, y: 0, width: 400, height: 300 }] } },
         materialsLimits: { maxFileBytes: 4_000_000, maxAggregateBytes: 8_000_000 }, artifactLimits: { maxFileBytes: 4_000_000, maxAggregateBytes: 8_000_000 },
         frames: [{ requestIndex: 1, index: 1, timeMs: 1000, text: "synthetic selected frame", reason: "fixture selection", event: "fixture", screenName: "display", bundlePath: "frames/frame-01.png", canonicalReason: "scene_change" }],
         contactSheetPath: "contact-sheet.png", admission: { createdAtMs: 1234, destination: { session: "synthetic-session", title: "", via: "sdk" } }, marks: [], requestVideoProof: true,
-      }),
+      }); },
       preflight: preflightCapturePublication, pollIntervalMs: 10000,
     };
     const coordinator = await createRecordCaptureCoordinator(options as never);
     try {
-      for (let index = 0; index < 5; index++) await coordinator.reconcile();
+      assert.deepEqual((await coordinator.captureFacts.readFacts()).captures, [], "materials-ready and publishing are not exposed as Saved");
+      assert.equal(await coordinator.resolveHandoff({ captureId: requestId, artifactId: bundleId }), null, "pending publication has no handoff");
+      await coordinator.reconcile();
+      if ((await coordinator.captureFacts.readFacts()).captures.length === 0) await coordinator.reconcile();
       const facts = await coordinator.captureFacts.readFacts();
       assert.deepEqual(facts.captures.map(value => [value.captureId, value.artifactId, value.phase, value.delivery]), [[requestId, bundleId, "saved", "unknown"]]);
       const resolved = await coordinator.resolveHandoff({ captureId: requestId, artifactId: bundleId });
       assert.equal(resolved?.handoff.savedBundle.bundlePath, bundlePath);
       assert.equal(resolved?.handoff.processing.frames[0]?.reason, "fixture selection");
       assert.equal(derives, 1);
+      assert.equal(selections, 1, "restart reuses immutable persisted frame/layout/admission decisions");
       assert.equal((await new SqlitePublicationBindingStore(controlRoot).list()).length, 1);
       assert.equal(JSON.stringify(await new SqlitePublicationBindingStore(controlRoot).listProcessing()).includes(ownerToken), false);
       assert.equal(publishes, 1, "the original assembled plan is published once");
@@ -1166,6 +1172,7 @@ test("capture coordinator advances one retained request through synthetic media,
       try {
         assert.equal((await reopened.resolveHandoff({ captureId: requestId, artifactId: bundleId }))?.handoff.savedBundle.bundlePath, bundlePath);
         assert.equal(derives, 1, "restart resolves Saved without rereading deleted retained materials or deriving again");
+        assert.equal(selections, 1, "restart does not reconstruct processing policy from caller glue");
         assert.equal(publishes, 1, "restart reconciles the same publication binding without redispatch");
       } finally { reopened.dispose(); }
     } finally { coordinator.dispose(); }
