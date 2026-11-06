@@ -953,6 +953,83 @@ test("ambiguous composed publication reconciles the same durable binding after r
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("reserved composed publication resumes its exact detached derivative input after restart", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-composition-reserved-recovery-"));
+  const destinationPath = join(root, "final.apparent");
+  const assembly = assemblyForDestination(input, destinationPath);
+  const derivatives2 = [derivative2For(input)];
+  const expectedDerivatives2 = structuredClone(derivatives2);
+  const derivative2Artifacts = {
+    "frames/frame-01.png": { receiptId: "8".repeat(32), selector: { kind: "frame" as const, requestIndex: 1 } },
+    "contact-sheet.png": { receiptId: "8".repeat(32), selector: { kind: "contact-sheet" as const } },
+  };
+  const publicationId = "a".repeat(32), ownerToken = "c".repeat(64), requestId = "reserved-request";
+  const expectedMaterials = structuredClone(input.manifest.key);
+  const expectedMaterialsDocument = structuredClone(validateMaterialsDocument(input.manifest, input.payloadBytes));
+  let dispatches = 0, inspections = 0;
+  let dispatchAssertion: unknown;
+  const sdk = {
+    async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
+    async publish(request: Parameters<CaptureClient["publish"]>[0]) {
+      dispatches++;
+      try {
+        assert.equal(request.ownerToken, ownerToken);
+        assert.deepEqual(request.materials, expectedMaterialsDocument);
+        assert.deepEqual(request.derivatives2, expectedDerivatives2, "recovery restores exact receipt, prepared request, and detached layout bytes");
+      } catch (error) { dispatchAssertion = error; throw error; }
+      return { captureId: identity.captureId, state: "saved", publicationId, planSha256: request.planFile.planSha256,
+        materials: expectedMaterialsDocument.manifest, publication: { captureId: identity.captureId, materials: expectedMaterials, publicationId,
+          planSha256: request.planFile.planSha256, bundleId: "sdk-bundle", bundlePath: destinationPath, artifactVersion: 1 as const,
+          artifactProvenance: "native" as const, manifestSha256: sha(assembly.apparentJson), inventorySha256: "9".repeat(64) } };
+    },
+    async inspectPublication() { inspections++; throw new Error("not_found until a publish request is actually admitted"); },
+  } as unknown as CaptureClient;
+  const originalReserve = SqlitePublicationBindingStore.prototype.reserve;
+  let faulted = false;
+  SqlitePublicationBindingStore.prototype.reserve = async function(binding) {
+    const reserved = await originalReserve.call(this, binding);
+    if (!faulted) { faulted = true; throw new Error("injected crash after reservation before dispatch"); }
+    return reserved;
+  };
+  const request = { status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+    assembly: input, ownerToken, publicationId, stagingRoot: join(root, "staging"), destinationPath, derivatives2, derivative2Artifacts,
+    requestId, requestVideoProof: true };
+  try {
+    const first = createRecordPublicationOutput(sdk, join(root, "control"), preflightCapturePublication);
+    await assert.rejects(first.publish(request), /injected crash after reservation/u);
+    const store = new SqlitePublicationBindingStore(join(root, "control"));
+    const reserved = await store.get(identity.captureId);
+    assert.equal(reserved?.state, "reserved");
+    assert.ok(reserved?.recoveryInput);
+    assert.equal(JSON.stringify(reserved).includes(ownerToken), false);
+    assert.equal(dispatches, 0);
+
+    // Discard the caller-owned derivative/material objects; resume must use only the committed binding.
+    request.derivatives2[0]!.bytes.fill(0);
+    input.manifest.key.revision = "f".repeat(64);
+    SqlitePublicationBindingStore.prototype.reserve = originalReserve;
+    const reopened = createRecordPublicationOutput(sdk, join(root, "control"), preflightCapturePublication);
+    let saved: Awaited<ReturnType<typeof reopened.reconcile>> | undefined;
+    let resumeError: unknown;
+    try { saved = await reopened.reconcile({ captureId: identity.captureId, ownerToken, publicationId,
+      materials: expectedMaterials, leaseId: input.manifest.leaseId, bundleId: "sdk-bundle", bundlePath: destinationPath }); }
+    catch (error) { resumeError = error; }
+    assert.equal(dispatchAssertion, undefined, String(dispatchAssertion));
+    if (resumeError) throw resumeError;
+    assert.ok(saved);
+    assert.equal(saved.state, "saved");
+    assert.equal(dispatches, 1);
+    assert.equal(inspections, 0, "the reserved row could not have been known to Engine before dispatch");
+    assert.equal((await store.get(identity.captureId))?.state, "saved");
+    assert.equal((await reopened.captureFacts.readFacts()).captures[0]?.phase, "saved");
+    assert.equal((await reopened.resolveHandoff({ captureId: requestId, artifactId: "sdk-bundle" }))?.handoff.savedBundle.bundlePath, destinationPath);
+  } finally {
+    SqlitePublicationBindingStore.prototype.reserve = originalReserve;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("publication output exposes only durably matched Saved facts and handoff after restart", async () => {
   const input = await fixture();
   const root = await mkdtemp(join(tmpdir(), "record-publication-output-"));
@@ -1041,7 +1118,7 @@ test("publication database atomically admits immutable processing policy beside 
 });
 
 // All ports and receipts below are synthetic offline consistency fixtures; this is not native authority or platform proof.
-type CoordinatorCase = "complete" | "media-failed" | "media-unknown" | "publication-unknown" | "selection-failed";
+type CoordinatorCase = "complete" | "media-failed" | "media-unknown" | "publication-unknown" | "publication-reserved" | "selection-failed";
 async function coordinatorCase(mode: CoordinatorCase) {
   const input = await fixture();
   const root = await realpath(await mkdtemp(join(tmpdir(), "record-capture-coordinator-")));
@@ -1053,6 +1130,17 @@ async function coordinatorCase(mode: CoordinatorCase) {
   const bundleId = `record-${sha(new TextEncoder().encode(requestId))}.apparent`;
   const bundlePath = join(outputRoot, bundleId);
   const ownerToken = "c".repeat(64), materialsId = identity.materialsId, leaseId = "c".repeat(32);
+  const originalPublicationReserve = SqlitePublicationBindingStore.prototype.reserve;
+  let restoreReserve = () => undefined;
+  if (mode === "publication-reserved") {
+    let faulted = false;
+    SqlitePublicationBindingStore.prototype.reserve = async function(binding) {
+      const reserved = await originalPublicationReserve.call(this, binding);
+      if (!faulted) { faulted = true; throw new Error("injected crash after coordinator reservation before dispatch"); }
+      return reserved;
+    };
+    restoreReserve = () => { SqlitePublicationBindingStore.prototype.reserve = originalPublicationReserve; };
+  }
   const seal = async (relativePath: string, content: Uint8Array) => {
     const path = join(materialRoot, relativePath);
     await mkdir(join(path, ".."), { recursive: true, mode: 0o700 });
@@ -1115,6 +1203,7 @@ async function coordinatorCase(mode: CoordinatorCase) {
       },
       async inspectPublication(request: Parameters<CaptureClient["inspectPublication"]>[0]) {
         if (mode === "publication-unknown") throw new Error("lost inspection " + ownerToken);
+        if (mode === "publication-reserved" && publishes === 0) throw new Error("not_found before publish dispatch");
         return { captureId, state: "saved", publicationId: request.publicationId, planSha256: request.planSha256, materials: materialsManifest,
           publication: { captureId, materials: request.expected.materials, publicationId: request.publicationId, planSha256: request.planSha256,
             bundleId: request.expected.bundleId, bundlePath: request.expected.bundlePath, artifactVersion: 1 as const, artifactProvenance: "native" as const,
@@ -1176,13 +1265,13 @@ async function coordinatorCase(mode: CoordinatorCase) {
         coordinator.observeProcessingIssues(() => { throw new Error("isolated observer"); });
         await coordinator.reconcile().catch(() => undefined);
         const expectedCode = { "media-failed": "media-failed", "media-unknown": "media-outcome-unknown",
-          "publication-unknown": "publication-outcome-unknown", "selection-failed": "processing-failed" }[mode];
+          "publication-unknown": "publication-outcome-unknown", "publication-reserved": "publication-outcome-unknown", "selection-failed": "processing-failed" }[mode];
         const issues = coordinator.processingIssues();
         assert.ok(issues.some(issue => issue.requestId === requestId && issue.code === expectedCode));
         assert.ok(notices > 0, "automatic outcomes notify the host without requiring an explicit error-returning call");
         assert.equal(JSON.stringify(issues).includes(ownerToken), false, "public errors never expose private exception data");
         const facts = await coordinator.captureFacts.readFacts();
-        assert.equal(facts.captures[0]?.phase, mode.endsWith("unknown") ? "unknown" : "failed");
+        assert.equal(facts.captures[0]?.phase, mode.endsWith("unknown") || mode === "publication-reserved" ? "unknown" : "failed");
         assert.equal(facts.captures[0]?.outcomes.some(outcome => outcome.kind === "processing" && !outcome.ok && outcome.detail === expectedCode), true);
         const provider = coordinator.createProvider({ providerEpoch: "coordinator-failure-consumer" });
         try {
@@ -1204,12 +1293,24 @@ async function coordinatorCase(mode: CoordinatorCase) {
         assert.equal(coordinator.processingIssues().some(issue => issue.code === expectedCode), true, "issue reads are isolated");
         detach();
         await coordinator.dispose();
+        restoreReserve();
+        if (mode === "publication-reserved") await Promise.all([rm(materialRoot, { recursive: true, force: true }), rm(derivativeRoot, { recursive: true, force: true })]);
         const reopened = await createRecordCaptureCoordinator(options as never);
         try {
           await reopened.reconcile().catch(() => undefined);
-          assert.equal(reopened.processingIssues().some(issue => issue.code === expectedCode), true, "restart reconstructs failure from original durable job or policy");
+          if (mode === "publication-reserved")
+            assert.equal(reopened.processingIssues().some(issue => issue.code === expectedCode), false, "successful reserved resume clears the prior publication issue");
+          else assert.equal(reopened.processingIssues().some(issue => issue.code === expectedCode), true, "restart reconstructs failure from original durable job or policy");
           assert.equal(derives, mode === "selection-failed" ? 0 : 1, "unknown and failed jobs never redispatch on restart");
-          assert.equal(publishes, mode === "publication-unknown" ? 1 : 0, "unknown publication only inspects its original binding");
+          assert.equal(publishes, mode === "publication-unknown" || mode === "publication-reserved" ? 1 : 0,
+            "dispatching publication only inspects, while an undispatched reservation resumes its original request");
+          if (mode === "publication-reserved") {
+            await reopened.reconcile();
+            assert.equal((await reopened.captureFacts.readFacts()).captures[0]?.phase, "saved");
+            assert.equal(selections, 1, "reserved publication restart does not rerun processing selection");
+            assert.equal(derives, 1, "reserved publication restart does not rerun media derivation");
+            assert.equal(publishes, 1, "reserved publication restart dispatches its original tuple once");
+          }
         } finally { await reopened.dispose(); }
         return;
       }
@@ -1237,10 +1338,10 @@ async function coordinatorCase(mode: CoordinatorCase) {
         assert.equal(publishes, 1, "restart reconciles the same publication binding without redispatch");
       } finally { await reopened.dispose(); }
     } finally { await coordinator.dispose(); }
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { restoreReserve(); await rm(root, { recursive: true, force: true }); }
 }
 
-for (const mode of ["complete", "media-failed", "media-unknown", "publication-unknown", "selection-failed"] as const)
+for (const mode of ["complete", "media-failed", "media-unknown", "publication-unknown", "publication-reserved", "selection-failed"] as const)
   test(`capture coordinator retains the original identity and exposes ${mode}`, () => coordinatorCase(mode));
 
 for (const mode of ["pending", "failed"] as const) test(`coordinator startup ${mode} is observable and drains before cleanup`, async () => {

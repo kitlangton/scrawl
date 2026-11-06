@@ -4,9 +4,28 @@ import { isAbsolute, join, resolve } from "node:path";
 import { ensurePrivateFile, ensurePrivateRoot, hostError, validatePrivateFile } from "../host/private-path.js";
 import { initializePrivateSqlite } from "../host/sqlite-initialization.js";
 import type { ProcessingInput } from "../processing/index.js";
-import type { PublicationReceipt } from "@apparent/engine-sdk/capture";
+import type { CapturePublishInput, PublicationReceipt } from "@apparent/engine-sdk/capture";
+import type { Derivative2DocumentInput } from "@apparent/engine-sdk/media2";
+
+// Frozen SDK 0.4.1 detached-document and publication receipt-count limits.
+const maxPublicationDocumentBytes = 8 * 1024 * 1024;
+const maxMaterialDocumentJsonBytes = 48 * 1024 * 1024;
+const maxRecoveryReceiptCount = 32;
+// Covers 1 plan + 32 receipt docs + 32 detached layouts (base64) and escaped material metadata.
+const maxRecoveryJsonBytes = 768 * 1024 * 1024;
 
 export interface PublicationOutputMetadata { requestId: string; requestVideoProof: boolean; processing: ProcessingInput }
+export interface PublicationRecoveryDescriptor {
+  schema: 1;
+  captureId: string;
+  leaseId: string;
+  publicationId: string;
+  planFile: CapturePublishInput["planFile"];
+  planBytesBase64: string;
+  materials: CapturePublishInput["materials"];
+  derivatives?: Array<{ envelope: unknown; bytesBase64: string; requestedBundleMs: readonly number[] }>;
+  derivatives2?: Array<{ envelope: unknown; bytesBase64: string; request: Derivative2DocumentInput["request"]; layoutBytesBase64: string | null }>;
+}
 export interface ProcessingCoordinatorRecord {
   schema: 1;
   captureId: string;
@@ -27,6 +46,8 @@ export interface PublicationBinding {
   bundleId: string;
   bundlePath: string;
   manifestSha256: string;
+  /** Present on new reservations; ownerToken is always supplied at recovery time. */
+  recoveryInput?: PublicationRecoveryDescriptor;
   output?: PublicationOutputMetadata;
   savedReceipt?: PublicationReceipt;
   savedObservedAt?: string;
@@ -45,6 +66,7 @@ function valid(value: PublicationBinding): boolean {
     typeof value.bundlePath === "string" && isAbsolute(value.bundlePath) && resolve(value.bundlePath) === value.bundlePath && value.bundlePath.length <= 4096 && !value.bundlePath.includes("\0") &&
     hash.test(value.manifestSha256) && ["reserved", "dispatching", "publishing", "saved", "failed", "cancelled"].includes(value.state);
   if (!core) return false;
+  if (value.recoveryInput !== undefined && !validRecoveryDescriptor(value.recoveryInput, value)) return false;
   if (value.output !== undefined) {
     const output = value.output;
     if (!output || typeof output.requestId !== "string" || !output.requestId.trim() || output.requestId.length > 4096 || output.requestId === value.captureId ||
@@ -62,6 +84,47 @@ function valid(value: PublicationBinding): boolean {
   if ((value.savedReceipt !== undefined || value.savedObservedAt !== undefined) && (value.state !== "saved" || !value.savedReceipt || !value.savedObservedAt)) return false;
   if (value.state === "saved" && value.output && !value.savedReceipt) return false;
   return true;
+}
+
+function validRecoveryDescriptor(value: PublicationRecoveryDescriptor, binding: PublicationBinding): boolean {
+  try {
+    if (!value || value.schema !== 1 || value.captureId !== binding.captureId || value.publicationId !== binding.publicationId ||
+        value.leaseId !== binding.leaseId || !value.planFile || !value.materials ||
+        Object.keys(value).sort().join(",") !== ["captureId", "leaseId", "materials", "planBytesBase64", "planFile", "publicationId", "schema", ...(value.derivatives === undefined ? [] : ["derivatives"]), ...(value.derivatives2 === undefined ? [] : ["derivatives2"])].sort().join(",") ||
+        Object.hasOwn(value as object, "ownerToken")) return false;
+    const planBytes = decodedBytes(value.planBytesBase64, maxPublicationDocumentBytes, false);
+    if (!planBytes) return false;
+    if (value.derivatives !== undefined && !Array.isArray(value.derivatives)) return false;
+    if (value.derivatives2 !== undefined && !Array.isArray(value.derivatives2)) return false;
+    const derivatives = value.derivatives ?? [];
+    const derivatives2 = value.derivatives2 ?? [];
+    if (derivatives.length + derivatives2.length > maxRecoveryReceiptCount) return false;
+    for (const item of derivatives) {
+      if (!item || Object.keys(item).sort().join(",") !== "bytesBase64,envelope,requestedBundleMs" || !item.envelope ||
+          !Array.isArray(item.requestedBundleMs) || !decodedBytes(item.bytesBase64, maxPublicationDocumentBytes, false)) return false;
+    }
+    for (const item of derivatives2) {
+      if (!item || Object.keys(item).sort().join(",") !== "bytesBase64,envelope,layoutBytesBase64,request" || !item.envelope || !item.request ||
+          (item.layoutBytesBase64 !== null && !decodedBytes(item.layoutBytesBase64, maxPublicationDocumentBytes, false)) ||
+          !decodedBytes(item.bytesBase64, maxPublicationDocumentBytes, false)) return false;
+    }
+    const json = JSON.stringify(value);
+    return Buffer.byteLength(json) <= maxRecoveryJsonBytes && !hasOwnerTokenKey(value) &&
+      Buffer.byteLength(JSON.stringify(value.materials)) <= maxMaterialDocumentJsonBytes;
+  } catch { return false; }
+}
+
+function hasOwnerTokenKey(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(hasOwnerTokenKey);
+  return Object.entries(value).some(([key, item]) => key === "ownerToken" || hasOwnerTokenKey(item));
+}
+
+function decodedBytes(value: unknown, maximum: number, allowEmpty: boolean): Buffer | undefined {
+  if (typeof value !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) return undefined;
+  const bytes = Buffer.from(value, "base64");
+  if ((!allowEmpty && bytes.byteLength === 0) || bytes.byteLength > maximum || bytes.toString("base64") !== value) return undefined;
+  return bytes;
 }
 
 /** Private SQLite journal; it reserves control metadata only, never bundle paths. */
@@ -256,5 +319,5 @@ function same(a: PublicationBinding, b: PublicationBinding): boolean {
   return a.captureId === b.captureId && a.publicationId === b.publicationId && a.planSha256 === b.planSha256 &&
     a.materials.captureId === b.materials.captureId && a.materials.materialsId === b.materials.materialsId &&
     a.materials.revision === b.materials.revision && a.leaseId === b.leaseId && a.bundleId === b.bundleId && a.bundlePath === b.bundlePath &&
-    a.manifestSha256 === b.manifestSha256 && JSON.stringify(a.output) === JSON.stringify(b.output);
+    a.manifestSha256 === b.manifestSha256 && JSON.stringify(a.recoveryInput) === JSON.stringify(b.recoveryInput) && JSON.stringify(a.output) === JSON.stringify(b.output);
 }
